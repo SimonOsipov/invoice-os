@@ -1,66 +1,305 @@
 // Settings › Members and Settings › Roles, driven as BOTH personas, plus the one journey
-// that creates a seat, points a step at it and deletes it.
+// that creates a seat, points a step at it, reloads to prove it stuck, and deletes it.
 //
-// HALF LIVE, HALF MOCK — and the split is the first thing to know before changing anything:
+// LIVE, end to end. Settings › Roles is a real screen over five routes: GET/POST
+// /api/invoice/v1/workflow-roles, PATCH/DELETE /workflow-roles/{key} and
+// PUT /workflow-roles/{key}/members (internal/approval, wired APPR-04-01..06). Every NAME,
+// email, access role and status pill below is a live membership row (GET
+// /api/tenancy/v1/memberships), and every holder line on a role card is that row resolved
+// through lib/roles.ts's `resolve()` against the same live rows.
 //
-//   LIVE. The Members roster is a real backend read: App.tsx fetches GET
-//   /api/tenancy/v1/memberships once and shares it with the Members tab, the Roles tab and
-//   the Workflows builder. Every NAME, email, access role and status pill below is a
-//   membership row, and every holder line on a role card is that row resolved through the
-//   mock role store. A failure in those is a backend failure.
+// e2e/api/contract-approvals.spec.ts already pins the WIRE contract for those five routes —
+// status codes, error envelopes, the four-key Role shape, staffing order round-trips. This
+// file does not duplicate that: it drives the SCREEN, through the same typed seam
+// (e2e/api/client.ts) only where it needs a live read or a cleanup delete of its own.
 //
-//   MOCK. Role DEFINITIONS and STAFFING (SEED_FIRM_ROLES / SEED_INHOUSE_ROLES, RoleModal,
-//   WorkflowRolePills) have no endpoint at all — the store is App.tsx useState and resets on
-//   reload. Real staffing is APPR-02's, per Decision [roles-staffing-stays-mock].
+// See e2e/topology/settingsFixtures.ts for the membership half of this file's fixtures
+// (SEED_*_MEMBERS, the roster's column heads, the disabled-control copy). The role-card half
+// below is NOT a shared fixture: it is derived by hand, in this file, against
+// db/seed.dev.sql's workflow_roles/workflow_role_members and lib/roles.ts's resolve() —
+// see SEED_FIRM_ROLE_CARDS below for the derivation itself.
 //
-// See e2e/topology/roleFixtures.ts, which separates the two kinds of constant.
+// NO WRITE TO A MEMBERSHIP is driven from the browser. Suspend/Reactivate are real, audited
+// PATCHes, and this environment is shared and never reset between specs — a status write
+// started here could not be restored on a failed assertion the way api/contract-tenancy.spec.ts's
+// try/finally does. The controls are asserted ENABLED and correctly labelled; the write itself
+// is proven over the wire in that spec instead. Workflow-ROLE writes are different: Test 3
+// below drives create/staff/delete from the browser on purpose, because that round trip —
+// through the UI, against the real store — is exactly what this file exists to prove, and its
+// own cleanup (below) is what keeps the environment honest afterward.
 //
-// NO WRITE IS DRIVEN FROM THE BROWSER. Suspend/Reactivate are real, audited PATCHes, and
-// this environment is shared and never reset between specs — a status write started here
-// could not be restored on a failed assertion the way api/contract-tenancy.spec.ts's
-// try/finally does. The controls are asserted ENABLED and correctly labelled; the write
-// itself is proven over the wire in that spec instead.
+// COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide lists
+// on a never-reset dev DB, and permits exactly two shapes — (1) compared against a live API
+// read taken in the same test, (2) containment of rows this test itself created. The member
+// roster is exempt from the ban and stays a literal count: no endpoint mints a membership
+// (there is no invite) and PATCH writes `status` only, so that list cannot grow.
+// workflow_roles is NOT exempt — Test 3 creates one from this very screen — so every
+// role-grid count below uses shape (1) (Test 1, Test 2, via e2e/api/client.ts's
+// listWorkflowRoles) or shape (2) (Test 3, via the created/deleted role's own locator).
 //
-// COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide
-// lists on a never-reset dev DB. The roster is exempt and the exemption is narrow: no
-// endpoint mints a membership (there is no invite) and PATCH writes `status` only, so this
-// list cannot grow. api/isolation.spec.ts already pins its exact user_id set.
+// CARD ORDER is still asserted (`ListRoles`' `ORDER BY created_at, key`,
+// internal/approval/store.go:64-65, seeded ascending in db/seed.dev.sql) — but by the
+// RELATIVE position of the expected titles (`expectRelativeOrder` below), never `.nth()` into
+// the raw grid: a residue card from an earlier failed run (deletes are soft, keys are never
+// reclaimed) can sit anywhere in the DOM without disturbing where these titles fall
+// relative to one another.
 //
-// NO reload or page.goto() after the first sign-in in any test below: the ROLE store is
-// useState with no persistence, so a reload would wipe the mutation in Test 3 and the test
-// would go red for entirely the wrong reason. The same fact is why that mutation needs no
-// cleanup and cannot poison the two sweeps: only the SESSION reaches localStorage
-// (lib/session.ts), so each signInAs reseeds roles and policies outright — and it never
-// touched a database to begin with.
+// RELOAD is no longer special. Role definitions and staffing are server rows now, so a
+// mid-test `page.reload()` re-fetches the same data rather than wiping an in-memory store —
+// Test 3 uses exactly that to prove the round trip is real (AC-8). The one mutation in this
+// file that STILL needs no cleanup is the policy step Test 3 repoints at its new seat:
+// approval POLICIES remain frontend `useState` (APPR-05/09's problem, not this one), so every
+// `signInAs` reseeds them from scratch and the repoint never touches a database. The ROLE that
+// step points at is a real row, which is why only that half gets the `test.afterAll` sweep
+// below, modelled on contract-approvals.spec.ts:86-94: the two halves of Test 3's mutation now
+// have different lifetimes, and a single cleanup story would be wrong for one of them.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
+import { listWorkflowRoles, login, deleteWorkflowRole, PERSONAS } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import {
   MEMBERS_TABLE_HEADS,
-  MOCK_DELETED_ROLE_LINE,
-  MOCK_DELETED_ROLE_OPTION,
-  MOCK_DRAWER_ROLE_HELPER,
-  MOCK_FIRM_PICKER_SELECTABLE,
-  MOCK_FIRM_ROLES,
-  MOCK_FIRM_ROSTER_CELLS,
-  MOCK_FIRM_TWO_SEAT_STEPS,
-  MOCK_FIRM_UNASSIGNED,
-  MOCK_INHOUSE_PICKER_SELECTABLE,
-  MOCK_INHOUSE_ROLES,
-  MOCK_INHOUSE_ROSTER_CELLS,
-  MOCK_INHOUSE_SUSPENDED_STEPS,
-  MOCK_INHOUSE_UNASSIGNED,
   PROTECTED_ADMIN_NOTE,
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
   SUSPEND_EXPLANATION,
   SUSPENDED_STEPS_NOTE,
   UNBACKED,
-  type MockRoleCard,
-  type MockRosterCell,
   type SeededMember,
-} from './roleFixtures'
+} from './settingsFixtures'
 import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+
+// ---------------------------------------------------------------------------------------
+// SEED role cards — derived BY HAND against db/seed.dev.sql's workflow_roles +
+// workflow_role_members and lib/roles.ts's resolve()/activeHolders(), never copied from the
+// deleted MOCK_* fixture. `who`/`warn` are the APPR-04-02 predicate's own output: only an
+// ACTIVE admin or reviewer is a legal approver, so a seat held only by a preparer (both
+// `Preparer` cards) or only by a suspended reviewer (in-house `CFO`) renders its holder's
+// name in the warn/red tone, same as an empty seat. `usage`/`holders` are unaffected by that
+// predicate (roleUsage() counts EVERY seeded holder and EVERY policy step regardless of
+// approver eligibility) and come straight from the still-mock policy store
+// (lib/workflows.ts's SEED_FIRM_POLICIES/SEED_INHOUSE_POLICIES) plus the raw
+// workflow_role_members row count — re-derived below, not assumed unchanged.
+interface SeedRoleCard {
+  /** role.key — names the drawer's pill toggle, `${idPrefix}-wfrole-${key}` (MemberParts.tsx). */
+  key: string
+  /** role.title — the card's heading, and the inspector select's option label. */
+  title: string
+  /** role.desc — the card's second line, verbatim from workflow_roles.description. */
+  desc: string
+  /** `resolve()`'s text — a SEEDED display_name, or `Nobody assigned`. No `— suspended` suffix. */
+  who: string
+  /** `resolve()`'s warn: true whenever no ACTIVE approver holds the seat. */
+  warn: boolean
+  /** `roleUsage(steps(policies, key))`. The card uppercases it in CSS; matched case-insensitively. */
+  usage: string
+  /** `holderCount(held.length)` — ALL seeded holders, active or not. Same CSS uppercase. */
+  holders: string
+}
+
+// …0004 Musa Danjuma holds two seats (fin_mgr, fin_dir), which is where the roster cell's
+// `+N` form comes from. …0003/…0006 hold `preparer` between them — both PREPARERS, so
+// neither counts as an approver and the seat renders warn despite two live holders.
+// quality_reviewer is the seat nobody holds at all.
+const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
+  {
+    key: 'preparer',
+    title: 'Invoice Preparer',
+    desc: 'Prepares and imports client invoices',
+    who: 'Folake Adesina +1',
+    warn: true,
+    usage: 'not used in any policy',
+    holders: '2 people',
+  },
+  {
+    key: 'fin_mgr',
+    title: 'Engagement Manager',
+    desc: 'First sign-off on a client invoice',
+    who: 'Musa Danjuma',
+    warn: false,
+    usage: '2 approval steps · 2 policies',
+    holders: '1 person',
+  },
+  {
+    key: 'fin_dir',
+    title: 'Senior Manager',
+    desc: 'Second sign-off above ₦250m',
+    who: 'Musa Danjuma',
+    warn: false,
+    usage: '3 approval steps · 3 policies',
+    holders: '1 person',
+  },
+  {
+    key: 'compliance',
+    title: 'Tax Reviewer',
+    desc: 'Checks VAT, WHT and TIN detail before filing',
+    who: 'Chiamaka Nwosu',
+    warn: false,
+    usage: '3 approval steps · 3 policies',
+    holders: '1 person',
+  },
+  {
+    key: 'cfo',
+    title: 'Engagement Partner',
+    desc: 'Signs off invoices above ₦1bn',
+    who: 'Chinedu Okafor',
+    warn: false,
+    usage: '2 approval steps · 2 policies',
+    holders: '1 person',
+  },
+  {
+    key: 'quality_reviewer',
+    title: 'Quality Reviewer',
+    desc: 'Second-partner review on flagged engagements',
+    who: 'Nobody assigned',
+    warn: true,
+    usage: 'not used in any policy',
+    holders: '0 people',
+  },
+]
+
+// …0012 Adebayo Ogunlesi is SUSPENDED and the sole `cfo` holder — a legal approver's seat that
+// still renders warn, because status gates it same as absence does. `fin_mgr`/`ceo` have
+// nobody at all; `preparer` has one PREPARER holder, the same not-an-approver case as firm's.
+const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
+  {
+    key: 'preparer',
+    title: 'Preparer',
+    desc: 'Accounts Payable',
+    who: 'Zainab Lawal',
+    warn: true,
+    usage: 'not used in any policy',
+    holders: '1 person',
+  },
+  {
+    key: 'line_mgr',
+    title: 'Line Manager',
+    desc: 'Requesting dept.',
+    who: 'Emeka Uzowulu',
+    warn: false,
+    usage: '2 approval steps · 2 policies',
+    holders: '1 person',
+  },
+  {
+    key: 'fin_mgr',
+    title: 'Finance Manager',
+    desc: 'Finance',
+    who: 'Nobody assigned',
+    warn: true,
+    usage: 'not used in any policy',
+    holders: '0 people',
+  },
+  {
+    key: 'controller',
+    title: 'Financial Controller',
+    desc: 'Finance',
+    who: 'Tunde Adeyemi',
+    warn: false,
+    usage: 'not used in any policy',
+    holders: '1 person',
+  },
+  {
+    key: 'fin_dir',
+    title: 'Finance Director',
+    desc: 'Finance',
+    who: 'Ngozi Balogun +1',
+    warn: false,
+    usage: '2 approval steps · 2 policies',
+    holders: '2 people',
+  },
+  {
+    key: 'compliance',
+    title: 'Compliance Officer',
+    desc: 'Tax & Compliance',
+    who: 'Ibrahim Bello',
+    warn: false,
+    usage: 'not used in any policy',
+    holders: '1 person',
+  },
+  {
+    key: 'cfo',
+    title: 'CFO',
+    desc: 'Executive',
+    who: 'Adebayo Ogunlesi',
+    warn: true,
+    usage: '2 approval steps · 2 policies',
+    holders: '1 person',
+  },
+  { key: 'ceo', title: 'CEO', desc: 'Executive', who: 'Nobody assigned', warn: true, usage: '1 approval step · 1 policy', holders: '0 people' },
+]
+
+/** `unassignedNotice(n)` plus the ' · '-joined titles beneath it — one banner shape, two tabs. */
+interface SeedUnassignedBanner {
+  notice: string
+  titles: string
+}
+
+// Two roles: `preparer` (both seeded holders are PREPARERS, so `activeHolders` is empty) and
+// `quality_reviewer` (no holders at all). The predicate change (APPR-04-02) is what moves this
+// from the pre-change '1 role … Quality Reviewer' to this.
+const FIRM_UNASSIGNED: SeedUnassignedBanner = {
+  notice: '2 roles have nobody active assigned. Approval steps pointed at them will block.',
+  titles: 'Invoice Preparer · Quality Reviewer',
+}
+
+// Four roles: `preparer` (a preparer-only seat), `fin_mgr`/`ceo` (nobody at all), and `cfo`
+// (its one holder is suspended). Pre-predicate-change this read '3 roles … Finance Manager ·
+// CFO · CEO' — `preparer` is the new arrival.
+const INHOUSE_UNASSIGNED: SeedUnassignedBanner = {
+  notice: '4 roles have nobody active assigned. Approval steps pointed at them will block.',
+  titles: 'Preparer · Finance Manager · CFO · CEO',
+}
+
+/** `rosterRoleCell()` — the Members table's Workflow roles cell: first title plus `+N`, every title in the tooltip. */
+interface SeedRosterCell {
+  member: string
+  text: string
+  /** Newline-joined. Empty means the cell carries no `title` attribute at all. */
+  tooltip: string
+}
+
+// `rosterRoleCell` unions every seat a member holds regardless of approver eligibility, so
+// this is unaffected by the APPR-04-02 predicate — re-derived and confirmed unchanged, not
+// assumed so. …0007 Halima Yusuf is the em-dash case: seeded, suspended, and staffed into no
+// role at all. She is READ-ONLY to every spec — nothing may PATCH her.
+const FIRM_ROSTER_CELLS: readonly SeedRosterCell[] = [
+  { member: 'Musa Danjuma', text: 'Engagement Manager +1', tooltip: 'Engagement Manager\nSenior Manager' },
+  { member: 'Chiamaka Nwosu', text: 'Tax Reviewer', tooltip: 'Tax Reviewer' },
+  { member: 'Halima Yusuf', text: '—', tooltip: '' },
+]
+
+// One entry: every seeded in-house member is staffed into some role, so this mode has no
+// em-dash example — the firm carries that case above.
+const INHOUSE_ROSTER_CELLS: readonly SeedRosterCell[] = [{ member: 'Ngozi Balogun', text: 'Finance Director', tooltip: 'Finance Director' }]
+
+// `pickerMembers().length` — every seeded member, since none of them is `invited`.
+const FIRM_PICKER_SELECTABLE = SEED_FIRM_MEMBERS.length
+const INHOUSE_PICKER_SELECTABLE = SEED_INHOUSE_MEMBERS.length
+
+// `stepsForMember` unions every seat …0004 holds in ONE traversal — 5 steps (2 from fin_mgr,
+// 3 from fin_dir) across 3 distinct policies, not two rows of 2 and 3.
+const FIRM_TWO_SEAT_STEPS: { member: string; held: readonly string[]; named: string; policies: string } = {
+  member: 'Musa Danjuma',
+  held: ['fin_mgr', 'fin_dir'],
+  named: 'Named in 5 approval steps',
+  policies: 'Standard approval policy · Cross-border & FX · Government supply (B2G)',
+}
+
+/** …0012 Adebayo Ogunlesi holds `cfo` alone, which two in-house policy steps name. */
+const INHOUSE_SUSPENDED_STEPS: { member: string; named: string; rowWarning: string } = {
+  member: 'Adebayo Ogunlesi',
+  named: 'Named in 2 approval steps',
+  rowWarning: 'Named in 2 approval steps · those steps will block',
+}
+
+/** `drawerRoleHelper('reviewer')` — the non-preparer arm. Free of the seed. */
+const DRAWER_ROLE_HELPER = 'Roles decide which approval steps this person can act on.'
+
+/** `roleOf`'s fallback title, prepended to the inspector select when a step names a deleted seat. */
+const DELETED_ROLE_OPTION = 'Deleted role'
+
+/** `resolve` / `inspectorResolve` for that same missing seat. */
+const DELETED_ROLE_LINE = 'Role no longer exists'
 
 // The Settings tab strip, in render order. In-house prepends its own Company tab ahead of
 // the shared list, so the two differ by that one entry — and Roles sits directly after
@@ -126,18 +365,64 @@ function wfSelect(page: Page, label: string) {
 }
 
 /**
- * One role card, whole. `usage` and `holders` are matched case-INSENSITIVELY: the card
- * uppercases both in CSS, and this assertion must not depend on whether that reaches the
- * text. `desc` is matched exactly — the two-line clamp on it is `-webkit-line-clamp`, which
- * truncates the render and leaves the text intact. `who` is a LIVE display_name.
+ * One role card, whole, found by its EXACT title — never `.nth(index)`, which a residue card
+ * elsewhere in the grid could shift. `usage`/`holders` are matched case-insensitively (the
+ * card uppercases both in CSS); `desc` exactly (`-webkit-line-clamp` truncates the render, not
+ * the DOM). `who`'s tone is checked separately, below.
  */
-async function expectRoleCard(page: Page, index: number, role: MockRoleCard): Promise<void> {
-  const card = page.getByTestId('role-card').nth(index)
-  await expect(card.getByText(role.title, { exact: true }), `role card ${index} title`).toBeVisible()
+async function expectRoleCard(page: Page, role: SeedRoleCard): Promise<void> {
+  const card = roleCard(page, role.title)
+  await expect(card, `role card "${role.title}" should render exactly once`).toHaveCount(1)
   await expect(card.getByText(role.desc, { exact: true }), `${role.title} desc`).toBeVisible()
-  await expect(card.getByText(role.who, { exact: true }), `${role.title} holder line`).toBeVisible()
+  const who = card.getByText(role.who, { exact: true })
+  await expect(who, `${role.title} holder line`).toBeVisible()
+  await expectHolderTone(who, role.warn, `${role.title} holder line`)
   await expect(card.getByText(role.usage), `${role.title} usage line`).toBeVisible()
   await expect(card.getByText(role.holders), `${role.title} holder count`).toBeVisible()
+}
+
+/**
+ * `who.warn` renders as an inline `color: var(--status-red-text)` (else `var(--fg-2)`) —
+ * RolesView.tsx:227-231. Checked on the literal CSS-variable reference the DOM carries, not
+ * the browser's *resolved* color: this file's own font-weight check on the active nav item
+ * (below persona-surfaces.spec.ts:355-357) already flagged a resolved design-system color as
+ * "a moving target" across engines, which `element.style.color` never is — it echoes back
+ * exactly what React wrote, the same property the unit suite checks directly
+ * (InvoicesList.test.tsx's `tin.style.color`).
+ */
+async function expectHolderTone(who: Locator, warn: boolean, label: string): Promise<void> {
+  const color = await who.evaluate((el) => (el as HTMLElement).style.color)
+  expect(color, `${label} should render in its ${warn ? 'warn/red' : 'default'} tone`).toBe(warn ? 'var(--status-red-text)' : 'var(--fg-2)')
+}
+
+/** The DOM index of the card carrying this EXACT title, among every `role-card` on screen. */
+async function cardIndex(page: Page, title: string): Promise<number> {
+  return roleCard(page, title).evaluate((el) => Array.from(document.querySelectorAll('[data-testid="role-card"]')).indexOf(el))
+}
+
+/**
+ * Card order is pinned server-side (see the header) — asserted here by RELATIVE position: each
+ * title in `titles` must render strictly after the one before it. A set-equality check would
+ * pass on a shuffled grid; `.nth()` would break the moment a residue card (soft-deleted, never
+ * reclaimed) landed among these.
+ */
+async function expectRelativeOrder(page: Page, titles: readonly string[]): Promise<void> {
+  const indices = await Promise.all(titles.map((t) => cardIndex(page, t)))
+  for (let i = 1; i < indices.length; i++) {
+    expect(indices[i], `"${titles[i]}" should render after "${titles[i - 1]}"`).toBeGreaterThan(indices[i - 1])
+  }
+}
+
+/**
+ * AC-4, shape (1): the grid's cardinality against a live read taken in this same test — never
+ * a literal, since Test 3 (or an unswept probe) can grow this tenant's workflow_roles forever.
+ * `token` must come from the SAME tenant the browser session is signed into.
+ */
+async function expectLiveGridCount(page: Page, token: string): Promise<void> {
+  const live = await listWorkflowRoles(token)
+  await expect(page.getByTestId('role-card'), 'grid count must equal a live read taken in this test').toHaveCount(
+    live.workflow_roles.length,
+  )
 }
 
 /** One roster row's server-stated identity: email, access-role label and status pill. */
@@ -151,7 +436,7 @@ async function expectRosterRow(page: Page, m: SeededMember): Promise<void> {
 }
 
 /** The roster's Workflow roles cell: `first title +N` on screen, every title in the tooltip. */
-async function expectRosterCell(page: Page, cell: MockRosterCell): Promise<void> {
+async function expectRosterCell(page: Page, cell: SeedRosterCell): Promise<void> {
   const target = memberRow(page, cell.member).getByText(cell.text, { exact: true })
   await expect(target, `${cell.member}'s Workflow roles cell`).toHaveCount(1)
   // A roleless row renders `—` and deliberately carries no tooltip at all.
@@ -178,7 +463,7 @@ async function toggleRowMenu(page: Page, name: string): Promise<void> {
 // ---------------------------------------------------------------------------------------
 // Test 1 -- the FIRM workspace: the live roster, the seeded seats, the seat nobody holds
 // ---------------------------------------------------------------------------------------
-test('firm Settings: the live member directory, the seeded seats, and every control that has no endpoint', async ({ page }) => {
+test('firm Settings: the live member directory, the live role grid, and every control that has no endpoint', async ({ page }) => {
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm')
@@ -255,23 +540,23 @@ test('firm Settings: the live member directory, the seeded seats, and every cont
 
   // --- the Members tab speaks in roles ------------------------------------------------------
   await expect(page.getByTestId('members-table').getByText('Workflow roles')).toBeVisible()
-  for (const cell of MOCK_FIRM_ROSTER_CELLS) {
+  for (const cell of FIRM_ROSTER_CELLS) {
     await expectRosterCell(page, cell)
   }
   // The same sentence the Roles tab renders, from the same derivation — and firm is the mode
   // where this banner never used to appear at all.
-  await expect(page.getByTestId('members-unassigned')).toContainText(MOCK_FIRM_UNASSIGNED.notice)
+  await expect(page.getByTestId('members-unassigned')).toContainText(FIRM_UNASSIGNED.notice)
 
   // --- the drawer: pill toggles, and three controls with nothing behind them ------------------
-  const twoSeat = MOCK_FIRM_TWO_SEAT_STEPS
+  const twoSeat = FIRM_TWO_SEAT_STEPS
   await memberRow(page, twoSeat.member).getByText(twoSeat.member, { exact: true }).click()
   const drawer = page.getByTestId('member-drawer')
   await expect(drawer).toBeVisible()
-  for (const role of MOCK_FIRM_ROLES) {
+  for (const role of SEED_FIRM_ROLE_CARDS) {
     const pressed = String(twoSeat.held.includes(role.key))
     await expect(page.getByTestId(`drawer-wfrole-${role.key}`), `${role.title} pill`).toHaveAttribute('aria-pressed', pressed)
   }
-  await expect(page.getByTestId('drawer-wfrole-helper')).toHaveText(MOCK_DRAWER_ROLE_HELPER)
+  await expect(page.getByTestId('drawer-wfrole-helper')).toHaveText(DRAWER_ROLE_HELPER)
   // Every seat this person holds, unioned in ONE traversal: a policy naming two of their
   // roles is one row here, not two.
   await expect(page.getByTestId('member-steps-named')).toHaveText(twoSeat.named)
@@ -306,35 +591,39 @@ test('firm Settings: the live member directory, the seeded seats, and every cont
   await expect(drawer).toHaveCount(0)
 
   // --- the Roles tab ------------------------------------------------------------------------
+  const token = await login(PERSONAS.A)
   await settingsTab(page, 'Roles').click()
   await expect(page.getByTestId('roles-grid')).toBeVisible()
-  await expect(page.getByTestId('role-card')).toHaveCount(MOCK_FIRM_ROLES.length)
-  for (const [i, role] of MOCK_FIRM_ROLES.entries()) {
-    // nth(i) is what pins ORDER — a set-equality check would pass on a shuffled grid. Each
-    // card's holder line resolves LIVE names through the mock role store's member ids.
-    await expectRoleCard(page, i, role)
+  await expectLiveGridCount(page, token)
+  for (const role of SEED_FIRM_ROLE_CARDS) {
+    await expectRoleCard(page, role)
   }
+  await expectRelativeOrder(
+    page,
+    SEED_FIRM_ROLE_CARDS.map((r) => r.title),
+  )
 
-  // The unsignable seat, named where the reader already is. Quality Reviewer's card reads
-  // `Nobody assigned` above, and the banner is the workspace-level statement of the same
-  // fact — it sits above the grid, which a search box cannot change.
+  // The unsignable seats, named where the reader already is. Each card above already reads
+  // its own warn state; the banner is the workspace-level statement of the same facts — it
+  // sits above the grid, which a search box cannot change.
   const banner = page.getByTestId('roles-unassigned')
-  await expect(banner).toContainText(MOCK_FIRM_UNASSIGNED.notice)
-  await expect(banner).toContainText(MOCK_FIRM_UNASSIGNED.titles)
+  await expect(banner).toContainText(FIRM_UNASSIGNED.notice)
+  await expect(banner).toContainText(FIRM_UNASSIGNED.titles)
 
   // Disjointness, firm half. Scoped to the grid and EXACT: `Preparer` is a substring of this
   // mode's own `Invoice Preparer`, so a containment check here would fail for the wrong
   // reason. Two disjoint sets is what "the store is keyed firm/inhouse" means observationally.
   const grid = page.getByTestId('roles-grid')
-  for (const role of MOCK_INHOUSE_ROLES) {
+  for (const role of SEED_INHOUSE_ROLE_CARDS) {
     await expect(grid.getByText(role.title, { exact: true }), `${role.title} must not leak into firm`).toHaveCount(0)
   }
 
-  // The create modal opens here but writes nothing — the full create/staff/delete journey is
-  // Test 3. The picker's denominator is the SELECTABLE roster: an invited person has no row
-  // to tick, and no seeded row is invited, so the footnote that names them never renders.
+  // The create modal opens here but writes nothing — the full create/staff/reload/delete
+  // journey is Test 3. The picker's denominator is the SELECTABLE roster: an invited person
+  // has no row to tick, and no seeded row is invited, so the footnote that names them never
+  // renders.
   await page.getByTestId('roles-new').click()
-  await expect(page.getByTestId('role-modal-count')).toHaveText(`0 of ${MOCK_FIRM_PICKER_SELECTABLE} selected`)
+  await expect(page.getByTestId('role-modal-count')).toHaveText(`0 of ${FIRM_PICKER_SELECTABLE} selected`)
   await expect(page.getByTestId('role-modal-hidden')).toHaveCount(0)
   // Save is inert on an empty name and nothing else gates it.
   await expect(page.getByTestId('role-modal-save')).toBeDisabled()
@@ -347,7 +636,7 @@ test('firm Settings: the live member directory, the seeded seats, and every cont
 // ---------------------------------------------------------------------------------------
 // Test 2 -- the IN-HOUSE workspace: its own roster, its own seats, the suspended holder
 // ---------------------------------------------------------------------------------------
-test('in-house Settings: its own live roster, three seats that cannot be signed, and the suspended holder', async ({ page }) => {
+test('in-house Settings: its own live roster, three unsignable seats, and the suspended holder', async ({ page }) => {
   const errors = collectErrors(page)
 
   await signInAs(page, 'inhouse')
@@ -379,15 +668,15 @@ test('in-house Settings: its own live roster, three seats that cannot be signed,
     'Invite people',
   )
 
-  for (const cell of MOCK_INHOUSE_ROSTER_CELLS) {
+  for (const cell of INHOUSE_ROSTER_CELLS) {
     await expectRosterCell(page, cell)
   }
-  await expect(page.getByTestId('members-unassigned')).toContainText(MOCK_INHOUSE_UNASSIGNED.notice)
+  await expect(page.getByTestId('members-unassigned')).toContainText(INHOUSE_UNASSIGNED.notice)
 
   // --- the suspended holder's row and drawer --------------------------------------------------
   // …0012's status is a SERVER value. It is what puts the red pill on the row, the blocking
   // strip under it, and the amber note in the drawer — three surfaces off one column.
-  const suspended = MOCK_INHOUSE_SUSPENDED_STEPS
+  const suspended = INHOUSE_SUSPENDED_STEPS
   await expect(page.getByTestId('member-steps-warning')).toHaveText(suspended.rowWarning)
 
   await memberRow(page, suspended.member).getByText(suspended.member, { exact: true }).click()
@@ -414,25 +703,31 @@ test('in-house Settings: its own live roster, three seats that cannot be signed,
   await expect(drawer).toHaveCount(0)
 
   // --- the Roles tab --------------------------------------------------------------------------
+  const token = await login(PERSONAS.B)
   await settingsTab(page, 'Roles').click()
   await expect(page.getByTestId('roles-grid')).toBeVisible()
-  await expect(page.getByTestId('role-card')).toHaveCount(MOCK_INHOUSE_ROLES.length)
-  for (const [i, role] of MOCK_INHOUSE_ROLES.entries()) {
-    await expectRoleCard(page, i, role)
+  await expectLiveGridCount(page, token)
+  for (const role of SEED_INHOUSE_ROLE_CARDS) {
+    await expectRoleCard(page, role)
   }
+  await expectRelativeOrder(
+    page,
+    SEED_INHOUSE_ROLE_CARDS.map((r) => r.title),
+  )
 
-  // The OTHER unsignable state, and the one that reads as a person rather than as an absence:
-  // the only CFO holder is suspended, so the card names him and says nothing more. The word
-  // is deliberately absent — the tone carries the fact, and appending it would make the card
-  // read as an accusation rather than as a rota gap.
+  // The other unsignable state that reads as a person rather than as an absence: the only
+  // CFO holder is suspended, so the card names him and says nothing more (checked above by
+  // expectRoleCard's tone assertion). The word `suspended` is deliberately absent from the
+  // rendered text — the tone carries the fact, and appending it would make the card read as
+  // an accusation rather than as a rota gap.
   await expect(roleCard(page, 'CFO')).not.toContainText(/suspended/i)
 
   const banner = page.getByTestId('roles-unassigned')
-  await expect(banner).toContainText(MOCK_INHOUSE_UNASSIGNED.notice)
-  await expect(banner).toContainText(MOCK_INHOUSE_UNASSIGNED.titles)
+  await expect(banner).toContainText(INHOUSE_UNASSIGNED.notice)
+  await expect(banner).toContainText(INHOUSE_UNASSIGNED.titles)
 
   const grid = page.getByTestId('roles-grid')
-  for (const role of MOCK_FIRM_ROLES) {
+  for (const role of SEED_FIRM_ROLE_CARDS) {
     await expect(grid.getByText(role.title, { exact: true }), `${role.title} must not leak into in-house`).toHaveCount(0)
   }
 
@@ -440,7 +735,7 @@ test('in-house Settings: its own live roster, three seats that cannot be signed,
 })
 
 // ---------------------------------------------------------------------------------------
-// Test 3 -- create a seat, point a step at it, delete it
+// Test 3 -- create a seat, point a step at it, reload to prove it stuck, delete it
 // ---------------------------------------------------------------------------------------
 // In-house because the mutation needs a person the picker will offer and a policy with a
 // seeded root step to repoint. The holder is …0010 Tunde Adeyemi, who holds exactly ONE seat
@@ -448,20 +743,20 @@ test('in-house Settings: its own live roster, three seats that cannot be signed,
 // bare title to the `X +1` form, tooltip and all, and the transition is asserted from both
 // ends. Nobody in this workspace holds zero seats; the em-dash case is the firm's …0007
 // (Test 1), who is read-only.
-//
-// Nothing here reaches a database: role staffing is App.tsx useState.
-test('in-house: a created role is staffable, selectable on a step, and blocks that step once deleted', async ({ page }) => {
+test('in-house: a created role survives a reload, is selectable on a step, and blocks that step once deleted', async ({ page }) => {
   const errors = collectErrors(page)
 
-  // Per-run-unique, so two runs against the same environment cannot collide — and so the
-  // title can never be confused with a seeded one.
+  // Per-run-unique, so two runs against the same (never-reset) environment cannot collide,
+  // the title can never be confused with a seeded one, and the afterAll sweep below can find
+  // it by prefix alone.
   const stamp = Date.now()
   const title = `E2E seat ${stamp}`
   const desc = 'Signs off the browser journey'
   const holder = 'Tunde Adeyemi'
   const heldSeat = 'Financial Controller'
   // The first root step of the published in-house policy. Repointing it is what gives the
-  // deletion below something to break.
+  // deletion below something to break. This half of the mutation needs no cleanup of its own
+  // — see the header: policies are still frontend `useState`, and `signInAs` reseeds them.
   const policyName = 'Company approval policy'
   const seededStep = 'Line Manager must approve'
 
@@ -486,24 +781,43 @@ test('in-house: a created role is staffable, selectable on a step, and blocks th
   await pickerRows.locator('input[type="checkbox"]').check()
   // The denominator is the SELECTABLE roster — a live search narrows the rows below it and
   // changes neither the count nor the (absent) invited footnote.
-  await expect(page.getByTestId('role-modal-count')).toHaveText(`1 of ${MOCK_INHOUSE_PICKER_SELECTABLE} selected`)
+  await expect(page.getByTestId('role-modal-count')).toHaveText(`1 of ${INHOUSE_PICKER_SELECTABLE} selected`)
   await expect(page.getByTestId('role-modal-hidden')).toHaveCount(0)
   await page.getByTestId('role-modal-save').click()
 
   // The flash clears itself after 3s, so it is asserted before anything else.
   await expect(page.getByTestId('roles-flash')).toHaveText(`${title} saved`)
   await expect(page.getByTestId('role-modal')).toHaveCount(0)
-  await expect(page.getByTestId('role-card')).toHaveCount(MOCK_INHOUSE_ROLES.length + 1)
+  // AC-4, shape (2): containment of the row this test itself just created — no grid-wide
+  // literal count.
   const created = roleCard(page, title)
+  await expect(created, 'the created card exists exactly once').toHaveCount(1)
   await expect(created.getByText(desc, { exact: true })).toBeVisible()
-  // The holder line resolves the LIVE membership row the mock role now names.
+  // The holder line resolves the LIVE membership row the new role now names.
   await expect(created.getByText(holder, { exact: true })).toBeVisible()
   await expect(created.getByText('not used in any policy')).toBeVisible()
   await expect(created.getByText('1 person')).toBeVisible()
 
+  // --- AC-8: the round trip is real ---------------------------------------------------------
+  // Role definitions and staffing are server rows now, so a reload re-fetches rather than
+  // wiping them — the one assertion the deleted MOCK-era spec could structurally never make.
+  // `view`/the open Settings tab are plain useState (no hash route for Settings), so both are
+  // re-driven after the reload; the SESSION survives it untouched (lib/session.ts).
+  await page.reload()
+  await expect(sidebar(page)).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
+  await goTo(page, 'Settings')
+  await settingsTab(page, 'Roles').click()
+  await expect(page.getByTestId('roles-grid')).toBeVisible()
+  const survived = roleCard(page, title)
+  await expect(survived, 'the created seat survives a reload').toHaveCount(1)
+  await expect(survived.getByText(desc, { exact: true })).toBeVisible()
+  await expect(survived.getByText(holder, { exact: true })).toBeVisible()
+  await expect(survived.getByText('1 person')).toBeVisible()
+
   // --- the roster cell of the person staffed into it ---------------------------------------
-  // The AFTER half. `addRole` appends and `rolesOfMember` iterates in array order, so the
-  // seat he already held still renders first and the new one lives in the `+1`.
+  // The AFTER half. `addRole` appends and `rolesOfMember` iterates in array order (and the
+  // reload above re-fetched in the server's own `created_at` order, which is the same thing),
+  // so the seat he already held still renders first and the new one lives in the `+1`.
   await settingsTab(page, 'Members').click()
   await expectRosterCell(page, { member: holder, text: `${heldSeat} +1`, tooltip: `${heldSeat}\n${title}` })
 
@@ -513,7 +827,7 @@ test('in-house: a created role is staffable, selectable on a step, and blocks th
   // Selection TOGGLES, so this card is clicked exactly once.
   await page.getByText(seededStep, { exact: true }).click()
   const whoApproves = wfSelect(page, 'Who must approve')
-  const seatTitles = MOCK_INHOUSE_ROLES.map((r) => r.title)
+  const seatTitles = SEED_INHOUSE_ROLE_CARDS.map((r) => r.title)
   expect(await whoApproves.locator('option').allTextContents()).toEqual([...seatTitles, title])
   await whoApproves.selectOption({ label: title })
 
@@ -536,21 +850,38 @@ test('in-house: a created role is staffable, selectable on a step, and blocks th
   await expect(page.getByTestId('role-delete-cancel')).toBeVisible()
   await page.getByTestId('role-delete-confirmed').click()
   await expect(page.getByTestId('roles-flash')).toHaveText(`${title} deleted`)
-  await expect(page.getByTestId('role-card')).toHaveCount(MOCK_INHOUSE_ROLES.length)
+  // AC-4, shape (2) again: containment of ABSENCE, not a grid-wide literal count.
+  await expect(roleCard(page, title), 'the deleted card is gone').toHaveCount(0)
 
   // --- the step it pointed at now blocks -----------------------------------------------------
   // No policy was rewritten by the delete: the published policy still names the key, and the
   // step renders the truth rather than a raw id.
   await goTo(page, 'Workflows')
-  await expect(page.getByText(`${MOCK_DELETED_ROLE_OPTION} must approve`, { exact: true })).toBeVisible()
-  await page.getByText(`${MOCK_DELETED_ROLE_OPTION} must approve`, { exact: true }).click()
-  await expect(page.getByText(MOCK_DELETED_ROLE_LINE, { exact: true })).toBeVisible()
+  await expect(page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true })).toBeVisible()
+  await page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true }).click()
+  await expect(page.getByText(DELETED_ROLE_LINE, { exact: true })).toBeVisible()
   // The missing key is PREPENDED as an option, or the select would render blank on a step
   // whose seat is gone.
-  expect(await wfSelect(page, 'Who must approve').locator('option').allTextContents()).toEqual([
-    MOCK_DELETED_ROLE_OPTION,
-    ...seatTitles,
-  ])
+  expect(await wfSelect(page, 'Who must approve').locator('option').allTextContents()).toEqual([DELETED_ROLE_OPTION, ...seatTitles])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Best-effort, idempotent-on-purpose safety net for the mutation above — modelled on
+// contract-approvals.spec.ts:86-94. On the happy path Test 3 already deletes its own role
+// through the UI, so this finds nothing; it exists for the run where Test 3 fails before
+// reaching that step and would otherwise leave a live probe row behind. Matches by the
+// per-run-unique title PREFIX, not the exact stamp, so it also self-heals a prior failed
+// run's residue.
+test.afterAll(async () => {
+  const token = await login(PERSONAS.B)
+  const live = await listWorkflowRoles(token)
+  const strays = live.workflow_roles.filter((r) => /^E2E seat \d+$/.test(r.title))
+  for (const role of strays) {
+    try {
+      await deleteWorkflowRole(token, role.key)
+    } catch {
+      // already deleted, or never created
+    }
+  }
 })

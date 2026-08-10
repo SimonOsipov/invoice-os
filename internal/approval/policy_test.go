@@ -997,7 +997,9 @@ func TestPolicy_ValidateCondAmountAnswersAHugeExponentFast(t *testing.T) {
 // Rejecting the whole band is the safe direction and costs nothing real: the accepted
 // grammar is already a strict subset of numeric's.
 func TestPolicy_ValidateCondAmountRejectsAZeroTheColumnCannotHold(t *testing.T) {
-	for _, amount := range []string{"0e2147483647", "-0e2147483647", "0.00e2147483647", "0e1000000000"} {
+	// "0e13" is the first rejected zero: zero follows the same exponent rule as every
+	// other value, one past the "0e12" its sibling test pins as legal.
+	for _, amount := range []string{"0e13", "0e2147483647", "-0e2147483647", "0.00e2147483647", "0e1000000000"} {
 		t.Run(amount, func(t *testing.T) {
 			err, _, answered := costOfValidating(t, amount)
 			if !answered {
@@ -1013,7 +1015,7 @@ func TestPolicy_ValidateCondAmountRejectsAZeroTheColumnCannotHold(t *testing.T) 
 // TestPolicy_ValidateCondAmountKeepsZeroLegal: the fix for the test above must not cost
 // the zero every real caller sends.
 func TestPolicy_ValidateCondAmountKeepsZeroLegal(t *testing.T) {
-	for _, amount := range []string{"0", "0.00", "-0.00", "0e0", "0.0"} {
+	for _, amount := range []string{"0", "0.00", "-0.00", "0e0", "0.0", "0e12"} {
 		t.Run(amount, func(t *testing.T) {
 			if err := validateTree([]stepInput{condIn(">", amount, nil, nil)}); err != nil {
 				t.Errorf("err = %v, want nil", err)

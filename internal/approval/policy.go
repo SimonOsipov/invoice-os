@@ -287,12 +287,10 @@ func validateCondAmount(amount string) error {
 		return ErrValidation
 	}
 	// Bound the exponent before comparing: Cmp rescales to the smaller exponent, so
-	// "1e100000000" builds a 10^8-digit integer before it can be rejected. Zero rescales
-	// just as dearly and is in range at any exponent, so it answers here
-	// (TestPolicy_ValidateCondAmountAnswersAHugeExponentFast).
-	if d.IsZero() {
-		return nil
-	}
+	// "1e100000000" builds a 10^8-digit integer before it can be rejected. A zero
+	// coefficient costs the same and numeric refuses "0e2000000000" anyway — hence no
+	// zero short-circuit above this line
+	// (TestPolicy_ValidateCondAmountRejectsAZeroTheColumnCannotHold).
 	// Exponent 12 falls through to the ceiling, which rejects it; the rescale is bounded.
 	if d.Exponent() > 12 || d.Abs().GreaterThanOrEqual(condAmountCeiling) {
 		return ErrValidation

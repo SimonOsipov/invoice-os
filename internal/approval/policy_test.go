@@ -184,17 +184,9 @@ func TestPolicy_FlattenMintsServerIds(t *testing.T) {
 	}
 	clientIDs := takenSet("wn1000", "wn1001", "wn1002")
 
-	rows, ids := flattenSteps(tree)
+	rows := flattenSteps(tree)
 	if len(rows) != 3 {
 		t.Fatalf("rows = %d, want 3", len(rows))
-	}
-	if len(ids) != len(rows) {
-		t.Errorf("ids = %d, want one per row (%d)", len(ids), len(rows))
-	}
-	for _, id := range ids {
-		if _, err := uuid.Parse(id); err != nil {
-			t.Errorf("returned id %q is not a uuid: %v", id, err)
-		}
 	}
 
 	minted := make(map[string]bool, len(rows))
@@ -212,7 +204,7 @@ func TestPolicy_FlattenMintsServerIds(t *testing.T) {
 	}
 
 	// Ids churn per call by design — nothing reads a step id back.
-	again, _ := flattenSteps(tree)
+	again := flattenSteps(tree)
 	for _, r := range again {
 		if minted[r.ID] {
 			t.Errorf("second call reused id %q", r.ID)
@@ -228,7 +220,7 @@ func TestPolicy_FlattenDerivesParentBranchOrd(t *testing.T) {
 			[]stepInput{approvalIn("else-c")}),
 	}
 
-	rows, _ := flattenSteps(tree)
+	rows := flattenSteps(tree)
 	if len(rows) != 5 {
 		t.Fatalf("rows = %d, want 5", len(rows))
 	}
@@ -293,7 +285,7 @@ func TestPolicy_NestFlattenRoundTrip(t *testing.T) {
 		},
 	}
 
-	rows, _ := flattenSteps(tree)
+	rows := flattenSteps(tree)
 	got := nestSteps(rows)
 
 	// Ids are checked before they are blanked, so zeroing cannot hide a dropped id.

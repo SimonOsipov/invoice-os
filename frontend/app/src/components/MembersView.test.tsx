@@ -80,12 +80,18 @@ function Harness({
   membersError,
   refetchMembers,
   roles,
+  rolesState,
+  rolesError,
+  refetchRoles,
 }: {
   initial: Member[]
   membersState?: AsyncStatus
   membersError?: ApiError | null
   refetchMembers?: () => void
   roles?: Role[]
+  rolesState?: AsyncStatus
+  rolesError?: ApiError | null
+  refetchRoles?: () => void
 }) {
   const [members, setMembers] = useState<Member[]>(initial)
 
@@ -102,6 +108,9 @@ function Harness({
     membersState: membersState ?? 'ready',
     membersError: membersError ?? null,
     refetchMembers: refetchMembers ?? vi.fn(),
+    rolesState: rolesState ?? 'ready',
+    rolesError: rolesError ?? null,
+    refetchRoles: refetchRoles ?? vi.fn(),
     saveMember: vi.fn(), // the verb the UNWIRED table/drawer still call -- deliberately inert
     dropMember: vi.fn(),
     inviteMembers: vi.fn(),
@@ -247,6 +256,30 @@ describe('AC1: an errored roster never renders as an empty success', () => {
 
     fireEvent.click(screen.getByText('Retry'))
     expect(refetch).toHaveBeenCalledOnce()
+  })
+})
+
+// ============================================================================
+// APPR-04-06 AC1 -- the roster branches on the ROLES fetch too, not just members
+// ============================================================================
+
+describe('APPR-04-06 AC1: a roles-only fetch failure must not render the roster as if it loaded', () => {
+  function threeMembers(): Member[] {
+    return [member(), otherMember(), member({ id: 'u3', name: 'Third Person', initials: 'TP' })]
+  }
+
+  it('renders the error surface, not the table, when only ctx.rolesState is error', () => {
+    render(<Harness initial={threeMembers()} rolesState="error" rolesError={new ApiError('http', 'roles gateway is down', 503)} />)
+
+    expect(screen.queryByTestId('members-table'), 'a roles-only failure must not render the roster as if it loaded').toBeNull()
+    expect(screen.getByText('roles gateway is down')).toBeTruthy()
+  })
+
+  it('still renders the roster when the roles list is merely EMPTY, not errored', () => {
+    render(<Harness initial={threeMembers()} rolesState="ready" roles={[]} />)
+
+    expect(screen.getByTestId('members-table')).toBeTruthy()
+    expect(screen.queryByTestId('members-unassigned')).toBeNull()
   })
 })
 

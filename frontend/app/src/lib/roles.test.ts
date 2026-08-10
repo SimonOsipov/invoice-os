@@ -7,6 +7,7 @@ import { createAuthedFetch } from './authedFetch'
 import { replaceMember, toMember, type Member, type MembershipWire } from './members'
 import type { AuthedFetch } from './portfolio'
 import {
+  activeHolders,
   canSaveRole,
   createStaffedRole,
   createWorkflowRole,
@@ -355,12 +356,12 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
     ])
   })
 
-  it('firm has exactly one unsignable role', () => {
-    expect(unassignedRoles(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS).map((r) => r.key)).toEqual(['quality_reviewer'])
+  it('firm has exactly two unsignable roles — preparer is staffed but by no approver', () => {
+    expect(unassignedRoles(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'quality_reviewer'])
   })
 
-  it('inhouse has three unsignable roles, one of them suspended-only', () => {
-    expect(unassignedRoles(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['fin_mgr', 'cfo', 'ceo'])
+  it('inhouse has four unsignable roles, one of them suspended-only', () => {
+    expect(unassignedRoles(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'fin_mgr', 'cfo', 'ceo'])
     expect(resolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo').text).toBe('Adebayo Ogunlesi')
   })
 
@@ -502,8 +503,8 @@ describe('AC-8 — resolve and inspectorResolve', () => {
   it('resolve covers all five states', () => {
     // ok, one active holder
     expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'fin_mgr')).toEqual({ text: 'Musa Danjuma', warn: false })
-    // ok, several
-    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'preparer')).toEqual({ text: 'Folake Adesina +1', warn: false })
+    // blocked despite two holders — neither is an approver
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'preparer')).toEqual({ text: 'Folake Adesina +1', warn: true })
     // nobody holds it
     expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'quality_reviewer')).toEqual({ text: 'Nobody assigned', warn: true })
     // only suspended holders
@@ -554,7 +555,7 @@ describe('AC-8 — resolve and inspectorResolve', () => {
 
   it('inspectorResolve omits +N', () => {
     const text = inspectorResolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'preparer').text
-    expect(text).toBe('Currently: Folake Adesina')
+    expect(text).toBe('Currently: Folake Adesina — this step will block')
     expect(text).not.toContain('+1')
   })
 })
@@ -572,7 +573,10 @@ describe('AC-8 — a deleted role resolves to the deleted-role sentence, in both
 
 describe('AC-9 — unassignedRoles', () => {
   it('unassignedRoles is empty when every role has an active holder', () => {
-    const roles = [role('a', 'A', '', ['mf1']), role('b', 'B', '', ['mf2'])]
+    // mf1 admin, mf3 reviewer — both approvers. mf2 (preparer) would no longer keep this
+    // test's own claim true, so the fixture stays on approvers rather than the expectation
+    // flipping to contradict the test's name.
+    const roles = [role('a', 'A', '', ['mf1']), role('b', 'B', '', ['mf3'])]
     expect(unassignedRoles(roles, MOCK_FIRM_MEMBERS)).toEqual([])
   })
 })
@@ -947,6 +951,29 @@ describe('the firm workspace resolves every seeded approval step to a named pers
 })
 
 // ============================================================================
+// APPR-04-02 — activeHolders/resolution gain the isApprover predicate
+// ============================================================================
+// Cases the re-derived assertions above don't reach on their own: activeHolders has no
+// direct test anywhere else in this file, and no existing fixture mixes an active approver
+// with an active non-approver under the same role.
+
+describe('APPR-04-02 — the approver predicate', () => {
+  it('activeHolders drops a preparer and keeps a reviewer', () => {
+    const roles = [role('mixed', 'Mixed', '', ['mf2', 'mf3'])]
+    expect(activeHolders(roles, MOCK_FIRM_MEMBERS, 'mixed').map((m) => m.id)).toEqual(['mf3'])
+  })
+
+  it('an admin holder still satisfies a seat (Q1 admits admins)', () => {
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'cfo')).toEqual({ text: 'Chinedu Okafor', warn: false })
+  })
+
+  it('+N still counts every other holder, approver or not', () => {
+    const roles = [role('mixed', 'Mixed', '', ['mf3', 'mf2'])]
+    expect(resolve(roles, MOCK_FIRM_MEMBERS, 'mixed')).toEqual({ text: 'Musa Danjuma +1', warn: false })
+  })
+})
+
+// ============================================================================
 // QA (Stage 4) — traversal/resolution facts Mode A flagged as dropped with
 // stepsFor/resolvePosition and not portable from the seed alone: no seeded policy puts an
 // approval node in an else lane, repeats one role twice within one policy, or blocks a role
@@ -1065,8 +1092,8 @@ const SEEDED_INHOUSE_MEMBERS: readonly Member[] = [
 ].map((w) => toMember(w, 'nobody'))
 
 describe('AC-10 — unassignedRoles/resolve against the shipped re-point and a live-shaped directory', () => {
-  it('firm: only quality_reviewer is unassigned, and every one of the ten seeded approval steps resolves without warn', () => {
-    expect(unassignedRoles(SEED_FIRM_ROLES, SEEDED_FIRM_MEMBERS).map((r) => r.key)).toEqual(['quality_reviewer'])
+  it('firm: preparer and quality_reviewer are unassigned, and every one of the ten seeded approval steps resolves without warn', () => {
+    expect(unassignedRoles(SEED_FIRM_ROLES, SEEDED_FIRM_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'quality_reviewer'])
     const stepRoles = approvalRoles(SEED_FIRM_POLICIES)
     expect(stepRoles.length).toBe(10) // guard against a vacuous pass
     for (const key of stepRoles) {
@@ -1076,8 +1103,8 @@ describe('AC-10 — unassignedRoles/resolve against the shipped re-point and a l
     }
   })
 
-  it('inhouse: fin_mgr/cfo/ceo are unassigned, cfo blocks on its lone suspended holder, fin_dir resolves its active pair', () => {
-    expect(unassignedRoles(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['fin_mgr', 'cfo', 'ceo'])
+  it('inhouse: preparer/fin_mgr/cfo/ceo are unassigned, cfo blocks on its lone suspended holder, fin_dir resolves its active pair', () => {
+    expect(unassignedRoles(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'fin_mgr', 'cfo', 'ceo'])
     expect(resolve(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi', warn: true })
     expect(resolve(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS, 'fin_dir')).toEqual({ text: 'Ngozi Balogun +1', warn: false })
   })

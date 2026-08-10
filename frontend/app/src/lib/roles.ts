@@ -15,7 +15,7 @@ import type { AsyncStatus } from '@invoice-os/api-client'
 
 import type { AccessRole, Member, MembersSurface } from './members'
 import type { AuthedFetch } from './portfolio'
-import type { Policy, WorkflowMode } from './workflows'
+import type { Policy } from './workflows'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,67 +30,11 @@ export type Role = {
   members: string[]
 }
 
-/** Keyed per workspace mode, mirroring `PolicyStore` — NOT per client. */
-export type RoleStore = Record<WorkflowMode, Role[]>
-
 /** The card, the canvas and the inspector all need the amber tone to travel WITH the string. */
 export type Resolved = { text: string; warn: boolean }
 
 /** `stepsFor`'s shape with `name` renamed. Policies with a zero count are omitted. */
 export type RoleSteps = { total: number; policies: { policyName: string; count: number }[] }
-
-// ---------------------------------------------------------------------------
-// Seed
-// ---------------------------------------------------------------------------
-
-// `members` holds MEMBERSHIP SUBJECTS (db/seed.dev.sql), the same ids `toMember` projects a
-// live roster onto — a mock id here resolves to zero holders.
-//
-// Practice vocabulary on the keys `SEED_FIRM_POLICIES` already references; `quality_reviewer`
-// is the one net-new key and the one role nobody holds, which is what puts the blocking copy
-// on screen at first load. …0004 Musa Danjuma is the seeded two-role holder.
-export const SEED_FIRM_ROLES: readonly Role[] = [
-  {
-    key: 'preparer',
-    title: 'Invoice Preparer',
-    desc: 'Prepares and imports client invoices',
-    members: ['c0000000-0000-0000-0000-000000000003', 'c0000000-0000-0000-0000-000000000006'],
-  },
-  { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: ['c0000000-0000-0000-0000-000000000004'] },
-  { key: 'fin_dir', title: 'Senior Manager', desc: 'Second sign-off above ₦250m', members: ['c0000000-0000-0000-0000-000000000004'] },
-  { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: ['c0000000-0000-0000-0000-000000000005'] },
-  { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['c0000000-0000-0000-0000-000000000001'] },
-  { key: 'quality_reviewer', title: 'Quality Reviewer', desc: 'Second-partner review on flagged engagements', members: [] },
-]
-
-// The eight shipped `position` values restaffed, each old department string kept as `desc`.
-// …0012 Adebayo Ogunlesi is suspended and the only cfo holder, which is what makes the
-// suspended-only state reachable without a user constructing it.
-export const SEED_INHOUSE_ROLES: readonly Role[] = [
-  { key: 'preparer', title: 'Preparer', desc: 'Accounts Payable', members: ['c0000000-0000-0000-0000-000000000013'] },
-  { key: 'line_mgr', title: 'Line Manager', desc: 'Requesting dept.', members: ['c0000000-0000-0000-0000-000000000009'] },
-  { key: 'fin_mgr', title: 'Finance Manager', desc: 'Finance', members: [] },
-  { key: 'controller', title: 'Financial Controller', desc: 'Finance', members: ['c0000000-0000-0000-0000-000000000010'] },
-  {
-    key: 'fin_dir',
-    title: 'Finance Director',
-    desc: 'Finance',
-    members: ['c0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000008'],
-  },
-  { key: 'compliance', title: 'Compliance Officer', desc: 'Tax & Compliance', members: ['c0000000-0000-0000-0000-000000000011'] },
-  { key: 'cfo', title: 'CFO', desc: 'Executive', members: ['c0000000-0000-0000-0000-000000000012'] },
-  { key: 'ceo', title: 'CEO', desc: 'Executive', members: [] },
-]
-
-/** Deep clone per call, mirroring `seedPolicies`. */
-export function seedRoles(): RoleStore {
-  return { firm: cloneRoles(SEED_FIRM_ROLES), inhouse: cloneRoles(SEED_INHOUSE_ROLES) }
-}
-
-/** `members` is the only nested value a Role carries, so a bare spread would alias the seed. */
-function cloneRoles(list: readonly Role[]): Role[] {
-  return list.map((r) => ({ ...r, members: r.members.slice() }))
-}
 
 // ---------------------------------------------------------------------------
 // Reducers
@@ -424,6 +368,14 @@ export async function createWorkflowRole(f: AuthedFetch, base: string, title: st
 
 /** Go pointer fields: an absent key here must stay absent on the wire, never `""` or `null`. */
 export type RolePatch = { title?: string; desc?: string }
+
+/** Only the changed fields — an unchanged one is omitted, never sent back as its old value. */
+export function rolePatch(current: Role, title: string, desc: string): RolePatch {
+  const patch: RolePatch = {}
+  if (title !== current.title) patch.title = title
+  if (desc !== current.desc) patch.desc = desc
+  return patch
+}
 
 export async function updateWorkflowRole(f: AuthedFetch, base: string, key: string, patch: RolePatch): Promise<Role> {
   return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}`, { method: 'PATCH', body: patch })

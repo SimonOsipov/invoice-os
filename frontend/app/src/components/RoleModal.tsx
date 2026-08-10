@@ -81,11 +81,12 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   function save() {
     // The gate judges the trimmed name, so the trimmed name is what is stored.
     const title = name.trim()
-    const fields = { title, desc: desc.trim(), members: selected.slice() }
-    // `[key-is-a-slug]`: minted once from the title on create, never re-derived on rename —
-    // which is why the edit branch spreads the stored role rather than rebuilding it.
-    if (role) ctx.saveRole({ ...role, ...fields })
-    else ctx.addRole({ key: newRoleKey(ctx.roles, title), ...fields })
+    // `newRoleKey`'s removal (the key is minted server-side now) is a later, separate pass.
+    const fields = { key: newRoleKey(ctx.roles, title), title, desc: desc.trim(), members: selected.slice() }
+    // Split onto the new verbs. A members edit made here does not reach the server yet —
+    // that wiring lands separately.
+    if (role) ctx.renameRole(role.key, fields.title, fields.desc)
+    else ctx.createRole(fields.title, fields.desc, fields.members)
     onFlash(savedNotice(title))
     onClose()
   }

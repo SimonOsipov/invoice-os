@@ -335,10 +335,14 @@ export type PlatformCtx = {
   refetchMembers: () => void
 
   // --- Settings › Roles tab -------------------------------------------------
-  // The CURRENT WORKSPACE's approval seats, resolved out of the per-mode store in
-  // App.tsx exactly as `members` above is. On ctx and not in RolesView because the
-  // Workflows builder resolves a step's role against this same list.
+  // The tenant's approval seats, fetched ONCE in App.tsx and shared by the Roles tab and
+  // the Workflows builder — the `members` triple above, same shape and reason. Per
+  // TENANT, not per workspace mode: `policies` above keeps its own per-mode store, so the
+  // two are asymmetric on purpose.
   roles: Role[]
+  rolesState: AsyncStatus
+  rolesError: ApiError | null
+  refetchRoles: () => void
 
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two
@@ -483,10 +487,13 @@ export type PlatformCtx = {
   // swallow it. Invite, remove and access-role writes have no endpoint; their controls
   // ship disabled with `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
   setMemberStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => Promise<void>
-  // Settings › Roles, same one-funnel contract again. `addRole` takes a whole Role because
-  // the key is minted at compose time by `newRoleKey`, which needs the existing list.
-  saveRole: (next: Role) => void
-  addRole: (next: Role) => void
-  deleteRole: (key: string) => void
+  // Settings › Roles. Rename (PATCH) and staffing (PUT /members) are separate server
+  // writes, so they are separate verbs rather than one funnel over a whole Role — a
+  // partial failure has to say which half failed. Same reject-unreshaped contract as
+  // `setMemberStatus` above, restated once here rather than per verb.
+  createRole: (title: string, desc: string, members: readonly string[]) => Promise<Role>
+  renameRole: (key: string, title: string, desc: string) => Promise<Role>
+  staffRole: (key: string, members: readonly string[]) => Promise<Role>
+  deleteRole: (key: string) => Promise<void>
   signOut: () => void
 }

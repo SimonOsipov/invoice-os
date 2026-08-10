@@ -1333,7 +1333,9 @@ describe('AC-4 — the ctx write verbs', () => {
 
     await updateWorkflowRole(af as unknown as AuthedFetch, wireBase, stored.key, patch)
     const [, init] = af.mock.calls[0] as [string, ApiFetchOptions]
-    expect(init.body).toBe(JSON.stringify({ title: 'Chief Financial Officer' }))
+    // `af` is a bare double, not the real apiFetch — it never JSON.stringifies opts.body
+    // (only the real client.ts does, on the way to fetch), so the raw object is what lands.
+    expect(init.body).toEqual({ title: 'Chief Financial Officer' })
   })
 
   it('renameRole makes no call when nothing changed', () => {

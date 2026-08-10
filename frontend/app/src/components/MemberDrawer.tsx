@@ -133,12 +133,12 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
 
   // Writes straight through, like every other control here — §8 says each change persists
   // immediately and there is no Save button. Holders live on the ROLE, so the write funnel is
-  // `saveRole` and the composed row is the role, not the member.
+  // `staffRole`.
   function toggleWorkflowRole(key: string) {
     const role = ctx.roles.find((r) => r.key === key)
     if (!role) return
     const members = role.members.includes(memberId) ? role.members.filter((id) => id !== memberId) : [...role.members, memberId]
-    ctx.saveRole({ ...role, members })
+    ctx.staffRole(role.key, members)
   }
 
   return (

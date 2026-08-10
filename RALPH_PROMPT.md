@@ -32,7 +32,7 @@ Stories arrive in one of two states: **basic** (intent-only — Objective, Core 
 Never guess, assume, or reduce functionality. When something is unclear, what you do depends on the run:
 
 - **Interactive run** (the user is present and you are not inside a `/ralph` phase) — ask.
-- **Unattended run** — which is every phase of `/ralph` — take the conservative default: the option closest to the story's explicit text, smaller scope. Record it in `## Decisions` and log it prominently. **Never block on the user.**
+- **Unattended run** — which is every phase of `/ralph` — take the conservative default: the option closest to the story's explicit text, smaller scope. Record it in `## Decisions` and log it prominently. **Never block on the user** — with exactly one exception, the critical-fork gate in Phase 0.6d.
 
 Neither path licenses a silent feature cut. This rule holds in every phase, not only Phase 0.6.
 
@@ -111,7 +111,8 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    ```
    mcp__backlog__task_list({ labels: ["story:<lowercase-story-id>"], status: "To Do" })
    ```
-5. **Classify the story state**:
+5. **Refuse a story that still carries unanswered questions**: if the Obsidian story has a `## Blocking Questions` section with any entry left in it, stop immediately and print those entries. Phase 0.6d wrote them and a previous run halted on them. Answering them is the only way forward — never default them and never delete the section to proceed. (`## Open Questions` is a different, non-blocking section in full-mode PRDs. Do not treat it as this gate.)
+6. **Classify the story state**:
    - **`STORY_SOURCE=sysmap`** → always **BASIC**. A feature carries intent (name, description, acceptance criteria) and never subtasks — sysmap is not a task tracker. Its Backlog subtasks, if any, are labelled `story:f-192`.
    - **Zero subtasks + Objective/Core ACs present (or build-plan fallback)** → **BASIC** → set `PLANNING_REQUIRED=true`; topo-sort + plan-logging happen at the end of Phase 0.6.
    - **Subtasks returned (or an architect-level Obsidian story with a Subtasks section)** → **PRE-PLANNED** → topo-sort by `dependencies` → linear execution order, log the plan, skip Phase 0.6.
@@ -180,7 +181,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 
 #### b. QA-Verify debate — UNATTENDED disposition
 - Run the `/qa-verify` protocol against the finalized story: `product-qa-spec` critic (Sonnet) vs `product-architecture-spec` architect (Opus), ≤3 rounds, citation-required — including the Intent-Integrity checks (AC→Objective traceability, Out-of-scope leakage = mechanical).
-- Use the protocol's **Unattended Mode** disposition table: mechanical+resolved+cited → auto-apply; judgment / unresolved / uncited → **conservative default** (option closest to the story's explicit text, smaller scope) + prominent log entry. NEVER block on the user.
+- Use the protocol's **Unattended Mode** disposition table: mechanical+resolved+cited → auto-apply; judgment / unresolved / uncited → **conservative default** (option closest to the story's explicit text, smaller scope) + prominent log entry. NEVER block on the user here — Phase 0.6d re-tests these defaults and is the only step that may stop for one.
 - Append the run to the story's `… QA Debate Log.md`, marking each disposition `auto-applied | conservative-default (reason)`.
 - **Checkpoint:** `PLAN_VERIFIED`
 
@@ -190,8 +191,28 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 - Topo-sort by dependencies → linear execution order. **Log the plan**: story title, branch slug, ordered subtask list, count of Decisions + conservative-default dispositions.
 - **Checkpoint:** `SUBTASKS_READY`
 
-#### d. Decisions surfacing (non-blocking)
-- When spawning the FIRST subtask's executor (Phase 1), instruct it to include in the draft PR description: the story's **## Decisions** section (PM defaults + architect assumptions + conservative-default dispositions) and a pointer to the QA Debate Log. This is the user's review surface — the run does NOT wait for input; completion gates remain CI + Phase 3.5.
+#### d. Critical-fork gate — the ONE place the run stops
+
+A conservative default is right for a technical fork and wrong for a policy one. Before any code exists, test every entry in `## Decisions` — including the QA-debate conservative defaults — against three questions:
+
+- Does it decide **who is allowed** to do something?
+- Does it decide **what the system claims** to an outside party: the authority, the customer, the audit record?
+- Does it let the system **silently override a human's action**?
+
+Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark.
+
+With no critical fork, continue to Phase 0.6e. With one or more:
+
+1. Write each into the story file under `## Blocking Questions`: the question in one line, the default you will take if unanswered, and the alternative. Use that exact heading — `## Open Questions` already exists as a non-blocking PRD section and must not be reused here.
+2. Print that same list and **halt the run.** This is the only place `/ralph` waits for the user.
+3. **Checkpoint:** `AWAITING_ANSWERS`
+
+When the user answers, record each choice in `## Decisions` tagged `user — <what they chose>`, delete the `## Blocking Questions` section, then continue. Do not re-plan.
+
+**Stated boundary:** the gate runs where planning runs. A pre-planned story skips Phase 0.6 and therefore skips this gate, so critical forks already defaulted inside an architect-level story are not caught here.
+
+#### e. Decisions surfacing (non-blocking)
+- When spawning the FIRST subtask's executor (Phase 1), instruct it to include in the draft PR description: the story's **## Decisions** section (PM defaults + architect assumptions + conservative-default dispositions) and a pointer to the QA Debate Log. Phase 0.6d already cleared every critical fork, so this is a review surface, not a gate — the run does NOT wait for input; completion gates remain CI + Phase 3.5.
 
 Then proceed to Phase 1 exactly as for a pre-planned story.
 

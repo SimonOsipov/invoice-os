@@ -792,6 +792,11 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 		}
 		file = strings.TrimPrefix(file, "./")
 		allowed := strings.HasPrefix(file, "internal/validation/") ||
+			// approval_policy_versions.version is a different version entirely --
+			// per-policy, minted by CreatePolicy/PutDraft, never read from
+			// rule_sets. Accepted blind spot: a rule-set v1 pin written inside
+			// internal/approval/ would go unseen here.
+			strings.HasPrefix(file, "internal/approval/") ||
 			file == "e2e/api/validation.spec.ts" ||
 			file == "e2e/topology/targets.ts" ||
 			file == "frontend/app/src/lib/validationApi.test.ts" ||

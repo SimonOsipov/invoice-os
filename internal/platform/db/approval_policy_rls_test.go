@@ -56,7 +56,7 @@ func seedApprovalPolicy(t *testing.T, tenantID, name string) (id string, cleanup
 	return
 }
 
-// seedApprovalPolicyVersion stages one draft (unsealed, inactive) version, version=1, for
+// seedApprovalPolicyVersion stages one draft (unsealed, inactive) version, the first version, for
 // policyID.
 func seedApprovalPolicyVersion(t *testing.T, tenantID, policyID string) (id string, cleanup func()) {
 	t.Helper()

@@ -45,7 +45,7 @@ func seedApprovalPolicy(t *testing.T, super *pgxpool.Pool, tenantID, name string
 	return id
 }
 
-// seedApprovalPolicyVersion inserts one draft (unsealed, inactive) version, version=1.
+// seedApprovalPolicyVersion inserts one draft (unsealed, inactive) version, the first version.
 func seedApprovalPolicyVersion(t *testing.T, super *pgxpool.Pool, tenantID, policyID string) string {
 	t.Helper()
 	var id string

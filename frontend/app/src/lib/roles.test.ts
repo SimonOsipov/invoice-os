@@ -1,10 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { ApiError, type ApiFetchOptions, type AsyncStatus } from '@invoice-os/api-client'
 
 import { APP_PERSONAS } from '../auth'
+import { createAuthedFetch } from './authedFetch'
 import { replaceMember, toMember, type Member, type MembershipWire } from './members'
+import type { AuthedFetch } from './portfolio'
 import {
   canSaveRole,
+  createStaffedRole,
+  createWorkflowRole,
   deleteRoleConfirm,
+  deleteWorkflowRole,
   drawerRoleHelper,
   filterPickerMembers,
   filterRoles,
@@ -14,17 +21,19 @@ import {
   holders,
   inspectorResolve,
   intro,
+  isApprover,
+  listWorkflowRoles,
   newRoleKey,
   pickerHiddenAmongSelected,
   pickerMembers,
   pickerSelectionCount,
-  pruneMember,
   removeRole,
   replaceRole,
   resolve,
   roleOf,
   roleUsage,
   rolesOfMember,
+  rolesSurface,
   rosterRoleCell,
   SEED_FIRM_ROLES,
   SEED_INHOUSE_ROLES,
@@ -35,6 +44,7 @@ import {
   steps as roleSteps,
   unassignedNotice,
   unassignedRoles,
+  updateWorkflowRole,
   type Role,
   type RoleSteps,
 } from './roles'
@@ -420,21 +430,6 @@ describe('AC-4 — reducers are immutable', () => {
     const result = replaceRole(list, unknownRole)
     expect(result).not.toBe(list)
     expect(result).toEqual(list)
-  })
-
-  it('pruneMember drops one id from every role and leaves the rest', () => {
-    const roles = [role('fin_mgr', 'Engagement Manager', '', ['mf3']), role('fin_dir', 'Senior Manager', '', ['mf3'])]
-    const result = pruneMember(roles, 'mf3')
-    for (const r of result) expect(r.members).not.toContain('mf3')
-    expect(result.map((r) => r.key)).toEqual(['fin_mgr', 'fin_dir'])
-  })
-
-  it('setRoleMembers replaces the holder set immutably', () => {
-    const roles = [role('preparer', 'Invoice Preparer', '', ['mf2'])]
-    const result = setRoleMembers(roles, 'preparer', ['mf2', 'mf5'])
-    expect(result).not.toBe(roles)
-    expect(result.find((r) => r.key === 'preparer')?.members).toEqual(['mf2', 'mf5'])
-    expect(roles[0].members).toEqual(['mf2']) // source untouched
   })
 })
 
@@ -927,14 +922,7 @@ describe('drawerRoleHelper — forks on the access role, not the workflow role',
   })
 })
 
-describe('[remove-prunes-suspend-keeps] — pruneMember vs a status write', () => {
-  it('pruning a removed member empties the role they solely held', () => {
-    const pruned = pruneMember(MOCK_INHOUSE_ROLES, 'mh6')
-    const result = resolve(pruned, MOCK_INHOUSE_MEMBERS, 'cfo')
-    expect(result.text).toBe('Nobody assigned')
-    expect(result.warn).toBe(true)
-  })
-
+describe('[remove-prunes-suspend-keeps] — a status write does not unstaff', () => {
   it('suspending does not unstaff — the role keeps the member, resolve just blocks', () => {
     expect(MOCK_FIRM_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual(['mf3']) // guard
     const mf3 = MOCK_FIRM_MEMBERS.find((m) => m.id === 'mf3')!
@@ -1107,5 +1095,288 @@ describe('filterPickerMembers tolerates a null email', () => {
     // genuine red: today it throws instead of falling through to "no match".
     expect(() => filterPickerMembers([nullEmailRow], 'zzz-no-match')).not.toThrow()
     expect(filterPickerMembers([nullEmailRow], 'zzz-no-match')).toEqual([])
+  })
+})
+
+// ============================================================================
+// APPR-04-01 (task-460) — the wire layer over the APPR-02 workflow-role endpoints
+// ============================================================================
+// Two doubles, matching two different jobs:
+//  - listWorkflowRoles/createWorkflowRole/updateWorkflowRole/deleteWorkflowRole/
+//    setRoleMembers (the URL + exact-wire-body specs) use the REAL createAuthedFetch
+//    with only `fetch` stubbed (invoices.test.ts's I6-I14 idiom) — a stubbed 4xx must
+//    produce a genuine ApiError, not a re-implementation of apiFetch's own contract.
+//  - The "rejects unchanged" and "composes two calls" specs inject a hand-rolled
+//    AuthedFetch double directly (portfolio.test.ts's offboardEntity/onboardEntity
+//    precedent): object IDENTITY can only be proven that way — apiFetch mints a fresh
+//    ApiError from the response on every call, so a fetch-mock round trip could never
+//    produce the "same instance" AC-4 requires.
+
+interface RoleWireResponse {
+  ok: boolean
+  status: number
+  json: () => Promise<unknown>
+}
+
+function mockFetchOnce(response: RoleWireResponse) {
+  const fetchMock = vi.fn().mockResolvedValue(response)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+const wireBase = 'https://gw'
+
+const wireRoleA: Role = { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['u1'] }
+const wireRoleB: Role = { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: [] }
+
+describe('AC-1/AC-2 — listWorkflowRoles hits the workflow-roles path and unwraps the envelope', () => {
+  it('GET .../workflow-roles resolves the .workflow_roles array with no init', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ workflow_roles: [wireRoleA, wireRoleB] }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listWorkflowRoles(af, wireBase)
+
+    expect(result).toEqual([wireRoleA, wireRoleB])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles')
+  })
+})
+
+describe('AC-1/AC-5 — createWorkflowRole POSTs title and desc in that key order', () => {
+  it('the wire body is byte-exact: {"title":...,"desc":...}', async () => {
+    const created: Role = { key: 'tax-reviewer-2', title: 'Tax Reviewer', desc: 'Checks VAT', members: [] }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(created) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await createWorkflowRole(af, wireBase, 'Tax Reviewer', 'Checks VAT')
+
+    expect(result).toEqual(created)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ title: 'Tax Reviewer', desc: 'Checks VAT' }))
+  })
+})
+
+describe('AC-1/AC-6 — updateWorkflowRole PATCHes only the keys the patch carries', () => {
+  it('an absent title key stays absent on the wire — not sent as "" or null', async () => {
+    const updated: Role = { ...wireRoleA, desc: '' }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await updateWorkflowRole(af, wireBase, 'cfo', { desc: '' })
+
+    expect(result).toEqual(updated)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles/cfo')
+    expect(init.method).toBe('PATCH')
+    expect(init.body).toBe(JSON.stringify({ desc: '' }))
+    expect(init.body).not.toContain('title')
+  })
+})
+
+describe('AC-1 — deleteWorkflowRole sends DELETE and no body', () => {
+  it('DELETE .../workflow-roles/{key} with init.body undefined', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wireRoleA) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await deleteWorkflowRole(af, wireBase, 'cfo')
+
+    expect(result).toEqual(wireRoleA)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles/cfo')
+    expect(init.method).toBe('DELETE')
+    expect(init.body).toBeUndefined()
+  })
+})
+
+describe('AC-1/AC-5 — setRoleMembers PUTs the members array under the members key', () => {
+  it('PUT .../workflow-roles/{key}/members, body {"members":["u1","u2"]}', async () => {
+    const staffed: Role = { ...wireRoleA, members: ['u1', 'u2'] }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(staffed) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await setRoleMembers(af, wireBase, 'cfo', ['u1', 'u2'])
+
+    expect(result).toEqual(staffed)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles/cfo/members')
+    expect(init.method).toBe('PUT')
+    expect(init.body).toBe(JSON.stringify({ members: ['u1', 'u2'] }))
+  })
+
+  it('an empty set PUTs an explicit {"members":[]}, never an absent key — the server 400s on {}', async () => {
+    const unstaffed: Role = { ...wireRoleA, members: [] }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(unstaffed) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await setRoleMembers(af, wireBase, 'cfo', [])
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe(JSON.stringify({ members: [] }))
+  })
+})
+
+describe('AC-1 — a role key is percent-encoded into the path', () => {
+  it('a key carrying a space and a slash never splits the URL path', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wireRoleA) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await deleteWorkflowRole(af, wireBase, 'tax reviewer/2')
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles/tax%20reviewer%2F2')
+  })
+})
+
+describe('AC-4 — every wrapper rejects with the ApiError unchanged (not swallowed or rewrapped)', () => {
+  // "unchanged" is proven by REFERENCE (portfolio.test.ts's offboardEntity/onboardEntity
+  // precedent): a mocked AuthedFetch rejects with a specific ApiError instance, and each
+  // wrapper must propagate that EXACT object — no try/catch to rebuild or reshape it.
+  const boom = new ApiError('http', 'only an admin can change workflow roles', 403)
+
+  it('listWorkflowRoles', async () => {
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    await expect(listWorkflowRoles(af, wireBase)).rejects.toBe(boom)
+  })
+
+  it('createWorkflowRole', async () => {
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    await expect(createWorkflowRole(af, wireBase, 'Tax Reviewer', '')).rejects.toBe(boom)
+  })
+
+  it('updateWorkflowRole', async () => {
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    await expect(updateWorkflowRole(af, wireBase, 'cfo', { desc: '' })).rejects.toBe(boom)
+  })
+
+  it('deleteWorkflowRole', async () => {
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    await expect(deleteWorkflowRole(af, wireBase, 'cfo')).rejects.toBe(boom)
+  })
+
+  it('setRoleMembers', async () => {
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    await expect(setRoleMembers(af, wireBase, 'cfo', ['u1'])).rejects.toBe(boom)
+  })
+
+  it('the rejected value carries .status and .message unchanged', async () => {
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    const caught = await deleteWorkflowRole(af, wireBase, 'cfo').catch((e: unknown) => e)
+    expect(caught).toBe(boom)
+    expect((caught as ApiError).status).toBe(403)
+    expect((caught as ApiError).message).toBe('only an admin can change workflow roles')
+  })
+})
+
+describe('AC-3 — createStaffedRole composes POST then PUT', () => {
+  it('POSTs then PUTs the SERVER-returned key, in order — not a slug of the title', async () => {
+    const created: Role = { key: 'e2e-seat', title: 'E2E seat', desc: '', members: [] }
+    const staffed: Role = { ...created, members: ['u1'] }
+    const af = vi.fn((_url: string, opts?: ApiFetchOptions) => Promise.resolve(opts?.method === 'POST' ? created : staffed))
+
+    const result = await createStaffedRole(af as unknown as AuthedFetch, wireBase, 'E2E seat', '', ['u1'])
+
+    expect(result).toEqual(staffed)
+    expect(af).toHaveBeenCalledTimes(2)
+    const [firstUrl, firstOpts] = af.mock.calls[0] as [string, ApiFetchOptions]
+    const [secondUrl, secondOpts] = af.mock.calls[1] as [string, ApiFetchOptions]
+    expect(firstUrl).toBe('https://gw/api/invoice/v1/workflow-roles')
+    expect(firstOpts.method).toBe('POST')
+    expect(secondUrl).toBe('https://gw/api/invoice/v1/workflow-roles/e2e-seat/members')
+    expect(secondOpts.method).toBe('PUT')
+  })
+
+  it('makes no PUT for an unstaffed role — exactly one call, resolves the POST Role', async () => {
+    const created: Role = { key: 'e2e-seat', title: 'E2E seat', desc: '', members: [] }
+    const af = vi.fn().mockResolvedValue(created)
+
+    const result = await createStaffedRole(af as unknown as AuthedFetch, wireBase, 'E2E seat', '', [])
+
+    expect(result).toEqual(created)
+    expect(af).toHaveBeenCalledTimes(1)
+    const [, opts] = af.mock.calls[0] as [string, ApiFetchOptions]
+    expect(opts.method).toBe('POST')
+  })
+
+  it('a failed PUT rejects and does not hide that the role was already created', async () => {
+    const created: Role = { key: 'e2e-seat', title: 'E2E seat', desc: '', members: [] }
+    const putFailure = new ApiError('http', 'bad member id', 400)
+    const af = vi.fn((_url: string, opts?: ApiFetchOptions) => (opts?.method === 'POST' ? Promise.resolve(created) : Promise.reject(putFailure)))
+
+    await expect(createStaffedRole(af as unknown as AuthedFetch, wireBase, 'E2E seat', '', ['u1'])).rejects.toBe(putFailure)
+    expect(af).toHaveBeenCalledTimes(2) // the POST is still recorded as having happened
+    const [, firstOpts] = af.mock.calls[0] as [string, ApiFetchOptions]
+    expect(firstOpts.method).toBe('POST')
+  })
+})
+
+describe('AC-7 — rolesSurface takes the worse of the two statuses', () => {
+  // Hand-computed, independent of any ladder implementation: error worst, then loading,
+  // then idle/empty (both read as 'empty'), and only both-ready reaches 'roster'.
+  const CASES: readonly [AsyncStatus, AsyncStatus, ReturnType<typeof rolesSurface>][] = [
+    ['idle', 'idle', 'empty'],
+    ['idle', 'loading', 'loading'],
+    ['idle', 'error', 'error'],
+    ['idle', 'empty', 'empty'],
+    ['idle', 'ready', 'empty'],
+    ['loading', 'idle', 'loading'],
+    ['loading', 'loading', 'loading'],
+    ['loading', 'error', 'error'],
+    ['loading', 'empty', 'loading'],
+    ['loading', 'ready', 'loading'],
+    ['error', 'idle', 'error'],
+    ['error', 'loading', 'error'],
+    ['error', 'error', 'error'],
+    ['error', 'empty', 'error'],
+    ['error', 'ready', 'error'],
+    ['empty', 'idle', 'empty'],
+    ['empty', 'loading', 'loading'],
+    ['empty', 'error', 'error'],
+    ['empty', 'empty', 'empty'],
+    ['empty', 'ready', 'empty'],
+    ['ready', 'idle', 'empty'],
+    ['ready', 'loading', 'loading'],
+    ['ready', 'error', 'error'],
+    ['ready', 'empty', 'empty'],
+    ['ready', 'ready', 'roster'],
+  ]
+
+  it('covers all 25 (rolesStatus, membersStatus) pairs', () => {
+    expect(CASES.length).toBe(25) // guard against a vacuous pass
+    for (const [rolesStatus, membersStatus, expected] of CASES) {
+      expect(rolesSurface(rolesStatus, membersStatus)).toBe(expected)
+    }
+  })
+
+  it('an errored members fetch can never render as a landed roles grid', () => {
+    expect(rolesSurface('ready', 'error')).toBe('error')
+    expect(rolesSurface('error', 'ready')).toBe('error')
+  })
+})
+
+describe('AC-8 — isApprover admits reviewer and admin only', () => {
+  it('mirrors the Go predicate: admin and reviewer approve, preparer does not', () => {
+    expect(isApprover('admin')).toBe(true)
+    expect(isApprover('reviewer')).toBe(true)
+    expect(isApprover('preparer')).toBe(false)
+  })
+})
+
+describe('AC-9 — the deleted reducers are gone', () => {
+  it('setRoleMembers is the AuthedFetch-taking wrapper, not the old 3-arg reducer', () => {
+    expect(typeof setRoleMembers).toBe('function')
+    expect(setRoleMembers.length).toBe(4) // (f, base, key, memberIds) — the old reducer took 3
+  })
+
+  it('pruneMember and addRoleMembers are not exported from roles.ts', async () => {
+    const rolesModule: Record<string, unknown> = await import('./roles')
+    expect('pruneMember' in rolesModule).toBe(false)
+    expect('addRoleMembers' in rolesModule).toBe(false)
   })
 })

@@ -21,11 +21,10 @@ import {
   filterMembers,
   isFiltering,
   MEMBER_UNBACKED,
-  membersSurface,
   type AccessRole,
   type MemberStatus,
 } from '../lib/members'
-import { unassignedNotice, unassignedRoles } from '../lib/roles'
+import { rolesSurface, unassignedNotice, unassignedRoles } from '../lib/roles'
 import { MemberDrawer } from './MemberDrawer'
 import { AmberNote } from './MemberParts'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
@@ -87,7 +86,15 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     },
     [setMemberStatus],
   )
-  const surface = membersSurface(ctx.membersState)
+  // rolesSurface's 'empty' branch is RolesView's own "no roles yet" card — wrong here, since
+  // this roster doesn't care how many roles exist, only whether the fetch landed.
+  const rolesStatusForRoster = ctx.rolesState === 'empty' ? 'ready' : ctx.rolesState
+  const surface = rolesSurface(rolesStatusForRoster, ctx.membersState)
+  // RolesView.tsx:68-71's own shape: only the fetch(es) that actually failed get retried.
+  const retryRoster = useCallback(() => {
+    if (ctx.rolesState === 'error') ctx.refetchRoles()
+    if (ctx.membersState === 'error') ctx.refetchMembers()
+  }, [ctx.rolesState, ctx.membersState, ctx.refetchRoles, ctx.refetchMembers])
   const shown = filterMembers(members, query, roleFilter)
   // No mode gate, and the same `unassignedNotice` the Roles tab renders, so the two cannot
   // drift. Both resolve against the live roster.
@@ -163,7 +170,9 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'loading' && <Loading label="Loading members…" />}
 
-      {surface === 'error' && ctx.membersError && <ErrorState error={ctx.membersError} onRetry={ctx.refetchMembers} />}
+      {surface === 'error' && (ctx.rolesError ?? ctx.membersError) && (
+        <ErrorState error={(ctx.rolesError ?? ctx.membersError)!} onRetry={retryRoster} />
+      )}
 
       {surface === 'empty' && <EmptyState title={EMPTY_TITLE[mode]} message={EMPTY_MESSAGE} />}
 

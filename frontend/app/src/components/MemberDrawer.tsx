@@ -27,8 +27,9 @@
 // component's oracle is a screenshot — the one gate a fluent paraphrase walks through
 // (§15.8).
 
-import { useId, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 
+import { toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
@@ -102,6 +103,11 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   const removeNoteId = useId()
   useDismiss(true, onClose)
 
+  // The staffing write's own in-flight flag and failure reason -- the MembersView.tsx:79-89
+  // statusError SHAPE, reused for a different write than the one that prop already carries.
+  const [rolePending, setRolePending] = useState(false)
+  const [roleError, setRoleError] = useState<{ id: string; message: string } | null>(null)
+
   // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
   // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
   // row gives a wrong lock, and a status write replaces the row under this drawer.
@@ -133,12 +139,23 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
 
   // Writes straight through, like every other control here — §8 says each change persists
   // immediately and there is no Save button. Holders live on the ROLE, so the write funnel is
-  // `staffRole`.
-  function toggleWorkflowRole(key: string) {
+  // `staffRole`. The `rolePending` guard is load-bearing, not the fieldset below: jsdom never
+  // propagates `<fieldset disabled>` to a descendant button's IDL `disabled` property.
+  async function toggleWorkflowRole(key: string) {
+    if (rolePending) return
     const role = ctx.roles.find((r) => r.key === key)
     if (!role) return
     const members = role.members.includes(memberId) ? role.members.filter((id) => id !== memberId) : [...role.members, memberId]
-    ctx.staffRole(role.key, members)
+    setRoleError(null)
+    setRolePending(true)
+    try {
+      await ctx.staffRole(role.key, members)
+    } catch (err: unknown) {
+      // Verbatim, no prefix — the drawer's own status-error rule (the footer's below), reused.
+      setRoleError({ id: key, message: toApiError(err).message })
+    } finally {
+      setRolePending(false)
+    }
   }
 
   return (
@@ -243,7 +260,29 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               {MANAGE_ROLES}
             </button>
           </div>
-          <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
+          {/* The visual half of the in-flight lock — UnbackedField's `<fieldset disabled>`
+              shape (line 71 above), inlined rather than reused: that component always renders
+              a reason note, and a staffing write in flight has none to show. */}
+          <fieldset disabled={rolePending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
+            <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
+          </fieldset>
+          {roleError && (
+            <div
+              data-testid="member-drawer-role-error"
+              style={{
+                marginTop: 8,
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--status-red-bg)',
+                border: '1px solid var(--status-red-border)',
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                color: 'var(--status-red-text)',
+              }}
+            >
+              {roleError.message}
+            </div>
+          )}
           <div data-testid="drawer-wfrole-helper" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
             {drawerRoleHelper(row.role)}
           </div>

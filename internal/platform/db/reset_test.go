@@ -529,10 +529,11 @@ func TestResetLeavesTenantsRulesAndMembershipsUntouched(t *testing.T) {
 }
 
 // TestResetLeavesWorkflowRolesAndStaffingUntouched: workflow_roles and
-// workflow_role_members are excluded from resetTables, and nothing seeds them —
-// so resetTargetTables never learns their names and no assertion above would
-// notice if a future edit added them. This seeds its own role + staffing row so
-// the claim is not vacuous: adding either table to resetTables goes red here.
+// workflow_role_members are excluded from resetTables even though seed.dev.sql
+// seeds them now — so resetTargetTables never learns their names and no
+// assertion above would notice if a future edit added them. This seeds its own
+// role + staffing row so the claim is not vacuous: adding either table to
+// resetTables goes red here.
 // (Adding only workflow_roles fails louder still — the TRUNCATE carries no
 // CASCADE, so its inbound FK aborts Reset outright.)
 func TestResetLeavesWorkflowRolesAndStaffingUntouched(t *testing.T) {
@@ -578,7 +579,7 @@ func TestResetLeavesWorkflowRolesAndStaffingUntouched(t *testing.T) {
 
 	if got := mustCount(t, pool, `SELECT count(*) FROM workflow_roles WHERE id = $1`, roleID); got != 1 {
 		t.Errorf("workflow_roles probe row after Reset = %d, want 1 — the table is deliberately EXCLUDED "+
-			"from resetTables (reset.go), since nothing seeds it and a truncate would unstaff every seat", got)
+			"from resetTables (reset.go): Reset only reconstructs the known demo set, not arbitrary admin CRUD", got)
 	}
 	if got := mustCount(t, pool, `SELECT count(*) FROM workflow_role_members WHERE id = $1`, memberID); got != 1 {
 		t.Errorf("workflow_role_members probe row after Reset = %d, want 1 — same exclusion", got)

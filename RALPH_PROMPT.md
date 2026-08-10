@@ -29,7 +29,12 @@ Stories arrive in one of two states: **basic** (intent-only — Objective, Core 
 **Exception:** MCP tools (Backlog, git, gh, Railway read-only) can be called directly.
 
 ### 2. NO Assumptions, NO Feature Cuts
-Never guess, assume, or reduce functionality. If unclear, ask the user.
+Never guess, assume, or reduce functionality. When something is unclear, what you do depends on the run:
+
+- **Interactive run** (the user is present and you are not inside a `/ralph` phase) — ask.
+- **Unattended run** — which is every phase of `/ralph` — take the conservative default: the option closest to the story's explicit text, smaller scope. Record it in `## Decisions` and log it prominently. **Never block on the user.**
+
+Neither path licenses a silent feature cut. This rule holds in every phase, not only Phase 0.6.
 
 | WRONG | RIGHT |
 |-------|-------|
@@ -168,6 +173,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 
 #### a. Architecture — finalize the story
 - Spawn `product-architecture-spec` (Opus), CWD = `$WORKTREE_PATH`, passing the FULL basic story content (or build-plan row + milestone goal) and its Obsidian path. Instruct it to operate per its "Expanding a Basic Story" section.
+- **Diff every new control against its siblings.** When the story adds a control to an existing bar, panel or surface, compare its visibility and disabled treatment against the controls already there before the plan is final. A sibling's shipped decision is the spec; contradicting it on the same surface is a defect, not a choice. INVED-02 shipped a hidden button beside disabled ones and the decision was reversed after it was built.
 - It rewrites the story file in Obsidian to final state: system design, **## Implementation Subtasks** (`[<STORY-ID>-NN]` with Category / Dependencies / Description / Acceptance Criteria / Order / Test-first classification + Test Specs tables for `Test-first: yes`), and a **## Decisions** section appending every assumption it made where the story was silent.
 - **Traceability rule (hard):** every derived AC and subtask must trace to the Objective or a Core AC (or the milestone's "Ships when true"). Nothing in Out of Scope may appear in any subtask.
 - **Checkpoint:** `STORY_FINALIZED`
@@ -206,6 +212,8 @@ For each subtask, in dependency order, execute the stages below. Delegate to sub
 
 **Test-first is the strong default here.** This codebase lives on adversarial RLS / exactly-once / audit-immutability suites; logic-bearing work (rules engine, tax-math, state machines, RLS policies, validation) is prime test-first territory. `Test-first: no` is for pure UI/copy/config subtasks whose oracle is the Phase 3.5 deploy gate (smoke/topology/demo script), not unit tests.
 
+**"No honest oracle exists" is a finding, not a waiver.** When a subtask is classified `Test-first: no` because no test can see the failure — not because the work is trivial — record it in the story's `## Decisions` and name in the PR body which Phase 3.5 evidence artifact stands in for the missing test. The user then reads "this subtask has no test oracle, its only evidence is a screenshot" at the first human gate, instead of discovering it after the defect ships. BUG-03-05 is the case: the only bug-03 subtask with no red commit, and the one that shipped the bug.
+
 #### If Subagent Spawning Fails: retry, then HALT — NEVER perform the stage yourself
 Retry the Task call up to **twice** (fresh spawns; transient API/credit errors often clear). If the third attempt fails: **HALT the run** — leave the subtask "In Progress", report which stage's spawn failed and the error. Do NOT execute the stage in-context. A same-context QA pass of your own work is worthless evidence. **Sole exception:** the Explore stage (read-only Glob/Grep/Read) may be performed in-context — it produces no work product to self-grade.
 
@@ -220,6 +228,7 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - Spawn `Explore`, passing `$WORKTREE_PATH` as CWD.
 - Verify referenced files exist; Go package layout, imports, and placement match; the `internal/platform` seams (config, `WithinTenantTx`, queue, audit) are used correctly.
 - **For any Go signature/API change:** grep callers across `cmd/` and `internal/` and enumerate every caller + test that must be updated as a deliverable of this subtask.
+- **For any change to a JSON wire shape**, extend that grep to `e2e/` and the SPA wire mirrors (`frontend/*/src/lib/*.ts`). A response struct has hand-maintained TypeScript copies that no compiler links to it: adding a Go field does not break `pnpm -r typecheck` on a mirror that merely lacks it, so the per-subtask suite cannot catch the drift. Enumerate every mirror as a deliverable — `e2e/api/client.ts` is the one that gets forgotten.
 - **For any UI-touching subtask:** grep `e2e/` (smoke + topology) for the changed routes/testids/labels and enumerate every matching spec as a required-update deliverable.
 - If gaps found, update the Backlog task's implementation_notes.
 - **Checkpoint:** `EXPLORE_DONE`
@@ -309,6 +318,7 @@ Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This i
 4. **Spawn `product-qa-spec`** (default critique disposition) to verify **each** original acceptance criterion against the green run:
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion (topology proves cross-tenant refusal; the milestone demo script — e.g. M3-11 — proves the wedge flow).
    - **UI ACs (rendered surfaces)** → drive the deployed dev SPA read-only with the standalone Playwright MCP, authenticated as the seeded user, and capture each touched surface (including interactive states) to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` / layout against the Claude Design **prototype** (`.dc.html`, deployed to Netlify — confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a real fail; uncited taste is advisory → escalate to the user, never bounce the executor.
+   - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling — never by the raw measurement. A width assertion passes on the very bug it should catch: a cap and its placement are two facts, and measuring the cap proves nothing about placement (BUG-03-05 shipped 32% dead space under a green `width <= 1080`). Capture at 1280 / 1440 / 1920 / 2560 when the AC is about layout.
    - A holistic "looks done" is not allowed — every AC needs its own evidence (a passing job/assertion, or a screenshot).
 5. **Fix loop (cap 2 cycles):** batch ALL fails (failed ACs + real fidelity deltas) into one report → spawn `product-executor` to fix inside the worktree → push (this re-fires `dev-env.yml` on `synchronize`) → **wait** for the new run → re-verify only the failed ACs / unresolved deltas. Every bounce must cite an AC id, a design-system rule, or a prototype CSS rule. After **2** cycles, stop and **escalate remaining fails to the user** — each dev-env run provisions/rebuilds a full 11-service environment from scratch and is expensive.
 6. **Log** to the story's `… QA Debate Log.md` under `## Post-Deploy QA — <date>`: per-AC verdict + evidence (CI job / E2E assertion / screenshot), fidelity delta references (for UI stories), fix cycles used, the `dev-env.yml` run id(s), and any design-system citations / advisory notes.
@@ -339,6 +349,9 @@ Each worktree maintains its own `.claude/handoff.yaml` at `$WORKTREE_PATH/.claud
 Check the worktree's handoff first; if it exists and is recent, restore from it.
 
 ### During Work (every 2–3 subtasks)
+
+**Tie this to a checkpoint you already emit.** Write the handoff immediately after each `QA_VERIFY_DONE`, in the same step that moves the subtask on. Without that anchor this step does not happen: the `PreCompact` hook fires and stamps the file, but `story_id`, `stage`, `branch` and `completed_subtasks` sit at `null` — a handoff that records nothing is worse than none, because On Start restores from it and believes it.
+
 Update `.claude/handoff.yaml`:
 
 ```yaml
@@ -392,13 +405,21 @@ gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databas
 
 ---
 
+## Editing This File
+
+An agent parses these instructions with no one to ask when a sentence is ambiguous. Write for that reader.
+
+- **One word, one meaning.** Pick one verb per action and reuse it. Do not rotate `check` / `verify` / `confirm` / `ensure` for the same act — reserve `check` for a CI check, `assert` for a test assertion.
+- **One instruction per sentence**, twenty words or fewer for a procedure. Long compound sentences are where agents drop a clause.
+- **State each rule once**, in the phase that owns it, and reference it from anywhere else. A rule stated six ways is six rules to keep in sync.
+- **Prefer a positive statement to a prohibition.** The Anti-Patterns table is for defects with no natural home in a phase — not a mirror of rules already stated above.
+
 ## Completion Rules
 
-1. **Local tests green ≠ done** — the aggregate `CI` check must pass on the PR.
-2. **A green `dev-env.yml` run IS a blocker** — completion requires the deploy gate (deploy fleet → migrate+seed (at gateway boot) → fleet-gate → smoke + topology E2E) to conclude green on the PR head.
-3. **Subtask status transitions**: To Do → In Progress (Phase 0.5 / 0.6c) → Done (ONLY after Phase 3.5 passes).
-4. **Story-Level Deploy Gate (Phase 3.5) must pass** before completion — all original acceptance criteria verified against the green `dev-env.yml` run (plus, for UI stories, fidelity evidence vs the prototype), no unresolved bounces.
-5. Output `<promise>ALL_TASKS_COMPLETE</promise>` ONLY after Phase 3.5 passes AND subtasks are moved to "Done".
+1. **Both gates blocking** — as defined once in **Core Rule 3** above: the aggregate `CI` check and the `dev-env.yml` run must both be green on the PR head. Local tests green ≠ done.
+2. **Subtask status transitions**: To Do → In Progress (Phase 0.5 / 0.6c) → Done (ONLY after Phase 3.5 passes).
+3. **Story-Level Deploy Gate (Phase 3.5) must pass** before completion — all original acceptance criteria verified against the green `dev-env.yml` run (plus, for UI stories, fidelity evidence vs the prototype), no unresolved bounces.
+4. Output `<promise>ALL_TASKS_COMPLETE</promise>` ONLY after Phase 3.5 passes AND subtasks are moved to "Done".
 
 ---
 
@@ -408,25 +429,17 @@ gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databas
 |-------------|------------------|
 | Lead doing file edits directly | Delegate to product-executor / Explore subagents |
 | Skipping architecture / explore / QA stages | Every stage is mandatory (Test-Spec mandatory for `Test-first: yes`, skipped only for `Test-first: no`) |
-| Implementing a logic-bearing subtask before its AC tests are red | Author failing AC tests in Stage 2.5 first (`TESTS_RED`), then drive them green |
 | Weakening/skipping/deleting a red test to force green | Fix the implementation, not the test; if the test is wrong, flag it |
-| Executor authoring its own test coverage | Executor drives the architect's reds to green; QA owns new coverage (Stage 4) |
 | Adding a tenant-owned table without RLS + a cross-tenant refusal test | Every tenant table born with `tenant_id` + FORCE-RLS policy; QA adds the adversarial refusal assertion |
 | Hand-setting a goose migration order or shipping an untested `Down` | `make migrate-create` in the worktree; verify `migrate-up` + reversibility round-trip locally (the gateway migrates on deploy) |
 | Querying as superuser to "get past" RLS | Run inside `WithinTenantTx` as `invoice_app`; RLS isolation is the product |
 | Working in main checkout | Always work in `$WORKTREE_PATH`; main is the user's space |
 | Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-23) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
-| Mixing subtasks from different stories on one branch | One story (build-plan task) per branch, always |
 | Title-parsing Backlog tasks to find a story's subtasks | Use the `story:<slug>` label |
 | Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs (or a build-plan row) = BASIC → run Phase 0.6 |
-| Blocking on the user during Phase 0.6 | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR |
+| Blocking on the user in any unattended phase | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR |
 | Architect inventing scope while expanding a basic story | Every derived AC/subtask traces to Objective/Core AC/"Ships when true"; Out-of-scope leakage = mechanical fail |
-| Orchestrator running `git checkout -b` / `gh pr ready` | Use `git worktree add -b`; the executor handles push + PR transitions |
-| Deploying a draft PR to dev | Draft PRs skip `dev-env.yml` by design — deploy fires on `gh pr ready` (Phase 2 FINAL) |
-| Outputting ALL_TASKS_COMPLETE before `CI` + `dev-env.yml` are green | Both gates are blocking (Completion Rules) |
-| Sleeping/polling tightly for CI | Poll every 270 s (the single poll constant) |
 | Bouncing the executor on uncited taste | UI fails must cite a design-system rule or a prototype CSS rule; pure taste is advisory → escalate |
-| Grinding the deploy-gate fix loop past 2 cycles | Cap at 2; escalate unresolved fails to the user (each redeploy provisions/rebuilds the PR's full 11-service environment and is expensive) |
 | Renaming a variable and checking only that the rename landed | Grep every OTHER variable's rendered value for the OLD name before merge — M4-22's DSNs still interpolated the deleted names and rendered empty |
 | Re-running the deploy gate only BEFORE applying a variable deletion | Re-run it AFTER the deletion is applied — M4-22's own gates passed because they ran before, which is why this went unnoticed until M4-08 |
 | Not cleaning up the worktree after merge | Run `/post-merge-cleanup <STORY-ID>` |

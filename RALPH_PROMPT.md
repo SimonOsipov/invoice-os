@@ -201,7 +201,17 @@ A conservative default is right for a technical fork and wrong for a policy one.
 
 Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark.
 
-With no critical fork, continue to Phase 0.6e. With one or more:
+**First, check whether the user already answered it.** A story that came from an epic may inherit decisions taken once for the whole epic. Look in the story's own epic folder (`User Stories/<EPIC>/`) for a file whose frontmatter carries `type: decision-log`; fall back to a filename matching `*Decision Log*.md`. Most stories have no such file — then this paragraph does nothing and the gate proceeds exactly as below.
+
+When one exists, read it and, for each critical fork:
+
+- **The log answers this same question** → it is not blocking. Record it in `## Decisions` as `user — <the choice> (<decision-log file>, <its decided: date>)`. Cite the file and the date, never the choice alone, so a reader can check the reasoning and the rejected alternatives.
+- **The log is silent on it** → still blocking. Ask it.
+- **Your default contradicts the log** → blocking, and say so in the question. An epic-level decision that a story wants to overturn is exactly what the user must see.
+
+Match on the question, not on keywords. A log entry that merely mentions the same nouns has not answered the fork — treat that as silent and ask.
+
+With no critical fork left, continue to Phase 0.6e. With one or more:
 
 1. Write each into the story file under `## Blocking Questions`: the question in one line, the default you will take if unanswered, and the alternative. Use that exact heading — `## Open Questions` already exists as a non-blocking PRD section and must not be reused here.
 2. Print that same list and **halt the run.** This is the only place `/ralph` waits for the user.

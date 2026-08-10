@@ -35,13 +35,16 @@ import (
 
 // dbTestPools returns the superuser (seed + read-back) and app-role (Store) pools,
 // or skips when the per-role DSNs are unset — the same gate the sibling suites use
-// (idiom copied from internal/tenancy/tenancy_test.go).
+// (idiom copied from internal/tenancy/tenancy_test.go). DATABASE_MIGRATION_URL is
+// required too (policy_immutability_test.go's migratorPool reads it independently)
+// so a DSN gap fails this whole package's tests instead of skipping only some.
 func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	t.Helper()
 	appURL := os.Getenv("DATABASE_URL")
 	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
-	if appURL == "" || superURL == "" {
-		t.Skip("approval db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-approvals`)")
+	migURL := os.Getenv("DATABASE_MIGRATION_URL")
+	if appURL == "" || superURL == "" || migURL == "" {
+		t.Skip("approval db-integration test skipped: set DATABASE_URL, DATABASE_SUPERUSER_URL and DATABASE_MIGRATION_URL (or run `make test-approvals`)")
 	}
 	ctx := context.Background()
 

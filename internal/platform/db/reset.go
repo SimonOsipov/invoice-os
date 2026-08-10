@@ -193,6 +193,23 @@ func ResetEnabled(environment, flag string) bool {
 //	                          it legal. Object-storage bytes are NOT deleted:
 //	                          they are content-hash keyed and simply re-PUT on
 //	                          the next upload of the same file.
+//	approval_runs,            the run-ledger tables (APPR-03). approval_runs'
+//	approval_run_steps,       (tenant_id, invoice_id) FK is ON DELETE RESTRICT
+//	approval_decisions        against invoices, so omitting it here is exactly
+//	                          the failure this list exists to prevent:
+//	                          TRUNCATE invoices alone raises 0A000 ("cannot
+//	                          truncate a table referenced in a foreign key
+//	                          constraint ... approval_runs references
+//	                          invoices"), and the gateway fails to boot in
+//	                          every PR environment. run_steps and decisions
+//	                          follow one level down for the same reason
+//	                          (run_steps -> runs, decisions -> runs/run_steps,
+//	                          both CASCADE). approval_runs also FKs
+//	                          approval_policy_versions (RESTRICT) -- that does
+//	                          NOT pull approval_policy_versions into this
+//	                          statement: the rule only binds the table BEING
+//	                          truncated, and approval_policy_versions is not
+//	                          (see EXCLUDED, below).
 //
 // Deliberately EXCLUDED, with reasons (do not add on a whim):
 //
@@ -221,10 +238,47 @@ func ResetEnabled(environment, flag string) bool {
 //	workflow_roles,           per-tenant configuration created only by a tenant
 //	workflow_role_members     admin's own CRUD. Nothing seeds them, so truncating
 //	                          would unstaff every seat with nothing to restore it.
+//	approval_policies,        per-tenant approval workflow CONFIGURATION,
+//	approval_policy_versions, created and mutated only by a tenant admin's
+//	approval_policy_steps     own CRUD + seal action (APPR-01/02) -- same
+//	                          class as workflow_roles/workflow_role_members
+//	                          above: nothing seeds or reconstructs them, so
+//	                          truncating would leave a tenant with no
+//	                          approval policy and nothing to restore it.
+//	                          approval_policy_steps also carries its own
+//	                          BEFORE TRUNCATE trigger
+//	                          (approval_policy_steps_no_truncate, migrations/
+//	                          20260809210326_approval_policies.sql) -- that is
+//	                          NOT why any of the three stay out, though:
+//	                          exactly like audit_log's trigger it only fires
+//	                          in ORIGIN/LOCAL mode, so
+//	                          session_replication_role = 'replica' (set
+//	                          below) already suppresses it for free --
+//	                          verified empirically, TRUNCATE
+//	                          approval_policy_steps alone under replica
+//	                          succeeds silently. What actually blocks
+//	                          truncating any of these three, if it were ever
+//	                          attempted, is the Postgres rule stated above
+//	                          resetTables: every table referencing a
+//	                          truncated table must be named in the SAME
+//	                          TRUNCATE statement, a check that is NOT
+//	                          trigger-based and is NOT bypassed by
+//	                          session_replication_role. Verified
+//	                          empirically: TRUNCATE approval_policy_versions
+//	                          alone fails with 0A000 (DETAIL names
+//	                          approval_policy_steps as the referencing
+//	                          table) whether or not replica is set. Pulling
+//	                          any one of the three in would cascade into
+//	                          needing approval_policy_steps and/or the whole
+//	                          approval_runs ledger in the same statement,
+//	                          for a config table nothing reseeds -- no
+//	                          benefit, same shape as the
+//	                          rules/rule_set_versions exclusion above.
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
 	documents,
+	approval_runs, approval_run_steps, approval_decisions,
 	river_job, river_leader, river_queue, river_notification
 RESTART IDENTITY`
 

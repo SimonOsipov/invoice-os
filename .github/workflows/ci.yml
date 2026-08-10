@@ -366,10 +366,12 @@ jobs:
         # that keeps it off non-demo data wherever it runs. Needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/demodocs/...
-      - name: Approval workflow-roles suite (RLS-scoped roles + staffing + audit as invoice_app) + per-test visibility & skip gate
+      - name: Approval workflow-roles + policy seal-lock immutability suite (RLS-scoped roles + staffing + audit, owner-proof triggers as invoice_migrator) + per-test visibility & skip gate
         # Proves the workflow_roles / workflow_role_members store resolves to exactly the
         # caller's tenant under RLS (per-tenant key uniqueness, cross-tenant refusal, whole-set
-        # staffing replace) + audit in the same tx. Needs DATABASE_URL + DATABASE_SUPERUSER_URL.
+        # staffing replace) + audit in the same tx, and the five-mechanism seal lock on
+        # approval_policy_* binds the table OWNER, not just RLS. Needs DATABASE_URL +
+        # DATABASE_SUPERUSER_URL + DATABASE_MIGRATION_URL.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/approval/...
       - name: Demo-seed suite + CI -run filter coverage (as superuser) + per-test visibility & skip gate
         # The 47 TestSeed* functions self-seed (db.Seed is the system under test); must run

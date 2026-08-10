@@ -105,6 +105,48 @@ describe('AC-5: edit writes split on what actually changed', () => {
     expect(staffRole).toHaveBeenCalledWith('cfo', ['u1', 'u2'])
     expect(renameRole).not.toHaveBeenCalled()
   })
+
+  // QA: mutation-tested gap. `membersChanged` swapped for array-equality (join(',') compare)
+  // stayed green under the existing suite -- nothing exercised a reorder alone. The picker's
+  // own tick order can differ from role.members' stored order (untick+retick, or a seed whose
+  // members array isn't insertion-ordered), so order-sensitivity here is a false restaff.
+  it('a re-tick that reproduces the same member set in a different order does not restaff', () => {
+    const renameRole = vi.fn().mockResolvedValue(role())
+    const staffRole = vi.fn().mockResolvedValue(role())
+    const subject = role({ members: ['u1', 'u2'] })
+    renderModal({ mode: 'edit', role: subject }, { renameRole, staffRole })
+
+    const rows = screen.getAllByTestId('role-modal-member')
+    const ada = rows.find((r) => within(r).queryByText('Ada Person'))!
+    const bo = rows.find((r) => within(r).queryByText('Bo Person'))!
+    // untick both, retick Bo then Ada -- same SET, reversed order.
+    fireEvent.click(within(ada).getByRole('checkbox'))
+    fireEvent.click(within(bo).getByRole('checkbox'))
+    fireEvent.click(within(bo).getByRole('checkbox'))
+    fireEvent.click(within(ada).getByRole('checkbox'))
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+
+    expect(staffRole).not.toHaveBeenCalled()
+    expect(renameRole).not.toHaveBeenCalled()
+  })
+
+  it('an edit that both renames and restaffs fires both verbs', async () => {
+    const renameRole = vi.fn().mockResolvedValue(role())
+    const staffRole = vi.fn().mockResolvedValue(role())
+    renderModal({ mode: 'edit', role: role() }, { renameRole, staffRole })
+
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Chief' } })
+    const rows = screen.getAllByTestId('role-modal-member')
+    const bo = rows.find((r) => within(r).queryByText('Bo Person'))!
+    fireEvent.click(within(bo).getByRole('checkbox'))
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    // renameRole is awaited BEFORE staffRole is even called (save()'s sequential branches) --
+    // staffRole needs that first microtask to clear.
+    await renameRole.mock.results[0]?.value
+
+    expect(renameRole).toHaveBeenCalledWith('cfo', 'Chief', 'D')
+    expect(staffRole).toHaveBeenCalledWith('cfo', ['u1', 'u2'])
+  })
 })
 
 describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejection', () => {

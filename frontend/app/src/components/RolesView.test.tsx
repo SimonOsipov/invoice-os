@@ -113,6 +113,34 @@ describe('AC-2: ErrorState renders rolesError ?? membersError; retry calls the m
     expect(refetchMembers).toHaveBeenCalledOnce()
   })
 
+  // QA: mutation-tested gap. `retry` firing refetchMembers unconditionally stayed green
+  // under the existing two tests, since neither asserted the OTHER fetch's refetch was NOT
+  // called. The docblock's own claim ("a roles-only failure must not re-kick members",
+  // RolesView.tsx:67) had nothing pinning it.
+  it('retry does not call refetchMembers when only the roles fetch errored', () => {
+    const refetchRoles = vi.fn()
+    const refetchMembers = vi.fn()
+    render(
+      <Harness rolesState="error" rolesError={new ApiError('http', 'gateway is down', 503)} membersState="ready" refetchRoles={refetchRoles} refetchMembers={refetchMembers} />,
+    )
+
+    fireEvent.click(screen.getByText('Retry'))
+    expect(refetchRoles).toHaveBeenCalledOnce()
+    expect(refetchMembers).not.toHaveBeenCalled()
+  })
+
+  it('retry does not call refetchRoles when only the members fetch errored', () => {
+    const refetchRoles = vi.fn()
+    const refetchMembers = vi.fn()
+    render(
+      <Harness rolesState="ready" membersState="error" membersError={new ApiError('http', 'gateway is down', 503)} refetchRoles={refetchRoles} refetchMembers={refetchMembers} />,
+    )
+
+    fireEvent.click(screen.getByText('Retry'))
+    expect(refetchMembers).toHaveBeenCalledOnce()
+    expect(refetchRoles).not.toHaveBeenCalled()
+  })
+
   it('retry calls both refetches when both fetches errored, and the roles error message wins', () => {
     const refetchRoles = vi.fn()
     const refetchMembers = vi.fn()

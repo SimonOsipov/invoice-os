@@ -1380,3 +1380,121 @@ describe('AC-9 — the deleted reducers are gone', () => {
     expect('addRoleMembers' in rolesModule).toBe(false)
   })
 })
+
+// ============================================================================
+// QA gap-fill (task-460 Stage 4) — adversarial/edge coverage the Stage-2.5 table
+// didn't include, plus one hole the composed-call spec above couldn't see.
+// ============================================================================
+
+describe('QA — createStaffedRole distinguishes the server key from a same-shaped title slug', () => {
+  // The AC-3 "not a slug of the title" spec above uses title 'E2E seat', whose own slug
+  // ('e2e-seat') is IDENTICAL to the fixture's server-returned key — so it cannot actually
+  // tell "used created.key" apart from "used slug(title)". This fixture's slug and server
+  // key deliberately diverge (a title collision bumps the server's key, not the slug).
+  it('PUTs the collision-suffixed server key, never a fresh slug of the title', async () => {
+    const created: Role = { key: 'tax-reviewer-2', title: 'Tax Reviewer', desc: '', members: [] }
+    const staffed: Role = { ...created, members: ['u1'] }
+    const af = vi.fn((_url: string, opts?: ApiFetchOptions) => Promise.resolve(opts?.method === 'POST' ? created : staffed))
+
+    await createStaffedRole(af as unknown as AuthedFetch, wireBase, 'Tax Reviewer', '', ['u1'])
+
+    const [secondUrl] = af.mock.calls[1] as [string, ApiFetchOptions]
+    expect(secondUrl).toBe('https://gw/api/invoice/v1/workflow-roles/tax-reviewer-2/members')
+  })
+})
+
+describe('QA — non-2xx surfaces the servers exact message and status through the real fetch path', () => {
+  // The AC-4 block above proves reference identity via a hand-rolled AuthedFetch double.
+  // These go through the REAL createAuthedFetch + apiFetch, so they also prove the
+  // {error: "..."} envelope is actually read into ApiError.message end to end, per wrapper.
+  // Messages are approval.go's statusForErr literals, not invented strings.
+  it('listWorkflowRoles: 401 unauthorized', async () => {
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const caught = await listWorkflowRoles(af, wireBase).catch((e: unknown) => e)
+    expect((caught as ApiError).status).toBe(401)
+    expect((caught as ApiError).message).toBe('unauthorized')
+  })
+
+  it('createWorkflowRole: 403 only an admin can change workflow roles', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: 'only an admin can change workflow roles' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const caught = await createWorkflowRole(af, wireBase, 'Tax Reviewer', '').catch((e: unknown) => e)
+    expect((caught as ApiError).status).toBe(403)
+    expect((caught as ApiError).message).toBe('only an admin can change workflow roles')
+  })
+
+  it('updateWorkflowRole: 404 on a missing key', async () => {
+    mockFetchOnce({ ok: false, status: 404, json: () => Promise.resolve({ error: 'workflow role not found' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const caught = await updateWorkflowRole(af, wireBase, 'ghost', { desc: 'x' }).catch((e: unknown) => e)
+    expect((caught as ApiError).status).toBe(404)
+    expect((caught as ApiError).message).toBe('workflow role not found')
+  })
+
+  it('deleteWorkflowRole: 404 on a missing key', async () => {
+    mockFetchOnce({ ok: false, status: 404, json: () => Promise.resolve({ error: 'workflow role not found' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const caught = await deleteWorkflowRole(af, wireBase, 'ghost').catch((e: unknown) => e)
+    expect((caught as ApiError).status).toBe(404)
+    expect((caught as ApiError).message).toBe('workflow role not found')
+  })
+
+  it('setRoleMembers: 400 on a bad member id', async () => {
+    mockFetchOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'invalid request' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const caught = await setRoleMembers(af, wireBase, 'cfo', ['not-a-uuid']).catch((e: unknown) => e)
+    expect((caught as ApiError).status).toBe(400)
+    expect((caught as ApiError).message).toBe('invalid request')
+  })
+})
+
+describe('QA — a unicode role key is percent-encoded byte-for-byte into the path', () => {
+  it('non-ASCII and an embedded slash both survive encodeURIComponent, not a hand-rolled escape', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wireRoleA) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await deleteWorkflowRole(af, wireBase, 'café/💰')
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/workflow-roles/caf%C3%A9%2F%F0%9F%92%B0')
+  })
+})
+
+describe('QA — setRoleMembers with an undefined array (a caller bypassing the type system)', () => {
+  it('serializes to an absent key on the wire, and the servers own 400 for it propagates unchanged', async () => {
+    const fetchMock = mockFetchOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'members must be an array of member ids' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const caught = await setRoleMembers(af, wireBase, 'cfo', undefined as unknown as string[]).catch((e: unknown) => e)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe('{}') // JSON.stringify({members: undefined}) drops the key entirely
+    expect((caught as ApiError).status).toBe(400)
+    expect((caught as ApiError).message).toBe('members must be an array of member ids')
+  })
+})
+
+describe('QA — updateWorkflowRole with no changed keys', () => {
+  it('an empty patch still sends a literal {} body, not an absent one', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wireRoleA) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await updateWorkflowRole(af, wireBase, 'cfo', {})
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe('{}')
+  })
+})
+
+describe('QA — setRoleMembers resolves whatever order the server sends, not the callers input order', () => {
+  it('the callers ["u1","u2"] input does not dictate the resolved arrays order', async () => {
+    const reordered: Role = { ...wireRoleA, members: ['u2', 'u1'] }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(reordered) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await setRoleMembers(af, wireBase, 'cfo', ['u1', 'u2'])
+
+    expect(result.members).toEqual(['u2', 'u1'])
+  })
+})

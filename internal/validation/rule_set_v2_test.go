@@ -702,7 +702,9 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // and asserts its one MECHANICALLY-checkable property: every hit lives inside
 // internal/validation/**, one of the two named §c e2e artifacts,
 // validationApi.test.ts, the seed migrations, or pnpm-lock.yaml (the plan's own
-// "no Category-A hit exists outside this scope" claim).
+// "no Category-A hit exists outside this scope" claim). The allowlist is
+// detectionHitAllowed below; internal/approval/** was added to it for
+// approval_policy_versions.version and is narrowed there, not exempted.
 //
 // EXECUTOR NOTE (M4-04-01 Stage 3): this test originally also asserted
 // `wantCount == 90`. That assertion was REMOVED, for two reasons, and the
@@ -791,31 +793,79 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 			continue
 		}
 		file = strings.TrimPrefix(file, "./")
-		allowed := strings.HasPrefix(file, "internal/validation/") ||
-			// approval_policy_versions.version is a different version entirely --
-			// per-policy, minted by CreatePolicy/PutDraft, never read from
-			// rule_sets. Accepted blind spot: a rule-set v1 pin written inside
-			// internal/approval/ would go unseen here.
-			strings.HasPrefix(file, "internal/approval/") ||
-			file == "e2e/api/validation.spec.ts" ||
-			file == "e2e/topology/targets.ts" ||
-			file == "frontend/app/src/lib/validationApi.test.ts" ||
-			file == "migrations/20260711121327_seed_mbs_v1.sql" ||
-			file == "migrations/20260715120000_line_rules.sql" ||
-			// M4-04-01's own migration: Category B by the same rule as the two
-			// above. Its `version = 1` statements DEFINE the v1->v2 topology --
-			// deleting v1's two wrongly-added rules, deactivating v1, copying
-			// v1's 17 into v2, and (in the Down) reactivating v1. It is the
-			// authority that SETS which version is active; it never reads the
-			// active version and pins the result to 1. v1 is version 1
-			// permanently, by definition.
-			file == "migrations/20260716185106_rule_set_v2.sql" ||
-			file == "pnpm-lock.yaml"
-		if !allowed {
+		if !detectionHitAllowed(file, line) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
-				"internal/validation/**, the two §c e2e artifacts, validationApi.test.ts, the "+
-				"version-defining seed migrations, or pnpm-lock.yaml [RS-V2-14 scope]", line)
+				"internal/validation/**, a non-rule-set version pin in internal/approval/**, the "+
+				"two §c e2e artifacts, validationApi.test.ts, the version-defining seed "+
+				"migrations, or pnpm-lock.yaml [RS-V2-14 scope]", line)
 		}
+	}
+}
+
+// detectionHitAllowed is the baseline's Category-B allowlist, split out so
+// TestRuleSetV2_DetectionAllowlistScope can check the allowlist itself rather
+// than only what today's repo happens to contain. line is the whole grep hit.
+func detectionHitAllowed(file, line string) bool {
+	// approval_policy_versions.version is a different version entirely: per-policy,
+	// minted by the policy store, never read from rule_sets. Narrowed to hits that
+	// do not name a rule set, so a genuine rule-set v1 pin written inside
+	// internal/approval/ still trips this guard.
+	if strings.HasPrefix(file, "internal/approval/") {
+		haystack := strings.ToLower(line)
+		return !strings.Contains(haystack, "ruleset") && !strings.Contains(haystack, "rule_set")
+	}
+	return strings.HasPrefix(file, "internal/validation/") ||
+		file == "e2e/api/validation.spec.ts" ||
+		file == "e2e/topology/targets.ts" ||
+		file == "frontend/app/src/lib/validationApi.test.ts" ||
+		file == "migrations/20260711121327_seed_mbs_v1.sql" ||
+		file == "migrations/20260715120000_line_rules.sql" ||
+		// M4-04-01's own migration: Category B by the same rule as the two
+		// above. Its `version = 1` statements DEFINE the v1->v2 topology --
+		// deleting v1's two wrongly-added rules, deactivating v1, copying
+		// v1's 17 into v2, and (in the Down) reactivating v1. It is the
+		// authority that SETS which version is active; it never reads the
+		// active version and pins the result to 1. v1 is version 1
+		// permanently, by definition.
+		file == "migrations/20260716185106_rule_set_v2.sql" ||
+		file == "pnpm-lock.yaml"
+}
+
+// TestRuleSetV2_DetectionAllowlistScope pins the internal/approval carve-out to
+// the shape it was opened for. A directory-wide exemption would make every one
+// of the "still trips" rows below pass silently.
+func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+		line string
+		want bool
+	}{
+		{"a policy version fixture", "internal/approval/policy_test.go",
+			`internal/approval/policy_test.go:156:  Status: "draft", Version: 1,`, true},
+		{"a store assertion on the first policy version", "internal/approval/policy_store_test.go",
+			`internal/approval/policy_store_test.go:12:  if got.Version != 1 {`, true},
+		{"an SQL fixture selecting a policy's first version", "internal/approval/policy_store_test.go",
+			`internal/approval/policy_store_test.go:20:  WHERE policy_id = $1 AND version = 1`, true},
+		{"a rule-set struct pin smuggled into approval", "internal/approval/policy.go",
+			`internal/approval/policy.go:9:  rs := RuleSet{Version: 1}`, false},
+		{"a snake-case rule_set pin in approval", "internal/approval/policy_store.go",
+			`internal/approval/policy_store.go:9:  SELECT id FROM rule_sets WHERE version = 1`, false},
+		{"a camel-case ruleSetVersion pin in approval", "internal/approval/store.go",
+			`internal/approval/store.go:9:  if ruleSetVersion == 1 {`, false},
+		{"the same pin in an unrelated package", "internal/invoice/engine.go",
+			`internal/invoice/engine.go:9:  rs := RuleSet{Version: 1}`, false},
+		{"a plain version pin in an unrelated package", "internal/submission/worker.go",
+			`internal/submission/worker.go:9:  if v.Version == 1 {`, false},
+		{"internal/validation, which owns rule sets", "internal/validation/engine_test.go",
+			`internal/validation/engine_test.go:9:  RuleSet{Version: 1}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectionHitAllowed(tc.file, tc.line); got != tc.want {
+				t.Errorf("detectionHitAllowed = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

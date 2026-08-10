@@ -9,7 +9,7 @@
 // `environment: node`, so a string authored here is a string no spec can hold. The one
 // exception is marked below, matching `RolesView`'s own `NO_MATCH`.
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import { toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
@@ -73,9 +73,14 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   const [submitting, setSubmitting] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
 
+  // AC-7: a write in flight must not be closed out from under by any route, X or Escape included.
+  const closeIfIdle = useCallback(() => {
+    if (!submitting) onClose()
+  }, [submitting, onClose])
+
   // No `outsideRef` — the scrim's own onClick is the outside click, the call shape
   // useDismiss.ts:20-21 pre-authorises for a modal.
-  useDismiss(true, onClose)
+  useDismiss(true, closeIfIdle)
 
   const selectable = pickerMembers(ctx.members)
   const shown = filterPickerMembers(selectable, query)
@@ -162,7 +167,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={closeIfIdle}
             className="pf-btn"
             aria-label="Close"
             data-testid="role-modal-close"

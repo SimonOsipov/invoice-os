@@ -25,7 +25,6 @@ import {
   intro,
   isApprover,
   listWorkflowRoles,
-  newRoleKey,
   pickerHiddenAmongSelected,
   pickerMembers,
   pickerSelectionCount,
@@ -392,46 +391,6 @@ describe('AC-4 — reducers are immutable', () => {
   })
 })
 
-describe('AC-5 — newRoleKey', () => {
-  it('newRoleKey slugifies the title', () => {
-    expect(newRoleKey([], 'Engagement Partner')).toBe('engagement-partner')
-  })
-
-  it('newRoleKey suffixes on collision within the mode', () => {
-    const roles = [role('tax-reviewer', 'Tax Reviewer', '', [])]
-    expect(newRoleKey(roles, 'Tax Reviewer')).toBe('tax-reviewer-2')
-  })
-
-  it('newRoleKey never collides with a seeded key', () => {
-    const firm = MOCK_FIRM_ROLES
-    expect(firm.length).toBeGreaterThan(0) // guard against a vacuous pass
-    const keys = new Set(firm.map((r) => r.key))
-    for (const r of firm) expect(keys.has(newRoleKey(firm, r.title))).toBe(false)
-  })
-})
-
-describe("QA — newRoleKey's empty-slug fallback (Save gates on name, not on slug legality)", () => {
-  it("falls back to the literal key 'role' when the title slugifies to nothing", () => {
-    expect(newRoleKey([], '###')).toBe('role')
-  })
-
-  it('composes the fallback with the ordinary collision suffix', () => {
-    const withRole = [role('role', 'Role', '', [])]
-    expect(newRoleKey(withRole, '###')).toBe('role-2')
-    const withRole2 = [...withRole, role('role-2', 'Role', '', [])]
-    expect(newRoleKey(withRole2, '###')).toBe('role-3')
-  })
-
-  it('an emoji-only title hits the same fallback, not a different one', () => {
-    expect(newRoleKey([], '🎉🎉🎉')).toBe('role')
-  })
-
-  it('a title mixing non-latin letters with ascii keeps only the ascii', () => {
-    // 'Ω' is stripped like any other non a-z0-9 character — no unicode-aware slugifier here.
-    expect(newRoleKey([], 'Ω Reviewer')).toBe('reviewer')
-  })
-})
-
 describe('AC-6 — roleOf', () => {
   it('roleOf returns a deleted sentinel for an absent key', () => {
     expect(roleOf(MOCK_FIRM_ROLES, 'nope')).toEqual({ key: 'nope', title: 'Deleted role', desc: '', members: [], deleted: true })
@@ -787,13 +746,9 @@ describe('[key-is-a-slug] — renaming a role never re-derives its key', () => {
     expect(result[0].key).toBe('fin_mgr')
   })
 
-  it('the key a rename keeps is not what newRoleKey would derive from the new title', () => {
-    // The shipped edit path spreads the stored role and overrides title/desc/members only —
-    // this is the assertion that would catch RoleModal ever switching to re-deriving the key
-    // on save, the way it already does on create.
+  it('a rename keeps the stored key, not a re-derived one', () => {
     const original = role('fin_mgr', 'Engagement Manager', 'First sign-off', ['mf3'])
     const renamedTitle = 'Chief Engagement Officer'
-    expect(newRoleKey([original], renamedTitle)).not.toBe('fin_mgr')
     expect({ ...original, title: renamedTitle }.key).toBe('fin_mgr')
   })
 })

@@ -146,11 +146,11 @@ func parseResetTables() []string {
 // A parser that silently yields nothing would make every assertion below
 // vacuous, so the floor is pinned independently of the list's contents.
 func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
-	if len(resetTargetTables) < 14 {
+	if len(resetTargetTables) < 17 {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -200,6 +200,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	).Scan(&invoiceID); err != nil {
 		t.Fatalf("seed invoices fixture: %v", err)
 	}
+
+	// approval_runs' RESTRICT FK to invoices is exactly what makes a bare TRUNCATE
+	// invoices fail with 0A000 today — seeding real rows here (not just relying on
+	// the table's mere existence) is what stops the post-fix assertion passing
+	// vacuously for these three tables.
+	policyID, versionID, runID, runStepID, decisionID := seedApprovalRunLedgerFixture(t, pool, tenantID, invoiceID)
+	t.Cleanup(func() {
+		cleanupApprovalRunLedgerFixture(pool, policyID, versionID, runID, runStepID, decisionID)
+	})
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
@@ -307,6 +316,75 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	}
 }
 
+// seedApprovalRunLedgerFixture inserts one approval_policies -> approval_policy_versions
+// (unsealed) -> approval_runs -> approval_run_steps -> approval_decisions chain hung off
+// invoiceID, as the superuser. Deliberately not h/seedApprovalPolicy/seedApprovalRun (the
+// RLS-suite helpers in approval_policy_rls_test.go / approval_runs_rls_test.go): those
+// reach the package-level RLS harness `h`, which is nil whenever DATABASE_READER_URL is
+// unset — exactly the `migrations` CI job this package's TestReset* suite must run
+// under (ci.yml:262 sets only SUPERUSER/MIGRATION/URL). Calling them here would nil-panic
+// the whole test binary in that job instead of failing one test.
+// Registers no cleanup: policyID/versionID are EXCLUDED from resetTables so they survive
+// Reset and the caller must clean them up; run/run_step/decision are truncated by Reset
+// itself once resetTables includes them, so they need none.
+func seedApprovalRunLedgerFixture(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID string) (policyID, versionID, runID, runStepID, decisionID string) {
+	t.Helper()
+	ctx := context.Background()
+	marker := "reset-ledger-" + uuid.NewString()
+
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		tenantID, marker,
+	).Scan(&policyID); err != nil {
+		t.Fatalf("seed approval_policies fixture: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1) RETURNING id`,
+		tenantID, policyID,
+	).Scan(&versionID); err != nil {
+		t.Fatalf("seed approval_policy_versions fixture: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		tenantID, invoiceID, versionID, marker,
+	).Scan(&runID); err != nil {
+		t.Fatalf("seed approval_runs fixture: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind) VALUES ($1, $2, 1, 'approval') RETURNING id`,
+		tenantID, runID,
+	).Scan(&runStepID); err != nil {
+		t.Fatalf("seed approval_run_steps fixture: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor)
+		 VALUES ($1, $2, $3, 'approved', $4) RETURNING id`,
+		tenantID, runID, runStepID, marker,
+	).Scan(&decisionID); err != nil {
+		t.Fatalf("seed approval_decisions fixture: %v", err)
+	}
+	return
+}
+
+// cleanupApprovalRunLedgerFixture deletes a seedApprovalRunLedgerFixture chain
+// bottom-up (decision, step, run, then the two excluded config rows). Callers
+// MUST run this even though Reset is documented to truncate run/run_step/decision
+// itself: pre-fix, Reset always errors and rolls back (approval_runs is not yet in
+// resetTables), so nothing is truncated and the run row is left referencing
+// invoiceID with an ON DELETE RESTRICT FK — measured directly, a leaked run row
+// here blocks every seed_demo_test.go case's own "clear demo tenant's invoices"
+// step (that helper predates this epic and does not know about approval_runs).
+// Post-fix this is a harmless no-op: Reset has already emptied all three.
+func cleanupApprovalRunLedgerFixture(pool *pgxpool.Pool, policyID, versionID, runID, runStepID, decisionID string) {
+	ctx := context.Background()
+	_, _ = pool.Exec(ctx, `DELETE FROM approval_decisions WHERE id = $1`, decisionID)
+	_, _ = pool.Exec(ctx, `DELETE FROM approval_run_steps WHERE id = $1`, runStepID)
+	_, _ = pool.Exec(ctx, `DELETE FROM approval_runs WHERE id = $1`, runID)
+	_, _ = pool.Exec(ctx, `DELETE FROM approval_policy_versions WHERE id = $1`, versionID)
+	_, _ = pool.Exec(ctx, `DELETE FROM approval_policies WHERE id = $1`, policyID)
+}
+
 // countAllResetTargetTables returns the total row count summed across every
 // table db.Reset truncates — 0 iff every one of them is empty.
 func countAllResetTargetTables(t *testing.T, pool *pgxpool.Pool) int {
@@ -352,6 +430,60 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 
 	if after := countAllResetTargetTables(t, pool); after != 0 {
 		t.Errorf("rows remaining across the reset target tables after Reset = %d, want 0", after)
+	}
+}
+
+// TestResetTruncatesApprovalRunLedger: targeted counterpart to
+// TestResetTruncatesEveryConfiguredTable — asserts each of the three run-ledger
+// tables loses its specific seeded row, so a regression that over-truncates one
+// table while under-truncating another can't hide behind the summed count above.
+func TestResetTruncatesApprovalRunLedger(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+			t.Errorf("restore curated demo state after reset test: %v", err)
+		}
+	})
+
+	marker := "reset-run-ledger-" + uuid.NewString()
+	var entityID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3) RETURNING id`,
+		demoTenantID, marker, "99999999-"+uuid.NewString()[:4],
+	).Scan(&entityID); err != nil {
+		t.Fatalf("seed business_entities fixture: %v", err)
+	}
+
+	var invoiceID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status, issue_date,
+		     supplier_tin, supplier_name, currency, subtotal, vat, total)
+		 VALUES ($1, $2, $3, 'draft', '2026-01-01', '99999999-0001', $4, 'NGN', 100, 7.5, 107.5)
+		 RETURNING id`,
+		demoTenantID, entityID, marker, marker,
+	).Scan(&invoiceID); err != nil {
+		t.Fatalf("seed invoices fixture: %v", err)
+	}
+
+	policyID, versionID, runID, runStepID, decisionID := seedApprovalRunLedgerFixture(t, pool, demoTenantID, invoiceID)
+	t.Cleanup(func() {
+		cleanupApprovalRunLedgerFixture(pool, policyID, versionID, runID, runStepID, decisionID)
+	})
+
+	if err := db.Reset(ctx, superDSN); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if got := mustCount(t, pool, `SELECT count(*) FROM approval_runs WHERE id = $1`, runID); got != 0 {
+		t.Errorf("approval_runs probe row after Reset = %d, want 0", got)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM approval_run_steps WHERE id = $1`, runStepID); got != 0 {
+		t.Errorf("approval_run_steps probe row after Reset = %d, want 0", got)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionID); got != 0 {
+		t.Errorf("approval_decisions probe row after Reset = %d, want 0", got)
 	}
 }
 
@@ -450,6 +582,79 @@ func TestResetLeavesWorkflowRolesAndStaffingUntouched(t *testing.T) {
 	}
 	if got := mustCount(t, pool, `SELECT count(*) FROM workflow_role_members WHERE id = $1`, memberID); got != 1 {
 		t.Errorf("workflow_role_members probe row after Reset = %d, want 1 — same exclusion", got)
+	}
+}
+
+// TestResetLeavesApprovalPolicyConfigUntouched: POSITIVE CONTROL, mirroring
+// TestResetLeavesWorkflowRolesAndStaffingUntouched above. approval_policies,
+// approval_policy_versions and approval_policy_steps are deliberately EXCLUDED
+// from resetTables both BEFORE and AFTER this subtask's reset.go edit — only the
+// exclusion comment's prose changes, never resetTables' membership for these
+// three — so this test carries no organic RED phase of its own tied to that
+// claim. (It is, incidentally, one of the tests currently failing for the SAME
+// unrelated reason RS-01..03 are: db.Reset errors on every call today because
+// approval_runs is missing from resetTables, so this assertion is never reached
+// pre-fix either — see the RED-evidence table in the commit/PR description.)
+// Non-vacuity for the exclusion claim itself is discharged out of band by a
+// mutation drill (temporarily add approval_policies to resetTables, observe
+// this test go red, revert) — see the PR description for that evidence.
+func TestResetLeavesApprovalPolicyConfigUntouched(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+			t.Errorf("restore curated demo state after reset test: %v", err)
+		}
+	})
+
+	marker := "reset-policy-probe-" + uuid.NewString()
+	var policyID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		demoTenantID, marker,
+	).Scan(&policyID); err != nil {
+		t.Fatalf("seed approval_policies probe: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM approval_policies WHERE id = $1`, policyID)
+	})
+
+	var versionID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1) RETURNING id`,
+		demoTenantID, policyID,
+	).Scan(&versionID); err != nil {
+		t.Fatalf("seed approval_policy_versions probe: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM approval_policy_versions WHERE id = $1`, versionID)
+	})
+
+	var stepID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind) VALUES ($1, $2, 1, 'approval') RETURNING id`,
+		demoTenantID, versionID,
+	).Scan(&stepID); err != nil {
+		t.Fatalf("seed approval_policy_steps probe: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM approval_policy_steps WHERE id = $1`, stepID)
+	})
+
+	if err := db.Reset(ctx, superDSN); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if got := mustCount(t, pool, `SELECT count(*) FROM approval_policies WHERE id = $1`, policyID); got != 1 {
+		t.Errorf("approval_policies probe row after Reset = %d, want 1 — the table is deliberately EXCLUDED "+
+			"from resetTables (reset.go): tenant-admin-CRUD/seal-owned config, nothing reseeds it", got)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM approval_policy_versions WHERE id = $1`, versionID); got != 1 {
+		t.Errorf("approval_policy_versions probe row after Reset = %d, want 1 — same exclusion", got)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM approval_policy_steps WHERE id = $1`, stepID); got != 1 {
+		t.Errorf("approval_policy_steps probe row after Reset = %d, want 1 — same exclusion", got)
 	}
 }
 

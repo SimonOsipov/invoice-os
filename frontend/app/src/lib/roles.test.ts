@@ -4,7 +4,7 @@ import { ApiError, type ApiFetchOptions, type AsyncStatus } from '@invoice-os/ap
 
 import { APP_PERSONAS } from '../auth'
 import { createAuthedFetch } from './authedFetch'
-import { replaceMember, type Member } from './members'
+import { replaceMember, toMember, type Member, type MembershipWire } from './members'
 import type { AuthedFetch } from './portfolio'
 import {
   activeHolders,
@@ -55,7 +55,7 @@ import { SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES, type Policy } from './workfl
 // shipping a seed and SEED_*_ROLES were re-pointed at the live membership subjects. The two
 // travel together: a role's `members` ids only mean something against the directory they
 // were written for. Specs that pin the SHIPPED re-point use the real constants — see the
-// AC-10 block at the foot of this file.
+// SHIPPED_FIRM_ROLES/SHIPPED_INHOUSE_ROLES blocks further down this file.
 const MOCK_FIRM_MEMBERS: readonly Member[] = [
   {
     id: 'mf1',
@@ -1026,16 +1026,113 @@ describe('resolve — blocked with more than one inactive holder still appends +
   })
 })
 
-// The two "SEED_*_ROLES re-pointed at the seeded subjects" blocks that used to live here
-// (matching SEED_FIRM_ROLES/SEED_INHOUSE_ROLES member ids against a UUID regex, and
-// exercising unassignedRoles/resolve against them plus a hand-built wire directory) are
-// gone with the constants they pinned. Both are superseded, in stronger form, on the Go
-// side: TestSeedEveryStaffedUserHasAMembershipInThatTenant (a real FK join, not a regex)
-// and TestSeedAllFiveHolderStatesAreReachable (the exact same unstaffed/suspended-only
-// facts, off live DB rows) — internal/platform/db/seed_demo_test.go:4688,4852. The
-// unassignedRoles/resolve derivation itself stays covered by the MOCK_FIRM_ROLES/
-// MOCK_INHOUSE_ROLES specs above (:359-366), which assert the identical unassigned sets
-// and the identical suspended-cfo resolution.
+// QA (Stage 4): the two "SEED_*_ROLES re-pointed at the seeded subjects" blocks that used to
+// live here were dropped by this subtask's own red-test commit, on the claim that
+// TestSeedEveryStaffedUserHasAMembershipInThatTenant and TestSeedAllFiveHolderStatesAreReachable
+// (internal/platform/db/seed_demo_test.go:4688,4852) supersede them. Checked fact-by-fact: those
+// Go tests assert DB row state and never invoke unassignedRoles/resolve, so they cannot prove
+// what those functions RENDER for real seed-shaped data (e.g. the exact 'Adebayo Ogunlesi +1'
+// text) — that half of the coverage was a genuine loss, not a supersession. Restored here as a
+// file-local fixture (SHIPPED_FIRM/INHOUSE_ROLES/MEMBERS, byte-identical to the deleted
+// SEED_FIRM_ROLES/SEED_INHOUSE_ROLES and the deleted seedWire-built directory) rather than in
+// production code, since roles are server-fetched now and there is no module constant to re-add.
+const SHIPPED_FIRM_ROLES: readonly Role[] = [
+  {
+    key: 'preparer',
+    title: 'Invoice Preparer',
+    desc: 'Prepares and imports client invoices',
+    members: ['c0000000-0000-0000-0000-000000000003', 'c0000000-0000-0000-0000-000000000006'],
+  },
+  { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: ['c0000000-0000-0000-0000-000000000004'] },
+  { key: 'fin_dir', title: 'Senior Manager', desc: 'Second sign-off above ₦250m', members: ['c0000000-0000-0000-0000-000000000004'] },
+  { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: ['c0000000-0000-0000-0000-000000000005'] },
+  { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['c0000000-0000-0000-0000-000000000001'] },
+  { key: 'quality_reviewer', title: 'Quality Reviewer', desc: 'Second-partner review on flagged engagements', members: [] },
+]
+
+const SHIPPED_INHOUSE_ROLES: readonly Role[] = [
+  { key: 'preparer', title: 'Preparer', desc: 'Accounts Payable', members: ['c0000000-0000-0000-0000-000000000013'] },
+  { key: 'line_mgr', title: 'Line Manager', desc: 'Requesting dept.', members: ['c0000000-0000-0000-0000-000000000009'] },
+  { key: 'fin_mgr', title: 'Finance Manager', desc: 'Finance', members: [] },
+  { key: 'controller', title: 'Financial Controller', desc: 'Finance', members: ['c0000000-0000-0000-0000-000000000010'] },
+  {
+    key: 'fin_dir',
+    title: 'Finance Director',
+    desc: 'Finance',
+    members: ['c0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000008'],
+  },
+  { key: 'compliance', title: 'Compliance Officer', desc: 'Tax & Compliance', members: ['c0000000-0000-0000-0000-000000000011'] },
+  { key: 'cfo', title: 'CFO', desc: 'Executive', members: ['c0000000-0000-0000-0000-000000000012'] },
+  { key: 'ceo', title: 'CEO', desc: 'Executive', members: [] },
+]
+
+describe('QA — the unstaffed and suspended-only states survive off the shipped role set', () => {
+  it('every staffed role id in SHIPPED_FIRM_ROLES and SHIPPED_INHOUSE_ROLES is a seeded subject', () => {
+    const SUBJECT_RE = /^c0000000-0000-0000-0000-0000000000\d{2}$/
+    const ids = [...SHIPPED_FIRM_ROLES, ...SHIPPED_INHOUSE_ROLES].flatMap((r) => r.members)
+    expect(ids.length).toBeGreaterThan(0) // guard against a vacuous pass
+    for (const id of ids) expect(id).toMatch(SUBJECT_RE)
+  })
+
+  it('the unstaffed and suspended-only states survive the shipped role set', () => {
+    expect(SHIPPED_FIRM_ROLES.find((r) => r.key === 'quality_reviewer')?.members).toEqual([])
+    expect(SHIPPED_INHOUSE_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual([])
+    expect(SHIPPED_INHOUSE_ROLES.find((r) => r.key === 'ceo')?.members).toEqual([])
+    expect(SHIPPED_INHOUSE_ROLES.find((r) => r.key === 'cfo')?.members).toEqual(['c0000000-0000-0000-0000-000000000012'])
+  })
+})
+
+const seedWire = (userId: string, role: string, name: string, email: string, status: string): MembershipWire => ({
+  user_id: userId,
+  role,
+  status,
+  display_name: name,
+  email,
+})
+
+const SHIPPED_FIRM_MEMBERS: readonly Member[] = [
+  seedWire('c0000000-0000-0000-0000-000000000001', 'admin', 'Chinedu Okafor', 'c.okafor@okafor.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000003', 'preparer', 'Folake Adesina', 'f.adesina@okafor.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000004', 'reviewer', 'Musa Danjuma', 'm.danjuma@okafor.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000005', 'reviewer', 'Chiamaka Nwosu', 'c.nwosu@okafor.ng', 'active'),
+  seedWire(
+    'c0000000-0000-0000-0000-000000000006',
+    'preparer',
+    'Oluwaseyifunmi Adebanjo-Ogunleye',
+    'o.adebanjo-ogunleye@okaforandpartners.com.ng',
+    'active',
+  ),
+  seedWire('c0000000-0000-0000-0000-000000000007', 'reviewer', 'Halima Yusuf', 'h.yusuf@okafor.ng', 'suspended'),
+].map((w) => toMember(w, 'nobody'))
+
+const SHIPPED_INHOUSE_MEMBERS: readonly Member[] = [
+  seedWire('c0000000-0000-0000-0000-000000000002', 'admin', 'Ngozi Balogun', 'n.balogun@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000008', 'reviewer', 'Yetunde Fashola', 'y.fashola@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000009', 'reviewer', 'Emeka Uzowulu', 'e.uzowulu@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000010', 'reviewer', 'Tunde Adeyemi', 't.adeyemi@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000011', 'reviewer', 'Ibrahim Bello', 'i.bello@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000012', 'reviewer', 'Adebayo Ogunlesi', 'a.ogunlesi@honeywell.ng', 'suspended'),
+  seedWire('c0000000-0000-0000-0000-000000000013', 'preparer', 'Zainab Lawal', 'z.lawal@honeywell.ng', 'active'),
+].map((w) => toMember(w, 'nobody'))
+
+describe('QA — unassignedRoles/resolve against the shipped role set and a live-shaped directory', () => {
+  it('firm: preparer and quality_reviewer are unassigned, and every one of the ten seeded approval steps resolves without warn', () => {
+    expect(unassignedRoles(SHIPPED_FIRM_ROLES, SHIPPED_FIRM_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'quality_reviewer'])
+    const stepRoles = approvalRoles(SEED_FIRM_POLICIES)
+    expect(stepRoles.length).toBe(10) // guard against a vacuous pass
+    for (const key of stepRoles) {
+      const result = resolve(SHIPPED_FIRM_ROLES, SHIPPED_FIRM_MEMBERS, key)
+      expect(result.warn).toBe(false)
+      expect(result.text).not.toBe('Nobody assigned')
+    }
+  })
+
+  it('inhouse: preparer/fin_mgr/cfo/ceo are unassigned, cfo blocks on its lone suspended holder, fin_dir resolves its active pair', () => {
+    expect(unassignedRoles(SHIPPED_INHOUSE_ROLES, SHIPPED_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'fin_mgr', 'cfo', 'ceo'])
+    expect(resolve(SHIPPED_INHOUSE_ROLES, SHIPPED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi', warn: true })
+    expect(resolve(SHIPPED_INHOUSE_ROLES, SHIPPED_INHOUSE_MEMBERS, 'fin_dir')).toEqual({ text: 'Ngozi Balogun +1', warn: false })
+  })
+})
 
 // [roles.ts:348] — a third `.toLowerCase()` on `email` no AC names (found in the plan pass).
 // Same shape as members.test.ts's filterMembers/classifyInvites null-email specs.

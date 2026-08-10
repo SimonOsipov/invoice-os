@@ -7,8 +7,14 @@
 //
 // Both edges are TYPE-ONLY: the picker's meta column moved to `accessRoleLabel` at its own
 // call site when the in-house department fork went, so this module imports no runtime value.
+//
+// The `// Wire` section at the foot of this file adds five AuthedFetch wrappers over the
+// APPR-02 workflow-role endpoints, on lib/members.ts's live-wire shape.
 
-import type { AccessRole, Member } from './members'
+import type { AsyncStatus } from '@invoice-os/api-client'
+
+import type { AccessRole, Member, MembersSurface } from './members'
+import type { AuthedFetch } from './portfolio'
 import type { Policy, WorkflowMode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -89,7 +95,7 @@ function cloneRoles(list: readonly Role[]): Role[] {
 // ---------------------------------------------------------------------------
 // Reducers
 // ---------------------------------------------------------------------------
-// All five allocate unconditionally, so a miss returns a new array holding the same values
+// All three allocate unconditionally, so a miss returns a new array holding the same values
 // rather than the input reference — the `replaceMember` / `replacePolicy` form.
 
 export function replaceRole(list: readonly Role[], next: Role): Role[] {
@@ -102,21 +108,6 @@ export function addRole(list: readonly Role[], next: Role): Role[] {
 
 export function removeRole(list: readonly Role[], key: string): Role[] {
   return list.filter((r) => r.key !== key)
-}
-
-/** Copies the ids: one `memberIds` argument must not end up aliased by the role it staffs. */
-export function setRoleMembers(list: readonly Role[], key: string, memberIds: readonly string[]): Role[] {
-  return list.map((r) => (r.key === key ? { ...r, members: memberIds.slice() } : r))
-}
-
-/** Removing a member drops them from every role; suspending deliberately does not. */
-export function pruneMember(list: readonly Role[], memberId: string): Role[] {
-  return list.map((r) => ({ ...r, members: r.members.filter((id) => id !== memberId) }))
-}
-
-/** The invite path's write: minted ids join the chosen role in the same commit as the roster. */
-export function addRoleMembers(list: readonly Role[], key: string, memberIds: readonly string[]): Role[] {
-  return list.map((r) => (r.key === key ? { ...r, members: [...r.members, ...memberIds] } : r))
 }
 
 /**
@@ -411,4 +402,66 @@ export function savedNotice(title: string): string {
 /** NOT IN BRIEF: the delete half of the pair, so the two cannot drift. */
 export function deletedNotice(title: string): string {
   return `${title} deleted`
+}
+
+// ---------------------------------------------------------------------------
+// Wire
+// ---------------------------------------------------------------------------
+// The wire object IS `Role` (approval.Role, field-for-field) — no separate wire type or
+// projection. `base` is a parameter, never `gatewayBase()` called here; no wrapper catches,
+// so a non-2xx rejects with the underlying ApiError unchanged.
+
+/** The one-key envelope; the other four wrappers below resolve a bare `Role`. */
+export async function listWorkflowRoles(f: AuthedFetch, base: string): Promise<Role[]> {
+  const body = await f<{ workflow_roles: Role[] }>(`${base}/api/invoice/v1/workflow-roles`)
+  return body.workflow_roles
+}
+
+export async function createWorkflowRole(f: AuthedFetch, base: string, title: string, desc: string): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles`, { method: 'POST', body: { title, desc } })
+}
+
+/** Go pointer fields: an absent key here must stay absent on the wire, never `""` or `null`. */
+export type RolePatch = { title?: string; desc?: string }
+
+export async function updateWorkflowRole(f: AuthedFetch, base: string, key: string, patch: RolePatch): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}`, { method: 'PATCH', body: patch })
+}
+
+export async function deleteWorkflowRole(f: AuthedFetch, base: string, key: string): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}`, { method: 'DELETE' })
+}
+
+/** An empty set still PUTs an explicit `{"members":[]}` — the server 400s on an absent key. */
+export async function setRoleMembers(f: AuthedFetch, base: string, key: string, memberIds: readonly string[]): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}/members`, {
+    method: 'PUT',
+    body: { members: memberIds },
+  })
+}
+
+/** POSTs then PUTs the SERVER's own returned key, never a slug of the title; skips the PUT unstaffed. */
+export async function createStaffedRole(
+  f: AuthedFetch,
+  base: string,
+  title: string,
+  desc: string,
+  members: readonly string[],
+): Promise<Role> {
+  const created = await createWorkflowRole(f, base, title, desc)
+  if (members.length === 0) return created
+  return setRoleMembers(f, base, created.key, members)
+}
+
+/** Worst-of ladder over BOTH fetches the Roles screen needs landed — not `membersSurface`'s one-argument form. */
+export function rolesSurface(rolesStatus: AsyncStatus, membersStatus: AsyncStatus): MembersSurface {
+  if (rolesStatus === 'error' || membersStatus === 'error') return 'error'
+  if (rolesStatus === 'loading' || membersStatus === 'loading') return 'loading'
+  if (rolesStatus === 'idle' || rolesStatus === 'empty' || membersStatus === 'idle' || membersStatus === 'empty') return 'empty'
+  return 'roster'
+}
+
+/** Mirrors internal/invoice/store.go's isApprover. Not yet wired into activeHolders/resolution — APPR-04-02. */
+export function isApprover(role: AccessRole): boolean {
+  return role === 'admin' || role === 'reviewer'
 }

@@ -703,17 +703,40 @@ func TestRLS_ApprovalPolicyVersionsVersionUniquePerPolicy(t *testing.T) {
 	policyID, cleanup := seedApprovalPolicy(t, h.tenantA, apName("version-unique"))
 	defer cleanup()
 
+	// Every row here is sealed. approval_policy_versions_one_draft admits at most one unsealed
+	// version per policy, so unsealed rows could no longer coexist and would leave it ambiguous
+	// which of the two unique keys refused an insert.
 	if _, err := h.super.Exec(ctx,
-		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1)`,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed) VALUES ($1, $2, 1, true)`,
 		h.tenantA, policyID); err != nil {
 		t.Fatalf("seed version 1: %v", err)
 	}
+	// seal_guard refuses the DELETE of a sealed row, so the plain cleanup would silently leak
+	// into the shared harness tenant. Bypass trigger firing for the children only; the deferred
+	// policy cleanup then runs (LIFO) against a childless policy.
 	defer func() {
-		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_policy_versions WHERE policy_id = $1`, policyID)
+		ctx := context.Background()
+		tx, err := h.super.Begin(ctx)
+		if err != nil {
+			t.Errorf("teardown sealed versions: begin tx: %v", err)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+			t.Errorf("teardown sealed versions: set session_replication_role: %v", err)
+			return
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM approval_policy_versions WHERE policy_id = $1`, policyID); err != nil {
+			t.Errorf("teardown sealed versions: delete: %v", err)
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("teardown sealed versions: commit: %v", err)
+		}
 	}()
 
 	_, err := h.super.Exec(ctx,
-		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1)`,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed) VALUES ($1, $2, 1, true)`,
 		h.tenantA, policyID)
 	if err == nil {
 		t.Fatal("duplicate version 1 for the same policy succeeded, want 23505")
@@ -727,7 +750,7 @@ func TestRLS_ApprovalPolicyVersionsVersionUniquePerPolicy(t *testing.T) {
 
 	// Positive control: a different version number for the same policy succeeds.
 	if _, err := h.super.Exec(ctx,
-		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 2)`,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed) VALUES ($1, $2, 2, true)`,
 		h.tenantA, policyID); err != nil {
 		t.Fatalf("control: version 2 for the same policy: want success, got: %v", err)
 	}

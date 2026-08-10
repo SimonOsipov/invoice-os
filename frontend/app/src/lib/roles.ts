@@ -145,11 +145,12 @@ export function holders(list: readonly Role[], members: readonly Member[], key: 
 }
 
 /**
- * Status only — deliberately NOT filtered by access role. The delegate picker is the one place
- * the Reviewer role is a hard gate; a holder who is an admin still resolves.
+ * Status AND access role: only an active admin/reviewer satisfies a seat. Staffing a preparer
+ * stays legal server-side (`internal/approval/store.go:355-358`, `TestStaffing_PreparerMayBeStaffed`)
+ * — the approver filter is a read-time concern, not a staffing-time one.
  */
 export function activeHolders(list: readonly Role[], members: readonly Member[], key: string): Member[] {
-  return holders(list, members, key).filter((m) => m.status === 'active')
+  return holders(list, members, key).filter((m) => m.status === 'active' && isApprover(m.role))
 }
 
 export function rolesOfMember(list: readonly Role[], memberId: string): Role[] {
@@ -178,7 +179,7 @@ function resolution(list: readonly Role[], members: readonly Member[], key: stri
   if (!list.some((r) => r.key === key)) return { kind: 'missing' }
   const all = holders(list, members, key)
   if (all.length === 0) return { kind: 'none' }
-  const active = all.filter((m) => m.status === 'active')
+  const active = all.filter((m) => m.status === 'active' && isApprover(m.role))
   // `extra` counts the OTHER holders, active or not.
   const extra = all.length - 1
   if (active.length === 0) return { kind: 'blocked', primary: all[0].name, extra }
@@ -461,7 +462,7 @@ export function rolesSurface(rolesStatus: AsyncStatus, membersStatus: AsyncStatu
   return 'roster'
 }
 
-/** Mirrors internal/invoice/store.go's isApprover. Not yet wired into activeHolders/resolution — APPR-04-02. */
+/** Mirrors internal/invoice/store.go's isApprover. */
 export function isApprover(role: AccessRole): boolean {
   return role === 'admin' || role === 'reviewer'
 }

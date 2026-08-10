@@ -770,11 +770,21 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	// own --exclude-dir flags already carve out non-reviewed directories.
 	// This filters the OUTPUT for the assertion only; the command string
 	// above stays byte-for-byte verbatim.
+	//
+	// .scratch/ is dropped for the same reason: per-worktree agent scratch (RALPH
+	// session state, draft commit messages), never committed, absent from every CI
+	// checkout. A local note quoting a version pin was failing this test on the
+	// author's machine only -- the kind of false red that gets an allowlist widened.
 	const selfFile = "internal/validation/rule_set_v2_test.go"
 	var lines []string
 	for _, line := range allLines {
 		file, _, ok := strings.Cut(line, ":")
-		if ok && strings.TrimPrefix(file, "./") == selfFile {
+		if !ok {
+			lines = append(lines, line)
+			continue
+		}
+		file = strings.TrimPrefix(file, "./")
+		if file == selfFile || strings.HasPrefix(file, ".scratch/") {
 			continue
 		}
 		lines = append(lines, line)

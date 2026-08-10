@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -929,23 +930,95 @@ func TestPolicy_ValidateCondAmountGrammarIsNarrowerThanPostgres(t *testing.T) {
 	}
 }
 
-// TestPolicy_ValidateCondAmountAnswersAHugeExponentFast: "1e100000000" is eleven bytes
-// inside maxPolicyBodyBytes and cannot be a legal numeric(14,2), but the magnitude
-// comparison rescales it into a 10^8-digit integer before it can say so — measured
-// 23.8s and 287MB of heap for one call, on the request goroutine, pre-tx. The
-// exponent has to be refused before any magnitude comparison.
-func TestPolicy_ValidateCondAmountAnswersAHugeExponentFast(t *testing.T) {
-	const amount = "1e100000000"
-	done := make(chan error, 1)
-	go func() { done <- validateTree([]stepInput{condIn(">", amount, nil, nil)}) }()
+// condAmountCostBudget is the load-bearing half of the two tests below. A wall-clock
+// deadline only reports that this machine was fast enough; the allocation ceiling holds
+// on any machine, because reaching a magnitude comparison with one of these exponents
+// costs hundreds of MB whatever the hardware — measured on the code before the exponent
+// bound: 330MB for "1e100000000", 79MB for "0e100000000".
+const condAmountCostBudget = 8 << 20
+
+// costOfValidating returns the bytes validateTree allocated, or false if it had not
+// answered within a second.
+func costOfValidating(t *testing.T, amount string) (error, uint64, bool) {
+	t.Helper()
+	type result struct {
+		err   error
+		alloc uint64
+	}
+	done := make(chan result, 1)
+	go func() {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		err := validateTree([]stepInput{condIn(">", amount, nil, nil)})
+		runtime.ReadMemStats(&after)
+		done <- result{err, after.TotalAlloc - before.TotalAlloc}
+	}()
 	select {
-	case err := <-done:
-		if !errors.Is(err, ErrValidation) {
-			t.Errorf("err = %v, want ErrValidation", err)
+	case r := <-done:
+		if r.alloc > condAmountCostBudget {
+			t.Errorf("cond_amount %q allocated %dMB — its exponent reached a magnitude comparison", amount, r.alloc>>20)
 		}
+		return r.err, r.alloc, true
 	case <-time.After(time.Second):
-		t.Fatalf("validateTree with cond_amount %q had not answered after 1s — an eleven-byte value "+
-			"burns CPU and heap in the request goroutine", amount)
+		return nil, 0, false
+	}
+}
+
+// TestPolicy_ValidateCondAmountAnswersAHugeExponentFast: "1e100000000" is eleven bytes
+// inside maxPolicyBodyBytes and cannot be a legal numeric(14,2), but a magnitude
+// comparison rescales it into a 10^8-digit integer before it can say so — 23.8s and
+// 330MB for one call, on the request goroutine, pre-tx. "1e2147483647" is the reachable
+// ceiling and did not answer at all inside a minute. The exponent has to be refused
+// before any magnitude comparison.
+func TestPolicy_ValidateCondAmountAnswersAHugeExponentFast(t *testing.T) {
+	// "1e10000000" answered in 604ms before the bound — inside the deadline on this
+	// machine and outside it on a slower one, so the allocation ceiling is what catches
+	// it either way.
+	for _, amount := range []string{"1e10000000", "1e100000000", "1e2147483647"} {
+		t.Run(amount, func(t *testing.T) {
+			err, _, answered := costOfValidating(t, amount)
+			if !answered {
+				t.Fatalf("validateTree with cond_amount %q had not answered after 1s — a value this "+
+					"short burns CPU and heap in the request goroutine", amount)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+// TestPolicy_ValidateCondAmountRejectsAZeroTheColumnCannotHold: a zero coefficient skips
+// the exponent bound entirely, so the validator accepts every zero at every exponent.
+// numeric does not: measured on :5433, '0e100000000'::numeric(14,2) is 0.00 but
+// '0e2000000000' and '0e2147483647' both raise "value overflows numeric format" —
+// SQLSTATE 22003, no constraint name, so policyStatusForErr answers 500 where this
+// design promises 400. That is the defect class the cond_amount bound exists to close.
+// Rejecting the whole band is the safe direction and costs nothing real: the accepted
+// grammar is already a strict subset of numeric's.
+func TestPolicy_ValidateCondAmountRejectsAZeroTheColumnCannotHold(t *testing.T) {
+	for _, amount := range []string{"0e2147483647", "-0e2147483647", "0.00e2147483647", "0e1000000000"} {
+		t.Run(amount, func(t *testing.T) {
+			err, _, answered := costOfValidating(t, amount)
+			if !answered {
+				t.Fatalf("validateTree with cond_amount %q had not answered after 1s", amount)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation — numeric(14,2) refuses this value", err)
+			}
+		})
+	}
+}
+
+// TestPolicy_ValidateCondAmountKeepsZeroLegal: the fix for the test above must not cost
+// the zero every real caller sends.
+func TestPolicy_ValidateCondAmountKeepsZeroLegal(t *testing.T) {
+	for _, amount := range []string{"0", "0.00", "-0.00", "0e0", "0.0"} {
+		t.Run(amount, func(t *testing.T) {
+			if err := validateTree([]stepInput{condIn(">", amount, nil, nil)}); err != nil {
+				t.Errorf("err = %v, want nil", err)
+			}
+		})
 	}
 }
 

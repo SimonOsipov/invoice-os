@@ -86,8 +86,9 @@ ON CONFLICT ON CONSTRAINT workflow_roles_tenant_key_uq DO UPDATE SET
 -- on conflict, and a hardcoded id here would then point at a row that was never
 -- inserted, aborting the whole seed on workflow_role_members_tenant_role_fk. ord is
 -- 0-based and dense per role, matching SetRoleMembers' own write
--- (internal/approval/store.go:423). DO NOTHING: unlike role identity above, a live
--- staffing edit is the tenant admin's own choice and is never seed-repaired.
+-- (internal/approval/store.go:423). DO NOTHING only protects a row that still exists:
+-- an admin's edits to it survive, but a holder removed outright is re-created on the
+-- next seed, since the demo set is meant to converge.
 WITH role_member_seed (tenant_id, role_key, user_id, ord) AS (
   VALUES
     -- Okafor & Partners: preparer x2, fin_mgr/fin_dir share Musa Danjuma, cfo; quality_reviewer unstaffed

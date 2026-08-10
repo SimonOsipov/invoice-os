@@ -448,6 +448,38 @@ func TestRLS_ApprovalRunsVersionDeleteRestricted(t *testing.T) {
 	}
 }
 
+// QA adversarial addition (mutation-testing APPR-03-07): RN-09 pins RESTRICT on
+// approval_runs_tenant_version_fk, but nothing pinned it on approval_runs_tenant_invoice_fk —
+// flipping that one to NO ACTION left the whole suite green. Same shape as RN-09, invoice side.
+func TestRLS_ApprovalRunsInvoiceDeleteRestricted(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "RN-09b A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "RN-09b-A")
+	defer cleanupInvoiceA()
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("rn-09b-policy"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	runA, cleanupRunA := seedApprovalRun(t, h.tenantA, invoiceA, versionA)
+	defer cleanupRunA()
+
+	_, err := h.super.Exec(ctx, `DELETE FROM invoices WHERE id = $1`, invoiceA)
+	if err == nil {
+		t.Fatal("delete the referenced invoice with a live run succeeded, want restrict_violation " +
+			"(SQLSTATE 23001, ON DELETE RESTRICT)")
+	}
+	if code := pgCode(err); code != "23001" {
+		t.Fatalf("delete referenced invoice with a live run: SQLSTATE = %q, want 23001 (restrict_violation): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_runs WHERE id = $1`, runA); n != 1 {
+		t.Errorf("run rows after the refused invoice delete = %d, want 1 (row must survive)", n)
+	}
+}
+
 // RN-10: as SUPERUSER, a run step for A naming B's run_id is refused — the run FK is
 // not composite on (tenant_id, id). B's run must be real, not a garbage uuid: a garbage
 // id would ALSO fail a hypothetical single-column FK, defeating the point.
@@ -606,6 +638,57 @@ func TestRLS_ApprovalDecisionsCrossTenantRunStepRefused(t *testing.T) {
 		t.Errorf("constraint = %q, want %q", name, "approval_decisions_tenant_run_step_fk")
 	}
 	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_decisions WHERE run_step_id = $1`, stepB); n != 0 {
+		t.Errorf("decision rows after the refused INSERT = %d, want 0", n)
+	}
+}
+
+// QA adversarial addition (mutation-testing APPR-03-07): RN-13 only exercises the
+// run_step_id leg of approval_decisions's two composite FKs — its run_id leg stays valid
+// for tenant A throughout, so flipping approval_decisions_tenant_run_fk to single-column
+// left the whole suite green. Mirrors RN-13 with the roles reversed: run_id is wrong-tenant,
+// run_step_id is a valid tenant-A row.
+func TestRLS_ApprovalDecisionsCrossTenantRunRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "RN-13b A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "RN-13b-A")
+	defer cleanupInvoiceA()
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("rn-13b-policy-a"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	runA, cleanupRunA := seedApprovalRun(t, h.tenantA, invoiceA, versionA)
+	defer cleanupRunA()
+	stepA, cleanupStepA := seedApprovalRunStep(t, h.tenantA, runA, 0, "approval")
+	defer cleanupStepA()
+
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "RN-13b B Corp")
+	defer cleanupEntityB()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "RN-13b-B")
+	defer cleanupInvoiceB()
+	policyB, cleanupPolicyB := seedApprovalPolicy(t, h.tenantB, apName("rn-13b-policy-b"))
+	defer cleanupPolicyB()
+	versionB, cleanupVersionB := seedApprovalPolicyVersion(t, h.tenantB, policyB)
+	defer cleanupVersionB()
+	runB, cleanupRunB := seedApprovalRun(t, h.tenantB, invoiceB, versionB)
+	defer cleanupRunB()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor) VALUES ($1, $2, $3, 'approved', 'rn-13b-actor')`,
+		h.tenantA, runB, stepA)
+	if err == nil {
+		t.Fatal("decision for tenant A naming tenant B's run_id succeeded, want 23503 — the " +
+			"run FK is not composite on (tenant_id, id)")
+	}
+	if code := pgCode(err); code != "23503" {
+		t.Fatalf("cross-tenant run_id: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != "approval_decisions_tenant_run_fk" {
+		t.Errorf("constraint = %q, want %q", name, "approval_decisions_tenant_run_fk")
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_decisions WHERE run_step_id = $1`, stepA); n != 0 {
 		t.Errorf("decision rows after the refused INSERT = %d, want 0", n)
 	}
 }
@@ -819,5 +902,70 @@ func TestRLS_ApprovalRunLedgerTenantDeleteCascades(t *testing.T) {
 	}
 	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionID); n != 0 {
 		t.Errorf("decision rows after the tenant delete = %d, want 0", n)
+	}
+}
+
+// QA adversarial addition (mutation-testing APPR-03-07): RN-17 only exercises the
+// tenant-level cascade, and every one of these tables ALSO carries its own direct
+// tenant_id -> tenants CASCADE, so a run/run-step/decision row is removed by that path
+// regardless of what approval_run_steps_tenant_run_fk or approval_decisions_tenant_run_fk
+// say — flipping either to RESTRICT left RN-17 (and the whole suite) green. This deletes
+// the run directly, the way TestRLS_ApprovalPolicyVersionsDeleteCascadesToSteps does for
+// the config side, so the composite FK's own action is what gets exercised.
+func TestRLS_ApprovalRunsDeleteCascadesToRunStepsAndDecisions(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "run-delete-cascade Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "run-delete-cascade")
+	defer cleanupInvoiceA()
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("run-delete-cascade-policy"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	runID, _ := seedApprovalRun(t, h.tenantA, invoiceA, versionA)
+	stepID, _ := seedApprovalRunStep(t, h.tenantA, runID, 0, "approval")
+	decisionID, _ := seedApprovalDecision(t, h.tenantA, runID, stepID, "approved", "run-delete-cascade-actor")
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM approval_runs WHERE id = $1`, runID); err != nil {
+		t.Fatalf("delete the run directly (not via tenant): %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_run_steps WHERE id = $1`, stepID); n != 0 {
+		t.Errorf("run step rows after the run delete = %d, want 0 — approval_run_steps_tenant_run_fk "+
+			"is not cascading", n)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionID); n != 0 {
+		t.Errorf("decision rows after the run delete = %d, want 0 — approval_decisions_tenant_run_fk "+
+			"is not cascading", n)
+	}
+}
+
+// QA adversarial addition (mutation-testing APPR-03-07): same gap as above, for
+// approval_decisions_tenant_run_step_fk — deletes the run step directly so the tenant-level
+// direct cascade can't mask a RESTRICT flip on the composite FK.
+func TestRLS_ApprovalRunStepsDeleteCascadesToDecisions(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "runstep-delete-cascade Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "runstep-delete-cascade")
+	defer cleanupInvoiceA()
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("runstep-delete-cascade-policy"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	runA, cleanupRunA := seedApprovalRun(t, h.tenantA, invoiceA, versionA)
+	defer cleanupRunA()
+	stepID, _ := seedApprovalRunStep(t, h.tenantA, runA, 0, "approval")
+	decisionID, _ := seedApprovalDecision(t, h.tenantA, runA, stepID, "approved", "runstep-delete-cascade-actor")
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM approval_run_steps WHERE id = $1`, stepID); err != nil {
+		t.Fatalf("delete the run step directly (not via tenant): %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionID); n != 0 {
+		t.Errorf("decision rows after the run step delete = %d, want 0 — approval_decisions_tenant_run_step_fk "+
+			"is not cascading", n)
 	}
 }

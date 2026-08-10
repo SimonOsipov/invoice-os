@@ -807,3 +807,69 @@ func TestPIL15_CondAmountUpdateOnSealedStepRejected(t *testing.T) {
 		t.Errorf("step snapshot after rejected content UPDATE = %s, want unchanged %s", afterSnap, before)
 	}
 }
+
+// TestPIL16_RemainingContentColumnsUpdateOnSealedStepRejected: QA gap-fill for APPR-03-04.
+// Mutation-testing (APPR-03-07) found that of the content lock's 14 compared columns, only
+// four (id, version_id, workflow_role_key, cond_amount) had per-column regression coverage
+// (PIL-08/04/02/15) — dropping any of the other ten from the trigger's comparison list left
+// every existing PIL spec green. Table-driven UPDATE of each on a sealed step -> 23001.
+func TestPIL16_RemainingContentColumnsUpdateOnSealedStepRejected(t *testing.T) {
+	migrator := migratorPool(t)
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-03 pil-16")
+	policyID := seedApprovalPolicy(t, super, tenantID, "PIL-16 remaining columns policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	stepID := seedApprovalPolicyStep(t, super, tenantID, versionID, nil, "condition", 0)
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_steps SET branch = 'then', sla_hours = 4, cond_op = '>',
+		    cond_amount = 100.00, notify_target = 'ops@example.com', notify_channel = 'email'
+		 WHERE id = $1`, stepID); err != nil {
+		t.Fatalf("seed step content columns: %v", err)
+	}
+	sealApprovalPolicyVersion(t, super, versionID)
+	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantID) })
+
+	before := stepSnapshot(t, super, stepID)
+
+	tx, err := migrator.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin migrator tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	setTenantGUC(t, ctx, tx, tenantID)
+
+	// tenant_id/parent_step_id target fresh, unrelated UUIDs: if the lock ever stops
+	// comparing them, the UPDATE either succeeds outright or trips an unrelated FK
+	// (23503) instead of the lock's own 23001 — assertSQLState treats both as a failure,
+	// so this still catches the regression without needing a second valid row to reparent onto.
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		{"tenant_id", `UPDATE approval_policy_steps SET tenant_id = gen_random_uuid() WHERE id = $1`},
+		{"parent_step_id", `UPDATE approval_policy_steps SET parent_step_id = gen_random_uuid() WHERE id = $1`},
+		{"branch", `UPDATE approval_policy_steps SET branch = 'else' WHERE id = $1`},
+		{"ord", `UPDATE approval_policy_steps SET ord = 99 WHERE id = $1`},
+		{"kind", `UPDATE approval_policy_steps SET kind = 'approval' WHERE id = $1`},
+		{"sla_hours", `UPDATE approval_policy_steps SET sla_hours = 8 WHERE id = $1`},
+		{"cond_op", `UPDATE approval_policy_steps SET cond_op = '>=' WHERE id = $1`},
+		{"notify_target", `UPDATE approval_policy_steps SET notify_target = 'ops2@example.com' WHERE id = $1`},
+		{"notify_channel", `UPDATE approval_policy_steps SET notify_channel = 'slack' WHERE id = $1`},
+		{"created_at", `UPDATE approval_policy_steps SET created_at = created_at + interval '1 hour' WHERE id = $1`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			opErr := attemptWithSavepoint(t, ctx, tx, c.sql, stepID)
+			assertSQLState(t, opErr, "23001")
+		})
+	}
+
+	var afterSnap string
+	if err := tx.QueryRow(ctx, `SELECT to_jsonb(s)::text FROM approval_policy_steps s WHERE id = $1`, stepID).Scan(&afterSnap); err != nil {
+		t.Fatalf("read step after rejected updates: %v", err)
+	}
+	if afterSnap != before {
+		t.Errorf("step snapshot after rejected content updates = %s, want unchanged %s", afterSnap, before)
+	}
+}

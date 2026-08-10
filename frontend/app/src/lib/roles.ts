@@ -54,24 +54,6 @@ export function removeRole(list: readonly Role[], key: string): Role[] {
   return list.filter((r) => r.key !== key)
 }
 
-/**
- * Slug of the title, suffixed only on collision within the mode. Same slug form as rules.ts's
- * `tenantSlug` and deliberately not shared: a rules-domain edit there must not re-key roles.
- */
-export function newRoleKey(list: readonly Role[], title: string): string {
-  // A title of only punctuation slugifies to nothing, and Save gates on an empty NAME.
-  const base =
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'role'
-  const taken = new Set(list.map((r) => r.key))
-  if (!taken.has(base)) return base
-  let n = 2
-  while (taken.has(`${base}-${n}`)) n++
-  return `${base}-${n}`
-}
-
 // ---------------------------------------------------------------------------
 // Derivations — all pure, all taking their inputs as arguments
 // ---------------------------------------------------------------------------

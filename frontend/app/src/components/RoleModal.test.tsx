@@ -45,9 +45,17 @@ function ctxWith(over: Record<string, unknown> = {}) {
 
 /** Reads back a mock's own settled promise and attaches a no-op catch, so a deliberately
  * rejected write does not surface as vitest's global unhandled-rejection failure on top of
- * the real assertions below. Never used to weaken an assertion. */
+ * the real assertions below. Never used to weaken an assertion.
+ *
+ * The extra macrotask tick is load-bearing: React 19 commits a `setState` made from a promise
+ * continuation (outside any React event or `act()`) via its scheduler's `MessageChannel`
+ * queue, one tick past the microtask this awaits — proven by an isolated repro (3x chained
+ * `await Promise.resolve()` still observes the pre-update DOM; one `setTimeout(0)` does not).
+ * ClientsView.test.tsx's `waitFor`/`findBy*` calls around EntityFormModal's identical
+ * rejected-submit path are this same wait, just via a polling helper instead of a fixed tick. */
 async function drain(fn: ReturnType<typeof vi.fn>) {
   await fn.mock.results[0]?.value?.catch(() => {})
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function renderModal(subject: RoleModalSubject, ctxOver: Record<string, unknown> = {}, onClose = vi.fn(), onFlash = vi.fn()) {

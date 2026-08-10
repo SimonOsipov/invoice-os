@@ -1396,7 +1396,7 @@ describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
 
 // The `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The invite
 // modal's Workflow role select draws from BOTH tenant modes' seeded roles, and `Role.key` is
-// a free-form slug (`newRoleKey`), not a closed union — a role titled "None" collides with
+// a free-form, server-minted slug, not a closed union — a role titled "None" collides with
 // the sentinel on its own, with no widening required. This makes the risk MORE reachable
 // than QA48 described it, not less.
 //

@@ -13,7 +13,6 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { membersSurface } from '../lib/members'
 import {
   filterRoles,
   holderCount,
@@ -21,6 +20,7 @@ import {
   intro,
   resolve,
   roleUsage,
+  rolesSurface,
   steps,
   unassignedNotice,
   unassignedRoles,
@@ -61,11 +61,14 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   // STABLE — it is a `useDismiss` dependency inside the modal (useDismiss.ts:36-37).
   const closeModal = useCallback(() => setModal(null), [])
 
-  // The SAME ladder the Members tab runs, off the same helper: two rosters of one tenant on
-  // one screen must not disagree about whether the directory loaded. Every count and avatar
-  // below resolves against `members`, so an errored fetch would otherwise paint every role
-  // unheld and the amber notice would assert a coverage failure that is really a fetch one.
-  const surface = membersSurface(ctx.membersState)
+  // Worst-of BOTH fetches: every count and avatar below resolves against `roles` AND
+  // `members`, so either one erroring would otherwise paint the grid off half-loaded data.
+  const surface = rolesSurface(ctx.rolesState, ctx.membersState)
+  // Whichever fetch(es) actually failed — a roles-only failure must not re-kick members.
+  const retry = useCallback(() => {
+    if (ctx.rolesState === 'error') ctx.refetchRoles()
+    if (ctx.membersState === 'error') ctx.refetchMembers()
+  }, [ctx.rolesState, ctx.membersState, ctx.refetchRoles, ctx.refetchMembers])
   const unassigned = unassignedRoles(roles, members)
   const shown = filterRoles(roles, query)
   const searching = query.trim() !== ''
@@ -101,7 +104,9 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'loading' && <Loading label="Loading members…" />}
 
-      {surface === 'error' && ctx.membersError && <ErrorState error={ctx.membersError} onRetry={ctx.refetchMembers} />}
+      {surface === 'error' && (ctx.rolesError ?? ctx.membersError) && (
+        <ErrorState error={(ctx.rolesError ?? ctx.membersError)!} onRetry={retry} />
+      )}
 
       {surface !== 'loading' && surface !== 'error' && (
         <>

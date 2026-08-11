@@ -96,6 +96,26 @@ func TestApproval_CIRLSJobRunsThisPackage(t *testing.T) {
 	}
 }
 
+// TestApproval_DoesNotImportInvoicePackage (task-482 AC-5): internal/approval must never
+// import internal/invoice -- task-482 creates the internal/invoice -> internal/approval
+// edge and it must not reverse. Modelled on internal/invoice/validator_test.go's VC-14
+// guard (TestValidatorClient_DoesNotImportValidationPackage): `go list -deps` WITHOUT
+// -test, so test files never enter the graph. Passes today (the edge does not exist yet).
+func TestApproval_DoesNotImportInvoicePackage(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "./internal/approval")
+	cmd.Dir = repoRoot(t)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps ./internal/approval: %v\n%s", err, out)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == "github.com/SimonOsipov/invoice-os/internal/invoice" {
+			t.Fatalf("internal/approval imports internal/invoice -- forbidden: the arming edge runs " +
+				"internal/invoice -> internal/approval only and must never reverse")
+		}
+	}
+}
+
 // `go test` exits 0 on a skip, so a short export set makes `make test-approvals` report `ok`
 // having run none of the DB-backed tests. All three DSNs the package reads are pinned —
 // DATABASE_MIGRATION_URL feeds policy_immutability_test.go's migratorPool (the owner-proof

@@ -556,10 +556,22 @@ func waitUntilNBlockedBy(t *testing.T, super *pgxpool.Pool, holderPID, want int,
 		case <-deadline:
 			t.Fatalf("%s neither blocked on pid %d nor returned within %s", what, holderPID, lockWaitDeadline)
 		case <-tick.C:
+			// The chain is walked, not read directly: pg_blocking_pids is NOT transitive, and
+			// the second waiter for a row queues on the FIRST waiter's tuple lock rather than
+			// on the holder's xid — so `holderPID = ANY(pg_blocking_pids(pid))` is false for it
+			// however correctly it queued. UNION, not UNION ALL: it is what terminates the walk
+			// if a cycle ever appears.
 			var n int
 			if err := super.QueryRow(ctx,
-				`SELECT count(*) FROM pg_stat_activity
-				  WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`,
+				`WITH RECURSIVE blocked(pid, blocker) AS (
+				     SELECT a.pid, b
+				       FROM pg_stat_activity a, unnest(pg_blocking_pids(a.pid)) AS b
+				      WHERE a.datname = current_database()
+				     UNION
+				     SELECT w.pid, b
+				       FROM blocked w, unnest(pg_blocking_pids(w.blocker)) AS b
+				 )
+				 SELECT count(DISTINCT pid) FROM blocked WHERE blocker = $1`,
 				holderPID).Scan(&n); err != nil {
 				t.Fatalf("poll pg_blocking_pids: %v", err)
 			}

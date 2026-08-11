@@ -681,12 +681,87 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 	return p, nil
 }
 
-// errDeletePolicyNotImplemented and the stub below hold the seam's shape while
-// policy_delete_test.go runs RED. Both are deleted with the real body.
-var errDeletePolicyNotImplemented = errors.New("approval: DeletePolicy is not implemented")
-
+// DeletePolicy stamps deleted_at and, in the same transaction, deactivates the version the
+// policy was governing with: without that a soft-deleted policy keeps deciding every
+// invoice while being invisible to every read. Deactivation is not un-publishing —
+// seal_guard refuses only sealed -> unsealed, and published_at/by survive.
+//
+// This deletes a POLICY, not an approval DECISION (Decision Q12): no version row is ever
+// removed. invoice_app holds no DELETE on approval_policy_versions, approval_decisions is
+// GRANT SELECT, INSERT only, and approval_runs -> approval_policy_versions is ON DELETE
+// RESTRICT.
+//
+// The returned Policy is inert: only ID, Name and Scope are carried through, so a policy
+// published at v3 still answers status "draft", version 0, steps [] and versions []
+// (the DeleteRole precedent, store.go:309-312).
 func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
-	return Policy{}, errDeletePolicyNotImplemented
+	// GetPolicy's parse and its choice of sentinel: 400 against 404 on a path resource
+	// would be an existence oracle.
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return Policy{}, ErrPolicyNotFound
+	}
+
+	p := newPolicy()
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		// Must stay the first statement touching a policy row: the row-level exclusive lock
+		// it takes is what serialises this against PublishPolicy's FOR UPDATE
+		// (TestDeletePolicy_ConcurrentPublishLosesAsNotFound). deleted_at IS NULL is both the
+		// existence predicate and the idempotency mechanism — under READ COMMITTED a second
+		// delete re-evaluates it, matches nothing, and is ErrPolicyNotFound rather than a
+		// re-stamp. now() is the transaction timestamp the audit row's created_at also takes.
+		if err := tx.QueryRow(ctx,
+			`UPDATE approval_policies
+			    SET deleted_at = now()
+			  WHERE id = $1 AND deleted_at IS NULL
+			RETURNING id, name, scope`, u.String(),
+		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrPolicyNotFound
+			}
+			return err
+		}
+
+		// Policy-scoped, unlike publish's tenant-wide deactivation: this policy is the one
+		// leaving. No RowsAffected guard — 0 rows is the never-published case
+		// (TestDeletePolicy_UnpublishedPolicyKeepsItsDraft).
+		if _, err := tx.Exec(ctx,
+			`UPDATE approval_policy_versions
+			    SET is_active = false
+			  WHERE policy_id = $1 AND is_active`, p.ID); err != nil {
+			return err
+		}
+
+		// The AUDIT payload's number and nothing else's: Version names the version Steps
+		// belongs to, and Steps is [] (TestDeletePolicy_ReturnsAnInertDraftShape). coalesce
+		// is the handling for a policy carrying no version row at all.
+		var version int
+		if err := tx.QueryRow(ctx,
+			`SELECT coalesce(max(version), 0)
+			   FROM approval_policy_versions
+			  WHERE policy_id = $1`, p.ID,
+		).Scan(&version); err != nil {
+			return err
+		}
+
+		// Last statement in the closure: a failing audit write rolls the stamp and the
+		// deactivation back (TestDeletePolicy_AuditsInSameTx).
+		return audit.Record(ctx, tx, caller.Subject, "approval_policy.deleted", map[string]any{
+			"policy_id": p.ID,
+			"version":   version,
+		})
+	})
+	if err != nil {
+		return Policy{}, err
+	}
+	return p, nil
 }
 
 // stepArrays is the nine columns both INSERT batches share, one slice per column: unnest

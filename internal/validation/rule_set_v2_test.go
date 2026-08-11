@@ -405,9 +405,11 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	// so FORCE RLS on invoices does not hide rows from the DELETE. line_items and
 	// invoice_status_history follow via ON DELETE CASCADE off invoice_id.
 	// Same reasoning as internal/platform/db's resetInvoicesBeforeFullSchemaReset -- including
-	// its delete ORDER: app_exchange -> submission_jobs -> invoices, both ON DELETE RESTRICT,
-	// which db.Seed now populates (task-323).
+	// its delete ORDER: approval_runs -> app_exchange -> submission_jobs -> invoices, all
+	// ON DELETE RESTRICT, which db.Seed now populates (task-323). approval_runs is armed on
+	// every promotion under an active policy; its steps/decisions cascade off it.
 	for _, stmt := range []string{
+		`DELETE FROM approval_runs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM app_exchange WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM submission_jobs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`,

@@ -327,8 +327,9 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	// [v2-down-is-dev-irreversible], carried over for v3. Clearing them restores the
 	// premise this simulated Down needs; harmless, since the enclosing tx is always
 	// rolled back (mirrors TestRuleSetV2_DownRestoresV1 verbatim, delete order included:
-	// app_exchange -> submission_jobs -> invoices, both ON DELETE RESTRICT).
+	// approval_runs -> app_exchange -> submission_jobs -> invoices, all ON DELETE RESTRICT).
 	for _, stmt := range []string{
+		`DELETE FROM approval_runs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM app_exchange WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM submission_jobs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`,

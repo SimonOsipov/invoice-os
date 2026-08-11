@@ -28,7 +28,44 @@ func seedApprovalPolicyFor(t *testing.T, super *pgxpool.Pool, tenantID, name str
 	).Scan(&id); err != nil {
 		t.Fatalf("seed approval_policies: %v", err)
 	}
+	t.Cleanup(func() { teardownApprovalFixtureFor(t, super, tenantID) })
 	return id
+}
+
+// teardownApprovalFixtureFor unwinds a tenant's approval rows before seedTenant's
+// own cleanup deletes the tenant. Both guards this file trips would otherwise abort
+// that delete SILENTLY (it discards its error) and leak the tenant and its invoices:
+// approval_policy_versions_seal_guard refuses to delete a sealed version, and
+// approval_runs' composite FK to invoices is ON DELETE RESTRICT. session_replication_role
+// suppresses both; safe here because this drops rows rather than asserting on them.
+// Ported from internal/approval's teardownSealedApprovalFixture.
+func teardownApprovalFixtureFor(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Errorf("teardown approval fixture %s: begin tx: %v", tenantID, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Errorf("teardown approval fixture %s: set session_replication_role: %v", tenantID, err)
+		return
+	}
+	for _, table := range []string{
+		"approval_decisions", "approval_run_steps", "approval_runs",
+		"approval_policy_steps", "approval_policy_versions", "approval_policies",
+	} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
+			t.Errorf("teardown approval fixture %s: delete %s: %v", tenantID, table, err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("teardown approval fixture %s: commit: %v", tenantID, err)
+	}
 }
 
 // seedApprovalPolicyVersionFor inserts version 1, unsealed and inactive.

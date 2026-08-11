@@ -6,6 +6,7 @@ package approval
 
 import (
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -200,5 +201,383 @@ func TestEvalCondition_HugeExponentTotalDoesNotHang(t *testing.T) {
 	}
 	if got := evalCondition("<=", ptr("500000000.00"), &huge); got != false {
 		t.Errorf("evalCondition(\"<=\", ...) = %v, want false", got)
+	}
+}
+
+// materialise's oracle: frontend/app/src/lib/workflows.ts:491-505 (simulate), boundary
+// values transcribed from workflows.test.ts:711-773. Pure test — never calls
+// dbTestPools, so it cannot skip.
+
+// --- Step tree fixtures -------------------------------------------------------------
+//
+// stepApproval/stepNotify/stepAutoapprove/stepCond build the nested Step shape
+// (policy.go:19-30), distinct from policy_draft_test.go's approvalStep and
+// policy_test.go's condIn, which build stepInput for the wire/store seam, not this one.
+
+func stepApproval(role string, sla int) Step {
+	return Step{Kind: "approval", WorkflowRoleKey: ptr(role), SLAHours: ptr(sla)}
+}
+
+func stepNotify(target, channel string) Step {
+	return Step{Kind: "notify", NotifyTarget: ptr(target), NotifyChannel: ptr(channel)}
+}
+
+func stepAutoapprove() Step {
+	return Step{Kind: "autoapprove"}
+}
+
+func stepCond(op, amount string, then, els []Step) Step {
+	return Step{Kind: "condition", CondOp: ptr(op), CondAmount: ptr(amount), Then: then, Else: els}
+}
+
+// polF1..polH2 transcribe the SPA seed's five policies (workflows.ts:137-196) into the
+// nested Step shape. Each returns a fresh tree per call, mirroring
+// workflows.test.ts:47's clone-per-call. The never-taken lanes are left nil rather than
+// []Step{}, since a hand-built literal may hold either (policy.go:19-30's Then/Else are
+// only guaranteed non-nil once nestSteps has run) — that is the "at least one fixture
+// with nil lanes" case the plan calls for.
+
+func polF1() []Step {
+	return []Step{
+		stepApproval("fin_mgr", 48),
+		stepCond(">", "250000000.00", []Step{stepApproval("fin_dir", 48)}, nil),
+		stepCond(">", "1000000000.00", []Step{stepApproval("cfo", 72), stepNotify("Audit Committee", "Email")}, nil),
+		stepApproval("compliance", 24),
+	}
+}
+
+func polF2() []Step {
+	return []Step{
+		stepApproval("fin_mgr", 48),
+		stepCond(">", "500000000.00", []Step{stepApproval("fin_dir", 48)}, nil),
+		stepApproval("compliance", 24),
+	}
+}
+
+func polF3() []Step {
+	return []Step{
+		stepApproval("fin_dir", 48),
+		stepCond(">", "1000000000.00", []Step{stepApproval("cfo", 72)}, nil),
+		stepApproval("compliance", 24),
+	}
+}
+
+// polH1's h1n4 is the only seeded condition with a non-empty else — the only lane in
+// the whole seed that can reach an autoapprove (workflows.ts:180).
+func polH1() []Step {
+	return []Step{
+		stepApproval("line_mgr", 48),
+		stepCond(">", "500000000.00", []Step{stepApproval("fin_dir", 48)}, nil),
+		stepCond(">", "1000000000.00", []Step{stepApproval("cfo", 72)}, []Step{stepAutoapprove()}),
+		stepNotify("Tax Team", "In-app"),
+	}
+}
+
+func polH2() []Step {
+	return []Step{
+		stepApproval("line_mgr", 48),
+		stepApproval("fin_dir", 48),
+		stepCond(">", "1000000000.00", []Step{stepApproval("cfo", 72), stepApproval("ceo", 72)}, nil),
+	}
+}
+
+// --- expected-output builders --------------------------------------------------------
+
+// wantApproval/wantNotify/wantAutoapprove build the runStep shape a case expects,
+// leaving Ord at its zero value: ordered stamps the real 0..n-1 sequence on afterward,
+// so a case only spells what materialise cannot get for free from the tree.
+
+func wantApproval(role string, sla int) runStep {
+	return runStep{Kind: "approval", WorkflowRoleKey: ptr(role), SLAHours: ptr(sla)}
+}
+
+func wantNotify(target, channel string) runStep {
+	return runStep{Kind: "notify", NotifyTarget: ptr(target), NotifyChannel: ptr(channel)}
+}
+
+func wantAutoapprove() runStep {
+	return runStep{Kind: "autoapprove"}
+}
+
+func ordered(steps ...runStep) []runStep {
+	for i := range steps {
+		steps[i].Ord = i
+	}
+	return steps
+}
+
+// TestMaterialise_LinearPassMatchesSimulate pins AC-2 and AC-5: the five seed shapes at
+// every condition boundary must match the SPA oracle's emitted (Kind, WorkflowRoleKey,
+// SLAHours, NotifyTarget, NotifyChannel) tuple and its auto flag. polF2/polF3/polH2 have
+// no SPA spec case (workflows.test.ts has none) and are derived straight from their
+// "then-only, empty else" shape.
+func TestMaterialise_LinearPassMatchesSimulate(t *testing.T) {
+	cases := []struct {
+		name     string
+		tree     []Step
+		total    *decimal.Decimal
+		want     []runStep
+		wantAuto bool
+	}{
+		{"polF1 @1,000 (workflows.test.ts:727-730)", polF1(), dec("1000.00"),
+			ordered(wantApproval("fin_mgr", 48), wantApproval("compliance", 24)), false},
+		{"polF1 @250,000,000.00 exact boundary, > is false", polF1(), dec("250000000.00"),
+			ordered(wantApproval("fin_mgr", 48), wantApproval("compliance", 24)), false},
+		{"polF1 @750,000,000 (workflows.test.ts:713-717)", polF1(), dec("750000000.00"),
+			ordered(wantApproval("fin_mgr", 48), wantApproval("fin_dir", 48), wantApproval("compliance", 24)), false},
+		{"polF1 @2,000,000,000 (workflows.test.ts:722-724)", polF1(), dec("2000000000.00"),
+			ordered(wantApproval("fin_mgr", 48), wantApproval("fin_dir", 48), wantApproval("cfo", 72),
+				wantNotify("Audit Committee", "Email"), wantApproval("compliance", 24)), false},
+		{"polF2 @500,000,000.00 exact boundary", polF2(), dec("500000000.00"),
+			ordered(wantApproval("fin_mgr", 48), wantApproval("compliance", 24)), false},
+		{"polF2 @500,000,000.01", polF2(), dec("500000000.01"),
+			ordered(wantApproval("fin_mgr", 48), wantApproval("fin_dir", 48), wantApproval("compliance", 24)), false},
+		{"polF3 @1,000,000,000.00 exact boundary", polF3(), dec("1000000000.00"),
+			ordered(wantApproval("fin_dir", 48), wantApproval("compliance", 24)), false},
+		{"polF3 @1,000,000,000.01", polF3(), dec("1000000000.01"),
+			ordered(wantApproval("fin_dir", 48), wantApproval("cfo", 72), wantApproval("compliance", 24)), false},
+		{"polH1 @100,000,000, else lane's autoapprove", polH1(), dec("100000000.00"),
+			ordered(wantApproval("line_mgr", 48), wantAutoapprove(), wantNotify("Tax Team", "In-app")), true},
+		{"polH1 @750,000,000 (workflows.test.ts:737-745)", polH1(), dec("750000000.00"),
+			ordered(wantApproval("line_mgr", 48), wantApproval("fin_dir", 48), wantAutoapprove(),
+				wantNotify("Tax Team", "In-app")), true},
+		{"polH1 @1,500,000,000 (workflows.test.ts:756-760)", polH1(), dec("1500000000.00"),
+			ordered(wantApproval("line_mgr", 48), wantApproval("fin_dir", 48), wantApproval("cfo", 72),
+				wantNotify("Tax Team", "In-app")), false},
+		{"polH2 @999,999,999.99", polH2(), dec("999999999.99"),
+			ordered(wantApproval("line_mgr", 48), wantApproval("fin_dir", 48)), false},
+		{"polH2 @2,000,000,000", polH2(), dec("2000000000.00"),
+			ordered(wantApproval("line_mgr", 48), wantApproval("fin_dir", 48), wantApproval("cfo", 72),
+				wantApproval("ceo", 72)), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, auto := materialise(tc.tree, tc.total)
+			if !reflect.DeepEqual(steps, tc.want) {
+				t.Errorf("materialise(...) steps = %+v, want %+v", steps, tc.want)
+			}
+			if auto != tc.wantAuto {
+				t.Errorf("materialise(...) auto = %v, want %v", auto, tc.wantAuto)
+			}
+		})
+	}
+}
+
+// TestMaterialise_ConditionEmitsExactlyOneLaneNeverBoth pins AC-2. polH1's h1n4 is the
+// only seeded condition with two non-empty lanes, but its else holds an autoapprove —
+// indistinguishable from "nothing chosen" by role. Built here with one approval per
+// lane, each with a distinct role, so a leak from the untaken lane is provable.
+func TestMaterialise_ConditionEmitsExactlyOneLaneNeverBoth(t *testing.T) {
+	tree := []Step{
+		stepCond(">", "500000000.00",
+			[]Step{stepApproval("then-role", 48)},
+			[]Step{stepApproval("else-role", 24)},
+		),
+	}
+
+	below, _ := materialise(tree, dec("100000000.00"))
+	wantBelow := ordered(wantApproval("else-role", 24))
+	if !reflect.DeepEqual(below, wantBelow) {
+		t.Errorf("below threshold: materialise(...) = %+v, want %+v (else lane only)", below, wantBelow)
+	}
+
+	above, _ := materialise(tree, dec("600000000.00"))
+	wantAbove := ordered(wantApproval("then-role", 48))
+	if !reflect.DeepEqual(above, wantAbove) {
+		t.Errorf("above threshold: materialise(...) = %+v, want %+v (then lane only)", above, wantAbove)
+	}
+}
+
+// TestMaterialise_EmptyChosenLaneEmitsNothing pins AC-3. polH1's h1n2 (> ₦500m, empty
+// else) at ₦100,000,000 takes its empty else lane: zero steps, no placeholder, no
+// skipped row — while h1n1 before it and h1n4/h1n7 after it still emit in order. The
+// explicit length check is what rules out a placeholder row the tuple match alone
+// would not catch if it happened to carry zero-value fields.
+func TestMaterialise_EmptyChosenLaneEmitsNothing(t *testing.T) {
+	steps, auto := materialise(polH1(), dec("100000000.00"))
+	want := ordered(wantApproval("line_mgr", 48), wantAutoapprove(), wantNotify("Tax Team", "In-app"))
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("materialise(...) = %+v, want %+v (h1n2's empty else contributes nothing)", steps, want)
+	}
+	if !auto {
+		t.Errorf("auto = false, want true")
+	}
+	if len(steps) != 3 {
+		t.Errorf("len(steps) = %d, want 3 — an empty chosen lane must not emit a placeholder", len(steps))
+	}
+}
+
+// TestMaterialise_EmptyTreeEmitsNothing pins AC-3's other edge and the plan's slice
+// contract. Oracle: workflows.test.ts:771-773.
+func TestMaterialise_EmptyTreeEmitsNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		tree []Step
+	}{
+		{"nil tree", nil},
+		{"empty tree", []Step{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, auto := materialise(tc.tree, dec("750000000.00"))
+			if steps == nil {
+				t.Errorf("materialise(...) returned a nil slice, want non-nil so a caller may range and append")
+			}
+			if len(steps) != 0 {
+				t.Errorf("len(steps) = %d, want 0", len(steps))
+			}
+			if auto {
+				t.Errorf("auto = true, want false")
+			}
+		})
+	}
+}
+
+// TestMaterialise_OrdIsDenseAndZeroBased pins AC-1. polH1 @750,000,000 fires both
+// conditions (h1n2's then, h1n4's else); every lane's own steps carry policy ord 0
+// (policy.go:114), so only materialise's own counter can be dense over the emitted
+// sequence.
+func TestMaterialise_OrdIsDenseAndZeroBased(t *testing.T) {
+	steps, _ := materialise(polH1(), dec("750000000.00"))
+	if len(steps) != 4 {
+		t.Fatalf("len(steps) = %d, want 4", len(steps))
+	}
+	for i, s := range steps {
+		if s.Ord != i {
+			t.Errorf("steps[%d].Ord = %d, want %d", i, s.Ord, i)
+		}
+	}
+}
+
+// TestMaterialise_AutoIsStickyAndDoesNotTruncate pins AC-4's non-truncating half.
+// Oracle: workflows.test.ts:747-753.
+func TestMaterialise_AutoIsStickyAndDoesNotTruncate(t *testing.T) {
+	steps, auto := materialise(polH1(), dec("750000000.00"))
+	if !auto {
+		t.Errorf("auto = false, want true")
+	}
+	if len(steps) == 0 {
+		t.Fatalf("materialise returned zero steps")
+	}
+	last := steps[len(steps)-1]
+	want := runStep{Ord: len(steps) - 1, Kind: "notify", NotifyTarget: ptr("Tax Team"), NotifyChannel: ptr("In-app")}
+	if !reflect.DeepEqual(last, want) {
+		t.Errorf("last step = %+v, want %+v (walk continues past the autoapprove)", last, want)
+	}
+}
+
+// TestMaterialise_AutoIsFalseWhenTheAutoapproveIsInTheUntakenLane pins AC-4's other
+// half and is the discriminating test named in the plan: polH1 @1,500,000,000 — h1n4
+// (> ₦1bn) is true, so the then lane (cfo) is taken and the autoapprove sitting in the
+// untaken else lane must not set auto. An implementation that scans the whole TREE for
+// an autoapprove instead of the emitted list would flip this — a run that should still
+// need a cfo sign-off would close itself. Oracle: workflows.test.ts:756-760.
+func TestMaterialise_AutoIsFalseWhenTheAutoapproveIsInTheUntakenLane(t *testing.T) {
+	steps, auto := materialise(polH1(), dec("1500000000.00"))
+	if auto {
+		t.Errorf("auto = true, want false — the autoapprove is in the untaken else lane")
+	}
+	for _, s := range steps {
+		if s.Kind == "autoapprove" {
+			t.Errorf("emitted an autoapprove step: %+v, want none", s)
+		}
+	}
+
+	// Positive control, same tree: at ₦750,000,000 the else lane IS taken, so a stub
+	// that always returns auto=false cannot pass this test.
+	_, autoBelow := materialise(polH1(), dec("750000000.00"))
+	if !autoBelow {
+		t.Errorf("positive control: auto = false at ₦750,000,000, want true")
+	}
+}
+
+// TestMaterialise_NeverEmitsAConditionStep pins AC-6 across every seed shape at every
+// boundary above, each with a positive control on the emitted count so a stub
+// returning nothing cannot pass.
+func TestMaterialise_NeverEmitsAConditionStep(t *testing.T) {
+	cases := []struct {
+		name  string
+		tree  []Step
+		total *decimal.Decimal
+	}{
+		{"polF1 @750,000,000", polF1(), dec("750000000.00")},
+		{"polF1 @2,000,000,000", polF1(), dec("2000000000.00")},
+		{"polF2 @500,000,000.01", polF2(), dec("500000000.01")},
+		{"polF3 @1,000,000,000.01", polF3(), dec("1000000000.01")},
+		{"polH1 @100,000,000", polH1(), dec("100000000.00")},
+		{"polH1 @1,500,000,000", polH1(), dec("1500000000.00")},
+		{"polH2 @2,000,000,000", polH2(), dec("2000000000.00")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, _ := materialise(tc.tree, tc.total)
+			if len(steps) == 0 {
+				t.Fatalf("materialise returned zero steps — positive control requires a non-zero count")
+			}
+			for _, s := range steps {
+				if s.Kind == "condition" {
+					t.Errorf("emitted a condition step: %+v", s)
+				}
+			}
+		})
+	}
+}
+
+// TestMaterialise_NestedConditionIsSkippedNotEmitted pins the defensive ruling: the
+// depth-cap CHECK (migrations/20260809210326_approval_policies.sql:110-111) means
+// nestSteps can never produce a condition below the root, but a Go literal can. Poison
+// steps sit in the nested condition's own lanes — if materialise ever walked into it,
+// the exact-slice comparison below would fail by including them.
+func TestMaterialise_NestedConditionIsSkippedNotEmitted(t *testing.T) {
+	nested := stepCond(">", "0.00",
+		[]Step{stepApproval("poison-then", 1)},
+		[]Step{stepApproval("poison-else", 1)},
+	)
+	tree := []Step{
+		stepCond(">", "0.00", []Step{
+			stepApproval("a", 1),
+			nested,
+			stepApproval("b", 1),
+		}, nil),
+	}
+
+	steps, auto := materialise(tree, dec("1.00"))
+	want := ordered(wantApproval("a", 1), wantApproval("b", 1))
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("materialise(...) = %+v, want %+v (nested condition skipped, its lanes not walked)", steps, want)
+	}
+	if auto {
+		t.Errorf("auto = true, want false")
+	}
+}
+
+// TestMaterialise_NullCondOpTakesElseLane pins AC-2's nil-safety edge: cond_op is
+// nullable (migrations/20260809210326_approval_policies.sql:96) and Step.CondOp is a
+// *string, so a bare *n.CondOp deref would panic inside the promotion transaction. The
+// caller must deref through a local defaulting to "", which evalCondition already
+// answers false for — the else lane.
+func TestMaterialise_NullCondOpTakesElseLane(t *testing.T) {
+	build := func(op *string) []Step {
+		return []Step{{
+			Kind:       "condition",
+			CondOp:     op,
+			CondAmount: ptr("1.00"),
+			Then:       []Step{stepApproval("then-role", 1)},
+			Else:       []Step{stepApproval("else-role", 1)},
+		}}
+	}
+
+	steps, _ := materialise(build(nil), dec("100.00"))
+	want := ordered(wantApproval("else-role", 1))
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("nil cond_op: materialise(...) = %+v, want %+v (else lane, no panic)", steps, want)
+	}
+
+	// Positive control, identical tree: an explicit operator takes then.
+	steps, _ = materialise(build(ptr(">")), dec("100.00"))
+	want = ordered(wantApproval("then-role", 1))
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("cond_op '>': materialise(...) = %+v, want %+v (then lane)", steps, want)
 	}
 }

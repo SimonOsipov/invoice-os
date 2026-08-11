@@ -6,7 +6,7 @@ Automated execution of a single build-plan task through per-subtask quality gate
 
 **Story unit:** one **build-plan task** = one story = one branch = one PR (e.g. `M3-04` "Validation v1"). RALPH decomposes it into sub-subtasks (`M3-04-01`, …) internally. This matches exactly how M1/M2 shipped (`task-20` → `task-20.1–.4`).
 
-Stories arrive in one of two states: **basic** (intent-only — Objective, Core ACs, Out of Scope; produced by `/pm-review`; zero Backlog subtasks) or **pre-planned** (Backlog subtasks already exist, or the Obsidian story is already architect-level like the M1/M2 stories). Basic stories are planned **in-run** by Phase 0.6; pre-planned stories skip Phase 0.6.
+Stories arrive in one of two states: **basic** (intent-only — Objective, Core ACs, Out of Scope; produced by `/pm-story`, or by `/pm-epic` for one story of a researched epic; zero Backlog subtasks) or **pre-planned** (Backlog subtasks already exist, or the Obsidian story is already architect-level like the M1/M2 stories). Basic stories are planned **in-run** by Phase 0.6; pre-planned stories skip Phase 0.6.
 
 **Invocation**: `/ralph <STORY-ID>` (e.g., `/ralph M3-04`). Each invocation runs one story, in its own worktree and branch. Since M4-23, every PR deploys to its **own ephemeral Railway environment** (`dev-env.yml` concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — not a shared lock), so multiple `/ralph` invocations MAY run concurrently, each verifying its own story against its own isolated environment with no cross-story interference.
 
@@ -116,7 +116,7 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    - **`STORY_SOURCE=sysmap`** → always **BASIC**. A feature carries intent (name, description, acceptance criteria) and never subtasks — sysmap is not a task tracker. Its Backlog subtasks, if any, are labelled `story:f-192`.
    - **Zero subtasks + Objective/Core ACs present (or build-plan fallback)** → **BASIC** → set `PLANNING_REQUIRED=true`; topo-sort + plan-logging happen at the end of Phase 0.6.
    - **Subtasks returned (or an architect-level Obsidian story with a Subtasks section)** → **PRE-PLANNED** → topo-sort by `dependencies` → linear execution order, log the plan, skip Phase 0.6.
-   - **Neither** → error: "story <ID> is neither basic (no Objective/Core ACs, not in the build plan) nor pre-planned (no Backlog subtasks) — run /pm-review first."
+   - **Neither** → error: "story <ID> is neither basic (no Objective/Core ACs, not in the build plan) nor pre-planned (no Backlog subtasks) — run /pm-story first, or /pm-epic if the topic needs several stories."
 
 ### Phase 0.5: Worktree Bootstrap
 

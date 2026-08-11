@@ -5,6 +5,7 @@ package approval
 // never calls dbTestPools, so it cannot skip.
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -109,6 +110,28 @@ func TestEvalCondition_AmountMatchesSPA(t *testing.T) {
 			"top of the domain, exact equality",
 			ptr("999999999999.99"), dec("999999999999.99"), false, true, false, true,
 		},
+		// validateCondAmount rejects this at write time (exceeds numeric(14,2)), but a
+		// row written before that gate, or by direct SQL, could still carry it. A format
+		// check that rejects scientific notation before parsing would fold this to 0,
+		// making every cell wrong (a=999999999999.99 would beat a folded-to-0 v).
+		{
+			"scientific notation cond_amount, beyond the numeric(14,2) domain",
+			ptr("1e12"), dec("999999999999.99"), false, false, true, true,
+		},
+		// scale 3 is rejected by validateCondAmount at write time, but a pre-gate or
+		// SQL-written row could carry it. An implementation that rounds/truncates to 2
+		// decimals before comparing would see v==a and flip every cell.
+		{
+			"scale-3 cond_amount, rejected at write but not re-validated on read",
+			ptr("0.001"), dec("0.00"), false, false, true, true,
+		},
+		// decimal.NewFromString(" 500") errors, so this folds to 0 per AC-3 — same as any
+		// other unparseable string. An implementation that trims whitespace before parsing
+		// would instead read this as 500, flipping every cell against a total of 200.
+		{
+			"leading-whitespace cond_amount is unparseable, not a trimmed 500",
+			ptr(" 500"), dec("200.00"), true, true, false, false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -153,5 +176,29 @@ func TestEvalCondition_UnknownOperatorIsFalse(t *testing.T) {
 	// returns false cannot pass this test.
 	if got := evalCondition(">", cond, total); got != true {
 		t.Errorf("evalCondition(%q, ...) = %v, want true (positive control)", ">", got)
+	}
+
+	// Second pair, total == cond, so the mock's fallthrough (a <= v) is true here.
+	// The pair above has total > cond, so a <= v is false there too and cannot catch
+	// an implementation that silently falls through to LessThanOrEqual instead of false.
+	cond2, total2 := ptr("500000000.00"), dec("500000000.00")
+	for _, op := range []string{"", "==", "=", ">>", "≥"} {
+		if got := evalCondition(op, cond2, total2); got != false {
+			t.Errorf("evalCondition(%q, cond=500000000.00, total=500000000.00) = %v, want false", op, got)
+		}
+	}
+}
+
+// TestEvalCondition_HugeExponentTotalDoesNotHang: total is a *decimal.Decimal, not a
+// parsed string, so a caller could hand evalCondition a huge exponent. Cmp rescales to
+// the smaller exponent before comparing, which could build a huge coefficient; this
+// pins that the comparison stays correct and fast (no hang, no panic).
+func TestEvalCondition_HugeExponentTotalDoesNotHang(t *testing.T) {
+	huge := decimal.NewFromBigInt(big.NewInt(1), 1000000)
+	if got := evalCondition(">", ptr("500000000.00"), &huge); got != true {
+		t.Errorf("evalCondition(\">\", ...) = %v, want true", got)
+	}
+	if got := evalCondition("<=", ptr("500000000.00"), &huge); got != false {
+		t.Errorf("evalCondition(\"<=\", ...) = %v, want false", got)
 	}
 }

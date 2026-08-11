@@ -194,6 +194,98 @@ func TestArm_AuditFailureRollsBackTheWholeArm(t *testing.T) {
 	}
 }
 
+// --- QA: inherited constraint 1 — a NaN total must not roll back the arm ------------
+
+// TestArm_NaNTotalArmsSuccessfullyFoldedToZero pins the ArmTx step-2 constraint from
+// task-480's Implementation Notes: total is read as total::text into a *string and
+// parsed with decimal.NewFromString, mapping unparseable to nil — because
+// decimal.Decimal.Scan errors on the literal "NaN", and Postgres accepts 'NaN'::numeric
+// (verified live; 'Infinity' is rejected 22003 but 'NaN' is not). Arming runs inside
+// the caller's promotion transaction, so a Scan error here would roll back the whole
+// draft->validated promotion, not just the arm. seedInvoice + setInvoiceTotal write
+// directly via SQL, bypassing the app-level total-non-negative rule that blocks NaN
+// from reaching ArmTx through the normal invoice flow today (a runtime kill switch,
+// not a schema guarantee — invoices.total carries no CHECK).
+func TestArm_NaNTotalArmsSuccessfullyFoldedToZero(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-nan-total")
+	entityID := seedBusinessEntity(t, super, tenantID, "NaN Total Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "nan-total-invoice-1")
+	setInvoiceTotal(t, super, invoiceID, "NaN")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "NaN-total threshold policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	condID := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("500000000.00"),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condID, Branch: ptr("then"), Ord: 0,
+		Kind: "approval", WorkflowRoleKey: ptr("fin_dir"), SLAHours: ptr(48),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condID, Branch: ptr("else"), Ord: 0,
+		Kind: "notify", NotifyTarget: ptr("Tax Team"), NotifyChannel: ptr("In-app"),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-nan-total", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx over a NaN total: %v, want success — the arm must not roll back", err)
+	}
+	if res.Steps != 1 {
+		t.Fatalf("Steps = %d, want 1", res.Steps)
+	}
+	run := oneApprovalRun(t, super, invoiceID)
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 1 || steps[0].Kind != "notify" {
+		t.Fatalf("steps = %+v, want one notify step — NaN folds to 0, below the ₦500m threshold, so the else lane is chosen", steps)
+	}
+	if !res.Closed || run.State != "approved" {
+		t.Errorf("run.State = %q, Closed = %v, want approved/true — a notify-only chosen lane closes the run", run.State, res.Closed)
+	}
+}
+
+// --- QA: a NULL invoice total, distinct from NaN, also folds to 0 --------------------
+
+// TestArm_NullInvoiceTotalFoldsToZero: seedInvoice leaves total NULL (no default, no
+// CHECK). Against the SAME threshold policy as the NaN spec, a NULL total must select
+// the else lane exactly like NaN does — proving the *string nil path (no row parse
+// attempted at all) and the unparseable-string path both fold to absent/0, not two
+// different behaviours.
+func TestArm_NullInvoiceTotalFoldsToZero(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-null-total")
+	entityID := seedBusinessEntity(t, super, tenantID, "Null Total Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "null-total-invoice-1") // total left NULL
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Null-total threshold policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	condID := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("500000000.00"),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condID, Branch: ptr("then"), Ord: 0,
+		Kind: "approval", WorkflowRoleKey: ptr("fin_dir"), SLAHours: ptr(48),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condID, Branch: ptr("else"), Ord: 0,
+		Kind: "notify", NotifyTarget: ptr("Tax Team"), NotifyChannel: ptr("In-app"),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-null-total", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx over a NULL total: %v, want success", err)
+	}
+	if res.Steps != 1 {
+		t.Fatalf("Steps = %d, want 1", res.Steps)
+	}
+	steps := runStepsOf(t, super, oneApprovalRun(t, super, invoiceID).ID)
+	if len(steps) != 1 || steps[0].Kind != "notify" {
+		t.Fatalf("steps = %+v, want one notify step — a NULL total folds to 0, below the ₦500m threshold", steps)
+	}
+}
+
 // --- AC-10: the active version is resolved by is_active alone, never "newest sealed" -
 
 // TestArm_ResolvesActiveVersionNotNewestSealed: version 1 is active; a NEWER version 2
@@ -367,5 +459,136 @@ func TestArm_SecondOpenRunPropagates23505Raw(t *testing.T) {
 	}
 	if n := rowCount(t, super, "approval_runs", tenantID); n != 2 {
 		t.Errorf("control: approval_runs rows = %d, want 2 (the closed one plus the new one)", n)
+	}
+}
+
+// --- QA: the resolve query itself stays tenant-scoped, not just the write ------------
+
+// TestArm_CrossTenantVersionResolutionStaysScoped: two tenants each hold their OWN
+// active version, at the same time, with distinguishing role keys. Arming tenant B
+// through its own matched tenantID/tx must resolve and materialise tenant B's version
+// only — TestArm_MismatchedTenantRefusedByRLS already pins the write side (a mismatched
+// tenantID is refused by the run INSERT's RLS check); this pins the READ side, that the
+// unqualified `SELECT id FROM approval_policy_versions WHERE is_active` resolve
+// (RLS-scoped by the tx's own app.current_tenant, not by any WHERE tenant_id clause)
+// cannot see tenant A's active row while arming under tenant B's tx.
+func TestArm_CrossTenantVersionResolutionStaysScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := policyTenant(t, super, "APPR-06 arm-cross-tenant-resolve-a")
+	tenantB := policyTenant(t, super, "APPR-06 arm-cross-tenant-resolve-b")
+
+	policyA := seedApprovalPolicy(t, super, tenantA, "Tenant A policy")
+	versionA := seedApprovalPolicyVersionN(t, super, tenantA, policyA, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantA, versionA, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("tenant-a-role"), SLAHours: ptr(11),
+	})
+	activateApprovalPolicyVersion(t, super, versionA)
+
+	entityB := seedBusinessEntity(t, super, tenantB, "Tenant B Corp")
+	invoiceB := seedInvoice(t, super, tenantB, entityB, "cross-tenant-resolve-invoice-b")
+	policyB := seedApprovalPolicy(t, super, tenantB, "Tenant B policy")
+	versionB := seedApprovalPolicyVersionN(t, super, tenantB, policyB, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantB, versionB, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("tenant-b-role"), SLAHours: ptr(22),
+	})
+	activateApprovalPolicyVersion(t, super, versionB)
+
+	res, err := arm(t, app, tenantB, invoiceB, "fp-cross-tenant-resolve", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx(tenantB, invoiceB) with tenant A also holding an active version: %v", err)
+	}
+	if res.Steps != 1 {
+		t.Fatalf("Steps = %d, want 1", res.Steps)
+	}
+	run := oneApprovalRun(t, super, invoiceB)
+	if run.PolicyVersionID != versionB {
+		t.Errorf("run.PolicyVersionID = %q, want tenant B's own version %q, not tenant A's %q",
+			run.PolicyVersionID, versionB, versionA)
+	}
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 1 || steps[0].WorkflowRoleKey == nil || *steps[0].WorkflowRoleKey != "tenant-b-role" {
+		t.Errorf("steps = %+v, want one step with role tenant-b-role — tenant A's active version must not leak in", steps)
+	}
+}
+
+// --- QA: ord is densely reassigned 0..N-1 across a mix of root and condition-lane kinds
+
+// TestArm_OrdDensityAcrossMixedKinds: a root lane of [approval, condition, notify] whose
+// condition's THEN lane holds [notify, autoapprove] and whose ELSE lane is empty. Above
+// the threshold, materialise emits 4 steps drawn from two different source positions —
+// the root approval, the chosen lane's two steps, and the root's trailing notify — none
+// of which share the source tree's own per-lane ordinals (root ord 0/1/2; then-lane ord
+// 0/1). The stored run must show ord 0..3 densely, in emission order, surviving the DB
+// round trip through the bulk unnest insert.
+func TestArm_OrdDensityAcrossMixedKinds(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-ord-density-mixed-kinds")
+	entityID := seedBusinessEntity(t, super, tenantID, "Ord Density Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "ord-density-invoice-1")
+	setInvoiceTotal(t, super, invoiceID, "750000000.00") // above the 500m threshold below
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Ord density mixed-kinds policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("root-approval-role"), SLAHours: ptr(48),
+	})
+	condID := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 1, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("500000000.00"),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condID, Branch: ptr("then"), Ord: 0,
+		Kind: "notify", NotifyTarget: ptr("Then Lane Target"), NotifyChannel: ptr("Email"),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condID, Branch: ptr("then"), Ord: 1,
+		Kind: "autoapprove",
+	})
+	// else lane intentionally left empty
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 2, Kind: "notify", NotifyTarget: ptr("Root Trailing Target"), NotifyChannel: ptr("In-app"),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-ord-density", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if res.Steps != 4 {
+		t.Fatalf("Steps = %d, want 4", res.Steps)
+	}
+
+	run := oneApprovalRun(t, super, invoiceID)
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 4 {
+		t.Fatalf("runStepsOf = %d rows, want 4", len(steps))
+	}
+	wantKinds := []string{"approval", "notify", "autoapprove", "notify"}
+	for i, want := range wantKinds {
+		if steps[i].Ord != i {
+			t.Errorf("steps[%d].Ord = %d, want %d — ord must be dense 0..3 in emission order", i, steps[i].Ord, i)
+		}
+		if steps[i].Kind != want {
+			t.Errorf("steps[%d].Kind = %q, want %q", i, steps[i].Kind, want)
+		}
+	}
+	if steps[1].NotifyTarget == nil || *steps[1].NotifyTarget != "Then Lane Target" {
+		t.Errorf("steps[1].NotifyTarget = %v, want \"Then Lane Target\"", steps[1].NotifyTarget)
+	}
+	if steps[3].NotifyTarget == nil || *steps[3].NotifyTarget != "Root Trailing Target" {
+		t.Errorf("steps[3].NotifyTarget = %v, want \"Root Trailing Target\"", steps[3].NotifyTarget)
+	}
+
+	// `auto` is a single sticky flag over the WHOLE walk (materialise ports the SPA's
+	// simulate verbatim): the then-lane's autoapprove sets it even though the root
+	// approval sits at an earlier ord, so that root approval is written skipped, not
+	// pending — and with no approval step left pending, the run closes. This is the one
+	// DB-level pin of the auto-consumption seam this subtask owns (step 6); the pure
+	// `materialise` boolean is already covered in engine_test.go, but nothing previously
+	// checked the state ArmTx derives from it against a real stored row.
+	if steps[0].State != "skipped" {
+		t.Errorf("steps[0] (root approval) state = %q, want skipped — an autoapprove anywhere in the walk consumes every approval step", steps[0].State)
+	}
+	if !res.Closed || run.State != "approved" {
+		t.Errorf("run.State = %q, Closed = %v, want approved/true — no approval step is left pending", run.State, res.Closed)
 	}
 }

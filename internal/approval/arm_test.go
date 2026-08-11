@@ -207,6 +207,16 @@ func TestArm_WritesOneRowPerMaterialisedStep(t *testing.T) {
 			t.Errorf("steps[%d].Kind = %q, want %q", i, steps[i].Kind, want)
 		}
 	}
+	// The trailing (last-ord) row's own columns, not just kind/ord: a ragged unnest
+	// array pads its short columns with NULL starting at the END of the row set, so a
+	// dropped array element surfaces here first.
+	last := steps[3]
+	if last.NotifyTarget == nil || *last.NotifyTarget != "Tax Team" {
+		t.Errorf("steps[3].NotifyTarget = %v, want \"Tax Team\"", last.NotifyTarget)
+	}
+	if last.NotifyChannel == nil || *last.NotifyChannel != "In-app" {
+		t.Errorf("steps[3].NotifyChannel = %v, want \"In-app\"", last.NotifyChannel)
+	}
 }
 
 // --- AC-2: the one write-nothing arm ---------------------------------------------------
@@ -462,8 +472,17 @@ func TestArm_DueAtNullWhenNoDeadline(t *testing.T) {
 	if steps[0].DueAt != nil {
 		t.Errorf("steps[0] (sla NULL) due_at = %v, want NULL", steps[0].DueAt)
 	}
+	// The stored sla_hours column itself, not just due_at: NULL and 0 both yield
+	// due_at IS NULL, so a bulk-insert bug substituting 0 for a nil sla would pass the
+	// due_at checks above and be caught only here.
+	if steps[0].SLAHours != nil {
+		t.Errorf("steps[0] sla_hours = %v, want NULL, not 0 — NULL and 0 are distinct stored rows", *steps[0].SLAHours)
+	}
 	if steps[1].DueAt != nil {
 		t.Errorf("steps[1] (sla 0) due_at = %v, want NULL", steps[1].DueAt)
+	}
+	if steps[1].SLAHours == nil || *steps[1].SLAHours != 0 {
+		t.Errorf("steps[1] sla_hours = %v, want 0, not NULL", steps[1].SLAHours)
 	}
 	if steps[2].DueAt == nil {
 		t.Fatalf("steps[2] (sla 48) due_at is NULL, want opened_at + 48h")

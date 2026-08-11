@@ -368,6 +368,11 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "a condition must have at least one step in one of its two lanes"
 	case errors.Is(err, ErrPolicyNothingToPublish):
 		return http.StatusConflict, "this policy has no unpublished changes"
+	// The concurrent-publish loser, mapped from 23505 on
+	// approval_policy_versions_one_active. Policy wording, not statusForErr's role-domain
+	// string: the two mappers share the sentinel and nothing else.
+	case errors.Is(err, ErrConflict):
+		return http.StatusConflict, "another version was published first — reload the policy and try again"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

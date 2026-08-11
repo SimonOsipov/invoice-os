@@ -515,19 +515,166 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 	return p, nil
 }
 
-// errPublishNotImplemented is the stub's sentinel, so the RED specs in
-// policy_publish_test.go fail on their own assertions rather than on a panic. Delete it
-// together with the stub body below.
-var errPublishNotImplemented = errors.New("approval: PublishPolicy is not implemented")
-
 // PublishPolicy seals a policy's open draft and makes it the tenant's active version.
 //
 // Publishing a NEW version that names a dead role is refused at the door; a role deleted
 // AFTER publish leaves the sealed version active and its step blocking.
 // TestPublish_RejectsDanglingRole and TestPublish_RoleDeletedAfterPublishLeavesVersionActive
 // are the pair.
+//
+// No body is read at all: published_by is the caller's subject and published_at is now().
+// Statement order is the security property, as in PutDraft — the id is parsed ABOVE the
+// transaction so a malformed uuid never reaches SQL as a 22P02 that carries no sentinel,
+// and requireActiveAdmin is the first statement in the closure.
 func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
-	return Policy{}, errPublishNotImplemented
+	// GetPolicy's parse and its choice of sentinel: 400 against 404 on a path resource
+	// would be an existence oracle.
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return Policy{}, ErrPolicyNotFound
+	}
+
+	p := newPolicy()
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		// THE lock, and the only one that matters. Publish writes approval_policy_versions
+		// and nothing else, so without this row lock a concurrent PutDraft holding it sails
+		// past, and its DELETE FROM approval_policy_steps then dies 23001 under the version
+		// this sealed. FOR UPDATE on the version row would not serialise them — PutDraft
+		// never locks that row. Must stay the first row-read, mirroring PutDraft above.
+		if err := tx.QueryRow(ctx,
+			`SELECT id, name, scope
+			   FROM approval_policies
+			  WHERE id = $1 AND deleted_at IS NULL
+			    FOR UPDATE`, u.String(),
+		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrPolicyNotFound
+			}
+			return err
+		}
+
+		// NOT sealed, never "the active version": one_active spans the tenant, so a policy
+		// can hold sealed versions with no active one. one_draft caps this at one row.
+		var versionID string
+		var version int
+		if err := tx.QueryRow(ctx,
+			`SELECT id, version
+			   FROM approval_policy_versions
+			  WHERE policy_id = $1 AND NOT sealed`, p.ID,
+		).Scan(&versionID, &version); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrPolicyNothingToPublish
+			}
+			return err
+		}
+
+		// One read, two jobs: the gate's input and the response's tree. Publish writes no
+		// step, so re-reading after the seal would only repeat this.
+		trees, err := readPolicyTrees(ctx, tx, []string{versionID})
+		if err != nil {
+			return err
+		}
+		p.Steps = trees[versionID]
+
+		// ListRoles' predicate. Collected here rather than taken from liveRoleKeys, which is
+		// a test-only superuser read-back returning []string.
+		roles, err := tx.Query(ctx, `SELECT key FROM workflow_roles WHERE deleted_at IS NULL`)
+		if err != nil {
+			return err
+		}
+		liveKeys := map[string]bool{}
+		for roles.Next() {
+			var key string
+			if err := roles.Scan(&key); err != nil {
+				roles.Close()
+				return err
+			}
+			liveKeys[key] = true
+		}
+		// Closed explicitly rather than deferred: the statements below reuse this
+		// transaction's connection.
+		roles.Close()
+		if err := roles.Err(); err != nil {
+			return err
+		}
+
+		if err := validateForPublish(p.Steps, liveKeys); err != nil {
+			return err
+		}
+
+		// Its own statement, and TENANT-wide: one_active is ON (tenant_id) WHERE is_active,
+		// so publishing this policy deactivates whichever policy held the slot. No policy
+		// predicate — RLS is the tenant scope. Deactivation is not un-publishing; sealed,
+		// published_at and published_by are untouched
+		// (TestPublish_DeactivatesTheTenantsOtherPolicy).
+		if _, err := tx.Exec(ctx,
+			`UPDATE approval_policy_versions SET is_active = false WHERE is_active`); err != nil {
+			return err
+		}
+
+		// One statement, after the deactivation: is_active is never set on a row that is not
+		// simultaneously becoming sealed, or approval_policy_versions_active_is_sealed raises
+		// 23514. now() is the transaction timestamp, so published_at is the audit row's
+		// created_at (TestPublish_StampsActorAndTxTimestamp).
+		if _, err := tx.Exec(ctx,
+			`UPDATE approval_policy_versions
+			    SET sealed = true, is_active = true, published_at = now(), published_by = $2
+			  WHERE id = $1`, versionID, caller.Subject); err != nil {
+			// A concurrent publish won the tenant's slot. By constraint name, so a 23505 on
+			// any other unique stays a 500, and never retried: a retry would publish a tree
+			// this caller did not re-validate.
+			if uniqueViolationOn(err, "approval_policy_versions_one_active") {
+				return ErrConflict
+			}
+			return err
+		}
+
+		// Read AFTER the seal, or the response answers sealed:false, is_active:false,
+		// published_at:null on a row that is none of those
+		// (TestPublish_EmptyPolicyAllowed). The just-sealed version is the top one: a version
+		// is only ever minted as max+1 and sealing mints none.
+		versions, err := tx.Query(ctx,
+			`SELECT `+policyVersionColumns+`
+			   FROM approval_policy_versions
+			  WHERE policy_id = $1
+			  ORDER BY version DESC`, p.ID)
+		if err != nil {
+			return err
+		}
+		for versions.Next() {
+			_, _, pv, err := scanPolicyVersionRow(versions)
+			if err != nil {
+				versions.Close()
+				return err
+			}
+			if len(p.Versions) == 0 {
+				takeTopVersion(&p, pv)
+			}
+			p.Versions = append(p.Versions, pv)
+		}
+		versions.Close()
+		if err := versions.Err(); err != nil {
+			return err
+		}
+
+		// Last statement in the closure: a failing audit write rolls the seal back
+		// (TestPublish_AuditsInSameTx). version is the SEALED version's number.
+		return audit.Record(ctx, tx, caller.Subject, "approval_policy.published", map[string]any{
+			"policy_id": p.ID,
+			"version":   version,
+		})
+	})
+	if err != nil {
+		return Policy{}, err
+	}
+	return p, nil
 }
 
 // stepArrays is the nine columns both INSERT batches share, one slice per column: unnest

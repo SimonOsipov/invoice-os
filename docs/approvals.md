@@ -103,17 +103,34 @@ The actual procedure:
    steps (§10), so this cannot be done through the API:
 
    ```sql
-   SELECT s.branch, s.ord, s.kind, s.workflow_role_key, s.sla_hours, s.cond_op, s.cond_amount
+   SET app.current_tenant = '<tenant-uuid>';   -- omit only as a superuser; see §3
+
+   SELECT coalesce(parent.ord, s.ord) AS group_ord,
+          s.branch, s.ord, s.kind,
+          s.workflow_role_key, s.sla_hours, s.cond_op, s.cond_amount,
+          s.id, s.parent_step_id
      FROM approval_policy_steps s
      JOIN approval_policy_versions v ON v.id = s.version_id
+     LEFT JOIN approval_policy_steps parent ON parent.id = s.parent_step_id
     WHERE v.tenant_id = '<tenant-uuid>'
       AND v.policy_id = '<policy-A-uuid>'
       AND v.version   = <the version that was active>
-    ORDER BY s.parent_step_id NULLS FIRST, s.branch, s.ord;
+    ORDER BY group_ord, s.parent_step_id NULLS FIRST, s.branch, s.ord;
    ```
 
-   Rows with a null `branch` are the top level; `then`/`else` rows are the lanes of the
-   `condition` above them. Set the tenant GUC first (§3) unless you are a superuser.
+   The `SET` is not optional for a non-superuser connection, and it must be a plain `SET`
+   rather than `SET LOCAL` — §3 explains why, and the same trap applies here.
+
+   Reading the output: `group_ord` collects each root step together with the lane steps
+   belonging to it, so a `condition` row is immediately followed by its own `then` and
+   `else` rows and nothing else. A row with a null `branch` is a root step; a row with a
+   `branch` belongs to the step whose `id` equals its `parent_step_id`.
+
+   > **Match lanes by `parent_step_id`, never by adjacency.** The `id`/`parent_step_id`
+   > pair is the only reliable link. A policy with two `condition` steps produces two sets
+   > of `then`/`else` rows that are otherwise indistinguishable — and attaching a lane to
+   > the wrong threshold silently inverts a real approval rule. That is why both id columns
+   > are selected even though nothing else in this page needs them.
 
 2. **Re-author that tree** through `PUT /v1/approval-policies/{A}/draft`. This mints a
    fresh version numbered `max + 1` and **copies nothing** from the sealed one — every
@@ -203,11 +220,24 @@ They are, however, perfectly distinguishable **in the data**:
 > a publish landed reads an empty result and concludes it did not. Nothing is wrong; the
 > rows are simply invisible.
 >
+> Run this once, at the top of your session, before either query:
+>
 > ```sql
-> SET LOCAL app.current_tenant = '<tenant-uuid>';   -- required for EVERY non-superuser role
+> SET app.current_tenant = '<tenant-uuid>';   -- required for EVERY non-superuser role
 > ```
 >
-> Only a superuser or a `BYPASSRLS` connection may omit it.
+> **Use plain `SET`, not `SET LOCAL`.** `SET LOCAL` is scoped to a transaction, and
+> outside one it is discarded with only a warning — the query then runs with no tenant and
+> returns `(0 rows)`, which is the very failure this box exists to prevent:
+>
+> ```
+> WARNING:  SET LOCAL can only be used in transaction blocks
+> ```
+>
+> If you do want transaction scope, both statements must be inside the same transaction:
+> `BEGIN; SET LOCAL app.current_tenant = '…'; SELECT …; COMMIT;`
+>
+> Only a superuser or a `BYPASSRLS` connection may skip the setting entirely.
 
 Two queries.
 
@@ -408,12 +438,18 @@ Five further scope options exist in the product's scope dropdown:
 backing invoice classification, so a policy carrying one would route nothing while
 appearing to route something.
 
-> **Not yet removed from the editor.** The scope dropdown still offers all six options:
-> `WF_SCOPE_OPTIONS` (`frontend/app/src/lib/workflows.ts:107-114`) still declares them and
+> **Not yet removed from the editor — and nothing rejects them there.** The scope dropdown
+> still offers all six options: `WF_SCOPE_OPTIONS`
+> (`frontend/app/src/lib/workflows.ts:107-114`) still declares them and
 > `WorkflowBuilder.tsx:56` still maps the whole list into the rendered select. Three of
-> them also still appear as scopes on mock policy data. **Selecting one and saving is
-> rejected by the server**, so the editor currently offers five choices that cannot be
-> stored.
+> them also still appear as scopes on mock policy data.
+>
+> Selecting one and saving is **not** refused, because **nothing is sent**. The builder is
+> not wired to this API at all — the SPA makes no call to `/v1/approval-policies` anywhere,
+> and its `publishPolicy` is a local object transform. The screen accepts an unstorable
+> scope and displays it as published. The server's refusal is real but only reachable by
+> calling the API directly; the editor will not start meeting it until **APPR-09** wires
+> the builder to the server.
 >
 > Deleting them from the palette is **APPR-10's unbuilt work**, under the rule that **a
 > control which fails invisibly is removed, while a control that announces its own
@@ -584,7 +620,7 @@ message, not the status: several distinct causes share a status code.
 
 | Status | Message | What it means | What to do |
 |---|---|---|---|
-| `400` | `invalid request` | A value was rejected before it reached the database: an empty name, an unrecognised scope (§6), an unknown step `kind`, a `cond_op` outside `> >= < <=`, a `cond_amount` with more than two decimal places or too large for `numeric(14,2)`, a negative or oversized `sla_hours`, a `notify` step missing its target or channel, a `condition` step missing its operator or amount, a `condition` nested inside another step, or a NUL byte in any text field. | Fix the offending field. The message is deliberately non-specific; if it is not obvious, compare the payload against the constraints in §6 and the step rules. |
+| `400` | `invalid request` | A value was rejected before it reached the database. The complete set of causes: an empty name; an unrecognised scope (§6); an unknown step `kind`; a `condition` nested inside another step; a **non**-`condition` step carrying `then`/`else` children; a `cond_op` outside `> >= < <=`; a `cond_amount` that is not a decimal number, has more than two decimal places, or is too large for `numeric(14,2)`; a negative or oversized `sla_hours`; a `condition` step missing its operator or amount; a `notify` step missing its target or channel; or a NUL byte in any text field. | Fix the offending field. The message is deliberately non-specific, so work down the causes in this cell — nothing else produces it. |
 | `400` | `invalid request body` | The JSON did not decode, or the body exceeded the 64 KiB cap. | Check the payload is well-formed. A very large policy tree can genuinely hit the cap. |
 | `400` | `steps must be an array of approval steps` | A draft `PUT` omitted `steps` entirely. | Send `steps` explicitly. **`"steps": []` clears the tree** — that is a real operation, which is why an absent key is refused rather than treated as empty. |
 | `401` | `unauthorized` | No verified identity, or no tenant claim on the request. | An authentication problem, not a policy one. |

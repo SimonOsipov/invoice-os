@@ -502,7 +502,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(policy.version, 'the open draft is version 1').toBe(1)
     const versions = policy.versions as Array<Record<string, unknown>>
     expect(versions.length, 'exactly the one version create minted').toBe(1)
-    expect(versions[0].version).toBe(1)
+    expect(versions[0].version, 'create mints version one').toBe(1)
     expect(versions[0].sealed, 'the minted version is open').toBe(false)
     expect(versions[0].is_active, 'creating does not take the tenant active slot').toBe(false)
     expect(versions[0].published_at, 'published_at is an explicit null before publish').toBeNull()

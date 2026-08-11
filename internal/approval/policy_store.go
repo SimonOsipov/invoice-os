@@ -14,24 +14,27 @@ import (
 )
 
 // The policy handler seam, declared beside the methods that satisfy it (the
-// store.go:33-47 shape). Only the four implemented so far: a declared-but-unasserted
-// function type is dead code no vet catches, and the publish/delete signatures belong
-// to the subtasks that build them.
+// store.go:33-47 shape). Only the five implemented so far: a declared-but-unasserted
+// function type is dead code no vet catches, and the delete signature belongs to the
+// subtask that builds it.
 //
 // PutDraft takes []stepInput, not *[]stepInput: presence is the handler's call (a nil
 // pointer is a 400 there), and nil and an empty slice are the same store state.
+// PublishPolicy takes no body at all — published_by is the caller's subject.
 type (
-	PolicyLister  func(ctx context.Context) ([]Policy, error)
-	PolicyGetter  func(ctx context.Context, id string) (Policy, error)
-	PolicyCreator func(ctx context.Context, name, scope string) (Policy, error)
-	PolicyDrafter func(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error)
+	PolicyLister    func(ctx context.Context) ([]Policy, error)
+	PolicyGetter    func(ctx context.Context, id string) (Policy, error)
+	PolicyCreator   func(ctx context.Context, name, scope string) (Policy, error)
+	PolicyDrafter   func(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error)
+	PolicyPublisher func(ctx context.Context, id string) (Policy, error)
 )
 
 var (
-	_ PolicyLister  = new(Store).ListPolicies
-	_ PolicyGetter  = new(Store).GetPolicy
-	_ PolicyCreator = new(Store).CreatePolicy
-	_ PolicyDrafter = new(Store).PutDraft
+	_ PolicyLister    = new(Store).ListPolicies
+	_ PolicyGetter    = new(Store).GetPolicy
+	_ PolicyCreator   = new(Store).CreatePolicy
+	_ PolicyDrafter   = new(Store).PutDraft
+	_ PolicyPublisher = new(Store).PublishPolicy
 )
 
 // newPolicy is what every read and the create start from: lanes and versions are []
@@ -510,6 +513,21 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 		return Policy{}, err
 	}
 	return p, nil
+}
+
+// errPublishNotImplemented is the stub's sentinel, so the RED specs in
+// policy_publish_test.go fail on their own assertions rather than on a panic. Delete it
+// together with the stub body below.
+var errPublishNotImplemented = errors.New("approval: PublishPolicy is not implemented")
+
+// PublishPolicy seals a policy's open draft and makes it the tenant's active version.
+//
+// Publishing a NEW version that names a dead role is refused at the door; a role deleted
+// AFTER publish leaves the sealed version active and its step blocking.
+// TestPublish_RejectsDanglingRole and TestPublish_RoleDeletedAfterPublishLeavesVersionActive
+// are the pair.
+func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
+	return Policy{}, errPublishNotImplemented
 }
 
 // stepArrays is the nine columns both INSERT batches share, one slice per column: unnest

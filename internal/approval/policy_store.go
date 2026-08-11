@@ -342,13 +342,273 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 	return created, nil
 }
 
-// errPutDraftStub is the sentinel the stub below returns so the specs in
-// policy_draft_test.go fail on an assertion. A panic would abort the test binary, so
-// only one spec would run and no cleanup would fire. Delete it with the stub body.
-var errPutDraftStub = errors.New("approval: PutDraft is not implemented")
-
-// PutDraft rewrites a policy's open draft wholesale, forking a new version when the
-// policy has none. Stub only: the body is the next subtask's.
+// PutDraft rewrites a policy's open draft wholesale: the submitted tree replaces that
+// version's whole step set. A policy holding no open draft is forked a fresh version
+// numbered max+1 carrying only what was sent — a fork copies no steps.
+//
+// A sealed version is never reached: the resolution predicate is NOT sealed, never "the
+// active version", because approval_policy_versions_one_active spans the tenant and a
+// policy can hold sealed versions with no active one. approval_policy_steps_content_lock
+// would raise 23001 if the predicate ever broke, and that stays an honest 500 — it is a
+// plpgsql RAISE carrying no constraint name, so no mapper can catch it by accident.
+//
+// Statement order is the security property, as in CreatePolicy: the id is parsed and both
+// normalizers run ABOVE the transaction, so neither a malformed uuid (22P02) nor an
+// unnormalized scope (23514) reaches SQL — both carry no sentinel and would answer 500
+// where this seam promises 404 and 400. requireActiveAdmin is then the first statement in
+// the closure, before any policy row is read.
 func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error) {
-	return Policy{}, errPutDraftStub
+	// GetPolicy's parse, and its choice of sentinel: 400 against 404 on a path resource
+	// would be an existence oracle.
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return Policy{}, ErrPolicyNotFound
+	}
+	// Copied, never written through: the pointers belong to the caller (UpdateRole,
+	// store.go:211-218). normalizeScope's output set is exactly what
+	// approval_policies_scope_check accepts, so a non-nil "" reaches SQL as the default.
+	if name != nil {
+		n, err := normalizeName(*name)
+		if err != nil {
+			return Policy{}, err
+		}
+		name = &n
+	}
+	if scope != nil {
+		sc, err := normalizeScope(*scope)
+		if err != nil {
+			return Policy{}, err
+		}
+		scope = &sc
+	}
+	if err := validateTree(steps); err != nil {
+		return Policy{}, err
+	}
+	rows := flattenSteps(steps)
+
+	p := newPolicy()
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		// FOR UPDATE serialises concurrent forks, and must stay above the draft resolution
+		// below: unlocked, two callers both resolve "no draft" and the loser raises 23505 on
+		// approval_policy_versions_one_draft. deleted_at IS NULL is the existence predicate,
+		// so a soft-deleted policy is not reopened. u.String() is the canonical form —
+		// uuid.Parse also accepts the urn and braced spellings ::uuid rejects.
+		var policyID string
+		if err := tx.QueryRow(ctx,
+			`SELECT id
+			   FROM approval_policies
+			  WHERE id = $1 AND deleted_at IS NULL
+			    FOR UPDATE`, u.String(),
+		).Scan(&policyID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrPolicyNotFound
+			}
+			return err
+		}
+
+		// coalesce rather than Go-merged values: only the fields that were sent appear in
+		// the effective write. $3 is the NORMALIZED local, never the argument as received.
+		if err := tx.QueryRow(ctx,
+			`UPDATE approval_policies
+			    SET name = coalesce($2::text, name), scope = coalesce($3::text, scope)
+			  WHERE id = $1
+			  RETURNING id, name, scope`, policyID, name, scope,
+		).Scan(&p.ID, &p.Name, &p.Scope); err != nil {
+			return err
+		}
+
+		var versionID string
+		var version int
+		err := tx.QueryRow(ctx,
+			`SELECT id, version
+			   FROM approval_policy_versions
+			  WHERE policy_id = $1 AND NOT sealed`, policyID,
+		).Scan(&versionID, &version)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// max+1 folds into the INSERT so no window exists between reading the max and
+			// using it. tenant_id is explicit: the column has no DEFAULT. sealed and is_active
+			// take their false DEFAULTs — publishing is its own seam.
+			err = tx.QueryRow(ctx,
+				`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
+				 SELECT $1::uuid, $2::uuid, coalesce(max(version), 0) + 1
+				   FROM approval_policy_versions
+				  WHERE policy_id = $2
+				 RETURNING id, version`,
+				caller.TenantID, policyID,
+			).Scan(&versionID, &version)
+		}
+		if err != nil {
+			return err
+		}
+
+		// Whole-set delete then re-insert. The tuples this transaction deleted are already
+		// dead to its own uniqueness check, so rewriting the same slots needs no renumbering
+		// dance (the SetRoleMembers precedent, store.go:409-414).
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM approval_policy_steps WHERE version_id = $1`, versionID); err != nil {
+			return err
+		}
+		if err := insertPolicySteps(ctx, tx, caller.TenantID, versionID, rows); err != nil {
+			return err
+		}
+
+		// The written draft supplies Version, Sealed and Status: it is unsealed by
+		// construction, and it is the policy's top version because a version is only ever
+		// minted as max+1 and sealing never mints one.
+		takeTopVersion(&p, PolicyVersion{Version: version})
+
+		// GetPolicy's version read. Not in the plan's enumerated statement order, but the
+		// PUT answers a whole Policy and a versions: [] here would contradict the very next
+		// GET of the same row.
+		versions, err := tx.Query(ctx,
+			`SELECT `+policyVersionColumns+`
+			   FROM approval_policy_versions
+			  WHERE policy_id = $1
+			  ORDER BY version DESC`, policyID)
+		if err != nil {
+			return err
+		}
+		for versions.Next() {
+			_, _, pv, err := scanPolicyVersionRow(versions)
+			if err != nil {
+				versions.Close()
+				return err
+			}
+			p.Versions = append(p.Versions, pv)
+		}
+		versions.Close()
+		if err := versions.Err(); err != nil {
+			return err
+		}
+
+		// Read back rather than echoed from the request: numeric(14,2) normalises scale on
+		// write, so a step sent as "0" is stored as 0.00 and a response assembled in memory
+		// would disagree with the next GET of the same row
+		// (TestPutDraft_CondAmountScaleIsCanonicalInTheResponse).
+		trees, err := readPolicyTrees(ctx, tx, []string{versionID})
+		if err != nil {
+			return err
+		}
+		p.Steps = trees[versionID]
+
+		// Last statement in the closure: a failing audit write rolls the whole rewrite back
+		// (TestPutDraft_AuditsInSameTx). version is the WRITTEN draft's, the forked max+1
+		// when a fork happened.
+		return audit.Record(ctx, tx, caller.Subject, "approval_policy.updated", map[string]any{
+			"policy_id": p.ID,
+			"version":   version,
+		})
+	})
+	if err != nil {
+		return Policy{}, err
+	}
+	return p, nil
+}
+
+// stepArrays is the nine columns both INSERT batches share, one slice per column: unnest
+// takes an array per column, never an array of rows. The nullable seven bind as []*string
+// and []*int, which is what carries a NULL through a batch that also holds values
+// (TestPutDraft_NullableColumnsRoundTripInOneBatch).
+type stepArrays struct {
+	ids            []string
+	ords           []int
+	kinds          []string
+	roleKeys       []*string
+	slaHours       []*int
+	condOps        []*string
+	condAmounts    []*string
+	notifyTargets  []*string
+	notifyChannels []*string
+}
+
+func stepArraysOf(rows []stepRow) stepArrays {
+	a := stepArrays{
+		ids:            make([]string, len(rows)),
+		ords:           make([]int, len(rows)),
+		kinds:          make([]string, len(rows)),
+		roleKeys:       make([]*string, len(rows)),
+		slaHours:       make([]*int, len(rows)),
+		condOps:        make([]*string, len(rows)),
+		condAmounts:    make([]*string, len(rows)),
+		notifyTargets:  make([]*string, len(rows)),
+		notifyChannels: make([]*string, len(rows)),
+	}
+	for i, r := range rows {
+		a.ids[i], a.ords[i], a.kinds[i] = r.ID, r.Ord, r.Kind
+		a.roleKeys[i], a.slaHours[i] = r.WorkflowRoleKey, r.SLAHours
+		a.condOps[i], a.condAmounts[i] = r.CondOp, r.CondAmount
+		a.notifyTargets[i], a.notifyChannels[i] = r.NotifyTarget, r.NotifyChannel
+	}
+	return a
+}
+
+// insertPolicySteps writes one version's whole flattened tree in two statements, roots
+// then children. The roots statement omits parent_step_id and branch entirely rather than
+// binding an all-NULL array, and partitioning on ParentStepID == nil is where the
+// depth-two invariant becomes explicit at the call site. That invariant is validateTree's
+// (policy.go:227-232), not approval_policy_steps_depth_cap's — the CHECK forbids a
+// condition CHILD, not depth.
+//
+// ord is bound explicitly, never derived by WITH ORDINALITY: ord restarts in every lane,
+// so array position is right for the roots and wrong for the children, where a two-lane
+// condition must write ord 0 twice (TestPutDraft_TwoLaneConditionKeepsPerLaneOrd).
+// Zero-length arrays insert zero rows, so an empty tree needs no branch.
+func insertPolicySteps(ctx context.Context, tx pgx.Tx, tenantID, versionID string, rows []stepRow) error {
+	roots, children := []stepRow{}, []stepRow{}
+	for _, r := range rows {
+		if r.ParentStepID == nil {
+			roots = append(roots, r)
+			continue
+		}
+		children = append(children, r)
+	}
+
+	// Ids bind as text[] and cast, the treatment cond_amount gets: text[] is what pgx
+	// encodes without inference risk.
+	r := stepArraysOf(roots)
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO approval_policy_steps
+		     (tenant_id, version_id, id, ord, kind, workflow_role_key, sla_hours,
+		      cond_op, cond_amount, notify_target, notify_channel)
+		 SELECT $1::uuid, $2::uuid, s.id::uuid, s.ord, s.kind, s.role_key, s.sla,
+		        s.cond_op, s.cond_amount::numeric, s.notify_target, s.notify_channel
+		   FROM unnest($3::text[], $4::int[], $5::text[], $6::text[], $7::int[],
+		               $8::text[], $9::text[], $10::text[], $11::text[])
+		        AS s(id, ord, kind, role_key, sla, cond_op, cond_amount, notify_target, notify_channel)`,
+		tenantID, versionID, r.ids, r.ords, r.kinds, r.roleKeys, r.slaHours,
+		r.condOps, r.condAmounts, r.notifyTargets, r.notifyChannels,
+	); err != nil {
+		return err
+	}
+
+	c := stepArraysOf(children)
+	parents := make([]string, len(children))
+	branches := make([]string, len(children))
+	for i, row := range children {
+		// Both non-NULL by construction: flattenLane sets parent and branch together, so a
+		// half-populated child — which nestSteps would silently promote to a root — is
+		// unreachable from this path.
+		parents[i], branches[i] = *row.ParentStepID, *row.Branch
+	}
+	_, err := tx.Exec(ctx,
+		`INSERT INTO approval_policy_steps
+		     (tenant_id, version_id, id, parent_step_id, branch, ord, kind,
+		      workflow_role_key, sla_hours, cond_op, cond_amount, notify_target, notify_channel)
+		 SELECT $1::uuid, $2::uuid, s.id::uuid, s.parent::uuid, s.branch, s.ord, s.kind,
+		        s.role_key, s.sla, s.cond_op, s.cond_amount::numeric, s.notify_target, s.notify_channel
+		   FROM unnest($3::text[], $4::text[], $5::text[], $6::int[], $7::text[],
+		               $8::text[], $9::int[], $10::text[], $11::text[], $12::text[], $13::text[])
+		        AS s(id, parent, branch, ord, kind, role_key, sla, cond_op, cond_amount,
+		             notify_target, notify_channel)`,
+		tenantID, versionID, c.ids, parents, branches, c.ords, c.kinds,
+		c.roleKeys, c.slaHours, c.condOps, c.condAmounts, c.notifyTargets, c.notifyChannels,
+	)
+	return err
 }

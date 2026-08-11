@@ -1004,6 +1004,10 @@ func TestPutDraft_NilStepsClearsTheTree(t *testing.T) {
 //
 // The fork fixture is what makes the version row's xmin the transaction's; the name is
 // non-nil so the approval_policies UPDATE is unambiguously required too.
+//
+// policy_id is compared as a uuid on both sides. Bare, $2 resolves to uuid at p.id and the
+// payload leg then asks for text = uuid, so the join fails to PLAN (42883) whatever the
+// store wrote.
 func TestPutDraft_AuditsInSameTx(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 put-audit-atomicity")
@@ -1027,7 +1031,7 @@ func TestPutDraft_AuditsInSameTx(t *testing.T) {
 		    AND v.id = $3::uuid
 		    AND s.version_id = v.id
 		    AND a.tenant_id = $1 AND a.event = 'approval_policy.updated'
-		    AND a.payload->>'policy_id' = $2`,
+		    AND (a.payload->>'policy_id')::uuid = $2::uuid`,
 		tenantID, policyID, draft.ID,
 	).Scan(&policyXmin, &versionXmin, &stepXmin, &auditXmin, &actor, &payload); err != nil {
 		t.Fatalf("xmin join (no row means the policy, its forked version, its step and its audit event "+

@@ -623,6 +623,9 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		// simultaneously becoming sealed, or approval_policy_versions_active_is_sealed raises
 		// 23514. now() is the transaction timestamp, so published_at is the audit row's
 		// created_at (TestPublish_StampsActorAndTxTimestamp).
+		//
+		// No RowsAffected guard: the row resolved above cannot vanish under the policy lock —
+		// invoice_app holds no DELETE on this table (TestRLS_ApprovalPolicyTablesGrantMatrix).
 		if _, err := tx.Exec(ctx,
 			`UPDATE approval_policy_versions
 			    SET sealed = true, is_active = true, published_at = now(), published_by = $2

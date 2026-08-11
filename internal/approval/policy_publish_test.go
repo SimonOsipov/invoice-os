@@ -1,10 +1,11 @@
 package approval
 
 // Store.PublishPolicy under a real Postgres: the publish gate, the seal, the tenant-wide
-// deactivation and the audit. Written before the method body exists, so every spec here
-// starts RED against policy_store.go's stub.
+// deactivation and the audit. Adversarial coverage — the row lock, the admin gate, the
+// concurrent-publish loser — is in policy_publish_adversarial_test.go.
 //
-// TWO KNOWN UNTESTED OBLIGATIONS, both recorded rather than faked:
+// TWO KNOWN UNTESTED OBLIGATIONS, both recorded rather than faked. Both were discharged by
+// reading policy_store.go, and both stay untested: mutating either leaves this suite green.
 //
 //  1. "seal and activate are ONE statement" has no oracle. Statement count inside a
 //     transaction is invisible from outside it — it is observable only by scraping the

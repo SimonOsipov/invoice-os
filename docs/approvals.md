@@ -29,6 +29,10 @@ Reads are open to any caller holding a tenant claim. Every **write** requires an
 statement inside each write transaction, so a suspended or non-admin caller is refused
 with nothing written. It answers `403 only an admin can change approval policies`.
 
+**Arrived here from an error message?** Go straight to the [error
+reference](#appendix--error-reference) at the foot of this page, which lists every
+response these endpoints can return and what to do about each.
+
 ---
 
 ## 1. What publish does
@@ -80,13 +84,70 @@ they will get a quietly deactivated first policy.
 Deactivation is **not** un-publishing. The version that lost the slot keeps `sealed =
 true` and keeps its original `published_at` and `published_by`. Only `is_active` flips.
 
+### Recovering from an accidental deactivation
+
+**There is no undo, and there is no re-activate.** The only statement in the codebase that
+sets `is_active = true` is the publish seal itself, and it can only ever target a version
+resolved by `NOT sealed`. **No API path re-activates a version that has already been
+sealed** — which is every version that was ever live. Restoring policy A therefore means
+publishing it *again*, as a **new** version.
+
+The obvious workaround does not work: **deleting policy B does not bring A back.** The
+deactivation in `DELETE` is policy-scoped (§9), so it clears B's own `is_active` and
+touches nothing else. The tenant is then left with **zero** active versions — strictly
+worse than before.
+
+The actual procedure:
+
+1. **Read A's step tree out of the database.** No endpoint returns a sealed version's
+   steps (§10), so this cannot be done through the API:
+
+   ```sql
+   SELECT s.branch, s.ord, s.kind, s.workflow_role_key, s.sla_hours, s.cond_op, s.cond_amount
+     FROM approval_policy_steps s
+     JOIN approval_policy_versions v ON v.id = s.version_id
+    WHERE v.tenant_id = '<tenant-uuid>'
+      AND v.policy_id = '<policy-A-uuid>'
+      AND v.version   = <the version that was active>
+    ORDER BY s.parent_step_id NULLS FIRST, s.branch, s.ord;
+   ```
+
+   Rows with a null `branch` are the top level; `then`/`else` rows are the lanes of the
+   `condition` above them. Set the tenant GUC first (§3) unless you are a superuser.
+
+2. **Re-author that tree** through `PUT /v1/approval-policies/{A}/draft`. This mints a
+   fresh version numbered `max + 1` and **copies nothing** from the sealed one — every
+   step has to be sent again.
+
+3. **Publish it.** `POST /v1/approval-policies/{A}/publish`. This deactivates B in turn,
+   which is the intended outcome here.
+
+Afterwards A governs again, but as a **new version number** with a new `published_at` and
+`published_by` naming whoever performed the recovery. The originally-active version stays
+`sealed = t, is_active = f` for good. That is by design — the history of what was in force
+and who put it there is preserved rather than rewritten — but it does mean an accidental
+publish is permanently visible in the version list.
+
 `published_at` is `now()`, which in Postgres is the **transaction** timestamp, so it is
 identical to the `created_at` of the audit row written in the same transaction. That
 equality is a useful correlation handle when reading the two tables side by side.
 
-If two admins publish at the same instant, one wins the tenant slot and the loser gets
-`409 another version was published first — reload the policy and try again`. It is never
-retried automatically: a retry would publish a step tree the caller never re-validated.
+**Two admins publishing at once produce two different `409`s, and the likelier case is the
+confusing one.** Which you get depends on whether they were publishing the *same* policy:
+
+| Race | Loser's `409` | Why |
+|---|---|---|
+| the **same** policy | `this policy has no unpublished changes` | The two serialise on the policy row's `FOR UPDATE`. The loser then re-resolves its draft on a fresh snapshot, finds the version already sealed, and reports the same thing it would report if there had been nothing to publish at all. |
+| **different** policies | `another version was published first — reload the policy and try again` | Both pass their own draft resolution and then collide on the tenant's single active slot. |
+
+Read the first row carefully: a lost same-policy race is **indistinguishable by message**
+from publishing a policy that had no pending edits. An admin who is told "no unpublished
+changes" immediately after clicking Publish has most likely just lost a race to a
+colleague — their draft is now sealed and live, published under the *other* admin's name.
+Check `published_by` (§3) before assuming the click did nothing.
+
+Neither `409` is ever retried automatically: a retry would publish a step tree the caller
+never re-validated.
 
 The audit write is the **last** statement in the transaction, so a failing audit rolls
 the seal back — a sealed version without its audit row cannot exist.
@@ -96,9 +157,12 @@ the seal back — a sealed version without its audit row cannot exist.
 ## 2. A tenant with no active policy
 
 **Every invoice transmits as soon as it validates.** Approval policies do not
-participate in the transmit path at all. The only role gate on transmission is the
-capability check in `TransitionHandler` (`internal/invoice/handlers.go:669`), which
-admits an `admin` or a `reviewer` and refuses a `preparer`. No production code path
+participate in the transmit path at all. The only gates on transmission are the two
+capability checks that guard the two ways an invoice can be transmitted — the
+single-invoice `TransitionHandler` (`internal/invoice/handlers.go:669`) and the batch
+`BatchSubmitHandler` (`:1124`, behind `POST /v1/invoices/submissions`). Both apply the
+same `isApprover` test, admitting an `admin` or a `reviewer` and refusing a `preparer`
+with the same message. No production code path
 anywhere reads `approval_runs`, `approval_run_steps` or `approval_decisions` — the three
 tables are referenced only by the test-database reset list and by tests — and
 `approval_policy_versions` is read only by the policy endpoints themselves.
@@ -128,9 +192,24 @@ They are, however, perfectly distinguishable **in the data**:
 
 ## 3. How to verify an activation
 
-Two queries. Run them as a role that can read the tenant's rows; if you are connecting
-as `invoice_app` rather than as the migrator, set the tenant GUC first
-(`SET LOCAL app.current_tenant = '<tenant-uuid>';`) or RLS will return nothing.
+> **Set the tenant GUC first, or both queries below lie to you.** All three approval
+> tables and `audit_log` are `FORCE ROW LEVEL SECURITY`, and **neither `invoice_app` nor
+> `invoice_migrator` is a superuser or holds `BYPASSRLS`** — `FORCE` subjects the table's
+> owner too, so being the migrator buys you nothing here. Measured on a database holding
+> hundreds of published policies: as `invoice_migrator` with no GUC set, both queries
+> below return **`(0 rows)`**.
+>
+> That is the worst possible failure mode for this section — an operator checking whether
+> a publish landed reads an empty result and concludes it did not. Nothing is wrong; the
+> rows are simply invisible.
+>
+> ```sql
+> SET LOCAL app.current_tenant = '<tenant-uuid>';   -- required for EVERY non-superuser role
+> ```
+>
+> Only a superuser or a `BYPASSRLS` connection may omit it.
+
+Two queries.
 
 **a. The version state.** `sealed` and `is_active` are the two booleans that matter, and
 they are not the same fact:
@@ -219,10 +298,11 @@ All fourteen columns are compared, so any real change is caught.
 
 > **The `23001` errors carry no constraint name.** They are raised by PL/pgSQL functions,
 > so the `CONSTRAINT NAME` field of the error is empty and there is nothing to grep for.
-> Match on the message text instead:
+> Match on the message text instead. There are four:
 > - `steps of a sealed approval policy version are immutable: ...`
 > - `a sealed approval policy version cannot be deleted (version=N)`
 > - `a sealed approval policy version cannot be unsealed (version=N)`
+> - `approval_policy_steps is protected by the policy immutability lock: TRUNCATE is not permitted`
 
 The remaining two SQLSTATEs **do** carry a constraint name, which is the fastest way to
 identify them:
@@ -316,8 +396,7 @@ approval_policies_scope_check
 that value before the value ever reaches SQL. Any other string is a `400 invalid
 request`; a value that somehow reached the column directly would be a `23514`.
 
-Five scope options that once appeared in the policy editor have been **removed from the
-palette**, not left inert:
+Five further scope options exist in the product's scope dropdown:
 
 - `Foreign-currency invoices`
 - `Document type · B2G`
@@ -325,11 +404,22 @@ palette**, not left inert:
 - `Consumer invoices (B2C)`
 - `Credit notes & adjustments`
 
-None of them had any backing invoice classification, so a policy carrying one would have
-routed nothing while appearing to route something. The governing rule is: **a control
-that fails invisibly is removed; a control that announces its own disabled state is kept
-and labelled.** A scope dropdown looks identical whether or not it routes anything, which
-puts these five in the first category.
+**The server already refuses every one of them**, by the rule just above. None has any
+backing invoice classification, so a policy carrying one would route nothing while
+appearing to route something.
+
+> **Not yet removed from the editor.** The scope dropdown still offers all six options:
+> `WF_SCOPE_OPTIONS` (`frontend/app/src/lib/workflows.ts:107-114`) still declares them and
+> `WorkflowBuilder.tsx:56` still maps the whole list into the rendered select. Three of
+> them also still appear as scopes on mock policy data. **Selecting one and saving is
+> rejected by the server**, so the editor currently offers five choices that cannot be
+> stored.
+>
+> Deleting them from the palette is **APPR-10's unbuilt work**, under the rule that **a
+> control which fails invisibly is removed, while a control that announces its own
+> disabled state is kept and labelled.** A scope dropdown looks identical whether or not
+> it routes anything, which puts these five in the first category. Until that lands, the
+> `CHECK` above is the *storage* truth and the dropdown is not.
 
 Amount-threshold `condition` steps are unaffected and remain the supported way to express
 escalation, because they read the invoice's real total rather than an unpopulated
@@ -365,11 +455,16 @@ What each access role can do. This is the reference copy: the repo ships no rele
 artefact, so this page is the matrix's only home. The row labels are the ones rendered in
 the product, lowercase as authored (`frontend/app/src/lib/members.ts:91-99`).
 
-The **Enforced where** column is the load-bearing one. Most of these rows are
-**descriptive** — they document intent and drive the UI, but no server-side check refuses
-the action. A row reading "not enforced" means exactly that: the product will show the
-control and the server will not stop anyone from using it. Read it as a statement of
-fact, never as "presumably enforced somewhere".
+The **Enforced where** column is the load-bearing one, and it distinguishes two different
+kinds of "no":
+
+- **not enforced** — the endpoint exists and serves every role alike. The product shows
+  the control, and the server will not stop anyone from using it. This is the one that
+  matters for access control: the restriction shown on screen is decorative.
+- **no server surface** — the capability has no endpoint at all. Nothing to enforce,
+  because nothing is reachable. Not an access-control gap; an unbuilt feature.
+
+Read either as a statement of fact, never as "presumably enforced somewhere".
 
 | Capability | Admin | Preparer | Reviewer | Enforced where |
 |---|:---:|:---:|:---:|---|
@@ -377,10 +472,10 @@ fact, never as "presumably enforced somewhere".
 | import from file or ERP | ✓ | ✓ | ✓ | not enforced |
 | run validation | ✓ | ✓ | ✓ | not enforced |
 | approve in approval steps | ✓ | — | ✓ | **not enforced yet** — the approve/reject seam is unbuilt (APPR-07) |
-| transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced** — `internal/invoice/handlers.go:669` (`isApprover` = admin or reviewer; a preparer gets `403`) |
-| invite and manage members | ✓ | — | — | **partly server-enforced** — the *manage* half is admin-only at `internal/tenancy/store.go:140` (`PATCH /v1/memberships/{user_id}`). There is no invite path to enforce. |
-| manage ERP connectors | ✓ | — | — | not enforced |
-| manage signing certificates | ✓ | — | — | not enforced |
+| transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced, both doors** — `internal/invoice/handlers.go:669` (single) and `:1124` (batch, `POST /v1/invoices/submissions`). Both apply `isApprover` = admin or reviewer; a preparer gets `403` either way. |
+| invite and manage members | ✓ | — | — | **partly server-enforced** — the *manage* half is admin-only at `internal/tenancy/store.go:140` (`PATCH /v1/memberships/{user_id}`). The *invite* half has **no server surface**. |
+| manage ERP connectors | ✓ | — | — | **no server surface** — no endpoint exists |
+| manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
 
 **Two rows are server-enforced today**, and one of those only in half. Any wider claim —
 that approvals are enforced, or that the matrix as a whole is backed — is aspirational
@@ -479,3 +574,29 @@ update time. The field is satisfied from placeholder data.
 
 Anything that surfaces a real modification time needs a new column and a new wire field
 first. This is handed to APPR-09, which points the builder at the server.
+
+---
+
+## Appendix — error reference
+
+Every response the policy endpoints can return, and what to do about it. Look up the
+message, not the status: several distinct causes share a status code.
+
+| Status | Message | What it means | What to do |
+|---|---|---|---|
+| `400` | `invalid request` | A value was rejected before it reached the database: an empty name, an unrecognised scope (§6), an unknown step `kind`, a `cond_op` outside `> >= < <=`, a `cond_amount` with more than two decimal places or too large for `numeric(14,2)`, a negative or oversized `sla_hours`, a `notify` step missing its target or channel, a `condition` step missing its operator or amount, a `condition` nested inside another step, or a NUL byte in any text field. | Fix the offending field. The message is deliberately non-specific; if it is not obvious, compare the payload against the constraints in §6 and the step rules. |
+| `400` | `invalid request body` | The JSON did not decode, or the body exceeded the 64 KiB cap. | Check the payload is well-formed. A very large policy tree can genuinely hit the cap. |
+| `400` | `steps must be an array of approval steps` | A draft `PUT` omitted `steps` entirely. | Send `steps` explicitly. **`"steps": []` clears the tree** — that is a real operation, which is why an absent key is refused rather than treated as empty. |
+| `401` | `unauthorized` | No verified identity, or no tenant claim on the request. | An authentication problem, not a policy one. |
+| `403` | `only an admin can change approval policies` | The caller is not an **active** admin. A suspended admin and an invited-but-not-active admin are both refused. | Have an active admin perform the change, or reactivate the membership. Reads need no admin role. |
+| `404` | `approval policy not found` | No such policy in this tenant — or it is soft-deleted, or the id is not a well-formed uuid. All three are deliberately one answer, so the endpoint cannot be used to probe which ids exist. | Confirm the id and that the policy is not deleted (`deleted_at IS NULL`). |
+| `409` | `this policy has no unpublished changes` | Either there was genuinely no open draft, **or** a concurrent publish of the same policy won the race. | Check `published_by` and `published_at` (§3) before assuming nothing happened — see §1. |
+| `409` | `an approval step names a workflow role that no longer exists` | An `approval` step references a workflow role that has been deleted, or carries no role key at all. | Restore the role, or edit the step to name a live one, then publish again. A role deleted *after* a publish leaves the sealed version active with that step unsatisfiable. |
+| `409` | `a condition must have at least one step in one of its two lanes` | A `condition` step has both lanes empty, so it branches nowhere. | Put at least one step in the `then` or `else` lane, or remove the condition. |
+| `409` | `another version was published first — reload the policy and try again` | A concurrent publish of a **different** policy took the tenant's single active slot. | Reload, confirm which policy is now active (§3), and decide whether yours should replace it. Do not blind-retry — see §1. |
+| `500` | `internal server error` | Anything unmapped. A `23001`, `23514` or `42501` reaching the client arrives here, because those carry no sentinel the API layer can translate. | Read the service log for the underlying SQLSTATE, then §4. A `23001` or `42501` means something attempted a write the immutability lock or the grant matrix forbids, which is a bug, not an operator error. |
+
+For failures seen directly in `psql` rather than through the API, the SQLSTATE tables in
+§4 are the lookup: `23001` (immutability, no constraint name — match the message text),
+`23514` and `23505` (both carry a constraint name), and `42501` (a missing grant, which
+fires *before* any trigger).

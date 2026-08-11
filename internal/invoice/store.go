@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -1366,7 +1367,9 @@ func canEdit(s Status) bool {
 // property. TestCanRevalidate_AgreesWithThePromotionEdge is the tripwire: it
 // goes red the day such an edge is added, forcing a human decision on whether
 // the gate widens -- so it must be satisfied by this literal being right, never
-// by weakening the test.
+// by weakening the test. Draft-only is also what keeps ApplyValidation's step 5b
+// from double-arming: widening this now requires cancelling the live run first,
+// or the widened path 23505s on approval_runs_one_open.
 func canRevalidate(s Status) bool { return s == StatusDraft }
 
 // canSubmit is a deliberate literal, not canTransition(s, StatusQueued):
@@ -1655,6 +1658,7 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 //     is exactly what makes the verdict auditable).
 //  5. promote via transitionTx iff nothing blocks — the same tx, hence the
 //     extraction.
+//     5b. arm the approval run on that promotion (approval.ArmTx), same tx.
 //  6. audit.Record("invoice.validated") — every gate outcome writes it; a
 //     promotion additionally wrote "invoice.transitioned" in step 5.
 //
@@ -1743,6 +1747,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 		if !blocked {
 			var err error
 			if inv, err = transitionTx(ctx, tx, id, StatusDraft, StatusValidated, actorFromContext(ctx)); err != nil {
+				return err
+			}
+			// 5b. Armed inside the one !blocked gate so a second gate cannot drift.
+			// No active policy short-circuits in ArmTx; a 23505 here means a live run
+			// survived a demotion (APPR-06-07 cancels), so it is not swallowed.
+			if _, err := approval.ArmTx(ctx, tx, callerID.TenantID, id, evaluatedFingerprint, callerID.Subject); err != nil {
 				return err
 			}
 		}

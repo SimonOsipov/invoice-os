@@ -153,6 +153,11 @@ func sealApprovalPolicyVersion(t *testing.T, super *pgxpool.Pool, versionID stri
 // = 'replica', tx-scoped) and deletes them bottom-up explicitly, then deletes the tenant
 // OUTSIDE that override on a normal connection — inside it the CASCADE would not fire and the
 // children would orphan instead of being removed (measured on PG 18.4, design doc §6.4).
+//
+// approval_run_steps/approval_runs lead the list (APPR-06): approval_runs_tenant_invoice_fk
+// is RESTRICT, so a run outliving its steps' delete would block invoices/business_entities
+// below it (task-480 architecture-validation evidence). Not reproduced against a real fixture
+// as of this writing — added as insurance against RI-trigger ordering, not a proven leak.
 func teardownSealedApprovalFixture(t *testing.T, super *pgxpool.Pool, tenantID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -167,7 +172,7 @@ func teardownSealedApprovalFixture(t *testing.T, super *pgxpool.Pool, tenantID s
 		_ = tx.Rollback(ctx)
 		return
 	}
-	for _, table := range []string{"approval_policy_steps", "approval_policy_versions", "approval_policies"} {
+	for _, table := range []string{"approval_run_steps", "approval_runs", "approval_policy_steps", "approval_policy_versions", "approval_policies"} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
 			t.Errorf("teardown sealed fixture %s: delete %s: %v", tenantID, table, err)
 			_ = tx.Rollback(ctx)

@@ -16,10 +16,12 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -677,5 +679,397 @@ func TestArm_WritesOneAuditRowWithSummaryPayload(t *testing.T) {
 	}
 	if gotSteps, ok := body["steps"].(float64); !ok || int(gotSteps) != res.Steps {
 		t.Errorf("payload steps = %v, want %d", body["steps"], res.Steps)
+	}
+}
+
+// --- APPR-06-05 AC-1,3,4,5: autoapprove settles every step and closes the run -------
+
+// TestArm_AutoApproveSettlesEveryStepAndClosesTheRun pins polH1's own autoapprove
+// shape (engine_test.go's polH1, at ₦750,000,000 — the same tree and total as
+// TestMaterialise_LinearPassMatchesSimulate's "polH1 @750,000,000" case): both
+// approval steps sit BEFORE the autoapprove in emission order, so this is D15's other
+// direction from TestArm_OrdDensityAcrossMixedKinds, where the autoapprove sits after
+// a root approval reached through a different lane.
+func TestArm_AutoApproveSettlesEveryStepAndClosesTheRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-autoapprove-settles-run")
+	entityID := seedBusinessEntity(t, super, tenantID, "Autoapprove Settles Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "autoapprove-settles-invoice-1")
+	setInvoiceTotal(t, super, invoiceID, "750000000.00")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "polH1 shape")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("line_mgr"), SLAHours: ptr(48),
+	})
+	condA := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 1, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("500000000.00"),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condA, Branch: ptr("then"), Ord: 0,
+		Kind: "approval", WorkflowRoleKey: ptr("fin_dir"), SLAHours: ptr(48),
+	})
+	condB := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 2, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("1000000000.00"),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condB, Branch: ptr("then"), Ord: 0,
+		Kind: "approval", WorkflowRoleKey: ptr("cfo"), SLAHours: ptr(72),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		ParentStepID: &condB, Branch: ptr("else"), Ord: 0,
+		Kind: "autoapprove",
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 3, Kind: "notify", NotifyTarget: ptr("Tax Team"), NotifyChannel: ptr("In-app"),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-autoapprove-settles", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	// Guard first: every index below is vacuous unless exactly the four materialised
+	// steps landed (₦750m takes condA's then and condB's else).
+	if res.Steps != 4 {
+		t.Fatalf("Steps = %d, want 4", res.Steps)
+	}
+	if !res.Closed {
+		t.Error("Closed = false, want true")
+	}
+
+	run := oneApprovalRun(t, super, invoiceID)
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 4 {
+		t.Fatalf("runStepsOf = %d rows, want 4", len(steps))
+	}
+	lineMgr, finDir, auto, notify := steps[0], steps[1], steps[2], steps[3]
+
+	if lineMgr.Kind != "approval" || lineMgr.State != "skipped" {
+		t.Errorf("steps[0] (line_mgr) = %+v, want kind approval, state skipped", lineMgr)
+	}
+	if finDir.Kind != "approval" || finDir.State != "skipped" {
+		t.Errorf("steps[1] (fin_dir) = %+v, want kind approval, state skipped", finDir)
+	}
+	if auto.Kind != "autoapprove" || auto.State != "satisfied" {
+		t.Fatalf("steps[2] (autoapprove) = %+v, want kind autoapprove, state satisfied", auto)
+	}
+	if auto.SatisfiedAt == nil {
+		t.Error("autoapprove step satisfied_at is NULL, want non-NULL")
+	}
+	if auto.SatisfiedBy == nil || *auto.SatisfiedBy != "system" {
+		t.Errorf("autoapprove step satisfied_by = %v, want \"system\"", auto.SatisfiedBy)
+	}
+	if notify.Kind != "notify" || notify.State != "skipped" {
+		t.Errorf("steps[3] (notify) = %+v, want kind notify, state skipped", notify)
+	}
+	if notify.NotifyTarget == nil || *notify.NotifyTarget != "Tax Team" {
+		t.Errorf("notify_target = %v, want \"Tax Team\"", notify.NotifyTarget)
+	}
+	if notify.NotifyChannel == nil || *notify.NotifyChannel != "In-app" {
+		t.Errorf("notify_channel = %v, want \"In-app\"", notify.NotifyChannel)
+	}
+
+	if run.State != "approved" {
+		t.Errorf("run.State = %q, want approved", run.State)
+	}
+	if run.ClosedAt == nil {
+		t.Error("run.ClosedAt is NULL, want non-NULL")
+	}
+	if run.ClosedBy == nil || *run.ClosedBy != "system" {
+		t.Errorf("run.ClosedBy = %v, want \"system\"", run.ClosedBy)
+	}
+}
+
+// --- APPR-06-05 AC-2: closure is one rule, not two branches --------------------------
+
+// TestArm_ClosureIsOneRuleNotTwoBranches (D34) pins that the run's closed/approved
+// state comes from ONE predicate reading step states, never from a second branch keyed
+// on `auto` directly. Three legs, each its own tenant (approval_policy_versions_one_active
+// forbids two active versions sharing a tenant): (a) an autoapprove policy closes the
+// run; (b) a notify-only policy closes it too, even though auto is false — an
+// `if auto { close }` implementation fails ONLY this leg; (c) one staffed approval step
+// leaves the run open — the control that rules out a `len(steps)==0` implementation,
+// which would also pass leg (b) by accident.
+func TestArm_ClosureIsOneRuleNotTwoBranches(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	assertClosure := func(t *testing.T, invoiceID, wantState string, wantClosed bool) {
+		t.Helper()
+		run := oneApprovalRun(t, super, invoiceID)
+		if run.State != wantState {
+			t.Errorf("run.State = %q, want %q", run.State, wantState)
+		}
+		if wantClosed {
+			if run.ClosedAt == nil {
+				t.Error("run.ClosedAt is NULL, want non-NULL")
+			}
+			if run.ClosedBy == nil || *run.ClosedBy != "system" {
+				t.Errorf("run.ClosedBy = %v, want \"system\"", run.ClosedBy)
+			}
+		} else {
+			if run.ClosedAt != nil {
+				t.Errorf("run.ClosedAt = %v, want NULL", run.ClosedAt)
+			}
+			if run.ClosedBy != nil {
+				t.Errorf("run.ClosedBy = %v, want NULL", run.ClosedBy)
+			}
+		}
+	}
+
+	t.Run("leg a: an autoapprove policy closes the run", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-06 closure-leg-a-autoapprove")
+		entityID := seedBusinessEntity(t, super, tenantID, "Closure Leg A Corp")
+		invoiceID := seedInvoice(t, super, tenantID, entityID, "closure-leg-a-invoice")
+		setInvoiceTotal(t, super, invoiceID, "750000000.00")
+
+		policyID := seedApprovalPolicy(t, super, tenantID, "Leg A policy")
+		versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("line_mgr"), SLAHours: ptr(48),
+		})
+		condA := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			Ord: 1, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("500000000.00"),
+		})
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			ParentStepID: &condA, Branch: ptr("then"), Ord: 0,
+			Kind: "approval", WorkflowRoleKey: ptr("fin_dir"), SLAHours: ptr(48),
+		})
+		condB := seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			Ord: 2, Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("1000000000.00"),
+		})
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			ParentStepID: &condB, Branch: ptr("then"), Ord: 0,
+			Kind: "approval", WorkflowRoleKey: ptr("cfo"), SLAHours: ptr(72),
+		})
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			ParentStepID: &condB, Branch: ptr("else"), Ord: 0,
+			Kind: "autoapprove",
+		})
+		activateApprovalPolicyVersion(t, super, versionID)
+
+		if _, err := arm(t, app, tenantID, invoiceID, "fp-closure-leg-a", "test-actor"); err != nil {
+			t.Fatalf("ArmTx: %v", err)
+		}
+		assertClosure(t, invoiceID, "approved", true)
+	})
+
+	t.Run("leg b: a notify-only policy closes the run even though auto is false", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-06 closure-leg-b-notify-only")
+		entityID := seedBusinessEntity(t, super, tenantID, "Closure Leg B Corp")
+		invoiceID := seedInvoice(t, super, tenantID, entityID, "closure-leg-b-invoice")
+
+		policyID := seedApprovalPolicy(t, super, tenantID, "Leg B policy")
+		versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			Ord: 0, Kind: "notify", NotifyTarget: ptr("Tax Team"), NotifyChannel: ptr("In-app"),
+		})
+		activateApprovalPolicyVersion(t, super, versionID)
+
+		if _, err := arm(t, app, tenantID, invoiceID, "fp-closure-leg-b", "test-actor"); err != nil {
+			t.Fatalf("ArmTx: %v", err)
+		}
+		assertClosure(t, invoiceID, "approved", true)
+	})
+
+	t.Run("leg c: one staffed approval step leaves the run open", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-06 closure-leg-c-staffed")
+		entityID := seedBusinessEntity(t, super, tenantID, "Closure Leg C Corp")
+		invoiceID := seedInvoice(t, super, tenantID, entityID, "closure-leg-c-invoice")
+
+		roleID := seedWorkflowRole(t, super, tenantID, "leg-c-role", "Leg C Role")
+		adminID := uuid.NewString()
+		seedMembership(t, super, tenantID, adminID, "admin", "active")
+		staffWorkflowRole(t, super, tenantID, roleID, adminID, 0)
+
+		policyID := seedApprovalPolicy(t, super, tenantID, "Leg C policy")
+		versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("leg-c-role"), SLAHours: ptr(48),
+		})
+		activateApprovalPolicyVersion(t, super, versionID)
+
+		if _, err := arm(t, app, tenantID, invoiceID, "fp-closure-leg-c", "test-actor"); err != nil {
+			t.Fatalf("ArmTx: %v", err)
+		}
+		assertClosure(t, invoiceID, "open", false)
+	})
+}
+
+// --- APPR-06-05 AC-6,7: unsignable roles still arm pending, arming computes no blockedness
+
+// TestArm_UnsignableRolesStillArmPending: four workflow roles in one tenant —
+// ceo_none (zero holders), cfo_susp (sole holder suspended), prep_only (sole holder
+// active but role='preparer'), fin_dir_ok (sole holder active admin, Q1's signable
+// control) — named by one version's four root approval steps, in that order. The
+// fixture read-back BEFORE arming proves holder counts 0/1/1/1 and each holder's
+// stored role+status, so the four legs cannot silently collapse into one shape and
+// pass for the wrong reason. All four must arm identically — pending, run open, zero
+// approval_decisions rows — because arming computes no blockedness (AC-7): the
+// signable role's step is written exactly like the three unsignable ones.
+func TestArm_UnsignableRolesStillArmPending(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-unsignable-roles-pending")
+	entityID := seedBusinessEntity(t, super, tenantID, "Unsignable Roles Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "unsignable-roles-invoice-1")
+
+	seedWorkflowRole(t, super, tenantID, "ceo_none", "CEO (zero holders)")
+
+	cfoSuspID := seedWorkflowRole(t, super, tenantID, "cfo_susp", "CFO (suspended holder)")
+	cfoUserID := uuid.NewString()
+	seedMembership(t, super, tenantID, cfoUserID, "admin", "suspended")
+	staffWorkflowRole(t, super, tenantID, cfoSuspID, cfoUserID, 0)
+
+	prepOnlyID := seedWorkflowRole(t, super, tenantID, "prep_only", "Preparer-only holder")
+	prepUserID := uuid.NewString()
+	seedMembership(t, super, tenantID, prepUserID, "preparer", "active")
+	staffWorkflowRole(t, super, tenantID, prepOnlyID, prepUserID, 0)
+
+	finDirOkID := seedWorkflowRole(t, super, tenantID, "fin_dir_ok", "Fin Dir (signable control)")
+	finDirUserID := uuid.NewString()
+	seedMembership(t, super, tenantID, finDirUserID, "admin", "active")
+	staffWorkflowRole(t, super, tenantID, finDirOkID, finDirUserID, 0)
+
+	// Fixture assertion BEFORE arming: holder counts 0/1/1/1 and each holder's stored
+	// role+status, read back as one query ordered by role key.
+	type holder struct{ RoleKey, Role, Status string }
+	rows, err := super.Query(context.Background(),
+		`SELECT r.key, m.role, m.status
+		   FROM workflow_roles r
+		   JOIN workflow_role_members wrm ON wrm.workflow_role_id = r.id
+		   JOIN memberships m ON m.tenant_id = wrm.tenant_id AND m.user_id = wrm.user_id
+		  WHERE r.tenant_id = $1
+		  ORDER BY r.key`, tenantID)
+	if err != nil {
+		t.Fatalf("read back fixture holders: %v", err)
+	}
+	var holders []holder
+	for rows.Next() {
+		var h holder
+		if err := rows.Scan(&h.RoleKey, &h.Role, &h.Status); err != nil {
+			t.Fatalf("scan holder: %v", err)
+		}
+		holders = append(holders, h)
+	}
+	rows.Close()
+	wantHolders := []holder{
+		{"cfo_susp", "admin", "suspended"},
+		{"fin_dir_ok", "admin", "active"},
+		{"prep_only", "preparer", "active"},
+	}
+	if !reflect.DeepEqual(holders, wantHolders) {
+		t.Fatalf("fixture holders = %+v, want %+v (ceo_none has none; the other three exactly one each)", holders, wantHolders)
+	}
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Unsignable roles policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("ceo_none"), SLAHours: ptr(24),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 1, Kind: "approval", WorkflowRoleKey: ptr("cfo_susp"), SLAHours: ptr(24),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 2, Kind: "approval", WorkflowRoleKey: ptr("prep_only"), SLAHours: ptr(24),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 3, Kind: "approval", WorkflowRoleKey: ptr("fin_dir_ok"), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-unsignable-roles", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if res.Steps != 4 {
+		t.Fatalf("Steps = %d, want 4", res.Steps)
+	}
+	if res.Closed {
+		t.Error("Closed = true, want false — arming computes no blockedness, all four steps are pending")
+	}
+
+	run := oneApprovalRun(t, super, invoiceID)
+	if run.State != "open" {
+		t.Errorf("run.State = %q, want open", run.State)
+	}
+	if run.ClosedBy != nil {
+		t.Errorf("run.ClosedBy = %v, want NULL", run.ClosedBy)
+	}
+
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 4 {
+		t.Fatalf("runStepsOf = %d rows, want 4", len(steps))
+	}
+	wantKeys := []string{"ceo_none", "cfo_susp", "prep_only", "fin_dir_ok"}
+	for i, want := range wantKeys {
+		if steps[i].State != "pending" {
+			t.Errorf("steps[%d] (%s) state = %q, want pending — the signable role must be written identically to the unsignable ones", i, want, steps[i].State)
+		}
+		if steps[i].WorkflowRoleKey == nil || *steps[i].WorkflowRoleKey != want {
+			t.Errorf("steps[%d].WorkflowRoleKey = %v, want %q", i, steps[i].WorkflowRoleKey, want)
+		}
+	}
+
+	if n := rowCount(t, super, "approval_decisions", tenantID); n != 0 {
+		t.Errorf("approval_decisions rows = %d, want 0", n)
+	}
+}
+
+// --- APPR-06-05 AC-6: a soft-deleted role still arms pending -------------------------
+
+// TestArm_SoftDeletedRoleStillArmsPending: a role sealed into a policy step while
+// live, then soft-deleted before the arm — the step is still pending, its
+// workflow_role_key byte-identical to the seeded key, the run stays open.
+// TestApprovalSteps_DeletedRoleKeyResolvesToBlocked already pins that the key
+// "resolves to blocked at read time, not here"; this is the arm-time half of that
+// posture — arming itself does no role lookup at all.
+func TestArm_SoftDeletedRoleStillArmsPending(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-soft-deleted-role-pending")
+	entityID := seedBusinessEntity(t, super, tenantID, "Soft Deleted Role Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "soft-deleted-role-invoice-1")
+
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Soft-deleted role policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("tax-reviewer"), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID) // sealed + activated while the role is still live
+
+	softDeleteWorkflowRole(t, super, roleID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-soft-deleted-role", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if res.Steps != 1 {
+		t.Fatalf("Steps = %d, want 1", res.Steps)
+	}
+	if res.Closed {
+		t.Error("Closed = true, want false — the approval step is pending")
+	}
+
+	run := oneApprovalRun(t, super, invoiceID)
+	if run.State != "open" {
+		t.Errorf("run.State = %q, want open", run.State)
+	}
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 1 {
+		t.Fatalf("runStepsOf = %d rows, want 1", len(steps))
+	}
+	if steps[0].State != "pending" {
+		t.Errorf("step state = %q, want pending", steps[0].State)
+	}
+	if steps[0].WorkflowRoleKey == nil || *steps[0].WorkflowRoleKey != "tax-reviewer" {
+		t.Errorf("step workflow_role_key = %v, want \"tax-reviewer\" byte-identical to the seeded key", steps[0].WorkflowRoleKey)
+	}
+
+	// Re-read the role's own deleted_at, so this case cannot silently become "role
+	// still live".
+	after := roleRow(t, super, roleID)
+	if after.DeletedAt == nil {
+		t.Fatal("workflow_roles.deleted_at is NULL after softDeleteWorkflowRole, want non-NULL")
 	}
 }

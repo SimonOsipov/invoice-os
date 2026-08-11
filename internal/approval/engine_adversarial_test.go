@@ -592,3 +592,64 @@ func TestArm_OrdDensityAcrossMixedKinds(t *testing.T) {
 		t.Errorf("run.State = %q, Closed = %v, want approved/true — no approval step is left pending", run.State, res.Closed)
 	}
 }
+
+// --- APPR-06-05 AC-6: an empty (NULL and "") role key still arms pending -------------
+
+// TestArm_EmptyRoleKeyStillArmsPending: two approval steps, one with a NULL
+// workflow_role_key and one with "". Neither carries a CHECK
+// (approval_policy_steps and approval_run_steps both leave the column plain nullable
+// text), so both are seedable, and both must arm pending — arming does no role lookup
+// at all. The stored keys must round-trip distinctly: NULL stays NULL, "" stays "",
+// mirroring the NULL-vs-0 sla_hours discipline at arm_test.go's due-at spec.
+func TestArm_EmptyRoleKeyStillArmsPending(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 arm-empty-role-key-pending")
+	entityID := seedBusinessEntity(t, super, tenantID, "Empty Role Key Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "empty-role-key-invoice-1")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Empty role key policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: nil, SLAHours: ptr(24),
+	})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 1, Kind: "approval", WorkflowRoleKey: ptr(""), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-empty-role-key", "test-actor")
+	if err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if res.Steps != 2 {
+		t.Fatalf("Steps = %d, want 2", res.Steps)
+	}
+	if res.Closed {
+		t.Error("Closed = true, want false — both approval steps are pending")
+	}
+
+	run := oneApprovalRun(t, super, invoiceID)
+	if run.State != "open" {
+		t.Errorf("run.State = %q, want open", run.State)
+	}
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 2 {
+		t.Fatalf("runStepsOf = %d rows, want 2", len(steps))
+	}
+
+	if steps[0].State != "pending" {
+		t.Errorf("steps[0] (NULL key) state = %q, want pending — neither satisfied nor skipped", steps[0].State)
+	}
+	if steps[0].WorkflowRoleKey != nil {
+		t.Errorf("steps[0].WorkflowRoleKey = %q, want NULL, not '' — NULL and '' are distinct stored rows", *steps[0].WorkflowRoleKey)
+	}
+
+	if steps[1].State != "pending" {
+		t.Errorf("steps[1] ('' key) state = %q, want pending — neither satisfied nor skipped", steps[1].State)
+	}
+	if steps[1].WorkflowRoleKey == nil {
+		t.Error("steps[1].WorkflowRoleKey is NULL, want '', not NULL")
+	} else if *steps[1].WorkflowRoleKey != "" {
+		t.Errorf("steps[1].WorkflowRoleKey = %q, want ''", *steps[1].WorkflowRoleKey)
+	}
+}

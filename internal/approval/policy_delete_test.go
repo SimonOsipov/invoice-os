@@ -283,7 +283,7 @@ func TestDeletePolicy_UnpublishedPolicyKeepsItsDraft(t *testing.T) {
 
 // TestDeletePolicy_AnswersEmptyCollections: a policy that HAS both still answers steps: []
 // and versions: [] — never nil, and never the content the rows still hold. A deleted policy
-// has no addressable content (the DeleteRole precedent, store.go:309-312).
+// has no addressable content (the Store.DeleteRole precedent).
 func TestDeletePolicy_AnswersEmptyCollections(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 delete-empty-collections")
@@ -325,7 +325,7 @@ func TestDeletePolicy_AnswersEmptyCollections(t *testing.T) {
 //
 // The join includes the DEACTIVATED version row, which is only valid on a PUBLISHED
 // fixture: on a never-published policy the delete writes no version row at all and its
-// xmin is still the seed's, exactly the trap policy_publish_test.go:594 documents. v1 is
+// xmin is still the seed's, exactly the trap TestPublish_AuditsInSameTx documents. v1 is
 // sealed but inactive, so it is untouched and deliberately outside the join.
 func TestDeletePolicy_AuditsInSameTx(t *testing.T) {
 	super, app := dbTestPools(t)

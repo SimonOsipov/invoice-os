@@ -173,16 +173,30 @@ the seal back — a sealed version without its audit row cannot exist.
 
 ## 2. A tenant with no active policy
 
-**Every invoice transmits as soon as it validates.** Approval policies do not
-participate in the transmit path at all. The only gates on transmission are the two
-capability checks that guard the two ways an invoice can be transmitted — the
-single-invoice `TransitionHandler` (`internal/invoice/handlers.go:669`) and the batch
-`BatchSubmitHandler` (`:1124`, behind `POST /v1/invoices/submissions`). Both apply the
-same `isApprover` test, admitting an `admin` or a `reviewer` and refusing a `preparer`
-with the same message. No production code path
-anywhere reads `approval_runs`, `approval_run_steps` or `approval_decisions` — the three
-tables are referenced only by the test-database reset list and by tests — and
-`approval_policy_versions` is read only by the policy endpoints themselves.
+**Approval policies add no transmission gate today.** They do not participate in the
+transmit path at all. The gates that already existed are unmoved: the invoice must be
+`validated`, and the caller must pass the capability check on whichever of the two ways
+an invoice can be transmitted it takes — the single-invoice `TransitionHandler`
+(`internal/invoice/handlers.go:669`) and the batch `BatchSubmitHandler` (`:1124`, behind
+`POST /v1/invoices/submissions`). Both apply the same `isApprover` test, admitting an
+`admin` or a `reviewer` and refusing a `preparer` with `403` and the same message — with
+a policy or without one. No production code path anywhere reads `approval_runs`,
+`approval_run_steps` or `approval_decisions` — the three tables are referenced only by
+the test-database reset list and by tests — and `approval_policy_versions` is read only
+by the policy endpoints themselves.
+
+The SPA's empty state is the product wording for that, and it is talking about the
+*approval* gate rather than about who may transmit:
+
+> No approval policies yet — every invoice transmits as soon as it validates. Create
+> one to require sign-off first.
+>
+> — `frontend/app/src/components/WorkflowsView.tsx`
+
+Read as a claim about callers it over-promises: a `preparer` never transmits, policy or
+no policy. Read as what it means — *no approval step stands between validation and
+transmission* — it is accurate, and it stays accurate for an active but empty policy
+too (next paragraph). That is why an empty policy is deliberately publishable.
 
 **An active but EMPTY policy behaves identically.** A policy with zero steps is
 publishable, so a tenant can hold an active, sealed, correctly-published version that

@@ -192,6 +192,12 @@ func TestPolicy_CreateInsertsVersionOne(t *testing.T) {
 		t.Errorf("stored deleted_at = %v, want NULL — a new policy is live", *deletedAt)
 	}
 
+	// Counted separately: pgx QueryRow scans the first row and discards the rest,
+	// so a second version row is invisible to the scan below.
+	if n := rowCount(t, super, "approval_policy_versions", tenantID); n != 1 {
+		t.Errorf("version rows = %d, want exactly 1 — create mints one", n)
+	}
+
 	var version int
 	var sealed, isActive bool
 	var publishedAt, publishedBy *string
@@ -199,7 +205,7 @@ func TestPolicy_CreateInsertsVersionOne(t *testing.T) {
 		`SELECT version, sealed, is_active, published_at::text, published_by
 		   FROM approval_policy_versions WHERE tenant_id = $1`,
 		tenantID).Scan(&version, &sealed, &isActive, &publishedAt, &publishedBy); err != nil {
-		t.Fatalf("read back the version row (a second row also fails this scan): %v", err)
+		t.Fatalf("read back the version row: %v", err)
 	}
 	if version != 1 || sealed || isActive {
 		t.Errorf("stored version row = (version %d, sealed %v, is_active %v), want (1, false, false)",

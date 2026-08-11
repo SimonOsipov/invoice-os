@@ -818,11 +818,17 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 func detectionHitAllowed(file, line string) bool {
 	// approval_policy_versions.version is a different version entirely: per-policy,
 	// minted by the policy store, never read from rule_sets. Narrowed to hits that
-	// do not name a rule set, so a genuine rule-set v1 pin written inside
-	// internal/approval/ still trips this guard.
+	// name no rule-set construct, so a genuine rule-set v1 pin written inside
+	// internal/approval/ still trips this guard. loadV1 is on the list because it is
+	// the regex's own third alternative and names no policy construct anywhere.
 	if strings.HasPrefix(file, "internal/approval/") {
 		haystack := strings.ToLower(line)
-		return !strings.Contains(haystack, "ruleset") && !strings.Contains(haystack, "rule_set")
+		for _, ruleSetMarker := range []string{"ruleset", "rule_set", "loadv1"} {
+			if strings.Contains(haystack, ruleSetMarker) {
+				return false
+			}
+		}
+		return true
 	}
 	return strings.HasPrefix(file, "internal/validation/") ||
 		file == "e2e/api/validation.spec.ts" ||
@@ -863,6 +869,8 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`internal/approval/policy_store.go:9:  SELECT id FROM rule_sets WHERE version = 1`, false},
 		{"a camel-case ruleSetVersion pin in approval", "internal/approval/store.go",
 			`internal/approval/store.go:9:  if ruleSetVersion == 1 {`, false},
+		{"the rule-set v1 loader called from approval", "internal/approval/other.go",
+			`internal/approval/other.go:9:  return loadV1(ctx)`, false},
 		{"the same pin in an unrelated package", "internal/invoice/engine.go",
 			`internal/invoice/engine.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a plain version pin in an unrelated package", "internal/submission/worker.go",

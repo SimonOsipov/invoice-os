@@ -14,9 +14,8 @@ import (
 )
 
 // The policy handler seam, declared beside the methods that satisfy it (the
-// store.go:33-47 shape). Only the five implemented so far: a declared-but-unasserted
-// function type is dead code no vet catches, and the delete signature belongs to the
-// subtask that builds it.
+// store.go:33-47 shape). Every type here is asserted against its method: a
+// declared-but-unasserted function type is dead code no vet catches.
 //
 // PutDraft takes []stepInput, not *[]stepInput: presence is the handler's call (a nil
 // pointer is a 400 there), and nil and an empty slice are the same store state.
@@ -27,6 +26,7 @@ type (
 	PolicyCreator   func(ctx context.Context, name, scope string) (Policy, error)
 	PolicyDrafter   func(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error)
 	PolicyPublisher func(ctx context.Context, id string) (Policy, error)
+	PolicyDeleter   func(ctx context.Context, id string) (Policy, error)
 )
 
 var (
@@ -35,6 +35,7 @@ var (
 	_ PolicyCreator   = new(Store).CreatePolicy
 	_ PolicyDrafter   = new(Store).PutDraft
 	_ PolicyPublisher = new(Store).PublishPolicy
+	_ PolicyDeleter   = new(Store).DeletePolicy
 )
 
 // newPolicy is what every read and the create start from: lanes and versions are []
@@ -678,6 +679,14 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		return Policy{}, err
 	}
 	return p, nil
+}
+
+// errDeletePolicyNotImplemented and the stub below hold the seam's shape while
+// policy_delete_test.go runs RED. Both are deleted with the real body.
+var errDeletePolicyNotImplemented = errors.New("approval: DeletePolicy is not implemented")
+
+func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
+	return Policy{}, errDeletePolicyNotImplemented
 }
 
 // stepArrays is the nine columns both INSERT batches share, one slice per column: unnest

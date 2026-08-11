@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // failIfUndefinedApprovalSchema turns the pre-migration failure into an explicit fatal
@@ -392,5 +395,332 @@ func TestApprovalPolicy_ThreeDeepApprovalChainIsAcceptedTodayKnownGap(t *testing
 	}
 	if parentOfLeaf != mid {
 		t.Errorf("leaf's parent_step_id = %q, want %q — the three-deep chain did not persist as inserted", parentOfLeaf, mid)
+	}
+}
+
+// --- soft delete + the one-draft invariant -----------------------------------
+
+// TestApprovalPolicy_DeletedAtColumnExists: invoice_app stamps deleted_at and the row stays
+// readable — a soft delete is an UPDATE on a column the table-wide UPDATE grant already covers.
+func TestApprovalPolicy_DeletedAtColumnExists(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-05 soft-delete")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Soft-delete policy")
+
+	var affected int64
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE approval_policies SET deleted_at = now() WHERE id = $1`, policyID)
+		affected = tag.RowsAffected()
+		return err
+	}); err != nil {
+		t.Fatalf("soft delete as invoice_app: %v", err)
+	}
+	if affected != 1 {
+		t.Fatalf("soft delete affected %d rows, want 1", affected)
+	}
+
+	// Read back as the app role: nothing at the schema level hides a soft-deleted row, so the
+	// filter that eventually hides it is the query's job, not RLS's.
+	var stamped bool
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT deleted_at IS NOT NULL FROM approval_policies WHERE id = $1`, policyID).Scan(&stamped)
+	}); err != nil {
+		t.Fatalf("read back the soft-deleted policy as invoice_app: %v", err)
+	}
+	if !stamped {
+		t.Error("deleted_at IS NULL after the soft delete, want a timestamp")
+	}
+}
+
+// TestApprovalPolicy_OneDraftPerPolicy: a second unsealed version for the same policy is refused
+// by approval_policy_versions_one_draft, which is what makes the draft PUT's "resolve by NOT
+// sealed" unambiguous. version = 2 and the constraint-NAME assertion are both load-bearing:
+// reusing version 1 trips the pre-existing (tenant_id, policy_id, version) key, which raises the
+// same 23505 and leaves the new index unexercised.
+func TestApprovalPolicy_OneDraftPerPolicy(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-05 one-draft")
+	policyID := seedApprovalPolicy(t, super, tenantID, "One-draft policy")
+	seedApprovalPolicyVersion(t, super, tenantID, policyID)
+
+	// Guard: (tenant_id, policy_id, 2) is unoccupied, so the old key cannot be what refuses
+	// the insert below.
+	var clash int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = $1 AND policy_id = $2 AND version = 2`,
+		tenantID, policyID).Scan(&clash); err != nil {
+		t.Fatalf("count existing version-2 rows: %v", err)
+	}
+	if clash != 0 {
+		t.Fatalf("version 2 already exists for this policy (%d rows) — approval_policy_versions_tenant_policy_version_uq, not the new index, would refuse the insert", clash)
+	}
+
+	_, err := super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 2)`,
+		tenantID, policyID)
+	if err == nil {
+		t.Fatal("second unsealed version for the same policy succeeded, want unique_violation (SQLSTATE 23505)")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("second unsealed version: SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != "approval_policy_versions_one_draft" {
+		t.Errorf("constraint = %q, want %q", name, "approval_policy_versions_one_draft")
+	}
+
+	var unsealed int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = $1 AND policy_id = $2 AND NOT sealed`,
+		tenantID, policyID).Scan(&unsealed); err != nil {
+		t.Fatalf("count unsealed versions: %v", err)
+	}
+	if unsealed != 1 {
+		t.Errorf("unsealed version count = %d after the refused insert, want 1", unsealed)
+	}
+}
+
+// TestApprovalPolicy_OneDraftIndexAllowsManySealed.
+//
+// POSITIVE CONTROL: the index binds only unsealed rows, so sealing the draft frees the slot and
+// a policy accumulates many sealed versions beside at most one draft. Green before the migration
+// too, and the only spec that catches an index that lost its WHERE clause.
+func TestApprovalPolicy_OneDraftIndexAllowsManySealed(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-05 many-sealed")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Many-sealed policy")
+	v1 := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	// Registered after seedTenant's own cleanup so LIFO runs it first: once a version is sealed
+	// the plain tenant cascade raises 23001 and would leak this tenant forever.
+	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantID) })
+
+	sealApprovalPolicyVersion(t, super, v1)
+
+	var v2 string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 2) RETURNING id`,
+		tenantID, policyID).Scan(&v2); err != nil {
+		t.Fatalf("draft version 2 after sealing version 1: %v, want success", err)
+	}
+	sealApprovalPolicyVersion(t, super, v2)
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 3)`,
+		tenantID, policyID); err != nil {
+		t.Fatalf("draft version 3 after sealing version 2: %v, want success", err)
+	}
+
+	var sealed, unsealed int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE sealed), count(*) FILTER (WHERE NOT sealed)
+		   FROM approval_policy_versions WHERE tenant_id = $1 AND policy_id = $2`,
+		tenantID, policyID).Scan(&sealed, &unsealed); err != nil {
+		t.Fatalf("count versions by seal state: %v", err)
+	}
+	if sealed != 2 || unsealed != 1 {
+		t.Errorf("version counts = %d sealed / %d unsealed, want 2 / 1", sealed, unsealed)
+	}
+}
+
+// TestApprovalPolicy_HardDeleteStillUngranted.
+//
+// POSITIVE CONTROL: invoice_app holds no DELETE grant on approval_policies, so a hard delete
+// fails the privilege check before RLS is even consulted. Green before the migration too — it
+// pins the reason deleted_at has to exist at all, and goes red the day someone grants DELETE.
+func TestApprovalPolicy_HardDeleteStillUngranted(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-05 hard-delete")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Hard-delete policy")
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, execErr := tx.Exec(ctx, `DELETE FROM approval_policies WHERE id = $1`, policyID)
+		return execErr
+	})
+	assertSQLState(t, err, "42501")
+
+	var exists bool
+	if err := super.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM approval_policies WHERE id = $1)`, policyID).Scan(&exists); err != nil {
+		t.Fatalf("check policy survival: %v", err)
+	}
+	if !exists {
+		t.Error("policy no longer exists after the refused DELETE, want present")
+	}
+}
+
+// --- QA adversarial: tenant scope, per-policy keying, soft-delete interaction ---
+
+// TestApprovalPolicy_SoftDeleteIsTenantScoped: a soft delete is an UPDATE, so RLS — not a grant —
+// is the only thing between tenant B and tenant A's policy. Tenant B's UPDATE must find no row
+// rather than stamp one.
+func TestApprovalPolicy_SoftDeleteIsTenantScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantA := seedTenant(t, super, "APPR-05 soft-delete scope A")
+	tenantB := seedTenant(t, super, "APPR-05 soft-delete scope B")
+	policyA := seedApprovalPolicy(t, super, tenantA, "Tenant A policy")
+
+	var visible, affected int64
+	if err := db.WithinTenantTx(ctx, app, tenantB, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM approval_policies WHERE id = $1`, policyA).Scan(&visible); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE approval_policies SET deleted_at = now() WHERE id = $1`, policyA)
+		affected = tag.RowsAffected()
+		return err
+	}); err != nil {
+		t.Fatalf("tenant B attempts tenant A's policy: %v", err)
+	}
+	if visible != 0 {
+		t.Errorf("tenant A's policy is visible to tenant B (%d rows), want 0", visible)
+	}
+	if affected != 0 {
+		t.Errorf("tenant B soft-deleted %d of tenant A's policies, want 0", affected)
+	}
+
+	var stamped bool
+	if err := super.QueryRow(ctx,
+		`SELECT deleted_at IS NOT NULL FROM approval_policies WHERE id = $1`, policyA).Scan(&stamped); err != nil {
+		t.Fatalf("read back tenant A's policy: %v", err)
+	}
+	if stamped {
+		t.Error("tenant A's policy carries a deleted_at after tenant B's UPDATE, want NULL")
+	}
+
+	// Control: the identical statement under tenant A's own context does stamp the row, so the
+	// zero above is RLS and not a broken UPDATE.
+	var owned int64
+	if err := db.WithinTenantTx(ctx, app, tenantA, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE approval_policies SET deleted_at = now() WHERE id = $1`, policyA)
+		owned = tag.RowsAffected()
+		return err
+	}); err != nil {
+		t.Fatalf("control: tenant A soft-deletes its own policy: %v", err)
+	}
+	if owned != 1 {
+		t.Errorf("control: tenant A's own soft delete affected %d rows, want 1", owned)
+	}
+}
+
+// TestApprovalPolicy_OneDraftIsPerPolicyNotPerTenant: the index is keyed (tenant_id, policy_id),
+// unlike approval_policy_versions_one_active which is (tenant_id) alone. Draft resolution in the
+// CRUD path is per policy, so an index that borrowed the one_active shape would cap a whole
+// tenant at one draft and break it. The closing refusal stops this passing vacuously against a
+// database with no one_draft index at all.
+func TestApprovalPolicy_OneDraftIsPerPolicyNotPerTenant(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-05 per-policy draft")
+	policyOne := seedApprovalPolicy(t, super, tenantID, "First policy")
+	policyTwo := seedApprovalPolicy(t, super, tenantID, "Second policy")
+
+	seedApprovalPolicyVersion(t, super, tenantID, policyOne)
+	seedApprovalPolicyVersion(t, super, tenantID, policyTwo)
+
+	var drafts, policiesWithDraft int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*), count(DISTINCT policy_id) FROM approval_policy_versions
+		   WHERE tenant_id = $1 AND NOT sealed`, tenantID).Scan(&drafts, &policiesWithDraft); err != nil {
+		t.Fatalf("count drafts: %v", err)
+	}
+	if drafts != 2 || policiesWithDraft != 2 {
+		t.Errorf("tenant holds %d drafts across %d policies, want 2 across 2", drafts, policiesWithDraft)
+	}
+
+	// Same tenant, same policy: still refused. Version 3 is unoccupied, so the pre-existing
+	// (tenant_id, policy_id, version) key cannot be what fires.
+	_, err := super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 3)`,
+		tenantID, policyOne)
+	if err == nil {
+		t.Fatal("a second draft on the same policy succeeded, want 23505 — the index is not enforcing per policy")
+	}
+	if name := pgConstraint(err); name != "approval_policy_versions_one_draft" {
+		t.Errorf("constraint = %q, want %q", name, "approval_policy_versions_one_draft")
+	}
+}
+
+// TestApprovalPolicy_SoftDeleteDoesNotFreeTheDraftSlot: deleted_at and one_draft are independent.
+// A soft-deleted policy keeps its draft and still refuses a second one — the CRUD path cannot
+// treat a soft delete as a way to start over.
+func TestApprovalPolicy_SoftDeleteDoesNotFreeTheDraftSlot(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-05 deleted draft slot")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Soft-deleted policy with a draft")
+	draftID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, execErr := tx.Exec(ctx, `UPDATE approval_policies SET deleted_at = now() WHERE id = $1`, policyID)
+		return execErr
+	}); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	_, err := super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 2)`,
+		tenantID, policyID)
+	if err == nil {
+		t.Fatal("a second draft on a soft-deleted policy succeeded, want 23505")
+	}
+	if name := pgConstraint(err); name != "approval_policy_versions_one_draft" {
+		t.Errorf("constraint = %q, want %q", name, "approval_policy_versions_one_draft")
+	}
+
+	var survives, stamped bool
+	if err := super.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM approval_policy_versions WHERE id = $1),
+		        (SELECT deleted_at IS NOT NULL FROM approval_policies WHERE id = $2)`,
+		draftID, policyID).Scan(&survives, &stamped); err != nil {
+		t.Fatalf("read back draft and policy: %v", err)
+	}
+	if !survives {
+		t.Error("the draft vanished when its policy was soft-deleted, want it retained")
+	}
+	if !stamped {
+		t.Error("deleted_at is NULL after the soft delete, want a timestamp")
+	}
+}
+
+// TestApprovalPolicy_DeletedAtIsNullableWithNoDefault: nothing writes deleted_at implicitly. A
+// DEFAULT now() or a NOT NULL would soft-delete every policy the moment it is created.
+func TestApprovalPolicy_DeletedAtIsNullableWithNoDefault(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	var dataType, isNullable string
+	var columnDefault *string
+	if err := super.QueryRow(ctx,
+		`SELECT data_type, is_nullable, column_default FROM information_schema.columns
+		   WHERE table_schema = 'public' AND table_name = 'approval_policies' AND column_name = 'deleted_at'`,
+	).Scan(&dataType, &isNullable, &columnDefault); err != nil {
+		t.Fatalf("read deleted_at from the catalog: %v", err)
+	}
+	if dataType != "timestamp with time zone" {
+		t.Errorf("deleted_at type = %q, want %q", dataType, "timestamp with time zone")
+	}
+	if isNullable != "YES" {
+		t.Errorf("deleted_at is_nullable = %q, want YES", isNullable)
+	}
+	if columnDefault != nil {
+		t.Errorf("deleted_at column_default = %q, want none", *columnDefault)
+	}
+
+	tenantID := seedTenant(t, super, "APPR-05 deleted_at default")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Freshly created policy")
+	seedApprovalPolicyVersion(t, super, tenantID, policyID)
+
+	var stamped bool
+	if err := super.QueryRow(ctx,
+		`SELECT deleted_at IS NOT NULL FROM approval_policies WHERE id = $1`, policyID).Scan(&stamped); err != nil {
+		t.Fatalf("read back the fresh policy: %v", err)
+	}
+	if stamped {
+		t.Error("a freshly created policy already carries a deleted_at, want NULL")
 	}
 }

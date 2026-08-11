@@ -180,6 +180,17 @@ func main() {
 	app.Mux.HandleFunc("DELETE /v1/workflow-roles/{key}", approval.DeleteRoleHandler(roleStore.DeleteRole, app.Logger))
 	app.Mux.HandleFunc("PUT /v1/workflow-roles/{key}/members", approval.SetRoleMembersHandler(roleStore.SetRoleMembers, app.Logger))
 
+	// /v1/approval-policies... -- Settings > Workflows: the policy drafts and the
+	// publish-as-seal. roleStore is named for its first use, not its only one: the
+	// policy methods hang off the same *approval.Store. Writes are admin-only inside
+	// the store, so no route here carries a role gate either.
+	app.Mux.HandleFunc("GET /v1/approval-policies", approval.ListPoliciesHandler(roleStore.ListPolicies, app.Logger))
+	app.Mux.HandleFunc("POST /v1/approval-policies", approval.CreatePolicyHandler(roleStore.CreatePolicy, app.Logger))
+	app.Mux.HandleFunc("GET /v1/approval-policies/{id}", approval.GetPolicyHandler(roleStore.GetPolicy, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/approval-policies/{id}/draft", approval.PutDraftHandler(roleStore.PutDraft, app.Logger))
+	app.Mux.HandleFunc("POST /v1/approval-policies/{id}/publish", approval.PublishPolicyHandler(roleStore.PublishPolicy, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/approval-policies/{id}", approval.DeletePolicyHandler(roleStore.DeletePolicy, app.Logger))
+
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this
 	// service only ever enqueues submission_submit jobs via the transactional outbox

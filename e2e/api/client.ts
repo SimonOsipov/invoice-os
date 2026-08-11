@@ -610,3 +610,118 @@ export function staffWorkflowRole(token: string, key: string, members: string[])
     token,
   })
 }
+
+// ---- Approval-policy wire types, mirrored from internal/approval/policy.go's
+// Step/PolicyVersion/Policy (:17-80). No omitempty on ANY field, and Step/Policy both
+// carry a value-receiver MarshalJSON substituting [] for a nil lane -- so `steps`,
+// `versions`, `then` and `else` are always arrays, and `published_at`/`published_by` are
+// an explicit null rather than absent. Key sets: Policy 8, Step 10, PolicyVersion 5. ----
+
+export interface ApprovalStep {
+  // A server-minted uuid, re-minted on EVERY PUT draft (flattenSteps) -- never assert a value.
+  id: string
+  kind: 'approval' | 'condition' | 'notify' | 'autoapprove'
+  workflow_role_key: string | null
+  sla_hours: number | null
+  cond_op: '>' | '>=' | '<' | '<=' | null
+  cond_amount: string | null // numeric(14,2) read via ::text, so the scale survives ('0.00', not '0')
+  notify_target: string | null
+  notify_channel: string | null
+  then: ApprovalStep[] // [] never null
+  else: ApprovalStep[] // [] never null
+}
+
+export interface ApprovalPolicyVersion {
+  version: number
+  sealed: boolean
+  // The active slot is TENANT-wide (approval_policy_versions_one_active ON (tenant_id)):
+  // publishing any policy clears it on whichever version held it.
+  is_active: boolean
+  published_at: string | null // RFC3339Nano, always Z-suffixed; null until published
+  published_by: string | null // the publisher's subject uuid
+}
+
+export interface ApprovalPolicy {
+  id: string
+  name: string
+  scope: string // 'All invoices' is the only value normalizeScope accepts today
+  status: 'draft' | 'published' // derived from the TOP version's `sealed`
+  version: number // the version `steps` belongs to = the HIGHEST version
+  sealed: boolean
+  steps: ApprovalStep[] // the TOP version's tree, which is NOT necessarily the active one
+  versions: ApprovalPolicyVersion[] // ORDER BY version DESC, newest first
+}
+
+export interface ApprovalPoliciesResponse {
+  approval_policies: ApprovalPolicy[]
+}
+
+// stepInput (policy.go:83-93) declares NO id field, so a client-supplied one is dropped
+// at decode -- which is why this request type has none either.
+export interface ApprovalStepInput {
+  kind: string
+  workflow_role_key?: string | null
+  sla_hours?: number | null
+  cond_op?: string | null
+  cond_amount?: string | null
+  notify_target?: string | null
+  notify_channel?: string | null
+  then?: ApprovalStepInput[]
+  else?: ApprovalStepInput[]
+}
+
+export interface ApprovalPolicyCreateInput {
+  name: string
+  scope?: string // absent means the default scope, not a value
+}
+
+export interface ApprovalPolicyDraftInput {
+  name?: string
+  scope?: string
+  steps: ApprovalStepInput[] // required: a whole-tree replace, never a merge
+}
+
+// listApprovalPolicies(): GET /v1/approval-policies -- a flat list, no pagination
+// envelope. Ungated by design: any caller holding a tenant claim may read it.
+export function listApprovalPolicies(token: string): Promise<ApprovalPoliciesResponse> {
+  return apiFetch<ApprovalPoliciesResponse>(`${apiBase()}/api/invoice/v1/approval-policies`, { token })
+}
+
+export function getApprovalPolicy(token: string, id: string): Promise<ApprovalPolicy> {
+  return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies/${id}`, { token })
+}
+
+// createApprovalPolicy(): POST /v1/approval-policies. Mints the policy AND its open draft
+// version 1, so the answer is version 1, status "draft", steps []. The 201 itself is
+// invisible here (apiFetch resolves on any 2xx) -- that claim belongs to rawFetch.
+export function createApprovalPolicy(token: string, body: ApprovalPolicyCreateInput): Promise<ApprovalPolicy> {
+  return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies`, { method: 'POST', body, token })
+}
+
+// putApprovalPolicyDraft(): PUT /v1/approval-policies/{id}/draft, a whole-tree replace of
+// the open draft -- or of a fresh max+1 version when the policy holds none. Builds the
+// {name,scope,steps} envelope itself, so it cannot express {"steps":null} (the staffWorkflowRole
+// precedent) -- that 400 is only reachable through rawFetch.
+export function putApprovalPolicyDraft(token: string, id: string, body: ApprovalPolicyDraftInput): Promise<ApprovalPolicy> {
+  return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies/${id}/draft`, {
+    method: 'PUT',
+    body: { name: body.name, scope: body.scope, steps: body.steps },
+    token,
+  })
+}
+
+// publishApprovalPolicy(): POST /v1/approval-policies/{id}/publish. NO body at all -- the
+// handler reads none, and published_by is the caller's subject taken inside the store.
+export function publishApprovalPolicy(token: string, id: string): Promise<ApprovalPolicy> {
+  return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies/${id}/publish`, {
+    method: 'POST',
+    token,
+  })
+}
+
+// deleteApprovalPolicy(): DELETE /v1/approval-policies/{id}. SOFT, and the answer is INERT
+// -- only id/name/scope are carried through, so a policy published at v3 still answers
+// status "draft", version 0, steps [] and versions []. A second delete is 404.
+export function deleteApprovalPolicy(token: string, id: string): Promise<ApprovalPolicy> {
+  return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies/${id}`, { method: 'DELETE', token })
+}

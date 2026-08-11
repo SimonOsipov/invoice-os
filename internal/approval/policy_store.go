@@ -14,19 +14,24 @@ import (
 )
 
 // The policy handler seam, declared beside the methods that satisfy it (the
-// store.go:33-47 shape). Only the three this subtask implements: a declared-but-
-// unasserted function type is dead code no vet catches, and the draft/publish/delete
-// signatures belong to the subtasks that build them.
+// store.go:33-47 shape). Only the four implemented so far: a declared-but-unasserted
+// function type is dead code no vet catches, and the publish/delete signatures belong
+// to the subtasks that build them.
+//
+// PutDraft takes []stepInput, not *[]stepInput: presence is the handler's call (a nil
+// pointer is a 400 there), and nil and an empty slice are the same store state.
 type (
 	PolicyLister  func(ctx context.Context) ([]Policy, error)
 	PolicyGetter  func(ctx context.Context, id string) (Policy, error)
 	PolicyCreator func(ctx context.Context, name, scope string) (Policy, error)
+	PolicyDrafter func(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error)
 )
 
 var (
 	_ PolicyLister  = new(Store).ListPolicies
 	_ PolicyGetter  = new(Store).GetPolicy
 	_ PolicyCreator = new(Store).CreatePolicy
+	_ PolicyDrafter = new(Store).PutDraft
 )
 
 // newPolicy is what every read and the create start from: lanes and versions are []
@@ -335,4 +340,15 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 		return Policy{}, err
 	}
 	return created, nil
+}
+
+// errPutDraftStub is the sentinel the stub below returns so the specs in
+// policy_draft_test.go fail on an assertion. A panic would abort the test binary, so
+// only one spec would run and no cleanup would fire. Delete it with the stub body.
+var errPutDraftStub = errors.New("approval: PutDraft is not implemented")
+
+// PutDraft rewrites a policy's open draft wholesale, forking a new version when the
+// policy has none. Stub only: the body is the next subtask's.
+func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error) {
+	return Policy{}, errPutDraftStub
 }

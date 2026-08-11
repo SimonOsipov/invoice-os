@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -579,6 +580,51 @@ func TestPolicy_NameWithSQLAndUnicodeRoundTripsByte(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPolicy_NameWithANULIsRefusedNotA500: a NUL is the one byte text will not take —
+// Postgres raises 22021, which carries no constraint name, so policyStatusForErr falls to
+// its default and answers 500 on input a client chose. normalizeName is above the
+// transaction, so the refusal writes nothing.
+func TestPolicy_NameWithANULIsRefusedNotA500(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	for i, name := range []string{"Sign\x00off", "\x00", "Sign-off\x00", "\x00Sign-off"} {
+		t.Run(fmt.Sprintf("name %d", i), func(t *testing.T) {
+			tenantID := policyTenant(t, super, fmt.Sprintf("APPR-05 name-nul %d", i))
+			c, _ := activeAdmin(t, super, tenantID)
+
+			_, err := store.CreatePolicy(c, name, "")
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("CreatePolicy(%q) err = %v, want ErrValidation", name, err)
+			}
+			if code := pgCode(err); code != "" {
+				t.Errorf("CreatePolicy(%q) surfaced a raw Postgres error (SQLSTATE %s) — "+
+					"policyStatusForErr maps sentinels only, so this answers 500 instead of 400", name, code)
+			}
+			if n := rowCount(t, super, "approval_policies", tenantID); n != 0 {
+				t.Errorf("approval_policies rows = %d, want 0 — the name is refused above the transaction", n)
+			}
+			if n := rowCount(t, super, "approval_policy_versions", tenantID); n != 0 {
+				t.Errorf("approval_policy_versions rows = %d, want 0", n)
+			}
+			if n := auditCount(t, super, tenantID, "approval_policy.created"); n != 0 {
+				t.Errorf("approval_policy.created audit rows = %d, want 0", n)
+			}
+		})
+	}
+
+	t.Run("control: the same name without the NUL still writes", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-05 name-nul-control")
+		c, _ := activeAdmin(t, super, tenantID)
+		if _, err := store.CreatePolicy(c, "Signoff", ""); err != nil {
+			t.Fatalf("CreatePolicy: %v — the refusals above are vacuous unless this succeeds", err)
+		}
+		if n := rowCount(t, super, "approval_policies", tenantID); n != 1 {
+			t.Errorf("approval_policies rows = %d, want 1", n)
+		}
+	})
 }
 
 // TestPolicy_DuplicateNamesAreLegalAndBothAddressable: nothing constrains the name, so two

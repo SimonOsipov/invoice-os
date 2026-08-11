@@ -589,6 +589,76 @@ func TestPutDraft_ConditionLanesOfDifferentKindsRoundTrip(t *testing.T) {
 	}
 }
 
+// --- NUL bytes in the text columns -----------------------------------------------
+
+// TestPutDraft_NULInAnyTextFieldIsRefusedNotA500: a NUL is the one byte text will not
+// take — Postgres raises 22021, which carries no constraint name, so policyStatusForErr
+// falls to its default and answers 500 on input a client chose. PUT is the wider door of
+// the two: it carries the name AND the whole step tree. Every refusal is above the
+// transaction, so the seeded draft, the name and the version count are all untouched.
+func TestPutDraft_NULInAnyTextFieldIsRefusedNotA500(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	for _, tc := range []struct {
+		field string
+		name  *string
+		steps []stepInput
+	}{
+		{"name", ptr("Sign\x00off"), approvalStep("engagement-partner")},
+		{"workflow_role_key", nil, []stepInput{approvalIn("engagement\x00partner")}},
+		{"notify_target", nil, []stepInput{notifyIn("prep\x00arer", "email")}},
+		{"notify_channel", nil, []stepInput{notifyIn("preparer", "em\x00ail")}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			tenantID := policyTenant(t, super, "APPR-05 put-nul "+tc.field)
+			c, _ := activeAdmin(t, super, tenantID)
+			policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+			versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+			seeded := readStoredSteps(t, super, versionID)
+
+			_, err := store.PutDraft(c, policyID, tc.name, nil, tc.steps)
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("PutDraft with a NUL in %s: err = %v, want ErrValidation", tc.field, err)
+			}
+			if code := pgCode(err); code != "" {
+				t.Errorf("PutDraft with a NUL in %s surfaced a raw Postgres error (SQLSTATE %s) — "+
+					"policyStatusForErr maps sentinels only, so this answers 500 instead of 400", tc.field, code)
+			}
+			if got := storedPolicyName(t, super, policyID); got != "Sign-off" {
+				t.Errorf("stored name = %q, want the untouched %q", got, "Sign-off")
+			}
+			if got := readStoredSteps(t, super, versionID); !reflect.DeepEqual(got, seeded) {
+				t.Errorf("the step set changed despite the refusal:\n  before %v\n  after  %v", seeded, got)
+			}
+			if n := len(versionRows(t, super, policyID)); n != 1 {
+				t.Errorf("policy has %d versions, want the 1 seeded — a refused write forks nothing", n)
+			}
+			if n := auditCount(t, super, tenantID, "approval_policy.updated"); n != 0 {
+				t.Errorf("approval_policy.updated audit rows = %d, want 0", n)
+			}
+		})
+	}
+
+	t.Run("control: the same call without the NULs still writes", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-05 put-nul-control")
+		c, _ := activeAdmin(t, super, tenantID)
+		policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+		versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+
+		if _, err := store.PutDraft(c, policyID, ptr("Signoff"), nil,
+			[]stepInput{approvalIn("engagementpartner"), notifyIn("preparer", "email")}); err != nil {
+			t.Fatalf("PutDraft: %v — the refusals above are vacuous unless this succeeds", err)
+		}
+		if got := storedPolicyName(t, super, policyID); got != "Signoff" {
+			t.Errorf("stored name = %q, want %q", got, "Signoff")
+		}
+		if steps := readStoredSteps(t, super, versionID); len(steps) != 2 {
+			t.Errorf("draft holds %v, want the two submitted steps", steps)
+		}
+	})
+}
+
 // --- teardown residue -----------------------------------------------------------
 
 // TestPutDraft_LeavesNoPolicyRowsBehind: everything a fork writes must carry the caller's

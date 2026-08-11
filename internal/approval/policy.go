@@ -243,12 +243,25 @@ func validateLane(lane []stepInput, nested bool) error {
 	return nil
 }
 
+// hasNUL reports whether p holds the one byte text will not take: Postgres raises 22021
+// on it, carrying no constraint name, so policyStatusForErr answers 500 on client input
+// (TestPolicy_ValidateTreeRefusesANULInEveryTextFieldAndKind). Refused rather than
+// stripped — a name is not the server's to rewrite.
+func hasNUL(p *string) bool { return p != nil && strings.IndexByte(*p, 0) >= 0 }
+
 // validateStepFields also bounds the two numeric columns. An out-of-range value
 // raises 22003, which carries no constraint name and so cannot be mapped to a 400
 // downstream (TestPolicy_ValidateTreeCondAmountBounds, ...SlaHoursBounds). The
 // bounds are checked wherever the field is present, not only on the kind that
 // owns it, because the column is written whatever the kind.
 func validateStepFields(s stepInput) error {
+	// Kind is closed by policyStepKinds and cond_amount by decimal.NewFromString, so the
+	// four below are every client string that can still reach a text column.
+	for _, p := range []*string{s.WorkflowRoleKey, s.CondOp, s.NotifyTarget, s.NotifyChannel} {
+		if hasNUL(p) {
+			return ErrValidation
+		}
+	}
 	if s.SLAHours != nil && (*s.SLAHours < 0 || *s.SLAHours > math.MaxInt32) {
 		return ErrValidation
 	}
@@ -328,10 +341,11 @@ func validateForPublish(tree []Step, liveKeys map[string]bool) error {
 }
 
 // normalizeName trims and refuses an empty name. Trim-and-validate rather than the
-// inline strings.TrimSpace its siblings use, because two stores share this rule.
+// inline strings.TrimSpace its siblings use, because two stores share this rule. A NUL is
+// not whitespace, so the trim leaves it and only hasNUL stops it reaching text.
 func normalizeName(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if name == "" {
+	if name == "" || hasNUL(&name) {
 		return "", ErrValidation
 	}
 	return name, nil

@@ -342,6 +342,12 @@ func TestPolicy_ValidateTreeTable(t *testing.T) {
 		{"a condition with no cond_amount", []stepInput{{Kind: "condition", CondOp: ptr(">")}}, true},
 		{"a cond_amount that is not a decimal", []stepInput{condIn(">", "lots", nil, nil)}, true},
 		{"an empty cond_amount", []stepInput{condIn(">", "", nil, nil)}, true},
+		// cond_amount needs no NUL check of its own: decimal.NewFromString refuses one,
+		// and validateStepFields runs it whatever the kind.
+		{"a NUL in cond_amount", []stepInput{condIn(">", "100.00\x00", nil, nil)}, true},
+		{"a NUL in a nested lane's role key", []stepInput{
+			condIn(">", "100.00", []stepInput{approvalIn("tax\x00reviewer")}, nil),
+		}, true},
 		{"a negative sla_hours", []stepInput{
 			{Kind: "approval", WorkflowRoleKey: ptr("engagement-partner"), SLAHours: ptr(-1)},
 		}, true},
@@ -896,6 +902,49 @@ func TestPolicy_ValidateTreeBoundsApplyToEveryKind(t *testing.T) {
 	}
 }
 
+// TestPolicy_ValidateTreeRefusesANULInEveryTextFieldAndKind: a NUL in a text parameter
+// raises 22021, which carries no constraint name, so policyStatusForErr answers 500 on
+// input a client chose. Every string column is written whatever the kind carries it, so
+// a refusal that only fired on the owning kind would leave the hole open — the
+// TestPolicy_ValidateTreeBoundsApplyToEveryKind shape.
+func TestPolicy_ValidateTreeRefusesANULInEveryTextFieldAndKind(t *testing.T) {
+	fields := []struct {
+		field string
+		set   func(*stepInput)
+	}{
+		{"workflow_role_key", func(s *stepInput) { s.WorkflowRoleKey = ptr("tax\x00reviewer") }},
+		{"cond_op", func(s *stepInput) { s.CondOp = ptr(">\x00") }},
+		{"notify_target", func(s *stepInput) { s.NotifyTarget = ptr("prep\x00arer") }},
+		{"notify_channel", func(s *stepInput) { s.NotifyChannel = ptr("em\x00ail") }},
+	}
+	for _, kind := range stepKinds {
+		base := stepInput{Kind: kind}
+		switch kind {
+		case "condition":
+			base.CondOp, base.CondAmount = ptr(">"), ptr("1.00")
+		case "notify":
+			base.NotifyTarget, base.NotifyChannel = ptr("preparer"), ptr("email")
+		case "approval":
+			base.WorkflowRoleKey = ptr("tax-reviewer")
+		}
+		// The base is legal, or the rows below would pass on the wrong refusal.
+		t.Run(kind+" without a NUL", func(t *testing.T) {
+			if err := validateTree([]stepInput{base}); err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+		})
+		for _, tc := range fields {
+			t.Run(kind+" with a NUL in "+tc.field, func(t *testing.T) {
+				s := base
+				tc.set(&s)
+				if err := validateTree([]stepInput{s}); !errors.Is(err, ErrValidation) {
+					t.Errorf("err = %v, want ErrValidation", err)
+				}
+			})
+		}
+	}
+}
+
 // TestPolicy_ValidateCondAmountGrammarIsNarrowerThanPostgres: the safe direction is
 // the only one that matters — the validator may refuse text numeric would take, but
 // never the reverse, or 22003/22P02 reaches the store with no constraint name and
@@ -1046,6 +1095,10 @@ func TestPolicy_NormalizeNameUnicode(t *testing.T) {
 		{"a zero-width space is not whitespace", "​", "​", false},
 		{"empty", "", "", true},
 		{"ascii whitespace only", " \t\n ", "", true},
+		// A NUL is not whitespace, so the trim leaves it and text refuses it: 22021.
+		{"an embedded NUL", "Sign\x00off", "", true},
+		{"a NUL alone", "\x00", "", true},
+		{"a trailing NUL", "Sign-off\x00", "", true},
 		{"non-breaking space only", "  ", "", true},
 	}
 	for _, tc := range cases {

@@ -177,6 +177,15 @@ export function freshRoleTitle(): string {
   return `Probe Role ${tinRunSeed}-${tinCounter}`
 }
 
+// freshPolicyName(): a per-run-unique approval-policy name, on the same seed + counter as
+// freshRoleTitle above. Like a role title and unlike a TIN, a colliding name cannot fail
+// loud — nothing constrains approval_policies.name — so this buys identifiability in a
+// never-reset environment, not constraint safety.
+export function freshPolicyName(): string {
+  tinCounter += 1
+  return `Probe Policy ${tinRunSeed}-${tinCounter}`
+}
+
 // canonicalTin(): the portfolio service canonicalizes an accepted TIN to its
 // digits-only form on write and echoes THAT form back (internal/portfolio/tin.go's
 // ValidateTIN strips the hyphen before persisting/returning) — so any assertion

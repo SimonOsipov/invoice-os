@@ -76,8 +76,9 @@ func scanPolicyVersionRow(rows pgx.Rows) (policyID, versionID string, pv PolicyV
 // Plural so ListPolicies stays constant in policy count; GetPolicy passes one id. An
 // empty slice is legal: ANY of an empty array matches nothing.
 func readPolicyTrees(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[string][]Step, error) {
-	// cond_amount::text: Step.CondAmount is a *string so an exact decimal round-trips,
-	// never a float64 or a numeric (the D13 money rule, internal/invoice/store.go:44-53).
+	// cond_amount::text: the money rule (internal/invoice/store.go:44-53). pgx scans a
+	// bare numeric into a *string too, but drops the scale at zero — 0.00 reads back as
+	// "0" (TestPolicy_CondAmountKeepsItsScaleAtZero). Do not remove the cast.
 	rows, err := tx.Query(ctx,
 		`SELECT version_id, id, parent_step_id, branch, ord, kind,
 		        workflow_role_key, sla_hours, cond_op, cond_amount::text,

@@ -459,8 +459,9 @@ func TestPolicy_ListReturnsTreeAndVersions(t *testing.T) {
 	if root.Kind != "condition" || root.CondOp == nil || *root.CondOp != ">=" {
 		t.Errorf("root step = (kind %q, cond_op %v), want (condition, >=)", root.Kind, root.CondOp)
 	}
-	// The exact decimal text pins the ::text read: a float64 or a numeric round-trip
-	// would render 1000 here.
+	// The exact decimal text. It does NOT pin the ::text cast — pgx renders a bare
+	// numeric as "1000.00" too, and only zero tells the two apart
+	// (TestPolicy_CondAmountKeepsItsScaleAtZero).
 	if root.CondAmount == nil || *root.CondAmount != "1000.00" {
 		t.Errorf("root cond_amount = %v, want the exact decimal text 1000.00", root.CondAmount)
 	}

@@ -581,3 +581,115 @@ func TestMaterialise_NullCondOpTakesElseLane(t *testing.T) {
 		t.Errorf("cond_op '>': materialise(...) = %+v, want %+v (then lane)", steps, want)
 	}
 }
+
+// TestMaterialise_ConditionOnlyTreeWithBothLanesEmptyEmitsNothing: unlike
+// TestMaterialise_EmptyTreeEmitsNothing (no nodes at all), this tree has one condition
+// node whose chosen lane is empty either way — the zero-step shape APPR-06-05 (AC-4's
+// state rewrite) must also handle for a run whose only step was a spent condition.
+func TestMaterialise_ConditionOnlyTreeWithBothLanesEmptyEmitsNothing(t *testing.T) {
+	tree := []Step{stepCond(">", "500000000.00", nil, nil)}
+
+	for _, tc := range []struct {
+		name  string
+		total *decimal.Decimal
+	}{
+		{"condition true, then lane empty", dec("600000000.00")},
+		{"condition false, else lane empty", dec("100000000.00")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, auto := materialise(tree, tc.total)
+			if steps == nil {
+				t.Errorf("materialise(...) returned a nil slice, want non-nil")
+			}
+			if len(steps) != 0 {
+				t.Errorf("len(steps) = %d, want 0", len(steps))
+			}
+			if auto {
+				t.Errorf("auto = true, want false")
+			}
+		})
+	}
+}
+
+// TestMaterialise_AutoapproveAtRootIsRecognised: the seed shapes only ever place
+// autoapprove inside a condition's else lane, but nothing in materialise requires
+// that — a root-lane autoapprove must set auto too.
+func TestMaterialise_AutoapproveAtRootIsRecognised(t *testing.T) {
+	tree := []Step{stepApproval("fin_mgr", 48), stepAutoapprove()}
+	steps, auto := materialise(tree, dec("1.00"))
+	want := ordered(wantApproval("fin_mgr", 48), wantAutoapprove())
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("materialise(...) = %+v, want %+v", steps, want)
+	}
+	if !auto {
+		t.Errorf("auto = false, want true")
+	}
+}
+
+// TestMaterialise_TwoAutoapprovesInOnePolicyBothEmitAndAutoStaysTrue: no seed policy
+// has two autoapproves; nothing in materialise assumes at most one, so both must
+// emit as ordinary steps and auto must not toggle back off after the first.
+func TestMaterialise_TwoAutoapprovesInOnePolicyBothEmitAndAutoStaysTrue(t *testing.T) {
+	tree := []Step{
+		stepCond(">", "0.00", []Step{stepAutoapprove()}, nil),
+		stepAutoapprove(),
+	}
+	steps, auto := materialise(tree, dec("1.00"))
+	want := ordered(wantAutoapprove(), wantAutoapprove())
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("materialise(...) = %+v, want %+v (both autoapproves emitted)", steps, want)
+	}
+	if !auto {
+		t.Errorf("auto = false, want true")
+	}
+}
+
+// TestMaterialise_NonConditionNodeWithLanesIgnoresThem pins the schema's known gap
+// (schema_constraints_test.go:376-399, PC-17): approval_policy_steps_depth_cap only
+// rejects a CHILD whose own kind is 'condition', so an approval step can carry a
+// non-empty Then/Else to arbitrary depth and nestSteps will populate them. The SPA
+// oracle's BranchNode has no then/else on a non-condition node at all — take() only
+// ever reads n's own fields via take([]Step{n}), so this is structural, not
+// incidental: the exact-slice comparison below fails if either poison lane leaks in.
+func TestMaterialise_NonConditionNodeWithLanesIgnoresThem(t *testing.T) {
+	approvalWithLanes := stepApproval("fin_mgr", 48)
+	approvalWithLanes.Then = []Step{stepApproval("poison-then", 1)}
+	approvalWithLanes.Else = []Step{stepApproval("poison-else", 1)}
+
+	tree := []Step{approvalWithLanes, stepApproval("compliance", 24)}
+	steps, auto := materialise(tree, dec("1.00"))
+	want := ordered(wantApproval("fin_mgr", 48), wantApproval("compliance", 24))
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("materialise(...) = %+v, want %+v (approval's own then/else lanes not walked)", steps, want)
+	}
+	if len(steps) != 2 {
+		t.Errorf("len(steps) = %d, want 2 — a poison lane leaked in", len(steps))
+	}
+	if auto {
+		t.Errorf("auto = true, want false")
+	}
+}
+
+// TestMaterialise_ReturnedPointersAliasTheSourceTree documents rather than guards
+// against aliasing: runStep's *string/*int fields are the same pointers as the Step
+// tree's, by design (the plan rules out a deep copy). Mutating a returned runStep's
+// pointee DOES corrupt the source tree — proven here — but it does not matter in
+// practice: readPolicyTrees (policy_store.go:87) allocates a fresh tree per call, so
+// nothing outlives the single ArmTx invocation that both builds and consumes it, and
+// no code downstream of materialise ever writes through these pointers.
+func TestMaterialise_ReturnedPointersAliasTheSourceTree(t *testing.T) {
+	tree := []Step{stepApproval("fin_mgr", 48)}
+	steps, _ := materialise(tree, dec("1.00"))
+	if len(steps) != 1 {
+		t.Fatalf("len(steps) = %d, want 1", len(steps))
+	}
+
+	if steps[0].WorkflowRoleKey != tree[0].WorkflowRoleKey {
+		t.Fatalf("runStep.WorkflowRoleKey is not the same pointer as the source Step's — aliasing assumption is wrong")
+	}
+
+	*steps[0].WorkflowRoleKey = "mutated"
+	if *tree[0].WorkflowRoleKey != "mutated" {
+		t.Errorf("source tree unaffected by a mutation through the returned runStep — aliasing assumption is wrong")
+	}
+}

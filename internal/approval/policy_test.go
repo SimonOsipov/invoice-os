@@ -73,6 +73,21 @@ func condIn(op, amount string, then, els []stepInput) stepInput {
 	return stepInput{Kind: "condition", CondOp: ptr(op), CondAmount: ptr(amount), Then: then, Else: els}
 }
 
+// legalStepOfKind is the minimal step validateTree accepts for kind — the base every
+// every-kind case mutates one field of, so a refusal cannot come from the base.
+func legalStepOfKind(kind string) stepInput {
+	s := stepInput{Kind: kind}
+	switch kind {
+	case "condition":
+		s.CondOp, s.CondAmount = ptr(">"), ptr("1.00")
+	case "notify":
+		s.NotifyTarget, s.NotifyChannel = ptr("preparer"), ptr("email")
+	case "approval":
+		s.WorkflowRoleKey = ptr("tax-reviewer")
+	}
+	return s
+}
+
 // polRowsByRole indexes the flat rows by workflow_role_key, so a case can name a
 // step without depending on emission order.
 func polRowsByRole(t *testing.T, rows []stepRow) map[string]stepRow {
@@ -918,15 +933,7 @@ func TestPolicy_ValidateTreeRefusesANULInEveryTextFieldAndKind(t *testing.T) {
 		{"notify_channel", func(s *stepInput) { s.NotifyChannel = ptr("em\x00ail") }},
 	}
 	for _, kind := range stepKinds {
-		base := stepInput{Kind: kind}
-		switch kind {
-		case "condition":
-			base.CondOp, base.CondAmount = ptr(">"), ptr("1.00")
-		case "notify":
-			base.NotifyTarget, base.NotifyChannel = ptr("preparer"), ptr("email")
-		case "approval":
-			base.WorkflowRoleKey = ptr("tax-reviewer")
-		}
+		base := legalStepOfKind(kind)
 		// The base is legal, or the rows below would pass on the wrong refusal.
 		t.Run(kind+" without a NUL", func(t *testing.T) {
 			if err := validateTree([]stepInput{base}); err != nil {
@@ -937,6 +944,39 @@ func TestPolicy_ValidateTreeRefusesANULInEveryTextFieldAndKind(t *testing.T) {
 			t.Run(kind+" with a NUL in "+tc.field, func(t *testing.T) {
 				s := base
 				tc.set(&s)
+				if err := validateTree([]stepInput{s}); !errors.Is(err, ErrValidation) {
+					t.Errorf("err = %v, want ErrValidation", err)
+				}
+			})
+		}
+	}
+}
+
+// TestPolicy_ValidateTreeRefusesAForeignCondOpOnEveryKind: cond_op is written whatever the
+// kind carries it, and the column CHECK accepts only the four operators — a foreign one
+// raises 23514 on approval_policy_steps_cond_op_check, which carries no sentinel, so
+// policyStatusForErr answers 500 on input a client chose. The vocabulary therefore sits
+// outside the kind switch; only the condition's must-have-one rule stays inside it.
+//
+// The legal-cond_op control per kind is the other half: a non-condition step may carry an
+// operator, the column is nullable and unconstrained by kind, and refusing that would be a
+// behaviour change rather than a fix.
+func TestPolicy_ValidateTreeRefusesAForeignCondOpOnEveryKind(t *testing.T) {
+	for _, kind := range stepKinds {
+		base := legalStepOfKind(kind)
+		for _, op := range []string{">", ">=", "<", "<="} {
+			t.Run(kind+" with the legal cond_op "+op, func(t *testing.T) {
+				s := base
+				s.CondOp = ptr(op)
+				if err := validateTree([]stepInput{s}); err != nil {
+					t.Errorf("err = %v, want nil — the CHECK accepts this operator on any kind", err)
+				}
+			})
+		}
+		for _, op := range []string{"BOOM", "=", "<>", "!=", "=>", ">>", " >", "> ", ""} {
+			t.Run(kind+" with the foreign cond_op "+op, func(t *testing.T) {
+				s := base
+				s.CondOp = ptr(op)
 				if err := validateTree([]stepInput{s}); !errors.Is(err, ErrValidation) {
 					t.Errorf("err = %v, want ErrValidation", err)
 				}

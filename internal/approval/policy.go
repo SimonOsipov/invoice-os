@@ -255,12 +255,20 @@ func hasNUL(p *string) bool { return p != nil && strings.IndexByte(*p, 0) >= 0 }
 // bounds are checked wherever the field is present, not only on the kind that
 // owns it, because the column is written whatever the kind.
 func validateStepFields(s stepInput) error {
-	// Kind is closed by policyStepKinds and cond_amount by decimal.NewFromString, so the
-	// four below are every client string that can still reach a text column.
-	for _, p := range []*string{s.WorkflowRoleKey, s.CondOp, s.NotifyTarget, s.NotifyChannel} {
+	// Kind is closed by policyStepKinds, cond_op by the vocabulary below and cond_amount by
+	// decimal.NewFromString, so the three here are every client string that can still reach
+	// a text column.
+	for _, p := range []*string{s.WorkflowRoleKey, s.NotifyTarget, s.NotifyChannel} {
 		if hasNUL(p) {
 			return ErrValidation
 		}
+	}
+	// Outside the switch, like the two bounds below: cond_op is written whatever the kind
+	// carries it, and a value outside the four raises 23514 on
+	// approval_policy_steps_cond_op_check, which carries no sentinel
+	// (TestPolicy_ValidateTreeRefusesAForeignCondOpOnEveryKind).
+	if s.CondOp != nil && !policyCondOps[*s.CondOp] {
+		return ErrValidation
 	}
 	if s.SLAHours != nil && (*s.SLAHours < 0 || *s.SLAHours > math.MaxInt32) {
 		return ErrValidation
@@ -272,7 +280,8 @@ func validateStepFields(s stepInput) error {
 	}
 	switch s.Kind {
 	case "condition":
-		if s.CondOp == nil || !policyCondOps[*s.CondOp] {
+		// Presence only — the vocabulary is checked above, for every kind.
+		if s.CondOp == nil {
 			return ErrValidation
 		}
 		if s.CondAmount == nil {

@@ -659,6 +659,63 @@ func TestPutDraft_NULInAnyTextFieldIsRefusedNotA500(t *testing.T) {
 	})
 }
 
+// TestPutDraft_ForeignCondOpOnANonConditionIsRefusedNotA500: cond_op is written whatever
+// the kind carries it and nothing above the column checked it outside case "condition", so
+// a notify step naming a foreign operator reached SQL and raised 23514 on
+// approval_policy_steps_cond_op_check — no sentinel, a 500 on input a client chose. The
+// control is the same step with a legal operator, which the column accepts on any kind.
+func TestPutDraft_ForeignCondOpOnANonConditionIsRefusedNotA500(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	refused := notifyIn("preparer", "email")
+	refused.CondOp = ptr("BOOM")
+
+	t.Run("refused above the transaction", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-05 put-foreign-cond-op")
+		c, _ := activeAdmin(t, super, tenantID)
+		policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+		versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+		seeded := readStoredSteps(t, super, versionID)
+
+		_, err := store.PutDraft(c, policyID, nil, nil, []stepInput{refused})
+		if !errors.Is(err, ErrValidation) {
+			t.Errorf("PutDraft err = %v, want ErrValidation", err)
+		}
+		if code := pgCode(err); code != "" {
+			t.Errorf("PutDraft surfaced a raw Postgres error (SQLSTATE %s) — policyStatusForErr maps "+
+				"sentinels only, so this answers 500 instead of 400", code)
+		}
+		if got := readStoredSteps(t, super, versionID); !reflect.DeepEqual(got, seeded) {
+			t.Errorf("the step set changed despite the refusal:\n  before %v\n  after  %v", seeded, got)
+		}
+		if n := len(versionRows(t, super, policyID)); n != 1 {
+			t.Errorf("policy has %d versions, want the 1 seeded — a refused write forks nothing", n)
+		}
+		if n := auditCount(t, super, tenantID, "approval_policy.updated"); n != 0 {
+			t.Errorf("approval_policy.updated audit rows = %d, want 0", n)
+		}
+	})
+
+	t.Run("control: a legal cond_op on the same notify step still writes", func(t *testing.T) {
+		tenantID := policyTenant(t, super, "APPR-05 put-foreign-cond-op-control")
+		c, _ := activeAdmin(t, super, tenantID)
+		policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+		versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+
+		legal := refused
+		legal.CondOp = ptr(">")
+		if _, err := store.PutDraft(c, policyID, nil, nil, []stepInput{legal}); err != nil {
+			t.Fatalf("PutDraft: %v — the refusal above is vacuous unless this succeeds, and the "+
+				"column accepts an operator on any kind", err)
+		}
+		steps := readStoredSteps(t, super, versionID)
+		if len(steps) != 1 || steps[0].Kind != "notify" || steps[0].CondOp == nil || *steps[0].CondOp != ">" {
+			t.Errorf("draft holds %v, want the one notify step carrying cond_op >", steps)
+		}
+	})
+}
+
 // --- teardown residue -----------------------------------------------------------
 
 // TestPutDraft_LeavesNoPolicyRowsBehind: everything a fork writes must carry the caller's

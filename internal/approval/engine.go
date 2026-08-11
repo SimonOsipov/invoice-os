@@ -1,6 +1,14 @@
 package approval
 
-import "github.com/shopspring/decimal"
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
+
+	"github.com/SimonOsipov/invoice-os/internal/audit"
+)
 
 // runStep is one materialised approval_run_steps row before it is written. The columns
 // it omits — state, due_at, satisfied_at, satisfied_by — are all derived downstream.
@@ -96,4 +104,146 @@ func evalCondition(op string, condAmount *string, total *decimal.Decimal) bool {
 	// (workflows.ts:470). The only reachable case here is a NULL cond_op, and an
 	// unspecified condition must take the else lane rather than silently mean "≤".
 	return false
+}
+
+// ArmResult is what one arm did. RunID is "" only when the tenant has no active version.
+type ArmResult struct {
+	RunID  string
+	Steps  int
+	Closed bool // written closed 'approved' — no approval step was left pending
+}
+
+// ArmTx resolves the tenant's active sealed policy version against one invoice and writes
+// its run and ordered steps inside the caller's transaction. A tenant with no active
+// version is the ONE arm that writes nothing at all — no run, no step, no audit row.
+//
+// ArmTx does NOT lock the invoice row; the caller must already hold it
+// (Store.ApplyValidation's SELECT ... FOR UPDATE, internal/invoice/store.go:1697).
+//
+// fingerprint and actor are parameters, never derived here: contentFingerprint is
+// unexported in internal/invoice and that import edge must not reverse.
+//
+// Errors propagate RAW so their SQLSTATE survives. A 23505 on approval_runs_one_open is
+// deliberately not caught — it means the invoice already held an open run, an invariant
+// breach that must roll the caller's promotion back rather than read as a conflict.
+func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, actor string) (ArmResult, error) {
+	// is_active alone is the whole resolve: approval_policy_versions_one_active caps it at
+	// one row per tenant and approval_policy_versions_active_is_sealed makes active imply
+	// sealed, so neither ORDER BY nor LIMIT would add anything.
+	var versionID string
+	err := tx.QueryRow(ctx, `SELECT id FROM approval_policy_versions WHERE is_active`).Scan(&versionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ArmResult{}, nil
+	}
+	if err != nil {
+		return ArmResult{}, err
+	}
+
+	// total::text into a *string, never a bare decimal.Decimal: numeric(14,2) accepts NaN
+	// and decimal's Scan errors on it, which would roll back the caller's promotion. An
+	// unparseable total reads as absent, which evalCondition folds to zero.
+	var totalText *string
+	if err := tx.QueryRow(ctx,
+		`SELECT total::text FROM invoices WHERE id = $1`, invoiceID).Scan(&totalText); err != nil {
+		return ArmResult{}, err
+	}
+	var total *decimal.Decimal
+	if totalText != nil {
+		if parsed, err := decimal.NewFromString(*totalText); err == nil {
+			total = &parsed
+		}
+	}
+
+	trees, err := readPolicyTrees(ctx, tx, []string{versionID})
+	if err != nil {
+		return ArmResult{}, err
+	}
+	steps, auto := materialise(trees[versionID], total)
+
+	// One pass building all seven arrays and the state of every step. unnest pads a short
+	// array with NULLs instead of erroring, so they must stay the same length; the
+	// nullable four stay []*string/[]*int so a nil member encodes as a NULL element rather
+	// than a zero, which is a different stored row.
+	ords := make([]int, len(steps))
+	kinds := make([]string, len(steps))
+	roleKeys := make([]*string, len(steps))
+	slaHours := make([]*int, len(steps))
+	notifyTargets := make([]*string, len(steps))
+	notifyChannels := make([]*string, len(steps))
+	states := make([]string, len(steps))
+	for i, s := range steps {
+		// notify is skipped always, and so is an approval that an autoapprove already
+		// settled — `auto` is reported by materialise and applied here, once.
+		state := "skipped"
+		switch {
+		case s.Kind == "autoapprove":
+			state = "satisfied"
+		case s.Kind == "approval" && !auto:
+			state = "pending"
+		}
+		ords[i], kinds[i], states[i] = s.Ord, s.Kind, state
+		roleKeys[i], slaHours[i] = s.WorkflowRoleKey, s.SLAHours
+		notifyTargets[i], notifyChannels[i] = s.NotifyTarget, s.NotifyChannel
+	}
+
+	// The closure predicate, over the states just decided: no approval step left pending
+	// means nothing can ever satisfy this run, so it is written closed in the same INSERT
+	// that creates it. NOT len(steps) == 0 — a notify-only run has a step and still has
+	// nothing to satisfy.
+	runState := "approved"
+	for i, s := range steps {
+		if s.Kind == "approval" && states[i] == "pending" {
+			runState = "open"
+			break
+		}
+	}
+
+	var runID string
+	// closed_by is the literal 'system'. internal/invoice.SystemActor is its convention's
+	// source, but importing it here would close a cycle once internal/invoice calls ArmTx.
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO approval_runs
+		        (tenant_id, invoice_id, policy_version_id, content_fingerprint,
+		         state, closed_at, closed_by)
+		 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5,
+		         CASE WHEN $5 = 'approved' THEN now() END,
+		         CASE WHEN $5 = 'approved' THEN 'system' END)
+		 RETURNING id`,
+		tenantID, invoiceID, versionID, fingerprint, runState).Scan(&runID); err != nil {
+		return ArmResult{}, err
+	}
+
+	// Issued unconditionally: unnest of empty arrays inserts zero rows. due_at is gated on
+	// the KIND as well as the SLA, because materialise copies sla_hours through for every
+	// kind and a notify carrying one is seedable.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO approval_run_steps
+		        (tenant_id, run_id, ord, kind, workflow_role_key, sla_hours,
+		         notify_target, notify_channel, state, due_at, satisfied_at, satisfied_by)
+		 SELECT $1::uuid, $2::uuid,
+		        s.ord, s.kind, s.role_key, s.sla, s.notify_target, s.notify_channel, s.state,
+		        CASE WHEN s.kind = 'approval' AND s.sla > 0
+		             THEN now() + s.sla * interval '1 hour' END,
+		        CASE WHEN s.state = 'satisfied' THEN now() END,
+		        CASE WHEN s.state = 'satisfied' THEN 'system' END
+		   FROM unnest($3::int[], $4::text[], $5::text[], $6::int[],
+		               $7::text[], $8::text[], $9::text[])
+		        AS s(ord, kind, role_key, sla, notify_target, notify_channel, state)`,
+		tenantID, runID, ords, kinds, roleKeys, slaHours, notifyTargets, notifyChannels, states,
+	); err != nil {
+		return ArmResult{}, err
+	}
+
+	// Last statement, so a failing audit rolls the whole arm — and its caller's promotion —
+	// back. Summary only: no total, no line items, no role keys.
+	if err := audit.Record(ctx, tx, actor, "invoice.approval_armed", map[string]any{
+		"id":                invoiceID,
+		"run_id":            runID,
+		"policy_version_id": versionID,
+		"steps":             len(steps),
+	}); err != nil {
+		return ArmResult{}, err
+	}
+
+	return ArmResult{RunID: runID, Steps: len(steps), Closed: runState == "approved"}, nil
 }

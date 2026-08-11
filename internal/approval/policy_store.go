@@ -711,9 +711,10 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// Must stay the first statement touching a policy row: the row-level exclusive lock
-		// it takes is what serialises this against PublishPolicy's FOR UPDATE
-		// (TestDeletePolicy_ConcurrentPublishLosesAsNotFound). deleted_at IS NULL is both the
+		// Must stay the first statement touching a policy row: the row-level exclusive lock it
+		// takes is what serialises this against PublishPolicy's FOR UPDATE, in that lock order
+		// (TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite — the race spec passes
+		// against a later stamp too). deleted_at IS NULL is both the
 		// existence predicate and the idempotency mechanism — under READ COMMITTED a second
 		// delete re-evaluates it, matches nothing, and is ErrPolicyNotFound rather than a
 		// re-stamp. now() is the transaction timestamp the audit row's created_at also takes.

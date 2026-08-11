@@ -7,6 +7,8 @@ package approval
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -153,6 +155,74 @@ func TestPolicyHandlers_DuplicateJSONKeysTakeTheLast(t *testing.T) {
 		}
 		if got == nil || len(got) != 0 {
 			t.Errorf("store received %v, want an empty non-nil slice", got)
+		}
+	})
+}
+
+// TestPolicyHandlers_JSONEscapedNULReachesTheValidators: a NUL is legal in a JSON string
+// as an escape, so the one byte text will not take arrives through the decoder intact.
+// The handler forwards it untouched — the store's validators are the only thing between
+// it and a 22021. Pins the wire half of TestPolicy_NameWithANULIsRefusedNotA500 and
+// TestPutDraft_NULInAnyTextFieldIsRefusedNotA500, both of which start below the decoder.
+//
+// The body is marshalled rather than hand-written, so the escape under test is the one a
+// client's own encoder emits.
+func TestPolicyHandlers_JSONEscapedNULReachesTheValidators(t *testing.T) {
+	body := func(t *testing.T, v any) string {
+		t.Helper()
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal the request body: %v", err)
+		}
+		// Escaped, not raw: a raw NUL would be invalid JSON and the decoder, not the
+		// validator, would be what refused it.
+		if strings.ContainsRune(string(b), 0) {
+			t.Fatalf("body %q carries a raw NUL — the case would prove the decoder, not the guard", b)
+		}
+		return string(b)
+	}
+
+	t.Run("create/name", func(t *testing.T) {
+		id := caller()
+		got := "unset"
+		s := failClosedPolicySeam(t)
+		s.create = func(_ context.Context, name, _ string) (Policy, error) {
+			got = name
+			return Policy{}, ErrValidation
+		}
+		rec := servePolicy(t, s, nil, "POST", "/v1/approval-policies",
+			body(t, map[string]string{"name": "Sign\x00off"}), &id)
+		if got != "Sign\x00off" {
+			t.Fatalf("store received name %q, want the NUL undisturbed", got)
+		}
+		if _, err := normalizeName(got); !errors.Is(err, ErrValidation) {
+			t.Errorf("normalizeName(%q) = %v, want ErrValidation", got, err)
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want the store's 400: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("draft/step fields", func(t *testing.T) {
+		id := caller()
+		var got []stepInput
+		s := failClosedPolicySeam(t)
+		s.put = func(_ context.Context, _ string, _, _ *string, steps []stepInput) (Policy, error) {
+			got = steps
+			return Policy{}, ErrValidation
+		}
+		rec := servePolicy(t, s, nil, "PUT", "/v1/approval-policies/"+policyHandlerTestID+"/draft",
+			body(t, map[string]any{"steps": []map[string]string{
+				{"kind": "notify", "notify_target": "prep\x00arer", "notify_channel": "email"},
+			}}), &id)
+		if len(got) != 1 || got[0].NotifyTarget == nil || *got[0].NotifyTarget != "prep\x00arer" {
+			t.Fatalf("store received %+v, want the NUL undisturbed", got)
+		}
+		if err := validateTree(got); !errors.Is(err, ErrValidation) {
+			t.Errorf("validateTree = %v, want ErrValidation", err)
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want the store's 400: %s", rec.Code, rec.Body.String())
 		}
 	})
 }

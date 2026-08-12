@@ -247,3 +247,62 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 
 	return ArmResult{RunID: runID, Steps: len(steps), Closed: runState == "approved"}, nil
 }
+
+// CancelLiveRunTx cancels the invoice's LIVE runs — state 'open' or 'approved' — inside
+// the caller's transaction and audits each. Reports false when nothing was live.
+//
+// Plural by construction, singular in practice: the invariant is at most one live run,
+// and this function is what maintains it. Every path that walks an invoice back to draft
+// calls it, so a stale run can never outlive the promotion it belonged to.
+//
+// A 'rejected' run is deliberately NOT cancelled: it cannot satisfy APPR-08's gate,
+// re-arming beside one is legal, and rewriting a refusal as a cancellation would destroy
+// the evidence APPR-07 reads. Errors propagate RAW, matching ArmTx.
+func CancelLiveRunTx(ctx context.Context, tx pgx.Tx, invoiceID, actor string) (bool, error) {
+	// COALESCE, not plain assignment: an open run has both columns NULL so this IS plain
+	// assignment, while an already-closed 'approved' run keeps who closed it and when —
+	// the cancellation itself is what the audit row records.
+	rows, err := tx.Query(ctx,
+		`UPDATE approval_runs
+		    SET state     = 'cancelled',
+		        closed_at = COALESCE(closed_at, now()),
+		        closed_by = COALESCE(closed_by, $2)
+		  WHERE invoice_id = $1 AND state IN ('open','approved')
+		RETURNING id`,
+		invoiceID, actor)
+	if err != nil {
+		return false, err
+	}
+
+	// Query, never QueryRow: approval_runs_one_open constrains only 'open', so an invoice
+	// can hold an 'approved' AND an 'open' run at once. QueryRow would cancel both and
+	// audit one (TestCancelLiveRun_CancelsEveryLiveRunAndAuditsEach).
+	var runIDs []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			rows.Close()
+			return false, err
+		}
+		runIDs = append(runIDs, runID)
+	}
+	// Closed explicitly rather than deferred: the audit writes below reuse this
+	// transaction's connection.
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if len(runIDs) == 0 {
+		return false, nil
+	}
+
+	for _, runID := range runIDs {
+		if err := audit.Record(ctx, tx, actor, "invoice.approval_cancelled", map[string]any{
+			"id":     invoiceID,
+			"run_id": runID,
+		}); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}

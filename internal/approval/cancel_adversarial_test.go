@@ -34,14 +34,17 @@ func TestCancelLiveRun_CancelsEveryLiveRunAndAuditsEach(t *testing.T) {
 		t.Fatalf("seed approved run: %v", err)
 	}
 
-	openRunID := seedApprovalRun(t, super, tenantID, invoiceID, versionID) // defaults to open
-
+	// Seeded BEFORE the open run below, never after: seedApprovalRun inserts state='open'
+	// and approval_runs_one_open admits only one open run per invoice, so a seed that runs
+	// while another is still open 23505s before the call under test is ever reached.
 	rejectedRunID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
 	if _, err := super.Exec(context.Background(),
 		`UPDATE approval_runs SET state = 'rejected', closed_at = now(), closed_by = 'reviewer-1' WHERE id = $1`,
 		rejectedRunID); err != nil {
 		t.Fatalf("seed rejected run: %v", err)
 	}
+
+	openRunID := seedApprovalRun(t, super, tenantID, invoiceID, versionID) // defaults to open
 
 	got, err := cancel(t, app, tenantID, invoiceID, "adversarial-test-actor")
 	if err != nil {

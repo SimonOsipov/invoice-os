@@ -1276,6 +1276,12 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 			if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
 				return err
 			}
+			// 8b. no run outlives the promotion it belonged to (APPR-06-07, D37).
+			// Hooked BELOW step 6's no-op return, so an unchanged edit cancels
+			// nothing (TestEdit_NoOpEditCancelsNothing).
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, callerID.Subject); err != nil {
+				return err
+			}
 		}
 
 		// 9. re-attach the post-write lines LAST: both updateContentTx and
@@ -1475,8 +1481,19 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		}
 
 		var err error
-		inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx))
-		return err
+		if inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx)); err != nil {
+			return err
+		}
+
+		// -> draft ONLY (APPR-06-07, D30). validated -> queued deliberately leaves the
+		// run alone: cancelling there would erase the drift APPR-06-09's
+		// approval_run_orphaned detector reads during the ungated window.
+		if target == StatusDraft {
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, actorFromContext(ctx).Subject); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return Invoice{}, err

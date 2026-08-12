@@ -11,6 +11,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -313,5 +314,126 @@ func TestApprove_ConcurrentDecisionsOnAMultiStepRunResolveDeterministically(t *t
 	storedRun := oneApprovalRun(t, super, invoiceID)
 	if storedRun.State != "approved" {
 		t.Errorf("stored run.state = %q, want approved", storedRun.State)
+	}
+}
+
+// --- task-491 (APPR-07-06, Mode B / QA phase): the approve-reason bound belongs in
+// Decide, not only at the HTTP edge -----------------------------------------------
+//
+// decision.go:47-56 bounds a REJECT reason inside Decide itself (byte-counted,
+// maxRejectReasonLen). handlers.go's DecideHandler adds the SAME 1000-byte bound for
+// BOTH decisions, but only at the wire layer -- Decide's own approve path never checks
+// it. approval_decisions.reason is an unbounded `text` column (migrations/
+// 20260809232011_approval_runs.sql:86, no CHECK, no length constraint), so any future
+// caller of Store.Decide that is not DecideHandler -- a batch-approve, a CLI, a worker
+// -- can write an approve reason of arbitrary length straight past every guard this
+// story ships. This is a domain-layer gap, not merely a wire-layer one: every other
+// bound this package enforces (hasNUL, name length, role-key length) lives at the
+// store, not only at its HTTP callers.
+//
+// FAILS TODAY: Decide's approve branch has no length check at all. Reported as a
+// defect, not fixed here (QA does not implement store changes) -- see task-491's
+// implementation_notes for the verdict and the column-type evidence.
+
+// TestApprove_ReasonBoundIsEnforcedAtTheDomainLayerNotOnlyAtTheHTTPEdge mirrors
+// TestReject_ReasonOverByteBoundaryRefused exactly, for approve instead of reject, and
+// calls Decide directly -- bypassing DecideHandler entirely, the same way a future
+// non-HTTP caller would.
+func TestApprove_ReasonBoundIsEnforcedAtTheDomainLayerNotOnlyAtTheHTTPEdge(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 approve-reason-domain-bound", "approve-reason-domain-bound-role")
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	reason := strings.Repeat("a", 1001)
+	_, err := approve(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("Decide(approved) with a 1001-byte reason, called directly (not through DecideHandler): err = %v, want ErrValidation -- "+
+			"the bound must live in Decide itself, not only at the HTTP edge", err)
+	}
+	assertNothingWritten(t, super, f)
+}
+
+// TestApprove_UnboundedReasonReachesTheUnboundedTextColumn is the same gap's other
+// half: proves the column itself places no ceiling, so a caller that gets past
+// Decide's missing check writes exactly what it sent -- the unbounded write this bound
+// exists to prevent. Uses a MUCH larger reason than the 1001-byte case above so the
+// finding does not read as an off-by-one; strengthens the case that the fix belongs at
+// the domain layer, not the schema.
+func TestApprove_UnboundedReasonReachesTheUnboundedTextColumn(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 approve-reason-unbounded-column", "approve-reason-unbounded-column-role")
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	reason := strings.Repeat("a", 50_000)
+	_, err := approve(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+	if err != nil {
+		t.Fatalf("Decide(approved) with a 50,000-byte reason: %v, want success today -- documenting the unbounded column, not asserting it is correct", err)
+	}
+	decisions := decisionsForRun(t, super, f.runID)
+	if len(decisions) != 1 || decisions[0].Reason == nil {
+		t.Fatalf("decisions = %+v, want exactly one row with a non-NULL reason", decisions)
+	}
+	if got := len(*decisions[0].Reason); got != 50_000 {
+		t.Errorf("stored reason length = %d, want the full 50,000 bytes -- approval_decisions.reason (text, no CHECK) placed no ceiling of its own", got)
+	}
+}
+
+// --- the story's own named-but-never-written spec: a NUL byte in reason ------------
+//
+// The design doc's Test Specs table names TestDecide_NULByteInReasonIsRefusedNotStored
+// ("a reason containing \x00 -> Decide -> refused with nothing written (22021 never
+// reaches the client as a 500)"), but no file in this package ever defined it. Every
+// OTHER text field this package accepts (policy names, workflow_role_key, notify
+// target/channel) is screened with hasNUL (policy.go:251-255) before it reaches SQL;
+// Decide's reason parameter is not. Postgres's text type raises SQLSTATE 22021 for an
+// embedded NUL, which decisionStatusForErr's default case maps to a bare 500 -- turning
+// a client input mistake into a fabricated server error, the exact class of leak
+// pgCode(err) != "" checks elsewhere in this package (e.g.
+// TestApprove_ApproverGetsIdenticalRunNotFoundAcrossUnknownCrossTenantMalformedAndNoRun)
+// already guard against.
+//
+// FAILS TODAY for both decisions. Reported as a defect, not fixed here.
+
+// TestDecide_NULByteInReasonIsRefusedNotStored transcribes the story's own spec name
+// verbatim. Table over both decisions: reject already has ITS OWN trim+bound check
+// (decision.go:47-56) that a NUL survives untouched (a NUL is not whitespace), and
+// approve has no reason check at all before this subtask's HTTP-only bound -- neither
+// path screens for NUL specifically.
+func TestDecide_NULByteInReasonIsRefusedNotStored(t *testing.T) {
+	cases := []struct {
+		name     string
+		decision string
+	}{
+		{"approved", "approved"},
+		{"rejected", "rejected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			super, app := dbTestPools(t)
+			f := newApproveFixture(t, super, app, "APPR-07 nul-byte-reason-"+tc.name, "nul-byte-reason-"+tc.name+"-role")
+			adminID := uuid.NewString()
+			seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+			staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+			reason := "bad\x00reason"
+			var err error
+			if tc.decision == "approved" {
+				_, err = approve(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+			} else {
+				_, err = reject(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("Decide(%s) with a NUL byte in reason: err = %v, want ErrValidation", tc.decision, err)
+			}
+			if code := pgCode(err); code != "" {
+				t.Errorf("Decide(%s) with a NUL byte in reason surfaced a raw Postgres error (SQLSTATE %s) instead of a clean sentinel -- "+
+					"this is exactly what decisionStatusForErr's default case turns into an opaque 500", tc.decision, code)
+			}
+			assertNothingWritten(t, super, f)
+		})
 	}
 }

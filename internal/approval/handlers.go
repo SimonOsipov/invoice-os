@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -216,15 +217,25 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 	}
 }
 
-// decisionStatusForErr is the run-read seam's mapper. ErrRunNotFound covers unknown,
-// cross-tenant, malformed-uuid and no-run-row alike (read_model.go:77-79's sentinel),
-// so its wording never names which.
+// decisionStatusForErr is the run-read and decide seams' shared mapper. ErrRunNotFound
+// covers unknown, cross-tenant, malformed-uuid and no-run-row alike (read_model.go:
+// 77-79's sentinel), so its wording never names which. The two 403s name their own
+// axis (AXIS 1: not an approver at all; AXIS 2: an approver but not this step's role
+// holder) so the two stay distinguishable on the wire.
 func decisionStatusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, ErrNotPermitted):
+		return http.StatusForbidden, "only an approver can decide an approval step"
+	case errors.Is(err, ErrNotRoleHolder):
+		return http.StatusForbidden, "you do not hold the workflow role this step is waiting on"
 	case errors.Is(err, ErrRunNotFound):
 		return http.StatusNotFound, "no approval run for this invoice"
+	case errors.Is(err, ErrRunClosed):
+		return http.StatusConflict, "this approval run is already closed"
+	case errors.Is(err, ErrNotAwaitingApproval):
+		return http.StatusConflict, "this invoice is no longer awaiting approval"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}
@@ -239,13 +250,56 @@ type decisionRequest struct {
 	Reason   string `json:"reason"`
 }
 
-// DecideHandler returns POST /v1/invoices/{id}/approvals (APPR-07-06). STUB: wire
-// shape (identity, capped decode, decision vocabulary, reason rules) is not yet
-// implemented here -- always answers 501 so this subtask's RED specs fail on
-// assertions, not on undefined symbols or panics.
+// DecideHandler returns POST /v1/invoices/{id}/approvals: identity (401) -> capped
+// decode (400) -> decision vocabulary (400) -> reason rules (400) -> decide -> 200.
+// The actor is always auth.Identity.Subject, never a wire field
+// (TestApprovalHandler_ActorIsIdentityNotBody) -- Decider's own signature carries no
+// actor parameter, so a client-supplied one has nowhere to land.
 func DecideHandler(decide Decider, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxDecisionBodyBytes)
+		var req decisionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if req.Decision != "approved" && req.Decision != "rejected" {
+			writeError(w, http.StatusBadRequest, `decision must be "approved" or "rejected"`)
+			return
+		}
+
+		reason := strings.TrimSpace(req.Reason)
+		if req.Decision == "rejected" && reason == "" {
+			writeError(w, http.StatusBadRequest, "reason is required")
+			return
+		}
+		// AC-1's bound applies to both decisions -- Decide's own bound (decision.go:52)
+		// only ever fired for reject; approve had none before this subtask. Checked here,
+		// byte-counted via len(), so it also catches multi-byte reasons Decide never sees.
+		if len(reason) > maxRejectReasonLen {
+			writeError(w, http.StatusBadRequest, "reason exceeds the 1000-char bound")
+			return
+		}
+
+		run, err := decide(r.Context(), r.PathValue("id"), req.Decision, reason)
+		if err != nil {
+			status, msg := decisionStatusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "approval: decide approval", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
 	}
 }
 

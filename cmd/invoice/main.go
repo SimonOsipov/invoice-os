@@ -201,6 +201,10 @@ func main() {
 	// any authenticated tenant member may read a run, same as the policy routes above.
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/approval", approval.RunHandler(roleStore.ApprovalRun, app.Logger))
 
+	// POST /v1/invoices/{id}/approvals -- approve/reject a pending step (APPR-07-06).
+	// Plural spelling, distinct route from the GET singular above.
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/approvals", approval.DecideHandler(roleStore.DecideSeam, app.Logger))
+
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this
 	// service only ever enqueues submission_submit jobs via the transactional outbox

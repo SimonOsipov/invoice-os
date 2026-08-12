@@ -69,6 +69,17 @@ func (s *Store) Decide(ctx context.Context, invoiceID, decision string, reason *
 	return run, nil
 }
 
+// DecideSeam adapts Decide to the Decider seam DecideHandler calls -- plain string
+// reason (never a pointer), converting "" to nil so an absent/blank reason reaches
+// Decide exactly as it did before this subtask.
+func (s *Store) DecideSeam(ctx context.Context, invoiceID, decision, reason string) (Run, error) {
+	var r *string
+	if reason != "" {
+		r = &reason
+	}
+	return s.Decide(ctx, invoiceID, decision, r)
+}
+
 // Decider is the approve/reject seam DecideHandler calls -- plain string reason
 // (never a pointer), matching every other handler's wire contract.
 type Decider func(ctx context.Context, invoiceID, decision, reason string) (Run, error)

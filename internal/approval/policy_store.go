@@ -640,6 +640,13 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
+		// AFTER the seal, and that ordering is load-bearing: ArmTx resolves the version by
+		// `WHERE is_active`, so a sweep placed any earlier arms the version this publish just
+		// replaced — or, on a tenant's first publish, nothing at all.
+		if err := s.sweepValidatedBacklog(ctx, tx, caller.TenantID, caller.Subject); err != nil {
+			return err
+		}
+
 		// Read AFTER the seal, or the response answers sealed:false, is_active:false,
 		// published_at:null on a row that is none of those
 		// (TestPublish_EmptyPolicyAllowed). The just-sealed version is the top one: a version
@@ -679,6 +686,84 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		return Policy{}, err
 	}
 	return p, nil
+}
+
+// sweepValidatedBacklog arms one run per invoice sitting at `validated` with no live run,
+// inside PublishPolicy's transaction. This IS the backfill — there is no data migration
+// and no background pass — so when publish answers 200 the new version already governs the
+// whole backlog, not only invoices validated after it. A second publish arms zero: every
+// invoice the first sweep touched now carries a run the anti-join excludes.
+//
+// RLS is the only tenant filter, as everywhere else in this store. tenantID is passed
+// through for the run row ArmTx stamps, not used as a predicate.
+func (s *Store) sweepValidatedBacklog(ctx context.Context, tx pgx.Tx, tenantID, actor string) error {
+	// FOR UPDATE is required, not defensive: ArmTx documents that its caller already holds
+	// the invoice row lock, and this transaction's only other lock is on approval_policies.
+	// Without it a concurrent Store.Edit demotion between this SELECT and the arm below
+	// leaves an open run on a draft invoice — the approval_run_orphaned drift.
+	//
+	// `OF i` keeps the anti-join's approval_runs unlocked. ORDER BY i.id gives concurrent
+	// sweeps one lock order. LIMIT sweepCap+1 bounds the read and still tells at-cap from
+	// over-cap apart.
+	rows, err := tx.Query(ctx,
+		`SELECT i.id
+		   FROM invoices i
+		  WHERE i.status = 'validated'
+		    AND NOT EXISTS (
+		        SELECT 1 FROM approval_runs r
+		         WHERE r.invoice_id = i.id AND r.state IN ('open','approved')
+		    )
+		  ORDER BY i.id
+		  LIMIT $1
+		    FOR UPDATE OF i`, sweepCap+1)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	// Closed before the loop, not deferred: ArmTx reuses this transaction's connection,
+	// which an open cursor holds. The row locks are unaffected — they live until commit.
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Strictly greater. Exactly sweepCap publishes and arms
+	// (TestPublish_SweepAtExactlyCapSucceeds); one more refuses whole
+	// (TestPublish_SweepAboveCapReturns409), rolling the seal back with it.
+	if len(ids) > sweepCap {
+		return ErrSweepCapExceeded
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	// Fail closed rather than arm every run with an empty content_fingerprint, which no
+	// later comparison could tell from a real one.
+	if s.fingerprinter == nil {
+		return errors.New("approval: publish sweep has no fingerprinter — cmd/invoice/main.go wires invoice.FingerprintTx")
+	}
+
+	// No SAVEPOINT per invoice: the anti-join plus the row lock closes the 23505 window on
+	// approval_runs_one_open, so an error here is a real invariant breach that must roll the
+	// publish back rather than skip one invoice. sweepCap subtransactions would also overflow
+	// the backend's 64-entry subxid cache, which is a cost paid by every other session.
+	for _, id := range ids {
+		fp, err := s.fingerprinter(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if _, err := ArmTx(ctx, tx, tenantID, id, fp, actor); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeletePolicy stamps deleted_at and, in the same transaction, deactivates the version the

@@ -3,15 +3,18 @@
 **Audience:** anyone publishing, verifying or troubleshooting an approval policy in a
 deployed environment, and anyone building the layer that consumes one. This page
 specifies what publishing a policy *does today*, how to prove it happened, and which
-parts of the approvals story are **designed but not yet built** — so a reader can tell
-the two apart without reading the code.
+parts of the approvals story are **designed but not yet built** — the approve/reject seam
+(APPR-07) and the transmit gate (APPR-08) — so a reader can tell the two apart without
+reading the code.
 
-> **Read this first.** Publishing a policy today **seals and activates a configuration
-> record and nothing else**. It does not hold, block, gate or arm a single invoice. No
-> approval run is ever created, and the invoice transmit path never consults a policy, so
-> a tenant with a published policy and a tenant with none behave **identically**. The
-> enforcing engine is separate future work; it is called out by name in every section
-> where the distinction matters.
+> **Read this first.** Publishing a policy **seals a configuration record, activates it,
+> and arms the tenant's whole validated backlog in the same transaction**. One
+> `approval_runs` row is written per invoice sitting at `validated` with no live run,
+> capped at 5,000 (§5). What is *not* built is the enforcement on either side of that
+> ledger: nobody can approve or reject a run yet (**APPR-07**), and the transmit path
+> still never consults one (**APPR-08**), so an invoice carrying an open run transmits
+> exactly as it did before. Both are called out by name in every section where the
+> distinction matters.
 
 The API is six routes (`cmd/invoice/main.go:187-192`):
 
@@ -55,7 +58,12 @@ Two gates run before anything is written. Both answer `409`:
 
 An **empty** policy — no steps at all — passes both gates and is publishable.
 
-The write is two statements, in this order:
+A third `409` can arrive *after* those gates, from the arming sweep: `validated backlog
+exceeds the publish sweep cap — see docs/approvals.md`. It is not a gate, because it fires
+inside the transaction rather than before it — but the effect is the same, since the
+refusal rolls the whole transaction back and nothing is written (§5).
+
+The policy write is two statements, in this order:
 
 ```sql
 -- 1. release the tenant's active slot. No policy predicate; RLS is the tenant scope.
@@ -66,6 +74,13 @@ UPDATE approval_policy_versions
    SET sealed = true, is_active = true, published_at = now(), published_by = $caller
  WHERE id = $version;
 ```
+
+Those two are not the whole transaction. After the seal, and in the same transaction, the
+publish **arms the tenant's validated backlog** — one `approval_runs` row and its steps
+per candidate invoice — then writes its `approval_policy.published` audit row. The order
+is load-bearing: arming resolves the governing version by `WHERE is_active`, so a sweep
+placed before the seal would arm the version this publish just replaced. §5 is the full
+contract.
 
 **The first statement is tenant-wide, and that is the single most surprising thing on
 this page.** It carries no policy predicate. The index behind it is:
@@ -180,10 +195,15 @@ an invoice can be transmitted it takes — the single-invoice `TransitionHandler
 (`internal/invoice/handlers.go:669`) and the batch `BatchSubmitHandler` (`:1124`, behind
 `POST /v1/invoices/submissions`). Both apply the same `isApprover` test, admitting an
 `admin` or a `reviewer` and refusing a `preparer` with `403` and the same message — with
-a policy or without one. No production code path anywhere reads `approval_runs`,
-`approval_run_steps` or `approval_decisions` — the three tables are referenced only by
-the test-database reset list and by tests — and `approval_policy_versions` is read only
-by the policy endpoints themselves.
+a policy or without one.
+
+Runs are now **written**, and still read by nothing that gates anything. `ArmTx`
+(`internal/approval/engine.go`) writes `approval_runs` and `approval_run_steps` — from
+`ApplyValidation`'s promotion and from the publish sweep (§5) — resolving the tenant's
+active version by `WHERE is_active`, and `CancelLiveRunTx` closes those runs from the
+three paths that walk an invoice back to `draft`. **`approval_decisions` is still
+untouched by every production code path**: nothing writes one, because nothing can
+approve or reject yet (APPR-07). No transmit decision consults any of the three.
 
 The SPA's empty state is the product wording for that, and it is talking about the
 *approval* gate rather than about who may transmit:
@@ -200,8 +220,8 @@ too (next paragraph). That is why an empty policy is deliberately publishable.
 
 **An active but EMPTY policy behaves identically.** A policy with zero steps is
 publishable, so a tenant can hold an active, sealed, correctly-published version that
-constrains nothing. Today that tenant and a tenant with no policy at all are
-indistinguishable in behaviour.
+constrains nothing. That tenant and a tenant with no policy at all are indistinguishable
+in behaviour.
 
 They are, however, perfectly distinguishable **in the data**:
 
@@ -211,13 +231,40 @@ They are, however, perfectly distinguishable **in the data**:
 | active but empty policy | 1 row | 0 rows |
 | active policy with rules | 1 row | 1 or more rows |
 
-> **Carry this forward.** The arming engine's predicate must ask **both** questions.
-> "Does this tenant have an active version?" and "does that active version have steps?"
-> are different questions, and only the second one should arm a run. A predicate that
-> stops at the first will arm every invoice in a tenant whose admin published an empty
-> policy — turning a no-op configuration into a total transmit freeze. The two states
-> are identical in behaviour today precisely *because* nothing consumes them yet; that
-> stops being true the moment the engine lands.
+The empty-policy tenant now also accumulates **one `approval_runs` row per validated
+invoice**, each written closed `approved` — see the four facts below. The table above
+stays true exactly as written; the runs are a second, independent signal.
+
+> **Shipped behaviour: an active version ALWAYS arms.** Four facts, in the order they
+> matter:
+>
+> 1. **Once a tenant holds an active sealed version, every invoice reaching `validated`
+>    gets an `approval_runs` row** — whatever that version materialises to for that
+>    invoice. The one state that writes nothing at all is *no active version*.
+> 2. **A run is written closed `approved` at arm time when no `approval` step is left
+>    `pending`.** That covers the zero-step version, the condition whose selected lane is
+>    empty, the notify-only policy, and `autoapprove`. `closed_by = 'system'`, and arming
+>    writes no `approval_decisions` row ever — so the trail shows honestly that nobody
+>    was asked.
+> 3. **An active but empty policy therefore still transmits exactly like no policy at
+>    all**, through the gate's *second* disjunct (an `approved` run) rather than its first
+>    (no active version). The transmit freeze is avoided by CLOSING the run, not by
+>    declining to write one. Arming nothing — the shape this block used to prescribe —
+>    would satisfy neither disjunct of the positive predicate and would freeze every
+>    under-threshold invoice permanently.
+> 4. **The two states stay distinguishable in the data**, per the table above plus the
+>    zero-step `approved` runs.
+>
+> Pinned by `TestArm_ActiveButEmptyPolicyArmsClosedApprovedRun`,
+> `TestArm_EmptyChosenLaneArmsClosedApprovedRun` and
+> `TestArm_NotifyOnlyPolicyArmsClosedApprovedRun`.
+
+**One trap for whoever builds the SLA queries (APPR-07, APPR-11).** `due_at` is stamped
+on a step by its `kind`, not by its `state`: the CASE gates on `kind = 'approval' AND
+sla > 0` (`internal/approval/engine.go`), so an approval step that an `autoapprove`
+already settled still carries a `due_at`. **Any overdue or SLA-breach query must filter
+`state = 'pending'`** — selecting on `due_at < now()` alone surfaces steps nothing is
+waiting on.
 
 ---
 
@@ -371,40 +418,49 @@ triggers and deleting the children bottom-up.
 
 ## 5. The publish sweep
 
-> ### NOT IMPLEMENTED. This section describes future work.
->
-> **Nothing in this section is shipped behaviour.** The arming sweep belongs to the
-> arming-engine story (**APPR-06**), which is not built. Publishing a policy today writes
-> rows to `approval_policy_versions` and `audit_log` and **nothing else**. It creates no
-> `approval_runs`, `approval_run_steps` or `approval_decisions` row — those three tables
-> exist and no production code path reads or writes them at all. That is pinned, not
-> assumed: `TestPublish_CreatesNoApprovalRun` publishes a real policy over a validated
-> backlog and asserts all three tables are still empty. There is no cap to hit and no
-> `409` to receive, because there is no sweep. The contract below is recorded so it is
-> fixed before it is built — not because any of it exists.
+Publishing a policy arms the tenant's existing validated backlog. **This is the
+backfill** — there is no data migration and no background pass — so the version a publish
+seals governs invoices validated long before it, not only invoices validated after.
 
-The designed contract is:
+The shipped contract is:
 
-- **Synchronous.** Publishing arms the tenant's whole validated backlog **in the same
-  transaction** as the seal. When the call returns `200`, the policy is in force
-  immediately and completely — there is no window in which a policy is published but only
-  partly applied.
+- **Synchronous.** The sweep runs **in the same transaction** as the seal, immediately
+  after it. When the call returns `200`, the policy is in force immediately and
+  completely — there is no window in which a policy is published but only partly applied.
+- **One run per candidate, whatever the policy materialises to.** A candidate is an
+  invoice at `validated` carrying no `open` and no `approved` run. Every one of them gets
+  an `approval_runs` row — including a run written closed `approved` where the version
+  leaves no `approval` step pending (§2). That is what makes **a second publish arm
+  zero** true for *every* invoice rather than only for those that matched a step: the
+  anti-join excludes anything already carrying a live run. An invoice holding only a
+  `rejected` or `cancelled` run **is** re-armed, deliberately.
 - **Capped at 5,000 invoices.** Above that the publish **fails with a `409`** and seals
-  nothing; the transaction rolls back whole, leaving the draft open and the previously
-  active version untouched.
+  nothing; the transaction rolls back whole, leaving the draft open, the previously
+  active version in the slot, and not one run written. The boundary is strict: exactly
+  5,000 publishes, 5,001 refuses. The cap is a literal constant in the code, not settable
+  by env or by request.
 - **The `409` names this page** as the operator path, which is why the remedy is written
   here rather than in the error string.
+- **Candidate rows are locked** (`FOR UPDATE`) for the length of the sweep, so an invoice
+  cannot be demoted out from under a run being armed for it. A concurrent batch submit
+  over the same backlog can therefore deadlock; the loser's publish rolls back whole and
+  a retry succeeds.
+
+Pinned by `TestPublish_SweepArmsBacklog` (arms the backlog, skips `queued` and `draft`,
+second publish arms zero), `TestPublish_SweepSkipsInvoicesWithAnApprovedRun`,
+`TestPublish_SweepAtExactlyCapSucceeds`, `TestPublish_SweepAboveCapReturns409` and
+`TestPublish_SweepFingerprintMatchesInvoiceContent`.
 
 **The remedy, when a publish is refused for the cap.** The cap is a deliberate ceiling on
 transaction size, not a licence limit, and it is not raisable by configuration — there is
 no toggle.
 
-The intended operator path is to **reduce the validated backlog below 5,000 and publish
-again**: only invoices sitting at `validated` are swept, so transmitting or returning part
-of the backlog moves them out of the sweep's range. It requires no code change. **This
-path is derived from the designed cap check and has never been exercised** — there is no
-sweep to refuse a publish yet, so treat it as the intended shape rather than a tested
-runbook, and confirm it against the implementation once that lands.
+The operator path is to **reduce the validated backlog to 5,000 or fewer and publish
+again**: only invoices sitting at `validated` with no live run are swept, so transmitting
+or returning part of the backlog moves them out of the sweep's range. It requires no code
+change. The refusal itself is pinned by `TestPublish_SweepAboveCapReturns409`, which also
+asserts that nothing was armed and the version was not sealed — so a retry starts from the
+same unpublished draft.
 
 Beyond that there is no operator remedy: escalate. Moving the sweep to a background pass
 is a reserved design option and a code change, to be taken up only if a real tenant
@@ -415,10 +471,13 @@ tenant — about 5% of it. That figure was taken when the decision was made and 
 re-measured here; re-check it against production before treating the headroom as current.
 
 One correction worth recording, because the obvious rationale for the cap is wrong: a
-partially-armed tenant is **not** a leak. The gate the engine will apply is *positive* —
-an invoice is blocked unless an approval run has cleared it — so an invoice the sweep has
-not yet reached is **blocked, not released**. A partial sweep is therefore safe, and the
-synchronous choice rests on operator predictability, not on a correctness cliff.
+partially-armed tenant would **not** be a leak. The transmit gate that APPR-08 will apply
+is *positive* — an invoice is blocked unless an approval run has cleared it — so an
+invoice a sweep had not yet reached would be **blocked, not released**. (Read "the engine"
+in older notes carefully. The *arming* engine shipped, in APPR-06; the *transmit* gate is
+APPR-08 and has not.) As shipped, a partial sweep cannot arise at all — the cap rolls the
+whole transaction back — so the synchronous choice rests on operator predictability, not
+on a correctness cliff.
 
 ---
 
@@ -528,9 +587,11 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 | manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
 
 **Two rows are server-enforced today**, and one of those only in half. Any wider claim —
-that approvals are enforced, or that the matrix as a whole is backed — is aspirational
-until the engine lands. The code is the authority for this table; if the two disagree,
-the code is right and this table is stale.
+that approvals are enforced, or that the matrix as a whole is backed — remains
+aspirational. Arming shipped (APPR-06): the runs exist. **Enforcement did not**: the
+approve/reject seam is APPR-07 and the transmit gate is APPR-08, and until both land an
+approval run constrains nobody. The code is the authority for this table; if the two
+disagree, the code is right and this table is stale.
 
 Separately, and not in the matrix: **every approval-policy write requires an active
 admin** (`internal/approval/store.go:455`). Reading policies requires only a tenant
@@ -584,7 +645,9 @@ NULL` is both the existence predicate and the idempotency mechanism.
 
 ## 10. Handed forward
 
-Two gaps that are real, verified, and deliberately left for the stories that follow.
+Two gaps that are real, verified, and deliberately left for the stories that follow. A
+third — that the arming engine must read the active tree from the database rather than
+from the API — has since been **satisfied**, and is recorded below as shipped.
 
 ### The in-force step tree is not obtainable from the API
 
@@ -606,10 +669,13 @@ Two consequences, both correctness-relevant:
   unpublished draft, whatever the `is_active` flags further down the list say. Presenting
   a draft as the live rule set would tell an admin their unsaved intentions are already
   governing invoices.
-- **The arming engine (APPR-06) must read the active tree from the database inside its
-  own transaction**, not from this endpoint. Sourcing it here would arm runs against a
-  draft — a correctness bug, and a silent one, since a draft tree is structurally valid
-  and would produce plausible-looking runs enforcing rules nobody published.
+- **The arming engine reads the active tree from the database inside its own
+  transaction** — obligation met, not outstanding. `ArmTx` resolves the version with
+  `SELECT id FROM approval_policy_versions WHERE is_active` and reads its tree on the
+  caller's transaction (`internal/approval/engine.go`), never through this endpoint.
+  Sourcing it here would have armed runs against a draft — a correctness bug, and a silent
+  one, since a draft tree is structurally valid and would produce plausible-looking runs
+  enforcing rules nobody published.
 
 The natural fix is a dedicated read of the active version's tree. It is not in scope here
 and has no owner yet.
@@ -643,6 +709,7 @@ message, not the status: several distinct causes share a status code.
 | `409` | `this policy has no unpublished changes` | Either there was genuinely no open draft, **or** a concurrent publish of the same policy won the race. | Check `published_by` and `published_at` (§3) before assuming nothing happened — see §1. |
 | `409` | `an approval step names a workflow role that no longer exists` | An `approval` step references a workflow role that has been deleted, or carries no role key at all. | Restore the role, or edit the step to name a live one, then publish again. A role deleted *after* a publish leaves the sealed version active with that step unsatisfiable. |
 | `409` | `a condition must have at least one step in one of its two lanes` | A `condition` step has both lanes empty, so it branches nowhere. | Put at least one step in the `then` or `else` lane, or remove the condition. |
+| `409` | `validated backlog exceeds the publish sweep cap — see docs/approvals.md` | The publish found more than 5,000 invoices at `validated` with no live approval run, so its arming sweep (§5) refused rather than open a transaction that size. Nothing was sealed and nothing was armed. | Reduce the validated backlog to 5,000 or fewer — transmitting or returning part of it moves those invoices out of the sweep's range — then publish again. The cap is not raisable by configuration; §5 has the full operator path. |
 | `409` | `another version was published first — reload the policy and try again` | A concurrent publish of a **different** policy took the tenant's single active slot. | Reload, confirm which policy is now active (§3), and decide whether yours should replace it. Do not blind-retry — see §1. |
 | `500` | `internal server error` | Anything unmapped. A `23001`, `23514` or `42501` reaching the client arrives here, because those carry no sentinel the API layer can translate. | Read the service log for the underlying SQLSTATE, then §4. A `23001` or `42501` means something attempted a write the immutability lock or the grant matrix forbids, which is a bug, not an operator error. |
 

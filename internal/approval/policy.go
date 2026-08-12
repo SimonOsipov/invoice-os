@@ -124,6 +124,10 @@ type stepRow struct {
 const (
 	policyScopeAll     = "All invoices"
 	maxPolicyBodyBytes = 64 * 1024 // the maxStaffBodyBytes precedent; no step-count cap
+
+	// sweepCap ceilings the publish sweep's transaction. A literal, deliberately not
+	// raisable by env or request — see docs/approvals.md §5 for the operator path.
+	sweepCap = 5000
 )
 
 // Sentinels for the policy seam. statusForErr in approval.go stays untouched;
@@ -133,6 +137,7 @@ var (
 	ErrPolicyStepRole         = errors.New("approval: step names an unknown workflow role")
 	ErrPolicyEmptyBranches    = errors.New("approval: condition has two empty lanes")
 	ErrPolicyNothingToPublish = errors.New("approval: nothing to publish")
+	ErrSweepCapExceeded       = errors.New("approval: validated backlog exceeds the publish sweep cap")
 )
 
 // The sets the approval_policy_steps CHECK constraints accept.
@@ -391,6 +396,10 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "a condition must have at least one step in one of its two lanes"
 	case errors.Is(err, ErrPolicyNothingToPublish):
 		return http.StatusConflict, "this policy has no unpublished changes"
+	// The message names the page rather than the remedy: the operator path is several
+	// paragraphs long, so docs/approvals.md §5 carries it.
+	case errors.Is(err, ErrSweepCapExceeded):
+		return http.StatusConflict, "validated backlog exceeds the publish sweep cap — see docs/approvals.md"
 	// The concurrent-publish loser, mapped from 23505 on
 	// approval_policy_versions_one_active. Policy wording, not statusForErr's role-domain
 	// string: the two mappers share the sentinel and nothing else.

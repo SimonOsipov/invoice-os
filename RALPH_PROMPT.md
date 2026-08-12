@@ -175,6 +175,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 #### a. Architecture — finalize the story
 - Spawn `product-architecture-spec` (Opus), CWD = `$WORKTREE_PATH`, passing the FULL basic story content (or build-plan row + milestone goal) and its Obsidian path. Instruct it to operate per its "Expanding a Basic Story" section.
 - **Diff every new control against its siblings.** When the story adds a control to an existing bar, panel or surface, compare its visibility and disabled treatment against the controls already there before the plan is final. A sibling's shipped decision is the spec; contradicting it on the same surface is a defect, not a choice. INVED-02 shipped a hidden button beside disabled ones and the decision was reversed after it was built.
+- **Re-measure every fact the story asserts.** A basic story states facts, not only goals: a root cause, a mechanism, a count, another PR's shipped state, a precedent's preconditions, whether the prescribed fix can work. Treat each one as a hypothesis. Re-measure it inside the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`. Cite what you ran, never the conclusion alone. BUG-02 asserted three mechanisms and all three proved wrong; APPR-04's ground truth was wrong in thirteen places. When a corrected premise carries the story's scope, Phase 0.6d stops the run for it.
 - It rewrites the story file in Obsidian to final state: system design, **## Implementation Subtasks** (`[<STORY-ID>-NN]` with Category / Dependencies / Description / Acceptance Criteria / Order / Test-first classification + Test Specs tables for `Test-first: yes`), and a **## Decisions** section appending every assumption it made where the story was silent.
 - **Traceability rule (hard):** every derived AC and subtask must trace to the Objective or a Core AC (or the milestone's "Ships when true"). Nothing in Out of Scope may appear in any subtask.
 - **Checkpoint:** `STORY_FINALIZED`
@@ -182,6 +183,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 #### b. QA-Verify debate — UNATTENDED disposition
 - Run the `/qa-verify` protocol against the finalized story: `product-qa-spec` critic (Sonnet) vs `product-architecture-spec` architect (Opus), ≤3 rounds, citation-required — including the Intent-Integrity checks (AC→Objective traceability, Out-of-scope leakage = mechanical).
 - Use the protocol's **Unattended Mode** disposition table: mechanical+resolved+cited → auto-apply; judgment / unresolved / uncited → **conservative default** (option closest to the story's explicit text, smaller scope) + prominent log entry. NEVER block on the user here — Phase 0.6d re-tests these defaults and is the only step that may stop for one.
+- **A finding that falsifies a premise is not a wording fix.** Record it in `## Decisions` as `premise — CORRECTED`, then let Phase 0.6d judge it. Repairing the sentence and auto-applying it is how M4-03 buried one.
 - Append the run to the story's `… QA Debate Log.md`, marking each disposition `auto-applied | conservative-default (reason)`.
 - **Checkpoint:** `PLAN_VERIFIED`
 
@@ -193,13 +195,14 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 
 #### d. Critical-fork gate — the ONE place the run stops
 
-A conservative default is right for a technical fork and wrong for a policy one. Before any code exists, test every entry in `## Decisions` — including the QA-debate conservative defaults — against three questions:
+A conservative default is right for a technical fork and wrong for a policy one. It is also wrong for a fact that turned out false. Before any code exists, test every entry in `## Decisions` — the QA-debate conservative defaults and Phase 0.6a's `premise —` entries included — against four questions:
 
 - Does it decide **who is allowed** to do something?
 - Does it decide **what the system claims** to an outside party: the authority, the customer, the audit record?
 - Does it let the system **silently override a human's action**?
+- Does a **corrected premise** take away something this story's scope needs: a shipped screen, an endpoint, a merged PR, a seeded row?
 
-Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark.
+Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark. M4-03 would have tripped the fourth: its QA debate recorded "PR #54 is OPEN, not shipped", graded it MECHANICAL, softened three provenance labels, and shipped a feature the user could not reach.
 
 **First, check whether the user already answered it.** A story that came from an epic may inherit decisions taken once for the whole epic. Look in the story's own epic folder (`User Stories/<EPIC>/`) for a file whose frontmatter carries `type: decision-log`; fall back to a filename matching `*Decision Log*.md`. Most stories have no such file — then this paragraph does nothing and the gate proceeds exactly as below.
 
@@ -222,7 +225,7 @@ When the user answers, record each choice in `## Decisions` tagged `user — <wh
 **Stated boundary:** the gate runs where planning runs. A pre-planned story skips Phase 0.6 and therefore skips this gate, so critical forks already defaulted inside an architect-level story are not caught here.
 
 #### e. Decisions surfacing (non-blocking)
-- When spawning the FIRST subtask's executor (Phase 1), instruct it to include in the draft PR description: the story's **## Decisions** section (PM defaults + architect assumptions + conservative-default dispositions) and a pointer to the QA Debate Log. Phase 0.6d already cleared every critical fork, so this is a review surface, not a gate — the run does NOT wait for input; completion gates remain CI + Phase 3.5.
+- When spawning the FIRST subtask's executor (Phase 1), instruct it to include in the draft PR description: the story's **## Decisions** section (PM defaults + architect assumptions + conservative-default dispositions + Phase 0.6a's `premise —` entries) and a pointer to the QA Debate Log. Phase 0.6d already cleared every critical fork, so this is a review surface, not a gate — the run does NOT wait for input; completion gates remain CI + Phase 3.5.
 
 Then proceed to Phase 1 exactly as for a pre-planned story.
 
@@ -470,7 +473,7 @@ An agent parses these instructions with no one to ask when a sentence is ambiguo
 | Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-23) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
 | Title-parsing Backlog tasks to find a story's subtasks | Use the `story:<slug>` label |
 | Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs (or a build-plan row) = BASIC → run Phase 0.6 |
-| Blocking on the user in any unattended phase | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR |
+| Blocking on the user in any unattended phase | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR. Phase 0.6d is the single exception |
 | Architect inventing scope while expanding a basic story | Every derived AC/subtask traces to Objective/Core AC/"Ships when true"; Out-of-scope leakage = mechanical fail |
 | Bouncing the executor on uncited taste | UI fails must cite a design-system rule or a prototype CSS rule; pure taste is advisory → escalate |
 | Renaming a variable and checking only that the rename landed | Grep every OTHER variable's rendered value for the OLD name before merge — M4-22's DSNs still interpolated the deleted names and rendered empty |

@@ -154,7 +154,7 @@ func TestPublish_WaitsForTheLockedPolicyRow(t *testing.T) {
 				t.Fatalf("blocker %s: %v", h.name, err)
 			}
 
-			done := publishInBackground(NewStore(app), c, policyID)
+			done := publishInBackground(NewStore(app, stubFingerprinter), c, policyID)
 			waitUntilBlockedBy(t, super, holderPID, done, "PublishPolicy")
 
 			// Still a draft while the writer holds the row: the publish is waiting, not
@@ -186,7 +186,7 @@ func TestPublish_SamePolicyConcurrentPublishesSerialise(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-same-policy-race")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -264,7 +264,7 @@ func TestPublish_LosingTheActiveSlotIsErrConflict(t *testing.T) {
 		t.Fatalf("competitor claims the active slot: %v", err)
 	}
 
-	done := publishInBackground(NewStore(app), c, policyID)
+	done := publishInBackground(NewStore(app, stubFingerprinter), c, policyID)
 	waitUntilBlockedBy(t, super, holderPID, done, "PublishPolicy")
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatalf("commit the competitor: %v", err)
@@ -322,7 +322,7 @@ func TestPublish_RoleDeletedWhileTheSealWaitsStillSeals(t *testing.T) {
 		t.Fatalf("hold the active slot: %v", err)
 	}
 
-	done := publishInBackground(NewStore(app), c, policyID)
+	done := publishInBackground(NewStore(app, stubFingerprinter), c, policyID)
 	waitUntilBlockedBy(t, super, holderPID, done, "PublishPolicy")
 
 	// The gate has already run and passed; the role dies while the seal waits.
@@ -371,7 +371,7 @@ func TestPublish_NeedsAnActiveAdmin(t *testing.T) {
 
 			traced, rec := tracedAppPool(t)
 			rec.reset()
-			_, err := NewStore(traced).PublishPolicy(c, policyID)
+			_, err := NewStore(traced, stubFingerprinter).PublishPolicy(c, policyID)
 			if !errors.Is(err, ErrNotPermitted) {
 				t.Errorf("PublishPolicy as %s: err = %v, want ErrNotPermitted", tc.name, err)
 			}
@@ -398,7 +398,7 @@ func TestPublish_NeedsAnActiveAdmin(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedApprovalDraft(t, super, tenantID, policyID)
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
 		t.Fatalf("control: PublishPolicy as an active admin: %v, want success", err)
 	}
 }
@@ -413,7 +413,7 @@ func TestPublish_UnknownMalformedAndDeletedAreNotFound(t *testing.T) {
 	super, appPool := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-not-found")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(appPool)
+	store := NewStore(appPool, stubFingerprinter)
 
 	for _, id := range []string{"not-a-uuid", "", "11111111-1111-1111-1111-111111111111"} {
 		_, err := store.PublishPolicy(c, id)
@@ -458,7 +458,7 @@ func TestPublish_DeactivatesAnActiveVersionUnderASoftDeletedPolicy(t *testing.T)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
 		t.Fatalf("PublishPolicy while a soft-deleted policy holds the slot: %v, want success", err)
 	}
 	if v := versionRow(t, super, deletedVersion); !v.Sealed || v.IsActive {
@@ -479,7 +479,7 @@ func TestPublish_GateRecursesIntoConditionLanes(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-gate-recursion")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	deadRole := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	softDeleteWorkflowRole(t, super, deadRole)
@@ -546,7 +546,7 @@ func TestPublish_AnswersTheSealedTree(t *testing.T) {
 		Ord: 1, Kind: "notify", NotifyTarget: ptr("ops@example.com"), NotifyChannel: ptr("email"),
 	})
 
-	got, err := NewStore(app).PublishPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("PublishPolicy: %v, want success", err)
 	}

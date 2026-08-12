@@ -36,7 +36,7 @@ func TestDeletePolicy_NeedsAnActiveAdmin(t *testing.T) {
 
 			traced, rec := tracedAppPool(t)
 			rec.reset()
-			_, err := NewStore(traced).DeletePolicy(c, policyID)
+			_, err := NewStore(traced, stubFingerprinter).DeletePolicy(c, policyID)
 			if !errors.Is(err, ErrNotPermitted) {
 				t.Errorf("DeletePolicy as %s: err = %v, want ErrNotPermitted", tc.name, err)
 			}
@@ -67,7 +67,7 @@ func TestDeletePolicy_NeedsAnActiveAdmin(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedPublishedVersion(t, super, tenantID, policyID, 1, 0)
-	if _, err := NewStore(app).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("control: DeletePolicy as an active admin: %v, want success", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite(t *testing.T) {
 
 	traced, rec := tracedAppPool(t)
 	rec.reset()
-	if _, err := NewStore(traced).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(traced, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestDeletePolicy_IssuesNoStatementAgainstStepsOrTheRunLedger(t *testing.T) 
 
 	traced, rec := tracedAppPool(t)
 	rec.reset()
-	if _, err := NewStore(traced).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(traced, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestDeletePolicy_ConcurrentDeletesLeaveOneStamp(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 delete-races-delete")
 	cFirst, _ := activeAdmin(t, super, tenantID)
 	cSecond, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedPublishedVersion(t, super, tenantID, policyID, 1, 0)
@@ -226,7 +226,7 @@ func TestDeletePolicy_LeavesNoActivePolicyAndEveryReaderRefuses(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 delete-leaves-nothing-active")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	sealedV1 := seedPublishedVersion(t, super, tenantID, policyID, 1, 1)
@@ -304,7 +304,7 @@ func TestDeletePolicy_FreesTheNameForANewPolicy(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 delete-frees-the-name")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	first, err := store.CreatePolicy(c, "Sign-off", scopeAllInvoices)
 	if err != nil {
@@ -349,7 +349,7 @@ func TestDeletePolicy_AcceptsANonCanonicalUuidSpelling(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 delete-uuid-spelling")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	for _, tc := range []struct {
 		name  string

@@ -368,6 +368,30 @@ func hydrateLinesTx(ctx context.Context, tx pgx.Tx, invoiceID string) ([]LineIte
 	return out, nil
 }
 
+// FingerprintTx hashes one invoice's stored content inside the caller's transaction —
+// the same three steps ApplyValidation's staleness re-check takes (scanInvoice over
+// invoiceColumns, hydrateLinesTx, contentFingerprint), read through one MVCC snapshot.
+//
+// Exported for exactly one consumer: approval.Fingerprinter, which internal/approval's
+// publish sweep is built with at cmd/invoice/main.go. contentFingerprint stays unexported
+// so that edge cannot reverse (TestApproval_DoesNotImportInvoicePackage).
+//
+// Takes NO row lock: the sweep already holds it, matching ApplyValidation's shape where
+// the FOR UPDATE is step 1 of the caller's closure.
+func FingerprintTx(ctx context.Context, tx pgx.Tx, id string) (string, error) {
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
+	), &inv); err != nil {
+		return "", err
+	}
+	lines, err := hydrateLinesTx(ctx, tx, id)
+	if err != nil {
+		return "", err
+	}
+	return contentFingerprint(inv, lines), nil
+}
+
 // replaceLinesTx replaces an invoice's WHOLE line set inside the caller's tx:
 // DELETE every existing line, then re-INSERT in from array order with line_no
 // system-assigned 1..N ([line-update-shape], [line-no-by-position]). The INSERT

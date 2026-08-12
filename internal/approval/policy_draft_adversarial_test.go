@@ -38,7 +38,7 @@ func TestPutDraft_ResponseVersionsMatchTheNextGet(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedSealedActiveV1(t, super, tenantID, policyID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	put, err := store.PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
@@ -105,7 +105,7 @@ func TestPutDraft_PermissionCheckedBeforeAnyPolicyRow(t *testing.T) {
 
 			traced, rec := tracedAppPool(t)
 			rec.reset()
-			_, err := NewStore(traced).PutDraft(c, policyID, ptr("Hijacked"), nil, approvalStep("engagement-partner"))
+			_, err := NewStore(traced, stubFingerprinter).PutDraft(c, policyID, ptr("Hijacked"), nil, approvalStep("engagement-partner"))
 			if !errors.Is(err, ErrNotPermitted) {
 				t.Errorf("PutDraft as a %s: err = %v, want ErrNotPermitted", tc.name, err)
 			}
@@ -128,7 +128,7 @@ func TestPutDraft_PermissionCheckedBeforeAnyPolicyRow(t *testing.T) {
 			// Control: an active admin of the same tenant writes, so the refusal is not a
 			// store that refuses everyone.
 			admin, _ := activeAdmin(t, super, tenantID)
-			if _, err := NewStore(app).PutDraft(admin, policyID, nil, nil, approvalStep("engagement-partner")); err != nil {
+			if _, err := NewStore(app, stubFingerprinter).PutDraft(admin, policyID, nil, nil, approvalStep("engagement-partner")); err != nil {
 				t.Fatalf("PutDraft as an active admin: %v — the refusal above is vacuous unless this succeeds", err)
 			}
 		})
@@ -150,7 +150,7 @@ func TestPutDraft_NormalizersLeaveTheCallersPointeesAlone(t *testing.T) {
 	seedDraftWithSteps(t, super, tenantID, policyID, 1)
 
 	name, scope := "  Renamed  ", ""
-	if _, err := NewStore(app).PutDraft(c, policyID, &name, &scope, approvalStep("engagement-partner")); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, &name, &scope, approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestPutDraft_ConcurrentPutsConvergeOnOneDraft(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	v1 := seedSealedActiveV1(t, super, tenantID, policyID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	const n = 6
 	errs := make([]error, n)
@@ -290,7 +290,7 @@ func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
 		}
 	}
 
-	got, err := NewStore(app).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
 		t.Fatalf("PutDraft: %v (SQLSTATE %q)", err, pgCode(err))
 	}
@@ -350,7 +350,7 @@ func TestPutDraft_RenamesAndRewritesInOneCall(t *testing.T) {
 		{Kind: "notify", NotifyTarget: ptr("finance@example.com"), NotifyChannel: ptr("email")},
 	}
 
-	got, err := NewStore(app).PutDraft(c, policyID, ptr("  Renamed in the same call  "), ptr(""), tree)
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, ptr("  Renamed in the same call  "), ptr(""), tree)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestPutDraft_RepeatedPutsChurnIdsButKeepTheTree(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	tree := []stepInput{{
 		Kind: "condition", CondOp: ptr("<="), CondAmount: ptr("42.00"),
@@ -470,7 +470,7 @@ func TestPutDraft_DepthLimitTreeRoundTripsAndDeeperIsRefused(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	atLimit := []stepInput{{
 		Kind: "condition", CondOp: ptr(">="), CondAmount: ptr("1000.00"),
@@ -535,7 +535,7 @@ func TestPutDraft_ConditionLanesOfDifferentKindsRoundTrip(t *testing.T) {
 		},
 	}}
 
-	got, err := NewStore(app).PutDraft(c, policyID, nil, nil, tree)
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, tree)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
@@ -598,7 +598,7 @@ func TestPutDraft_ConditionLanesOfDifferentKindsRoundTrip(t *testing.T) {
 // transaction, so the seeded draft, the name and the version count are all untouched.
 func TestPutDraft_NULInAnyTextFieldIsRefusedNotA500(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	for _, tc := range []struct {
 		field string
@@ -666,7 +666,7 @@ func TestPutDraft_NULInAnyTextFieldIsRefusedNotA500(t *testing.T) {
 // control is the same step with a legal operator, which the column accepts on any kind.
 func TestPutDraft_ForeignCondOpOnANonConditionIsRefusedNotA500(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	refused := notifyIn("preparer", "email")
 	refused.CondOp = ptr("BOOM")
@@ -728,7 +728,7 @@ func TestPutDraft_LeavesNoPolicyRowsBehind(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedSealedActiveV1(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner")); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 

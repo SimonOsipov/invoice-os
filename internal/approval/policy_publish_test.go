@@ -166,7 +166,7 @@ func TestPublish_RejectsDanglingRole(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-dangling-role")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	softDeleteWorkflowRole(t, super, roleID)
@@ -217,7 +217,7 @@ func TestPublish_RejectsEmptyRoleKey(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-empty-role-key")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	// A live role exists, so a gate that answered ErrPolicyStepRole because the tenant has
 	// no roles at all would not pass this.
@@ -262,7 +262,7 @@ func TestPublish_RejectsEmptyBothLanes(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-empty-lanes")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	deadPolicyID := seedApprovalPolicy(t, super, tenantID, "Two empty lanes")
 	deadVersionID := seedApprovalPolicyVersionN(t, super, tenantID, deadPolicyID, 1)
@@ -317,7 +317,7 @@ func TestPublish_EmptyPolicyAllowed(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	got, err := NewStore(app).PublishPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("PublishPolicy of a stepless draft: %v, want success", err)
 	}
@@ -382,7 +382,7 @@ func TestPublish_DeactivatesTheTenantsOtherPolicy(t *testing.T) {
 	policyB := seedApprovalPolicy(t, super, tenantID, "B policy")
 	versionB := seedApprovalDraft(t, super, tenantID, policyB)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyB); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyB); err != nil {
 		t.Fatalf("PublishPolicy(B): %v, want success", err)
 	}
 
@@ -466,7 +466,7 @@ func TestPublish_SealAndActivateAreOneStatement(t *testing.T) {
 		t.Fatalf("incoming version = %+v after the rolled-back controls, want still (sealed false, is_active false)", v)
 	}
 
-	if _, err := NewStore(app).PublishPolicy(c, incomingPolicy); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, incomingPolicy); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success — the deactivation must precede the activation, or "+
 			"this is the 23505 control (ii) just measured", err)
 	}
@@ -498,7 +498,7 @@ func TestPublish_StampsActorAndTxTimestamp(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success", err)
 	}
 
@@ -544,7 +544,7 @@ func TestPublish_SecondPublishIsNothingToPublish(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-nothing-to-publish")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -592,7 +592,7 @@ func TestPublish_RoleDeletedAfterPublishLeavesVersionActive(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-role-deleted-after")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -647,7 +647,7 @@ func TestPublish_AuditsInSameTx(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success", err)
 	}
 
@@ -710,7 +710,7 @@ func TestPublish_AuditsInSameTx(t *testing.T) {
 // about tenancy.
 func TestPublish_CrossTenantIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	tenantA := policyTenant(t, super, "APPR-05 publish-cross-tenant A")
 	cA, _ := activeAdmin(t, super, tenantA)

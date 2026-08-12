@@ -267,7 +267,7 @@ func TestPutDraft_ReplacesOpenDraftWholesale(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 3)
 
-	got, err := NewStore(app).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestPutDraft_TwoLaneConditionKeepsPerLaneOrd(t *testing.T) {
 		},
 	}}
 
-	got, err := NewStore(app).PutDraft(c, policyID, nil, nil, tree)
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, tree)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestPutDraft_NullableColumnsRoundTripInOneBatch(t *testing.T) {
 		},
 	}
 
-	if _, err := NewStore(app).PutDraft(c, policyID, nil, nil, tree); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, tree); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 
@@ -514,7 +514,7 @@ func TestPutDraft_ForksFromActiveWhenNoDraft(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	v1 := seedSealedActiveV1(t, super, tenantID, policyID)
 
-	got, err := NewStore(app).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestPutDraft_ForkCopiesNoSteps(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	v1 := seedSealedActiveV1(t, super, tenantID, policyID)
 
-	got, err := NewStore(app).PutDraft(c, policyID, nil, nil, []stepInput{})
+	got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, []stepInput{})
 	if err != nil {
 		t.Fatalf("PutDraft with an empty tree: %v", err)
 	}
@@ -623,7 +623,7 @@ func TestPutDraft_LeavesSealedVersionByteIdentical(t *testing.T) {
 	}
 	versionBefore := versionSnapshot(t, super, v1)
 
-	if _, err := NewStore(app).PutDraft(c, policyID, ptr("Renamed"), nil, approvalStep("engagement-partner")); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, ptr("Renamed"), nil, approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 
@@ -681,7 +681,7 @@ func TestPutDraft_ClientStepIdsIgnored(t *testing.T) {
 	}
 	clientIDs := map[string]bool{"wn1000": true, "wn1001": true, "wn1002": true}
 
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 	first, err := store.PutDraft(c, policyID, nil, nil, *req.Steps)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
@@ -739,7 +739,7 @@ func TestPutDraft_CondAmountScaleIsCanonicalInTheResponse(t *testing.T) {
 		{Kind: "condition", CondOp: ptr("<"), CondAmount: ptr("1000.5")},
 	}
 
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 	put, err := store.PutDraft(c, policyID, nil, nil, tree)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
@@ -785,7 +785,7 @@ func TestPutDraft_ForeignScopeRejected(t *testing.T) {
 			versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
 			seeded := readStoredSteps(t, super, versionID)
 
-			_, err := NewStore(app).PutDraft(c, policyID, nil, ptr(scope), approvalStep("engagement-partner"))
+			_, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, ptr(scope), approvalStep("engagement-partner"))
 			if !errors.Is(err, ErrValidation) {
 				t.Errorf("PutDraft(scope %q) err = %v, want ErrValidation", scope, err)
 			}
@@ -814,7 +814,7 @@ func TestPutDraft_ForeignScopeRejected(t *testing.T) {
 		policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 		versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
 
-		if _, err := NewStore(app).PutDraft(c, policyID, nil, ptr(scopeAllInvoices), approvalStep("engagement-partner")); err != nil {
+		if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, ptr(scopeAllInvoices), approvalStep("engagement-partner")); err != nil {
 			t.Fatalf("PutDraft(%q): %v — the refusals above are vacuous unless this succeeds", scopeAllInvoices, err)
 		}
 		steps := readStoredSteps(t, super, versionID)
@@ -851,7 +851,7 @@ func TestPutDraft_EmptyScopePointerNormalized(t *testing.T) {
 			policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 			versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
 
-			got, err := NewStore(app).PutDraft(c, policyID, nil, tc.scope, approvalStep("engagement-partner"))
+			got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, tc.scope, approvalStep("engagement-partner"))
 			if err != nil {
 				t.Fatalf("PutDraft(scope %s): %v (SQLSTATE %q) — an unnormalized scope reaching SQL raises "+
 					"23514, and a nil one bound directly raises 23502", strOrNull(tc.scope), err, pgCode(err))
@@ -891,7 +891,7 @@ func TestPutDraft_AcceptsDanglingRoleKey(t *testing.T) {
 		}
 	}
 
-	if _, err := NewStore(app).PutDraft(c, policyID, nil, nil, approvalStep("ghost-role")); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, approvalStep("ghost-role")); err != nil {
 		t.Fatalf("PutDraft naming an unknown workflow role: %v — the live-role gate is publish's, not the draft's", err)
 	}
 
@@ -915,7 +915,7 @@ func TestPutDraft_AbsentNameLeavesColumnUnchanged(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Original name")
 	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 2)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	got, err := store.PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
 	if err != nil {
@@ -975,7 +975,7 @@ func TestPutDraft_NilStepsClearsTheTree(t *testing.T) {
 			policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 			versionID := seedDraftWithSteps(t, super, tenantID, policyID, 3)
 
-			got, err := NewStore(app).PutDraft(c, policyID, nil, nil, tc.steps)
+			got, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, nil, nil, tc.steps)
 			if err != nil {
 				t.Fatalf("PutDraft with %s steps: %v", tc.name, err)
 			}
@@ -1015,7 +1015,7 @@ func TestPutDraft_AuditsInSameTx(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedSealedActiveV1(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PutDraft(c, policyID, ptr("Renamed"), nil, approvalStep("engagement-partner")); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PutDraft(c, policyID, ptr("Renamed"), nil, approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 	draft := openDraft(t, super, policyID)
@@ -1088,7 +1088,7 @@ func TestPutDraft_AuditsInSameTx(t *testing.T) {
 // nothing about tenancy.
 func TestPutDraft_CrossTenantIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	tenantA := policyTenant(t, super, "APPR-05 put-cross-tenant A")
 	cA, _ := activeAdmin(t, super, tenantA)
@@ -1137,7 +1137,7 @@ func TestPutDraft_MalformedIdIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 put-not-found")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	liveID := seedApprovalPolicy(t, super, tenantID, "Live")
 	liveVersion := seedDraftWithSteps(t, super, tenantID, liveID, 1)

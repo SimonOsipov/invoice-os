@@ -1,11 +1,12 @@
 package approval
 
-// The approve/reject decision seam (§1.3 of the story). Decide/decideTx implement the
-// approve half; the rejected half lands in a later subtask on this branch.
+// The approve/reject decision seam (§1.3 of the story): Decide/decideTx implement
+// both halves.
 
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,7 +23,12 @@ var (
 	ErrRunClosed           = errors.New("approval: run is not open")
 	ErrNotRoleHolder       = errors.New("approval: caller does not hold the step's role")
 	ErrNotAwaitingApproval = errors.New("approval: invoice is not awaiting approval")
+	ErrNoDemoter           = errors.New("approval: reject has no demoter — cmd/invoice/main.go wires invoice.DemoteApprovalRejectedTx")
 )
+
+// maxRejectReasonLen bounds a reject reason, byte-counted -- maxKeepAsIsReasonLen's
+// own bound (internal/invoice/handlers.go:865).
+const maxRejectReasonLen = 1000
 
 // Decide is the approve/reject seam: two-axis authorization, the current pending
 // step's satisfaction, the ledger write, and the advance-or-close, all in one
@@ -33,6 +39,20 @@ func (s *Store) Decide(ctx context.Context, invoiceID, decision string, reason *
 	u, err := uuid.Parse(invoiceID)
 	if err != nil {
 		return Run{}, ErrRunNotFound
+	}
+
+	// A reject reason is required, unlike approve's optional one; trimmed and
+	// byte-bounded here so a malformed reason never reaches SQL, same rationale as
+	// the uuid parse above.
+	if decision == "rejected" {
+		trimmed := ""
+		if reason != nil {
+			trimmed = strings.TrimSpace(*reason)
+		}
+		if trimmed == "" || len(trimmed) > maxRejectReasonLen {
+			return Run{}, ErrValidation
+		}
+		reason = &trimmed
 	}
 
 	var run Run
@@ -177,19 +197,26 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID, stepID string, stepOrd int, decision, actor string, reason *string, demoter Demoter) (satisfied bool, err error) {
 	// approval_decisions holds only SELECT+INSERT for invoice_app (migrations/
 	// 20260809232011_approval_runs.sql:114) -- the UPDATE must claim the row FIRST,
-	// or a 0-row UPDATE would leave an unremovable phantom decision.
-	stepState := "satisfied"
-	if decision == "rejected" {
-		stepState = "rejected"
-	}
+	// or a 0-row UPDATE would leave an unremovable phantom decision. Rejected is not
+	// satisfied, so satisfied_at/satisfied_by stay NULL rather than being stamped.
 	var claimed string
-	err = tx.QueryRow(ctx,
-		`UPDATE approval_run_steps
-		    SET state = $2, satisfied_at = now(), satisfied_by = $3
-		  WHERE id = $1 AND state = 'pending'
-		RETURNING id`,
-		stepID, stepState, actor,
-	).Scan(&claimed)
+	if decision == "rejected" {
+		err = tx.QueryRow(ctx,
+			`UPDATE approval_run_steps
+			    SET state = 'rejected'
+			  WHERE id = $1 AND state = 'pending'
+			RETURNING id`,
+			stepID,
+		).Scan(&claimed)
+	} else {
+		err = tx.QueryRow(ctx,
+			`UPDATE approval_run_steps
+			    SET state = 'satisfied', satisfied_at = now(), satisfied_by = $2
+			  WHERE id = $1 AND state = 'pending'
+			RETURNING id`,
+			stepID, actor,
+		).Scan(&claimed)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -209,8 +236,9 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID
 		return false, err
 	}
 
-	// Close-or-advance and audit: the approved half only -- rejected lands in a
-	// later subtask on this branch.
+	// Close-or-advance and audit: approve only closes once no approval step remains
+	// pending; reject always closes the run right here, regardless of later steps
+	// (those stay pending, never skipped -- AC-4).
 	if decision == "approved" {
 		var stillPending bool
 		if err := tx.QueryRow(ctx,
@@ -231,6 +259,34 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID
 		}
 
 		if err := audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{
+			"invoice_id": invoiceID,
+			"run_id":     runID,
+			"step_ord":   stepOrd,
+			"reason":     reason,
+		}); err != nil {
+			return false, err
+		}
+	} else if decision == "rejected" {
+		// Fail closed rather than leave a rejected run with no route back to draft
+		// (policy_store.go:749-751's fingerprinter precedent).
+		if demoter == nil {
+			return false, ErrNoDemoter
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE approval_runs SET state = 'rejected', closed_at = now(), closed_by = $2 WHERE id = $1`,
+			runID, actor,
+		); err != nil {
+			return false, err
+		}
+
+		// The run must already read 'rejected' when the demoter runs (AC-6) --
+		// TestReject_CallsTheDemoterOnceAfterTheRunCloses observes this on the same tx.
+		if err := demoter(ctx, tx, invoiceID, tenantID, actor); err != nil {
+			return false, err
+		}
+
+		if err := audit.Record(ctx, tx, actor, "invoice.approval_rejected", map[string]any{
 			"invoice_id": invoiceID,
 			"run_id":     runID,
 			"step_ord":   stepOrd,

@@ -392,15 +392,25 @@ func FingerprintTx(ctx context.Context, tx pgx.Tx, id string) (string, error) {
 	return contentFingerprint(inv, lines), nil
 }
 
-// DemoteApprovalRejectedTx will walk a validated invoice back to draft after an
-// approver rejects it, via transitionTx on the caller's transaction — exported for
-// exactly one consumer: approval.Demoter, bound at cmd/invoice/main.go, mirroring
-// FingerprintTx's shape and the same reason (the internal/approval -> internal/invoice
-// edge must not open).
+// DemoteApprovalRejectedTx walks a validated invoice back to draft after an approver
+// rejects it, via transitionTx on the caller's transaction — exported for exactly one
+// consumer: approval.Demoter, bound at cmd/invoice/main.go, mirroring FingerprintTx's
+// shape and the same reason (the internal/approval -> internal/invoice edge must not
+// open).
 //
-// Stub: returns nil unconditionally until the real transitionTx call is wired in.
+// Takes NO row lock, like FingerprintTx: the caller (decideTx) already holds it. The
+// status is read fresh rather than assumed validated, so a source that is not
+// legally validated->draft (e.g. already draft) surfaces transitionTx's own
+// ErrIllegalTransition instead of silently rewriting the row.
 func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subject string) error {
-	return nil
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
+	), &inv); err != nil {
+		return err
+	}
+	_, err := transitionTx(ctx, tx, id, inv.Status, StatusDraft, Actor{TenantID: tenantID, Subject: subject})
+	return err
 }
 
 // replaceLinesTx replaces an invoice's WHOLE line set inside the caller's tx:

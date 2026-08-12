@@ -38,6 +38,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -382,13 +383,37 @@ func rcReconciler(h *harness) *Reconciler {
 
 // --- APPR-06-09 approval-drift fixtures -------------------------------------------------
 //
-// The two new kinds' Go constants do not exist yet (that is the executor's job, task-485)
-// — these string literals stand in for them so the tests below type-check and fail on the
-// real assertion (Scan returns nothing for them) rather than on a missing identifier.
+// Spelled here rather than aliased to ApprovalRunOrphaned/ApprovalBlockedUnstaffed: a test
+// that asserts against the constant it is checking asserts nothing (internal/approval/
+// policy_test.go:35). TestRLS_ApprovalDriftKindConstantsMatchScanQuery binds the two
+// spellings — and the SQL literals — back together.
 const (
 	rcApprovalRunOrphaned      = DriftKind("approval_run_orphaned")
 	rcApprovalBlockedUnstaffed = DriftKind("approval_blocked_unstaffed")
 )
+
+// The compiler binds neither exported DriftKind constant to the kind literal scanQuery
+// selects — editing one and not the other makes Scan return findings no consumer comparing
+// against the constant can match. Pure, no harness: the TestRLS_ prefix is the CI job's
+// `-run TestRLS` selector (ci.yml), not a claim that this case touches the database.
+func TestRLS_ApprovalDriftKindConstantsMatchScanQuery(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		exported DriftKind
+		spelled  DriftKind
+	}{
+		{"ApprovalRunOrphaned", ApprovalRunOrphaned, rcApprovalRunOrphaned},
+		{"ApprovalBlockedUnstaffed", ApprovalBlockedUnstaffed, rcApprovalBlockedUnstaffed},
+	} {
+		if c.exported != c.spelled {
+			t.Errorf("%s = %q, want %q (the spelling every test in this package asserts against)",
+				c.name, c.exported, c.spelled)
+		}
+		if lit := "'" + string(c.exported) + "'"; !strings.Contains(scanQuery, lit) {
+			t.Errorf("scanQuery selects no %s literal; %s would never appear in a Finding", lit, c.name)
+		}
+	}
+}
 
 // countForInvoice counts fs entries for one invoice — the two new arms are shaped (LATERAL
 // LIMIT 1, NOT EXISTS never LEFT JOIN) to never fan out more than one row per invoice; tests

@@ -952,6 +952,9 @@ func TestArm_UnsignableRolesStillArmPending(t *testing.T) {
 		holders = append(holders, h)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read back fixture holders: %v", err)
+	}
 	wantHolders := []holder{
 		{"cfo_susp", "admin", "suspended"},
 		{"fin_dir_ok", "admin", "active"},

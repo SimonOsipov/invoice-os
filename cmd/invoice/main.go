@@ -195,6 +195,10 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/approval-policies/{id}/publish", approval.PublishPolicyHandler(roleStore.PublishPolicy, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/approval-policies/{id}", approval.DeletePolicyHandler(roleStore.DeletePolicy, app.Logger))
 
+	// GET /v1/invoices/{id}/approval -- the run read model (APPR-07). No role gate:
+	// any authenticated tenant member may read a run, same as the policy routes above.
+	app.Mux.HandleFunc("GET /v1/invoices/{id}/approval", approval.RunHandler(roleStore.ApprovalRun, app.Logger))
+
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this
 	// service only ever enqueues submission_submit jobs via the transactional outbox

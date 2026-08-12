@@ -2,10 +2,12 @@ package approval
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // This layer owns WIRE shape only — identity, the body cap, whether the body decodes,
@@ -214,12 +216,42 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 	}
 }
 
-// RunHandler returns GET /v1/invoices/{id}/approval. STUB — answers 501 so
-// decision_handlers_test.go fails on its assertions rather than on a missing
-// symbol; Stage 3 replaces the body with identity -> path id -> read ->
-// decisionStatusForErr -> bare 200.
+// decisionStatusForErr is the run-read seam's mapper. ErrRunNotFound covers unknown,
+// cross-tenant, malformed-uuid and no-run-row alike (read_model.go:77-79's sentinel),
+// so its wording never names which.
+func decisionStatusForErr(err error) (status int, msg string) {
+	switch {
+	case errors.Is(err, db.ErrNoTenant):
+		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, ErrRunNotFound):
+		return http.StatusNotFound, "no approval run for this invoice"
+	default:
+		return http.StatusInternalServerError, "internal server error"
+	}
+}
+
+// RunHandler returns GET /v1/invoices/{id}/approval: identity (401) -> path id ->
+// read -> 200. No body is read at all, and no role gate — any authenticated tenant
+// member may read a run (AC-5); the approver check belongs to the POST.
 func RunHandler(read RunReader, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		run, err := read(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := decisionStatusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "approval: get approval run", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
 	}
 }

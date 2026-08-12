@@ -1,7 +1,9 @@
 package approval
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -31,7 +33,7 @@ type RunStep struct {
 	NotifyChannel     *string    `json:"notify_channel"`
 }
 
-// RunDecision is one approval_run_decisions row.
+// RunDecision is one approval_decisions row.
 type RunDecision struct {
 	RunStepID string    `json:"run_step_id"`
 	Ord       int       `json:"ord"`
@@ -64,6 +66,27 @@ func (r Run) MarshalJSON() ([]byte, error) {
 		v.Decisions = []RunDecision{}
 	}
 	return json.Marshal(v)
+}
+
+// ErrRunNotFound is the run-read sentinel: unknown, cross-tenant, malformed-uuid and
+// no-run-row invoice ids all answer alike (the GetPolicy no-oracle rule, policy.go:136).
+var ErrRunNotFound = errors.New("approval: run not found")
+
+// RunReader is the read-model seam, declared beside the method that satisfies it
+// (policy_store.go:16-30's shape).
+type RunReader func(ctx context.Context, invoiceID string) (Run, error)
+
+var _ RunReader = new(Store).ApprovalRun
+
+// ApprovalRun assembles one invoice's most recent approval run: its steps in ord order,
+// holder/title resolved through resolveHolder/roleTitle, and its decision ledger. RLS is
+// the only tenant scope -- no role gate.
+//
+// STUB for APPR-07-02's Test-Spec stage (task-487): the query logic is the executor's,
+// not this subtask's. Returns the zero Run and a nil error so every RED test in
+// read_model_db_test.go fails on an assertion, never a compile error.
+func (s *Store) ApprovalRun(ctx context.Context, invoiceID string) (Run, error) {
+	return Run{}, nil
 }
 
 // isApprover mirrors internal/invoice/store.go:1412 -- kept in sync by inspection, not import

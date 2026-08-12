@@ -4,6 +4,9 @@ package approval
 // decide whether this package's DB-backed tests execute at all.
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,10 +100,11 @@ func TestApproval_CIRLSJobRunsThisPackage(t *testing.T) {
 }
 
 // TestApproval_DoesNotImportInvoicePackage (task-482 AC-5): internal/approval must never
-// import internal/invoice -- task-482 creates the internal/invoice -> internal/approval
+// import internal/invoice -- task-482 created the internal/invoice -> internal/approval
 // edge and it must not reverse. Modelled on internal/invoice/validator_test.go's VC-14
 // guard (TestValidatorClient_DoesNotImportValidationPackage): `go list -deps` WITHOUT
-// -test, so test files never enter the graph. Passes today (the edge does not exist yet).
+// -test, so test files never enter the graph. The edge exists now (since subtask 06);
+// this polices it from ever reversing.
 func TestApproval_DoesNotImportInvoicePackage(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "./internal/approval")
 	cmd.Dir = repoRoot(t)
@@ -143,5 +147,61 @@ func TestApproval_MakeTargetExportsTheDSNsThePackageReads(t *testing.T) {
 	}
 	if !strings.Contains(recipe, "./internal/approval/...") {
 		t.Errorf("test-approvals no longer selects ./internal/approval/...:\n%s", recipe)
+	}
+}
+
+// TestMain_WiresTheFingerprinter (task-484 AC-6): cmd/invoice/main.go's approval.NewStore
+// call must pass invoice.FingerprintTx as its second argument, never nil. The required
+// parameter makes an OMITTED argument a compile error, but nil still compiles and would
+// only fail closed at runtime -- this is the static guard that catches that at review
+// time instead. An AST walk, not a byte scan, mirrors
+// TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain (handlers_test.go), so
+// reformatting main.go cannot break it. Fails today: main.go:176 reads
+// approval.NewStore(pool), one argument.
+func TestMain_WiresTheFingerprinter(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "cmd", "invoice", "main.go")
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var found bool
+	ast.Inspect(f, func(node ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "NewStore" {
+			return true
+		}
+		pkgIdent, ok := sel.X.(*ast.Ident)
+		if !ok || pkgIdent.Name != "approval" {
+			return true
+		}
+		found = true
+
+		if len(call.Args) != 2 {
+			t.Fatalf("approval.NewStore call in %s has %d argument(s), want 2 (pool, fingerprinter)",
+				path, len(call.Args))
+			return false
+		}
+		arg1, ok := call.Args[1].(*ast.SelectorExpr)
+		if !ok {
+			t.Fatalf("approval.NewStore's second argument in %s is not invoice.FingerprintTx (got %T) -- "+
+				"nil still compiles here but only fails closed at runtime", path, call.Args[1])
+			return false
+		}
+		pkg1, ok := arg1.X.(*ast.Ident)
+		if !ok || pkg1.Name != "invoice" || arg1.Sel.Name != "FingerprintTx" {
+			t.Fatalf("approval.NewStore's second argument in %s is not invoice.FingerprintTx", path)
+		}
+		return false
+	})
+	if !found {
+		t.Fatal("no approval.NewStore( call found in cmd/invoice/main.go")
 	}
 }

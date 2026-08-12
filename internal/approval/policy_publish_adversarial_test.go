@@ -24,9 +24,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -575,5 +577,183 @@ func TestPublish_AnswersTheSealedTree(t *testing.T) {
 	if pv := got.Versions[0]; !pv.Sealed || !pv.IsActive || pv.PublishedAt == nil ||
 		pv.PublishedBy == nil || *pv.PublishedBy != adminID {
 		t.Errorf("returned versions[0] = %+v, want sealed, active and stamped with %q", pv, adminID)
+	}
+}
+
+// --- AC-4 (task-484): the cap boundary is > sweepCap, never >= sweepCap --------
+
+// TestPublish_SweepAtExactlyCapSucceeds: exactly sweepCap (5,000) validated invoices
+// publish and arm all 5,000 — the refusal in TestPublish_SweepAboveCapReturns409 only
+// fires one row past this. Measured ~5.2s end to end (5,000 real ArmTx calls at
+// ~0.9ms/arm, 5,000 runs + 5,000 steps, dev :5433). Uses policyTenant and registers
+// NO invoice cleanup of its own: policyTenant already registers
+// teardownSealedApprovalFixture AFTER seedTenant's, so LIFO deletes
+// approval_run_steps -> approval_runs before the tenant cascade reaches invoices. A
+// second t.Cleanup deleting invoices would run FIRST under LIFO and die 23001 on
+// approval_runs_tenant_invoice_fk (observed).
+func TestPublish_SweepAtExactlyCapSucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 publish-sweep-at-cap")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	entityID := seedBusinessEntity(t, super, tenantID, "At-cap Corp")
+	bulkSeedValidatedInvoices(t, super, tenantID, entityID, "at-cap", sweepCap)
+
+	member := uuid.NewString()
+	seedMembership(t, super, tenantID, member, "preparer", "active")
+	roleID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	staffWorkflowRole(t, super, tenantID, roleID, member, 0)
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	seedApprovalDraftNamingRole(t, super, tenantID, policyID, "engagement-partner")
+
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy at exactly the sweep cap: %v, want success", err)
+	}
+
+	if n := rowCount(t, super, "approval_runs", tenantID); n != sweepCap {
+		t.Errorf("approval_runs rows = %d, want %d — every validated invoice at exactly the cap must arm", n, sweepCap)
+	}
+	if n := rowCount(t, super, "approval_run_steps", tenantID); n != sweepCap {
+		t.Errorf("approval_run_steps rows = %d, want %d", n, sweepCap)
+	}
+}
+
+// --- AC-2 (task-484): an existing open-or-approved run is not a candidate ------
+
+// TestPublish_SweepSkipsInvoicesWithAnApprovedRun: one validated invoice already
+// carries a run closed 'approved' (the autoapprove/empty-policy shape D39 documents),
+// beside a validated invoice with no run at all -> PublishPolicy sweeps only the
+// second. The first keeps exactly its one pre-existing run — pinning the anti-join's
+// state IN ('open','approved') leg, not just its 'open' leg.
+func TestPublish_SweepSkipsInvoicesWithAnApprovedRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 publish-sweep-skips-approved")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	entityID := seedBusinessEntity(t, super, tenantID, "Skip Corp")
+
+	alreadyArmedID := seedInvoice(t, super, tenantID, entityID, "sweep-skip-already-armed")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'validated' WHERE id = $1`, alreadyArmedID); err != nil {
+		t.Fatalf("validate invoice: %v", err)
+	}
+	priorPolicyID := seedApprovalPolicy(t, super, tenantID, "Prior policy")
+	priorVersionID := seedApprovalPolicyVersionN(t, super, tenantID, priorPolicyID, 1)
+	existingRunID := seedApprovalRun(t, super, tenantID, alreadyArmedID, priorVersionID)
+	closeApprovalRunFor(t, super, existingRunID, "approved", "system")
+
+	candidateID := seedInvoice(t, super, tenantID, entityID, "sweep-skip-candidate")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'validated' WHERE id = $1`, candidateID); err != nil {
+		t.Fatalf("validate invoice: %v", err)
+	}
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	seedApprovalDraft(t, super, tenantID, policyID)
+
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy: %v, want success", err)
+	}
+
+	if n := approvalRunCountForInvoice(t, super, alreadyArmedID); n != 1 {
+		t.Errorf("approval_runs rows for the already-armed invoice = %d, want still exactly 1 — it must not be re-armed", n)
+	}
+	if n := approvalRunCountForInvoice(t, super, candidateID); n != 1 {
+		t.Errorf("approval_runs rows for the candidate invoice = %d, want 1", n)
+	}
+}
+
+// --- AC-5 (task-484): a nil Fingerprinter fails closed, never writes '' --------
+
+// TestPublish_NilFingerprinterFailsRatherThanWritingEmpty: NewStore(app, nil) over a
+// tenant with one validated invoice must fail the publish rather than arm a run with
+// an empty content_fingerprint — D31's fail-closed rule. Positive control in the SAME
+// fixture: a second, freshly-drafted policy published through a store built with
+// stubFingerprinter succeeds and arms one run, so the refusal above cannot be "this
+// store always refuses."
+func TestPublish_NilFingerprinterFailsRatherThanWritingEmpty(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 publish-nil-fingerprinter")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	entityID := seedBusinessEntity(t, super, tenantID, "Nil-fingerprinter Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "nil-fp-invoice-1")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'validated' WHERE id = $1`, invoiceID); err != nil {
+		t.Fatalf("validate invoice: %v", err)
+	}
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	versionID := seedApprovalDraft(t, super, tenantID, policyID)
+
+	if _, err := NewStore(app, nil).PublishPolicy(c, policyID); err == nil {
+		t.Fatal("PublishPolicy with a nil Fingerprinter and a non-empty candidate set succeeded, want an error")
+	}
+	if n := approvalRunCountForInvoice(t, super, invoiceID); n != 0 {
+		t.Errorf("approval_runs rows = %d, want 0 — a nil Fingerprinter must not write an empty fingerprint", n)
+	}
+	if v := versionRow(t, super, versionID); v.Sealed || v.IsActive {
+		t.Errorf("version row = %+v, want still (sealed false, is_active false) — the whole publish must roll back", v)
+	}
+
+	// Positive control: the same fixture, a second policy, a store built with
+	// stubFingerprinter — publishes and arms one run.
+	controlPolicyID := seedApprovalPolicy(t, super, tenantID, "Control sign-off")
+	seedApprovalDraft(t, super, tenantID, controlPolicyID)
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, controlPolicyID); err != nil {
+		t.Fatalf("control: PublishPolicy with stubFingerprinter: %v, want success — the refusal above "+
+			"is vacuous unless this succeeds", err)
+	}
+	if n := approvalRunCountForInvoice(t, super, invoiceID); n != 1 {
+		t.Errorf("control: approval_runs rows = %d, want 1", n)
+	}
+}
+
+// --- AC-1 (task-484): the sweep writes what the Fingerprinter returns, never '' ---
+
+// hexFingerprintPattern is the shape a real content_fingerprint must have: 64
+// lowercase hex chars.
+var hexFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// TestPublish_SweepFingerprintIsARealHash: the in-package companion to
+// TestPublish_SweepFingerprintMatchesInvoiceContent (internal/invoice; D1 — this
+// package cannot import internal/invoice). Proves the sweep passes stubFingerprinter's
+// return value through to approval_runs.content_fingerprint verbatim: 64 lowercase hex
+// chars, never "". The real-content proof — that the value equals the invoice's actual
+// computed hash — lives in the internal/invoice test; this one only pins the plumbing.
+func TestPublish_SweepFingerprintIsARealHash(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 publish-sweep-fingerprint-shape")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	entityID := seedBusinessEntity(t, super, tenantID, "Fingerprint-shape Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "fp-shape-invoice-1")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'validated' WHERE id = $1`, invoiceID); err != nil {
+		t.Fatalf("validate invoice: %v", err)
+	}
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	seedApprovalDraft(t, super, tenantID, policyID)
+
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy: %v, want success", err)
+	}
+
+	var got string
+	if err := super.QueryRow(context.Background(),
+		`SELECT content_fingerprint FROM approval_runs WHERE invoice_id = $1`, invoiceID,
+	).Scan(&got); err != nil {
+		t.Fatalf("read approval_runs.content_fingerprint: %v", err)
+	}
+	if got == "" {
+		t.Fatal(`content_fingerprint = "", want the Fingerprinter's return value`)
+	}
+	if !hexFingerprintPattern.MatchString(got) {
+		t.Errorf("content_fingerprint = %q, want 64 lowercase hex chars", got)
+	}
+	if got != stubFingerprintValue {
+		t.Errorf("content_fingerprint = %q, want the stub's literal %q — the sweep must pass the "+
+			"Fingerprinter's return through verbatim", got, stubFingerprintValue)
 	}
 }

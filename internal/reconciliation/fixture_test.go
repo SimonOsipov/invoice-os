@@ -379,3 +379,202 @@ func rcReconciler(h *harness) *Reconciler {
 		Logger:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 }
+
+// --- APPR-06-09 approval-drift fixtures -------------------------------------------------
+//
+// The two new kinds' Go constants do not exist yet (that is the executor's job, task-485)
+// — these string literals stand in for them so the tests below type-check and fail on the
+// real assertion (Scan returns nothing for them) rather than on a missing identifier.
+const (
+	rcApprovalRunOrphaned      = DriftKind("approval_run_orphaned")
+	rcApprovalBlockedUnstaffed = DriftKind("approval_blocked_unstaffed")
+)
+
+// countForInvoice counts fs entries for one invoice — the two new arms are shaped (LATERAL
+// LIMIT 1, NOT EXISTS never LEFT JOIN) to never fan out more than one row per invoice; tests
+// assert that directly instead of just checking presence.
+func countForInvoice(fs []Finding, invoiceID string) int {
+	n := 0
+	for _, f := range fs {
+		if f.InvoiceID == invoiceID {
+			n++
+		}
+	}
+	return n
+}
+
+// containsFindingFor reports whether fs holds a Finding for invoiceID with kind k.
+func containsFindingFor(fs []Finding, invoiceID string, k DriftKind) bool {
+	for _, f := range fs {
+		if f.InvoiceID == invoiceID && f.Kind == k {
+			return true
+		}
+	}
+	return false
+}
+
+// rcTeardownApproval deletes one tenant's approval rows bottom-up, ported from
+// internal/approval/policy_immutability_test.go's teardownSealedApprovalFixture minus its
+// trailing `DELETE FROM tenants` (rcSeedTenant's own cleanup owns that). Reports every
+// failure with t.Errorf, never a swallowed `_, _ =` — approval_runs -> invoices is ON
+// DELETE RESTRICT, so a silently-discarded failure here strands the tenant's invoices and
+// aborts the tenant cascade (the exact shape that broke CI in subtask 06, fixed in 0281257).
+func rcTeardownApproval(t *testing.T, h *harness, tenantID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Errorf("teardown approval fixture %s: begin tx: %v", tenantID, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Errorf("teardown approval fixture %s: set session_replication_role: %v", tenantID, err)
+		return
+	}
+	for _, table := range []string{
+		"approval_decisions", "approval_run_steps", "approval_runs",
+		"approval_policy_steps", "approval_policy_versions", "approval_policies",
+	} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
+			t.Errorf("teardown approval fixture %s: delete %s: %v", tenantID, table, err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("teardown approval fixture %s: commit: %v", tenantID, err)
+	}
+}
+
+// rcSeedApprovalPolicy seeds one approval_policies row plus one UNSEALED, INACTIVE
+// approval_policy_versions row — neither new SQL arm reads either table, the version exists
+// only to satisfy approval_runs_tenant_version_fk, and leaving it unsealed keeps the seal
+// guard off the teardown path entirely. The returned cleanup is a closure the CALLER must
+// defer — not t.Cleanup: Go runs every defer before any t.Cleanup, so a t.Cleanup-registered
+// teardown here would run AFTER cleanupInvoice/cleanupTenant instead of before, and
+// approval_runs' RESTRICT FK to invoices would abort that cascade.
+func rcSeedApprovalPolicy(t *testing.T, h *harness, tenantID string) (versionID string, cleanup func()) {
+	t.Helper()
+	ctx := context.Background()
+
+	var policyID string
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		tenantID, "Reconciliation fixture policy",
+	).Scan(&policyID); err != nil {
+		t.Fatalf("seed approval_policies fixture: %v", err)
+	}
+
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed, is_active)
+		 VALUES ($1, $2, 1, false, false) RETURNING id`,
+		tenantID, policyID,
+	).Scan(&versionID); err != nil {
+		t.Fatalf("seed approval_policy_versions fixture: %v", err)
+	}
+
+	return versionID, func() { rcTeardownApproval(t, h, tenantID) }
+}
+
+// rcSeedWorkflowRole seeds one workflow_roles row, soft-deleted (deleted_at = now()) when
+// deleted is true. No individual cleanup: workflow_roles references tenants(id) ON DELETE
+// CASCADE with no RESTRICT on that path, so rcSeedTenant's own cleanup sweeps it.
+func rcSeedWorkflowRole(t *testing.T, h *harness, tenantID, key string, deleted bool) (roleID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var deletedAt *time.Time
+	if deleted {
+		now := time.Now()
+		deletedAt = &now
+	}
+
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO workflow_roles (tenant_id, key, title, deleted_at) VALUES ($1, $2, $3, $4) RETURNING id`,
+		tenantID, key, key, deletedAt,
+	).Scan(&roleID); err != nil {
+		t.Fatalf("seed workflow_roles fixture: %v", err)
+	}
+	return roleID
+}
+
+// rcSeedMember seeds one memberships row with a fresh uuid user_id. role is one of
+// admin|preparer|reviewer (FK to roles, seeded by migration 20260709151759_roles.sql, not by
+// db/seed.dev.sql); status is one of active|invited|suspended. No individual cleanup — same
+// CASCADE-only reasoning as rcSeedWorkflowRole.
+func rcSeedMember(t *testing.T, h *harness, tenantID, role, status string) (userID string) {
+	t.Helper()
+	ctx := context.Background()
+	userID = uuid.NewString()
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+		tenantID, userID, role, status,
+	); err != nil {
+		t.Fatalf("seed memberships fixture: %v", err)
+	}
+	return userID
+}
+
+// rcStaffRole seeds one workflow_role_members row, linking an existing role and member. Must
+// run after rcSeedWorkflowRole and rcSeedMember — its FK to memberships is composite
+// (tenant_id, user_id). No individual cleanup — same CASCADE-only reasoning as
+// rcSeedWorkflowRole.
+func rcStaffRole(t *testing.T, h *harness, tenantID, roleID, userID string, ord int) {
+	t.Helper()
+	ctx := context.Background()
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO workflow_role_members (tenant_id, workflow_role_id, user_id, ord) VALUES ($1, $2, $3, $4)`,
+		tenantID, roleID, userID, ord,
+	); err != nil {
+		t.Fatalf("seed workflow_role_members fixture: %v", err)
+	}
+}
+
+// rcSeedRun seeds one approval_runs row. content_fingerprint is NOT NULL with no default, so
+// a literal is always supplied. closed_at/closed_by are populated for any non-'open' state
+// (approval_runs itself has no CHECK requiring this; the two new SQL arms only ever key off
+// state, not these columns — set anyway so a seeded closed run never looks mid-flight).
+func rcSeedRun(t *testing.T, h *harness, tenantID, invoiceID, versionID, state string) (runID string) {
+	t.Helper()
+	ctx := context.Background()
+	runID = uuid.NewString()
+
+	var closedAt *time.Time
+	var closedBy *string
+	if state != "open" {
+		now := time.Now()
+		closedAt = &now
+		by := "system"
+		closedBy = &by
+	}
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO approval_runs
+		   (id, tenant_id, invoice_id, policy_version_id, state, content_fingerprint, closed_at, closed_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		runID, tenantID, invoiceID, versionID, state, "fixture-fp-"+runID[:8], closedAt, closedBy,
+	); err != nil {
+		t.Fatalf("seed approval_runs fixture: %v", err)
+	}
+	return runID
+}
+
+// rcSeedRunStep seeds one approval_run_steps row. roleKey is a *string so the NULL-key case
+// (TestRLS_ScanApprovalBlockedUnstaffedRoleKeyEdges) is expressible.
+func rcSeedRunStep(t *testing.T, h *harness, tenantID, runID string, ord int, kind string, roleKey *string, state string) {
+	t.Helper()
+	ctx := context.Background()
+	stepID := uuid.NewString()
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO approval_run_steps (id, tenant_id, run_id, ord, kind, workflow_role_key, state)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		stepID, tenantID, runID, ord, kind, roleKey, state,
+	); err != nil {
+		t.Fatalf("seed approval_run_steps fixture: %v", err)
+	}
+}

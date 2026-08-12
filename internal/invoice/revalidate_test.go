@@ -1347,3 +1347,93 @@ func TestRevalidateActive_ChunksOneOverBoundaryIntoTwoCalls(t *testing.T) {
 		t.Errorf("validator received %d batch call(s), want exactly 2 for %d invoices (ceil over the 200 boundary)", srv.calls, n)
 	}
 }
+
+// --- task-483 (APPR-06-07, Mode A): DemoteRevalidatedTx cancels the live run too ---
+
+// TestRevalidate_CancelsThenRearms (AC-7): a validated invoice with one open run
+// (armed under an active policy) --> DemoteRevalidatedTx demotes it --> the run is
+// cancelled with closed_by = 'revalidate-rule-set' (RevalidateActor's fixed literal,
+// actor.go) --> then ApplyValidation re-promotes it (DemoteRevalidatedTx touches no
+// content column, so the SAME pre-demotion fingerprint still matches) --> exactly one
+// cancelled run and one open run, the new run carrying the SAME content_fingerprint.
+// Fails today: the first run stays open and the re-arm hits 23505 on
+// approval_runs_one_open.
+func TestRevalidate_CancelsThenRearms(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID, entityID, _ := seedOneStepActivePolicyTenant(t, super, "REVAL-CANCEL-REARM")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "REVAL-CANCEL-REARM"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fp := contentFingerprint(inv, inv.LineItems)
+	ruleSetVersionID1 := seedRuleSetVersionID(t, super)
+	validated, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID1, fp)
+	if err != nil {
+		t.Fatalf("ApplyValidation (seed, arms an open run): %v", err)
+	}
+	if validated.Status != StatusValidated {
+		t.Fatalf("ApplyValidation (seed): status = %q, want %q (precondition)", validated.Status, StatusValidated)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, inv.ID); n != 1 {
+		t.Fatalf("precondition: open approval_runs rows for invoice = %d, want exactly 1", n)
+	}
+
+	vs := []Violation{{RuleKey: "buyer-tin-required", Severity: "error", Message: "Buyer TIN is required"}}
+	ruleSetVersionID2 := seedRuleSetVersionID(t, super)
+	var demoted Invoice
+	err = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		demoted, err = store.DemoteRevalidatedTx(ctx, tx, inv.ID, tenantID, vs, ruleSetVersionID2)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("DemoteRevalidatedTx: %v (want nil)", err)
+	}
+	if demoted.Status != StatusDraft {
+		t.Fatalf("DemoteRevalidatedTx: status = %q, want %q (demoted)", demoted.Status, StatusDraft)
+	}
+
+	// DemoteRevalidatedTx stamps violations/rule_set_version_id only -- none of the
+	// ten MBS content columns -- so the invoice's content is unchanged and the SAME
+	// pre-demotion fingerprint still matches the just-demoted row.
+	ruleSetVersionID3 := seedRuleSetVersionID(t, super)
+	revalidated, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID3, fp)
+	if err != nil {
+		t.Fatalf("ApplyValidation (re-promote after DemoteRevalidatedTx): want success, got: %v "+
+			"(want no 23505 on approval_runs_one_open -- DemoteRevalidatedTx must cancel the stale open run first)", err)
+	}
+	if revalidated.Status != StatusValidated {
+		t.Errorf("ApplyValidation (re-promote): status = %q, want %q", revalidated.Status, StatusValidated)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'cancelled'`, inv.ID); n != 1 {
+		t.Errorf("cancelled approval_runs rows for invoice = %d, want exactly 1", n)
+	}
+	var cancelledClosedBy string
+	if err := super.QueryRow(ctx,
+		`SELECT closed_by FROM approval_runs WHERE invoice_id = $1 AND state = 'cancelled'`, inv.ID,
+	).Scan(&cancelledClosedBy); err != nil {
+		t.Fatalf("read the cancelled run: %v", err)
+	}
+	if cancelledClosedBy != "revalidate-rule-set" {
+		t.Errorf("cancelled run closed_by = %q, want %q (RevalidateActor's fixed literal)", cancelledClosedBy, "revalidate-rule-set")
+	}
+
+	var openFingerprint string
+	if err := super.QueryRow(ctx,
+		`SELECT content_fingerprint FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, inv.ID,
+	).Scan(&openFingerprint); err != nil {
+		t.Fatalf("read the fresh open run: %v", err)
+	}
+	if openFingerprint != fp {
+		t.Errorf("fresh open run content_fingerprint = %q, want %q (unchanged by DemoteRevalidatedTx)", openFingerprint, fp)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1`, inv.ID); n != 2 {
+		t.Errorf("approval_runs rows for invoice = %d, want exactly 2 (one cancelled, one open)", n)
+	}
+}

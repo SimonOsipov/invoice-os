@@ -2614,3 +2614,375 @@ func TestStoreEdit_EmptyLineItemsFingerprintDiffersFromPreEdit(t *testing.T) {
 		t.Errorf("got.LineItems = %+v, want empty", got.LineItems)
 	}
 }
+
+// ============================================================================
+// task-483 (APPR-06-07, Mode A): CancelLiveRunTx wired into Store.Edit's demotion
+// branch -- specs written against store.go's CURRENT, unwired demotion (the
+// canTransition block, store.go:1275-1279), so every assertion below fails for the
+// reason noted on each test, never a compile error. This file never references
+// internal/approval directly (see TestEdit_CancelRollsBackWithTheEdit's own header
+// for why): approval_runs fixtures are seeded via seedApprovalRunFor/
+// closeApprovalRunFor (apply_validation_arming_test.go), which write raw SQL, never
+// through Store.Edit itself.
+// ============================================================================
+
+// cancelledPayload is invoice.approval_cancelled's payload shape (internal/approval,
+// mirrored here since this file cannot import that package -- see the section
+// header above).
+type cancelledPayload struct {
+	ID    string `json:"id"`
+	RunID string `json:"run_id"`
+}
+
+// TestEdit_CancelsOpenRun (AC-2, AC-9): a validated invoice with one open run -->
+// Store.Edit changes a content field --> invoice is draft, the run is cancelled with
+// closed_by = the caller's subject and closed_at non-NULL, exactly one
+// invoice.approval_cancelled audit row naming the run. Fails today: the run stays
+// open -- nothing in Store.Edit touches approval_runs yet.
+func TestEdit_CancelsOpenRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "CANCEL-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "CANCEL-01 entity")
+	subject := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-01", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "CANCEL-01 policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	runID := seedApprovalRunFor(t, super, tenantID, inv.ID, versionID) // defaults to open
+
+	beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+	newVAT := "9.50"
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
+	if err != nil {
+		t.Fatalf("Edit (content change on validated invoice with an open run): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+
+	var state string
+	var closedAt, closedBy *string
+	if err := super.QueryRow(ctx,
+		`SELECT state, closed_at::text, closed_by FROM approval_runs WHERE id = $1`, runID,
+	).Scan(&state, &closedAt, &closedBy); err != nil {
+		t.Fatalf("read back the run: %v", err)
+	}
+	if state != "cancelled" {
+		t.Errorf("run state after Edit = %q, want %q", state, "cancelled")
+	}
+	if closedAt == nil {
+		t.Errorf("run closed_at after Edit is NULL, want non-NULL")
+	}
+	if closedBy == nil || *closedBy != subject {
+		t.Errorf("run closed_by after Edit = %v, want %q (the caller's subject)", closedBy, subject)
+	}
+
+	if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit+1 {
+		t.Errorf("invoice.approval_cancelled audit rows = %d, want %d (exactly one new row)", n, beforeCancelledAudit+1)
+	}
+	raw := auditPayload(t, app, tenantID, "invoice.approval_cancelled")
+	var payload cancelledPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal invoice.approval_cancelled payload %s: %v", raw, err)
+	}
+	if payload.ID != inv.ID {
+		t.Errorf("audit payload id = %q, want %q", payload.ID, inv.ID)
+	}
+	if payload.RunID != runID {
+		t.Errorf("audit payload run_id = %q, want %q", payload.RunID, runID)
+	}
+}
+
+// TestEdit_NoOpEditCancelsNothing (AC-6): a validated invoice with one open run -->
+// Store.Edit resubmits identical content (a no-op) --> invoice stays validated, the
+// run stays open, no invoice.approval_cancelled audit row. Passes today by
+// construction -- the no-op short-circuit at store.go:1219 returns before the
+// demotion branch (where the cancel will live) is ever reached, the same
+// "passes today, becomes a real guard once wired" shape as
+// TestApplyValidation_NoActivePolicyLeavesTheTrailUnchanged
+// (apply_validation_arming_test.go). The control for TestEdit_CancelsOpenRun above:
+// goes red if a future change ever hooked the cancel ABOVE the no-op return.
+func TestEdit_NoOpEditCancelsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "CANCEL-02 tenant")
+	entityID := seedEntity(t, super, tenantID, "CANCEL-02 entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-02", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "CANCEL-02 policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	runID := seedApprovalRunFor(t, super, tenantID, inv.ID, versionID)
+
+	beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}}) // resent unchanged
+	if err != nil {
+		t.Fatalf("Edit (no-op, VAT resent unchanged): want success, got: %v", err)
+	}
+	if got.Status != StatusValidated {
+		t.Errorf("Edit returned status = %q, want unchanged %q (no-op)", got.Status, StatusValidated)
+	}
+
+	var state string
+	if err := super.QueryRow(ctx, `SELECT state FROM approval_runs WHERE id = $1`, runID).Scan(&state); err != nil {
+		t.Fatalf("read back the run: %v", err)
+	}
+	if state != "open" {
+		t.Errorf("run state after a no-op Edit = %q, want unchanged %q", state, "open")
+	}
+	if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit {
+		t.Errorf("invoice.approval_cancelled audit rows = %d, want unchanged %d (a no-op cancels nothing)", n, beforeCancelledAudit)
+	}
+}
+
+// TestEdit_CancelsApprovedRunNotOnlyOpen (AC-1, AC-2): a validated invoice whose only
+// run is closed 'approved', zero steps, closed_by='system' (answer B's ordinary shape
+// for an invoice that needed no sign-off, D37) --> Store.Edit changes a content field
+// --> invoice is draft, that run is cancelled, closed_by is STILL 'system' and
+// closed_at is unchanged (the COALESCE), exactly one cancellation audit row. Fails
+// today: nothing cancels. Also fails against a `state = 'open'` predicate, which
+// would leave the run 'approved' (D37).
+func TestEdit_CancelsApprovedRunNotOnlyOpen(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "CANCEL-03 tenant")
+	entityID := seedEntity(t, super, tenantID, "CANCEL-03 entity")
+	subject := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-03", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "CANCEL-03 policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	runID := seedApprovalRunFor(t, super, tenantID, inv.ID, versionID)
+	closeApprovalRunFor(t, super, runID, "approved", "system")
+
+	var seededClosedAt string
+	if err := super.QueryRow(ctx, `SELECT closed_at::text FROM approval_runs WHERE id = $1`, runID).Scan(&seededClosedAt); err != nil {
+		t.Fatalf("read back the seeded closed_at: %v", err)
+	}
+
+	beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+	newVAT := "9.50"
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
+	if err != nil {
+		t.Fatalf("Edit (content change on validated invoice with a closed 'approved' run): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+
+	var state, closedAt string
+	var closedBy *string
+	if err := super.QueryRow(ctx,
+		`SELECT state, closed_at::text, closed_by FROM approval_runs WHERE id = $1`, runID,
+	).Scan(&state, &closedAt, &closedBy); err != nil {
+		t.Fatalf("read back the run: %v", err)
+	}
+	if state != "cancelled" {
+		t.Errorf("run state after Edit = %q, want %q (D37: an approved run is live and must cancel too)", state, "cancelled")
+	}
+	if closedBy == nil || *closedBy != "system" {
+		t.Errorf("run closed_by after Edit = %v, want unchanged %q (COALESCE preserves the original closure)", closedBy, "system")
+	}
+	if closedAt != seededClosedAt {
+		t.Errorf("run closed_at after Edit = %q, want unchanged %q (COALESCE preserves the original closure)", closedAt, seededClosedAt)
+	}
+
+	if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit+1 {
+		t.Errorf("invoice.approval_cancelled audit rows = %d, want %d (exactly one new row)", n, beforeCancelledAudit+1)
+	}
+}
+
+// TestStoreEdit_DemoteThenRevalidateUnderActivePolicySucceeds (AC-4, AC-7, [FIX-3]):
+// the story's headline behaviour, untested until this subtask. Modelled on the
+// shipped TestStoreEdit_DemoteThenRevalidateSucceeds (above) with an ACTIVE
+// one-approval-step policy added: create --> ApplyValidation arms an OPEN run -->
+// Store.Edit changes VAT, demoting --> ApplyValidation with the fresh fingerprint
+// SUCCEEDS (no 23505 on approval_runs_one_open) and arms a second run --> exactly two
+// runs exist for the invoice: the first cancelled, the second open with one pending
+// approval step and the post-edit content_fingerprint. Fails today: ApplyValidation
+// returns the raw 23505 subtask 06 deliberately left uncaught -- the exact re-arm
+// hazard this subtask closes.
+func TestStoreEdit_DemoteThenRevalidateUnderActivePolicySucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID, entityID, _ := seedOneStepActivePolicyTenant(t, super, "DEMOTE-REVAL-ACTIVE")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DEMOTE-REVAL-ACTIVE", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	fp1 := contentFingerprint(inv, inv.LineItems)
+	ruleSetVersionID1 := seedRuleSetVersionID(t, super)
+	validated, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID1, fp1)
+	if err != nil {
+		t.Fatalf("ApplyValidation (seed, arms an open run under the active policy): %v", err)
+	}
+	if validated.Status != StatusValidated {
+		t.Fatalf("ApplyValidation (seed): status = %q, want %q (precondition)", validated.Status, StatusValidated)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, inv.ID); n != 1 {
+		t.Fatalf("precondition: open approval_runs rows for invoice = %d, want exactly 1 (ArmTx must have armed an open run)", n)
+	}
+
+	newVAT := "9.50"
+	edited, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
+	if err != nil {
+		t.Fatalf("Edit (content change, demotion): want success, got: %v", err)
+	}
+	if edited.Status != StatusDraft {
+		t.Fatalf("Edit: status = %q, want %q (demoted)", edited.Status, StatusDraft)
+	}
+
+	freshFP := contentFingerprint(edited, edited.LineItems)
+	ruleSetVersionID2 := seedRuleSetVersionID(t, super)
+	revalidated, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID2, freshFP)
+	if err != nil {
+		t.Fatalf("ApplyValidation (re-validate after demotion): want success through the fix loop, got: %v "+
+			"(want no 23505 on approval_runs_one_open -- Store.Edit's demotion must cancel the stale open run before ApplyValidation re-arms)", err)
+	}
+	if revalidated.Status != StatusValidated {
+		t.Errorf("ApplyValidation (re-validate): status = %q, want %q (promoted back to green)", revalidated.Status, StatusValidated)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1`, inv.ID); n != 2 {
+		t.Fatalf("approval_runs rows for invoice = %d, want exactly 2 (the cancelled first run, the fresh second run)", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state <> 'cancelled'`, inv.ID); n != 1 {
+		t.Fatalf("non-cancelled approval_runs rows for invoice = %d, want exactly 1", n)
+	}
+
+	var liveRunID, liveState, liveFingerprint string
+	if err := super.QueryRow(ctx,
+		`SELECT id, state, content_fingerprint FROM approval_runs WHERE invoice_id = $1 AND state <> 'cancelled'`, inv.ID,
+	).Scan(&liveRunID, &liveState, &liveFingerprint); err != nil {
+		t.Fatalf("read the live run: %v", err)
+	}
+	if liveState != "open" {
+		t.Errorf("live run state = %q, want %q", liveState, "open")
+	}
+	if liveFingerprint != freshFP {
+		t.Errorf("live run content_fingerprint = %q, want the post-edit fingerprint %q", liveFingerprint, freshFP)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_run_steps WHERE run_id = $1 AND state = 'pending'`, liveRunID); n != 1 {
+		t.Errorf("pending approval_run_steps rows for the live run = %d, want exactly 1", n)
+	}
+}
+
+// TestEdit_CancelRollsBackWithTheEdit (AC-8): pins CancelLiveRunTx's D12 contract --
+// "the cancel joins the caller's transaction rather than opening one of its own" --
+// against the specific way an executor could get this wrong: hooking the cancel call
+// EARLIER than the plan's insertion point (immediately after transitionTx, inside the
+// demotion branch), or having it commit on its own connection instead of the passed
+// tx. Reuses the crafted-actor injection TestStoreEdit_ContentAuditFailureRollsBackWholeEdit
+// uses (above): an empty Subject fails invoice.updated's audit_log CHECK at step 7,
+// aborting the WHOLE Store.Edit transaction before the demotion branch (step 8, where
+// the cancel lives, the LAST statement in that transaction per the plan) is ever
+// reached.
+//
+// This means: against the plan's own correctly-ordered implementation, this test
+// passes BOTH today and after CancelLiveRunTx ships -- step 7 always fires first, so
+// the cancel is never reached either way. It is the SAME "passes today by
+// construction, becomes a real guard once wired" shape as TestEdit_NoOpEditCancelsNothing
+// above and TestApplyValidation_NoActivePolicyLeavesTheTrailUnchanged
+// (apply_validation_arming_test.go): a future change that moved the cancel call ABOVE
+// step 7, or that let it survive step 7's abort by writing on its own connection
+// rather than the caller's tx, would flip the run to 'cancelled' here and this test
+// would catch it. No construction of "cancel succeeds, then a LATER statement fails"
+// is reachable through Store.Edit itself: the plan places the cancel as the last
+// statement in the demotion branch, and every write in one Edit call shares the SAME
+// ctx-derived actor (callerID.Subject / actorFromContext(ctx) are the identical
+// value), so no crafted Subject can pass step 7's audit_log CHECK and fail only
+// later -- confirmed structurally in store.go, not merely asserted here. This is also
+// why this test deliberately does NOT reference approval.CancelLiveRunTx directly:
+// doing so would fail to compile today and take every other test in this package down
+// with it.
+func TestEdit_CancelRollsBackWithTheEdit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "CANCEL-05 tenant")
+	entityID := seedEntity(t, super, tenantID, "CANCEL-05 entity")
+	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-05", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(cNormal, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "CANCEL-05 policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	runID := seedApprovalRunFor(t, super, tenantID, inv.ID, versionID)
+
+	beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+	cCrafted := auth.WithIdentity(ctx, auth.Identity{Subject: "", Role: "authenticated", TenantID: tenantID})
+	newVAT := "9.50"
+	_, err = store.Edit(cCrafted, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
+	if err == nil {
+		t.Fatal("Edit with a crafted actor succeeded, want an audit_log actor CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("Edit with a crafted actor: pgCode = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1`, inv.ID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusValidated {
+		t.Errorf("status after failed Edit = %q, want unchanged %q", status, StatusValidated)
+	}
+
+	var state string
+	if err := super.QueryRow(ctx, `SELECT state FROM approval_runs WHERE id = $1`, runID).Scan(&state); err != nil {
+		t.Fatalf("read back the run: %v", err)
+	}
+	if state != "open" {
+		t.Errorf("run state after the whole Edit transaction rolled back = %q, want unchanged %q", state, "open")
+	}
+
+	if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit {
+		t.Errorf("invoice.approval_cancelled audit rows = %d, want unchanged %d (rolled back with everything else)", n, beforeCancelledAudit)
+	}
+}

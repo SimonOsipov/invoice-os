@@ -135,6 +135,73 @@ func sealApprovalPolicyVersionFor(t *testing.T, super *pgxpool.Pool, versionID s
 	}
 }
 
+// seedApprovalRunFor inserts one approval_runs row directly (state defaults to
+// 'open') -- reimplements internal/approval's own seedApprovalRun
+// (schema_constraints_test.go:213) here because that helper is unexported and
+// unreachable from this package. task-483 (APPR-06-07).
+func seedApprovalRunFor(t *testing.T, super *pgxpool.Pool, tenantID, invoiceID, versionID string) string {
+	t.Helper()
+	var id string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		tenantID, invoiceID, versionID, "fp-"+uuid.NewString(),
+	).Scan(&id); err != nil {
+		t.Fatalf("seed approval_runs: %v", err)
+	}
+	return id
+}
+
+// closeApprovalRunFor force-closes a run directly, for fixtures that need one already
+// closed BEFORE the call under test runs (e.g. a zero-step 'approved' run) --
+// bypasses both ArmTx's own closure branch and CancelLiveRunTx, each under test
+// elsewhere. task-483 (APPR-06-07).
+func closeApprovalRunFor(t *testing.T, super *pgxpool.Pool, runID, state, closedBy string) {
+	t.Helper()
+	tag, err := super.Exec(context.Background(),
+		`UPDATE approval_runs SET state = $1, closed_at = now(), closed_by = $2 WHERE id = $3`,
+		state, closedBy, runID)
+	if err != nil {
+		t.Fatalf("close approval_runs %s: %v", runID, err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("close approval_runs %s affected %d rows, want 1", runID, tag.RowsAffected())
+	}
+}
+
+// approvalStepInLaneSpecFor is one approval_policy_steps row, including the
+// condition-lane columns approvalStepSpecFor omits -- ported from internal/approval's
+// seedStepSpec/seedApprovalPolicyStepInLane (policy_crud_test.go), unreachable from
+// this package. task-483 (APPR-06-07).
+type approvalStepInLaneSpecFor struct {
+	ParentStepID    *string
+	Branch          *string // nil at root; "then" or "else" inside a lane
+	Ord             int
+	Kind            string
+	WorkflowRoleKey *string
+	SLAHours        *int
+	CondOp          *string
+	CondAmount      *string
+}
+
+// seedApprovalStepInLaneFor must run BEFORE activateApprovalPolicyVersionFor -- same
+// ordering rule as seedApprovalStepFor.
+func seedApprovalStepInLaneFor(t *testing.T, super *pgxpool.Pool, tenantID, versionID string, spec approvalStepInLaneSpecFor) string {
+	t.Helper()
+	var id string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_policy_steps
+		        (tenant_id, version_id, parent_step_id, branch, ord, kind, workflow_role_key, sla_hours, cond_op, cond_amount)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text::numeric)
+		 RETURNING id`,
+		tenantID, versionID, spec.ParentStepID, spec.Branch, spec.Ord, spec.Kind,
+		spec.WorkflowRoleKey, spec.SLAHours, spec.CondOp, spec.CondAmount,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed approval_policy_steps (kind %s, ord %d): %v", spec.Kind, spec.Ord, err)
+	}
+	return id
+}
+
 // seedOneStepActivePolicyTenant is the shared fixture: a fresh tenant with one active
 // version naming a single staffed approval role -- what every AC below arms against.
 func seedOneStepActivePolicyTenant(t *testing.T, super *pgxpool.Pool, label string) (tenantID, entityID, versionID string) {

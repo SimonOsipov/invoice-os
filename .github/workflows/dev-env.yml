@@ -804,6 +804,16 @@ jobs:
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke
+      # All three suites write to the SAME e2e/playwright-report/, and every
+      # upload used to sit after every suite — so the "smoke" and "api" artifacts
+      # both contained whatever the LAST suite left behind. Park each report the
+      # moment its suite ends, before the next one overwrites it.
+      - name: Park the smoke report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-smoke
+          fi
       - name: API E2E (typed contract suite)
         # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
         # must complete before topology's rule-dependent assertions run (D4).
@@ -814,34 +824,52 @@ jobs:
         # browser project). Does not touch the database directly (M4-22-05) --
         # PERF-03/04/05 now read over HTTP instead; api/db.ts is deleted.
         run: pnpm --filter @invoice-os/e2e test:api
+      - name: Park the API report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-api
+          fi
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
         # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).
         run: pnpm --filter @invoice-os/e2e test:topology
+      - name: Park the topology report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-topology
+          fi
+      # `if: always()`, not `if: failure()`. A spec that fails and then passes on
+      # its retry leaves this job GREEN, so the failure-only upload could never
+      # capture the one case with no other evidence. Measured over the 7 most
+      # recent green Dev Env runs: 5 contained a retry-pass across 6 specs, and
+      # every one of those reports was discarded. flakyReporter names them in the
+      # job summary; these artifacts are how you then read the trace.
       - name: Upload smoke Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: smoke-playwright-report
-          path: e2e/playwright-report/
-          if-no-files-found: warn
+          path: e2e/report-smoke/
+          if-no-files-found: ignore
           retention-days: 7
       - name: Upload API Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-api
-          path: e2e/playwright-report/
-          if-no-files-found: warn
+          path: e2e/report-api/
+          if-no-files-found: ignore
           retention-days: 7
       - name: Upload topology Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: topology-playwright-report
-          path: e2e/playwright-report/
-          if-no-files-found: warn
+          path: e2e/report-topology/
+          if-no-files-found: ignore
           retention-days: 7
 
   # NOTE: there is still no scale-down job here — teardown is a separate

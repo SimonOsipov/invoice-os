@@ -26,7 +26,10 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  // See the note in playwright.config.ts: a retry-pass reports green, so name it.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['./flakyReporter.ts', { label: 'api' }]]
+    : [['list'], ['./flakyReporter.ts', { label: 'api' }]],
   use: {
     headless: true,
   },

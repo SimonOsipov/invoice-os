@@ -65,7 +65,7 @@ func TestPublish_SweepFingerprintMatchesInvoiceContent(t *testing.T) {
 	policyID := seedApprovalPolicyFor(t, super, tenantID, "APPR-06-08 sweep-fingerprint policy")
 	seedApprovalPolicyVersionFor(t, super, tenantID, policyID) // zero steps -- the smallest publishable tree
 
-	if _, err := approval.NewStore(app, FingerprintTx).PublishPolicy(adminCtx, policyID); err != nil {
+	if _, err := approval.NewStore(app, FingerprintTx, nil).PublishPolicy(adminCtx, policyID); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success", err)
 	}
 

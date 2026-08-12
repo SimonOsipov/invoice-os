@@ -392,6 +392,27 @@ func FingerprintTx(ctx context.Context, tx pgx.Tx, id string) (string, error) {
 	return contentFingerprint(inv, lines), nil
 }
 
+// DemoteApprovalRejectedTx walks a validated invoice back to draft after an approver
+// rejects it, via transitionTx on the caller's transaction — exported for exactly one
+// consumer: approval.Demoter, bound at cmd/invoice/main.go, mirroring FingerprintTx's
+// shape and the same reason (the internal/approval -> internal/invoice edge must not
+// open).
+//
+// Takes NO row lock, like FingerprintTx: the caller (decideTx) already holds it. The
+// status is read fresh rather than assumed validated, so a source that is not
+// legally validated->draft (e.g. already draft) surfaces transitionTx's own
+// ErrIllegalTransition instead of silently rewriting the row.
+func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subject string) error {
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
+	), &inv); err != nil {
+		return err
+	}
+	_, err := transitionTx(ctx, tx, id, inv.Status, StatusDraft, Actor{TenantID: tenantID, Subject: subject})
+	return err
+}
+
 // replaceLinesTx replaces an invoice's WHOLE line set inside the caller's tx:
 // DELETE every existing line, then re-INSERT in from array order with line_no
 // system-assigned 1..N ([line-update-shape], [line-no-by-position]). The INSERT
@@ -1536,11 +1557,13 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // status change could diverge on a crash, breaking M4's "every transition
 // writes audit 08 in the same transaction".)
 //
-// It has exactly FIVE callers today — Store.Transition (store.go:727),
-// Store.ApplyValidation (store.go:968), Store.Edit's demotion branch
-// (store.go:626), Submitter.BatchSubmit (batch_submit.go:215), and
-// markTerminalTx (actor.go:94, shared by MarkSubmittedTx/MarkFailedTx) —
-// and remains the SINGLE writer of invoices.status, with legalTransitions/
+// It has exactly SEVEN callers today — Store.Transition (store.go),
+// Store.ApplyValidation (store.go), Store.Edit's demotion branch
+// (store.go), DemoteApprovalRejectedTx (store.go), Submitter.BatchSubmit
+// (batch_submit.go), Store.DemoteRevalidatedTx (revalidate.go), and
+// Store.markTerminalTx (actor.go, shared by MarkSubmittedTx/MarkFailedTx) —
+// FOUR of the seven live in store.go — and remains the SINGLE writer of
+// invoices.status, with legalTransitions/
 // canTransition still the single source of truth for what is legal. That is
 // what PRESERVES the M4 gate's "illegal state transitions are rejected by the
 // single transition function" no matter how many callers accrue: none of

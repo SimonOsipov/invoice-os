@@ -89,7 +89,7 @@ func TestPolicy_CondAmountKeepsItsScaleAtZero(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 cond-amount-scale")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
@@ -154,7 +154,7 @@ func TestPolicy_GetStepsComeFromTheTopVersion(t *testing.T) {
 		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("engagement-partner"),
 	})
 
-	got, err := NewStore(app, stubFingerprinter).GetPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter, nil).GetPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("GetPolicy: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestPolicy_GetAfterRepublishNamesTheDraftNotTheActiveTree(t *testing.T) {
 		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("draft-only-role"),
 	})
 
-	got, err := NewStore(app, stubFingerprinter).GetPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter, nil).GetPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("GetPolicy: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestPolicy_PublishedByWithoutPublishedAtRendersNullNotZero(t *testing.T) {
 		t.Fatalf("stamp published_by: %v", err)
 	}
 
-	got, err := NewStore(app, stubFingerprinter).GetPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter, nil).GetPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("GetPolicy: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestPolicy_PolicyWithNoVersionRowsIsAnInertDraft(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 no-versions")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Orphan")
 
 	want := Policy{
@@ -370,7 +370,7 @@ func TestPolicy_ListStaysThreeStatementsAsPoliciesGrow(t *testing.T) {
 
 			traced, rec := tracedAppPool(t)
 			rec.reset()
-			got, err := NewStore(traced, stubFingerprinter).ListPolicies(c)
+			got, err := NewStore(traced, stubFingerprinter, nil).ListPolicies(c)
 			if err != nil {
 				t.Fatalf("ListPolicies: %v", err)
 			}
@@ -427,7 +427,7 @@ func TestPolicy_ListIsBoundedToTheTenantByRLSAlone(t *testing.T) {
 
 	traced, rec := tracedAppPool(t)
 	rec.reset()
-	got, err := NewStore(traced, stubFingerprinter).ListPolicies(cB)
+	got, err := NewStore(traced, stubFingerprinter, nil).ListPolicies(cB)
 	if err != nil {
 		t.Fatalf("ListPolicies as B: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestPolicy_ListWithNoPoliciesIsEmptyNotNull(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 empty-list")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	got, err := NewStore(app, stubFingerprinter).ListPolicies(c)
+	got, err := NewStore(app, stubFingerprinter, nil).ListPolicies(c)
 	if err != nil {
 		t.Fatalf("ListPolicies: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestPolicy_ListOrderIsStableAcrossEqualCreatedAt(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 order-stability")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	ids := []string{}
 	for i := 0; i < 8; i++ {
@@ -534,7 +534,7 @@ func TestPolicy_ListOrderIsStableAcrossEqualCreatedAt(t *testing.T) {
 // wildcards and combining marks must survive the INSERT and both reads unchanged.
 func TestPolicy_NameWithSQLAndUnicodeRoundTripsByte(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	names := []string{
 		`Robert"); DROP TABLE approval_policies;--`,
@@ -588,7 +588,7 @@ func TestPolicy_NameWithSQLAndUnicodeRoundTripsByte(t *testing.T) {
 // transaction, so the refusal writes nothing.
 func TestPolicy_NameWithANULIsRefusedNotA500(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	for i, name := range []string{"Sign\x00off", "\x00", "Sign-off\x00", "\x00Sign-off"} {
 		t.Run(fmt.Sprintf("name %d", i), func(t *testing.T) {
@@ -633,7 +633,7 @@ func TestPolicy_DuplicateNamesAreLegalAndBothAddressable(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 duplicate-names")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	a, err := store.CreatePolicy(c, "Sign-off", "")
 	if err != nil {
@@ -671,7 +671,7 @@ func TestPolicy_RecreatingASoftDeletedNameFindsOnlyTheLiveOne(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 recreate-name")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	old, err := store.CreatePolicy(c, "Sign-off", "")
 	if err != nil {
@@ -719,7 +719,7 @@ func TestPolicy_ConcurrentCreatesEachGetTheirOwnDraft(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 concurrent-create")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const n = 8
 	ids := make([]string, n)

@@ -173,11 +173,13 @@ func main() {
 	// /v1/workflow-roles... -- Settings > Roles: the approval seats and who staffs
 	// them. Same invoice_app pool as the invoice store above; the writes are
 	// admin-only inside the store, so no route here carries a role gate.
-	// invoice.FingerprintTx is the publish sweep's Fingerprinter: this is the one place
-	// both packages are in scope, and internal/approval must never import internal/invoice
-	// (TestApproval_DoesNotImportInvoicePackage). Passing nil here compiles and fails only
-	// at the first publish over a non-empty backlog — TestMain_WiresTheFingerprinter guards it.
-	roleStore := approval.NewStore(pool, invoice.FingerprintTx)
+	// invoice.FingerprintTx is the publish sweep's Fingerprinter and
+	// invoice.DemoteApprovalRejectedTx is Decide's reject-half Demoter: this is the one
+	// place both packages are in scope, and internal/approval must never import
+	// internal/invoice (TestApproval_DoesNotImportInvoicePackage). Passing nil here
+	// compiles and fails only at the first publish/reject — TestMain_WiresTheStoreCollaborators
+	// guards it.
+	roleStore := approval.NewStore(pool, invoice.FingerprintTx, invoice.DemoteApprovalRejectedTx)
 	app.Mux.HandleFunc("GET /v1/workflow-roles", approval.ListRolesHandler(roleStore.ListRoles, app.Logger))
 	app.Mux.HandleFunc("POST /v1/workflow-roles", approval.CreateRoleHandler(roleStore.CreateRole, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/workflow-roles/{key}", approval.UpdateRoleHandler(roleStore.UpdateRole, app.Logger))
@@ -194,6 +196,14 @@ func main() {
 	app.Mux.HandleFunc("PUT /v1/approval-policies/{id}/draft", approval.PutDraftHandler(roleStore.PutDraft, app.Logger))
 	app.Mux.HandleFunc("POST /v1/approval-policies/{id}/publish", approval.PublishPolicyHandler(roleStore.PublishPolicy, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/approval-policies/{id}", approval.DeletePolicyHandler(roleStore.DeletePolicy, app.Logger))
+
+	// GET /v1/invoices/{id}/approval -- the run read model (APPR-07). No role gate:
+	// any authenticated tenant member may read a run, same as the policy routes above.
+	app.Mux.HandleFunc("GET /v1/invoices/{id}/approval", approval.RunHandler(roleStore.ApprovalRun, app.Logger))
+
+	// POST /v1/invoices/{id}/approvals -- approve/reject a pending step (APPR-07-06).
+	// Plural spelling, distinct route from the GET singular above.
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/approvals", approval.DecideHandler(roleStore.DecideSeam, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this

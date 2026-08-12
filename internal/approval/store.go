@@ -24,6 +24,16 @@ import (
 // The caller holds the invoice row lock; implementations must not take one.
 type Fingerprinter func(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error)
 
+// Demoter walks a validated invoice back to draft after a reject decision, on the
+// caller's transaction — the reject twin of Fingerprinter, for the identical reason:
+// internal/invoice's demotion (transitionTx) is unexported and that package imports
+// this one, so the edge must not reverse (TestApproval_DoesNotImportInvoicePackage).
+// cmd/invoice/main.go binds invoice.DemoteApprovalRejectedTx here.
+//
+// The caller closes the run BEFORE calling this and holds the invoice row lock;
+// implementations must not take one of their own.
+type Demoter func(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, subject string) error
+
 // Store reads and writes workflow roles as the invoice_app role. It holds the
 // app-role pool (DATABASE_URL); every call runs one db.WithinRequestTenantTx, so
 // the app.current_tenant GUC is set for the transaction and RLS is the only tenant
@@ -31,16 +41,18 @@ type Fingerprinter func(ctx context.Context, tx pgx.Tx, invoiceID string) (strin
 type Store struct {
 	pool          *pgxpool.Pool
 	fingerprinter Fingerprinter
+	demoter       Demoter
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's lifecycle.
 //
-// fingerprinter is a required parameter, not an option: every sibling store here is
-// NewStore(pool) and this repo has no functional-options precedent (D31). Only
-// PublishPolicy's sweep reads it, so a store that never publishes may pass nil — the
-// sweep then fails closed rather than writing an empty fingerprint.
-func NewStore(pool *pgxpool.Pool, fingerprinter Fingerprinter) *Store {
-	return &Store{pool: pool, fingerprinter: fingerprinter}
+// fingerprinter and demoter are both required parameters, not options: every sibling
+// store here is NewStore(pool) and this repo has no functional-options precedent (D31).
+// PublishPolicy's sweep is the only reader of fingerprinter and Decide's reject branch
+// is the only reader of demoter, so a store that never exercises one may pass nil for
+// it — that path then fails closed rather than silently skipping the write.
+func NewStore(pool *pgxpool.Pool, fingerprinter Fingerprinter, demoter Demoter) *Store {
+	return &Store{pool: pool, fingerprinter: fingerprinter, demoter: demoter}
 }
 
 // The handler seam 06 wires HTTP to. Declared beside the methods that satisfy them

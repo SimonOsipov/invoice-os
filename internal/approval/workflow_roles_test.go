@@ -339,7 +339,7 @@ func tracedAppPool(t *testing.T) (*pgxpool.Pool, *sqlRecorder) {
 // and a malformed or repeated member id are ErrValidation above the tx, which would
 // silently stop proving the identity-first property.
 func TestWorkflowRole_StoreSatisfiesTheHandlerSeam(t *testing.T) {
-	nilPool := NewStore(nil, nil) // never dialled: the identity is resolved first
+	nilPool := NewStore(nil, nil, nil) // never dialled: the identity is resolved first
 	var list RolesLister = nilPool.ListRoles
 	var create RoleCreator = nilPool.CreateRole
 	var update RoleUpdater = nilPool.UpdateRole
@@ -373,7 +373,7 @@ func TestWorkflowRole_CreateMintsKeyFromTitle(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 create-mints")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	got, err := NewStore(app, stubFingerprinter).CreateRole(c, "Engagement Partner", "First sign-off")
+	got, err := NewStore(app, stubFingerprinter, nil).CreateRole(c, "Engagement Partner", "First sign-off")
 	if err != nil {
 		t.Fatalf("CreateRole: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestWorkflowRole_CreateNeverReusesASoftDeletedKey(t *testing.T) {
 	deletedID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	softDeleteWorkflowRole(t, super, deletedID)
 
-	got, err := NewStore(app, stubFingerprinter).CreateRole(c, "Tax Reviewer", "")
+	got, err := NewStore(app, stubFingerprinter, nil).CreateRole(c, "Tax Reviewer", "")
 	if err != nil {
 		t.Fatalf("CreateRole: %v, want a fresh key — a deleted_at filter on the key query makes this ErrConflict", err)
 	}
@@ -438,7 +438,7 @@ func TestWorkflowRole_CreateAllowsDuplicateTitles(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 
-	got, err := NewStore(app, stubFingerprinter).CreateRole(c, "Tax Reviewer", "")
+	got, err := NewStore(app, stubFingerprinter, nil).CreateRole(c, "Tax Reviewer", "")
 	if err != nil {
 		t.Fatalf("CreateRole with a duplicate title: %v, want success", err)
 	}
@@ -461,7 +461,7 @@ func TestWorkflowRole_CreateRejectsEmptyTitle(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 empty-title")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	for _, title := range []string{"", "   ", "\t\n", " "} {
 		t.Run(fmt.Sprintf("title=%q", title), func(t *testing.T) {
@@ -494,7 +494,7 @@ func TestWorkflowRole_CreateRejectsEmptyTitle(t *testing.T) {
 func TestWorkflowRole_CreateTitleIsValidatedBeforeTheCallerRoleIsRead(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 guard-order")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
 
 	if _, err := store.CreateRole(c, "   ", "a blurb"); !errors.Is(err, ErrValidation) {
@@ -517,7 +517,7 @@ func TestWorkflowRole_CreateTrimsTitleAndDesc(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 trim")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	got, err := NewStore(app, stubFingerprinter).CreateRole(c, "  Tax Reviewer  ", "  blurb  ")
+	got, err := NewStore(app, stubFingerprinter, nil).CreateRole(c, "  Tax Reviewer  ", "  blurb  ")
 	if err != nil {
 		t.Fatalf("CreateRole: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestWorkflowRole_CreateStoresEmptyDescNotNull(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 empty-desc")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	got, err := NewStore(app, stubFingerprinter).CreateRole(c, "Quality Reviewer", "")
+	got, err := NewStore(app, stubFingerprinter, nil).CreateRole(c, "Quality Reviewer", "")
 	if err != nil {
 		t.Fatalf("CreateRole: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestWorkflowRole_CreateStoresEmptyDescNotNull(t *testing.T) {
 func TestWorkflowRole_CreateRequiresActiveAdmin(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 caller-axis")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	refused := map[string]context.Context{}
 	for _, caller := range []struct{ name, role, status string }{
@@ -624,7 +624,7 @@ func TestWorkflowRole_CreateCallerRoleIsScopedToTheCallersTenant(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantA := seedTenant(t, super, "APPR-02 caller-scope A")
 	tenantB := seedTenant(t, super, "APPR-02 caller-scope B")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	dual := uuid.NewString() // admin in B, preparer in A
 	seedMembership(t, super, tenantB, dual, "admin", "active")
@@ -676,7 +676,7 @@ func TestWorkflowRole_CreateAuditsInSameTx(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 audit-atomicity")
 	c, adminID := activeAdmin(t, super, tenantID)
 
-	created, err := NewStore(app, stubFingerprinter).CreateRole(c, "Engagement Partner", "First sign-off")
+	created, err := NewStore(app, stubFingerprinter, nil).CreateRole(c, "Engagement Partner", "First sign-off")
 	if err != nil {
 		t.Fatalf("CreateRole: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestWorkflowRole_UniqueViolationOnlyMapsTheKeyConstraint(t *testing.T) {
 // both succeed), so the assertion is the invariant read back from the database.
 func TestWorkflowRole_ConcurrentCreateEitherSucceedsOrConflicts(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const rounds = 8
 	for round := range rounds {
@@ -821,7 +821,7 @@ func TestWorkflowRole_ListReturnsMembersInOrdOrder(t *testing.T) {
 	}
 
 	c, _ := activeAdmin(t, super, tenantID)
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -842,7 +842,7 @@ func TestWorkflowRole_ListIssuesTwoQueriesRegardlessOfRoleCount(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 query-count")
 	c, _ := activeAdmin(t, super, tenantID)
 	app, rec := tracedAppPool(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	user := uuid.NewString()
 	seedMembership(t, super, tenantID, user, "preparer", "active")
@@ -890,7 +890,7 @@ func TestWorkflowRole_ListExcludesSoftDeleted(t *testing.T) {
 	softDeleteWorkflowRole(t, super, deadID)
 
 	c, _ := activeAdmin(t, super, tenantID)
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestWorkflowRole_ListEmptyTenantReturnsEmptySlice(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 empty-tenant")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -934,7 +934,7 @@ func TestWorkflowRole_ListRoleWithNoMembersIsEmptyNotNil(t *testing.T) {
 	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestWorkflowRole_ListIsTenantScoped(t *testing.T) {
 	staffWorkflowRole(t, super, tenantA, roleA, userA, 0)
 
 	c, _ := activeAdmin(t, super, tenantA)
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -1005,7 +1005,7 @@ func TestWorkflowRole_ListOrderedByCreatedAtThenKey(t *testing.T) {
 	stampCreatedAt(t, super, aRole, base.Add(time.Hour))
 
 	c, _ := activeAdmin(t, super, tenantID)
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -1023,7 +1023,7 @@ func TestWorkflowRole_ListNeedsNoAdminRole(t *testing.T) {
 	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
 
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles as a preparer: %v, want success", err)
 	}
@@ -1043,7 +1043,7 @@ func TestWorkflowRole_ListRequiresNoMembershipRow(t *testing.T) {
 	c := auth.WithIdentity(context.Background(),
 		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	roles, err := NewStore(app, stubFingerprinter).ListRoles(c)
+	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
 	if err != nil {
 		t.Fatalf("ListRoles with no membership row: %v, want the roles — parity with GET /v1/memberships", err)
 	}
@@ -1071,7 +1071,7 @@ func TestWorkflowRole_RenameKeepsKey(t *testing.T) {
 		t.Fatalf("newRoleKey(%q) = %q, the seeded key — a re-deriving store would pass this test", newTitle, minted)
 	}
 
-	got, err := NewStore(app, stubFingerprinter).UpdateRole(c, "fin_mgr", ptr(newTitle), nil)
+	got, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "fin_mgr", ptr(newTitle), nil)
 	if err != nil {
 		t.Fatalf("UpdateRole: %v", err)
 	}
@@ -1100,7 +1100,7 @@ func TestWorkflowRole_UpdateRejectsNoFieldsAndEmptyTitle(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 update-validation")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	seedRoleDesc(t, super, roleID, "a blurb")
 	before := roleRow(t, super, roleID)
@@ -1142,7 +1142,7 @@ func TestWorkflowRole_UpdateDescOnlyLeavesTitle(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 update-desc-only")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	seedRoleDesc(t, super, roleID, "old blurb")
 
@@ -1175,7 +1175,7 @@ func TestWorkflowRole_UpdateTrimsWhatItStores(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 
-	got, err := NewStore(app, stubFingerprinter).UpdateRole(c, "tax-reviewer",
+	got, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "tax-reviewer",
 		ptr("  Chief Engagement Officer  "), ptr("  blurb  "))
 	if err != nil {
 		t.Fatalf("UpdateRole: %v", err)
@@ -1208,7 +1208,7 @@ func TestWorkflowRole_UpdateReturnsTheRolesMembers(t *testing.T) {
 	staffWorkflowRole(t, super, tenantID, roleID, users[1], 0)
 	want := []string{users[1], users[0]}
 
-	got, err := NewStore(app, stubFingerprinter).UpdateRole(c, "tax-reviewer", ptr("Renamed"), nil)
+	got, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "tax-reviewer", ptr("Renamed"), nil)
 	if err != nil {
 		t.Fatalf("UpdateRole: %v", err)
 	}
@@ -1244,7 +1244,7 @@ func TestWorkflowRole_UpdateReturnsOnlyItsOwnMembers(t *testing.T) {
 	staffWorkflowRole(t, super, tenantID, roleID, mine, 0)
 	staffWorkflowRole(t, super, tenantID, otherID, theirs, 0)
 
-	got, err := NewStore(app, stubFingerprinter).UpdateRole(c, "tax-reviewer", ptr("Renamed"), nil)
+	got, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "tax-reviewer", ptr("Renamed"), nil)
 	if err != nil {
 		t.Fatalf("UpdateRole: %v", err)
 	}
@@ -1261,7 +1261,7 @@ func TestWorkflowRole_UpdateReturnsOnlyItsOwnMembers(t *testing.T) {
 func TestWorkflowRole_UpdateValidatedBeforeTheCallerRoleIsRead(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 update-guard-order")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	before := roleRow(t, super, roleID)
@@ -1290,7 +1290,7 @@ func TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead(t *testing.T
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 no-existence-oracle")
 	otherTenant := seedTenant(t, super, "APPR-02 no-existence-oracle other")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	preparer, _ := callerCtx(t, super, tenantID, "preparer", "active")
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	before := roleRow(t, super, roleID)
@@ -1357,7 +1357,7 @@ func TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead(t *testing.T
 func TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 write-caller-axis")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	before := roleRow(t, super, roleID)
 
@@ -1415,7 +1415,7 @@ func TestWorkflowRole_UpdateAndDeleteAreTenantScoped(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantA := seedTenant(t, super, "APPR-02 write-scope A")
 	tenantB := seedTenant(t, super, "APPR-02 write-scope B")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	sharedA := seedWorkflowRole(t, super, tenantA, "shared", "A Shared")
 	sharedB := seedWorkflowRole(t, super, tenantB, "shared", "B Shared")
@@ -1486,7 +1486,7 @@ func TestWorkflowRole_RenameToAnExistingTitleIsLegal(t *testing.T) {
 	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	partnerID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 
-	got, err := NewStore(app, stubFingerprinter).UpdateRole(c, "engagement-partner", ptr("Tax Reviewer"), nil)
+	got, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "engagement-partner", ptr("Tax Reviewer"), nil)
 	if err != nil {
 		t.Fatalf("UpdateRole to a title another role already holds: %v, want success", err)
 	}
@@ -1516,7 +1516,7 @@ func TestWorkflowRole_UpdateAuditsInSameTx(t *testing.T) {
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	seedRoleDesc(t, super, roleID, "old blurb")
 
-	if _, err := NewStore(app, stubFingerprinter).UpdateRole(c, "tax-reviewer", ptr("Quality Reviewer"), ptr("new blurb")); err != nil {
+	if _, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "tax-reviewer", ptr("Quality Reviewer"), ptr("new blurb")); err != nil {
 		t.Fatalf("UpdateRole: %v", err)
 	}
 
@@ -1573,7 +1573,7 @@ func TestWorkflowRole_UpdateAuditsAnEditThatChangesNothing(t *testing.T) {
 	seedRoleDesc(t, super, roleID, "a blurb")
 	before := roleRow(t, super, roleID)
 
-	got, err := NewStore(app, stubFingerprinter).UpdateRole(c, "tax-reviewer", ptr("Tax Reviewer"), ptr("a blurb"))
+	got, err := NewStore(app, stubFingerprinter, nil).UpdateRole(c, "tax-reviewer", ptr("Tax Reviewer"), ptr("a blurb"))
 	if err != nil {
 		t.Fatalf("UpdateRole with the stored values: %v, want success", err)
 	}
@@ -1618,7 +1618,7 @@ func TestWorkflowRole_UpdateAuditsAnEditThatChangesNothing(t *testing.T) {
 // happen not to overlap.
 func TestWorkflowRole_ConcurrentRenamesChainInTheAudit(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const rounds = 8
 	for round := range rounds {
@@ -1700,7 +1700,7 @@ func TestWorkflowRole_DeletedRoleIsNotListed(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 delete-unlisted")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	deadID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 
@@ -1739,7 +1739,7 @@ func TestWorkflowRole_DeleteLeavesPublishedStepsIntact(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 delete-keeps-staffing")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	seedRoleDesc(t, super, roleID, "a blurb")
@@ -1793,7 +1793,7 @@ func TestWorkflowRole_DeletedRoleIsNotAddressable(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 deleted-unaddressable")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	deadID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 	softDeleteWorkflowRole(t, super, deadID)
@@ -1827,7 +1827,7 @@ func TestWorkflowRole_SecondDeleteIsNotFoundAndDoesNotRestamp(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 second-delete")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 
 	got, err := store.DeleteRole(c, "tax-reviewer")
@@ -1861,7 +1861,7 @@ func TestWorkflowRole_SecondDeleteIsNotFoundAndDoesNotRestamp(t *testing.T) {
 // call stamps and audits — the idempotency ruling holds with no explicit lock.
 func TestWorkflowRole_ConcurrentDeleteExactlyOneWins(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const rounds = 8
 	for round := range rounds {
@@ -1914,7 +1914,7 @@ func TestWorkflowRole_ConcurrentDeleteExactlyOneWins(t *testing.T) {
 // nothing.
 func TestWorkflowRole_ConcurrentDeleteAndRenameOneLosesCoherently(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const rounds = 8
 	for round := range rounds {
@@ -1986,7 +1986,7 @@ func TestWorkflowRole_DeleteAuditsInSameTx(t *testing.T) {
 	c, adminID := activeAdmin(t, super, tenantID)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 
-	if _, err := NewStore(app, stubFingerprinter).DeleteRole(c, "tax-reviewer"); err != nil {
+	if _, err := NewStore(app, stubFingerprinter, nil).DeleteRole(c, "tax-reviewer"); err != nil {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 

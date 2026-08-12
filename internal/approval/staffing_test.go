@@ -204,7 +204,7 @@ func TestStaffing_PreparerMayBeStaffed(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-preparer")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	preparer := uuid.NewString()
 	seedMembership(t, super, tenantID, preparer, "preparer", "active")
@@ -243,7 +243,7 @@ func TestStaffing_SuspendedAndInvitedMembersAreStaffable(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-suspended-invited")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	suspended, invited := uuid.NewString(), uuid.NewString()
 	seedMembership(t, super, tenantID, suspended, "reviewer", "suspended")
@@ -286,7 +286,7 @@ func TestStaffing_OrderRoundTrips(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-order")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 3)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
@@ -331,7 +331,7 @@ func TestStaffing_ReplaceIsWholeSet(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-whole-set")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 3)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
@@ -378,7 +378,7 @@ func TestStaffing_EmptySetUnstaffs(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-empty")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 2)
 	roleID := seedWorkflowRole(t, super, tenantID, "quality-reviewer", "Quality Reviewer")
@@ -430,7 +430,7 @@ func TestStaffing_DuplicateUserRejected(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 staff-duplicate")
 	c, _ := activeAdmin(t, super, tenantID)
 	app, rec := tracedAppPool(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 2)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
@@ -472,7 +472,7 @@ func TestStaffing_DuplicateUserRejected(t *testing.T) {
 func TestStaffing_MalformedMembersRejectedBeforeTheTx(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-malformed")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 
@@ -524,7 +524,7 @@ func TestStaffing_UnknownUserRejected(t *testing.T) {
 	tenantA := seedTenant(t, super, "APPR-02 staff-unknown-user A")
 	tenantB := seedTenant(t, super, "APPR-02 staff-unknown-user B")
 	c, _ := activeAdmin(t, super, tenantA)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	known := uuid.NewString()
 	seedMembership(t, super, tenantA, known, "preparer", "active")
@@ -639,7 +639,7 @@ func TestStaffing_MemberRemovalPrunesEveryRole(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-prune")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 3)
 	x, other1, other2 := users[0], users[1], users[2]
@@ -703,7 +703,7 @@ func TestStaffing_SuspendKeepsStaffing(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-suspend")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 2)
 	x, y := users[0], users[1]
@@ -740,7 +740,7 @@ func TestStaffing_SuspendKeepsStaffing(t *testing.T) {
 func TestStaffing_RequiresActiveAdminCaller(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-caller-axis")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 2)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
@@ -797,7 +797,7 @@ func TestStaffing_PermissionCheckedBeforeRowRead(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-no-oracle")
 	otherTenant := seedTenant(t, super, "APPR-02 staff-no-oracle other")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 	preparer, _ := callerCtx(t, super, tenantID, "preparer", "active")
 
 	member := uuid.NewString()
@@ -862,7 +862,7 @@ func TestStaffing_DeletedRoleCannotBeStaffed(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-deleted-role")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 2)
 	deadID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
@@ -901,7 +901,7 @@ func TestStaffing_DeleteReportsNoMembersButKeepsTheRows(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 delete-keeps-staffing")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	users := seedActiveMembers(t, super, tenantID, 2)
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
@@ -948,7 +948,7 @@ func TestStaffing_IsTenantScoped(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantA := seedTenant(t, super, "APPR-02 staff-scope A")
 	tenantB := seedTenant(t, super, "APPR-02 staff-scope B")
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	aRole := seedWorkflowRole(t, super, tenantA, "shared", "A Shared")
 	bRole := seedWorkflowRole(t, super, tenantB, "shared", "B Shared")
@@ -991,7 +991,7 @@ func TestStaffing_IsTenantScoped(t *testing.T) {
 // overlap.
 func TestStaffing_ConcurrentPutsDoNotMerge(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const rounds = 8
 	for round := range rounds {
@@ -1063,7 +1063,7 @@ func nonCanonicalForms(id string) map[string]string {
 // the raw argument would silently disagree with the row it just wrote.
 func TestStaffing_NonCanonicalUuidFormsAreCanonicalised(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	member := uuid.NewString()
 	for name, form := range nonCanonicalForms(member) {
@@ -1104,7 +1104,7 @@ func TestStaffing_DuplicateIsDetectedAcrossSpellings(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 staff-duplicate-spellings")
 	c, _ := activeAdmin(t, super, tenantID)
 	app, rec := tracedAppPool(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	member := uuid.NewString()
 	seedMembership(t, super, tenantID, member, "preparer", "active")
@@ -1145,7 +1145,7 @@ func TestStaffing_LargeMemberListIsOneInsert(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 staff-large-list")
 	c, _ := activeAdmin(t, super, tenantID)
 	app, rec := tracedAppPool(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const n = 400
 	users := seedActiveMembers(t, super, tenantID, n)
@@ -1189,7 +1189,7 @@ func TestStaffing_LargeMemberListIsOneInsert(t *testing.T) {
 // ErrNotFound; when it commits second, the replaced set survives inert.
 func TestStaffing_ConcurrentStaffAndDeleteResolveCoherently(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	const rounds = 8
 	for round := range rounds {
@@ -1263,7 +1263,7 @@ func TestStaffing_AuditsInSameTx(t *testing.T) {
 	submitted := []string{users[1], users[0]}
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 
-	if _, err := NewStore(app, stubFingerprinter).SetRoleMembers(c, "tax-reviewer", sent(submitted...)); err != nil {
+	if _, err := NewStore(app, stubFingerprinter, nil).SetRoleMembers(c, "tax-reviewer", sent(submitted...)); err != nil {
 		t.Fatalf("SetRoleMembers: %v", err)
 	}
 

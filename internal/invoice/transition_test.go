@@ -41,8 +41,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- INV-SM-01..07 + sole-writer invariant ---------------------------------
@@ -1321,4 +1323,35 @@ func TestTransition_DemotionToDraftCancelsOpenRun(t *testing.T) {
 			t.Errorf("invoice.approval_cancelled audit rows = %d, want %d (exactly one new row)", n, beforeCancelledAudit+1)
 		}
 	})
+}
+
+// TestDemoteApprovalRejectedTx_TakesNoLockAndRefusesIllegalSource (task-490 AC-4): a
+// draft invoice has no validated->draft edge to walk backward from -- DemoteApproval
+// RejectedTx must refuse rather than blindly rewrite the row. Fails today:
+// DemoteApprovalRejectedTx is a stub that returns nil unconditionally.
+func TestDemoteApprovalRejectedTx_TakesNoLockAndRefusesIllegalSource(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-07-05 demote-illegal-source tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-07-05 demote-illegal-source entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-07-05-ILLEGAL", StatusDraft)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return DemoteApprovalRejectedTx(ctx, tx, invID, tenantID, "some-reviewer-subject")
+	})
+	if !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("DemoteApprovalRejectedTx on a draft invoice: err = %v, want ErrIllegalTransition", err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("status after the refused demotion = %q, want unchanged %q", status, StatusDraft)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != 0 {
+		t.Errorf("invoice_status_history rows = %d, want 0 -- a refused demotion must write nothing", n)
+	}
 }

@@ -230,6 +230,25 @@ func decisionStatusForErr(err error) (status int, msg string) {
 	}
 }
 
+// decisionRequest is the POST /v1/invoices/{id}/approvals wire body. Deliberately
+// has NO `by`/`actor` field -- the actor is ALWAYS auth.Identity.Subject, so a
+// client-supplied `by` is silently ignored by json.Decode
+// (TestApprovalHandler_ActorIsIdentityNotBody).
+type decisionRequest struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
+}
+
+// DecideHandler returns POST /v1/invoices/{id}/approvals (APPR-07-06). STUB: wire
+// shape (identity, capped decode, decision vocabulary, reason rules) is not yet
+// implemented here -- always answers 501 so this subtask's RED specs fail on
+// assertions, not on undefined symbols or panics.
+func DecideHandler(decide Decider, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 // RunHandler returns GET /v1/invoices/{id}/approval: identity (401) -> path id ->
 // read -> 200. No body is read at all, and no role gate — any authenticated tenant
 // member may read a run (AC-5); the approver check belongs to the POST.

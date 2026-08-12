@@ -204,11 +204,6 @@ func TestRunHandler_NoRoleGate(t *testing.T) {
 // Filtered on this story's prefix so it never contends with
 // TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain's /v1/workflow-roles
 // filter (D33) — that scan cannot see this route and stays untouched.
-//
-// One row only: subtask 06 adds POST /v1/invoices/{id}/approvals under the same
-// prefix and owns the len(found) == len(want) exhaustiveness check once both
-// routes exist (D33 5b) — copying it here now would go red the moment that POST
-// lands.
 func TestApprovalRoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 	const path = "../../cmd/invoice/main.go"
 	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
@@ -261,6 +256,7 @@ func TestApprovalRoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 
 	want := []struct{ pattern, handler, storeMethod string }{
 		{"GET /v1/invoices/{id}/approval", "approval.RunHandler", "ApprovalRun"},
+		{"POST /v1/invoices/{id}/approvals", "approval.DecideHandler", "DecideSeam"},
 	}
 	for _, w := range want {
 		got, ok := found[w.pattern]
@@ -282,6 +278,9 @@ func TestApprovalRoutesRegisteredInCmdInvoiceMain(t *testing.T) {
 		if !strings.HasPrefix(pattern, "GET ") && !strings.HasPrefix(pattern, "POST ") {
 			t.Errorf("approval-run pattern %q carries no method, so it answers every verb", pattern)
 		}
+	}
+	if len(found) != len(want) {
+		t.Errorf("main.go registers %d approval-run pattern(s), want %d: %v", len(found), len(want), keysOfMap(found))
 	}
 }
 
@@ -448,4 +447,393 @@ func TestRunHandler_IdentityWithEmptyTenantReachesSeamAndMapsNoTenant(t *testing
 	if got := errorMessage(t, rec.Body.Bytes()); got != "unauthorized" {
 		t.Errorf("error = %q, want %q", got, "unauthorized")
 	}
+}
+
+// --- DecideHandler's tests: POST /v1/invoices/{id}/approvals (APPR-07-06) --------
+//
+// RED at the test-spec stage: DecideHandler is a 501 stub (handlers.go), so every
+// case below fails on its status/body assertion, never on a panic or a skip.
+
+const decisionHandlerTestID = "9f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e61"
+
+// failClosedDecide fails the test if the seam runs at all, so a request the handler
+// has to reject before calling it shows up as a failure rather than a silent call.
+func failClosedDecide(t *testing.T) Decider {
+	t.Helper()
+	return func(context.Context, string, string, string) (Run, error) {
+		t.Fatal("decider must not run on a request the handler has to reject")
+		return Run{}, nil
+	}
+}
+
+// decisionMux registers the one pattern cmd/invoice/main.go will serve for POST, so
+// {id} is populated the way production populates it. Pinned against the real file by
+// TestApprovalRoutesRegisteredInCmdInvoiceMain.
+func decisionMux(decide Decider, log *slog.Logger) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invoices/{id}/approvals", DecideHandler(decide, log))
+	return mux
+}
+
+// serveDecision drives one POST request through the mux. A nil id means no identity
+// in context.
+func serveDecision(t *testing.T, decide Decider, log *slog.Logger, path, body string, id *auth.Identity) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("POST", path, strings.NewReader(body))
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	decisionMux(decide, log).ServeHTTP(rec, r)
+	return rec
+}
+
+// decisionBody marshals decisionRequest so tests building long/multi-byte reasons
+// don't hand-splice raw JSON.
+func decisionBody(t *testing.T, decision, reason string) string {
+	t.Helper()
+	b, err := json.Marshal(decisionRequest{Decision: decision, Reason: reason})
+	if err != nil {
+		t.Fatalf("marshal decisionRequest: %v", err)
+	}
+	return string(b)
+}
+
+// AC-1: a client-supplied by/actor has nowhere to land -- Decider's own signature
+// (context, invoiceID, decision, reason) carries no actor parameter at all.
+func TestApprovalHandler_ActorIsIdentityNotBody(t *testing.T) {
+	id := caller()
+	var ran bool
+	var capturedDecision, capturedReason string
+	decide := Decider(func(_ context.Context, _, decision, reason string) (Run, error) {
+		ran, capturedDecision, capturedReason = true, decision, reason
+		return Run{RunID: decisionHandlerTestID, State: "approved"}, nil
+	})
+	body := `{"decision":"approved","by":"attacker","actor":"attacker"}`
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !ran {
+		t.Fatal("the seam never ran")
+	}
+	if capturedDecision != "approved" {
+		t.Errorf("seam received decision = %q, want %q", capturedDecision, "approved")
+	}
+	if capturedReason != "" {
+		t.Errorf("seam received reason = %q, want empty (the body carries no reason)", capturedReason)
+	}
+}
+
+func TestApprovalHandler_NoIdentityIs401(t *testing.T) {
+	decide := failClosedDecide(t)
+	body := decisionBody(t, "approved", "")
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, nil)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 with no identity in context: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != "unauthorized" {
+		t.Errorf("error = %q, want %q", got, "unauthorized")
+	}
+}
+
+// AC-4: absent, empty, wrong-case and unknown decision values are all the same 400.
+func TestApprovalHandler_UnknownDecisionIs400(t *testing.T) {
+	bodies := []string{
+		`{}`,
+		`{"decision":""}`,
+		`{"decision":"APPROVED"}`,
+		`{"decision":"maybe"}`,
+	}
+	for _, body := range bodies {
+		t.Run(body, func(t *testing.T) {
+			id := caller()
+			decide := failClosedDecide(t)
+			rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 for body %s: %s", rec.Code, body, rec.Body.String())
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != `decision must be "approved" or "rejected"` {
+				t.Errorf("error = %q, want %q", got, `decision must be "approved" or "rejected"`)
+			}
+		})
+	}
+}
+
+// AC-5: a reject with no reason, or a whitespace-only one, is refused before the
+// seam ever sees it.
+func TestApprovalHandler_RejectRequiresNonBlankReason(t *testing.T) {
+	bodies := []string{
+		`{"decision":"rejected"}`,
+		`{"decision":"rejected","reason":"   "}`,
+	}
+	for _, body := range bodies {
+		t.Run(body, func(t *testing.T) {
+			id := caller()
+			decide := failClosedDecide(t)
+			rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 for body %s: %s", rec.Code, body, rec.Body.String())
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != "reason is required" {
+				t.Errorf("error = %q, want %q", got, "reason is required")
+			}
+		})
+	}
+}
+
+func TestApprovalHandler_ReasonIsTrimmedBeforeTheStore(t *testing.T) {
+	id := caller()
+	var ran bool
+	var capturedReason string
+	decide := Decider(func(_ context.Context, _, _, reason string) (Run, error) {
+		ran, capturedReason = true, reason
+		return Run{RunID: decisionHandlerTestID, State: "rejected"}, nil
+	})
+	body := `{"decision":"rejected","reason":"  wrong VAT  "}`
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !ran {
+		t.Fatal("the seam never ran")
+	}
+	if capturedReason != "wrong VAT" {
+		t.Errorf("seam received reason = %q, want %q (leading/trailing space trimmed)", capturedReason, "wrong VAT")
+	}
+}
+
+// AC-5: the 1000-byte bound applies to BOTH decisions -- reject's is already
+// enforced in Decide (decision.go:52); approve's is a NEW bound this subtask adds
+// at the handler layer (task-491's "one gap" note -- approve's reason is currently
+// unbounded in shipped code).
+func TestApprovalHandler_ReasonBoundIs1000Bytes(t *testing.T) {
+	for _, decision := range []string{"approved", "rejected"} {
+		t.Run(decision+"/at the bound is accepted", func(t *testing.T) {
+			id := caller()
+			var ran bool
+			var capturedReason string
+			decide := Decider(func(_ context.Context, _, _, reason string) (Run, error) {
+				ran, capturedReason = true, reason
+				return Run{RunID: decisionHandlerTestID, State: "pending"}, nil
+			})
+			reason := strings.Repeat("x", maxRejectReasonLen)
+			body := decisionBody(t, decision, reason)
+			rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 for a %d-byte reason: %s", rec.Code, maxRejectReasonLen, rec.Body.String())
+			}
+			if !ran {
+				t.Fatal("the seam never ran for a reason exactly at the bound")
+			}
+			if capturedReason != reason {
+				t.Errorf("seam received reason of length %d, want the full %d-byte reason unchanged", len(capturedReason), len(reason))
+			}
+		})
+		t.Run(decision+"/one byte over is refused", func(t *testing.T) {
+			id := caller()
+			decide := failClosedDecide(t)
+			reason := strings.Repeat("x", maxRejectReasonLen+1)
+			body := decisionBody(t, decision, reason)
+			rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 for a %d-byte reason: %s", rec.Code, maxRejectReasonLen+1, rec.Body.String())
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != "reason exceeds the 1000-char bound" {
+				t.Errorf("error = %q, want %q", got, "reason exceeds the 1000-char bound")
+			}
+		})
+	}
+}
+
+// The story's AC-1 bounds an approve reason at 1000 bytes too -- new behaviour this
+// subtask ships, not merely tests (task-491's "one gap" note). len() on a Go string
+// counts bytes, so a rune count under 1000 must still be refused once the UTF-8
+// encoding crosses the byte bound.
+func TestApprovalHandler_ApproveReasonBoundIsByteCountedNotRuneCounted(t *testing.T) {
+	id := caller()
+	decide := failClosedDecide(t)
+	reason := strings.Repeat("é", 600) // 600 runes, 1200 bytes (2 bytes/rune in UTF-8)
+	if n := len([]rune(reason)); n >= maxRejectReasonLen {
+		t.Fatalf("test setup: reason has %d runes, want under %d", n, maxRejectReasonLen)
+	}
+	if n := len(reason); n <= maxRejectReasonLen {
+		t.Fatalf("test setup: reason has %d bytes, want over %d", n, maxRejectReasonLen)
+	}
+	body := decisionBody(t, "approved", reason)
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a 1200-byte/600-rune reason: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != "reason exceeds the 1000-char bound" {
+		t.Errorf("error = %q, want %q", got, "reason exceeds the 1000-char bound")
+	}
+}
+
+func TestApprovalHandler_ApproveAcceptsAnAbsentReason(t *testing.T) {
+	id := caller()
+	var ran bool
+	var capturedReason string
+	decide := Decider(func(_ context.Context, _, _, reason string) (Run, error) {
+		ran, capturedReason = true, reason
+		return Run{RunID: decisionHandlerTestID, State: "approved"}, nil
+	})
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", `{"decision":"approved"}`, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !ran {
+		t.Fatal("the seam never ran")
+	}
+	if capturedReason != "" {
+		t.Errorf("seam received reason = %q, want empty for an absent reason key", capturedReason)
+	}
+}
+
+// AC-2: the over-cap body is VALID JSON (padded via "reason"), so a handler with no
+// MaxBytesReader would still decode successfully rather than tripping the
+// malformed-JSON branch by accident (TestWorkflowRoleHandlers_BodyOverCapRejected's
+// precedent, handlers_test.go:220-221).
+func TestApprovalHandler_OversizedBodyIs400(t *testing.T) {
+	id := caller()
+	decide := failClosedDecide(t)
+	pad := strings.Repeat("x", maxDecisionBodyBytes)
+	body := decisionBody(t, "approved", pad)
+	if len(body) <= maxDecisionBodyBytes {
+		t.Fatalf("test setup: body is %d bytes, want over the %d-byte cap", len(body), maxDecisionBodyBytes)
+	}
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", body, &id)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (not 413, not 500): %s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request body" {
+		t.Errorf("error = %q, want %q", got, "invalid request body")
+	}
+}
+
+func TestApprovalHandler_MalformedJSONIs400(t *testing.T) {
+	id := caller()
+	decide := failClosedDecide(t)
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", `{"decision":`, &id)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request body" {
+		t.Errorf("error = %q, want %q", got, "invalid request body")
+	}
+}
+
+// AC-7: decisionStatusForErr's full six-sentinel table, driven through the handler
+// like TestRunHandler_NotFoundEnvelope's precedent above. The two 403s carry
+// different messages naming their own axis -- distinguishable by construction here,
+// since a collapsed message would fail one of the two subtests.
+func TestApprovalHandler_StatusForErrArms(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantMsg    string
+	}{
+		{"no tenant", db.ErrNoTenant, http.StatusUnauthorized, "unauthorized"},
+		{"not an approver (AXIS 1)", ErrNotPermitted, http.StatusForbidden, "only an approver can decide an approval step"},
+		{"not the step's role holder (AXIS 2)", ErrNotRoleHolder, http.StatusForbidden, "you do not hold the workflow role this step is waiting on"},
+		{"no run for this invoice", ErrRunNotFound, http.StatusNotFound, "no approval run for this invoice"},
+		{"run already closed", ErrRunClosed, http.StatusConflict, "this approval run is already closed"},
+		{"invoice not awaiting approval", ErrNotAwaitingApproval, http.StatusConflict, "this invoice is no longer awaiting approval"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := caller()
+			decide := Decider(func(context.Context, string, string, string) (Run, error) { return Run{}, c.err })
+			rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", `{"decision":"approved"}`, &id)
+
+			if rec.Code != c.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, c.wantStatus, rec.Body.String())
+			}
+			if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != "error" {
+				t.Errorf("error body keys = %v, want exactly [error]", got)
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != c.wantMsg {
+				t.Errorf("error = %q, want %q", got, c.wantMsg)
+			}
+		})
+	}
+}
+
+// AC-8: 200 carries the same bare Run body GET /v1/invoices/{id}/approval returns --
+// no envelope, same key set as TestRunHandler_SuccessIsABareObject above.
+func TestApprovalHandler_SuccessReturnsTheRunBody(t *testing.T) {
+	id := caller()
+	want := Run{
+		RunID:     decisionHandlerTestID,
+		State:     "approved",
+		OpenedAt:  time.Now(),
+		Steps:     []RunStep{{Ord: 1, Kind: "approval", State: "satisfied"}},
+		Decisions: []RunDecision{{RunStepID: "step-1", Ord: 1, Decision: "approved", Actor: id.Subject, DecidedAt: time.Now()}},
+	}
+	decide := Decider(func(context.Context, string, string, string) (Run, error) { return want, nil })
+	rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", `{"decision":"approved"}`, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	wantKeys := []string{"closed_at", "closed_by", "decisions", "opened_at", "run_id", "state", "steps"}
+	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != strings.Join(wantKeys, ",") {
+		t.Errorf("response keys = %v, want exactly %v -- the same bare Run GET /v1/invoices/{id}/approval returns", got, wantKeys)
+	}
+	var got Run
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if got.RunID != want.RunID || got.State != want.State {
+		t.Errorf("body = %+v, want the seam's run %+v", got, want)
+	}
+}
+
+// D32: both spellings are registered with one method each, so the wrong-spelling
+// call is 405 with an Allow header, not 404. strings.Contains, not equality --
+// net/http's ServeMux answers HEAD for a registered GET too, so the singular's real
+// Allow header is "GET, HEAD" (TestRunHandler_PostTodayIsMethodNotAllowed's own
+// precedent above already asserts it the same way).
+func TestApprovalRoutes_WrongMethodOnEitherSpellingIs405(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/invoices/{id}/approval", RunHandler(failClosedRun(t), nil))
+	mux.HandleFunc("POST /v1/invoices/{id}/approvals", DecideHandler(failClosedDecide(t), nil))
+
+	t.Run("POST on the singular is 405", func(t *testing.T) {
+		r := httptest.NewRequest("POST", "/v1/invoices/"+decisionHandlerTestID+"/approval", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want 405: %s", rec.Code, rec.Body.String())
+		}
+		if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") {
+			t.Errorf("Allow header = %q, want it to list GET", allow)
+		}
+	})
+
+	t.Run("GET on the plural is 405", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/v1/invoices/"+decisionHandlerTestID+"/approvals", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want 405: %s", rec.Code, rec.Body.String())
+		}
+		if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "POST") {
+			t.Errorf("Allow header = %q, want it to list POST", allow)
+		}
+	})
 }

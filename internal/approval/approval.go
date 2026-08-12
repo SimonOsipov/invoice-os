@@ -39,8 +39,9 @@ var (
 
 // Body caps applied before decode — the platform server sets no limit of its own.
 const (
-	maxCreateBodyBytes = 4 * 1024  // title + desc
-	maxStaffBodyBytes  = 64 * 1024 // an ordered uuid array; ~1,700 ids against a real ceiling in the dozens
+	maxCreateBodyBytes   = 4 * 1024  // title + desc
+	maxStaffBodyBytes    = 64 * 1024 // an ordered uuid array; ~1,700 ids against a real ceiling in the dozens
+	maxDecisionBodyBytes = 4 * 1024  // decision + reason
 )
 
 var slugRE = regexp.MustCompile(`[^a-z0-9]+`)

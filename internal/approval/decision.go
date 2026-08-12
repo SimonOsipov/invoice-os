@@ -69,6 +69,10 @@ func (s *Store) Decide(ctx context.Context, invoiceID, decision string, reason *
 	return run, nil
 }
 
+// Decider is the approve/reject seam DecideHandler calls -- plain string reason
+// (never a pointer), matching every other handler's wire contract.
+type Decider func(ctx context.Context, invoiceID, decision, reason string) (Run, error)
+
 // requireApprover refuses any caller that is not an active {admin, reviewer} -- AXIS
 // 1 (Q1: preparers excluded). Mirrors requireActiveAdmin's shape (store.go:470-484)
 // with the wider role set. Must run before any approval_run/approval_run_steps row

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -458,5 +459,432 @@ func TestDecide_NULByteInReasonIsRefusedNotStored(t *testing.T) {
 			}
 			assertNothingWritten(t, super, f)
 		})
+	}
+}
+
+// --- task-492 (APPR-07-07, adversarial suite): the 6 genuinely-new specs from the
+// Stage-1/2 validation appendix (task-492's implementation_plan), plus one boundary
+// positive control for approve's reason bound. 5 of task-492's own 11 planned specs
+// duplicate shipped coverage 1:1 (TestApprove_CrossTenantRunIsNotFound,
+// TestApprovalRun_CrossTenantReadIsNotFound,
+// TestApprove_ForbiddenAndUnknownAreIndistinguishableForANonApprover,
+// TestApprove_SubjectWithNoMembershipRefused,
+// TestApprovalRun_HolderOrderFollowsStaffingOrdNotRosterOrder) and are deliberately not
+// rebuilt here -- see the appendix for the 1:1 mapping. The NUL-byte spec
+// (TestDecide_NULByteInReasonIsRefusedNotStored, above) was verified against hasNUL's
+// position-independent check (policy.go:255) and already covers both decision branches;
+// no further NUL-position variant adds coverage.
+
+// TestDecisions_AppendOnlyGrantMatrix (AC-5): approval_decisions holds only SELECT,
+// INSERT for invoice_app (migrations/20260809232011_approval_runs.sql:114) -- the
+// durability claim the story's ledger rests on, distinct from approval_policies'
+// grant matrix (schema_constraints_test.go's TestApprovalPolicy_HardDeleteStillUngranted
+// is the only other 42501 probe in the package, and it never touches this table).
+func TestDecisions_AppendOnlyGrantMatrix(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 decisions-grant-matrix", "decisions-grant-matrix-role")
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	if _, err := approve(t, app, f.tenantID, adminID, f.invoiceID, nil); err != nil {
+		t.Fatalf("seed a real decision: Decide(approved): %v, want success", err)
+	}
+	var decisionID string
+	if err := super.QueryRow(context.Background(),
+		`SELECT id FROM approval_decisions WHERE run_id = $1`, f.runID).Scan(&decisionID); err != nil {
+		t.Fatalf("read back decision id: %v", err)
+	}
+
+	updErr := db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(),
+			`UPDATE approval_decisions SET actor = 'tampered' WHERE id = $1`, decisionID)
+		return err
+	})
+	assertSQLState(t, updErr, "42501")
+
+	delErr := db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(),
+			`DELETE FROM approval_decisions WHERE id = $1`, decisionID)
+		return err
+	})
+	assertSQLState(t, delErr, "42501")
+
+	// The row survives both refused mutations byte-identical.
+	after := decisionsForRun(t, super, f.runID)
+	if len(after) != 1 || after[0].Actor != adminID {
+		t.Errorf("approval_decisions after the refused UPDATE/DELETE = %+v, want the original row untouched", after)
+	}
+}
+
+// TestApprove_ConcurrentApproveAndRejectYieldOneOutcome (AC-6): every existing
+// concurrency test races two calls of the SAME decision value
+// (TestApprove_ConcurrentSingleDecision, TestApprove_ConcurrentDecisionsOnAMultiStepRunResolveDeterministically,
+// both approve-v-approve in decision_test.go). Nothing races one approve against one
+// reject on the same run. The resolving SELECT (decision.go:159-172) is shared,
+// decision-value-agnostic code, so the loser here is ErrRunClosed regardless of which
+// value it carried -- this proves the winner's decision value and the run's terminal
+// state never disagree, whichever of the two actually wins the row lock.
+func TestApprove_ConcurrentApproveAndRejectYieldOneOutcome(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 concurrent-approve-reject", "concurrent-approve-reject-role")
+
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errs[0] = approve(t, app, f.tenantID, adminID, f.invoiceID, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		reason := "racing reject"
+		_, errs[1] = reject(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+	}()
+	close(start)
+	wg.Wait()
+
+	approveWon, rejectWon := errs[0] == nil, errs[1] == nil
+	if approveWon == rejectWon {
+		t.Fatalf("errs = %v, want exactly one of approve/reject to succeed", errs)
+	}
+	loserErr := errs[1]
+	if rejectWon {
+		loserErr = errs[0]
+	}
+	if !errors.Is(loserErr, ErrRunClosed) {
+		t.Errorf("loser's err = %v, want ErrRunClosed", loserErr)
+	}
+
+	decisions := decisionsForRun(t, super, f.runID)
+	if len(decisions) != 1 {
+		t.Fatalf("approval_decisions rows for the run = %d, want exactly 1: %+v", len(decisions), decisions)
+	}
+	wantDecision := "approved"
+	if rejectWon {
+		wantDecision = "rejected"
+	}
+	if decisions[0].Decision != wantDecision {
+		t.Errorf("stored decision = %q, want %q (matching whichever of approve/reject actually won)", decisions[0].Decision, wantDecision)
+	}
+
+	run := oneApprovalRun(t, super, f.invoiceID)
+	if run.State != wantDecision {
+		t.Errorf("run.State = %q, want %q -- must match the single decision that was written", run.State, wantDecision)
+	}
+}
+
+// demoteAndCancel mirrors internal/invoice/store.go's edit-triggered demotion
+// (store.go:1327,1537: validated -> draft, then CancelLiveRunTx, same tx, same
+// invoices -> approval_* lock order as decideTx) using only package-local pieces --
+// internal/approval must not import internal/invoice.
+func demoteAndCancel(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID, actor string) (bool, error) {
+	t.Helper()
+	var cancelled bool
+	err := db.WithinTenantTx(context.Background(), pool, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(context.Background(),
+			`UPDATE invoices SET status = 'draft' WHERE id = $1 AND status = 'validated'`, invoiceID); err != nil {
+			return err
+		}
+		var err error
+		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, actor)
+		return err
+	})
+	return cancelled, err
+}
+
+// TestApprove_ConcurrentDecideAndEditDoNotStrandTheRun (AC-6): the mechanism the story
+// names (internal/invoice/store.go:1327,1537) demotes a validated invoice to draft and
+// calls CancelLiveRunTx in the SAME tx -- reachable entirely inside this package via
+// decideTx and the exported CancelLiveRunTx. Uses reject, not approve: CancelLiveRunTx
+// deliberately treats 'approved' as still-live (engine.go:258-260's own doc: cancelling
+// a decided-but-since-edited run is intended), so racing approve here would make "a
+// cancelled run carrying a decision" a LEGITIMATE outcome, not a defect. 'rejected' is
+// the one state CancelLiveRunTx never touches, so this is the shape that actually
+// distinguishes a real stranding bug from working-as-designed.
+func TestApprove_ConcurrentDecideAndEditDoNotStrandTheRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 concurrent-decide-edit", "concurrent-decide-edit-role")
+
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	var rejectErr, cancelErr error
+	var cancelled bool
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		reason := "racing edit"
+		_, rejectErr = reject(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		cancelled, cancelErr = demoteAndCancel(t, app, f.tenantID, f.invoiceID, "editor-actor")
+	}()
+	close(start)
+	wg.Wait()
+
+	if cancelErr != nil {
+		t.Fatalf("demoteAndCancel: %v, want nil", cancelErr)
+	}
+
+	run := oneApprovalRun(t, super, f.invoiceID)
+	decisions := decisionsForRun(t, super, f.runID)
+
+	switch {
+	case rejectErr == nil:
+		// reject won the invoices-row lock: the run closes rejected before the edit
+		// ever reaches it, so CancelLiveRunTx must find it already excluded.
+		if run.State != "rejected" {
+			t.Errorf("reject won the race but run.State = %q, want rejected", run.State)
+		}
+		if len(decisions) != 1 {
+			t.Errorf("reject won the race but approval_decisions rows = %d, want 1", len(decisions))
+		}
+		if cancelled {
+			t.Error("CancelLiveRunTx reported cancelled=true against an already-rejected run, want false -- a rejected run must never be cancelled")
+		}
+	case errors.Is(rejectErr, ErrNotAwaitingApproval):
+		// the edit won the invoices-row lock: the invoice reads 'draft' by the time
+		// Decide re-checks it, refusing before ever touching the run.
+		if run.State != "cancelled" {
+			t.Errorf("the edit won the race but run.State = %q, want cancelled", run.State)
+		}
+		if len(decisions) != 0 {
+			t.Errorf("the edit won the race but approval_decisions rows = %d, want 0 -- a cancelled run must never carry a decision", len(decisions))
+		}
+		if !cancelled {
+			t.Error("CancelLiveRunTx reported cancelled=false against a still-open run, want true")
+		}
+	default:
+		t.Fatalf("reject returned %v, want nil or ErrNotAwaitingApproval", rejectErr)
+	}
+
+	// Either branch, the run must never be left open beside a non-validated invoice --
+	// exactly reconciliation's approval_run_orphaned finding
+	// (internal/reconciliation/reconciliation.go:168-172).
+	if run.State == "open" {
+		t.Error("run.State = open after both goroutines completed, want rejected or cancelled")
+	}
+}
+
+// TestApprove_TwoOpenRunsCannotExist (AC-6): the only existing coverage of
+// approval_runs_one_open (schema_constraints_test.go's TestApprovalRuns_SecondOpenRunRejected)
+// is a raw-SQL direct-INSERT probe of the constraint alone. This walks the real
+// lifecycle instead -- reject (via Decide) -> demote -> re-validate -> re-arm (via
+// ArmTx) -- and confirms at most one OPEN run exists at every step, not just at the
+// two static endpoints.
+func TestApprove_TwoOpenRunsCannotExist(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 two-open-runs-lifecycle", "two-open-runs-role")
+
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	openRunCount := func(t *testing.T) int {
+		t.Helper()
+		var n int
+		if err := super.QueryRow(context.Background(),
+			`SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, f.invoiceID).Scan(&n); err != nil {
+			t.Fatalf("count open runs: %v", err)
+		}
+		return n
+	}
+	if n := openRunCount(t); n != 1 {
+		t.Fatalf("open runs before reject = %d, want 1", n)
+	}
+
+	reason := "not this one"
+	if _, err := reject(t, app, f.tenantID, adminID, f.invoiceID, &reason); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if n := openRunCount(t); n != 0 {
+		t.Errorf("open runs after reject = %d, want 0", n)
+	}
+	rejectedRun := oneApprovalRun(t, super, f.invoiceID)
+	if rejectedRun.State != "rejected" {
+		t.Fatalf("run.State after reject = %q, want rejected", rejectedRun.State)
+	}
+
+	// Demote + re-validate: stubDemoter (decision_test.go) never touches
+	// invoices.status -- the honest oracle for that edge is
+	// internal/invoice/reject_demotion_test.go -- so this simulates the two real
+	// transitions directly, matching TestApprove_ConcurrentDecideAndEditDoNotStrandTheRun's
+	// same rationale above.
+	setInvoiceStatus(t, super, f.invoiceID, "draft")
+	if n := openRunCount(t); n != 0 {
+		t.Errorf("open runs while draft = %d, want 0", n)
+	}
+	setInvoiceStatus(t, super, f.invoiceID, "validated")
+	if n := openRunCount(t); n != 0 {
+		t.Errorf("open runs after re-validate, before re-arm = %d, want 0", n)
+	}
+
+	res, err := arm(t, app, f.tenantID, f.invoiceID, "fp-two-open-runs-rearm", "rearm-actor")
+	if err != nil {
+		t.Fatalf("re-arm: %v", err)
+	}
+	if res.RunID == rejectedRun.ID {
+		t.Fatalf("re-arm produced the SAME run id as the rejected run, want a new one")
+	}
+	if n := openRunCount(t); n != 1 {
+		t.Errorf("open runs after re-arm = %d, want exactly 1", n)
+	}
+
+	var total int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM approval_runs WHERE invoice_id = $1`, f.invoiceID).Scan(&total); err != nil {
+		t.Fatalf("count total runs: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("total approval_runs for invoice = %d, want exactly 2 (rejected + re-armed)", total)
+	}
+
+	var newState string
+	if err := super.QueryRow(context.Background(),
+		`SELECT state FROM approval_runs WHERE id = $1`, res.RunID).Scan(&newState); err != nil {
+		t.Fatalf("read back re-armed run state: %v", err)
+	}
+	if newState != "open" {
+		t.Errorf("re-armed run.state = %q, want open", newState)
+	}
+}
+
+// TestApprove_HolderInAnotherTenantDoesNotSatisfy (AC-2): the highest-value AXIS-2 gap
+// -- every shipped cross-tenant test is refused earlier, at the invoices lookup
+// (staging the collision as "decide tenant A's invoice as a tenant-B caller"), so
+// nothing exercises AXIS 2's own RLS-only isolation (decision.go:174-197 carries no
+// explicit tenant_id predicate of its own; RLS on workflow_roles/workflow_role_members
+// is the only thing scoping it). This stages the caller as a genuine active admin OF
+// THE RUN'S OWN TENANT -- AXIS 1 and the invoices/approval_runs lookups all pass -- but
+// staffed into a role sharing the exact same key STRING only in a DIFFERENT tenant.
+// Reachable because memberships_tenant_user_uq is (tenant_id, user_id), not user_id
+// alone: one person can hold separate membership+staffing rows in two tenants.
+func TestApprove_HolderInAnotherTenantDoesNotSatisfy(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 holder-other-tenant", "same-key-axis2")
+	otherTenantID := policyTenant(t, super, "APPR-07 holder-other-tenant OTHER")
+	otherRoleID := seedWorkflowRole(t, super, otherTenantID, "same-key-axis2", "same-key-axis2")
+
+	callerID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, callerID, "admin", "active") // real, active admin OF THE TARGET tenant
+	// workflow_role_members_tenant_user_fk requires a (tenant_id, user_id) membership
+	// row in the SAME tenant as the staffing row -- memberships_tenant_user_uq is
+	// (tenant_id, user_id), not user_id alone, so this is a second, separate row for
+	// the same person.
+	seedMembership(t, super, otherTenantID, callerID, "admin", "active")
+	staffWorkflowRole(t, super, otherTenantID, otherRoleID, callerID, 0) // staffed in the OTHER tenant's same-key role only
+
+	_, err := approve(t, app, f.tenantID, callerID, f.invoiceID, nil)
+	if !errors.Is(err, ErrNotRoleHolder) {
+		t.Errorf("Decide(approved) as an admin staffed into a SAME-KEY role in a DIFFERENT tenant: err = %v, want ErrNotRoleHolder", err)
+	}
+	assertNothingWritten(t, super, f)
+
+	// Positive control: the SAME caller, SAME invoice, staffed into the TARGET
+	// tenant's own role instead, now succeeds -- proving the refusal above was
+	// really about tenant-scoping the staffing row, not something else broken in
+	// this fixture.
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, callerID, 0)
+	run, err := approve(t, app, f.tenantID, callerID, f.invoiceID, nil)
+	if err != nil {
+		t.Fatalf("Decide(approved) after staffing the caller into the TARGET tenant's own role: %v, want success", err)
+	}
+	if run.State != "approved" {
+		t.Errorf("run.State = %q, want approved", run.State)
+	}
+}
+
+// TestApprovalRunSteps_TenantIsolationDirectRLSCheck mirrors
+// TestApprove_TenantBindingIsCorrectAndCrossTenantInvisible's shape for
+// approval_run_steps: approval_runs and approval_decisions each have a direct RLS proof
+// of their own; approval_run_steps shares the identical verbatim tenant_isolation
+// policy (migrations/20260809232011_approval_runs.sql:107-112, "the verbatim M2-06
+// template") but was, until now, only ever exercised transitively -- every existing
+// test that would reach it is already refused earlier, at the run or invoice lookup.
+func TestApprovalRunSteps_TenantIsolationDirectRLSCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 run-steps-direct-rls", "run-steps-direct-rls-role")
+	otherTenantID := policyTenant(t, super, "APPR-07 run-steps-direct-rls OTHER")
+
+	var tenantID string
+	if err := super.QueryRow(context.Background(),
+		`SELECT tenant_id FROM approval_run_steps WHERE id = $1`, f.stepID).Scan(&tenantID); err != nil {
+		t.Fatalf("read back step tenant_id: %v", err)
+	}
+	if tenantID != f.tenantID {
+		t.Errorf("approval_run_steps.tenant_id = %q, want %q", tenantID, f.tenantID)
+	}
+
+	var n int
+	err := db.WithinTenantTx(context.Background(), app, otherTenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT count(*) FROM approval_run_steps WHERE id = $1`, f.stepID).Scan(&n)
+	})
+	if err != nil {
+		t.Fatalf("count steps as the other tenant: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("approval_run_steps rows visible under a different tenant's RLS scope = %d, want 0", n)
+	}
+
+	// Positive control: the step's own tenant sees it fine -- otherwise "0 rows" could
+	// vacuously pass because the step never existed at all.
+	var m int
+	err = db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT count(*) FROM approval_run_steps WHERE id = $1`, f.stepID).Scan(&m)
+	})
+	if err != nil {
+		t.Fatalf("count steps as the step's own tenant: %v", err)
+	}
+	if m != 1 {
+		t.Errorf("approval_run_steps rows visible under the step's own tenant = %d, want 1", m)
+	}
+}
+
+// TestApprove_ReasonAtByteBoundarySucceeds mirrors TestReject_ReasonAtByteBoundarySucceeds
+// (decision_test.go) for approve. The existing approve-reason coverage above
+// (TestApprove_ReasonBoundIsEnforcedAtTheDomainLayerNotOnlyAtTheHTTPEdge,
+// TestApprove_VeryLongReasonIsRefusedAndWritesNothing,
+// TestApprove_MultiByteReasonOverByteBoundaryRefusedAtTheDomainLayer) only ever asserts
+// REFUSAL -- nothing proves the bound is a genuine boundary rather than an
+// always-refuse: a mutant that made approve's check fire even AT 1000 bytes would pass
+// every one of those.
+func TestApprove_ReasonAtByteBoundarySucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 approve-reason-at-boundary", "approve-reason-at-boundary-role")
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	reason := strings.Repeat("a", 1000)
+	run, err := approve(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+	if err != nil {
+		t.Fatalf("Decide(approved) with a 1000-byte reason: %v, want success", err)
+	}
+	if run.State != "approved" {
+		t.Errorf("run.State = %q, want approved -- a reason exactly at the 1000-byte bound must be legal", run.State)
+	}
+
+	decisions := decisionsForRun(t, super, f.runID)
+	if len(decisions) != 1 {
+		t.Fatalf("approval_decisions rows for the run = %d, want exactly 1", len(decisions))
+	}
+	if decisions[0].Reason == nil || *decisions[0].Reason != reason {
+		t.Errorf("stored decision reason mismatch, want the full 1000-byte reason written through unchanged")
 	}
 }

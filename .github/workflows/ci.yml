@@ -557,13 +557,54 @@ jobs:
       - name: pnpm -r build (all four SPAs)
         run: pnpm -r build
 
+  # Stale cross-language references (cluster 4 of the QA-log aggregate). The Go
+  # compiler and `pnpm -r typecheck` already fail when a renamed symbol strands a
+  # caller. Neither can see a STRING that one file produces and another quotes —
+  # a Playwright assertion on user-visible copy, a getByTestId, a route in a doc.
+  # Those break late (a deploy gate) or not at all.
+  #
+  # Deliberately NOT behind the `changes` filter: the producer and the stranded
+  # consumer are in different halves of the monorepo by definition, so any filter
+  # that skips a half is exactly the blindness this job exists to remove.
+  #
+  # Measured over the 40 most recent merged PRs before it shipped: 0 false
+  # failures across 32 PR ranges, and it fires on both breaks the QA logs record
+  # (DEMO-01's `AUDIT LOGGED` toast, APPR-15's deleted invite test ids) at the
+  # push where each was live.
+  stale-refs:
+    name: Stale references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scan diffs against the merge base, so a shallow clone would make
+          # it silently find nothing — the failure mode it is built to catch.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Proves the detector still fires on its pinned known positives before its
+      # verdict is trusted. A scan that reports zero because it is broken looks
+      # exactly like a scan that reports zero because the branch is clean.
+      - name: Prove the detector fires (known positives)
+        run: go test ./internal/tools/stalerefs/ -count=1
+      - name: Scan for stale references
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then BASE="${{ github.event.before }}"; fi
+          case "$BASE" in
+            ""|0000000000000000000000000000000000000000)
+              echo "No base commit to diff against — nothing to scan."; exit 0 ;;
+          esac
+          go run ./internal/tools/stalerefs -base "$BASE" -head HEAD
+
   # Single always-running gate. Mark THIS check ("CI") required in branch
   # protection (M1-05): it passes when the triggered jobs pass or are skipped,
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit, stale-refs]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -578,6 +619,7 @@ jobs:
           echo "audit:         ${{ needs.audit.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
+          echo "stale-refs:    ${{ needs.stale-refs.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
           fi
@@ -606,5 +648,10 @@ jobs:
           # never merely skip.
           if [ "${{ needs.clean-clone.result }}" != "success" ]; then
             echo "::error::Clean-clone build failed"; exit 1
+          fi
+          # stale-refs is unconditional for the same reason: a skip here would be
+          # indistinguishable from a clean scan.
+          if [ "${{ needs.stale-refs.result }}" != "success" ]; then
+            echo "::error::Stale-reference scan failed"; exit 1
           fi
           echo "All triggered CI jobs passed (skipped jobs are OK)."

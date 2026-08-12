@@ -150,15 +150,18 @@ func TestApproval_MakeTargetExportsTheDSNsThePackageReads(t *testing.T) {
 	}
 }
 
-// TestMain_WiresTheFingerprinter (task-484 AC-6): cmd/invoice/main.go's approval.NewStore
-// call must pass invoice.FingerprintTx as its second argument, never nil. The required
-// parameter makes an OMITTED argument a compile error, but nil still compiles and would
+// TestMain_WiresTheStoreCollaborators (task-484 AC-6, task-490 AC-4): cmd/invoice/
+// main.go's approval.NewStore call must pass invoice.FingerprintTx as its second
+// argument and invoice.DemoteApprovalRejectedTx as its third, never nil. Both required
+// parameters make an OMITTED argument a compile error, but nil still compiles and would
 // only fail closed at runtime -- this is the static guard that catches that at review
 // time instead. An AST walk, not a byte scan, mirrors
 // TestWorkflowRoleHandlers_RoutesRegisteredInCmdInvoiceMain (handlers_test.go), so
-// reformatting main.go cannot break it. Fails today: main.go:176 reads
-// approval.NewStore(pool), one argument.
-func TestMain_WiresTheFingerprinter(t *testing.T) {
+// reformatting main.go cannot break it. One guard for both collaborators -- a second,
+// separately named test walking the same call would be two things that must agree
+// forever. Fails today: main.go:180 still reads approval.NewStore(pool,
+// invoice.FingerprintTx), two arguments.
+func TestMain_WiresTheStoreCollaborators(t *testing.T) {
 	path := filepath.Join(repoRoot(t), "cmd", "invoice", "main.go")
 	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
@@ -184,8 +187,8 @@ func TestMain_WiresTheFingerprinter(t *testing.T) {
 		}
 		found = true
 
-		if len(call.Args) != 2 {
-			t.Fatalf("approval.NewStore call in %s has %d argument(s), want 2 (pool, fingerprinter)",
+		if len(call.Args) != 3 {
+			t.Fatalf("approval.NewStore call in %s has %d argument(s), want 3 (pool, fingerprinter, demoter)",
 				path, len(call.Args))
 			return false
 		}
@@ -198,6 +201,16 @@ func TestMain_WiresTheFingerprinter(t *testing.T) {
 		pkg1, ok := arg1.X.(*ast.Ident)
 		if !ok || pkg1.Name != "invoice" || arg1.Sel.Name != "FingerprintTx" {
 			t.Fatalf("approval.NewStore's second argument in %s is not invoice.FingerprintTx", path)
+		}
+		arg2, ok := call.Args[2].(*ast.SelectorExpr)
+		if !ok {
+			t.Fatalf("approval.NewStore's third argument in %s is not invoice.DemoteApprovalRejectedTx (got %T) -- "+
+				"nil still compiles here but only fails closed at runtime", path, call.Args[2])
+			return false
+		}
+		pkg2, ok := arg2.X.(*ast.Ident)
+		if !ok || pkg2.Name != "invoice" || arg2.Sel.Name != "DemoteApprovalRejectedTx" {
+			t.Fatalf("approval.NewStore's third argument in %s is not invoice.DemoteApprovalRejectedTx", path)
 		}
 		return false
 	})

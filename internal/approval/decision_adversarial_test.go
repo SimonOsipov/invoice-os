@@ -78,7 +78,7 @@ func TestApprove_NonApproverOracleIdenticalAcrossFourInvoiceStates(t *testing.T)
 	seedMembership(t, super, f.tenantID, preparerID, "preparer", "active")
 
 	traced, rec := tracedAppPool(t)
-	store := NewStore(traced, stubFingerprinter)
+	store := NewStore(traced, stubFingerprinter, nil)
 	callAs := func(t *testing.T, invoiceID string) error {
 		t.Helper()
 		rec.reset()
@@ -137,7 +137,7 @@ func TestApprove_ApproverGetsIdenticalRunNotFoundAcrossUnknownCrossTenantMalform
 
 	c := auth.WithIdentity(context.Background(),
 		auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantB})
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	cases := []struct{ name, id string }{
 		{"unknown id", uuid.NewString()},

@@ -40,7 +40,7 @@ func (s *Store) Decide(ctx context.Context, invoiceID, decision string, reason *
 		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
 		caller, _ := auth.IdentityFromContext(ctx)
 		var derr error
-		run, derr = decideTx(ctx, tx, u.String(), decision, reason, caller)
+		run, derr = decideTx(ctx, tx, u.String(), decision, reason, caller, s.demoter)
 		return derr
 	})
 	if err != nil {
@@ -74,7 +74,7 @@ func requireApprover(ctx context.Context, tx pgx.Tx, subject string) error {
 // Exposed at package scope, unexported, so a test can wrap it in its own
 // db.WithinTenantTx and force a rollback after a real write -- the ArmTx/
 // CancelLiveRunTx precedent for same-tx atomicity proofs.
-func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason *string, caller auth.Identity) (Run, error) {
+func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason *string, caller auth.Identity, demoter Demoter) (Run, error) {
 	if err := requireApprover(ctx, tx, caller.Subject); err != nil {
 		return Run{}, err
 	}
@@ -149,7 +149,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		return Run{}, ErrNotRoleHolder
 	}
 
-	if _, err := commitDecisionTx(ctx, tx, invoiceID, runID, stepID, stepOrd, decision, caller.Subject, reason); err != nil {
+	if _, err := commitDecisionTx(ctx, tx, invoiceID, caller.TenantID, runID, stepID, stepOrd, decision, caller.Subject, reason, demoter); err != nil {
 		return Run{}, err
 	}
 
@@ -174,7 +174,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 // UPDATE, which makes "the UPDATE affects 0 rows" unreachable through the full
 // Decide seam under normal concurrency (the resolving SELECT would simply find no
 // pending row instead) -- this lets the guard be driven directly as its own unit.
-func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, runID, stepID string, stepOrd int, decision, actor string, reason *string) (satisfied bool, err error) {
+func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID, stepID string, stepOrd int, decision, actor string, reason *string, demoter Demoter) (satisfied bool, err error) {
 	// approval_decisions holds only SELECT+INSERT for invoice_app (migrations/
 	// 20260809232011_approval_runs.sql:114) -- the UPDATE must claim the row FIRST,
 	// or a 0-row UPDATE would leave an unremovable phantom decision.

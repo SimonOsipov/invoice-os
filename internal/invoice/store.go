@@ -392,6 +392,17 @@ func FingerprintTx(ctx context.Context, tx pgx.Tx, id string) (string, error) {
 	return contentFingerprint(inv, lines), nil
 }
 
+// DemoteApprovalRejectedTx will walk a validated invoice back to draft after an
+// approver rejects it, via transitionTx on the caller's transaction — exported for
+// exactly one consumer: approval.Demoter, bound at cmd/invoice/main.go, mirroring
+// FingerprintTx's shape and the same reason (the internal/approval -> internal/invoice
+// edge must not open).
+//
+// Stub: returns nil unconditionally until the real transitionTx call is wired in.
+func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subject string) error {
+	return nil
+}
+
 // replaceLinesTx replaces an invoice's WHOLE line set inside the caller's tx:
 // DELETE every existing line, then re-INSERT in from array order with line_no
 // system-assigned 1..N ([line-update-shape], [line-no-by-position]). The INSERT

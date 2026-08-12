@@ -110,7 +110,7 @@ func TestApprovalRun_ReturnsOrderedStepsWithHolders(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestApprovalRun_HolderUsesResolveWordingNotInspector(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestApprovalRun_NotifyStepIsIncludedSkippedWithTargetAndChannel(t *testing.
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestApprovalRun_AutoapproveStepIsIncludedSatisfied(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestApprovalRun_OverdueOnlyForPendingSteps(t *testing.T) {
 		backdateRunStepDueAt(t, super, runStepID(t, super, res.RunID, 0), time.Now().Add(-time.Hour))
 
 		c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-		run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+		run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 		if err != nil {
 			t.Fatalf("ApprovalRun: %v", err)
 		}
@@ -341,7 +341,7 @@ func TestApprovalRun_OverdueOnlyForPendingSteps(t *testing.T) {
 		backdateRunStepDueAt(t, super, runStepID(t, super, res.RunID, 1), time.Now().Add(-time.Hour))
 
 		c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-		run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+		run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 		if err != nil {
 			t.Fatalf("ApprovalRun: %v", err)
 		}
@@ -383,7 +383,7 @@ func TestApprovalRun_DeletedRoleTitleAndHolderFallback(t *testing.T) {
 	softDeleteWorkflowRole(t, super, roleID)
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestApprovalRun_UnstaffedRoleReadsNobodyAssigned(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestApprovalRun_SuspendedSoleHolderWarns(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestApprovalRun_AllHoldersSuspendedWarnsWithPlusN(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestApprovalRun_NoRunIsNotFound(t *testing.T) {
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "no-run-invoice-1")
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	_, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	_, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if !errors.Is(err, ErrRunNotFound) {
 		t.Errorf("ApprovalRun with no run row: err = %v, want ErrRunNotFound", err)
 	}
@@ -557,7 +557,7 @@ func TestApprovalRun_NoRunIsNotFound(t *testing.T) {
 // this package's RLS-forced posture.
 func TestApprovalRun_UnknownCrossTenantAndMalformedIdsAgree(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, stubFingerprinter)
+	store := NewStore(app, stubFingerprinter, nil)
 
 	tenantA := policyTenant(t, super, "APPR-07 cross-tenant A")
 	entityA := seedBusinessEntity(t, super, tenantA, "Cross Tenant A Corp")
@@ -629,7 +629,7 @@ func TestApprovalRun_DecisionLedgerCarriesActorTimeAndReason(t *testing.T) {
 	seedApprovalDecision(t, super, tenantID, res.RunID, stepID, "approved", "qa-tester", &reason)
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -687,7 +687,7 @@ func TestApprovalRun_MultiStepRunWithNotifyAndDecisionAssemblesTogether(t *testi
 	seedApprovalDecision(t, super, tenantID, res.RunID, firstStepID, "approved", "qa-tester", nil)
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -728,7 +728,7 @@ func TestApprovalRun_ClosedRunStillReadable(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}

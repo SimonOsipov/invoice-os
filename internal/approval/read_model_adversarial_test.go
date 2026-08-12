@@ -89,7 +89,7 @@ func TestApprovalRun_CancelledRunDoesNotShadowTheCurrentRun(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestApprovalRun_TiedOpenedAtStillReturnsExactlyOneRun(t *testing.T) {
 	backdateRunOpenedAt(t, super, secondRes.RunID, tied)
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v (want a run picked, not an error)", err)
 	}
@@ -178,13 +178,13 @@ func TestApprovalRun_SuperuserPoolBypassesRLS_ProvesTheAppPoolIsolationIsReal(t 
 	// Negative control: the app pool (invoice_app, RLS-bound) refuses tenant A's data to
 	// tenant B's context -- the same guarantee TestApprovalRun_UnknownCrossTenantAndMalformedIdsAgree
 	// already pins, repeated here so the positive control below has a same-test baseline.
-	if _, err := NewStore(app, stubFingerprinter).ApprovalRun(cB, invoiceA); !errors.Is(err, ErrRunNotFound) {
+	if _, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(cB, invoiceA); !errors.Is(err, ErrRunNotFound) {
 		t.Fatalf("app pool: ApprovalRun(tenant B ctx, tenant A invoice) = %v, want ErrRunNotFound", err)
 	}
 
 	// Positive control: the identical call over the superuser pool succeeds and returns
 	// tenant A's run -- proving the refusal above rests on RLS + the invoice_app role.
-	run, err := NewStore(super, stubFingerprinter).ApprovalRun(cB, invoiceA)
+	run, err := NewStore(super, stubFingerprinter, nil).ApprovalRun(cB, invoiceA)
 	if err != nil {
 		t.Fatalf("superuser pool: ApprovalRun(tenant B ctx, tenant A invoice) = %v, want success (a superuser always bypasses RLS)", err)
 	}
@@ -229,7 +229,7 @@ func TestApprovalRun_DecisionReferencingStepFromAnotherRunDefaultsOrdToZero(t *t
 	seedApprovalDecision(t, super, tenantID, resA.RunID, stepFromB, "approved", "qa-tester", nil)
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceA)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceA)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestApprovalRun_DecisionReasonDistinguishesNullFromEmptyString(t *testing.T
 	seedApprovalDecision(t, super, tenantID, res.RunID, emptyStep, "approved", "qa-tester", ptr(""))
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestApprovalRun_HolderNameFallsBackToEmailWhenDisplayNameIsNull(t *testing.
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestApprovalRun_StepsReturnInOrdOrderRegardlessOfPhysicalInsertOrder(t *tes
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestApprovalRun_HolderResolutionUsesStaffingOrdNotPhysicalInsertOrder(t *te
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount(t *testing.T) {
 	tracedApp, rec := tracedAppPool(t)
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
 	rec.reset()
-	run, err := NewStore(tracedApp, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(tracedApp, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestApprovalRun_ZeroStepRunReadsEmptyNonNilSlices(t *testing.T) {
 	}
 
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	run, err := NewStore(app, stubFingerprinter).ApprovalRun(c, invoiceID)
+	run, err := NewStore(app, stubFingerprinter, nil).ApprovalRun(c, invoiceID)
 	if err != nil {
 		t.Fatalf("ApprovalRun: %v", err)
 	}

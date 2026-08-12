@@ -2,6 +2,7 @@ package approval
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -68,7 +69,7 @@ func (r Run) MarshalJSON() ([]byte, error) {
 // isApprover mirrors internal/invoice/store.go:1412 -- kept in sync by inspection, not import
 // (unexported across packages). Also mirrors roles.ts's isApprover (roles.ts:405-407).
 func isApprover(accessRole string) bool {
-	return false // stub: executor implements
+	return accessRole == "admin" || accessRole == "reviewer"
 }
 
 // holderInput is one row of the ordered holder list `resolution` classifies --
@@ -98,27 +99,80 @@ type resolutionResult struct {
 // inspectorResolveHolder cannot disagree about them. roleExists stands in for
 // `list.some(r => r.key === key)`; holders is already in ord order.
 func resolution(roleExists bool, holders []holderInput) resolutionResult {
-	return resolutionResult{} // stub: executor implements
+	if !roleExists {
+		return resolutionResult{kind: resMissing}
+	}
+	if len(holders) == 0 {
+		return resolutionResult{kind: resNone}
+	}
+	var active []holderInput
+	for _, h := range holders {
+		if h.Status == "active" && isApprover(h.AccessRole) {
+			active = append(active, h)
+		}
+	}
+	extra := len(holders) - 1 // counts the OTHER holders, active or not -- roles.ts:109-110
+	if len(active) == 0 {
+		return resolutionResult{kind: resBlocked, primary: holders[0].Name, extra: extra}
+	}
+	return resolutionResult{kind: resOK, primary: active[0].Name, extra: extra}
 }
 
 // resolveHolder mirrors roles.ts:119-124 (resolve) over resolution().
 func resolveHolder(roleExists bool, holders []holderInput) Resolved {
-	return Resolved{} // stub: executor implements
+	res := resolution(roleExists, holders)
+	switch res.kind {
+	case resMissing:
+		return Resolved{Text: "Role no longer exists", Warn: true}
+	case resNone:
+		return Resolved{Text: "Nobody assigned", Warn: true}
+	case resBlocked:
+		return Resolved{Text: withExtra(res.primary, res.extra), Warn: true}
+	default: // resOK
+		return Resolved{Text: withExtra(res.primary, res.extra), Warn: false}
+	}
 }
 
 // inspectorResolveHolder mirrors roles.ts:127-133 (inspectorResolve) over the
 // same resolution() -- deliberately omits +N (roles.ts:126). Its only caller
 // in this story is the mirror test (D22).
 func inspectorResolveHolder(roleExists bool, holders []holderInput) Resolved {
-	return Resolved{} // stub: executor implements
+	res := resolution(roleExists, holders)
+	switch res.kind {
+	case resMissing:
+		return Resolved{Text: "Role no longer exists", Warn: true}
+	case resNone:
+		return Resolved{Text: "Nobody holds this role — this step will block", Warn: true}
+	case resBlocked:
+		return Resolved{Text: "Currently: " + res.primary + " — this step will block", Warn: true}
+	default: // resOK
+		return Resolved{Text: "Currently: " + res.primary, Warn: false}
+	}
+}
+
+// withExtra appends " +N" when other holders exist, roles.ts:122's shape (resolve only).
+func withExtra(primary string, extra int) string {
+	if extra > 0 {
+		return fmt.Sprintf("%s +%d", primary, extra)
+	}
+	return primary
 }
 
 // holderName mirrors toMember's display_name ?? email ?? user_id ladder (members.ts:546).
 func holderName(displayName, email *string, userID string) string {
-	return "" // stub: executor implements
+	if displayName != nil {
+		return *displayName
+	}
+	if email != nil {
+		return *email
+	}
+	return userID
 }
 
 // roleTitle mirrors roleOf's deleted-role fallback (roles.ts:63).
 func roleTitle(roleExists bool, liveTitle string) string {
-	return "" // stub: executor implements
+	if !roleExists {
+		return "Deleted role"
+	}
+	return liveTitle
 }

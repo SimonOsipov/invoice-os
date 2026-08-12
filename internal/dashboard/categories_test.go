@@ -41,6 +41,9 @@ func fetchActiveRuleKeys(t *testing.T, app *pgxpool.Pool) []string {
 func TestCategories_EveryActiveRuleIsMapped(t *testing.T) {
 	_, app := dbTestPools(t)
 	active := fetchActiveRuleKeys(t, app)
+	if len(active) == 0 {
+		t.Fatal("no active rules read back -- the loop below would assert nothing")
+	}
 
 	for _, key := range active {
 		if _, ok := ruleCategories[key]; !ok {

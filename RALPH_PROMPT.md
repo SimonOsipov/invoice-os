@@ -289,6 +289,8 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - Spawn `product-qa-spec` (Mode B) in its default critique disposition (skeptical, anchors on acceptance criteria not the diff, cites evidence per verdict).
 - Pass: acceptance criteria, implementation plan, changed files, Definition of Done.
 - For `Test-first: yes` subtasks, confirm the Stage 2.5 AC tests are now green and still meaningful (would fail if behavior regressed), then *add* adversarial / edge / negative coverage (including a cross-tenant RLS refusal assertion for any new tenant-owned table).
+- Prove every AC test can fail. Change one source line so the behaviour breaks. Run that test. Record `<file:line changed> -> FAIL <TestName>` in the QA findings, one row per AC. A test that stays green under its own mutation does not prove its AC. Report that test as a QA failure. Mode-B tests need this most: nothing gave them a red phase.
+- When a test asserts over a collection, assert the collection is not empty. An empty collection satisfies every assertion inside the loop.
 - Backend: verify tests pass, model/schema/RLS correctness. Frontend: Playwright MCP visual verification against the deployed dev SPA once available.
 - If issues found: spawn product-executor to fix, then re-verify.
 - Update the Backlog task's implementation_notes with QA findings.

@@ -217,6 +217,9 @@ func TestUnknownPrefixNotFound(t *testing.T) {
 func TestRoutesEverySevenService(t *testing.T) {
 	tg := setupGateway(t)
 	tok := tg.validToken(t)
+	if len(tg.caps) != 7 {
+		t.Fatalf("gateway routes %d services, want 7 -- the loop below would assert nothing", len(tg.caps))
+	}
 	for svc, cap := range tg.caps {
 		t.Run(svc, func(t *testing.T) {
 			rec := httptest.NewRecorder()

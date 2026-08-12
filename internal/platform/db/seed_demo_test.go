@@ -4196,6 +4196,9 @@ func TestSeedNeverReintroducesAWithdrawnTIN(t *testing.T) {
 	}
 
 	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	if len(got) == 0 {
+		t.Fatal("seed produced no demo business entities -- the loop below would assert nothing")
+	}
 	withdrawn := make(map[string]bool, len(demoWithdrawnTINs))
 	for _, tin := range demoWithdrawnTINs {
 		withdrawn[tin] = true

@@ -5,7 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // Resolved is the card/canvas/inspector shared shape -- amber warning travels
@@ -80,13 +86,230 @@ var _ RunReader = new(Store).ApprovalRun
 
 // ApprovalRun assembles one invoice's most recent approval run: its steps in ord order,
 // holder/title resolved through resolveHolder/roleTitle, and its decision ledger. RLS is
-// the only tenant scope -- no role gate.
+// the only tenant scope -- no role gate, no tenant_id predicate anywhere below
+// (store.go:27-30).
 //
-// STUB for APPR-07-02's Test-Spec stage (task-487): the query logic is the executor's,
-// not this subtask's. Returns the zero Run and a nil error so every RED test in
-// read_model_db_test.go fails on an assertion, never a compile error.
+// Run -> steps -> decisions -> the distinct role keys' holders, each its own statement
+// stitched in Go by index map -- this package's readPolicyTrees/ListRoles shape, not a
+// JOIN (there are none elsewhere in this package's non-test code).
 func (s *Store) ApprovalRun(ctx context.Context, invoiceID string) (Run, error) {
-	return Run{}, nil
+	// GetPolicy's parse and sentinel choice (policy_store.go:218-221): malformed input
+	// never reaches SQL as an unmappable 22P02.
+	u, err := uuid.Parse(invoiceID)
+	if err != nil {
+		return Run{}, ErrRunNotFound
+	}
+
+	run := Run{Steps: []RunStep{}, Decisions: []RunDecision{}}
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT id, state, opened_at, closed_at, closed_by
+			   FROM approval_runs
+			  WHERE invoice_id = $1
+			  ORDER BY opened_at DESC
+			  LIMIT 1`, u.String(),
+		).Scan(&run.RunID, &run.State, &run.OpenedAt, &run.ClosedAt, &run.ClosedBy); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrRunNotFound
+			}
+			return err
+		}
+
+		// stepOrd resolves the decision ledger's ord (AC-6): approval_decisions has no
+		// ord column of its own, so it comes from the step it decided on, without a join.
+		stepOrd := map[string]int{}
+		roleKeys := []string{}
+		seenKeys := map[string]bool{}
+
+		rows, err := tx.Query(ctx,
+			`SELECT id, ord, kind, workflow_role_key, sla_hours, due_at, state,
+			        satisfied_at, satisfied_by, notify_target, notify_channel
+			   FROM approval_run_steps
+			  WHERE run_id = $1
+			  ORDER BY ord`, run.RunID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			var st RunStep
+			if err := rows.Scan(&id, &st.Ord, &st.Kind, &st.WorkflowRoleKey, &st.SLAHours, &st.DueAt,
+				&st.State, &st.SatisfiedAt, &st.SatisfiedBy, &st.NotifyTarget, &st.NotifyChannel); err != nil {
+				rows.Close()
+				return err
+			}
+			// AC-5: gated on state, not just a due_at comparison -- due_at is stamped by
+			// kind (engine.go:225-226), so an autoapprove-settled step can still carry one.
+			st.Overdue = st.State == "pending" && st.DueAt != nil && st.DueAt.Before(time.Now())
+			stepOrd[id] = st.Ord
+			if st.WorkflowRoleKey != nil && !seenKeys[*st.WorkflowRoleKey] {
+				seenKeys[*st.WorkflowRoleKey] = true
+				roleKeys = append(roleKeys, *st.WorkflowRoleKey)
+			}
+			run.Steps = append(run.Steps, st)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		exists, titles, holders, err := resolveRunRoles(ctx, tx, roleKeys)
+		if err != nil {
+			return err
+		}
+		for i := range run.Steps {
+			// Gated on the role key being present, never on kind == "approval": nothing in
+			// the schema stops a role key on a notify/autoapprove step (policy.go:262-269),
+			// and running a nil key through resolveHolder(false, nil) would wrongly answer
+			// "Role no longer exists" instead of leaving both fields null.
+			key := run.Steps[i].WorkflowRoleKey
+			if key == nil {
+				continue
+			}
+			title := roleTitle(exists[*key], titles[*key])
+			run.Steps[i].WorkflowRoleTitle = &title
+			holder := resolveHolder(exists[*key], holders[*key])
+			run.Steps[i].Holder = &holder
+		}
+
+		drows, err := tx.Query(ctx,
+			`SELECT run_step_id, decision, actor, decided_at, reason
+			   FROM approval_decisions
+			  WHERE run_id = $1
+			  ORDER BY decided_at`, run.RunID)
+		if err != nil {
+			return err
+		}
+		for drows.Next() {
+			var d RunDecision
+			if err := drows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.DecidedAt, &d.Reason); err != nil {
+				drows.Close()
+				return err
+			}
+			d.Ord = stepOrd[d.RunStepID]
+			run.Decisions = append(run.Decisions, d)
+		}
+		drows.Close()
+		if err := drows.Err(); err != nil {
+			return err
+		}
+		// decided_at then ord (AC-6): ord is only known after the step pass above, so the
+		// tie-break is finished here rather than in SQL.
+		sort.SliceStable(run.Decisions, func(i, j int) bool {
+			a, b := run.Decisions[i], run.Decisions[j]
+			if !a.DecidedAt.Equal(b.DecidedAt) {
+				return a.DecidedAt.Before(b.DecidedAt)
+			}
+			return a.Ord < b.Ord
+		})
+
+		return nil
+	})
+	if err != nil {
+		return Run{}, err
+	}
+	return run, nil
+}
+
+// resolveRunRoles resolves title/exists and ordered holder inputs for a set of distinct
+// role keys: the roles, then their staffing, then those holders' memberships -- three
+// statements constant in the key count, the ListRoles/readPolicyTrees shape, never a
+// JOIN and never a tenant_id predicate (RLS is the only scope, store.go:27-30).
+func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string) (exists map[string]bool, titles map[string]string, holders map[string][]holderInput, err error) {
+	exists = map[string]bool{}
+	titles = map[string]string{}
+	holders = map[string][]holderInput{}
+
+	roleKeyOf := map[string]string{} // role id -> key
+	roleIDs := []string{}
+	rows, err := tx.Query(ctx,
+		`SELECT id, key, title FROM workflow_roles WHERE key = ANY($1::text[]) AND deleted_at IS NULL`, keys)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for rows.Next() {
+		var id, key, title string
+		if err := rows.Scan(&id, &key, &title); err != nil {
+			rows.Close()
+			return nil, nil, nil, err
+		}
+		exists[key] = true
+		titles[key] = title
+		roleKeyOf[id] = key
+		roleIDs = append(roleIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Holders must return in workflow_role_members.ord order: resolveHolder distinguishes
+	// the first holder from the first ACTIVE one.
+	userIDs := []string{}
+	seenUsers := map[string]bool{}
+	roleUsers := map[string][]string{} // role id -> user ids, in ord order
+	memberRows, err := tx.Query(ctx,
+		`SELECT workflow_role_id, user_id
+		   FROM workflow_role_members
+		  WHERE workflow_role_id = ANY($1::uuid[])
+		  ORDER BY workflow_role_id, ord`, roleIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for memberRows.Next() {
+		var roleID, userID string
+		if err := memberRows.Scan(&roleID, &userID); err != nil {
+			memberRows.Close()
+			return nil, nil, nil, err
+		}
+		roleUsers[roleID] = append(roleUsers[roleID], userID)
+		if !seenUsers[userID] {
+			seenUsers[userID] = true
+			userIDs = append(userIDs, userID)
+		}
+	}
+	memberRows.Close()
+	if err := memberRows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	type memberInfo struct {
+		displayName, email *string
+		status, role       string
+	}
+	members := map[string]memberInfo{}
+	mrows, err := tx.Query(ctx,
+		`SELECT user_id, display_name, email, status, role
+		   FROM memberships
+		  WHERE user_id = ANY($1::uuid[])`, userIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for mrows.Next() {
+		var userID string
+		var mi memberInfo
+		if err := mrows.Scan(&userID, &mi.displayName, &mi.email, &mi.status, &mi.role); err != nil {
+			mrows.Close()
+			return nil, nil, nil, err
+		}
+		members[userID] = mi
+	}
+	mrows.Close()
+	if err := mrows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	for roleID, key := range roleKeyOf {
+		for _, userID := range roleUsers[roleID] {
+			mi := members[userID]
+			holders[key] = append(holders[key], holderInput{
+				Name:       holderName(mi.displayName, mi.email, userID),
+				Status:     mi.status,
+				AccessRole: mi.role,
+			})
+		}
+	}
+	return exists, titles, holders, nil
 }
 
 // isApprover mirrors internal/invoice/store.go:1412 -- kept in sync by inspection, not import

@@ -247,9 +247,10 @@ stays true exactly as written; the runs are a second, independent signal.
 >    writes no `approval_decisions` row ever — so the trail shows honestly that nobody
 >    was asked.
 > 3. **An active but empty policy therefore still transmits exactly like no policy at
->    all**, through the gate's *second* disjunct (an `approved` run) rather than its first
->    (no active version). The transmit freeze is avoided by CLOSING the run, not by
->    declining to write one. Arming nothing — the shape this block used to prescribe —
+>    all** — today because no transmit gate exists at all, and once APPR-08's does,
+>    through that gate's *second* disjunct (an `approved` run) rather than its first (no
+>    active version). The transmit freeze is avoided by CLOSING the run, not by declining
+>    to write one. Arming nothing — the shape this block used to prescribe —
 >    would satisfy neither disjunct of the positive predicate and would freeze every
 >    under-threshold invoice permanently.
 > 4. **The two states stay distinguishable in the data**, per the table above plus the
@@ -442,9 +443,12 @@ The shipped contract is:
 - **The `409` names this page** as the operator path, which is why the remedy is written
   here rather than in the error string.
 - **Candidate rows are locked** (`FOR UPDATE`) for the length of the sweep, so an invoice
-  cannot be demoted out from under a run being armed for it. A concurrent batch submit
-  over the same backlog can therefore deadlock; the loser's publish rolls back whole and
-  a retry succeeds.
+  cannot be demoted out from under a run being armed for it. Consequence worth knowing: a
+  **batch submit running concurrently** takes its own row locks over the same `validated`
+  population in caller-list order rather than by id, so the two can deadlock (`40P01`).
+  The failure is safe either way — whichever transaction Postgres picks as the victim
+  rolls back whole, so a losing publish seals nothing and arms nothing — but it surfaces
+  as a `500`, and the remedy is to retry.
 
 Pinned by `TestPublish_SweepArmsBacklog` (arms the backlog, skips `queued` and `draft`,
 second publish arms zero), `TestPublish_SweepSkipsInvoicesWithAnApprovedRun`,
@@ -711,7 +715,7 @@ message, not the status: several distinct causes share a status code.
 | `409` | `a condition must have at least one step in one of its two lanes` | A `condition` step has both lanes empty, so it branches nowhere. | Put at least one step in the `then` or `else` lane, or remove the condition. |
 | `409` | `validated backlog exceeds the publish sweep cap — see docs/approvals.md` | The publish found more than 5,000 invoices at `validated` with no live approval run, so its arming sweep (§5) refused rather than open a transaction that size. Nothing was sealed and nothing was armed. | Reduce the validated backlog to 5,000 or fewer — transmitting or returning part of it moves those invoices out of the sweep's range — then publish again. The cap is not raisable by configuration; §5 has the full operator path. |
 | `409` | `another version was published first — reload the policy and try again` | A concurrent publish of a **different** policy took the tenant's single active slot. | Reload, confirm which policy is now active (§3), and decide whether yours should replace it. Do not blind-retry — see §1. |
-| `500` | `internal server error` | Anything unmapped. A `23001`, `23514` or `42501` reaching the client arrives here, because those carry no sentinel the API layer can translate. | Read the service log for the underlying SQLSTATE, then §4. A `23001` or `42501` means something attempted a write the immutability lock or the grant matrix forbids, which is a bug, not an operator error. |
+| `500` | `internal server error` | Anything unmapped. A `23001`, `23514`, `42501` or `40P01` reaching the client arrives here, because those carry no sentinel the API layer can translate. | Read the service log for the underlying SQLSTATE, then §4. A `23001` or `42501` means something attempted a write the immutability lock or the grant matrix forbids, which is a bug, not an operator error. A `40P01` on a publish is the sweep deadlocking with a concurrent batch submit (§5): nothing was sealed or armed, so retry. |
 
 For failures seen directly in `psql` rather than through the API, the SQLSTATE tables in
 §4 are the lookup: `23001` (immutability, no constraint name — match the message text),

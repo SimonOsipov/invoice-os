@@ -1557,10 +1557,12 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // status change could diverge on a crash, breaking M4's "every transition
 // writes audit 08 in the same transaction".)
 //
-// It has exactly FIVE callers today — Store.Transition (store.go:727),
-// Store.ApplyValidation (store.go:968), Store.Edit's demotion branch
-// (store.go:626), Submitter.BatchSubmit (batch_submit.go:215), and
-// markTerminalTx (actor.go:94, shared by MarkSubmittedTx/MarkFailedTx) —
+// It has exactly SEVEN callers today — Store.Transition (store.go:1529),
+// Store.ApplyValidation (store.go:1811), Store.Edit's demotion branch
+// (store.go:1321), DemoteApprovalRejectedTx (store.go:412),
+// Submitter.BatchSubmit (batch_submit.go:215), DemoteRevalidatedTx
+// (revalidate.go:71), and markTerminalTx (actor.go:142, shared by
+// MarkSubmittedTx/MarkFailedTx) — FOUR of the seven live in store.go —
 // and remains the SINGLE writer of invoices.status, with legalTransitions/
 // canTransition still the single source of truth for what is legal. That is
 // what PRESERVES the M4 gate's "illegal state transitions are rejected by the

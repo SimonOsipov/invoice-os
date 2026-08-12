@@ -2,19 +2,19 @@
 
 **Audience:** anyone publishing, verifying or troubleshooting an approval policy in a
 deployed environment, and anyone building the layer that consumes one. This page
-specifies what publishing a policy *does today*, how to prove it happened, and which
-parts of the approvals story are **designed but not yet built** — the approve/reject seam
-(APPR-07) and the transmit gate (APPR-08) — so a reader can tell the two apart without
-reading the code.
+specifies what publishing a policy *does today*, how a run is approved or rejected, how
+to prove either happened, and which part of the approvals story is **designed but not
+yet built** — the transmit gate (APPR-08) — so a reader can tell built from unbuilt
+without reading the code.
 
 > **Read this first.** Publishing a policy **seals a configuration record, activates it,
 > and arms the tenant's whole validated backlog in the same transaction**. One
 > `approval_runs` row is written per invoice sitting at `validated` with no live run,
-> capped at 5,000 (§5). What is *not* built is the enforcement on either side of that
-> ledger: nobody can approve or reject a run yet (**APPR-07**), and the transmit path
-> still never consults one (**APPR-08**), so an invoice carrying an open run transmits
-> exactly as it did before. Both are called out by name in every section where the
-> distinction matters.
+> capped at 5,000 (§5). Approve and reject now write `approval_decisions`
+> (**APPR-07** — §2.1/§2.2). What is *still not* built is the transmit gate: the
+> transmit path still never consults a run (**APPR-08**), so an invoice carrying an
+> open run transmits exactly as it did before. That gap is called out by name in every
+> section where the distinction matters.
 
 The API is six routes (`cmd/invoice/main.go:187-192`):
 
@@ -201,9 +201,10 @@ Runs are now **written**, and still read by nothing that gates anything. `ArmTx`
 (`internal/approval/engine.go`) writes `approval_runs` and `approval_run_steps` — from
 `ApplyValidation`'s promotion and from the publish sweep (§5) — resolving the tenant's
 active version by `WHERE is_active`, and `CancelLiveRunTx` closes those runs from the
-three paths that walk an invoice back to `draft`. **`approval_decisions` is still
-untouched by every production code path**: nothing writes one, because nothing can
-approve or reject yet (APPR-07). No transmit decision consults any of the three.
+three paths that walk an invoice back to `draft`. **`approval_decisions` now has a
+production writer**: `Store.Decide` (`internal/approval/decision.go`) approves or
+rejects the current pending step (§2.1/§2.2, APPR-07). No transmit decision consults
+any of the three yet (APPR-08).
 
 The SPA's empty state is the product wording for that, and it is talking about the
 *approval* gate rather than about who may transmit:
@@ -266,6 +267,50 @@ sla > 0` (`internal/approval/engine.go`), so an approval step that an `autoappro
 already settled still carries a `due_at`. **Any overdue or SLA-breach query must filter
 `state = 'pending'`** — selecting on `due_at < now()` alone surfaces steps nothing is
 waiting on.
+
+### 2.1 `GET /v1/invoices/{id}/approval` — read a run
+
+Any caller holding a tenant claim may read a run — no role gate (`RunHandler`,
+`internal/approval/handlers.go:313-334`). Answers the invoice's most recent
+`approval_runs` row, its steps in `ord` order, and its full decision ledger.
+
+| Status | Message | Meaning |
+|---|---|---|
+| `200` | — | the run, assembled fresh (steps + decisions) |
+| `401` | `unauthorized` | no verified identity / no tenant claim |
+| `404` | `no approval run for this invoice` | unknown, cross-tenant, malformed-uuid and no-run-row invoice ids all answer alike, deliberately (the `GetPolicy` no-oracle rule, `read_model.go:77-79`) |
+
+### 2.2 `POST /v1/invoices/{id}/approvals` — approve or reject
+
+Advances or closes the current pending `approval` step: two-axis authorization, the
+ledger write, and the close-or-advance, all in one transaction
+(`internal/approval/decision.go`).
+
+- **AXIS 1** — the caller must be an active `admin` or `reviewer`; a `preparer` (or any
+  caller with no active membership) is refused.
+- **AXIS 2** — the caller must hold the pending step's `workflow_role_key`; an approver
+  who is not staffed to that specific role is refused.
+
+Body: `{"decision": "approved" | "rejected", "reason"?: string}`. `reason` is required and
+must be non-blank for `rejected`, optional for `approved`; both are capped at 1000 bytes.
+
+| Status | Message | Meaning |
+|---|---|---|
+| `200` | — | the step was decided; body is the run, re-read fresh in the same tx |
+| `400` | `decision must be "approved" or "rejected"` | an unrecognised `decision` value |
+| `400` | `reason is required` | a `rejected` decision with a blank/absent reason |
+| `400` | `reason exceeds the 1000-char bound` | `reason` over 1000 bytes, either decision |
+| `401` | `unauthorized` | no verified identity / no tenant claim |
+| `403` | `only an approver can decide an approval step` | AXIS 1 refusal |
+| `403` | `you do not hold the workflow role this step is waiting on` | AXIS 2 refusal |
+| `404` | `no approval run for this invoice` | same no-oracle rule as the GET |
+| `409` | `this approval run is already closed` | the run already closed (a second decision, or a lost race) |
+| `409` | `this invoice is no longer awaiting approval` | the invoice's status left `validated` before this decision landed |
+
+**`/approval` (GET) and `/approvals` (POST) differ by one character.** Each spelling is
+registered for exactly one method; calling the wrong verb on the wrong spelling answers
+`405` with an `Allow` header naming the correct one — e.g. `POST
+/v1/invoices/{id}/approval` answers `405 Allow: GET, HEAD`, not `404`.
 
 ---
 
@@ -584,18 +629,18 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 | create and edit invoices | ✓ | ✓ | ✓ | not enforced |
 | import from file or ERP | ✓ | ✓ | ✓ | not enforced |
 | run validation | ✓ | ✓ | ✓ | not enforced |
-| approve in approval steps | ✓ | — | ✓ | **not enforced yet** — the approve/reject seam is unbuilt (APPR-07) |
+| approve in approval steps | ✓ | — | ✓ | **server-enforced** — `internal/approval/decision.go`'s two-axis check: AXIS 1 refuses any non-{admin,reviewer}; AXIS 2 refuses an approver who does not hold the pending step's workflow role. |
 | transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced, both doors** — `internal/invoice/handlers.go:669` (single) and `:1124` (batch, `POST /v1/invoices/submissions`). Both apply `isApprover` = admin or reviewer; a preparer gets `403` either way. |
 | invite and manage members | ✓ | — | — | **partly server-enforced** — the *manage* half is admin-only at `internal/tenancy/store.go:140` (`PATCH /v1/memberships/{user_id}`). The *invite* half has **no server surface**. |
 | manage ERP connectors | ✓ | — | — | **no server surface** — no endpoint exists |
 | manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
 
-**Two rows are server-enforced today**, and one of those only in half. Any wider claim —
-that approvals are enforced, or that the matrix as a whole is backed — remains
-aspirational. Arming shipped (APPR-06): the runs exist. **Enforcement did not**: the
-approve/reject seam is APPR-07 and the transmit gate is APPR-08, and until both land an
-approval run constrains nobody. The code is the authority for this table; if the two
-disagree, the code is right and this table is stale.
+**Three rows are server-enforced today**, and one of those only in half. Any wider claim
+— that the matrix as a whole is backed — remains aspirational. Arming shipped (APPR-06):
+the runs exist. Approve/reject shipped (APPR-07): `internal/approval/decision.go` is the
+enforcement point. **Still missing**: the transmit gate (APPR-08) — until it lands, an
+open approval run constrains nobody at the transmit door. The code is the authority for
+this table; if the two disagree, the code is right and this table is stale.
 
 Separately, and not in the matrix: **every approval-policy write requires an active
 admin** (`internal/approval/store.go:455`). Reading policies requires only a tenant
@@ -715,6 +760,14 @@ message, not the status: several distinct causes share a status code.
 | `409` | `a condition must have at least one step in one of its two lanes` | A `condition` step has both lanes empty, so it branches nowhere. | Put at least one step in the `then` or `else` lane, or remove the condition. |
 | `409` | `validated backlog exceeds the publish sweep cap — see docs/approvals.md` | The publish found more than 5,000 invoices at `validated` with no live approval run, so its arming sweep (§5) refused rather than open a transaction that size. Nothing was sealed and nothing was armed. | Reduce the validated backlog to 5,000 or fewer — transmitting or returning part of it moves those invoices out of the sweep's range — then publish again. The cap is not raisable by configuration; §5 has the full operator path. |
 | `409` | `another version was published first — reload the policy and try again` | A concurrent publish of a **different** policy took the tenant's single active slot. | Reload, confirm which policy is now active (§3), and decide whether yours should replace it. Do not blind-retry — see §1. |
+| `400` | `decision must be "approved" or "rejected"` | The POST body's `decision` field was missing or held a value other than the two legal ones. | Send exactly `"approved"` or `"rejected"`. |
+| `400` | `reason is required` | The decision was `rejected` but `reason` was absent or blank after trimming. | Supply a non-blank reason. |
+| `400` | `reason exceeds the 1000-char bound` | `reason` (either decision) was over 1000 bytes. | Shorten the reason. |
+| `403` | `only an approver can decide an approval step` | The caller's membership role is `preparer`, or the caller holds no active membership at all (AXIS 1). | Have an active `admin` or `reviewer` decide instead. |
+| `403` | `you do not hold the workflow role this step is waiting on` | The caller is an approver but is not staffed to the pending step's `workflow_role_key` (AXIS 2). | Have a staffed holder of that role decide, or restaff the role. |
+| `404` | `no approval run for this invoice` | No run exists for this invoice id in this tenant — unknown id, cross-tenant id, malformed uuid, and no-run-row all answer alike by design. | Confirm the invoice id and that an approval policy was active when it validated. |
+| `409` | `this approval run is already closed` | The run's most recent decision already closed it (approved or rejected); no pending step remains to decide. | `GET` the run to see the final state; nothing left to decide. |
+| `409` | `this invoice is no longer awaiting approval` | The invoice's status changed away from `validated` between the run opening and this decision. | `GET` the invoice/run to see current state. |
 | `500` | `internal server error` | Anything unmapped. A `23001`, `23514`, `42501` or `40P01` reaching the client arrives here, because those carry no sentinel the API layer can translate. | Read the service log for the underlying SQLSTATE, then §4. A `23001` or `42501` means something attempted a write the immutability lock or the grant matrix forbids, which is a bug, not an operator error. A `40P01` on a publish is the sweep deadlocking with a concurrent batch submit (§5): nothing was sealed or armed, so retry. |
 
 For failures seen directly in `psql` rather than through the API, the SQLSTATE tables in

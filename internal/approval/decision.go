@@ -174,6 +174,9 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 	// AXIS 2: the inverse of reconciliation's approval_blocked_unstaffed NOT EXISTS
 	// body (internal/reconciliation/reconciliation.go:179-204), narrowed to the
 	// caller -- no tenant_id predicate, RLS is the only filter (store.go:27-30).
+	//
+	// m.status/m.role duplicate AXIS 1's already-run requireApprover check on the SAME
+	// row (memberships_tenant_user_uq UNIQUE(tenant_id,user_id)) -- defense-in-depth only.
 	var holds bool
 	if roleKey != nil {
 		if err := tx.QueryRow(ctx,

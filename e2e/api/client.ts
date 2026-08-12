@@ -725,3 +725,69 @@ export function publishApprovalPolicy(token: string, id: string): Promise<Approv
 export function deleteApprovalPolicy(token: string, id: string): Promise<ApprovalPolicy> {
   return apiFetch<ApprovalPolicy>(`${apiBase()}/api/invoice/v1/approval-policies/${id}`, { method: 'DELETE', token })
 }
+
+// ---- Approval-run wire types, mirrored from internal/approval/read_model.go's
+// Resolved/RunStep/RunDecision/Run. RunStep carries no omitempty (fixed key set
+// regardless of kind); Run substitutes [] for a nil Steps/Decisions via its own
+// MarshalJSON, so both are always arrays. ----
+
+export interface ApprovalResolved {
+  text: string
+  warn: boolean
+}
+
+export interface ApprovalRunStep {
+  ord: number
+  kind: string
+  state: string
+  workflow_role_key: string | null
+  workflow_role_title: string | null
+  holder: ApprovalResolved | null
+  sla_hours: number | null
+  due_at: string | null
+  overdue: boolean
+  satisfied_at: string | null
+  satisfied_by: string | null
+  notify_target: string | null
+  notify_channel: string | null
+}
+
+export interface ApprovalRunDecision {
+  run_step_id: string
+  ord: number
+  decision: string
+  actor: string
+  decided_at: string
+  reason: string | null
+}
+
+export interface ApprovalRun {
+  run_id: string
+  state: string
+  opened_at: string
+  closed_at: string | null
+  closed_by: string | null
+  steps: ApprovalRunStep[]
+  decisions: ApprovalRunDecision[]
+}
+
+// getInvoiceApproval(): GET /v1/invoices/{id}/approval -- the run read model. Ungated
+// by design: RLS is the only tenant scope, no role gate (read_model.go's own comment).
+export function getInvoiceApproval(token: string, id: string): Promise<ApprovalRun> {
+  return apiFetch<ApprovalRun>(`${apiBase()}/api/invoice/v1/invoices/${id}/approval`, { token })
+}
+
+// decideInvoiceApproval(): POST /v1/invoices/{id}/approvals -- approve or reject the
+// current pending step. reason is required and non-blank for "rejected", optional for
+// "approved"; both capped at 1000 bytes server-side.
+export function decideInvoiceApproval(
+  token: string,
+  id: string,
+  body: { decision: 'approved' | 'rejected'; reason?: string },
+): Promise<ApprovalRun> {
+  return apiFetch<ApprovalRun>(`${apiBase()}/api/invoice/v1/invoices/${id}/approvals`, {
+    method: 'POST',
+    body,
+    token,
+  })
+}

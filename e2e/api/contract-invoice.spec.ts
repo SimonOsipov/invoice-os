@@ -36,8 +36,25 @@
 // note); a high `offset` for empty-state (the shared dev tenant already
 // carries invoices from other specs, so there is no truly empty list).
 import { test, expect } from '@playwright/test'
-import { login, me, memberships, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
-import { freshTin } from './fixtures'
+import {
+  login,
+  me,
+  memberships,
+  createEntity,
+  createInvoice,
+  validateInvoice,
+  rawFetch,
+  listInvoices,
+  createApprovalPolicy,
+  putApprovalPolicyDraft,
+  publishApprovalPolicy,
+  deleteApprovalPolicy,
+  getInvoiceApproval,
+  decideInvoiceApproval,
+  PERSONAS,
+  type Entity,
+} from './client'
+import { freshTin, freshPolicyName } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports
@@ -983,6 +1000,174 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const preparerBody = preparerRes.body as Record<string, unknown>
       expect(preparerBody.can_submit, 'a preparer cannot submit any invoice').toBe(false)
       expect(preparerBody.submit_blocked_reason, 'the role refusal is emitted on every status, not only the editable ones').toBe(NOT_APPROVER_REASON)
+    })
+  })
+
+  // APPR-07-08 (D38): db/seed.dev.sql has NO seeded approval policy, and publishing takes
+  // the tenant's SINGLE active slot tenant-wide, arming every invoice this shared tenant
+  // validates. Every test below creates its own one-step policy and deletes it in a
+  // `finally`, so the tenant returns to zero active versions before the next spec runs.
+  test.describe('approval decision', () => {
+    // armedInvoice(): a fresh one-step policy naming roleKey, published, then a clean
+    // invoice validated against it -- ApplyValidation's promotion arms exactly one open
+    // run with one pending step (engine.go's ArmTx). Caller must delete policyId (D38).
+    async function armedInvoice(roleKey: string): Promise<{ invoiceId: string; policyId: string }> {
+      const policy = await createApprovalPolicy(token, { name: freshPolicyName() })
+      await putApprovalPolicyDraft(token, policy.id, { steps: [{ kind: 'approval', workflow_role_key: roleKey }] })
+      await publishApprovalPolicy(token, policy.id)
+
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated, arming a run').toBe('validated')
+
+      return { invoiceId: created.id, policyId: policy.id }
+    }
+
+    test('approve: 200, a single-step run closes approved', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'approved' },
+        })
+        expect(res.status, "an admin staffed to the pending step's role can approve").toBe(200)
+        const body = res.body as Record<string, unknown>
+        expect(body.state, 'a single-step policy closes on its first decision').toBe('approved')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('reject: 200, the run closes rejected', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'rejected', reason: 'missing purchase order' },
+        })
+        expect(res.status, "an admin staffed to the pending step's role can reject").toBe(200)
+        const body = res.body as Record<string, unknown>
+        expect(body.state, 'reject closes the run').toBe('rejected')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('400: an unrecognised decision value', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'maybe' },
+        })
+        assertErrorEnvelope(res, 400, 'unrecognised decision value')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('400: a blank reject reason', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'rejected', reason: '   ' },
+        })
+        assertErrorEnvelope(res, 400, 'blank reject reason')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('403: a preparer cannot decide (AXIS 1)', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${preparerToken}` },
+          body: { decision: 'approved' },
+        })
+        assertErrorEnvelope(res, 403, 'preparer cannot decide')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('403: an approver not staffed to the pending role (AXIS 2)', async () => {
+      // quality_reviewer is seeded UNSTAFFED (db/seed.dev.sql) -- token (…0001) is an
+      // active admin, so it passes AXIS 1 but fails AXIS 2 on this policy.
+      const { invoiceId, policyId } = await armedInvoice('quality_reviewer')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'approved' },
+        })
+        assertErrorEnvelope(res, 403, 'admin not staffed to the pending role')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('404: a random uuid has no approval run', async () => {
+      const res = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/approvals`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { decision: 'approved' },
+      })
+      assertErrorEnvelope(res, 404, 'random uuid has no run')
+    })
+
+    test('409: a second decision on an already-closed run', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const first = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'approved' },
+        })
+        expect(first.status, 'setup: the first decision should close the single-step run').toBe(200)
+
+        const second = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'approved' },
+        })
+        assertErrorEnvelope(second, 409, 'second decision on a closed run')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('journey: validate -> approve -> submit, independent of the absent transmit gate', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const run = await getInvoiceApproval(token, invoiceId)
+        expect(run.state, 'validating armed an open run').toBe('open')
+        expect(run.steps, 'the one-step cfo policy arms exactly one step').toHaveLength(1)
+        expect(run.steps[0].state, 'the arm-time step is pending').toBe('pending')
+
+        const decided = await decideInvoiceApproval(token, invoiceId, { decision: 'approved' })
+        expect(decided.state, 'approving the only step closes the run').toBe('approved')
+
+        // APPR-08's transmit gate does not exist yet, so this proves only the DECISION
+        // half of the path -- submit is not actually gated by the run's state today.
+        const submitted = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/transitions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { target: 'queued' },
+        })
+        expect(submitted.status, 'submit succeeds after approval, same as before the decision seam existed').toBe(200)
+        const submittedBody = submitted.body as Record<string, unknown>
+        expect(submittedBody.status, 'the invoice reaches queued').toBe('queued')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
     })
   })
 })

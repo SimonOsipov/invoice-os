@@ -439,6 +439,65 @@ func TestApprovalRun_HolderResolutionUsesStaffingOrdNotPhysicalInsertOrder(t *te
 	}
 }
 
+// --- AC-8: statement count really is constant, not just claimed in prose -------------
+
+// TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount (AC-8): five approval steps
+// across three distinct roles, each staffed with two holders, plus one decision -- a
+// per-step or per-role query (an N+1) would inflate the count past the six the
+// implementation notes claim. Uses tracedAppPool/sqlRecorder (workflow_roles_test.go),
+// the only way to see an N+1 whose RESULTS are identical to the batched form.
+func TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-07 statement-count")
+	entityID := seedBusinessEntity(t, super, tenantID, "Statement Count Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "statement-count-invoice-1")
+
+	for _, key := range []string{"role-a", "role-b", "role-c"} {
+		roleID := seedWorkflowRole(t, super, tenantID, key, key)
+		for i := 0; i < 2; i++ {
+			userID := uuid.NewString()
+			seedMembership(t, super, tenantID, userID, "reviewer", "active")
+			staffWorkflowRole(t, super, tenantID, roleID, userID, i)
+		}
+	}
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Statement count policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	for i, key := range []string{"role-a", "role-b", "role-c", "role-a", "role-b"} {
+		seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+			Ord: i, Kind: "approval", WorkflowRoleKey: ptr(key), SLAHours: ptr(24),
+		})
+	}
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	res, err := arm(t, app, tenantID, invoiceID, "fp-statement-count", "test-actor")
+	if err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	stepID := runStepID(t, super, res.RunID, 0)
+	seedApprovalDecision(t, super, tenantID, res.RunID, stepID, "approved", "qa-tester", nil)
+
+	tracedApp, rec := tracedAppPool(t)
+	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
+	rec.reset()
+	run, err := NewStore(tracedApp, stubFingerprinter).ApprovalRun(c, invoiceID)
+	if err != nil {
+		t.Fatalf("ApprovalRun: %v", err)
+	}
+	if len(run.Steps) != 5 {
+		t.Fatalf("len(run.Steps) = %d, want 5", len(run.Steps))
+	}
+
+	for _, table := range []string{
+		"FROM approval_runs", "FROM approval_run_steps", "FROM workflow_roles",
+		"FROM workflow_role_members", "FROM memberships", "FROM approval_decisions",
+	} {
+		if got := len(rec.mentioning(table)); got != 1 {
+			t.Errorf("statements mentioning %q = %d, want exactly 1 (five steps across three roles must not inflate this)", table, got)
+		}
+	}
+}
+
 // --- zero-step run: the []-never-nil rule holds even with nothing to report ----------
 
 // TestApprovalRun_ZeroStepRunReadsEmptyNonNilSlices: an empty policy closes on arm with

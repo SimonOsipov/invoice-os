@@ -18,10 +18,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // decideOverHTTP builds the real production mux (decisionMux, DecideSeam wired to a
@@ -263,5 +265,157 @@ func TestDecideHandler_ConcurrentPOSTsToTheSameInvoiceSerializeCleanly(t *testin
 	}
 	if n := len(decisionsForRun(t, super, f.runID)); n != 1 {
 		t.Errorf("approval_decisions rows for the run = %d, want exactly 1 -- no double-write under concurrency", n)
+	}
+}
+
+// --- re-verification pass (fix-verify): the three fixed defects, proven through HTTP --
+
+// TestDecideHandler_NULByteInReasonOverHTTPIs400NotAnOpaque500: the fix's third defect
+// (a NUL byte used to surface as a raw SQLSTATE 22021 Postgres error, which
+// decisionStatusForErr's default case turned into a bare 500) closed at the Decide
+// level (hasNUL, decision.go:44-49) and the mapper level (ErrValidation -> 400
+// "invalid reason", handlers.go:238-241). TestDecide_NULByteInReasonIsRefusedNotStored
+// proves the Decide half directly; this proves the mapper half is actually REACHABLE
+// through the real wired handler, not merely correct in isolation -- nothing else in
+// the package drives a NUL byte through decisionMux -> DecideHandler -> DecideSeam ->
+// Decide -> Postgres.
+func TestDecideHandler_NULByteInReasonOverHTTPIs400NotAnOpaque500(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 http-nul-byte-reason", "http-nul-byte-reason-role")
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	store := NewStore(app, stubFingerprinter, nil)
+	body, err := json.Marshal(decisionRequest{Decision: "approved", Reason: "bad\x00reason"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	rec := decideOverHTTP(t, store, f.tenantID, adminID, f.invoiceID, string(body))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (not 500 -- the raw Postgres 22021 must never reach the client): %s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec.Body.Bytes()); got != "invalid reason" {
+		t.Errorf("error = %q, want %q", got, "invalid reason")
+	}
+	assertNothingWritten(t, super, f)
+}
+
+// TestDecideHandler_ErrValidationDoesNotShadowAnotherSentinel: decisionStatusForErr's
+// new ErrValidation case (handlers.go:238-241) sits between ErrNotAwaitingApproval and
+// default -- confirms every OTHER sentinel in the six-case table still maps to its own
+// status/message, i.e. the new case did not accidentally widen to catch errors it
+// should not (errors.Is only matches ErrValidation itself; this is a regression guard
+// on the whole switch, not just the new arm).
+func TestDecideHandler_ErrValidationDoesNotShadowAnotherSentinel(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantMsg    string
+	}{
+		{"no tenant", db.ErrNoTenant, http.StatusUnauthorized, "unauthorized"},
+		{"not an approver", ErrNotPermitted, http.StatusForbidden, "only an approver can decide an approval step"},
+		{"not the role holder", ErrNotRoleHolder, http.StatusForbidden, "you do not hold the workflow role this step is waiting on"},
+		{"no run", ErrRunNotFound, http.StatusNotFound, "no approval run for this invoice"},
+		{"run closed", ErrRunClosed, http.StatusConflict, "this approval run is already closed"},
+		{"not awaiting approval", ErrNotAwaitingApproval, http.StatusConflict, "this invoice is no longer awaiting approval"},
+		{"validation (the new case)", ErrValidation, http.StatusBadRequest, "invalid reason"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := caller()
+			decide := Decider(func(context.Context, string, string, string) (Run, error) { return Run{}, c.err })
+			rec := serveDecision(t, decide, nil, "/v1/invoices/"+decisionHandlerTestID+"/approvals", `{"decision":"approved"}`, &id)
+
+			if rec.Code != c.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, c.wantStatus, rec.Body.String())
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != c.wantMsg {
+				t.Errorf("error = %q, want %q -- ErrValidation's new case must not shadow this sentinel", got, c.wantMsg)
+			}
+		})
+	}
+}
+
+// TestDecideHandler_PostReturnsTheCurrentRunNotACancelledPriorOneOverHTTP mirrors
+// TestApprovalRun_CancelledRunDoesNotShadowTheCurrentRun's fixture exactly
+// (read_model_adversarial_test.go), but decides over HTTP instead of reading via GET --
+// the re-verification pass's item 3-bullet-2 ask: does decideTx's header re-read return
+// the run it just decided, never a different run sharing the same invoice_id? decideTx
+// re-reads by the SAME runID pinned earlier in the function (not a fresh
+// invoice_id-keyed lookup), so this also guards against a future edit that swaps that
+// re-read for one keyed on invoice_id + ORDER BY opened_at DESC, which WOULD be exposed
+// to exactly the trap ApprovalRun's own precedent test exists for.
+func TestDecideHandler_PostReturnsTheCurrentRunNotACancelledPriorOneOverHTTP(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-07 http-multi-run-current")
+	entityID := seedBusinessEntity(t, super, tenantID, "HTTP Multi Run Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "http-multi-run-invoice-1")
+	setInvoiceStatus(t, super, invoiceID, "validated")
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "HTTP multi-run policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("http-multi-run-role"), SLAHours: ptr(24),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	firstRes, err := arm(t, app, tenantID, invoiceID, "fp-http-multi-run-1", "test-actor")
+	if err != nil {
+		t.Fatalf("arm (first): %v", err)
+	}
+	backdateRunOpenedAt(t, super, firstRes.RunID, time.Now().Add(-time.Hour))
+
+	if _, err := cancel(t, app, tenantID, invoiceID, "test-actor"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	secondRes, err := arm(t, app, tenantID, invoiceID, "fp-http-multi-run-2", "test-actor")
+	if err != nil {
+		t.Fatalf("arm (second): %v", err)
+	}
+	if secondRes.RunID == firstRes.RunID {
+		t.Fatal("second arm reused the first run's id -- the fixture is broken, not the assertion below")
+	}
+
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	roleID := seedWorkflowRole(t, super, tenantID, "http-multi-run-role", "http-multi-run-role")
+	staffWorkflowRole(t, super, tenantID, roleID, adminID, 0)
+
+	store := NewStore(app, stubFingerprinter, nil)
+	rec := decideOverHTTP(t, store, tenantID, adminID, invoiceID, `{"decision":"approved"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var got Run
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if got.RunID != secondRes.RunID {
+		t.Errorf("response run_id = %q, want the current (second) run %q, never the cancelled first run %q", got.RunID, secondRes.RunID, firstRes.RunID)
+	}
+	if got.State != "approved" {
+		t.Errorf("response state = %q, want approved", got.State)
+	}
+
+	// The cancelled run is untouched -- this decided the CURRENT run, not the stale one.
+	// Queried by each run's own known id (not oneApprovalRun, which requires exactly one
+	// row for the invoice and would fail here -- there are deliberately two).
+	var firstState, secondState string
+	if err := super.QueryRow(context.Background(), `SELECT state FROM approval_runs WHERE id = $1`, firstRes.RunID).Scan(&firstState); err != nil {
+		t.Fatalf("read back first (cancelled) run state: %v", err)
+	}
+	if err := super.QueryRow(context.Background(), `SELECT state FROM approval_runs WHERE id = $1`, secondRes.RunID).Scan(&secondState); err != nil {
+		t.Fatalf("read back second (current) run state: %v", err)
+	}
+	if firstState != "cancelled" {
+		t.Errorf("first run state = %q, want unchanged cancelled -- the decide must not have touched it", firstState)
+	}
+	if secondState != "approved" {
+		t.Errorf("second run state = %q, want approved", secondState)
 	}
 }

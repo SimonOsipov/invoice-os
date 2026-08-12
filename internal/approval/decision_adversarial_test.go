@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -320,20 +321,15 @@ func TestApprove_ConcurrentDecisionsOnAMultiStepRunResolveDeterministically(t *t
 // --- task-491 (APPR-07-06, Mode B / QA phase): the approve-reason bound belongs in
 // Decide, not only at the HTTP edge -----------------------------------------------
 //
-// decision.go:47-56 bounds a REJECT reason inside Decide itself (byte-counted,
-// maxRejectReasonLen). handlers.go's DecideHandler adds the SAME 1000-byte bound for
-// BOTH decisions, but only at the wire layer -- Decide's own approve path never checks
-// it. approval_decisions.reason is an unbounded `text` column (migrations/
-// 20260809232011_approval_runs.sql:86, no CHECK, no length constraint), so any future
-// caller of Store.Decide that is not DecideHandler -- a batch-approve, a CLI, a worker
-// -- can write an approve reason of arbitrary length straight past every guard this
-// story ships. This is a domain-layer gap, not merely a wire-layer one: every other
-// bound this package enforces (hasNUL, name length, role-key length) lives at the
-// store, not only at its HTTP callers.
-//
-// FAILS TODAY: Decide's approve branch has no length check at all. Reported as a
-// defect, not fixed here (QA does not implement store changes) -- see task-491's
-// implementation_notes for the verdict and the column-type evidence.
+// decision.go:51-68 now bounds BOTH decisions' reasons inside Decide itself
+// (byte-counted, maxRejectReasonLen) -- the fix for the defect these two tests
+// originally found and pinned RED (task-491's first QA pass: Decide's approve branch
+// had no length check at all, so a non-HTTP caller of the exported Store.Decide -- a
+// batch-approve, a CLI, a worker -- could write a reason of arbitrary length straight
+// past every guard the HTTP-only bound provided). approval_decisions.reason is still an
+// unbounded `text` column (migrations/20260809232011_approval_runs.sql:86, no CHECK) --
+// the ceiling is enforced in Go, not the schema, same as every other bound this package
+// keeps at the store layer (hasNUL, name length, role-key length).
 
 // TestApprove_ReasonBoundIsEnforcedAtTheDomainLayerNotOnlyAtTheHTTPEdge mirrors
 // TestReject_ReasonOverByteBoundaryRefused exactly, for approve instead of reject, and
@@ -355,54 +351,81 @@ func TestApprove_ReasonBoundIsEnforcedAtTheDomainLayerNotOnlyAtTheHTTPEdge(t *te
 	assertNothingWritten(t, super, f)
 }
 
-// TestApprove_UnboundedReasonReachesTheUnboundedTextColumn is the same gap's other
-// half: proves the column itself places no ceiling, so a caller that gets past
-// Decide's missing check writes exactly what it sent -- the unbounded write this bound
-// exists to prevent. Uses a MUCH larger reason than the 1001-byte case above so the
-// finding does not read as an off-by-one; strengthens the case that the fix belongs at
-// the domain layer, not the schema.
-func TestApprove_UnboundedReasonReachesTheUnboundedTextColumn(t *testing.T) {
+// TestApprove_VeryLongReasonIsRefusedAndWritesNothing is the fixed version of what was
+// TestApprove_UnboundedReasonReachesTheUnboundedTextColumn: that test documented the
+// defect (a 50,000-byte approve reason wrote through in full) and necessarily flipped
+// to FAIL once Decide's domain-layer bound (decision.go:63-68) shipped -- no threshold
+// can satisfy both "50,000 bytes writes through" and "1001 bytes is refused". Rewritten
+// in place rather than left red or deleted, since QA authored it and the behaviour it
+// pinned was the bug, not a spec worth preserving. Uses a MUCH larger reason than the
+// 1001-byte case above so the coverage isn't a duplicate off-by-one check: it proves
+// the bound holds even for a wildly oversized input, not merely at the boundary, and
+// that nothing partial lands in approval_decisions on the refused write.
+func TestApprove_VeryLongReasonIsRefusedAndWritesNothing(t *testing.T) {
 	super, app := dbTestPools(t)
-	f := newApproveFixture(t, super, app, "APPR-07 approve-reason-unbounded-column", "approve-reason-unbounded-column-role")
+	f := newApproveFixture(t, super, app, "APPR-07 approve-reason-very-long-refused", "approve-reason-very-long-refused-role")
 	adminID := uuid.NewString()
 	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
 	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
 
 	reason := strings.Repeat("a", 50_000)
 	_, err := approve(t, app, f.tenantID, adminID, f.invoiceID, &reason)
-	if err != nil {
-		t.Fatalf("Decide(approved) with a 50,000-byte reason: %v, want success today -- documenting the unbounded column, not asserting it is correct", err)
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("Decide(approved) with a 50,000-byte reason: err = %v, want ErrValidation -- "+
+			"the domain-layer bound must hold well past the boundary, not just at 1001 bytes", err)
 	}
-	decisions := decisionsForRun(t, super, f.runID)
-	if len(decisions) != 1 || decisions[0].Reason == nil {
-		t.Fatalf("decisions = %+v, want exactly one row with a non-NULL reason", decisions)
+	assertNothingWritten(t, super, f)
+}
+
+// TestApprove_MultiByteReasonOverByteBoundaryRefusedAtTheDomainLayer mirrors
+// TestReject_MultiByteReasonOverByteBoundaryRefused (decision_test.go), for approve
+// instead of reject, calling Decide directly. Proves the fix's new approve-branch bound
+// (decision.go:63-68, `len(*reason) > maxRejectReasonLen`) is byte-counted, not
+// rune-counted, the same way the pre-existing HTTP-edge check already was -- the
+// re-verification pass this test exists for: mutating that len() call to
+// utf8.RuneCountInString must still redden a DOMAIN-layer caller, not just
+// TestApprovalHandler_ApproveReasonBoundIsByteCountedNotRuneCounted's HTTP-edge one.
+func TestApprove_MultiByteReasonOverByteBoundaryRefusedAtTheDomainLayer(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-07 approve-reason-multibyte-domain", "approve-reason-multibyte-domain-role")
+	adminID := uuid.NewString()
+	seedMembership(t, super, f.tenantID, adminID, "admin", "active")
+	staffWorkflowRole(t, super, f.tenantID, f.roleID, adminID, 0)
+
+	reason := strings.Repeat("€", 334) // 1002 bytes, 334 runes
+	if n := utf8.RuneCountInString(reason); n >= maxRejectReasonLen {
+		t.Fatalf("fixture reason has %d runes, want under %d -- the point of this test is the byte/rune gap", n, maxRejectReasonLen)
 	}
-	if got := len(*decisions[0].Reason); got != 50_000 {
-		t.Errorf("stored reason length = %d, want the full 50,000 bytes -- approval_decisions.reason (text, no CHECK) placed no ceiling of its own", got)
+	if len(reason) <= maxRejectReasonLen {
+		t.Fatalf("fixture reason has %d bytes, want over %d", len(reason), maxRejectReasonLen)
 	}
+
+	_, err := approve(t, app, f.tenantID, adminID, f.invoiceID, &reason)
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("Decide(approved) with a %d-byte/%d-rune reason, called directly: err = %v, want ErrValidation (byte-counted, not rune-counted)",
+			len(reason), utf8.RuneCountInString(reason), err)
+	}
+	assertNothingWritten(t, super, f)
 }
 
 // --- the story's own named-but-never-written spec: a NUL byte in reason ------------
 //
 // The design doc's Test Specs table names TestDecide_NULByteInReasonIsRefusedNotStored
 // ("a reason containing \x00 -> Decide -> refused with nothing written (22021 never
-// reaches the client as a 500)"), but no file in this package ever defined it. Every
-// OTHER text field this package accepts (policy names, workflow_role_key, notify
-// target/channel) is screened with hasNUL (policy.go:251-255) before it reaches SQL;
-// Decide's reason parameter is not. Postgres's text type raises SQLSTATE 22021 for an
-// embedded NUL, which decisionStatusForErr's default case maps to a bare 500 -- turning
-// a client input mistake into a fabricated server error, the exact class of leak
-// pgCode(err) != "" checks elsewhere in this package (e.g.
-// TestApprove_ApproverGetsIdenticalRunNotFoundAcrossUnknownCrossTenantMalformedAndNoRun)
-// already guard against.
-//
-// FAILS TODAY for both decisions. Reported as a defect, not fixed here.
+// reaches the client as a 500)"), but no file in this package defined it until this QA
+// pass. Every OTHER text field this package accepts (policy names, workflow_role_key,
+// notify target/channel) was already screened with hasNUL (policy.go:251-255) before
+// reaching SQL; Decide's reason parameter now is too (decision.go:44-49), fixing the
+// gap this test originally found RED: a NUL byte used to raise a raw Postgres 22021 that
+// decisionStatusForErr's default case turned into a bare 500. decisionStatusForErr now
+// maps ErrValidation -> 400 "invalid reason" (handlers.go:238-241), so the fabricated
+// 500 this test's own doc comment used to describe no longer happens.
 
 // TestDecide_NULByteInReasonIsRefusedNotStored transcribes the story's own spec name
-// verbatim. Table over both decisions: reject already has ITS OWN trim+bound check
-// (decision.go:47-56) that a NUL survives untouched (a NUL is not whitespace), and
-// approve has no reason check at all before this subtask's HTTP-only bound -- neither
-// path screens for NUL specifically.
+// verbatim. Table over both decisions: reject already had ITS OWN trim+bound check
+// (decision.go:53-62) that a NUL survives untouched (a NUL is not whitespace), and
+// approve had no reason check at all before this subtask's HTTP-only bound -- hasNUL
+// now screens both, ahead of either decision's own branch.
 func TestDecide_NULByteInReasonIsRefusedNotStored(t *testing.T) {
 	cases := []struct {
 		name     string

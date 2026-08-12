@@ -41,6 +41,13 @@ func (s *Store) Decide(ctx context.Context, invoiceID, decision string, reason *
 		return Run{}, ErrRunNotFound
 	}
 
+	// A NUL byte never reaches SQL for either decision: Postgres raises 22021 for it
+	// (hasNUL's own rationale, policy.go:251-255), which decisionStatusForErr's default
+	// case would otherwise turn into an opaque 500.
+	if hasNUL(reason) {
+		return Run{}, ErrValidation
+	}
+
 	// A reject reason is required, unlike approve's optional one; trimmed and
 	// byte-bounded here so a malformed reason never reaches SQL, same rationale as
 	// the uuid parse above.
@@ -53,6 +60,11 @@ func (s *Store) Decide(ctx context.Context, invoiceID, decision string, reason *
 			return Run{}, ErrValidation
 		}
 		reason = &trimmed
+	} else if reason != nil && len(*reason) > maxRejectReasonLen {
+		// Same 1000-byte bound as reject's, now enforced for approve too: Decide is
+		// exported, so a non-HTTP caller must not be able to write an unbounded reason
+		// past the domain layer (DecideHandler's own bound was the only one before this).
+		return Run{}, ErrValidation
 	}
 
 	var run Run
@@ -188,11 +200,16 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		return Run{}, err
 	}
 
-	// Re-read inside the same tx: commitDecisionTx may have advanced or closed it.
+	// Re-read inside the same tx: commitDecisionTx may have advanced or closed it. Full
+	// assembly (not just the header) so POST's body matches a fresh GET (AC-8, defect
+	// finding item 3) -- assembleRunStepsAndDecisions is ApprovalRun's own tx-scoped half.
 	run := Run{RunID: runID}
 	if err := tx.QueryRow(ctx,
 		`SELECT state, opened_at, closed_at, closed_by FROM approval_runs WHERE id = $1`, runID,
 	).Scan(&run.State, &run.OpenedAt, &run.ClosedAt, &run.ClosedBy); err != nil {
+		return Run{}, err
+	}
+	if err := assembleRunStepsAndDecisions(ctx, tx, &run); err != nil {
 		return Run{}, err
 	}
 	return run, nil

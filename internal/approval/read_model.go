@@ -115,100 +115,113 @@ func (s *Store) ApprovalRun(ctx context.Context, invoiceID string) (Run, error) 
 			return err
 		}
 
-		// stepOrd resolves the decision ledger's ord (AC-6): approval_decisions has no
-		// ord column of its own, so it comes from the step it decided on, without a join.
-		stepOrd := map[string]int{}
-		roleKeys := []string{}
-		seenKeys := map[string]bool{}
-
-		rows, err := tx.Query(ctx,
-			`SELECT id, ord, kind, workflow_role_key, sla_hours, due_at, state,
-			        satisfied_at, satisfied_by, notify_target, notify_channel
-			   FROM approval_run_steps
-			  WHERE run_id = $1
-			  ORDER BY ord`, run.RunID)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var id string
-			var st RunStep
-			if err := rows.Scan(&id, &st.Ord, &st.Kind, &st.WorkflowRoleKey, &st.SLAHours, &st.DueAt,
-				&st.State, &st.SatisfiedAt, &st.SatisfiedBy, &st.NotifyTarget, &st.NotifyChannel); err != nil {
-				rows.Close()
-				return err
-			}
-			// AC-5: gated on state, not just a due_at comparison -- due_at is stamped by
-			// kind (engine.go:225-226), so an autoapprove-settled step can still carry one.
-			st.Overdue = st.State == "pending" && st.DueAt != nil && st.DueAt.Before(time.Now())
-			stepOrd[id] = st.Ord
-			if st.WorkflowRoleKey != nil && !seenKeys[*st.WorkflowRoleKey] {
-				seenKeys[*st.WorkflowRoleKey] = true
-				roleKeys = append(roleKeys, *st.WorkflowRoleKey)
-			}
-			run.Steps = append(run.Steps, st)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		exists, titles, holders, err := resolveRunRoles(ctx, tx, roleKeys)
-		if err != nil {
-			return err
-		}
-		for i := range run.Steps {
-			// Gated on the role key being present, never on kind == "approval": nothing in
-			// the schema stops a role key on a notify/autoapprove step (policy.go:262-269),
-			// and running a nil key through resolveHolder(false, nil) would wrongly answer
-			// "Role no longer exists" instead of leaving both fields null.
-			key := run.Steps[i].WorkflowRoleKey
-			if key == nil {
-				continue
-			}
-			title := roleTitle(exists[*key], titles[*key])
-			run.Steps[i].WorkflowRoleTitle = &title
-			holder := resolveHolder(exists[*key], holders[*key])
-			run.Steps[i].Holder = &holder
-		}
-
-		drows, err := tx.Query(ctx,
-			`SELECT run_step_id, decision, actor, decided_at, reason
-			   FROM approval_decisions
-			  WHERE run_id = $1
-			  ORDER BY decided_at`, run.RunID)
-		if err != nil {
-			return err
-		}
-		for drows.Next() {
-			var d RunDecision
-			if err := drows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.DecidedAt, &d.Reason); err != nil {
-				drows.Close()
-				return err
-			}
-			d.Ord = stepOrd[d.RunStepID]
-			run.Decisions = append(run.Decisions, d)
-		}
-		drows.Close()
-		if err := drows.Err(); err != nil {
-			return err
-		}
-		// decided_at then ord (AC-6): ord is only known after the step pass above, so the
-		// tie-break is finished here rather than in SQL.
-		sort.SliceStable(run.Decisions, func(i, j int) bool {
-			a, b := run.Decisions[i], run.Decisions[j]
-			if !a.DecidedAt.Equal(b.DecidedAt) {
-				return a.DecidedAt.Before(b.DecidedAt)
-			}
-			return a.Ord < b.Ord
-		})
-
-		return nil
+		return assembleRunStepsAndDecisions(ctx, tx, &run)
 	})
 	if err != nil {
 		return Run{}, err
 	}
 	return run, nil
+}
+
+// assembleRunStepsAndDecisions fills run.Steps and run.Decisions for an already-resolved
+// run.RunID -- the tx-scoped half ApprovalRun and decideTx both call (defect finding,
+// item 3), so POST's response body matches the same run's fresh GET rather than
+// duplicating this assembly. Five statements (steps, three role-resolution queries,
+// decisions); ApprovalRun's own run-header lookup above is the sixth
+// (TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount).
+func assembleRunStepsAndDecisions(ctx context.Context, tx pgx.Tx, run *Run) error {
+	run.Steps = []RunStep{}
+	run.Decisions = []RunDecision{}
+
+	// stepOrd resolves the decision ledger's ord (AC-6): approval_decisions has no
+	// ord column of its own, so it comes from the step it decided on, without a join.
+	stepOrd := map[string]int{}
+	roleKeys := []string{}
+	seenKeys := map[string]bool{}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, ord, kind, workflow_role_key, sla_hours, due_at, state,
+		        satisfied_at, satisfied_by, notify_target, notify_channel
+		   FROM approval_run_steps
+		  WHERE run_id = $1
+		  ORDER BY ord`, run.RunID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var st RunStep
+		if err := rows.Scan(&id, &st.Ord, &st.Kind, &st.WorkflowRoleKey, &st.SLAHours, &st.DueAt,
+			&st.State, &st.SatisfiedAt, &st.SatisfiedBy, &st.NotifyTarget, &st.NotifyChannel); err != nil {
+			rows.Close()
+			return err
+		}
+		// AC-5: gated on state, not just a due_at comparison -- due_at is stamped by
+		// kind (engine.go:225-226), so an autoapprove-settled step can still carry one.
+		st.Overdue = st.State == "pending" && st.DueAt != nil && st.DueAt.Before(time.Now())
+		stepOrd[id] = st.Ord
+		if st.WorkflowRoleKey != nil && !seenKeys[*st.WorkflowRoleKey] {
+			seenKeys[*st.WorkflowRoleKey] = true
+			roleKeys = append(roleKeys, *st.WorkflowRoleKey)
+		}
+		run.Steps = append(run.Steps, st)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	exists, titles, holders, err := resolveRunRoles(ctx, tx, roleKeys)
+	if err != nil {
+		return err
+	}
+	for i := range run.Steps {
+		// Gated on the role key being present, never on kind == "approval": nothing in
+		// the schema stops a role key on a notify/autoapprove step (policy.go:262-269),
+		// and running a nil key through resolveHolder(false, nil) would wrongly answer
+		// "Role no longer exists" instead of leaving both fields null.
+		key := run.Steps[i].WorkflowRoleKey
+		if key == nil {
+			continue
+		}
+		title := roleTitle(exists[*key], titles[*key])
+		run.Steps[i].WorkflowRoleTitle = &title
+		holder := resolveHolder(exists[*key], holders[*key])
+		run.Steps[i].Holder = &holder
+	}
+
+	drows, err := tx.Query(ctx,
+		`SELECT run_step_id, decision, actor, decided_at, reason
+		   FROM approval_decisions
+		  WHERE run_id = $1
+		  ORDER BY decided_at`, run.RunID)
+	if err != nil {
+		return err
+	}
+	for drows.Next() {
+		var d RunDecision
+		if err := drows.Scan(&d.RunStepID, &d.Decision, &d.Actor, &d.DecidedAt, &d.Reason); err != nil {
+			drows.Close()
+			return err
+		}
+		d.Ord = stepOrd[d.RunStepID]
+		run.Decisions = append(run.Decisions, d)
+	}
+	drows.Close()
+	if err := drows.Err(); err != nil {
+		return err
+	}
+	// decided_at then ord (AC-6): ord is only known after the step pass above, so the
+	// tie-break is finished here rather than in SQL.
+	sort.SliceStable(run.Decisions, func(i, j int) bool {
+		a, b := run.Decisions[i], run.Decisions[j]
+		if !a.DecidedAt.Equal(b.DecidedAt) {
+			return a.DecidedAt.Before(b.DecidedAt)
+		}
+		return a.Ord < b.Ord
+	})
+
+	return nil
 }
 
 // resolveRunRoles resolves title/exists and ordered holder inputs for a set of distinct

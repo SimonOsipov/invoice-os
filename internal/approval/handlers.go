@@ -236,6 +236,10 @@ func decisionStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "this approval run is already closed"
 	case errors.Is(err, ErrNotAwaitingApproval):
 		return http.StatusConflict, "this invoice is no longer awaiting approval"
+	case errors.Is(err, ErrValidation):
+		// DecideHandler pre-validates reason emptiness/length itself, so this only ever
+		// fires for a check Decide alone makes -- today, the NUL-byte guard above.
+		return http.StatusBadRequest, "invalid reason"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

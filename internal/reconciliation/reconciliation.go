@@ -23,7 +23,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
-// DriftKind names one of the 8 drift signatures Scan detects (M5-06 System Design table).
+// DriftKind names one of the 10 drift signatures Scan detects (M5-06 System Design table,
+// plus the two approval signatures from APPR-06). Nothing binds these constants to the kind
+// literals in scanQuery — adding a kind means editing both.
 type DriftKind string
 
 const (
@@ -35,6 +37,9 @@ const (
 	IRNWithoutAccepted DriftKind = "irn_without_accepted"
 	AcceptedWithoutIRN DriftKind = "accepted_without_irn"
 	VerdictNotRouted   DriftKind = "verdict_not_routed"
+
+	ApprovalRunOrphaned      DriftKind = "approval_run_orphaned"
+	ApprovalBlockedUnstaffed DriftKind = "approval_blocked_unstaffed"
 )
 
 // Finding is one row Scan returns: an invoice (and, where relevant, the submission_jobs
@@ -56,8 +61,8 @@ type Thresholds struct {
 	HopCeiling    int
 }
 
-// scanQuery implements the 8 drift signatures (L1/H1/H2/O1/Q1/C1/C2/C3, M5-06 System
-// Design table) as one UNION ALL over the `latest`-cycle CTE
+// scanQuery implements the 10 drift signatures (L1/H1/H2/O1/Q1/C1/C2/C3, M5-06 System
+// Design table, plus APPR-06's two approval arms) as one UNION ALL over the `latest`-cycle CTE
 // (DISTINCT ON (invoice_id) … ORDER BY created_at DESC — [drift-scan-uses-latest-cycle]),
 // so a resubmission's new job row is always the cycle evaluated. The two "live river_job"
 // sub-predicates are inlined per branch rather than shared via a second CTE: L1 keys off
@@ -153,6 +158,50 @@ SELECT i.id, j.id, 'verdict_not_routed', false
 FROM invoices i
 JOIN latest j ON j.invoice_id = i.id
 WHERE i.status = 'submitted' AND j.state IN ('accepted', 'rejected')
+
+UNION ALL
+
+-- The explicit tenant_id predicates on these two arms are not redundancy with RLS: Scan also
+-- runs on a superuser pool with no app.current_tenant set (TestSeedTripsNoReconciliationDrift),
+-- where the unscoped form cross-joins tenants and drops real drift. A watchdog must not fail
+-- silent.
+SELECT i.id, NULL::uuid, 'approval_run_orphaned', false
+FROM invoices i
+JOIN approval_runs r ON r.tenant_id = i.tenant_id AND r.invoice_id = i.id
+WHERE r.state = 'open'
+  AND i.status <> 'validated'
+
+UNION ALL
+
+-- LATERAL … LIMIT 1 picks the one current step, and NOT EXISTS (never LEFT JOIN … IS NULL)
+-- collapses the holders: a run with several pending steps or several holders must still
+-- produce exactly one finding.
+SELECT i.id, NULL::uuid, 'approval_blocked_unstaffed', false
+FROM invoices i
+JOIN approval_runs r ON r.tenant_id = i.tenant_id AND r.invoice_id = i.id AND r.state = 'open'
+JOIN LATERAL (
+    SELECT s.workflow_role_key
+    FROM approval_run_steps s
+    WHERE s.tenant_id = r.tenant_id
+      AND s.run_id = r.id
+      AND s.kind = 'approval'
+      AND s.state = 'pending'
+    ORDER BY s.ord
+    LIMIT 1
+) cur ON true
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM workflow_roles wr
+    JOIN workflow_role_members wrm
+      ON wrm.tenant_id = wr.tenant_id AND wrm.workflow_role_id = wr.id
+    JOIN memberships m
+      ON m.tenant_id = wrm.tenant_id AND m.user_id = wrm.user_id
+    WHERE wr.tenant_id = r.tenant_id
+      AND wr.key = cur.workflow_role_key
+      AND wr.deleted_at IS NULL
+      AND m.status = 'active'
+      AND m.role IN ('admin', 'reviewer')
+)
 `
 
 // Scan walks the tenant-scoped `invoices` ⋈ latest `submission_jobs` ⋈ river_job

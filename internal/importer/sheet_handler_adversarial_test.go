@@ -95,6 +95,9 @@ func TestSheetHandler_SingleColumnCSV(t *testing.T) {
 	if len(resp.Columns) != 1 || resp.Columns[0] != "only" {
 		t.Fatalf("columns = %v, want a single \"only\" entry", resp.Columns)
 	}
+	if len(resp.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3 (A, B, C) -- the loop below would assert nothing", len(resp.Rows))
+	}
 	for i, row := range resp.Rows {
 		if len(row) != 1 {
 			t.Errorf("rows[%d] = %v, want exactly 1 cell", i, row)

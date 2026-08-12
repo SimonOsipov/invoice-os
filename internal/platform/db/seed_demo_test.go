@@ -1050,6 +1050,9 @@ func TestSeedBackfillsFiscalIdentifiersOntoPreexistingAcceptedRows(t *testing.T)
 	}
 
 	precond := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+	if len(precond) == 0 {
+		t.Fatal("no demo fiscal invoices read back -- the precondition loop below would assert nothing")
+	}
 	for _, r := range precond {
 		if r.status != "accepted" {
 			continue
@@ -2211,7 +2214,11 @@ func TestSeedInvoiceCreatedAtStrictlyPast(t *testing.T) {
 	}
 
 	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
-		for _, r := range fetchDemoInvoiceOrder(t, pool, tenantID) {
+		order := fetchDemoInvoiceOrder(t, pool, tenantID)
+		if len(order) == 0 {
+			t.Fatalf("tenant %s: Seed produced no demo invoices -- the loop below would assert nothing", tenantID)
+		}
+		for _, r := range order {
 			if !r.createdAt.Before(dbNow) {
 				t.Errorf("tenant %s: %s created_at = %v, want strictly before %v", tenantID, r.invoiceNumber, r.createdAt, dbNow)
 			}
@@ -4261,7 +4268,11 @@ func TestSeedMembershipsHaveIdentity(t *testing.T) {
 		t.Fatalf("Seed: %v", err)
 	}
 
-	for _, r := range fetchAllPersonaMemberships(t, pool) {
+	memberships := fetchAllPersonaMemberships(t, pool)
+	if len(memberships) == 0 {
+		t.Fatal("Seed produced no persona memberships -- the loop below would assert nothing")
+	}
+	for _, r := range memberships {
 		if r.displayName == "" {
 			t.Errorf("tenant %s, user %s: display_name = %q, want non-empty", r.tenantID, r.userID, r.displayName)
 		}

@@ -213,3 +213,13 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 		writeJSON(w, http.StatusOK, normalise(role))
 	}
 }
+
+// RunHandler returns GET /v1/invoices/{id}/approval. STUB — answers 501 so
+// decision_handlers_test.go fails on its assertions rather than on a missing
+// symbol; Stage 3 replaces the body with identity -> path id -> read ->
+// decisionStatusForErr -> bare 200.
+func RunHandler(read RunReader, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}

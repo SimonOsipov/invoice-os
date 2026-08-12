@@ -29,8 +29,11 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -111,6 +114,49 @@ func seedApprovalDraftNamingRole(t *testing.T, super *pgxpool.Pool, tenantID, po
 	return versionID, stepID
 }
 
+// stubFingerprintValue is a well-formed 64-char hex literal -- the shape a real
+// content_fingerprint must have, without computing one.
+var stubFingerprintValue = strings.Repeat("f", 64)
+
+// stubFingerprinter is the local Fingerprinter double every approval-package sweep
+// test builds its Store with (D1, task-484): internal/approval cannot import
+// internal/invoice ("import cycle not allowed in test", proven against every one of
+// this package's 23 test files), so the real invoice.FingerprintTx is exercised only
+// from internal/invoice's TestPublish_SweepFingerprintMatchesInvoiceContent. This is
+// the func-type seam NewStore's new parameter exists for.
+func stubFingerprinter(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error) {
+	return stubFingerprintValue, nil
+}
+
+// bulkSeedValidatedInvoices inserts n validated invoices under one business entity in a
+// single INSERT ... SELECT FROM generate_series -- ~65ms at n=5000 (measured dev :5433).
+// Numbers are prefix-g for uniqueness; only tenant_id, entity_id and invoice_number
+// lack column defaults.
+func bulkSeedValidatedInvoices(t *testing.T, super *pgxpool.Pool, tenantID, entityID, prefix string, n int) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status)
+		 SELECT $1, $2, $3 || '-' || g, 'validated'
+		   FROM generate_series(1, $4) AS g`,
+		tenantID, entityID, prefix, n,
+	); err != nil {
+		t.Fatalf("bulk-seed %d validated invoices: %v", n, err)
+	}
+}
+
+// approvalRunCountForInvoice counts approval_runs rows for one invoice, through the
+// superuser pool -- all three ledger tables are FORCE RLS, so an app-role count with
+// no tenant GUC set would read 0 whatever was written.
+func approvalRunCountForInvoice(t *testing.T, super *pgxpool.Pool, invoiceID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM approval_runs WHERE invoice_id = $1`, invoiceID).Scan(&n); err != nil {
+		t.Fatalf("count approval_runs for invoice %s: %v", invoiceID, err)
+	}
+	return n
+}
+
 // --- AC-1: an approval step must name a live role -----------------------------
 
 // TestPublish_RejectsDanglingRole: the door refuses a NEW version naming a soft-deleted
@@ -120,7 +166,7 @@ func TestPublish_RejectsDanglingRole(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-dangling-role")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	softDeleteWorkflowRole(t, super, roleID)
@@ -171,7 +217,7 @@ func TestPublish_RejectsEmptyRoleKey(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-empty-role-key")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	// A live role exists, so a gate that answered ErrPolicyStepRole because the tenant has
 	// no roles at all would not pass this.
@@ -216,7 +262,7 @@ func TestPublish_RejectsEmptyBothLanes(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-empty-lanes")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	deadPolicyID := seedApprovalPolicy(t, super, tenantID, "Two empty lanes")
 	deadVersionID := seedApprovalPolicyVersionN(t, super, tenantID, deadPolicyID, 1)
@@ -271,7 +317,7 @@ func TestPublish_EmptyPolicyAllowed(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	got, err := NewStore(app).PublishPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("PublishPolicy of a stepless draft: %v, want success", err)
 	}
@@ -336,7 +382,7 @@ func TestPublish_DeactivatesTheTenantsOtherPolicy(t *testing.T) {
 	policyB := seedApprovalPolicy(t, super, tenantID, "B policy")
 	versionB := seedApprovalDraft(t, super, tenantID, policyB)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyB); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyB); err != nil {
 		t.Fatalf("PublishPolicy(B): %v, want success", err)
 	}
 
@@ -420,7 +466,7 @@ func TestPublish_SealAndActivateAreOneStatement(t *testing.T) {
 		t.Fatalf("incoming version = %+v after the rolled-back controls, want still (sealed false, is_active false)", v)
 	}
 
-	if _, err := NewStore(app).PublishPolicy(c, incomingPolicy); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, incomingPolicy); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success — the deactivation must precede the activation, or "+
 			"this is the 23505 control (ii) just measured", err)
 	}
@@ -452,7 +498,7 @@ func TestPublish_StampsActorAndTxTimestamp(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success", err)
 	}
 
@@ -498,7 +544,7 @@ func TestPublish_SecondPublishIsNothingToPublish(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-nothing-to-publish")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -546,7 +592,7 @@ func TestPublish_RoleDeletedAfterPublishLeavesVersionActive(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 publish-role-deleted-after")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -601,7 +647,7 @@ func TestPublish_AuditsInSameTx(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)
 
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
 		t.Fatalf("PublishPolicy: %v, want success", err)
 	}
 
@@ -664,7 +710,7 @@ func TestPublish_AuditsInSameTx(t *testing.T) {
 // about tenancy.
 func TestPublish_CrossTenantIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	tenantA := policyTenant(t, super, "APPR-05 publish-cross-tenant A")
 	cA, _ := activeAdmin(t, super, tenantA)
@@ -696,46 +742,106 @@ func TestPublish_CrossTenantIsNotFound(t *testing.T) {
 	}
 }
 
-// --- AC-11: no run is armed ---------------------------------------------------
+// --- AC-1,2: the publish sweep arms the validated backlog ----------------------
 
-// TestPublish_CreatesNoApprovalRun: arming is APPR-06's, not this subtask's. The counts
-// go through the SUPERUSER pool — all three tables are FORCE RLS, so an app-role count
-// with no tenant GUC set reads 0 whatever was written.
-func TestPublish_CreatesNoApprovalRun(t *testing.T) {
+// TestPublish_SweepArmsBacklog replaces TestPublish_CreatesNoApprovalRun (task-484):
+// arming a tenant's validated backlog on publish is this subtask's whole point, not
+// deferred work the way APPR-05 shipped it. A second publish then arms zero (AC-2)
+// -- every invoice the first sweep touched now carries a run, so the anti-join finds
+// nothing left to arm.
+func TestPublish_SweepArmsBacklog(t *testing.T) {
 	super, app := dbTestPools(t)
-	tenantID := policyTenant(t, super, "APPR-05 publish-no-run")
+	tenantID := policyTenant(t, super, "APPR-06 publish-sweep-arms-backlog")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	// Validated invoices are the population an arming sweep would walk.
-	entityID := seedBusinessEntity(t, super, tenantID, "No-run Corp")
-	for _, number := range []string{"no-run-invoice-1", "no-run-invoice-2"} {
-		invoiceID := seedInvoice(t, super, tenantID, entityID, number)
+	entityID := seedBusinessEntity(t, super, tenantID, "Sweep Corp")
+	var validatedIDs []string
+	for _, number := range []string{"sweep-validated-1", "sweep-validated-2", "sweep-validated-3"} {
+		id := seedInvoice(t, super, tenantID, entityID, number)
 		if _, err := super.Exec(context.Background(),
-			`UPDATE invoices SET status = 'validated' WHERE id = $1`, invoiceID); err != nil {
+			`UPDATE invoices SET status = 'validated' WHERE id = $1`, id); err != nil {
 			t.Fatalf("validate invoice %s: %v", number, err)
 		}
+		validatedIDs = append(validatedIDs, id)
 	}
-	var validated int
-	if err := super.QueryRow(context.Background(),
-		`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND status = 'validated'`, tenantID,
-	).Scan(&validated); err != nil {
-		t.Fatalf("count validated invoices: %v", err)
+	queuedID := seedInvoice(t, super, tenantID, entityID, "sweep-queued")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'queued' WHERE id = $1`, queuedID); err != nil {
+		t.Fatalf("queue invoice: %v", err)
 	}
-	if validated != 2 {
-		t.Fatalf("validated invoices = %d, want 2 — with none, this spec passes vacuously", validated)
-	}
+	draftID := seedInvoice(t, super, tenantID, entityID, "sweep-draft") // stays 'draft' by default
 
-	seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	member := uuid.NewString()
+	seedMembership(t, super, tenantID, member, "preparer", "active")
+	roleID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	staffWorkflowRole(t, super, tenantID, roleID, member, 0)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedApprovalDraftNamingRole(t, super, tenantID, policyID, "engagement-partner")
 
-	if _, err := NewStore(app).PublishPolicy(c, policyID); err != nil {
-		t.Fatalf("PublishPolicy: %v, want success — a failed publish would make the counts below vacuous", err)
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID); err != nil {
+		t.Fatalf("PublishPolicy: %v, want success", err)
 	}
 
-	for _, table := range []string{"approval_runs", "approval_run_steps", "approval_decisions"} {
-		if n := rowCount(t, super, table, tenantID); n != 0 {
-			t.Errorf("%s rows = %d, want 0 — publish arms nothing", table, n)
+	if n := rowCount(t, super, "approval_runs", tenantID); n != 3 {
+		t.Errorf("approval_runs rows = %d, want 3 — one per validated invoice", n)
+	}
+	for _, id := range validatedIDs {
+		if n := approvalRunCountForInvoice(t, super, id); n != 1 {
+			t.Errorf("approval_runs rows for validated invoice %s = %d, want 1", id, n)
 		}
+	}
+	for label, id := range map[string]string{"queued": queuedID, "draft": draftID} {
+		if n := approvalRunCountForInvoice(t, super, id); n != 0 {
+			t.Errorf("approval_runs rows for the %s invoice = %d, want 0 — only validated is swept", label, n)
+		}
+	}
+	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 3 {
+		t.Errorf("invoice.approval_armed audit rows = %d, want 3", n)
+	}
+
+	// AC-2: a second publish arms zero — every candidate the first sweep found now
+	// carries an open run, so the anti-join excludes all three.
+	secondPolicyID := seedApprovalPolicy(t, super, tenantID, "Second sign-off")
+	seedApprovalDraftNamingRole(t, super, tenantID, secondPolicyID, "engagement-partner")
+	if _, err := NewStore(app, stubFingerprinter).PublishPolicy(c, secondPolicyID); err != nil {
+		t.Fatalf("second PublishPolicy: %v, want success", err)
+	}
+	if n := rowCount(t, super, "approval_runs", tenantID); n != 3 {
+		t.Errorf("approval_runs rows after the second publish = %d, want still 3 — a second publish arms zero", n)
+	}
+	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 3 {
+		t.Errorf("invoice.approval_armed audit rows after the second publish = %d, want still 3", n)
+	}
+}
+
+// --- AC-3,4: the cap refuses the whole publish before arming anything ----------
+
+// TestPublish_SweepAboveCapReturns409: sweepCap+1 (5,001) validated invoices is one
+// over the literal cap (AC-4) -> PublishPolicy refuses with ErrSweepCapExceeded
+// BEFORE arming anything: approval_runs stays empty and the version stays unsealed
+// and inactive, so a retry after trimming the backlog starts from the same
+// unpublished draft. Runs in ~0.1s — LIMIT sweepCap+1 lets the refusal fire before
+// any ArmTx call.
+func TestPublish_SweepAboveCapReturns409(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-06 publish-sweep-above-cap")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	entityID := seedBusinessEntity(t, super, tenantID, "Above-cap Corp")
+	bulkSeedValidatedInvoices(t, super, tenantID, entityID, "above-cap", sweepCap+1)
+
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	versionID := seedApprovalDraft(t, super, tenantID, policyID)
+
+	_, err := NewStore(app, stubFingerprinter).PublishPolicy(c, policyID)
+	if !errors.Is(err, ErrSweepCapExceeded) {
+		t.Fatalf("PublishPolicy over the sweep cap: err = %v, want ErrSweepCapExceeded", err)
+	}
+
+	if n := rowCount(t, super, "approval_runs", tenantID); n != 0 {
+		t.Errorf("approval_runs rows = %d, want 0 — the cap refusal rolls back the whole transaction", n)
+	}
+	if v := versionRow(t, super, versionID); v.Sealed || v.IsActive {
+		t.Errorf("version row = %+v, want still (sealed false, is_active false)", v)
 	}
 }

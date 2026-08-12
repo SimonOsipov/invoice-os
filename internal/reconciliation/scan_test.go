@@ -31,6 +31,15 @@
 //	AC-1   TestRLS_ScanPendingTooLong
 //	AC-2   TestRLS_ScanUsesLatestCycle
 //	AC-4   TestRLS_ScanCleanInvoiceNoFindings
+//
+// APPR-06-09 (task-485) adds four more cases for the two approval-drift kinds
+// (approval_run_orphaned, approval_blocked_unstaffed) — RED against the shipped scanQuery,
+// which has no arm for either kind yet:
+//
+//	AC-1,3 TestRLS_ScanApprovalRunOrphaned
+//	AC-3   TestRLS_ScanApprovalRunOrphanedIgnoresValidated
+//	AC-1,4 TestRLS_ScanApprovalBlockedUnstaffed
+//	AC-5   TestRLS_ScanHealthyArmedInvoiceNoApprovalFindings
 package reconciliation
 
 import (
@@ -354,5 +363,189 @@ func TestRLS_ScanCleanInvoiceNoFindings(t *testing.T) {
 			t.Errorf("Scan findings for the CLEAN invoice = %+v, want none (accepted + IRN + "+
 				"latest job accepted is fully consistent)", f)
 		}
+	}
+}
+
+// AC-1, AC-3: an open approval run on an invoice no longer at 'validated' is drift — the run
+// should have closed (APPR-06-07's demotion-cancel path) once the invoice moved off the
+// state that justified it. Second leg pins D20: the ungated validated -> queued window must
+// ALSO flag, not just the draft demotion path.
+func TestRLS_ScanApprovalRunOrphaned(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID, entityID, invoiceID, cleanupInvoice := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupInvoice()
+	invoiceID2, cleanupInvoice2 := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupInvoice2()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	rcSeedRun(t, h, tenantID, invoiceID, versionID, "open")
+	rcSeedRun(t, h, tenantID, invoiceID2, versionID, "open")
+
+	if _, err := h.super.Exec(ctx, `UPDATE invoices SET status = 'draft' WHERE id = $1`, invoiceID); err != nil {
+		t.Fatalf("flip invoice to draft out of band: %v", err)
+	}
+	if _, err := h.super.Exec(ctx, `UPDATE invoices SET status = 'queued' WHERE id = $1`, invoiceID2); err != nil {
+		t.Fatalf("flip invoice2 to queued out of band: %v", err)
+	}
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: rcApprovalRunOrphaned, Healable: false}
+	if n := countForInvoice(got, invoiceID); n != 1 {
+		t.Fatalf("Scan findings for the draft-demoted invoice %q = %d (%+v), want exactly 1", invoiceID, n, got)
+	}
+	for _, f := range got {
+		if f.InvoiceID == invoiceID && !findingEqual(f, want) {
+			t.Errorf("finding = %+v, want %+v", f, want)
+		}
+	}
+
+	if !containsFindingFor(got, invoiceID2, rcApprovalRunOrphaned) {
+		t.Errorf("Scan findings = %+v, want approval_run_orphaned ALSO for invoice %q "+
+			"(D20 — the ungated validated -> queued window must stay visible)", got, invoiceID2)
+	}
+	// A bare 'queued' status with no submission_jobs row is ALSO the pre-existing Q1
+	// (queued_never_sent) trigger — that arm legitimately co-fires here, so only an
+	// unrelated THIRD kind on invoiceID2 would be unexpected.
+	for _, f := range got {
+		if f.InvoiceID == invoiceID2 && f.Kind != rcApprovalRunOrphaned && f.Kind != QueuedNeverSent {
+			t.Errorf("Scan findings for invoice %q includes unexpected kind %+v", invoiceID2, f)
+		}
+	}
+}
+
+// AC-3: a validated invoice with an open run whose current step is STAFFED must not flag as
+// orphaned. Positive control in the same test: the same invoice flipped to draft produces
+// exactly one approval_run_orphaned — staffing the step is required, or a stray
+// approval_blocked_unstaffed would muddy the count.
+func TestRLS_ScanApprovalRunOrphanedIgnoresValidated(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID, _, invoiceID, cleanupInvoice := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupInvoice()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	roleID := rcSeedWorkflowRole(t, h, tenantID, "staffed-role", false)
+	userID := rcSeedMember(t, h, tenantID, "admin", "active")
+	rcStaffRole(t, h, tenantID, roleID, userID, 0)
+	roleKey := "staffed-role"
+
+	runID := rcSeedRun(t, h, tenantID, invoiceID, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runID, 1, "approval", &roleKey, "pending")
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan (validated, staffed current step): %v", err)
+	}
+	if n := countForInvoice(got, invoiceID); n != 0 {
+		t.Errorf("Scan findings for invoice %q = %d (%+v), want 0 — validated invoice, open "+
+			"run, staffed current step must produce neither approval finding", invoiceID, n, got)
+	}
+
+	if _, err := h.super.Exec(ctx, `UPDATE invoices SET status = 'draft' WHERE id = $1`, invoiceID); err != nil {
+		t.Fatalf("flip invoice to draft: %v", err)
+	}
+
+	after, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan (after draft demotion): %v", err)
+	}
+	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: rcApprovalRunOrphaned, Healable: false}
+	if n := countForInvoice(after, invoiceID); n != 1 {
+		t.Fatalf("Scan (after draft demotion) findings for invoice %q = %d (%+v), want exactly "+
+			"1 — the positive control this ignores-validated case is measured against", invoiceID, n, after)
+	}
+	for _, f := range after {
+		if f.InvoiceID == invoiceID && !findingEqual(f, want) {
+			t.Errorf("finding after demotion = %+v, want %+v", f, want)
+		}
+	}
+}
+
+// AC-1, AC-4: a validated invoice, open run, whose lowest-ord pending approval step names a
+// live role with zero holders is drift.
+func TestRLS_ScanApprovalBlockedUnstaffed(t *testing.T) {
+	h := requireHarness(t)
+
+	tenantID, _, invoiceID, cleanupInvoice := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupInvoice()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	rcSeedWorkflowRole(t, h, tenantID, "empty-role", false) // zero holders, on purpose
+	roleKey := "empty-role"
+
+	runID := rcSeedRun(t, h, tenantID, invoiceID, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runID, 1, "approval", &roleKey, "pending")
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: rcApprovalBlockedUnstaffed, Healable: false}
+	if n := countForInvoice(got, invoiceID); n != 1 {
+		t.Fatalf("Scan findings for invoice %q = %d (%+v), want exactly 1", invoiceID, n, got)
+	}
+	for _, f := range got {
+		if f.InvoiceID == invoiceID && !findingEqual(f, want) {
+			t.Errorf("finding = %+v, want %+v", f, want)
+		}
+	}
+}
+
+// AC-5: a fully-healthy armed invoice (validated, open run, current step staffed by an
+// active reviewer) yields NEITHER new kind. Positive control: a deliberately drifted sibling
+// invoice under the same tenant/Scan call DOES return a finding, so the empty result for the
+// healthy invoice is never a vacuous pass against a Scan that finds nothing for anyone.
+func TestRLS_ScanHealthyArmedInvoiceNoApprovalFindings(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID, entityID, invoiceHealthy, cleanupHealthy := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupHealthy()
+	invoiceDrifted, cleanupDrifted := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupDrifted()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	roleID := rcSeedWorkflowRole(t, h, tenantID, "healthy-role", false)
+	userID := rcSeedMember(t, h, tenantID, "reviewer", "active")
+	rcStaffRole(t, h, tenantID, roleID, userID, 0)
+	roleKey := "healthy-role"
+
+	healthyRun := rcSeedRun(t, h, tenantID, invoiceHealthy, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, healthyRun, 1, "approval", &roleKey, "pending")
+
+	rcSeedRun(t, h, tenantID, invoiceDrifted, versionID, "open")
+	if _, err := h.super.Exec(ctx, `UPDATE invoices SET status = 'draft' WHERE id = $1`, invoiceDrifted); err != nil {
+		t.Fatalf("flip drifted sibling to draft: %v", err)
+	}
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	if !containsFindingFor(got, invoiceDrifted, rcApprovalRunOrphaned) {
+		t.Fatalf("Scan findings = %+v, want approval_run_orphaned for the deliberately drifted "+
+			"sibling invoice %q — the positive control this healthy-invoice case is measured "+
+			"against, proving Scan can return findings in this same tenant", got, invoiceDrifted)
+	}
+	if n := countForInvoice(got, invoiceHealthy); n != 0 {
+		t.Errorf("Scan findings for the healthy invoice %q = %d (%+v), want 0 — validated, open "+
+			"run, current step staffed by an active reviewer", invoiceHealthy, n, got)
 	}
 }

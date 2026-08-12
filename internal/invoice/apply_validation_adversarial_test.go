@@ -289,3 +289,107 @@ func TestApplyValidation_StatusCheckPrecedesFingerprintCheckWhenBothStale(t *tes
 		t.Fatal("err wraps BOTH ErrNotDraft and ErrStaleValidation -- the two sentinels must be mutually exclusive per call")
 	}
 }
+
+// --- task-483 (APPR-06-07, Mode A): the gate-bypass sequence D37 closes ------------
+
+// TestEdit_AmountRaisedAboveThresholdLeavesNoStaleApprovedRun (AC-1, AC-4): the full
+// bypass sequence in one tenant whose active policy requires sign-off only above
+// N500m (a root condition, ">" 500,000,000.00, gating a single approval step in its
+// "then" lane -- an amount at or below the threshold takes the empty "else" lane and
+// arms nothing, a zero-step run closed 'approved'). An invoice at 100,000,000
+// validates and arms that zero-step run --> Store.Edit raises the total to
+// 750,000,000, demoting it --> ApplyValidation re-promotes --> exactly ONE run is not
+// cancelled; it is open with one pending approval step; ZERO runs for the invoice are
+// 'approved'. Fails today: nothing arms below the threshold check even exists to
+// interact with, and nothing cancels the stale approved run, so a fresh ArmTx would
+// never even be reached (ApplyValidation demotes-then-revalidates through the SAME
+// unwired path TestStoreEdit_DemoteThenRevalidateUnderActivePolicySucceeds pins) --
+// this is the specific case D37 calls out: a `state = 'open'` cancel predicate would
+// leave the stale 'approved' run alive alongside the fresh one, and APPR-08's gate
+// (which asks "is there A run in state approved", not "which one") would let the
+// invoice through unapproved.
+func TestEdit_AmountRaisedAboveThresholdLeavesNoStaleApprovedRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "ADV-THRESHOLD tenant")
+	entityID := seedEntity(t, super, tenantID, "ADV-THRESHOLD entity")
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "ADV-THRESHOLD policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	condID := seedApprovalStepInLaneFor(t, super, tenantID, versionID, approvalStepInLaneSpecFor{
+		Ord: 0, Kind: "condition", CondOp: strPtr(">"), CondAmount: strPtr("500000000.00"),
+	})
+	seedApprovalStepInLaneFor(t, super, tenantID, versionID, approvalStepInLaneSpecFor{
+		ParentStepID: &condID, Branch: strPtr("then"), Ord: 0,
+		Kind: "approval", WorkflowRoleKey: strPtr("finance-lead"),
+	})
+	// Deliberately NO "else" branch: below the threshold, the condition's else lane
+	// is empty, so materialise emits zero steps -- the zero-step 'approved' shape
+	// this test's precondition needs.
+	activateApprovalPolicyVersionFor(t, super, versionID)
+
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-THRESHOLD", Total: strPtr("100000000.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	fp1 := contentFingerprint(inv, inv.LineItems)
+	ruleSetVersionID1 := seedRuleSetVersionID(t, super)
+	validated, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID1, fp1)
+	if err != nil {
+		t.Fatalf("ApplyValidation (seed, below threshold): %v", err)
+	}
+	if validated.Status != StatusValidated {
+		t.Fatalf("ApplyValidation (seed): status = %q, want %q (precondition)", validated.Status, StatusValidated)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'approved'`, inv.ID); n != 1 {
+		t.Fatalf("precondition: approved approval_runs rows for invoice = %d, want exactly 1 (a below-threshold arm must close zero-step, approved)", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_run_steps WHERE tenant_id = $1`, tenantID); n != 0 {
+		t.Fatalf("precondition: approval_run_steps rows = %d, want 0 (zero-step arm)", n)
+	}
+
+	newTotal := "750000000.00"
+	edited, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{Total: &newTotal}})
+	if err != nil {
+		t.Fatalf("Edit (raise total above the threshold): want success, got: %v", err)
+	}
+	if edited.Status != StatusDraft {
+		t.Fatalf("Edit: status = %q, want %q (demoted)", edited.Status, StatusDraft)
+	}
+
+	freshFP := contentFingerprint(edited, edited.LineItems)
+	ruleSetVersionID2 := seedRuleSetVersionID(t, super)
+	revalidated, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID2, freshFP)
+	if err != nil {
+		t.Fatalf("ApplyValidation (re-validate above the threshold): want success, got: %v "+
+			"(want the stale zero-step approved run cancelled before the fresh open run arms)", err)
+	}
+	if revalidated.Status != StatusValidated {
+		t.Errorf("ApplyValidation (re-validate): status = %q, want %q", revalidated.Status, StatusValidated)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state <> 'cancelled'`, inv.ID); n != 1 {
+		t.Errorf("non-cancelled approval_runs rows for invoice = %d, want exactly 1", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'approved'`, inv.ID); n != 0 {
+		t.Errorf("approved approval_runs rows for invoice after re-validating above threshold = %d, want 0 -- "+
+			"a stale approved run beside a fresh open one is exactly the gate bypass D37 closes", n)
+	}
+
+	var liveRunID, liveState string
+	if err := super.QueryRow(ctx,
+		`SELECT id, state FROM approval_runs WHERE invoice_id = $1 AND state <> 'cancelled'`, inv.ID,
+	).Scan(&liveRunID, &liveState); err != nil {
+		t.Fatalf("read the live run: %v", err)
+	}
+	if liveState != "open" {
+		t.Errorf("live run state = %q, want %q", liveState, "open")
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_run_steps WHERE run_id = $1 AND state = 'pending'`, liveRunID); n != 1 {
+		t.Errorf("pending approval_run_steps rows for the live run = %d, want exactly 1", n)
+	}
+}

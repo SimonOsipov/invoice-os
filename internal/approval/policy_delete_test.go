@@ -113,7 +113,7 @@ func TestDeletePolicy_IsSoftAndKeepsVersions(t *testing.T) {
 	sealedV1 := seedPublishedVersion(t, super, tenantID, policyID, 1, 1)
 	openV2 := seedVersionWithSteps(t, super, tenantID, policyID, 2, 2)
 
-	if _, err := NewStore(app).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestDeletePolicy_DeactivatesTheActiveVersion(t *testing.T) {
 		t.Fatalf("fixture active version ids = %v, want exactly [%s]", ids, versionID)
 	}
 
-	if _, err := NewStore(app).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func TestDeletePolicy_SecondDeleteIsNotFoundAndDoesNotRestamp(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 delete-twice")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedPublishedVersion(t, super, tenantID, policyID, 1, 0)
@@ -219,7 +219,7 @@ func TestDeletePolicy_UnknownAndMalformedAreNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 delete-not-found")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	for _, id := range []string{"not-a-uuid", "", uuid.NewString()} {
 		_, err := store.DeletePolicy(c, id)
@@ -261,7 +261,7 @@ func TestDeletePolicy_UnpublishedPolicyKeepsItsDraft(t *testing.T) {
 	beforeVersion := versionSnapshot(t, super, versionID)
 	beforeStep := stepSnapshot(t, super, stepID)
 
-	if _, err := NewStore(app).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("DeletePolicy of a never-published policy: %v — the deactivation matching 0 rows is legal", err)
 	}
 
@@ -293,7 +293,7 @@ func TestDeletePolicy_AnswersEmptyCollections(t *testing.T) {
 	seedPublishedVersion(t, super, tenantID, policyID, 1, 2)
 	seedVersionWithSteps(t, super, tenantID, policyID, 2, 1)
 
-	got, err := NewStore(app).DeletePolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestDeletePolicy_AuditsInSameTx(t *testing.T) {
 	sealApprovalPolicyVersion(t, super, seedVersionWithSteps(t, super, tenantID, policyID, 1, 0))
 	activeVersion := seedPublishedVersion(t, super, tenantID, policyID, 2, 0)
 
-	if _, err := NewStore(app).DeletePolicy(c, policyID); err != nil {
+	if _, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID); err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
 
@@ -394,7 +394,7 @@ func TestDeletePolicy_AuditsInSameTx(t *testing.T) {
 // refusal would prove nothing about tenancy.
 func TestDeletePolicy_CrossTenantIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	tenantA := policyTenant(t, super, "APPR-05 delete-cross-tenant A")
 	cA, _ := activeAdmin(t, super, tenantA)
@@ -446,7 +446,7 @@ func TestDeletePolicy_ReturnsAnInertDraftShape(t *testing.T) {
 	sealApprovalPolicyVersion(t, super, seedVersionWithSteps(t, super, tenantID, policyID, 2, 0))
 	seedPublishedVersion(t, super, tenantID, policyID, 3, 1)
 
-	got, err := NewStore(app).DeletePolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("DeletePolicy: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestDeletePolicy_ZeroVersionPolicyAuditsVersionZero(t *testing.T) {
 		t.Fatalf("fixture has %d version rows, want 0", n)
 	}
 
-	got, err := NewStore(app).DeletePolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).DeletePolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("DeletePolicy of a version-less policy: %v, want success", err)
 	}
@@ -613,7 +613,7 @@ func TestDeletePolicy_ConcurrentPublishLosesAsNotFound(t *testing.T) {
 	ctx := context.Background()
 	tenantID := policyTenant(t, super, "APPR-05 delete-races-publish")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	versionID := seedApprovalDraft(t, super, tenantID, policyID)

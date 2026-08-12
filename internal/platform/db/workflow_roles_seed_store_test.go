@@ -64,7 +64,7 @@ func TestSeedFiveHolderStatesReachableThroughTheRealStore(t *testing.T) {
 		t.Fatalf("connect app pool: %v", err)
 	}
 	defer appPool.Close()
-	store := approval.NewStore(appPool)
+	store := approval.NewStore(appPool, nil) // ListRoles only — the fingerprinter is the publish sweep's
 
 	holdersOf := func(tenantID, roleKey string) []holderMembership {
 		t.Helper()

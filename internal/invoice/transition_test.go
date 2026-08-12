@@ -1184,3 +1184,141 @@ func TestLegalTransitionsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// --- task-483 (APPR-06-07, Mode A): Store.Transition cancels the live run too -----
+
+// TestTransition_DemotionToDraftCancelsOpenRun (AC-9, AC-10): a validated invoice with
+// one open run --> Store.Transition(ctx, id, StatusDraft) (the POST
+// /v1/invoices/{id}/transitions path TransitionHandler lets through, handlers.go:695-698)
+// --> invoice is draft, run cancelled with closed_by = the caller's subject, exactly
+// one cancellation audit row. Fails today: the run stays open.
+//
+// Two in-test controls, run in the SAME test so a widened hook cannot pass silently:
+//   - validated -> queued (a DIFFERENT legal edge out of validated) leaves the run
+//     OPEN and writes no cancellation row -- D20/D30's boundary (AC-10): cancelling on
+//     queued too would destroy the drift D20's approval_run_orphaned signal needs
+//     during the ungated window.
+//   - rejected -> draft (the second demotion-to-draft edge) IS cancelled, same as
+//     validated -> draft.
+func TestTransition_DemotionToDraftCancelsOpenRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	t.Run("validated -> draft cancels the open run", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "TRANS-CANCEL-01 tenant")
+		entityID := seedEntity(t, super, tenantID, "TRANS-CANCEL-01 entity")
+		subject := uuid.NewString()
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TRANS-CANCEL-01"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+			t.Fatalf("pre-hop Transition(-> validated): %v", err)
+		}
+
+		policyID := seedApprovalPolicyFor(t, super, tenantID, "TRANS-CANCEL-01 policy")
+		versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+		runID := seedApprovalRunFor(t, super, tenantID, inv.ID, versionID) // defaults to open
+
+		beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+		got, err := store.Transition(c, inv.ID, StatusDraft)
+		if err != nil {
+			t.Fatalf("Transition(validated -> draft) with an open run: %v (want nil)", err)
+		}
+		if got.Status != StatusDraft {
+			t.Errorf("Transition returned status = %q, want %q", got.Status, StatusDraft)
+		}
+
+		var state string
+		var closedBy *string
+		if err := super.QueryRow(ctx, `SELECT state, closed_by FROM approval_runs WHERE id = $1`, runID).Scan(&state, &closedBy); err != nil {
+			t.Fatalf("read back the run: %v", err)
+		}
+		if state != "cancelled" {
+			t.Errorf("run state after Transition(-> draft) = %q, want %q", state, "cancelled")
+		}
+		if closedBy == nil || *closedBy != subject {
+			t.Errorf("run closed_by after Transition(-> draft) = %v, want %q (the caller's subject)", closedBy, subject)
+		}
+		if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit+1 {
+			t.Errorf("invoice.approval_cancelled audit rows = %d, want %d (exactly one new row)", n, beforeCancelledAudit+1)
+		}
+	})
+
+	t.Run("validated -> queued leaves the open run untouched (D20/D30 boundary)", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "TRANS-CANCEL-02 tenant")
+		entityID := seedEntity(t, super, tenantID, "TRANS-CANCEL-02 entity")
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TRANS-CANCEL-02"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+			t.Fatalf("pre-hop Transition(-> validated): %v", err)
+		}
+
+		policyID := seedApprovalPolicyFor(t, super, tenantID, "TRANS-CANCEL-02 policy")
+		versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+		runID := seedApprovalRunFor(t, super, tenantID, inv.ID, versionID)
+
+		beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+		got, err := store.Transition(c, inv.ID, StatusQueued)
+		if err != nil {
+			t.Fatalf("Transition(validated -> queued): %v (want nil)", err)
+		}
+		if got.Status != StatusQueued {
+			t.Errorf("Transition returned status = %q, want %q", got.Status, StatusQueued)
+		}
+
+		var state string
+		if err := super.QueryRow(ctx, `SELECT state FROM approval_runs WHERE id = $1`, runID).Scan(&state); err != nil {
+			t.Fatalf("read back the run: %v", err)
+		}
+		if state != "open" {
+			t.Errorf("run state after Transition(-> queued) = %q, want unchanged %q (only -> draft may cancel)", state, "open")
+		}
+		if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit {
+			t.Errorf("invoice.approval_cancelled audit rows = %d, want unchanged %d", n, beforeCancelledAudit)
+		}
+	})
+
+	t.Run("rejected -> draft cancels the open run too", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "TRANS-CANCEL-03 tenant")
+		entityID := seedEntity(t, super, tenantID, "TRANS-CANCEL-03 entity")
+		subject := uuid.NewString()
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+		invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TRANS-CANCEL-03", StatusRejected)
+
+		policyID := seedApprovalPolicyFor(t, super, tenantID, "TRANS-CANCEL-03 policy")
+		versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+		runID := seedApprovalRunFor(t, super, tenantID, invID, versionID)
+
+		beforeCancelledAudit := auditCount(t, app, tenantID, "invoice.approval_cancelled")
+
+		got, err := store.Transition(c, invID, StatusDraft)
+		if err != nil {
+			t.Fatalf("Transition(rejected -> draft) with an open run: %v (want nil)", err)
+		}
+		if got.Status != StatusDraft {
+			t.Errorf("Transition returned status = %q, want %q", got.Status, StatusDraft)
+		}
+
+		var state string
+		if err := super.QueryRow(ctx, `SELECT state FROM approval_runs WHERE id = $1`, runID).Scan(&state); err != nil {
+			t.Fatalf("read back the run: %v", err)
+		}
+		if state != "cancelled" {
+			t.Errorf("run state after Transition(rejected -> draft) = %q, want %q", state, "cancelled")
+		}
+		if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit+1 {
+			t.Errorf("invoice.approval_cancelled audit rows = %d, want %d (exactly one new row)", n, beforeCancelledAudit+1)
+		}
+	})
+}

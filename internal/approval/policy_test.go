@@ -558,6 +558,8 @@ func TestPolicy_StatusForErrTable(t *testing.T) {
 		{ErrPolicyStepRole, http.StatusConflict, "an approval step names a workflow role that no longer exists"},
 		{ErrPolicyEmptyBranches, http.StatusConflict, "a condition must have at least one step in one of its two lanes"},
 		{ErrPolicyNothingToPublish, http.StatusConflict, "this policy has no unpublished changes"},
+		// AC-3 (task-484): the publish sweep's cap refusal.
+		{ErrSweepCapExceeded, http.StatusConflict, "validated backlog exceeds the publish sweep cap — see docs/approvals.md"},
 		// The concurrent-publish loser: 23505 on approval_policy_versions_one_active maps
 		// here. Policy wording, not statusForErr's role-domain string — the two mappers
 		// share the sentinel and nothing else.

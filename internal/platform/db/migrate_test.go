@@ -44,7 +44,9 @@ import (
 //
 // Order is load-bearing: submission_jobs -> invoices and app_exchange ->
 // submission_jobs are both ON DELETE RESTRICT, and db.Seed now writes rows to
-// both (task-323), so clearing invoices first fails 23001.
+// both (task-323), so clearing invoices first fails 23001. approval_runs ->
+// invoices is RESTRICT too, and every validated invoice under an active policy
+// carries one; its steps/decisions follow via ON DELETE CASCADE.
 func resetInvoicesBeforeFullSchemaReset(t *testing.T, ctx context.Context) {
 	t.Helper()
 	superDSN := os.Getenv("DATABASE_SUPERUSER_URL")
@@ -57,6 +59,7 @@ func resetInvoicesBeforeFullSchemaReset(t *testing.T, ctx context.Context) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	for _, stmt := range []string{
+		`DELETE FROM approval_runs`,
 		`DELETE FROM app_exchange`,
 		`DELETE FROM submission_jobs`,
 		`DELETE FROM invoices`,

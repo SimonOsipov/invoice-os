@@ -11,14 +11,21 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"io/fs"
+	"os"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 // failIfUndefinedApprovalRun turns the pre-migration failure into an explicit message
@@ -67,6 +74,26 @@ func seedApprovalRunStep(t *testing.T, tenantID, runID string, ord int, kind str
 	}
 	if err != nil {
 		t.Fatalf("seed approval_run_steps: %v", err)
+	}
+	cleanup = func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_run_steps WHERE id = $1`, id)
+	}
+	return
+}
+
+// seedApprovalNotifyRunStep stages one kind='notify' step carrying both notify columns.
+func seedApprovalNotifyRunStep(t *testing.T, tenantID, runID, target, channel string) (id string, cleanup func()) {
+	t.Helper()
+	err := h.super.QueryRow(context.Background(),
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, notify_target, notify_channel)
+		 VALUES ($1, $2, 0, 'notify', $3, $4) RETURNING id`,
+		tenantID, runID, target, channel,
+	).Scan(&id)
+	if failIfUndefinedApprovalRun(t, "seed approval_run_steps (notify)", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("seed approval_run_steps (notify): %v", err)
 	}
 	cleanup = func() {
 		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_run_steps WHERE id = $1`, id)
@@ -513,6 +540,116 @@ func TestRLS_ApprovalRunStepsCrossTenantRunRefused(t *testing.T) {
 	}
 	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_run_steps WHERE run_id = $1`, runB); n != 0 {
 		t.Errorf("step rows after the refused INSERT = %d, want 0", n)
+	}
+}
+
+// APPR-06-01: the notify columns are ordinary row-level data, not exempt from the
+// table's existing tenant_isolation predicate just because they were added after the
+// policy was created — A cannot see B's notify_target/notify_channel by row id.
+func TestRLS_ApprovalRunStepsNotifyColumnsCrossTenantSelectRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "RN-NC1 A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "RN-NC1-A")
+	defer cleanupInvoiceA()
+	policyA, cleanupPolicyA := seedApprovalPolicy(t, h.tenantA, apName("rn-nc1-policy-a"))
+	defer cleanupPolicyA()
+	versionA, cleanupVersionA := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersionA()
+	runA, cleanupRunA := seedApprovalRun(t, h.tenantA, invoiceA, versionA)
+	defer cleanupRunA()
+	stepA, cleanupStepA := seedApprovalNotifyRunStep(t, h.tenantA, runA, "A Tax Team", "Email")
+	defer cleanupStepA()
+
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "RN-NC1 B Corp")
+	defer cleanupEntityB()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "RN-NC1-B")
+	defer cleanupInvoiceB()
+	policyB, cleanupPolicyB := seedApprovalPolicy(t, h.tenantB, apName("rn-nc1-policy-b"))
+	defer cleanupPolicyB()
+	versionB, cleanupVersionB := seedApprovalPolicyVersion(t, h.tenantB, policyB)
+	defer cleanupVersionB()
+	runB, cleanupRunB := seedApprovalRun(t, h.tenantB, invoiceB, versionB)
+	defer cleanupRunB()
+	stepB, cleanupStepB := seedApprovalNotifyRunStep(t, h.tenantB, runB, "B Tax Team", "Slack")
+	defer cleanupStepB()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var target, channel string
+		if e := tx.QueryRow(ctx,
+			`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, stepA,
+		).Scan(&target, &channel); e != nil {
+			return e
+		}
+		if target != "A Tax Team" || channel != "Email" {
+			t.Errorf("A's own notify columns = (%q, %q), want (%q, %q)", target, channel, "A Tax Team", "Email")
+		}
+
+		if n := mustCount(t, tx, `SELECT count(*) FROM approval_run_steps WHERE id = $1`, stepB); n != 0 {
+			t.Errorf("B's notify step visible to A by id = %d, want 0", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}
+
+// APPR-06-01: a cross-tenant write naming another tenant's notify columns is refused two
+// ways — an INSERT with tenant_id set to B hits the WITH CHECK before the run_id FK is
+// even reached (RN-03's shape), and an UPDATE targeting B's step from A's tx matches zero
+// rows because the row is invisible (IB-RLS-03's shape, import_batches_rls_test.go).
+func TestRLS_ApprovalRunStepsNotifyColumnsCrossTenantWriteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "RN-NC2 B Corp")
+	defer cleanupEntityB()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "RN-NC2-B")
+	defer cleanupInvoiceB()
+	policyB, cleanupPolicyB := seedApprovalPolicy(t, h.tenantB, apName("rn-nc2-policy-b"))
+	defer cleanupPolicyB()
+	versionB, cleanupVersionB := seedApprovalPolicyVersion(t, h.tenantB, policyB)
+	defer cleanupVersionB()
+	runB, cleanupRunB := seedApprovalRun(t, h.tenantB, invoiceB, versionB)
+	defer cleanupRunB()
+	stepB, cleanupStepB := seedApprovalNotifyRunStep(t, h.tenantB, runB, "B Tax Team", "Slack")
+	defer cleanupStepB()
+
+	insertErr := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, notify_target, notify_channel)
+			 VALUES ($1, $2, 0, 'notify', $3, $4)`,
+			h.tenantB, runB, "hijacked target", "hijacked channel")
+		return e
+	})
+	assertRLSViolation(t, insertErr)
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_run_steps WHERE notify_target = $1`, "hijacked target"); n != 0 {
+		t.Errorf("rows after the refused cross-tenant notify INSERT = %d, want 0", n)
+	}
+
+	updateErr := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE approval_run_steps SET notify_target = 'overwritten' WHERE id = $1`, stepB)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 0 {
+			t.Errorf("cross-tenant notify_target UPDATE affected %d rows, want 0", ct.RowsAffected())
+		}
+		return nil
+	})
+	if updateErr != nil {
+		t.Fatalf("WithinTenantTx (UPDATE): %v", updateErr)
+	}
+
+	var got string
+	if e := h.super.QueryRow(ctx, `SELECT notify_target FROM approval_run_steps WHERE id = $1`, stepB).Scan(&got); e != nil {
+		t.Fatalf("read back notify_target as superuser: %v", e)
+	}
+	if got != "B Tax Team" {
+		t.Errorf("notify_target after the refused cross-tenant UPDATE = %q, want unchanged %q", got, "B Tax Team")
 	}
 }
 
@@ -967,5 +1104,107 @@ func TestRLS_ApprovalRunStepsDeleteCascadesToDecisions(t *testing.T) {
 	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionID); n != 0 {
 		t.Errorf("decision rows after the run step delete = %d, want 0 — approval_decisions_tenant_run_step_fk "+
 			"is not cascading", n)
+	}
+}
+
+// approvalRunStepsNotifyMigrationVersion is the notify-columns migration's goose
+// version id, taken from the embedded filename rather than hardcoded.
+func approvalRunStepsNotifyMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	const glob = "*_approval_run_steps_notify.sql"
+	matches, err := fs.Glob(migrations.FS, glob)
+	if err != nil {
+		t.Fatalf("glob %s in migrations.FS: %v", glob, err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("migrations.FS holds %d files matching %s (%v), want exactly 1", len(matches), glob, matches)
+	}
+	v, err := strconv.ParseInt(strings.SplitN(matches[0], "_", 2)[0], 10, 64)
+	if err != nil {
+		t.Fatalf("parse goose version out of %q: %v", matches[0], err)
+	}
+	return v
+}
+
+// approvalRunStepsColumns reads approval_run_steps' current column set, ordinal-position
+// order.
+func approvalRunStepsColumns(t *testing.T, ctx context.Context) []string {
+	t.Helper()
+	rows, err := h.super.Query(ctx,
+		`SELECT column_name FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = 'approval_run_steps'
+		 ORDER BY ordinal_position`)
+	if err != nil {
+		t.Fatalf("query approval_run_steps columns: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column name: %v", err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate approval_run_steps columns: %v", err)
+	}
+	return out
+}
+
+// AC-2, AC-4: the notify-columns migration's own Down drops EXACTLY notify_target and
+// notify_channel, and re-applying Up restores them. Driven through goose (ApplyVersion
+// on the real provider, reading migrations.FS) rather than a hand-copied ALTER TABLE, so
+// this proves the shipped Down body itself. CI's migrate-reset + migrate-up round-trip
+// cannot catch an over-broad Down (e.g. one that also dropped sla_hours): the re-up
+// rebuilds the whole table from CREATE TABLE, so the extra drop would never surface —
+// this is the only oracle for "drops both columns and nothing else". Transcribed from
+// TestRLS_MembershipsDownDropsExactlyThreeColumns (memberships_rls_test.go).
+func TestRLS_ApprovalRunStepsNotifyDownDropsExactlyTwoColumns(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	version := approvalRunStepsNotifyMigrationVersion(t)
+
+	migDSN := os.Getenv("DATABASE_MIGRATION_URL")
+	sqlDB, err := sql.Open("pgx", migDSN)
+	if err != nil {
+		t.Fatalf("open migrator connection: %v", err)
+	}
+	// Registered before the restore cleanup below so LIFO runs restore first, close
+	// last — a plain `defer` here would close the connection before t.Cleanup runs.
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("build migration provider: %v", err)
+	}
+
+	// Restore the column set regardless of how the assertions below turn out — later
+	// tests in this package depend on notify_target/notify_channel existing.
+	t.Cleanup(func() {
+		if _, err := provider.Up(context.Background()); err != nil {
+			t.Errorf("restore approval_run_steps schema after the Down/Up round-trip: %v", err)
+		}
+	})
+
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back the notify-columns migration: %v", err)
+	}
+
+	wantDown := []string{
+		"id", "tenant_id", "run_id", "ord", "kind", "workflow_role_key",
+		"sla_hours", "due_at", "state", "satisfied_at", "satisfied_by", "created_at",
+	}
+	if got := approvalRunStepsColumns(t, ctx); !reflect.DeepEqual(got, wantDown) {
+		t.Fatalf("columns after Down = %v, want %v", got, wantDown)
+	}
+
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("re-apply the notify-columns migration: %v", err)
+	}
+
+	wantUp := append(append([]string{}, wantDown...), "notify_target", "notify_channel")
+	if got := approvalRunStepsColumns(t, ctx); !reflect.DeepEqual(got, wantUp) {
+		t.Fatalf("columns after re-applying Up = %v, want %v", got, wantUp)
 	}
 }

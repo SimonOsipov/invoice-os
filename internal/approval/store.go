@@ -15,17 +15,32 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
+// Fingerprinter hashes one invoice's content inside the caller's transaction. It is a
+// func type rather than a direct call because contentFingerprint is unexported in
+// internal/invoice and that package imports this one — the edge must not reverse
+// (TestApproval_DoesNotImportInvoicePackage). cmd/invoice/main.go is the only place both
+// packages meet, so that is where invoice.FingerprintTx is bound.
+//
+// The caller holds the invoice row lock; implementations must not take one.
+type Fingerprinter func(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error)
+
 // Store reads and writes workflow roles as the invoice_app role. It holds the
 // app-role pool (DATABASE_URL); every call runs one db.WithinRequestTenantTx, so
 // the app.current_tenant GUC is set for the transaction and RLS is the only tenant
 // filter — no statement below carries a tenant_id predicate.
 type Store struct {
-	pool *pgxpool.Pool
+	pool          *pgxpool.Pool
+	fingerprinter Fingerprinter
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's lifecycle.
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+//
+// fingerprinter is a required parameter, not an option: every sibling store here is
+// NewStore(pool) and this repo has no functional-options precedent (D31). Only
+// PublishPolicy's sweep reads it, so a store that never publishes may pass nil — the
+// sweep then fails closed rather than writing an empty fingerprint.
+func NewStore(pool *pgxpool.Pool, fingerprinter Fingerprinter) *Store {
+	return &Store{pool: pool, fingerprinter: fingerprinter}
 }
 
 // The handler seam 06 wires HTTP to. Declared beside the methods that satisfy them

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -365,6 +366,30 @@ func hydrateLinesTx(ctx context.Context, tx pgx.Tx, invoiceID string) ([]LineIte
 		return nil, err
 	}
 	return out, nil
+}
+
+// FingerprintTx hashes one invoice's stored content inside the caller's transaction —
+// the same three steps ApplyValidation's staleness re-check takes (scanInvoice over
+// invoiceColumns, hydrateLinesTx, contentFingerprint), read through one MVCC snapshot.
+//
+// Exported for exactly one consumer: approval.Fingerprinter, which internal/approval's
+// publish sweep is built with at cmd/invoice/main.go. contentFingerprint stays unexported
+// so that edge cannot reverse (TestApproval_DoesNotImportInvoicePackage).
+//
+// Takes NO row lock: the sweep already holds it, matching ApplyValidation's shape where
+// the FOR UPDATE is step 1 of the caller's closure.
+func FingerprintTx(ctx context.Context, tx pgx.Tx, id string) (string, error) {
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
+	), &inv); err != nil {
+		return "", err
+	}
+	lines, err := hydrateLinesTx(ctx, tx, id)
+	if err != nil {
+		return "", err
+	}
+	return contentFingerprint(inv, lines), nil
 }
 
 // replaceLinesTx replaces an invoice's WHOLE line set inside the caller's tx:
@@ -1275,6 +1300,12 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 			if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
 				return err
 			}
+			// 8b. no run outlives the promotion it belonged to (APPR-06-07, D37).
+			// Hooked BELOW step 6's no-op return, so an unchanged edit cancels
+			// nothing (TestEdit_NoOpEditCancelsNothing).
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, callerID.Subject); err != nil {
+				return err
+			}
 		}
 
 		// 9. re-attach the post-write lines LAST: both updateContentTx and
@@ -1366,7 +1397,9 @@ func canEdit(s Status) bool {
 // property. TestCanRevalidate_AgreesWithThePromotionEdge is the tripwire: it
 // goes red the day such an edge is added, forcing a human decision on whether
 // the gate widens -- so it must be satisfied by this literal being right, never
-// by weakening the test.
+// by weakening the test. Draft-only is also what keeps ApplyValidation's step 5b
+// from double-arming: widening this now requires cancelling the live run first,
+// or the widened path 23505s on approval_runs_one_open.
 func canRevalidate(s Status) bool { return s == StatusDraft }
 
 // canSubmit is a deliberate literal, not canTransition(s, StatusQueued):
@@ -1472,8 +1505,19 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		}
 
 		var err error
-		inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx))
-		return err
+		if inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx)); err != nil {
+			return err
+		}
+
+		// -> draft ONLY (APPR-06-07, D30). validated -> queued deliberately leaves the
+		// run alone: cancelling there would erase the drift APPR-06-09's
+		// approval_run_orphaned detector reads during the ungated window.
+		if target == StatusDraft {
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, actorFromContext(ctx).Subject); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return Invoice{}, err
@@ -1655,6 +1699,7 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 //     is exactly what makes the verdict auditable).
 //  5. promote via transitionTx iff nothing blocks — the same tx, hence the
 //     extraction.
+//     5b. arm the approval run on that promotion (approval.ArmTx), same tx.
 //  6. audit.Record("invoice.validated") — every gate outcome writes it; a
 //     promotion additionally wrote "invoice.transitioned" in step 5.
 //
@@ -1743,6 +1788,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 		if !blocked {
 			var err error
 			if inv, err = transitionTx(ctx, tx, id, StatusDraft, StatusValidated, actorFromContext(ctx)); err != nil {
+				return err
+			}
+			// 5b. Armed inside the one !blocked gate so a second gate cannot drift.
+			// No active policy short-circuits in ArmTx; a 23505 here means a live run
+			// survived a demotion (APPR-06-07 cancels), so it is not swallowed.
+			if _, err := approval.ArmTx(ctx, tx, callerID.TenantID, id, evaluatedFingerprint, callerID.Subject); err != nil {
 				return err
 			}
 		}

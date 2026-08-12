@@ -411,7 +411,10 @@ func TestV4_DownRestoresV3Active(t *testing.T) {
 	// db/seed.dev.sql seeds demo invoices that stamp the active version via
 	// rule_set_version_id, whose FK carries no ON DELETE clause -- clear them so the
 	// Down's DELETE below doesn't 23503 (harmless: this tx is always rolled back).
+	// Delete order as in TestRuleSetV2_DownRestoresV1: approval_runs -> app_exchange ->
+	// submission_jobs -> invoices, all ON DELETE RESTRICT.
 	for _, stmt := range []string{
+		`DELETE FROM approval_runs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM app_exchange WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM submission_jobs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
 		`DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`,

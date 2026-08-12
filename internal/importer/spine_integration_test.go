@@ -245,6 +245,10 @@ func TestSpineIntegration(t *testing.T) {
 	})
 
 	// SPINE-04: exactly 6 audit rows per invoice; per-event counts.
+	//
+	// These exact counts (and SPINE-07's 6, SPINE-08's 3) presuppose a tenant with
+	// no active approval policy: invoice.approval_armed populates the same
+	// payload->>'id' they correlate on, so a stray arm breaks both count and set.
 	t.Run("SPINE-04_auditLog6RowsPerEvent", func(t *testing.T) {
 		for _, s := range samples {
 			if len(s.audit) != 6 {

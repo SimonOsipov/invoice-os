@@ -724,3 +724,223 @@ func TestApprovalPolicy_DeletedAtIsNullableWithNoDefault(t *testing.T) {
 		t.Error("a freshly created policy already carries a deleted_at, want NULL")
 	}
 }
+
+// --- run-step notify columns (APPR-06-01) -----------------------------------
+
+// TestApprovalRunSteps_NotifyColumnsStoreTargetAndChannel (AC-1): a notify-kind run
+// step round-trips its notify_target and notify_channel verbatim. RED today at the
+// INSERT: 42703 (notify_target does not exist).
+func TestApprovalRunSteps_NotifyColumnsStoreTargetAndChannel(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-06 notify-columns store")
+	entityID := seedBusinessEntity(t, super, tenantID, "Notify-columns Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "notify-columns-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Notify-columns policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	var stepID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, state, notify_target, notify_channel)
+		 VALUES ($1, $2, 0, 'notify', 'skipped', $3, $4) RETURNING id`,
+		tenantID, runID, "Tax Team", "In-app").Scan(&stepID); err != nil {
+		t.Fatalf("insert notify run step: %v", err)
+	}
+
+	var target, channel string
+	if err := super.QueryRow(ctx,
+		`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, stepID,
+	).Scan(&target, &channel); err != nil {
+		t.Fatalf("read back notify_target/notify_channel: %v", err)
+	}
+	if target != "Tax Team" {
+		t.Errorf("notify_target = %q, want %q", target, "Tax Team")
+	}
+	if channel != "In-app" {
+		t.Errorf("notify_channel = %q, want %q", channel, "In-app")
+	}
+}
+
+// TestApprovalRunSteps_NotifyColumnsNullableForNonNotifyKinds (AC-1): an approval-kind
+// step carries neither column. Proves nullable-with-no-default — a NOT NULL would
+// refuse every non-notify INSERT the arming path makes; a DEFAULT would mask this. RED
+// today at the read-back: 42703 (the INSERT itself already passes today).
+func TestApprovalRunSteps_NotifyColumnsNullableForNonNotifyKinds(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-06 notify-columns nullable")
+	entityID := seedBusinessEntity(t, super, tenantID, "Notify-columns nullable Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "notify-columns-nullable-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Notify-columns nullable policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	var stepID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind) VALUES ($1, $2, 0, 'approval') RETURNING id`,
+		tenantID, runID).Scan(&stepID); err != nil {
+		t.Fatalf("insert approval-kind run step: %v", err)
+	}
+
+	var target, channel *string
+	if err := super.QueryRow(ctx,
+		`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, stepID,
+	).Scan(&target, &channel); err != nil {
+		t.Fatalf("read back notify_target/notify_channel: %v", err)
+	}
+	if target != nil {
+		t.Errorf("notify_target = %q, want NULL", *target)
+	}
+	if channel != nil {
+		t.Errorf("notify_channel = %q, want NULL", *channel)
+	}
+}
+
+// TestApprovalRunSteps_NotifyColumnsWritableByAppRole (AC-3): the table-level grant to
+// invoice_app already covers columns added after it — no per-column ACL exists that a
+// new column could miss — while invoice_tenant_reader holds no grant on this table at
+// all. Transcribes TestApprovalPolicy_DeletedAtColumnExists, which answered the
+// identical question for approval_policies.deleted_at. RED today: 42703.
+func TestApprovalRunSteps_NotifyColumnsWritableByAppRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-06 notify-columns app-role")
+	entityID := seedBusinessEntity(t, super, tenantID, "Notify-columns app-role Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "notify-columns-app-role-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Notify-columns app-role policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	var stepID string
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, state, notify_target, notify_channel)
+			 VALUES ($1, $2, 0, 'notify', 'skipped', $3, $4) RETURNING id`,
+			tenantID, runID, "Tax Team", "In-app").Scan(&stepID)
+	}); err != nil {
+		t.Fatalf("insert notify run step as invoice_app: %v", err)
+	}
+
+	var target, channel string
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, stepID,
+		).Scan(&target, &channel)
+	}); err != nil {
+		t.Fatalf("read back notify columns as invoice_app: %v", err)
+	}
+	if target != "Tax Team" {
+		t.Errorf("notify_target = %q, want %q", target, "Tax Team")
+	}
+	if channel != "In-app" {
+		t.Errorf("notify_channel = %q, want %q", channel, "In-app")
+	}
+
+	// has_column_privilege is the honest probe: grants on this table are table-level
+	// with every pg_attribute.attacl NULL, so no per-column ACL could diverge from it.
+	for _, c := range []struct {
+		role, priv, col string
+		want            bool
+	}{
+		{"invoice_app", "INSERT", "notify_target", true},
+		{"invoice_app", "UPDATE", "notify_channel", true},
+		{"invoice_app", "SELECT", "notify_target", true},
+		{"invoice_tenant_reader", "SELECT", "notify_target", false},
+	} {
+		var got bool
+		if err := super.QueryRow(ctx,
+			`SELECT has_column_privilege($1, 'approval_run_steps', $2, $3)`, c.role, c.col, c.priv,
+		).Scan(&got); err != nil {
+			t.Fatalf("has_column_privilege(%s, approval_run_steps.%s, %s): %v", c.role, c.col, c.priv, err)
+		}
+		if got != c.want {
+			t.Errorf("has_column_privilege(%s, approval_run_steps.%s, %s) = %v, want %v",
+				c.role, c.col, c.priv, got, c.want)
+		}
+	}
+}
+
+// TestApprovalRunSteps_NotifyColumnsIndependentlySettable: no CHECK ties the two columns
+// together, so a notify step may legally carry one without the other. Locks in that the
+// migration adds no "both or neither" constraint an arming engine would have to satisfy.
+func TestApprovalRunSteps_NotifyColumnsIndependentlySettable(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-06 notify-columns partial")
+	entityID := seedBusinessEntity(t, super, tenantID, "Notify-columns partial Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "notify-columns-partial-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Notify-columns partial policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	var targetOnlyID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, notify_target) VALUES ($1, $2, 0, 'notify', $3) RETURNING id`,
+		tenantID, runID, "Tax Team").Scan(&targetOnlyID); err != nil {
+		t.Fatalf("insert notify step with only notify_target: %v", err)
+	}
+	var target string
+	var channel *string
+	if err := super.QueryRow(ctx,
+		`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, targetOnlyID,
+	).Scan(&target, &channel); err != nil {
+		t.Fatalf("read back target-only row: %v", err)
+	}
+	if target != "Tax Team" || channel != nil {
+		t.Errorf("target-only row = (%q, %v), want (%q, nil)", target, channel, "Tax Team")
+	}
+
+	var channelOnlyID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, notify_channel) VALUES ($1, $2, 1, 'notify', $3) RETURNING id`,
+		tenantID, runID, "Email").Scan(&channelOnlyID); err != nil {
+		t.Fatalf("insert notify step with only notify_channel: %v", err)
+	}
+	var target2 *string
+	var channel2 string
+	if err := super.QueryRow(ctx,
+		`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, channelOnlyID,
+	).Scan(&target2, &channel2); err != nil {
+		t.Fatalf("read back channel-only row: %v", err)
+	}
+	if target2 != nil || channel2 != "Email" {
+		t.Errorf("channel-only row = (%v, %q), want (nil, %q)", target2, channel2, "Email")
+	}
+}
+
+// TestApprovalRunSteps_NotifyColumnsEmptyStringDistinctFromNull: Postgres text columns
+// never fold "" to NULL, and the migration adds no CHECK forbidding it — an empty string
+// round-trips as an empty string, not as NULL.
+func TestApprovalRunSteps_NotifyColumnsEmptyStringDistinctFromNull(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-06 notify-columns empty-string")
+	entityID := seedBusinessEntity(t, super, tenantID, "Notify-columns empty-string Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "notify-columns-empty-string-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Notify-columns empty-string policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	var stepID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, notify_target, notify_channel)
+		 VALUES ($1, $2, 0, 'notify', $3, NULL) RETURNING id`,
+		tenantID, runID, "").Scan(&stepID); err != nil {
+		t.Fatalf("insert notify step with empty-string target: %v", err)
+	}
+
+	var target *string
+	var channel *string
+	if err := super.QueryRow(ctx,
+		`SELECT notify_target, notify_channel FROM approval_run_steps WHERE id = $1`, stepID,
+	).Scan(&target, &channel); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if target == nil || *target != "" {
+		t.Errorf("notify_target = %v, want a non-nil empty string", target)
+	}
+	if channel != nil {
+		t.Errorf("notify_channel = %q, want NULL", *channel)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -68,6 +69,12 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 	// transitionTx writes the history row AND the invoice.transitioned audit
 	// row; its RETURNING re-reads the stamp above on the same tx.
 	if inv, err = transitionTx(ctx, tx, id, StatusValidated, StatusDraft, actor); err != nil {
+		return Invoice{}, err
+	}
+
+	// No run outlives the promotion it belonged to (APPR-06-07, D37). The sweep has no
+	// request identity, so the canceller is RevalidateActor's fixed literal.
+	if _, err := approval.CancelLiveRunTx(ctx, tx, id, actor.Subject); err != nil {
 		return Invoice{}, err
 	}
 

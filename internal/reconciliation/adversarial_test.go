@@ -5,6 +5,16 @@
 // job-specificity of the live-poll suppression clause, the re-arm→re-scan storm-guard closing
 // the loop end-to-end, the nil-SubmissionJobID payload path, and reconciliation.* audit rows
 // sharing audit_log's append-only guarantee.
+//
+// APPR-06-09 (task-485) adds four RED cases for the two approval-drift kinds, pinning the
+// edges the scan_test.go AC cases don't reach: only-signable-holders dedup, current-step
+// (lowest-ord pending) selection, dead/missing/NULL role-key handling, and closed-run
+// suppression. All four fail today because the shipped scanQuery has no arm for either kind:
+//
+//	AC-4   TestRLS_ScanApprovalBlockedUnstaffedCountsOnlySignableHolders
+//	AC-4   TestRLS_ScanApprovalBlockedUnstaffedUsesCurrentStepOnly
+//	AC-4   TestRLS_ScanApprovalBlockedUnstaffedRoleKeyEdges
+//	AC-3,4 TestRLS_ScanApprovalFindingsIgnoreClosedRuns
 package reconciliation
 
 import (
@@ -284,5 +294,275 @@ func TestRLS_ReconciliationAuditImmutable(t *testing.T) {
 	n := mustCount(t, h.super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1`, tenantID)
 	if n != 1 {
 		t.Errorf("audit_log rows after blocked mutations = %d, want 1 (unchanged)", n)
+	}
+}
+
+// AC-4: five runs in one tenant whose current pending approval step names a role held only
+// by, respectively: a suspended reviewer; an active preparer (wrong role — preparers cannot
+// sign); an invited (not yet active) admin; TWO suspended reviewers; an active admin. The
+// first four must flag, the fifth must not, and the two-suspended-holders case must yield
+// exactly ONE row — the NOT EXISTS shape (never a LEFT JOIN) must not fan out per holder.
+func TestRLS_ScanApprovalBlockedUnstaffedCountsOnlySignableHolders(t *testing.T) {
+	h := requireHarness(t)
+
+	tenantID, entityID, invoiceA, cleanupA := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupA()
+	invoiceB, cleanupB := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupB()
+	invoiceC, cleanupC := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupC()
+	invoiceD, cleanupD := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupD()
+	invoiceE, cleanupE := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupE()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	// A: role held only by a suspended reviewer.
+	roleA := rcSeedWorkflowRole(t, h, tenantID, "role-a-suspended-reviewer", false)
+	userA := rcSeedMember(t, h, tenantID, "reviewer", "suspended")
+	rcStaffRole(t, h, tenantID, roleA, userA, 0)
+	keyA := "role-a-suspended-reviewer"
+	runA := rcSeedRun(t, h, tenantID, invoiceA, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runA, 1, "approval", &keyA, "pending")
+
+	// B: role held only by an active preparer.
+	roleB := rcSeedWorkflowRole(t, h, tenantID, "role-b-active-preparer", false)
+	userB := rcSeedMember(t, h, tenantID, "preparer", "active")
+	rcStaffRole(t, h, tenantID, roleB, userB, 0)
+	keyB := "role-b-active-preparer"
+	runB := rcSeedRun(t, h, tenantID, invoiceB, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runB, 1, "approval", &keyB, "pending")
+
+	// C: role held only by an invited (not yet active) admin.
+	roleC := rcSeedWorkflowRole(t, h, tenantID, "role-c-invited-admin", false)
+	userC := rcSeedMember(t, h, tenantID, "admin", "invited")
+	rcStaffRole(t, h, tenantID, roleC, userC, 0)
+	keyC := "role-c-invited-admin"
+	runC := rcSeedRun(t, h, tenantID, invoiceC, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runC, 1, "approval", &keyC, "pending")
+
+	// D: role held by TWO suspended reviewers — must dedup to exactly one row.
+	roleD := rcSeedWorkflowRole(t, h, tenantID, "role-d-two-suspended", false)
+	userD1 := rcSeedMember(t, h, tenantID, "reviewer", "suspended")
+	rcStaffRole(t, h, tenantID, roleD, userD1, 0)
+	userD2 := rcSeedMember(t, h, tenantID, "reviewer", "suspended")
+	rcStaffRole(t, h, tenantID, roleD, userD2, 1)
+	keyD := "role-d-two-suspended"
+	runD := rcSeedRun(t, h, tenantID, invoiceD, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runD, 1, "approval", &keyD, "pending")
+
+	// E: role held by an active admin — signable, must NOT flag.
+	roleE := rcSeedWorkflowRole(t, h, tenantID, "role-e-active-admin", false)
+	userE := rcSeedMember(t, h, tenantID, "admin", "active")
+	rcStaffRole(t, h, tenantID, roleE, userE, 0)
+	keyE := "role-e-active-admin"
+	runE := rcSeedRun(t, h, tenantID, invoiceE, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runE, 1, "approval", &keyE, "pending")
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		invoiceID string
+		want      int
+	}{
+		{"suspended reviewer only", invoiceA, 1},
+		{"active preparer only", invoiceB, 1},
+		{"invited admin only", invoiceC, 1},
+		{"two suspended reviewers", invoiceD, 1},
+		{"active admin", invoiceE, 0},
+	} {
+		n := countForInvoice(got, tc.invoiceID)
+		if n != tc.want {
+			t.Errorf("%s: Scan findings for invoice %q = %d, want %d (%+v)", tc.name, tc.invoiceID, n, tc.want, got)
+			continue
+		}
+		if tc.want == 1 && !containsFindingFor(got, tc.invoiceID, rcApprovalBlockedUnstaffed) {
+			t.Errorf("%s: Scan findings for invoice %q = %+v, want approval_blocked_unstaffed", tc.name, tc.invoiceID, got)
+		}
+	}
+}
+
+// AC-4: only the lowest-ord PENDING approval step is "current". Run A: ord-1 SATISFIED
+// (unstaffed role key), ord-2 pending + staffed -> current is ord-2, staffed -> NOT flagged.
+// Run B: ord-1 pending + unstaffed, ord-2 pending + staffed -> current is ord-1, unstaffed ->
+// flagged. Both runs share one tenant, so the negative half is measured beside a live
+// positive.
+func TestRLS_ScanApprovalBlockedUnstaffedUsesCurrentStepOnly(t *testing.T) {
+	h := requireHarness(t)
+
+	tenantID, entityID, invoiceA, cleanupA := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupA()
+	invoiceB, cleanupB := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupB()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	staffedRole := rcSeedWorkflowRole(t, h, tenantID, "staffed-role", false)
+	staffedUser := rcSeedMember(t, h, tenantID, "admin", "active")
+	rcStaffRole(t, h, tenantID, staffedRole, staffedUser, 0)
+	staffedKey := "staffed-role"
+
+	rcSeedWorkflowRole(t, h, tenantID, "unstaffed-role", false) // zero holders, on purpose
+	unstaffedKey := "unstaffed-role"
+
+	// Run A: ord-1 satisfied (unstaffed role, but not the current step), ord-2 pending+staffed.
+	runA := rcSeedRun(t, h, tenantID, invoiceA, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runA, 1, "approval", &unstaffedKey, "satisfied")
+	rcSeedRunStep(t, h, tenantID, runA, 2, "approval", &staffedKey, "pending")
+
+	// Run B: ord-1 pending+unstaffed (the current step), ord-2 pending+staffed.
+	runB := rcSeedRun(t, h, tenantID, invoiceB, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runB, 1, "approval", &unstaffedKey, "pending")
+	rcSeedRunStep(t, h, tenantID, runB, 2, "approval", &staffedKey, "pending")
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	if n := countForInvoice(got, invoiceA); n != 0 {
+		t.Errorf("Scan findings for invoice A (satisfied ord-1 unstaffed, current pending ord-2 "+
+			"staffed) = %d (%+v), want 0 — only the lowest-ord PENDING step is current", n, got)
+	}
+	if n := countForInvoice(got, invoiceB); n != 1 {
+		t.Fatalf("Scan findings for invoice B (current pending ord-1 unstaffed) = %d (%+v), want exactly 1", n, got)
+	}
+	if !containsFindingFor(got, invoiceB, rcApprovalBlockedUnstaffed) {
+		t.Errorf("Scan findings for invoice B = %+v, want approval_blocked_unstaffed", got)
+	}
+}
+
+// AC-4: a signable person behind a DEAD role is still unsignable, and a NULL role key is not
+// silently healthy. Three runs whose current pending approval step carries, respectively: a
+// workflow_role_key naming no workflow_roles row; a key naming a soft-deleted role whose lone
+// holder IS an active admin; a NULL workflow_role_key. All three must flag.
+func TestRLS_ScanApprovalBlockedUnstaffedRoleKeyEdges(t *testing.T) {
+	h := requireHarness(t)
+
+	tenantID, entityID, invoiceA, cleanupA := rcSeedInvoice(t, h, rcInvoiceOpts{status: "validated"})
+	defer cleanupA()
+	invoiceB, cleanupB := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupB()
+	invoiceC, cleanupC := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupC()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	// A: workflow_role_key names no workflow_roles row at all.
+	ghostKey := "ghost-role-does-not-exist"
+	runA := rcSeedRun(t, h, tenantID, invoiceA, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runA, 1, "approval", &ghostKey, "pending")
+
+	// B: role soft-deleted, even though its lone holder is an active admin.
+	deletedRoleID := rcSeedWorkflowRole(t, h, tenantID, "deleted-role", true)
+	activeAdmin := rcSeedMember(t, h, tenantID, "admin", "active")
+	rcStaffRole(t, h, tenantID, deletedRoleID, activeAdmin, 0)
+	deletedKey := "deleted-role"
+	runB := rcSeedRun(t, h, tenantID, invoiceB, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runB, 1, "approval", &deletedKey, "pending")
+
+	// C: NULL workflow_role_key.
+	runC := rcSeedRun(t, h, tenantID, invoiceC, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, runC, 1, "approval", nil, "pending")
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		invoiceID string
+	}{
+		{"role key names no workflow_roles row", invoiceA},
+		{"role soft-deleted despite an active admin holder", invoiceB},
+		{"NULL workflow_role_key", invoiceC},
+	} {
+		if n := countForInvoice(got, tc.invoiceID); n != 1 {
+			t.Errorf("%s: Scan findings for invoice %q = %d (%+v), want exactly 1", tc.name, tc.invoiceID, n, got)
+			continue
+		}
+		if !containsFindingFor(got, tc.invoiceID, rcApprovalBlockedUnstaffed) {
+			t.Errorf("%s: Scan findings for invoice %q = %+v, want approval_blocked_unstaffed", tc.name, tc.invoiceID, got)
+		}
+	}
+}
+
+// AC-3, AC-4 (D37 control): a transmitted/closed run must not flag forever, and an unstaffed
+// step behind a CLOSED run must not flag either. One tenant: a submitted invoice whose run is
+// approved; a validated invoice whose run is cancelled with an unstaffed pending step; a
+// validated invoice whose open run holds only a notify/skipped step; a validated invoice
+// whose open run has no steps at all -> none of the four produce either new kind. Positive
+// control: a fifth, deliberately orphaned invoice in the same tenant DOES flag.
+func TestRLS_ScanApprovalFindingsIgnoreClosedRuns(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID, entityID, invoiceApproved, cleanupApproved := rcSeedInvoice(t, h, rcInvoiceOpts{status: "submitted"})
+	defer cleanupApproved()
+	invoiceCancelled, cleanupCancelled := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupCancelled()
+	invoiceNotify, cleanupNotify := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupNotify()
+	invoiceNoSteps, cleanupNoSteps := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupNoSteps()
+	invoiceOrphaned, cleanupOrphaned := rcSeedInvoiceIn(t, h, tenantID, entityID, rcInvoiceOpts{status: "validated"})
+	defer cleanupOrphaned()
+
+	versionID, cleanupPolicy := rcSeedApprovalPolicy(t, h, tenantID)
+	defer cleanupPolicy()
+
+	// D37: a transmitted invoice with an APPROVED (closed) run must not flag forever.
+	rcSeedRun(t, h, tenantID, invoiceApproved, versionID, "approved")
+
+	// A CANCELLED run with an unstaffed pending step still must not flag — the arm requires
+	// run.state = 'open'.
+	cancelledRun := rcSeedRun(t, h, tenantID, invoiceCancelled, versionID, "cancelled")
+	unstaffedKey := "unstaffed-role-on-cancelled-run"
+	rcSeedRunStep(t, h, tenantID, cancelledRun, 1, "approval", &unstaffedKey, "pending")
+
+	// An OPEN run with only a notify/skipped step — no pending 'approval' step at all.
+	notifyRun := rcSeedRun(t, h, tenantID, invoiceNotify, versionID, "open")
+	rcSeedRunStep(t, h, tenantID, notifyRun, 1, "notify", nil, "skipped")
+
+	// An OPEN run with NO steps at all.
+	rcSeedRun(t, h, tenantID, invoiceNoSteps, versionID, "open")
+
+	// Positive control: a deliberately orphaned invoice (open run, invoice not validated).
+	rcSeedRun(t, h, tenantID, invoiceOrphaned, versionID, "open")
+	if _, err := h.super.Exec(ctx, `UPDATE invoices SET status = 'draft' WHERE id = $1`, invoiceOrphaned); err != nil {
+		t.Fatalf("flip control invoice to draft: %v", err)
+	}
+
+	got, err := rcScan(t, h, tenantID, rcThresholds)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	if !containsFindingFor(got, invoiceOrphaned, rcApprovalRunOrphaned) {
+		t.Fatalf("Scan findings = %+v, want approval_run_orphaned for the deliberately-orphaned "+
+			"control invoice %q — the positive control this closed-runs case is measured against", got, invoiceOrphaned)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		invoiceID string
+	}{
+		{"approved (closed) run", invoiceApproved},
+		{"cancelled run with an unstaffed pending step", invoiceCancelled},
+		{"open run with only a notify/skipped step", invoiceNotify},
+		{"open run with no steps at all", invoiceNoSteps},
+	} {
+		if n := countForInvoice(got, tc.invoiceID); n != 0 {
+			t.Errorf("%s: Scan findings for invoice %q = %d (%+v), want 0", tc.name, tc.invoiceID, n, got)
+		}
 	}
 }

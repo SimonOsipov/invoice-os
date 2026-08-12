@@ -154,7 +154,7 @@ func TestPolicy_CreateInsertsVersionOne(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 create-v1")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	got, err := NewStore(app).CreatePolicy(c, "Sign-off", "")
+	got, err := NewStore(app, stubFingerprinter).CreatePolicy(c, "Sign-off", "")
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestPolicy_CreateAuditsInSameTx(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 create-audit-atomicity")
 	c, adminID := activeAdmin(t, super, tenantID)
 
-	created, err := NewStore(app).CreatePolicy(c, "Sign-off", "")
+	created, err := NewStore(app, stubFingerprinter).CreatePolicy(c, "Sign-off", "")
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestCreatePolicy_ForeignScopeRejected(t *testing.T) {
 			tenantID := policyTenant(t, super, "APPR-05 foreign-scope")
 			c, _ := activeAdmin(t, super, tenantID)
 
-			_, err := NewStore(app).CreatePolicy(c, "Sign-off", scope)
+			_, err := NewStore(app, stubFingerprinter).CreatePolicy(c, "Sign-off", scope)
 			if !errors.Is(err, ErrValidation) {
 				t.Errorf("CreatePolicy(scope %q) err = %v, want ErrValidation", scope, err)
 			}
@@ -326,7 +326,7 @@ func TestCreatePolicy_ForeignScopeRejected(t *testing.T) {
 	t.Run("control: the accepted scope still writes", func(t *testing.T) {
 		tenantID := policyTenant(t, super, "APPR-05 foreign-scope-control")
 		c, _ := activeAdmin(t, super, tenantID)
-		if _, err := NewStore(app).CreatePolicy(c, "Sign-off", scopeAllInvoices); err != nil {
+		if _, err := NewStore(app, stubFingerprinter).CreatePolicy(c, "Sign-off", scopeAllInvoices); err != nil {
 			t.Fatalf("CreatePolicy(%q): %v — the refusals above are vacuous unless this succeeds", scopeAllInvoices, err)
 		}
 		if n := rowCount(t, super, "approval_policies", tenantID); n != 1 {
@@ -341,7 +341,7 @@ func TestCreatePolicy_EmptyNameRejected(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 empty-name")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	_, err := store.CreatePolicy(c, "   ", "")
 	if !errors.Is(err, ErrValidation) {
@@ -390,7 +390,7 @@ func TestCreatePolicy_EmptyScopeNormalizedBeforeSQL(t *testing.T) {
 			tenantID := policyTenant(t, super, "APPR-05 scope-normalized")
 			c, _ := activeAdmin(t, super, tenantID)
 
-			created, err := NewStore(app).CreatePolicy(c, "Sign-off", in)
+			created, err := NewStore(app, stubFingerprinter).CreatePolicy(c, "Sign-off", in)
 			if err != nil {
 				t.Fatalf("CreatePolicy(scope %q): %v (SQLSTATE %q) — an unnormalized scope reaching SQL "+
 					"raises 23514 on approval_policies_scope_check", in, err, pgCode(err))
@@ -439,7 +439,7 @@ func TestPolicy_ListReturnsTreeAndVersions(t *testing.T) {
 	})
 	seedApprovalPolicyStepInLane(t, super, tenantID, v2, seedStepSpec{Ord: 1, Kind: "autoapprove"})
 
-	got, err := NewStore(app).ListPolicies(c)
+	got, err := NewStore(app, stubFingerprinter).ListPolicies(c)
 	if err != nil {
 		t.Fatalf("ListPolicies: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestPolicy_ListOmitsSoftDeleted(t *testing.T) {
 	})
 	softDeleteApprovalPolicy(t, super, deletedID)
 
-	got, err := NewStore(app).ListPolicies(c)
+	got, err := NewStore(app, stubFingerprinter).ListPolicies(c)
 	if err != nil {
 		t.Fatalf("ListPolicies: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestPolicy_ListOmitsSoftDeleted(t *testing.T) {
 	t.Run("three statements, constant in policy count", func(t *testing.T) {
 		traced, rec := tracedAppPool(t)
 		rec.reset()
-		if _, err := NewStore(traced).ListPolicies(c); err != nil {
+		if _, err := NewStore(traced, stubFingerprinter).ListPolicies(c); err != nil {
 			t.Fatalf("ListPolicies on the traced pool: %v", err)
 		}
 		sql := rec.mentioning("approval_polic")
@@ -563,7 +563,7 @@ func TestPolicy_GetUnknownAndMalformedAreNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 get-not-found")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	liveID := seedApprovalPolicy(t, super, tenantID, "Live")
 	seedApprovalPolicyVersionN(t, super, tenantID, liveID, 1)
@@ -611,7 +611,7 @@ func TestPolicy_StatusIsDraftIffUnsealedVersionExists(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 derived-status")
 	c, _ := activeAdmin(t, super, tenantID)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 
 	v1 := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
@@ -646,7 +646,7 @@ func TestPolicy_ReadNeedsNoAdminRoleWriteDoes(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 read-ungated")
 	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
@@ -682,7 +682,7 @@ func TestPolicy_CreatePermissionCheckedBeforeRowRead(t *testing.T) {
 
 	traced, rec := tracedAppPool(t)
 	rec.reset()
-	_, err := NewStore(traced).CreatePolicy(c, "Sign-off", "")
+	_, err := NewStore(traced, stubFingerprinter).CreatePolicy(c, "Sign-off", "")
 	if !errors.Is(err, ErrNotPermitted) {
 		t.Errorf("CreatePolicy as a suspended admin: err = %v, want ErrNotPermitted", err)
 	}
@@ -702,7 +702,7 @@ func TestPolicy_CreatePermissionCheckedBeforeRowRead(t *testing.T) {
 		t.Errorf("approval_policy.created audit rows = %d, want 0", n)
 	}
 
-	if _, err := NewStore(app).CreatePolicy(c, "   ", ""); !errors.Is(err, ErrValidation) {
+	if _, err := NewStore(app, stubFingerprinter).CreatePolicy(c, "   ", ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("CreatePolicy with a blank name as a suspended admin: err = %v, want ErrValidation — "+
 			"the normalizers run above the transaction, so they answer before the permission check", err)
 	}
@@ -714,7 +714,7 @@ func TestPolicy_CreatePermissionCheckedBeforeRowRead(t *testing.T) {
 // neither fetches nor lists tenant A's policy.
 func TestPolicy_CrossTenantGetIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app)
+	store := NewStore(app, stubFingerprinter)
 
 	tenantA := policyTenant(t, super, "APPR-05 cross-tenant A")
 	cA, _ := activeAdmin(t, super, tenantA)
@@ -773,7 +773,7 @@ func TestPolicy_BranchlessChildPromotesToRootNotDetected(t *testing.T) {
 		WorkflowRoleKey: ptr("engagement-partner"),
 	})
 
-	got, err := NewStore(app).GetPolicy(c, policyID)
+	got, err := NewStore(app, stubFingerprinter).GetPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("GetPolicy: %v", err)
 	}

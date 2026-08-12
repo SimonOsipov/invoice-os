@@ -22,10 +22,16 @@ import (
 
 var ciSkipCallRE = regexp.MustCompile(`t\.Skipf?\(`)
 
+// ciGateScript is the wrapper a gate step invokes. It doubles as the CONTROL
+// NEEDLE for ciAssertScansFound: a scan whose regexp stopped matching is
+// indistinguishable from a clean repo unless something that must be found is
+// looked for alongside it.
+const ciGateScript = "rls-test-gate.sh"
+
 // ciGateStepRE matches a ci.yml step invoking this tool's wrapper. The go job's
 // bare `go test ./...` deliberately does not match: it carries no DSNs, which is
 // the environment where these tests skip themselves.
-var ciGateStepRE = regexp.MustCompile(`(?m)^[ \t]*run:[ \t]*(.*rls-test-gate\.sh.*?)[ \t]*$`)
+var ciGateStepRE = regexp.MustCompile(`(?m)^[ \t]*run:[ \t]*(.*` + regexp.QuoteMeta(ciGateScript) + `.*?)[ \t]*$`)
 
 var ciPkgArgRE = regexp.MustCompile(`\./(internal/[a-zA-Z0-9_/-]+?)(?:/\.\.\.)?(?:\s|$)`)
 
@@ -118,6 +124,40 @@ func ciGatedPackages(t *testing.T, root string) []string {
 	return out
 }
 
+// ciAssertScansFound fails when the SCANS behind these guards stopped working.
+//
+// Both guards conclude "nothing is wrong" from an empty scan result, so a broken
+// scanner reads exactly like a clean repo — the defect these guards exist to
+// catch, turned on the guards themselves. Measured by mutation before this
+// existed: renaming the string ciGateStepRE looks for left
+// TestCIRunFiltersReachEveryDBGatedTest green, and breaking the `DATABASE_` walk
+// left BOTH green. TestEveryDBGatedPackageRunsInACIGateStep survived the first
+// mutation only by accident — with zero steps found, every package reads as
+// unregistered, so it failed loudly for the wrong reason.
+//
+// Two defences, the pair this repo already uses elsewhere (filename_removed_test.go,
+// envPosture.test.ts): a control needle that must be found, and a floor on the
+// population each scan returns.
+func ciAssertScansFound(t *testing.T, yaml string, steps map[string][]string, gated []string) {
+	t.Helper()
+
+	if !strings.Contains(yaml, ciGateScript) {
+		t.Fatalf("ci.yml no longer mentions %s -- either the DB suites moved to a different "+
+			"runner, or the script was renamed; either way these guards can no longer see them",
+			ciGateScript)
+	}
+	if len(steps) == 0 {
+		t.Fatalf("ci.yml still mentions %s but ciGateStepRE matched no step -- the pattern is "+
+			"broken (a reworded or multi-line `run:` does this), so every check below would "+
+			"pass having examined nothing", ciGateScript)
+	}
+	if len(gated) == 0 {
+		t.Fatal("the internal/ walk found no DB-gated test package -- either every DB suite is " +
+			"gone, or ciSkipCallRE / the DATABASE_ needle stopped matching; either way the " +
+			"checks below would pass having examined nothing")
+	}
+}
+
 type ciFunc struct {
 	name string
 	src  string
@@ -161,10 +201,13 @@ func ciPackageFuncs(t *testing.T, dir string) []ciFunc {
 // of DB-backed tests without adding its ci.yml step is a build break, not a pass.
 func TestEveryDBGatedPackageRunsInACIGateStep(t *testing.T) {
 	root := ciRepoRoot(t)
-	steps := ciGateSteps(ciYAML(t, root))
+	yaml := ciYAML(t, root)
+	steps := ciGateSteps(yaml)
+	gated := ciGatedPackages(t, root)
+	ciAssertScansFound(t, yaml, steps, gated)
 
 	var unregistered []string
-	for _, pkg := range ciGatedPackages(t, root) {
+	for _, pkg := range gated {
 		covered := false
 		for stepPkg := range steps {
 			if pkg == stepPkg || strings.HasPrefix(pkg, stepPkg+"/") {
@@ -186,12 +229,21 @@ func TestEveryDBGatedPackageRunsInACIGateStep(t *testing.T) {
 // exempt: the go job runs those through go test ./... without DSNs.
 func TestCIRunFiltersReachEveryDBGatedTest(t *testing.T) {
 	root := ciRepoRoot(t)
+	yaml := ciYAML(t, root)
+	steps := ciGateSteps(yaml)
+	ciAssertScansFound(t, yaml, steps, ciGatedPackages(t, root))
 
-	for stepPkg, filters := range ciGateSteps(ciYAML(t, root)) {
+	for stepPkg, filters := range steps {
 		if slices.Contains(filters, "") {
 			continue // an unfiltered step already runs the whole package
 		}
 		funcs := ciPackageFuncs(t, filepath.Join(root, stepPkg))
+		// Third floor: a package a gate step names must hold tests to reach.
+		if len(funcs) == 0 {
+			t.Fatalf("ci.yml runs a filtered gate step on ./%s/... but the parse found no test "+
+				"function there -- the glob or the parse is broken, so the filter check below "+
+				"would pass having examined nothing", stepPkg)
+		}
 
 		gates := map[string]bool{}
 		for _, fn := range funcs {

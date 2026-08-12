@@ -215,3 +215,165 @@ func TestIsApprover_MatchesInvoiceStoreAndRolesTs(t *testing.T) {
 		}
 	}
 }
+
+// QA mutation pass: every existing "ok"-arm fixture happens to have active[0] == holders[0],
+// so swapping active[0] for holders[0] in resolution() went undetected. This fixture puts the
+// eligible holder second.
+func TestResolution_OkPrimaryIsFirstActiveNotFirstHolder(t *testing.T) {
+	holders := []holderInput{
+		{Name: "Halima Yusuf", Status: "suspended", AccessRole: "reviewer"},
+		{Name: "Musa Danjuma", Status: "active", AccessRole: "reviewer"},
+	}
+	got := resolveHolder(true, holders)
+	want := Resolved{Text: "Musa Danjuma +1", Warn: false}
+	if got != want {
+		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
+	}
+
+	gotInspector := inspectorResolveHolder(true, holders)
+	wantInspector := Resolved{Text: "Currently: Musa Danjuma", Warn: false}
+	if gotInspector != wantInspector {
+		t.Errorf("inspectorResolveHolder(true, %+v) = %+v, want %+v", holders, gotInspector, wantInspector)
+	}
+}
+
+// QA mutation pass: TestRunReadModel_StepKeySetIsFixed only observes JSON output, so
+// omitempty on a field the fixture always sets non-empty (e.g. Kind) went undetected.
+// Assert directly against the struct tags -- AC-1's "no omitempty on any field".
+func TestWireStructs_NoFieldCarriesOmitempty(t *testing.T) {
+	for _, v := range []any{Resolved{}, RunStep{}, RunDecision{}, Run{}} {
+		typ := reflect.TypeOf(v)
+		for i := 0; i < typ.NumField(); i++ {
+			tag := typ.Field(i).Tag.Get("json")
+			if strings.Contains(tag, "omitempty") {
+				t.Errorf("%s.%s: json tag %q carries omitempty, want none", typ.Name(), typ.Field(i).Name, tag)
+			}
+		}
+	}
+}
+
+// TestRunReadModel_StepKeySetIsFixed only checks the key COUNT is stable across kinds; this
+// pins the actual 13 names against §2.3 so a renamed (not just added/omitted) key is caught.
+func TestRunStep_KeyNamesMatchSpec(t *testing.T) {
+	b, err := json.Marshal(RunStep{Kind: "approval"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want := []string{"ord", "kind", "state", "workflow_role_key", "workflow_role_title", "holder",
+		"sla_hours", "due_at", "overdue", "satisfied_at", "satisfied_by", "notify_target", "notify_channel"}
+	for _, k := range want {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing key %q in %v", k, m)
+		}
+	}
+	if len(m) != len(want) {
+		t.Errorf("got %d keys, want %d: %v", len(m), len(want), m)
+	}
+}
+
+func TestRunDecision_KeyNamesMatchSpec(t *testing.T) {
+	b, err := json.Marshal(RunDecision{})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want := []string{"run_step_id", "ord", "decision", "actor", "decided_at", "reason"}
+	for _, k := range want {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing key %q in %v", k, m)
+		}
+	}
+	if len(m) != len(want) {
+		t.Errorf("got %d keys, want %d: %v", len(m), len(want), m)
+	}
+}
+
+func TestRun_KeyNamesMatchSpec(t *testing.T) {
+	b, err := json.Marshal(Run{})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want := []string{"run_id", "state", "opened_at", "closed_at", "closed_by", "steps", "decisions"}
+	for _, k := range want {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing key %q in %v", k, m)
+		}
+	}
+	if len(m) != len(want) {
+		t.Errorf("got %d keys, want %d: %v", len(m), len(want), m)
+	}
+}
+
+// A role can have holders yet still be unsatisfiable -- every one of them suspended, not just
+// outranked by access role. Distinguishes "no eligible holder" from "no holder at all".
+func TestResolveHolder_AllHoldersSuspended(t *testing.T) {
+	holders := []holderInput{
+		{Name: "Halima Yusuf", Status: "suspended", AccessRole: "reviewer"},
+		{Name: "Musa Danjuma", Status: "suspended", AccessRole: "admin"},
+	}
+	got := resolveHolder(true, holders)
+	want := Resolved{Text: "Halima Yusuf +1", Warn: true}
+	if got != want {
+		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
+	}
+}
+
+// roles.ts/members.ts use `??` (nullish coalescing): only null/undefined falls through, an
+// empty string does not. The Go port must agree -- a non-nil pointer to "" stops the ladder.
+func TestHolderName_EmptyStringDisplayNameDoesNotFallThrough(t *testing.T) {
+	got := holderName(ptr(""), ptr("halima@example.com"), "user-2")
+	want := ""
+	if got != want {
+		t.Errorf("holderName(ptr(\"\"), ...) = %q, want %q (empty string must not fall through to email)", got, want)
+	}
+}
+
+// Unicode and a long name must survive the "%s +%d" formatting unmangled.
+func TestResolveHolder_UnicodeAndVeryLongNameInPlusNFormatting(t *testing.T) {
+	longName := strings.Repeat("Adéọlá ", 40) + "Bàbáyẹmi"
+	holders := []holderInput{
+		{Name: longName, Status: "active", AccessRole: "reviewer"},
+		{Name: "Ha", Status: "suspended", AccessRole: "reviewer"},
+	}
+	got := resolveHolder(true, holders)
+	want := Resolved{Text: longName + " +1", Warn: false}
+	if got != want {
+		t.Errorf("resolveHolder with long unicode name: got %+v, want %+v", got, want)
+	}
+}
+
+// extra counts every OTHER holder even when all of them (not just the primary) are eligible --
+// existing fixtures only ever exercise extra=0 or extra=1.
+func TestResolution_ExtraCountsAllOtherHoldersEvenWhenEveryoneEligible(t *testing.T) {
+	holders := []holderInput{
+		{Name: "Musa Danjuma", Status: "active", AccessRole: "reviewer"},
+		{Name: "Halima Yusuf", Status: "active", AccessRole: "admin"},
+		{Name: "Folake Adesina", Status: "active", AccessRole: "reviewer"},
+	}
+	got := resolveHolder(true, holders)
+	want := Resolved{Text: "Musa Danjuma +2", Warn: false}
+	if got != want {
+		t.Errorf("resolveHolder(true, %+v) = %+v, want %+v", holders, got, want)
+	}
+}
+
+// A non-nil but empty holders slice must behave identically to nil -- resolution() must not
+// branch on nil-ness rather than length.
+func TestResolveHolder_EmptyNonNilHoldersSliceSameAsNil(t *testing.T) {
+	got := resolveHolder(true, []holderInput{})
+	want := Resolved{Text: "Nobody assigned", Warn: true}
+	if got != want {
+		t.Errorf("resolveHolder(true, []holderInput{}) = %+v, want %+v", got, want)
+	}
+}

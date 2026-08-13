@@ -1562,6 +1562,13 @@ describe('bulkBarView: the note is absent at zero and names no cause, so it is t
 
     expect(bulkBarView([], gated, 'idle', false).note).toBe('1 of the 2 rows on this page cannot be sent.')
   })
+
+  it('BULK-A4: a single-row page whose one row cannot be sent reads "row", not "rows"', () => {
+    // Reachable from a search or a rule filter that narrows the page to one hit.
+    expect(bulkBarView([], [mkRow('a', 'queued')], 'idle', false).note).toBe(
+      '1 of the 1 row on this page cannot be sent.',
+    )
+  })
 })
 
 describe('bulkBarView: the confirm names the count, the action, the outcome and the irreversibility (BULK-9, AC-3)', () => {

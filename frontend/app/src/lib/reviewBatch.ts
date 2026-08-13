@@ -1047,7 +1047,7 @@ export function bulkBarView(
     countLabel: `${n} selected on this page`,
     note:
       notReady > 0
-        ? `${notReady} of the ${rows.length} rows on this page cannot be sent.`
+        ? `${notReady} of the ${rows.length} ${rows.length === 1 ? 'row' : 'rows'} on this page cannot be sent.`
         : null,
     submitLabel: `Submit ${n} for transmission`,
     // Singular at one, so the confirmation never reads "Send 1 invoices".

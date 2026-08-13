@@ -927,6 +927,16 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await expect(page.getByTestId('publish-blocked-reason'), 'the policy and its step reached the server').toHaveCount(0)
 
   // --- delete it, from the affordance the inspector offers ----------------------------------
+  // Re-select first, or there is no inspector to offer it: [selection-clears-on-save] — the PUT
+  // re-mints every step id, so `save()` drops the held selection (WorkflowBuilder.tsx:200) and the
+  // panel falls back to its no-selection state. Clicking the card is the whole re-selection
+  // (`onSelect`, WorkflowCanvas.tsx:205), and the settle is the inspector's OWN resolved line, so
+  // a missed click fails here instead of timing out on a button that never renders.
+  await page.getByText(`${title} must approve`, { exact: true }).click()
+  await expect(
+    page.getByText(`Currently: ${holder}`, { exact: true }),
+    'the inspector re-opened on the saved step',
+  ).toBeVisible()
   await page.getByRole('button', { name: 'Manage roles', exact: true }).click()
   await expect(page.getByTestId('roles-grid')).toBeVisible()
   // The usage line moved the moment the step was repointed: one step, one policy.

@@ -136,9 +136,10 @@ export function buildMixedCsv(): string {
 // resolve the same way through App.tsx's follow-up list call.
 //
 // `invoiceNumber` is caller-supplied (Date.now()-suffixed at the call site) rather than a
-// fixed literal, mirroring this file's own per-run-uniqueness discipline: this suite reruns
-// against a shared, never-reset dev DB, and a fixed literal would collide with an earlier
-// run's (tenant, entity, invoice_number) the moment two runs share an entity.
+// fixed literal, mirroring this file's own per-run-uniqueness discipline. A fixed literal
+// would collide on (tenant, entity, invoice_number) with any other row already carrying it:
+// an earlier spec in the same run, or the same test's own first attempt before a Playwright
+// retry. The per-PR reset (docs/e2e-convention.md) clears the cross-RUN case only.
 export function buildSingleInvoiceCsv(invoiceNumber: string): string {
   const lines: string[] = [PERF_HEADER]
   lines.push(

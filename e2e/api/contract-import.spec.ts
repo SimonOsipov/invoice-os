@@ -328,8 +328,9 @@ test.describe('document download contract (API E2E, over the deployed gateway)',
     expect(res.headers.get('content-type'), 'fixed, never the row declared_content_type').toBe('application/octet-stream')
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
     expect(res.headers.get('accept-ranges')).toBe('bytes')
-    // Prefix only, never the exact filename: dedupe keeps the FIRST upload's name and
-    // this DB is never reset between runs.
+    // Prefix only, never the exact filename: dedupe keeps the FIRST upload's name, and
+    // an identical upload can already have happened earlier in this run or on this test's
+    // own pre-retry attempt.
     expect(res.headers.get('content-disposition') ?? '', 'the disposition must be an attachment').toMatch(/^attachment/)
     await res.arrayBuffer()
   })

@@ -14,13 +14,15 @@
 // commit gate needs an entity_id, and inhouseClient() pins active.entityId to null --
 // lib/clients.ts). The same "own entity per test" discipline as invoice-surfaces.spec.ts
 // and import-wizard.spec.ts: this suite runs serially (fullyParallel:false, workers:1,
-// playwright.topology.config.ts) against the same shared, never-reset dev DB.
+// playwright.topology.config.ts) against the one deployment all three suites share, with no
+// reset between them (docs/e2e-convention.md "One browser, serial").
 //
-// COUNT ASSERTIONS: tenant B accumulates invoices forever on that DB, so no assertion here
-// may name a literal count. Only two shapes are legal, and both are used below --
-// (1) compared against a LIVE API read taken in the same test (the Approvals badge, the
-// Overview KPI), and (2) containment of rows this test itself created. A hardcoded '3'
-// would pass once and rot on the next run.
+// COUNT ASSERTIONS: tenant B's invoices accumulate through the run -- the api suite writes
+// to it before this suite starts, and a retry re-runs a test over its own first attempt's
+// rows -- so no assertion here may name a literal count. Only two shapes are legal, and
+// both are used below -- (1) compared against a LIVE API read taken in the same test (the
+// Approvals badge, the Overview KPI), and (2) containment of rows this test itself created.
+// A hardcoded '3' would pass on a clean fixture and fail the moment anything ran first.
 import { test, expect, type Page } from '@playwright/test'
 import { createEntity, createInvoice, login, rollup, validateInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
@@ -143,8 +145,8 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   const token = await login(PERSONAS.B)
   const stamp = Date.now()
   // Two entities, so the list assertion below also exercises the tenant-wide (un-scoped)
-  // in-house fetch. Each gets its own freshTin() -- the dev DB is never reset and
-  // business_entities has a per-tenant unique TIN index.
+  // in-house fetch. Each gets its own freshTin() -- business_entities has a per-tenant
+  // unique TIN index, and the seeded portfolio is already sitting in it.
   const entityA = await createEntity(token, { name: `PERSONA-01 sweep A ${stamp}`, tin: freshTin() })
   const entityB = await createEntity(token, { name: `PERSONA-01 sweep B ${stamp}`, tin: freshTin() })
   const validatedNumber = `INV-P01-SWEEP-V-${stamp}`

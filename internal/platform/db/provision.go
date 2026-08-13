@@ -73,6 +73,27 @@ type ProvisionConfig struct {
 	Logger *slog.Logger
 }
 
+// ResetWillRun reports whether Provision's sequence runs the destructive
+// PR-environment Reset for this config: both guards on, in the nesting Provision
+// actually applies (see Provision's doc comment for why the reset guard is
+// consulted only inside the bootstrap/seed one).
+//
+// Provision branches on THIS method rather than on the two guards inline, so the
+// answer a caller can ask for either side of the call is the same expression
+// that decided — not a second copy of it that a later edit to the nesting could
+// leave quietly disagreeing.
+//
+// cmd/gateway/main.go publishes the result on /healthz as `db_reset`
+// (platform.DBReset), which dev-env.yml's health-gate asserts on every PR run.
+// That gate exists because both inputs are hand-set Railway variables and both
+// fail CLOSED AND SILENT: lose GATEWAY_DB_RESET when a service is recreated and
+// every E2E run goes quietly back to testing against inherited residue, with
+// nothing red anywhere to say so.
+func (cfg ProvisionConfig) ResetWillRun() bool {
+	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) &&
+		ResetEnabled(cfg.RailwayEnvironmentName, cfg.ResetFlag)
+}
+
 // unrenderedReference is the opening delimiter of a Railway variable reference.
 // A DSN that still contains it was never rendered: the variable EXISTS on the
 // service, so a bare non-empty check passes, but the value it points at did not
@@ -168,10 +189,10 @@ func waitForPostgres(ctx context.Context, dsn string, budget time.Duration, logg
 // not called at all, so an empty/zero RolePasswords or an unreachable
 // superuser DSN cannot fail a guard-off boot (AC-3).
 //
-// Reset's own guard (ResetEnabled, evaluated from
-// cfg.RailwayEnvironmentName/cfg.ResetFlag — see reset.go for why that pair,
-// not cfg.Environment/cfg.BootstrapFlag) is checked ONLY when the bootstrap/
-// seed guard is already on: resetting a database Provision is not otherwise
+// Reset's own guard (cfg.ResetWillRun, which folds in ResetEnabled's
+// cfg.RailwayEnvironmentName/cfg.ResetFlag pair — see reset.go for why that
+// pair, not cfg.Environment/cfg.BootstrapFlag) is checked ONLY when the
+// bootstrap/seed guard is already on: resetting a database Provision is not otherwise
 // about to (re)seed would leave a PR environment's Postgres empty rather than
 // demo-ready, which is worse than leaving the old residue in place. Every
 // environment ResetEnabled ever permits is a strict subset of what
@@ -226,7 +247,7 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 		// runs AFTER the schema is migrated and BEFORE Seed repopulates it, so
 		// a PR fork's inherited residue is gone before the curated fixtures
 		// land.
-		if ResetEnabled(cfg.RailwayEnvironmentName, cfg.ResetFlag) {
+		if cfg.ResetWillRun() {
 			if err := Reset(ctx, cfg.SuperuserDSN); err != nil {
 				return fmt.Errorf("db: provision: reset: %w", err)
 			}

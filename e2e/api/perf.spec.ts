@@ -133,8 +133,8 @@ interface ImportResponse {
 // (playwright.api.config.ts: workers:1, fullyParallel:false, [Decision A8]),
 // and this test's 500 freshly-created invoices are the MOST RECENT for this
 // tenant (List orders `created_at DESC, id DESC`) -- so they surface within
-// the first few pages regardless of any older, accumulated dev-DB history
-// from prior runs of this same gate.
+// the first few pages regardless of the seeded invoices and of anything an
+// earlier spec in this run, or this test's own pre-retry attempt, left behind.
 async function findInvoiceId(token: string, entityId: string, invoiceNumber: string): Promise<string> {
   const pageSize = 200
   let offset = 0

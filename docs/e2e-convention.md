@@ -49,9 +49,29 @@ or `pageerror` during a journey fails it).
 
 **chromium-only, `workers: 1`.** No multi-browser matrix, no sharding.
 
-The suite runs against **one shared deployed dev database with no reset** between runs,
-so parallel runs would corrupt each other's data. Every spec must create per-run-unique
-data (fresh TINs, random UUIDs, high offsets for empty-state).
+**Every run gets a database of its own, and shares it across all three suites.**
+
+The suites run only on a pull request (`dev-env.yml`'s `e2e` job), against that PR's own
+ephemeral Railway environment. That environment's Postgres is a *fork* of the persistent
+environment's volume, so it is born holding everything that environment holds — and the
+gateway TRUNCATEs the tenant-data tables and re-seeds the curated demo state at boot, on
+every deploy (Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`). A run
+therefore starts from the seed, never from another run's leftovers, and the health-gate
+fails the run outright if that reset did not happen — it is armed by a hand-set Railway
+variable that otherwise fails closed and silent.
+
+What a spec still cannot assume is an empty table:
+
+- smoke → api → topology run in that order against ONE deployment with **no reset between
+  them**, and `api/perf.spec.ts` alone creates 500 invoices before topology reads a list;
+- a Playwright retry re-runs a failed test against everything its first attempt left behind;
+- the tables holding admin CRUD — `workflow_roles`, `workflow_role_members`, `memberships`,
+  the approval-policy tables — are deliberately **excluded** from the reset (`resetTables`'s
+  own EXCLUDED block says why), so writes there outlive the run that made them.
+
+So the rule is unchanged, and `workers: 1` still holds: every spec creates per-run-unique
+data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and
+asserts containment or a live-read comparison rather than a literal count.
 
 ## Target surface
 

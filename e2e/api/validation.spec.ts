@@ -128,7 +128,10 @@ test.describe('validation collect-all + live kill-switch (API E2E, over the depl
   test.beforeAll(async () => {
     token = await login(PERSONAS.A)
     // D3 self-heal: force BOTH target rules enabled before any test/toggle
-    // runs, healing a prior crashed run's leak on this shared dev fleet.
+    // runs, healing a leaked kill-switch. `rules` is EXCLUDED from the per-PR
+    // reset (resetTables) -- seed.dev.sql re-enables every rule instead -- so
+    // the leak this heals is one a crashed spec left EARLIER IN THIS RUN, after
+    // the seed had already converged.
     // Uses selfHeal (not ensureEnabled) so a genuinely unexpected failure
     // aborts the file loudly here, rather than surfacing as confusing
     // mid-test assertion failures against a rule that never got re-enabled.

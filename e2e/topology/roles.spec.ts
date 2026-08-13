@@ -29,7 +29,7 @@
 // own cleanup (below) is what keeps the environment honest afterward.
 //
 // COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide lists
-// on a never-reset dev DB, and permits exactly two shapes — (1) compared against a live API
+// on the deployment every suite in the run shares, and permits exactly two shapes — (1) compared against a live API
 // read taken in the same test, (2) containment of rows this test itself created. The member
 // roster is exempt from the ban and stays a literal count: no endpoint mints a membership
 // (there is no invite) and PATCH writes `status` only, so that list cannot grow.
@@ -746,9 +746,10 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
 test('in-house: a created role survives a reload, is selectable on a step, and blocks that step once deleted', async ({ page }) => {
   const errors = collectErrors(page)
 
-  // Per-run-unique, so two runs against the same (never-reset) environment cannot collide,
-  // the title can never be confused with a seeded one, and the afterAll sweep below can find
-  // it by prefix alone.
+  // Per-run-unique, so nothing else in this run (nor this test's own pre-retry attempt, nor
+  // a role a previous run's afterAll sweep failed to remove -- workflow_roles is EXCLUDED
+  // from the per-PR reset, resetTables) can collide with it, the title can never be confused
+  // with a seeded one, and the afterAll sweep below can find it by prefix alone.
   const stamp = Date.now()
   const title = `E2E seat ${stamp}`
   const desc = 'Signs off the browser journey'

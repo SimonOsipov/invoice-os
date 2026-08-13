@@ -93,7 +93,7 @@ async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> 
 // signInFirm() alone leaves the switcher's default selection at whatever `clients[0]`
 // resolves to (portfolio's List `ORDER BY name ASC, id ASC`, internal/portfolio/store.go)
 // -- never the fresh entity, which sorts wherever its own Date.now()-suffixed name lands
-// among 25+ others on the shared, never-reset dev DB. Sidebar.tsx:
+// among the seeded portfolio and every other entity this run has created. Sidebar.tsx:
 // data-testid="company-switcher" (the toggle button) / "company-switcher-option" (each
 // row in the open dropdown).
 async function selectEntity(page: Page, entityName: string): Promise<void> {
@@ -713,8 +713,8 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
 
   // 7a. Dashboard rollup ready state (Gap 1). [dashboard-scope-per-client] means this
-  // page now shows the ACTIVE entity's OWN scoped total, not the shared dev DB's
-  // ever-growing tenant-wide count ([dashboard-ready-not-counted] is retired by that same
+  // page now shows the ACTIVE entity's OWN scoped total, not the tenant-wide count that
+  // every other spec in this run adds to ([dashboard-ready-not-counted] is retired by that same
   // change) -- so the exact value is technically knowable here (2: mix-clean plus the
   // now-fixed mix-violate), but this stays existence/ready-only rather than coupling this
   // arc's business-flow assertion to buildMixedCsv's exact row count: only the overview

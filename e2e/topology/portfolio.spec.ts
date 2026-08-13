@@ -289,7 +289,7 @@ test('status-filter: each position requests its status and renders only those ro
 
 // Proves the header count equals the rows actually rendered under each position.
 // Structural (rendered-row-count vs. parsed-header-number), not a hardcoded portfolio
-// size, since the dev DB is shared and not reset between spec runs.
+// size: every spec in this run adds to the same portfolio (docs/e2e-convention.md).
 test('status-filter: the header count follows the filter', async ({ page }) => {
   const errors = collectErrors(page)
 

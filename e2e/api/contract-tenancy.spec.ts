@@ -6,8 +6,9 @@
 // convention (its own local copy, not imported — matches this suite's
 // existing per-file duplication of the shape helper).
 //
-// NO LONGER READ-ONLY. The PATCH matrix below writes to a SHARED, never-reset
-// environment, so every write here obeys two rules:
+// NO LONGER READ-ONLY. The PATCH matrix below writes to a shared environment, and
+// memberships is one of the tables the per-PR reset deliberately EXCLUDES (resetTables) --
+// a dirty status survives the run. So every write here obeys two rules:
 //   - the subject is SEED-ONLY (never …0001/…0002, the two sign-in personas —
 //     a tenant stranded at zero active admins needs a superuser to recover);
 //   - the row is forced back to `active` on the way in AND on the way out, in a

@@ -541,8 +541,9 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   // quarantined structurally per buildMixedCsv's own doc comment). The "different
   // invoice" this test wants is therefore unambiguously INV-UI-MIX-CLEAN, clicked by
   // name -- not a positional `.pf-list-row.first()`, which (before this fix) depended
-  // on whichever entity happened to be active by DEFAULT and how the shared,
-  // never-reset dev DB's ever-growing invoice set paginated: exactly the CI-caught
+  // on whichever entity happened to be active by DEFAULT and how the tenant-wide
+  // invoice set paginated -- the api suite alone puts 500 more rows in it before this
+  // suite starts (perf.spec.ts), reset or no reset: exactly the CI-caught
   // filter-after-paginate regression this fix closes (the scoped list would render
   // EMPTY whenever the default entity's own invoices fell outside the newest-50
   // tenant-wide window, timing out this very click).
@@ -981,8 +982,9 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   ).toHaveCount(0)
 
   // A fresh number: the default draft seeds a FIXED literal (lib/clients.ts's
-  // defaultDraft), and this suite reruns against a persistent, never-reset dev DB — a
-  // second run under the literal would 409 on (tenant_id, entity_id, invoice_number).
+  // defaultDraft), so a second create under it would 409 on
+  // (tenant_id, entity_id, invoice_number) -- which a Playwright retry of this very test
+  // does, against the invoice its own first attempt already filed.
   const manualNumber = `INH-MAN-${Date.now()}`
   await page.getByPlaceholder('INV-0000-00000').fill(manualNumber)
   await expect(fileBtn).toBeEnabled()

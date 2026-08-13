@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +57,7 @@ func main() {
 	// fallbacks, see resolveRolePassword below) are required — production boots
 	// without any of them set. The reset guard is separate — see
 	// RailwayEnvironmentName/ResetFlag below and db.ResetEnabled's doc comment.
-	if err := db.Provision(context.Background(), db.ProvisionConfig{
+	provisionCfg := db.ProvisionConfig{
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
 		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
@@ -89,9 +90,21 @@ func main() {
 		SeedFS:       dbsql.FS,
 		ConnectWait:  dbConnectWait,
 		Logger:       app.Logger,
-	}); err != nil {
+	}
+	if err := db.Provision(context.Background(), provisionCfg); err != nil {
 		fatal(app.Logger, "gateway: provision: %v", err)
 	}
+
+	// Publish what the sequence above actually did, off the same predicate it
+	// branched on, before app.Run opens the listener — so the first /healthz any
+	// caller can reach already carries it. Both of the reset's inputs are
+	// hand-set Railway variables that fail closed and silent, so without this
+	// the destructive PR-environment reset can stop happening with no failure
+	// anywhere: the fleet greens, the E2E suites run against a fork still
+	// holding every row prior runs left in the persistent environment, and the
+	// only symptom is tests that get harder to keep passing. dev-env.yml's
+	// health-gate asserts db_reset on every PR run.
+	platform.DBReset = strconv.FormatBool(provisionCfg.ResetWillRun())
 
 	verifier, err := auth.NewVerifier(auth.Config{
 		Issuer:  mustEnv("AUTH_ISSUER"),

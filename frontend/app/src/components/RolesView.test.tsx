@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
 import type { Role } from '../lib/roles'
+import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { RolesView } from './RolesView'
 
@@ -36,6 +37,8 @@ function role(over: Partial<Role> = {}): Role {
 function Harness({
   members = [],
   roles = [],
+  policies = [],
+  policiesState = 'ready',
   rolesState = 'ready',
   rolesError = null,
   membersState = 'ready',
@@ -45,6 +48,8 @@ function Harness({
 }: {
   members?: Member[]
   roles?: Role[]
+  policies?: Policy[]
+  policiesState?: AsyncStatus
   rolesState?: AsyncStatus
   rolesError?: ApiError | null
   membersState?: AsyncStatus
@@ -55,8 +60,8 @@ function Harness({
   const ctx = {
     members,
     roles,
-    policies: [],
-    policiesState: 'ready',
+    policies,
+    policiesState,
     policiesError: null,
     refetchPolicies: vi.fn(),
     publishPolicy: vi.fn(),
@@ -195,6 +200,44 @@ describe('AC-4: the roles-unassigned banner stays gated on the full roster surfa
     render(<Harness roles={[role()]} rolesState="ready" membersState="ready" />)
 
     expect(screen.getByTestId('roles-unassigned')).toBeTruthy()
+  })
+})
+
+// ============================================================================
+// APPR-09-06 (task-510) — RED. The fifth `ctx.policies` reader.
+// ============================================================================
+// `roleUsage(steps(policies, role.key))` (RolesView.tsx:238) renders on EVERY card, gated only
+// by `rolesSurface(rolesState, membersState)` — policies are not in that ladder. Unlanded,
+// every footer reads 'not used in any policy', the same false claim as RoleModal's delete
+// confirm, at grid volume.
+
+describe('APPR-09-06 AC-1/AC-3: a role card claims policy usage only off a landed policies fetch', () => {
+  /** Header / holders / footer. MembersTable.test.tsx:42's `row.children[2]` idiom — the
+   *  footer carries no test id, and RolesView.tsx is not edited to give it one. */
+  function footerOf(card: HTMLElement): HTMLElement {
+    return card.children[2] as HTMLElement
+  }
+
+  it('a role card claims no policy usage only once the policies fetch has landed', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="loading" />)
+
+    const footer = footerOf(screen.getByTestId('role-card'))
+    // Population floor: the footer's OTHER slot must still render, or both absences below
+    // would pass on a card that simply lost its footer.
+    expect(footer.textContent, 'the footer did not render, so the absences below are vacuous').toContain('0 people')
+    expect(footer.textContent, 'an unlanded policies fetch reads as "this role is used nowhere"').not.toContain('not used in any policy')
+    // The unlanded answer is the EMPTY STRING. '—' claims "nothing here" in its own right —
+    // MembersTable.tsx:195-197 sets that convention, pinned on the roster side at
+    // MembersTable.test.tsx:49.
+    expect(footer.textContent, "the unlanded footer fell back to the em dash, which is its own claim").not.toContain('—')
+  })
+
+  it('a landed-empty policy list still prints the real zero-usage footer', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="empty" />)
+
+    expect(footerOf(screen.getByTestId('role-card')).textContent, 'the guard swallowed a genuinely landed-empty answer').toContain(
+      'not used in any policy',
+    )
   })
 })
 

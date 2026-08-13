@@ -270,6 +270,60 @@ describe('AC-7: the EntityFormModal in-flight idiom', () => {
   })
 })
 
+// ============================================================================
+// APPR-09-06 (task-510) — RED. The delete confirm's usage claim
+// ============================================================================
+// `deleteRoleConfirm(role.title, steps(ctx.policies, role.key))` (RoleModal.tsx:309) reads the
+// array with no status gate. `roleUsage` returns the literal 'not used in any policy' at zero
+// (lib/roles.ts:207), so an unlanded fetch prints that sentence immediately above a Delete
+// button, on a role that IS used. `deleteRoleConfirm` has no third branch today, so the fix
+// needs one new copy string in lib/roles.ts — asserted here by what it must NOT say, since a
+// named import of a not-yet-added export cannot even collect.
+
+describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a landed policies fetch', () => {
+  function confirmText(): string {
+    return screen.getByTestId('role-delete-confirm').textContent ?? ''
+  }
+
+  it('the delete confirmation withholds its usage claim while policies are still loading', () => {
+    renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'loading' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+
+    const text = confirmText()
+    // Needle under the absence: the block must still name the role it is about to delete, or a
+    // confirm that rendered nothing at all would satisfy the assertion below.
+    expect(text, 'the confirm block rendered no sentence, so the absence below is vacuous').toContain('CFO')
+    expect(text, 'an unlanded policies fetch reads as "not used in any policy" above a Delete button').not.toContain(
+      'not used in any policy',
+    )
+    // Nothing is BLOCKED here — the consequence merely cannot be narrated, and the server's own
+    // refusal still lands in `role-modal-error` if the delete is declined.
+    expect((screen.getByTestId('role-delete-confirmed') as HTMLButtonElement).disabled, 'the gate blocked the delete instead of the claim').toBe(false)
+  })
+
+  it('the delete confirmation withholds its usage claim over an errored policies fetch', () => {
+    // `policies: []` PINNED, not incidental: App.tsx keeps the last landed rows across an error
+    // (App.tsx:294-298), so an errored fetch holding stale rows would not exercise this path at
+    // all. The live defect is the NEVER-LANDED one.
+    renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'error' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+
+    const text = confirmText()
+    expect(text, 'the confirm block rendered no sentence, so the absence below is vacuous').toContain('CFO')
+    expect(text).not.toContain('not used in any policy')
+  })
+
+  // ALREADY GREEN on write, and kept as the over-widening guard (WorkflowBuilder.test.tsx:102's
+  // posture): today's code ignores the status entirely, so `steps([], key)` already yields the
+  // zero copy. What it pins is that the new gate does not swallow a genuinely landed-empty answer.
+  it('a landed-empty policy list still says the role is not used in any policy', () => {
+    renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'empty' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+
+    expect(confirmText(), 'the guard swallowed a genuinely landed-empty answer').toContain('It is not used in any policy.')
+  })
+})
+
 describe('AC-12: onFlash fires only after the write resolves', () => {
   it('the flash fires only after the write resolves', async () => {
     let settle!: (r: Role) => void

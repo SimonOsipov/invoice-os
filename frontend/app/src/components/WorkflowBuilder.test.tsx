@@ -647,8 +647,13 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-describe('APPR-09-05 QA: two writes in flight', () => {
-  it('the gate follows the LAST landed answer, in either arrival order', async () => {
+describe('APPR-09-05 QA: two writes, one after the other', () => {
+  // RE-AUTHORED by APPR-09-06 (task-510). This spec used to click Save while a publish was
+  // still in flight, which AC-5's `submitting` guard makes impossible — the second click is
+  // now inert by design, so the spec was unfixable-green. The property it exists for is
+  // untouched: the gate reads `server`, it does not LATCH on the seal. The two answers now
+  // land sequentially, which is the only order the guard leaves reachable.
+  it('the gate follows the LAST landed answer, and does not latch on the seal', async () => {
     const self = policyWith('fin_mgr')
     const pub = deferred<Policy>()
     const sav = deferred<Policy>()
@@ -657,17 +662,17 @@ describe('APPR-09-05 QA: two writes in flight', () => {
 
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self], publishPolicy, savePolicy })} policy={self} />)
     fireEvent.click(publishButton())
-    fireEvent.click(saveButton())
     expect(publishPolicy).toHaveBeenCalledTimes(1)
-    expect(savePolicy).toHaveBeenCalledTimes(1)
 
-    // Publish lands first and seals.
+    // The publish lands first and seals.
     pub.resolve({ ...self, status: 'published', version: 1, activeVersion: 1 })
     await waitFor(() => expect(publishButton().disabled).toBe(true))
     expect(screen.getByText(PUBLISH_SEALED_REASON)).toBeTruthy()
 
-    // Then the save's own answer — a fresh unsealed v2 — arrives and re-opens it. A gate that
+    // Then a save, whose own answer — a fresh unsealed v2 — re-opens the gate. A gate that
     // LATCHED on the seal rather than reading `server` would stay shut here.
+    fireEvent.click(saveButton())
+    expect(savePolicy, 'the save never fired, so the re-open below proves nothing about the gate').toHaveBeenCalledTimes(1)
     sav.resolve({ ...self, status: 'draft', version: 2, activeVersion: 1 })
     await waitFor(() => expect(publishButton().disabled, 'the gate latched instead of reading the last landed row').toBe(false))
     expect(screen.queryByTestId('publish-blocked-reason')).toBeNull()
@@ -676,23 +681,176 @@ describe('APPR-09-05 QA: two writes in flight', () => {
     expect(screen.queryByTestId('policy-save-error')).toBeNull()
     expect(screen.queryByTestId('policy-publish-error')).toBeNull()
   })
+})
 
-  it('a re-seed that lands after an edit DISCARDS it — recorded, not endorsed', async () => {
-    // KNOWN RACE, reported at Stage 4 and unowned: `save()`/`publish()` re-seed `working` from
-    // the answer, so a keystroke typed inside the round trip is overwritten. The shipped remedy
-    // elsewhere is a `submitting` flag that disables the form for the duration
-    // (RoleModal.tsx:73,197; EntityFormModal.tsx:64; MemberDrawer.tsx:272). A guard that adds it
-    // here must REPLACE this spec — do not work around it.
+// ----------------------------------------------------------------------------
+// APPR-09-06 (task-510) AC-5 — RED. The in-flight guard
+// ----------------------------------------------------------------------------
+// `save()`/`publish()` re-seed `working` from the answer, so a keystroke typed inside the round
+// trip is silently overwritten. Before subtask 05 this could not happen — every keystroke was
+// its own PUT. The shipped remedy is one `submitting` flag disabling the form for the duration
+// (RoleModal.tsx:73,:197; EntityFormModal.tsx:64; MemberDrawer.tsx:272), cleared in `finally`.
+// The spec these replace — 'a re-seed that lands after an edit DISCARDS it' — recorded the race
+// and said in its own comment that a real guard must REPLACE it rather than work around it.
+//
+// TRANSIENT, not the four-layer disabled recipe: MemberDrawer.tsx:269-272 writes that rule down
+// — `UnbackedField` "always renders a reason note, and a staffing write in flight has none to
+// show". A write in flight gets a bare `disabled`, no reason note and no `aria-describedby`.
+
+/**
+ * jsdom's `.disabled` IDL property reflects the CONTENT ATTRIBUTE only, so a control inside a
+ * `<fieldset disabled>` still reports `false`. This walks the ancestry the way the HTML spec's
+ * "actually disabled" definition does, so the specs below hold whether the guard lands on the
+ * control itself or on a wrapping fieldset — the trade MemberDrawer.tsx:64-71 pre-authorises for
+ * `WfSelect`, which carries no `disabled` prop of its own (WorkflowParts.tsx:216-226).
+ */
+function inert(el: Element): boolean {
+  if ((el as HTMLInputElement).disabled) return true
+  return el.closest('fieldset[disabled]') !== null
+}
+
+function nameInput(): HTMLInputElement {
+  return screen.getByLabelText('Policy name') as HTMLInputElement
+}
+
+/**
+ * A `hideLabel` WfSelect carries its `aria-label` on the <label> WRAPPER (WorkflowParts.tsx:226),
+ * so RTL hands back the wrapper rather than the control. Descend when that happens, or the
+ * assertions below would read a fieldset ancestor and miss a `disabled` on the select itself.
+ */
+function control(el: HTMLElement): HTMLElement {
+  return el.tagName === 'LABEL' ? ((el.querySelector('select, input, button') as HTMLElement) ?? el) : el
+}
+
+/** One palette tile, matched on its own second line rather than a shared word like 'Approval'. */
+function paletteTile(): HTMLElement {
+  return screen.getByText('Someone must sign off').closest('button')!
+}
+
+describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => {
+  it('every control that mutates the working tree is inert inside a save round trip', () => {
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    render(
+      <WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise), roles: FIRM_ROLES })} policy={self} />,
+    )
+    // Selected BEFORE the write, so the inspector renders real controls rather than its
+    // no-selection card — otherwise the last target below has nothing to find.
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    // THUNKS, not held elements: wrapping the canvas or the scope row in a new `<fieldset>`
+    // remounts that subtree, and a node captured beforehand would be detached — `closest`
+    // on a detached node answers null, which would read as a spurious failure.
+    const targets: [string, () => Element][] = [
+      ['the policy name', () => nameInput()],
+      ['the scope select', () => control(screen.getByLabelText('Applies'))],
+      ['Clear steps', () => screen.getByRole('button', { name: 'Clear steps' })],
+      ['the palette', () => paletteTile()],
+      ['the canvas move handle', () => screen.getByRole('button', { name: 'Move Engagement Manager must approve' })],
+      ['the inspector deadline', () => screen.getByLabelText('Deadline')],
+    ]
+    expect(targets.length, 'nothing was checked').toBeGreaterThan(0)
+    // Every query resolves, and every control is live, BEFORE the write — so the flips below
+    // are neither vacuous nor a broken selector.
+    for (const [what, get] of targets) {
+      expect(inert(get()), `${what} was already inert before the write, so the flip below is vacuous`).toBe(false)
+    }
+
+    // Held rather than re-queried: `saveButton()` matches the exact label, and this control
+    // takes its own `disabled` — it is not inside any wrapper that could remount it.
+    const save = saveButton()
+    fireEvent.click(save)
+
+    for (const [what, get] of targets) {
+      expect(inert(get()), `${what} still rewrites the working tree while a save is in flight`).toBe(true)
+    }
+    expect(inert(save), 'Save draft still fires a second PUT mid-flight').toBe(true)
+  })
+
+  it('the simulator and the way out stay live — neither loses a keystroke', () => {
+    // ALREADY GREEN on write: the over-widening guard for the two controls the guard must NOT
+    // reach. `WorkflowSimulator` writes only local `sim` state, and leaving ABANDONS a write
+    // rather than silently overwriting one, which is the only thing AC-5 names.
     const self = policyWith('fin_mgr')
     const sav = deferred<Policy>()
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
 
     fireEvent.click(saveButton())
-    fireEvent.change(screen.getByLabelText('Policy name'), { target: { value: 'Typed mid-flight' } })
-    expect((screen.getByLabelText('Policy name') as HTMLInputElement).value).toBe('Typed mid-flight')
 
-    sav.resolve({ ...self, name: 'Test policy' })
-    await waitFor(() => expect((screen.getByLabelText('Policy name') as HTMLInputElement).value).toBe('Test policy'))
+    expect(inert(control(screen.getByLabelText('Doc type'))), 'the simulator writes no server state and must stay usable').toBe(false)
+    expect(inert(screen.getByRole('button', { name: /All policies/ })), 'the guard trapped the user inside the builder').toBe(false)
+  })
+
+  it('a second Save click inside the round trip never reaches the gateway', () => {
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    const savePolicy = vi.fn(() => sav.promise)
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy })} policy={self} />)
+
+    const save = saveButton()
+    fireEvent.click(save)
+    fireEvent.click(save)
+
+    expect(savePolicy, 'the second click fired a second PUT, whose answer re-seeds over the first').toHaveBeenCalledTimes(1)
+  })
+
+  it('a publish in flight shuts Publish WITHOUT claiming the tree is unsaved', () => {
+    // `blockedReason` is null here — the tree is clean and the top version is not yet sealed.
+    // So `disabled` must gain `|| submitting`, while `title`, `aria-describedby` and the visible
+    // note stay keyed on `blockedReason` ALONE: 'Save your changes first' is not true mid-publish.
+    const self = policyWith('fin_mgr')
+    const pub = deferred<Policy>()
+    const publishPolicy = vi.fn(() => pub.promise)
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], publishPolicy })} policy={self} />)
+    expect(publishButton().disabled, 'Publish was already shut, so the flip below is vacuous').toBe(false)
+
+    fireEvent.click(publishButton())
+
+    expect(publishButton().disabled, 'a second Publish click reaches the gateway and earns a 409').toBe(true)
+    expect(publishPolicy).toHaveBeenCalledTimes(1)
+    fireEvent.click(publishButton())
+    expect(publishPolicy, 'the guard disabled the control but did not guard the handler').toHaveBeenCalledTimes(1)
+    // The whole point of keeping the reason on `blockedReason`: a transient lock has no reason
+    // to state, and stating the wrong one is worse than stating none.
+    expect(screen.queryByTestId('publish-blocked-reason'), 'a publish in flight renders "Save your changes first", which is untrue').toBeNull()
+    expect(publishButton().title, 'the tooltip states a reason that does not apply mid-publish').toBeFalsy()
+    expect(publishButton().getAttribute('aria-describedby')).toBeNull()
+    // The publish path locks the same form the save path does.
+    expect(inert(nameInput()), 'a keystroke typed inside a publish is overwritten by its re-seed').toBe(true)
+  })
+
+  it('a landed save re-opens the form', async () => {
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+    fireEvent.click(saveButton())
+    expect(inert(nameInput()), 'the form never locked, so the re-open below is vacuous').toBe(true)
+
+    sav.resolve({ ...self, name: 'Server name' })
+
+    await waitFor(() => expect(inert(nameInput()), 'the form stayed dead after the write landed').toBe(false))
+    expect(nameInput().value, 'the re-seed never reached the field').toBe('Server name')
+    expect(inert(control(screen.getByLabelText('Applies'))), 'the scope select stayed dead after the write landed').toBe(false)
+  })
+
+  it('a REFUSED save re-opens the form over its error slot', async () => {
+    // The `finally` clause, not the success path: a rejection that left `submitting` true would
+    // strand the user in a dead form with the server's reason and no way to act on it.
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    const refusal = 'only an admin can change approval policies'
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+    const save = saveButton()
+    fireEvent.click(save)
+    expect(inert(nameInput()), 'the form never locked, so the re-open below is vacuous').toBe(true)
+
+    sav.reject(new ApiError('http', refusal, 403))
+
+    expect(await screen.findByText(refusal)).toBeTruthy()
+    expect(inert(nameInput()), 'a refused write left the form permanently dead').toBe(false)
+    expect(inert(save), 'the user cannot retry the write that was just refused').toBe(false)
   })
 })
 

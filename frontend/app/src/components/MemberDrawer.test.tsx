@@ -307,3 +307,34 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
     expect(pill.getAttribute('aria-pressed'), 'the real held role must render once the retry lands, not stay stuck on the error swap').toBe('true')
   })
 })
+
+// ============================================================================
+// APPR-09-06 (task-510) — AC-2, pinned rather than changed
+// ============================================================================
+// ALREADY GREEN on write, deliberately. AC-2 asks for "the same loading affordance" over an
+// unlanded policies fetch, but its premise is false: `stepsForMember` answers `null` at zero BY
+// CONTRACT (lib/roles.ts:170-173 — "THE GATE IS THE COUNT: holding a role a policy never names
+// answers `null`, not a section reading 'Named in 0 approval steps' above an empty list"), and
+// MemberDrawer.tsx:306 renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
+// false claim. An affordance here would contradict a shipped design note, so this pins the
+// contract instead: the gate stays the null, never a count re-derived off `ctx.policies`.
+
+describe('APPR-09-06 AC-2: an unlanded policies fetch renders no steps line at all', () => {
+  it('the drawer renders no steps line, not a zero-step line, while policies are unlanded', () => {
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [role({ key: 'cfo', members: ['u2'] })], policies: [], policiesState: 'loading' })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    // Population floor: the panel that WOULD carry the steps line did render. The landed
+    // counterpart — the same drawer printing its real count — is the spec at line 159 above.
+    expect(screen.getByTestId('drawer-wfrole-helper').textContent).toBe(drawerRoleHelper('preparer'))
+    expect(screen.queryByTestId('member-steps-named'), 'an unlanded policies fetch rendered a step count').toBeNull()
+    expect(screen.queryByText(stepsNamedLine(0))).toBeNull()
+  })
+})

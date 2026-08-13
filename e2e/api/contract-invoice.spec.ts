@@ -1300,21 +1300,40 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // gates ENFORCEMENT, not visibility.
 
     test('contract: the four approval flags are present and typed', async () => {
-      const { invoiceId, policyId } = await armedInvoice('cfo')
-      try {
-        // approveFlags() already asserts PRESENCE and the approve/reject agreement; this
-        // adds only the types, so the presence loop is not duplicated.
-        const body = await approveFlags(invoiceId, token)
+      // approveFlags() already asserts PRESENCE and the approve/reject agreement; this
+      // adds only the types, so the presence loop is not duplicated. Driven over TWO
+      // shapes so both arms of `string | null` are actually observed: an armed invoice a
+      // staffed admin can decide (booleans true, reasons null) and a bare draft the status
+      // rung refuses (booleans false, reasons strings). One shape alone would leave half
+      // the declared type unexercised.
+      const assertTypes = (body: Record<string, unknown>, label: string) => {
         for (const k of ['can_approve', 'can_reject']) {
-          expect(typeof body[k], `${k} should be a boolean, not a string or a number`).toBe('boolean')
+          expect(typeof body[k], `${label}: ${k} should be a boolean`).toBe('boolean')
         }
         for (const k of ['approve_blocked_reason', 'reject_blocked_reason']) {
           const v = body[k]
-          expect(v === null || typeof v === 'string', `${k} should be string | null, was ${JSON.stringify(v)}`).toBe(true)
+          expect(v === null || typeof v === 'string', `${label}: ${k} should be string | null, was ${JSON.stringify(v)}`).toBe(true)
         }
+      }
+
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const armed = await approveFlags(invoiceId, token)
+        assertTypes(armed, 'armed invoice')
+        expect(armed.can_approve, 'a staffed admin on an open run can decide').toBe(true)
+        expect(armed.approve_blocked_reason, 'an allowed gate names no refusal').toBeNull()
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }
+
+      const draft = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-APPR-TYPES-${freshTin()}`),
+      })
+      const bare = await approveFlags(draft.id, token)
+      assertTypes(bare, 'bare draft')
+      expect(bare.can_approve, 'a draft with no run cannot be decided').toBe(false)
+      expect(typeof bare.approve_blocked_reason, 'a refused gate names a sentence, not null').toBe('string')
     })
 
     test('contract: list rows carry the approval key', async () => {

@@ -142,8 +142,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const [saveError, setSaveError] = useState<string | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
   // One flag for both verbs (RoleModal.tsx:73's shape). Both re-seed `working` from the answer,
-  // so a keystroke typed inside the round trip is overwritten when it lands.
-  const [submitting, setSubmitting] = useState(false)
+  // so a keystroke typed inside the round trip is overwritten when it lands. It NAMES the verb
+  // only so each control's pending label can — off a shared boolean, Publish reads 'Publishing…'
+  // inside a save. Still one piece of state: `submitting` is derived, so either verb locks the
+  // whole form ('ONE flag covers both verbs').
+  const [pendingVerb, setPendingVerb] = useState<'save' | 'publish' | null>(null)
+  const submitting = pendingVerb !== null
 
   // The Saved flash. 1700ms, and re-clicking Save restarts it rather than stacking a
   // second timer — the effect's cleanup cancels the one in flight.
@@ -183,7 +187,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
 
   async function save() {
     if (submitting) return
-    setSubmitting(true)
+    setPendingVerb('save')
     setSaveError(null)
     try {
       // ONE object into BOTH states. Cloning either side (`setServer({ ...saved })`) leaves
@@ -201,7 +205,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
     } finally {
       // `finally`, so a refusal re-opens the form over its error slot rather than stranding
       // the user in a dead one.
-      setSubmitting(false)
+      setPendingVerb(null)
     }
   }
 
@@ -212,7 +216,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // no id churns.
   async function publish() {
     if (submitting) return
-    setSubmitting(true)
+    setPendingVerb('publish')
     setPublishError(null)
     try {
       const published = await ctx.publishPolicy(working.id)
@@ -221,7 +225,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
     } catch (err) {
       setPublishError(toApiError(err).message)
     } finally {
-      setSubmitting(false)
+      setPendingVerb(null)
     }
   }
 
@@ -386,7 +390,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               Clear steps
             </button>
             <button type="button" onClick={() => void save()} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 16px', fontSize: 13 }}>
-              {saved ? 'Saved' : 'Save draft'}
+              {pendingVerb === 'save' ? 'Saving…' : saved ? 'Saved' : 'Save draft'}
             </button>
             {/* Disabled-with-a-reason, never hidden: the visible sibling below is the only layer
                 a keyboard user and a text assertion can both reach. No `filter: 'none'` — that
@@ -409,7 +413,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 ...(blockedReason ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
               }}
             >
-              Publish
+              {pendingVerb === 'publish' ? 'Publishing…' : 'Publish'}
             </button>
           </div>
           {blockedReason && (

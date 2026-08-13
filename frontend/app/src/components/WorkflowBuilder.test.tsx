@@ -186,8 +186,14 @@ const FIRM_ROLES: Role[] = [
   { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: [] },
 ]
 
+/**
+ * Either label: the control names the verb in flight, so a publish round trip reads
+ * 'Publishing…'. Alternation rather than `/^Publish/`, which a future 'Publish anyway' would
+ * also pass. `saveButton()` stays pinned to the resting label — no call site queries it mid-save,
+ * and a save that renamed it mid-PUBLISH is exactly the false claim this split removes.
+ */
 function publishButton(): HTMLButtonElement {
-  return screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement
+  return screen.getByRole('button', { name: /^(Publish|Publishing…)$/ }) as HTMLButtonElement
 }
 
 /** The colour a hint carries, whether the string sits in the styled node or in a child span. */
@@ -982,6 +988,79 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
     const flex = wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex')
     expect(flex, 'exactly one wrapper blockifies its child').toHaveLength(1)
     expect(flex[0].contains(screen.getByLabelText('Applies')), 'the flex wrapper is not the one around WfSelect').toBe(true)
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APPR-09-06 follow-up — the in-flight lock states that it is in flight
+// ----------------------------------------------------------------------------
+// AC-5's `disabled` lands with no pending affordance: no `:disabled` rule exists in
+// frontend/app/src/styles/platform.css or packages/design-tokens/app-layer.css, and
+// `.asc-app .v2-btn-ghost` sets an explicit `color` (app-layer.css:214), so the UA grey never
+// paints. The form silently froze. Both precedents AC-5 cites flip their label instead
+// (RoleModal.tsx:382, EntityFormModal.tsx:208), which is what these pin.
+
+describe('APPR-09-06 follow-up: each write control names the verb in flight', () => {
+  it('Save draft reads Saving… for the round trip, and Publish keeps its resting label', async () => {
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+    // Held: the control is a direct child of the header row, so no render detaches it — and
+    // `saveButton()` matches the RESTING label, which is the point of the assertion below.
+    const save = saveButton()
+    expect(screen.queryByText('Saving…'), 'the pending label is already on screen, so the flip below is vacuous').toBeNull()
+
+    fireEvent.click(save)
+
+    expect(save.textContent, 'the form locked with nothing on screen saying a write is running').toBe('Saving…')
+    // The cross-verb half: ONE flag locks both controls, but only one verb is running.
+    expect(publishButton().textContent, 'Publish claimed a publish that is not running').toBe('Publish')
+
+    sav.resolve({ ...self, name: 'Server name' })
+
+    await waitFor(() => expect(screen.queryByText('Saving…'), 'the pending label outlived the write').toBeNull())
+    expect(save.textContent, 'the landed-write flash never replaced the pending label').toBe('Saved')
+  })
+
+  it('Publish reads Publishing… for the round trip, and Save draft keeps its resting label', async () => {
+    const self = policyWith('fin_mgr')
+    const pub = deferred<Policy>()
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], publishPolicy: vi.fn(() => pub.promise) })} policy={self} />)
+
+    const publish = publishButton()
+    expect(publish.disabled, 'Publish is already shut, so the click below starts no write').toBe(false)
+    expect(screen.queryByText('Publishing…'), 'the pending label is already on screen, so the flip below is vacuous').toBeNull()
+
+    fireEvent.click(publish)
+
+    // Without this, a Publish shut by an in-flight write is indistinguishable from one shut by
+    // `blockedReason` — and the latter is the only one that carries a visible reason.
+    expect(publish.textContent, 'the form locked with nothing on screen saying a write is running').toBe('Publishing…')
+    expect(saveButton().textContent, 'Save draft claimed a save that is not running').toBe('Save draft')
+
+    pub.resolve({ ...self, status: 'published', version: 1, activeVersion: 1 })
+
+    await waitFor(() => expect(publish.textContent, 'the pending label outlived the write').toBe('Publish'))
+    expect(screen.queryByText('Publishing…')).toBeNull()
+  })
+
+  it('a REFUSED write drops the pending label too — the `finally` clears it on both verbs', async () => {
+    // Settling is not landing. A label cleared only on the success path leaves a refused write
+    // reading 'Saving…' forever, over an error slot the user cannot act on.
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    const refusal = 'only an admin can change approval policies'
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+    const save = saveButton()
+    fireEvent.click(save)
+    expect(save.textContent, 'the label never flipped, so the clear below is vacuous').toBe('Saving…')
+
+    sav.reject(new ApiError('http', refusal, 403))
+
+    expect(await screen.findByText(refusal)).toBeTruthy()
+    expect(save.textContent, 'a refused write is still claiming to be in flight').toBe('Save draft')
   })
 })
 

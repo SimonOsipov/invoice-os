@@ -214,10 +214,14 @@ export interface InvoiceRecord {
   failure_kind: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
-  // approval (APPR-08-08) -- listItem's sibling key, not an Invoice json tag, so it
-  // rides InvoiceRecord the way `rule_set_version` does. REQUIRED and nullable: the
-  // server always says explicitly (no omitempty on any of RowFacts' six keys), and
-  // `null` is a positive claim -- this invoice has no approval run.
+  // approval (APPR-08-08) -- a LIST-wire key: Go emits it on listItem only, never on
+  // getResponse. REQUIRED and nullable, and getInvoice normalises the absent key to
+  // `null`, so the declared type is true on a detail record too -- an `undefined` here
+  // would make isRowSelectable fail OPEN. That is the `rule_set_version` trap being
+  // AVOIDED (typed present, reads undefined on list rows -- reviewBatch.ts), not the
+  // precedent being followed. Declaring it on the base record differs in SHAPE from
+  // Go's listItem and client.ts's InvoiceListItem, which hang it off the list type
+  // alone; all three agree in MEANING -- `null` claims this invoice has no run.
   approval: InvoiceApproval | null
 }
 
@@ -590,10 +594,15 @@ export async function violationSummary(
 // is exactly the drift that decision forbids. submit_blocked_reason now carries an APPROVAL
 // refusal alongside the role and status ones (APPR-08-05): on a validated invoice whose
 // approval run is still open, can_submit is false and this field explains why.
+//
+// `approval` is normalised for a different reason than the rest: the detail wire never
+// carries the key at all (it is listItem's), so without the `?? null` a detail record
+// reads `undefined` behind a required type and isRowSelectable fails OPEN.
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
   return {
     ...res,
+    approval: res.approval ?? null,
     rule_set_version: res.rule_set_version ?? null,
     qr_png_base64: res.qr_png_base64 ?? null,
     can_edit: res.can_edit === true,

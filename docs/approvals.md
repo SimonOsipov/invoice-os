@@ -202,8 +202,10 @@ section changes — flag on or off.
 
 The gate is applied at exactly **two** places and nowhere else: `Store.Transition`
 (`internal/invoice`), the single-invoice door, and `Submitter.BatchSubmit`
-(`internal/submission`), the batch door. A direct `UPDATE invoices SET status = 'queued'`
-against the database bypasses it, and that is **out of scope by design** —
+(`internal/invoice/batch_submit.go` — **not** `internal/submission`, which owns the worker
+that drains the queue afterwards), the batch door. A direct
+`UPDATE invoices SET status = 'queued'` against the database bypasses it, and that is
+**out of scope by design** —
 `invoices.status` carries only its 7-value `CHECK`, no trigger has ever guarded that
 table, and the schema has never been state-machine-aware: every legal-transition rule in
 this product lives in Go. Closing that door would mean teaching the schema the whole
@@ -799,6 +801,16 @@ whether anyone can **see** that a run is open.
 - `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
 - `can_submit` / `submit_blocked_reason` on the invoice wire.
 
+**The two doors refuse in different registers**, and that is not a defect. `Store.Transition`
+answers `409` with `awaitingApprovalReason` (`internal/invoice/handlers.go`) — the same
+sentence `submit_blocked_reason` carries. `Submitter.BatchSubmit` has no sentence field:
+`BatchSubmitResultItem.Reason` carries the machine token `awaiting_approval`, and the SPA
+maps that token to its own label (`SKIP_REASON_LABELS`,
+`frontend/app/src/lib/invoices.ts`). The two state the same fact in different registers;
+they are not the same string, and no mirror test links them — TypeScript cannot import a
+Go const. Unifying the
+copy would mean putting a sentence on the batch wire, which no story has asked for.
+
 **One exception, on the error path only.** `Store.ApprovalFacts` folds the flag into
 `TransmitClear` on its success path. When the read itself fails, it returns the zero
 `ApprovalFacts` instead, and `GetHandler` does the same with a seam error — so
@@ -817,12 +829,17 @@ off — still submits the same invoice. Pinned by
   flag is on or off. Runs, their steps and their decisions exist either way; the flag only
   decides whether an open one stops a transmit.
 - `can_approve` / `can_reject`.
-- The per-row `approval` facts on `GET /v1/invoices`.
+- The per-row `approval` facts on `GET /v1/invoices`. **With one consequence**: the SPA
+  reads `run_state` off these facts in `isRowSelectable`
+  (`frontend/app/src/lib/invoices.ts`) and refuses the checkbox, so an open run blocks
+  batch **selection** in the browser whatever the flag says. Visibility is ungated, but the
+  SPA turns it into a block.
 - The `awaiting_approval` list filter.
 
 So with the flag off an operator still sees the whole approval surface — runs open,
-approvers approve or reject, rows report the step they are waiting on — and invoices still
-transmit. That is deliberate: every read surface can be exercised in production before the
+approvers approve or reject, rows report the step they are waiting on — and the server
+still transmits, though the review screen will not let an open-run row be batch-selected
+(above). That is deliberate: every read surface can be exercised in production before the
 refusal is switched on.
 
 ### APPR-14 owns the flip

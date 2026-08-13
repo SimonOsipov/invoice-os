@@ -281,9 +281,13 @@ const revalidateBlockedReason = "Only draft invoices can be re-validated — edi
 const notApproverTransmitReason = "Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team."
 
 // awaitingApprovalReason is the ONE refusal sentence every approval-blocked door
-// emits, so a blocked caller's message never varies by door — the
-// notApproverTransmitReason precedent above. Deliberately distinguishable from
-// internal/approval's "no longer awaiting approval" 409, which means the inverse
+// emits, so a blocked caller's message never varies by door FOR THE SAME WIRE
+// FIELD — the notApproverTransmitReason precedent above. Those fields are the 409
+// body (statusForErr) and submit_blocked_reason (submitGate). The batch door has
+// no sentence field at all: BatchSubmitResultItem.Reason carries the machine token
+// awaiting_approval, which the SPA labels itself (docs/approvals.md §11).
+// Distinguishable on purpose from internal/approval's "no longer awaiting
+// approval" 409, which means the inverse
 // (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
 const awaitingApprovalReason = "This invoice is waiting on approval — it can be submitted once an approver approves it."
 

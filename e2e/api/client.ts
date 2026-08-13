@@ -391,6 +391,14 @@ export interface GetInvoiceResult extends Invoice {
   ubl_blocked_reason: string | null
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
+  // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
+  // no-omitempty convention. One backend gate feeds both pairs, so can_approve always
+  // equals can_reject and the two reasons are the same string. NOT gated by
+  // APPROVALS_ENFORCED -- the decision endpoint is unflagged.
+  can_approve: boolean
+  approve_blocked_reason: string | null
+  can_reject: boolean
+  reject_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

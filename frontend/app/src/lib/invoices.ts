@@ -241,6 +241,14 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   // fail-closed convention as the four flags above.
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
+  // can_approve/can_reject and their reasons (APPR-08-06) -- same convention again.
+  // Approve and reject availability are IDENTICAL (one backend gate feeds both), so
+  // the two booleans always agree and the two reasons are the same string; they ship
+  // as two pairs because the screen renders two buttons, each needing its own slot.
+  can_approve: boolean
+  approve_blocked_reason: string | null
+  can_reject: boolean
+  reject_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two

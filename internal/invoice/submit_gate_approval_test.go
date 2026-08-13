@@ -226,7 +226,10 @@ func TestGetHandler_ApprovalFactsErrorFailsClosedNot500(t *testing.T) {
 // TestGetHandler_ApprovalFactsResolvedOnEveryStatus: exactly one seam call per
 // request whatever the status -- the TestGetHandler_CallerRoleResolvedOnEveryStatus
 // precedent. A short-circuit on non-validated statuses would starve
-// can_approve/can_reject (APPR-08-06), which are not status-gated.
+// can_approve/can_reject (APPR-08-06). Those ARE status-gated -- approvalGate's
+// rung 2 refuses anything but validated -- but the seam must still be resolved on
+// every status: the wire has to carry an honest reason wherever the ladder stops,
+// and a reordered ladder must not silently read a zero-valued fact.
 func TestGetHandler_ApprovalFactsResolvedOnEveryStatus(t *testing.T) {
 	for _, s := range allStatuses {
 		t.Run(string(s), func(t *testing.T) {

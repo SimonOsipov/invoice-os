@@ -229,6 +229,10 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 //
 // CanResolveOutside/ResolveOutsideBlockedReason follow the same two rules,
 // appended last of all, and come from resolveOutsideGate below.
+//
+// CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
+// follow the same two rules, appended last of all, and come from ONE
+// approvalGate call -- approve and reject availability are identical.
 type getResponse struct {
 	Invoice
 	RuleSetVersion              *int    `json:"rule_set_version"`
@@ -242,6 +246,10 @@ type getResponse struct {
 	UBLBlockedReason            *string `json:"ubl_blocked_reason"`
 	CanResolveOutside           bool    `json:"can_resolve_outside"`
 	ResolveOutsideBlockedReason *string `json:"resolve_outside_blocked_reason"`
+	CanApprove                  bool    `json:"can_approve"`
+	ApproveBlockedReason        *string `json:"approve_blocked_reason"`
+	CanReject                   bool    `json:"can_reject"`
+	RejectBlockedReason         *string `json:"reject_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -328,6 +336,17 @@ func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 	return true, nil
 }
 
+// approvalGate is the detail page's approve/reject availability, mirroring
+// decideTx's refusal ladder rung for rung so the wire never offers a button the
+// endpoint would refuse. ONE gate feeds both pairs: decideTx branches on the
+// decision only after every rung, and reject's extra reason rule is
+// DecideHandler's body check, not an availability rung.
+//
+// stub (APPR-08-06 Mode A): the ladder is not implemented yet.
+func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
+	return false, nil // stub
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
@@ -407,6 +426,9 @@ func GetHandler(
 
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
 		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear)
+		// ONE call feeds both pairs, so can_approve and can_reject cannot diverge
+		// (TestApprovalGate_ApproveAndRejectNeverDiverge).
+		canDecide, decideReason := approvalGate(inv.Status, role, facts)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -430,6 +452,10 @@ func GetHandler(
 			UBLBlockedReason:            ublReason,
 			CanResolveOutside:           canResolveOutside,
 			ResolveOutsideBlockedReason: resolveOutsideReason,
+			CanApprove:                  canDecide,
+			ApproveBlockedReason:        decideReason,
+			CanReject:                   canDecide,
+			RejectBlockedReason:         decideReason,
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local

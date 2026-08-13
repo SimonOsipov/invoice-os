@@ -617,6 +617,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -646,6 +650,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -671,6 +679,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -717,6 +729,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -899,6 +915,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -973,6 +993,104 @@ describe('getInvoice', () => {
 
     expect(result.can_view_ubl).toBe(true)
     expect(result.ubl_blocked_reason).toBe('stale reason')
+  })
+
+  // --- APPR-08-06 (task-504): can_approve / can_reject fail-closed normalization ---
+  //
+  // These specs exist because `getInvoice` returns `{ ...res, ... }` and `res` is already
+  // typed `InvoiceDetailRecord`: OMITTING the four explicit normalization lines COMPILES,
+  // and tsc reports nothing. Without them the four keys bypass the fail-closed convention
+  // entirely and arrive as whatever the wire carried. Only a runtime spec catches that,
+  // which is what each `it` below is.
+
+  it('APPROVE-1: a non-boolean truthy can_approve is denied', async () => {
+    // Unannotated literal (the G2 idiom): the mutation oracle for `=== true` over
+    // `?? false` / plain truthiness. `1` survives both of those.
+    const wire = { ...draftInvoice, can_approve: 1, approve_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_approve).toBe(false)
+  })
+
+  it('APPROVE-2: a stringly-typed can_reject is denied', async () => {
+    // The nastiest wire value there is: the STRING "true" is truthy, and even the
+    // string "false" would be. Approve/reject are the two most destructive buttons on
+    // the screen, so anything that is not literally `true` must deny.
+    const wire = { ...draftInvoice, can_reject: 'true', reject_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_reject).toBe(false)
+  })
+
+  it('APPROVE-3: a wire missing either boolean fails closed, never undefined', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_reject: true }) })
+    const missingApprove = await getInvoice(af, base, 'inv-1')
+    expect(missingApprove.can_approve).toBe(false)
+    expect(missingApprove.can_approve).not.toBeUndefined()
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_approve: true }) })
+    const missingReject = await getInvoice(af, base, 'inv-1')
+    expect(missingReject.can_reject).toBe(false)
+    expect(missingReject.can_reject).not.toBeUndefined()
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_approve: undefined, can_reject: undefined }) })
+    const undef = await getInvoice(af, base, 'inv-1')
+    expect(undef.can_approve).toBe(false)
+    expect(undef.can_reject).toBe(false)
+  })
+
+  it('APPROVE-4: a genuine true survives -- the normalization is not a hardcoded false', async () => {
+    const wire = { ...draftInvoice, can_approve: true, approve_blocked_reason: null, can_reject: true, reject_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_approve).toBe(true)
+    expect(result.can_reject).toBe(true)
+  })
+
+  it('APPROVE-5: both reasons normalize to null when absent, never undefined', async () => {
+    const wire = { ...draftInvoice, can_approve: false, can_reject: false }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.approve_blocked_reason).toBeNull()
+    expect(result.approve_blocked_reason).not.toBeUndefined()
+    expect(result.reject_blocked_reason).toBeNull()
+    expect(result.reject_blocked_reason).not.toBeUndefined()
+  })
+
+  it('APPROVE-6: both reasons pass through byte-identically', async () => {
+    // internal/invoice/handlers.go's approvalGate rung 5, verbatim -- em dash U+2014.
+    // The SPA has no authority over this copy ([gates-on-the-wire]); a fallback string
+    // authored here is exactly the drift that decision forbids.
+    const reasonText =
+      "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+    const wire = {
+      ...draftInvoice,
+      can_approve: false,
+      approve_blocked_reason: reasonText,
+      can_reject: false,
+      reject_blocked_reason: reasonText,
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.approve_blocked_reason).toBe(reasonText)
+    expect(result.reject_blocked_reason).toBe(reasonText)
   })
 })
 
@@ -1270,6 +1388,10 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       ubl_blocked_reason: null,
       can_resolve_outside: true,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -1409,6 +1531,10 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)

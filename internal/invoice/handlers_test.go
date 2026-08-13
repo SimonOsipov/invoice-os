@@ -3681,6 +3681,21 @@ func TestGetHandler_ActionFlagsFalseNotOmitted(t *testing.T) {
 	if !strings.Contains(body, `"can_revalidate":false`) {
 		t.Errorf("body = %s, want the literal \"can_revalidate\":false (not omitted) on a non-editable status", body)
 	}
+	// APPR-08-06 (task-504), AC #6: the same no-omitempty rule for the approve
+	// pair. accepted is not validated, so rung 2 refuses and BOTH reasons are a
+	// non-null quoted string here -- the explicit-null half needs a gate-PASSING
+	// fixture and lives in TestGetHandler_ApproveReasonsExplicitNullWhenAllowed
+	// (doInvoiceGet hardwires clearApprovalStub, whose RunState is "").
+	for _, want := range []string{`"can_approve":false`, `"can_reject":false`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %s, want the literal %s (not omitted) on a non-approvable status", body, want)
+		}
+	}
+	for _, k := range []string{"approve_blocked_reason", "reject_blocked_reason"} {
+		if strings.Contains(body, `"`+k+`":null`) || !strings.Contains(body, `"`+k+`":"`) {
+			t.Errorf("body = %s, want %q to be a non-null quoted string on accepted -- rung 2 refuses a non-validated invoice", body, k)
+		}
+	}
 }
 
 // TestGetHandler_RevalidateBlockedReasonNullOnDraft (T8): a draft invoice
@@ -3833,7 +3848,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
 	// additive set -- the exact-count assertion below re-balances on its own.
 	// can_resolve_outside/resolve_outside_blocked_reason join the same way.
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason"}
+	// APPR-08-06 (task-504): can_approve/approve_blocked_reason/can_reject/
+	// reject_blocked_reason join the same additive set, 37 wire keys -> 41.
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
+		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -3990,6 +4008,10 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"can_view_ubl", "ubl_blocked_reason",
 		// appended after ubl_blocked_reason, so they land last of all.
 		"can_resolve_outside", "resolve_outside_blocked_reason",
+		// APPR-08-06 (task-504): appended after resolve_outside_blocked_reason,
+		// so THESE now land last of all -- one approvalGate call feeds both pairs,
+		// and the approve pair is declared before the reject pair.
+		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -4218,6 +4240,17 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	if !strings.Contains(body, `"can_edit":true`) {
 		t.Errorf("body = %s, want the literal \"can_edit\":true for failed once failed->draft is a legal edge -- GetHandler must call canEdit(inv.Status), not restate a hardcoded per-status switch (Core AC 4)", body)
 	}
+	// APPR-08-06 (task-504), AC #7 -- ANTI-COUPLING, the inverse claim to the
+	// assertion above. approvalGate's status rung is a LITERAL s != validated,
+	// mirroring decideTx's own (decision.go), so widening legalTransitions must
+	// NOT widen the approve pair the way it widens can_edit. The lever cannot
+	// reach these flags at all; the derivation oracle that CAN is
+	// TestGetHandler_ApproveFlagsTrackTheInjectedFacts, which varies ApprovalFacts.
+	for _, want := range []string{`"can_approve":false`, `"can_reject":false`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %s, want the literal %s on failed even with failed->draft made legal -- the approve flags must not inherit canEdit's widening", body, want)
+		}
+	}
 }
 
 // TestListHandler_NoActionFlagKeys (T14): List must stay clean of every
@@ -4239,7 +4272,12 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 	body := rec.Body.String()
 	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`,
 		// BUG-04-03 (task-399): the UBL gate is detail-only too.
-		`"can_view_ubl":`, `"ubl_blocked_reason":`} {
+		`"can_view_ubl":`, `"ubl_blocked_reason":`,
+		// The resolve-outside pair was never in this guard -- a pre-existing
+		// 2-key gap, closed here rather than widened to 6 by APPR-08-06.
+		`"can_resolve_outside":`, `"resolve_outside_blocked_reason":`,
+		// APPR-08-06 (task-504): the approve pair is detail-only too.
+		`"can_approve":`, `"approve_blocked_reason":`, `"can_reject":`, `"reject_blocked_reason":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
 		}

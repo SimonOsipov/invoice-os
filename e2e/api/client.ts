@@ -332,7 +332,20 @@ export interface Invoice {
   kept_as_is_at: string | null
   kept_as_is_by: string | null
   kept_as_is_reason: string | null
+  // approval (APPR-08-08) -- listItem's sibling, present on the LIST wire only, as an
+  // object or an explicit null. The api specs that assert it are APPR-08-10's.
+  approval: InvoiceApproval | null
   line_items?: InvoiceLineItem[]
+}
+
+// Mirrors approval.RowFacts (internal/approval/gate.go) field for field.
+export interface InvoiceApproval {
+  run_state: string
+  pending_ord: number | null
+  pending_role_title: string | null
+  pending_holder_warn: boolean
+  due_at: string | null
+  overdue: boolean
 }
 
 export interface ListInvoicesQuery {

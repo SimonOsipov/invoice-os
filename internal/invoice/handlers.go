@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
@@ -111,6 +112,17 @@ type listPagination struct {
 type listResponse struct {
 	Invoices   []Invoice      `json:"invoices"`
 	Pagination listPagination `json:"pagination"`
+}
+
+// listItem is one GET /v1/invoices row: Invoice embedded, plus one additive
+// sibling. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
+// and RuleSetVersion is json:"-" for exactly that reason.
+//
+// stub (APPR-08-08 Mode A): the Approval sibling and this type's use by
+// ListHandler are Stage 3 work. TestListItem_InvoiceKeysUnmovedAndUnrenamed
+// is the spec.
+type listItem struct {
+	Invoice
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -565,7 +577,16 @@ const maxImportBatchIDs = 25
 // checked BEFORE uuid.Parse so the cap is never payable in unbounded parse
 // work. One value still produces a one-element ListFilter.ImportBatchIDs and
 // byte-identical semantics to today.
-func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, error), log *slog.Logger) http.HandlerFunc {
+//
+// rowFacts is accepted and IGNORED at this stage -- stub (APPR-08-08 Mode A).
+// Calling it, mapping items into listItem and 500ing on its error are Stage 3
+// work; TestListHandler_RowFacts* are the specs.
+func ListHandler(
+	list func(ctx context.Context, f ListFilter) ([]Invoice, int, error),
+	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error),
+	log *slog.Logger,
+) http.HandlerFunc {
+	_ = rowFacts // stub
 	if log == nil {
 		log = slog.Default()
 	}

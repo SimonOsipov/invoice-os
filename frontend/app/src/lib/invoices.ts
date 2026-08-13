@@ -200,6 +200,22 @@ export interface InvoiceRecord {
   failure_kind: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
+  // approval (APPR-08-08) -- listItem's sibling key, not an Invoice json tag, so it
+  // rides InvoiceRecord the way `rule_set_version` does. REQUIRED and nullable: the
+  // server always says explicitly (no omitempty on any of RowFacts' six keys), and
+  // `null` is a positive claim -- this invoice has no approval run.
+  approval: InvoiceApproval | null
+}
+
+// One list row's approval standing, mirroring approval.RowFacts (gate.go) field for
+// field. `due_at` is the wire's RFC3339 string, not a Date.
+export interface InvoiceApproval {
+  run_state: string
+  pending_ord: number | null
+  pending_role_title: string | null
+  pending_holder_warn: boolean
+  due_at: string | null
+  overdue: boolean
 }
 
 // getInvoice's own response shape: InvoiceRecord plus getResponse's OTHER sibling key,
@@ -226,9 +242,10 @@ export interface InvoiceRecord {
 // lets a consumer read `undefined` and treat "the server did not say" as an open
 // question, the fail-open shape [gates-on-the-wire] exists to remove. The same holds for
 // every action key added since, `can_approve`/`can_reject` and their reasons included
-// (APPR-08-06): all four are REQUIRED, never `?`. They sit on
-// InvoiceDetailRecord ONLY, never InvoiceRecord: ListHandler returns bare Invoice rows,
-// which carry no such keys.
+// (APPR-08-06): all four are REQUIRED, never `?`. The ACTION FLAGS sit on
+// InvoiceDetailRecord ONLY, never InvoiceRecord -- TestListHandler_NoActionFlagKeys
+// keeps them off the list wire. `approval` is the one base-record exception: it is a
+// list row's own key (APPR-08-08), declared on InvoiceRecord above.
 export interface InvoiceDetailRecord extends InvoiceRecord {
   rule_set_version: number | null
   qr_png_base64: string | null
@@ -468,6 +485,17 @@ export async function listInvoices(
   if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
   return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+}
+
+// normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval`, the
+// same convention getInvoice applies to the action flags below: booleans via `=== true`
+// (never `?? false`), nullable fields via `?? null`, a missing or non-object `approval`
+// to `null` (never `undefined`). Exported so the specs can drive it directly.
+//
+// stub (APPR-08-08 Mode A): the real body is Stage 3 work, and listInvoices does not
+// call it yet. The `normaliseInvoiceRow *` specs in invoices.test.ts are the oracle.
+export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
+  return raw
 }
 
 // The register's own page size (mirrors REVIEW_PAGE_SIZE, reviewBatch.ts:702). Stays

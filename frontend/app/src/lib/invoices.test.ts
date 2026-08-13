@@ -57,6 +57,7 @@ import {
   listInvoices,
   mbsPathToEditField,
   newIdempotencyKey,
+  normaliseInvoiceRow,
   pruneSelection,
   reasonFieldFlags,
   rejectionProvenance,
@@ -81,6 +82,7 @@ import {
   type BatchSubmitResultItem,
   type EditFieldKey,
   type EditFormState,
+  type InvoiceApproval,
   type InvoiceCreateInput,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
@@ -170,6 +172,7 @@ const draftInvoice: InvoiceRecord = {
   kept_as_is_by: null,
   kept_as_is_reason: null,
   failure_kind: null,
+  approval: null,
   rule_set_version: null,
 }
 
@@ -518,6 +521,124 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
 
     expect(result.invoices[0].failure_kind).toBe('payload_not_built')
     expect(result.invoices[1].failure_kind).toBeNull()
+  })
+})
+
+// --- APPR-08-08 (task-499): the per-row `approval` envelope -----------------
+//
+// `normaliseInvoiceRow` is a STUB returning its input unchanged, and `listInvoices`
+// does not call it yet, so every ROW-* case below fails on its own assertion.
+
+// wireRow builds an UNANNOTATED wire object and casts once, at the boundary. The
+// APPROVE-1/2/3/5 specs get the same effect for free by going through the fetch mock,
+// which TypeScript never checks; normaliseInvoiceRow is called directly, so the cast
+// has to be explicit -- and the malformed values are the whole point of the specs.
+const wireRow = (over: Record<string, unknown>): InvoiceRecord =>
+  ({ ...draftInvoice, ...over }) as unknown as InvoiceRecord
+
+// rowWithoutApproval is the OLDER-SERVER wire: the key is absent, not null.
+const rowWithoutApproval = (): InvoiceRecord => {
+  const clone: Record<string, unknown> = { ...draftInvoice }
+  delete clone.approval
+  return clone as unknown as InvoiceRecord
+}
+
+// fullApproval mirrors approval.RowFacts' six keys, all well-formed.
+const fullApproval: InvoiceApproval = {
+  run_state: 'open',
+  pending_ord: 0,
+  pending_role_title: 'Finance Lead',
+  pending_holder_warn: false,
+  due_at: '2026-08-20T09:00:00Z',
+  overdue: false,
+}
+
+describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pass', () => {
+  it('ROW-1: a missing or non-object `approval` normalises to null, never undefined', () => {
+    const missing = normaliseInvoiceRow(rowWithoutApproval())
+    expect(missing.approval).toBeNull()
+    expect(missing.approval).not.toBeUndefined()
+    expect('approval' in missing).toBe(true)
+
+    // A non-object is the same "the server did not say" case: a string/number/array
+    // would otherwise be handed to a consumer that reads `.run_state` off it.
+    for (const bogus of ['open', 7, [], true]) {
+      expect(normaliseInvoiceRow(wireRow({ approval: bogus })).approval, `approval=${JSON.stringify(bogus)}`).toBeNull()
+    }
+  })
+
+  it('ROW-2: pending_holder_warn/overdue are `=== true`, never truthy -- and a genuine true still survives', () => {
+    // The G2 idiom: `1` survives `?? false` AND plain truthiness, and the STRING
+    // "false" is truthy too. These two booleans drive a WARNING badge on the register,
+    // so anything that is not literally true must read false.
+    const hostile = normaliseInvoiceRow(
+      wireRow({ approval: { ...fullApproval, pending_holder_warn: 'true', overdue: 1 } }),
+    )
+    expect(hostile.approval?.pending_holder_warn).toBe(false)
+    expect(hostile.approval?.overdue).toBe(false)
+
+    // The permissive control -- without it a hardcoded `false` passes the two above.
+    const genuine = normaliseInvoiceRow(
+      wireRow({ approval: { ...fullApproval, pending_holder_warn: true, overdue: true } }),
+    )
+    expect(genuine.approval?.pending_holder_warn).toBe(true)
+    expect(genuine.approval?.overdue).toBe(true)
+  })
+
+  it('ROW-3: pending_role_title passes through byte-identically -- no SPA-authored fallback', () => {
+    // internal/approval's roleTitle answers "Deleted role" for a role that no longer
+    // exists, and read_model.go's holder copy uses an em dash (U+2014). That copy is
+    // the backend's ([gates-on-the-wire]); a default authored here is exactly the
+    // drift that decision forbids.
+    const title = 'Finance Lead — Lagos'
+    const got = normaliseInvoiceRow(wireRow({ approval: { ...fullApproval, pending_role_title: title } }))
+    expect(got.approval).not.toBeNull()
+    expect(got.approval?.pending_role_title).toBe(title)
+  })
+
+  it('ROW-4: the three nullable approval fields normalise to null when absent, never undefined', () => {
+    const got = normaliseInvoiceRow(wireRow({ approval: { run_state: 'open' } }))
+    expect(got.approval).not.toBeNull()
+    expect(got.approval?.run_state).toBe('open')
+    for (const key of ['pending_ord', 'pending_role_title', 'due_at'] as const) {
+      expect(got.approval?.[key], key).toBeNull()
+      expect(got.approval?.[key], key).not.toBeUndefined()
+    }
+  })
+
+  it('ROW-5: every non-approval key is left byte-identical -- the normaliser widens nothing else', () => {
+    const wire = wireRow({ approval: { ...fullApproval, overdue: 1 } })
+    const got = normaliseInvoiceRow(wire)
+
+    expect(Object.keys(got).sort()).toEqual(Object.keys(wire).sort())
+    for (const key of Object.keys(wire)) {
+      if (key === 'approval') continue
+      expect(got[key as keyof InvoiceRecord], key).toEqual(wire[key as keyof InvoiceRecord])
+    }
+  })
+
+  it('ROW-6: listInvoices normalises EVERY row, not just the first', () => {
+    // A single-row shortcut (`invoices[0]`) or a normaliser applied only to `.find(...)`
+    // would pass every case above and still ship raw wire on rows 2..n.
+    const envelope = {
+      invoices: [
+        { ...draftInvoice, id: 'inv-a', approval: { ...fullApproval, overdue: 1 } },
+        { ...draftInvoice, id: 'inv-b', approval: undefined },
+        { ...draftInvoice, id: 'inv-c', approval: { run_state: 'open' } },
+      ],
+      pagination: { limit: 50, offset: 0, total: 3 },
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(envelope) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    return listInvoices(af, base, {}).then((result) => {
+      expect(result.invoices).toHaveLength(3)
+      expect(result.invoices[0].approval?.overdue).toBe(false)
+      expect(result.invoices[1].approval).toBeNull()
+      expect(result.invoices[2].approval?.pending_ord).toBeNull()
+      expect(result.invoices[2].approval?.pending_role_title).toBeNull()
+      expect(result.invoices[2].approval?.due_at).toBeNull()
+    })
   })
 })
 
@@ -2500,7 +2621,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 25 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 27 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -2538,6 +2659,11 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // BUG-06-04 (task-386): +1 -- failure_kind joins Invoice the same way.
       'failure_kind',
       'rule_set_version',
+      // APPR-08-08 (task-499): +1 -- `approval` is a listItem SIBLING, not an Invoice
+      // json tag, exactly like `rule_set_version` above. The title said 25 while this
+      // list already held 26 (rule_set_version was added without updating it); the
+      // count is 27 now and the title says so.
+      'approval',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]

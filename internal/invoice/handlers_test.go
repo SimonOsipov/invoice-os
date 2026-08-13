@@ -66,6 +66,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
@@ -225,6 +226,15 @@ func clearApprovalStub(ctx context.Context, id string) (ApprovalFacts, error) {
 	return ApprovalFacts{TransmitClear: true}, nil
 }
 
+// emptyRowFactsStub is the shared rowFacts stub for ListHandler call sites that
+// do not exercise the row-approval envelope itself -- doInvoiceList hardwires it
+// exactly as doInvoiceGet hardwires adminRoleStub/clearApprovalStub, so all 47
+// callers stay byte-identical. An empty map means "no invoice on this page has
+// an approval run", which is what every pre-APPR-08-08 spec assumes.
+func emptyRowFactsStub(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	return map[string]approval.RowFacts{}, nil
+}
+
 // fixedApprovalStub is fixedRoleStub's idiom for the approval seam.
 func fixedApprovalStub(clear bool, err error) func(ctx context.Context, id string) (ApprovalFacts, error) {
 	return func(ctx context.Context, id string) (ApprovalFacts, error) {
@@ -258,7 +268,7 @@ func doInvoiceList(t *testing.T, list func(ctx context.Context, f ListFilter) ([
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	ListHandler(list, nil).ServeHTTP(rec, r)
+	ListHandler(list, emptyRowFactsStub, nil).ServeHTTP(rec, r)
 	var resp listInvoicesResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -1196,7 +1206,7 @@ func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(
 		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+batchOther, nil)
 		r = r.WithContext(auth.WithIdentity(ctx, identity))
 		rec := httptest.NewRecorder()
-		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
 		var resp listInvoicesResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -1207,7 +1217,7 @@ func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(
 		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+uuid.NewString(), nil)
 		r = r.WithContext(auth.WithIdentity(ctx, identity))
 		rec := httptest.NewRecorder()
-		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
 		var resp listInvoicesResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode response %q: %v", rec.Body.String(), err)

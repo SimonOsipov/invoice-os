@@ -12,7 +12,6 @@ package invoice
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -118,18 +117,8 @@ func (r *sqlRecorder) mentioning(substr string) []string {
 // must already have gone through dbTestPools, which owns the skip gate.
 func tracedAppPool(t *testing.T) (*pgxpool.Pool, *sqlRecorder) {
 	t.Helper()
-	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
-	if err != nil {
-		t.Fatalf("parse DATABASE_URL: %v", err)
-	}
 	rec := &sqlRecorder{}
-	cfg.ConnConfig.Tracer = rec
-	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("connect traced app pool: %v", err)
-	}
-	t.Cleanup(p.Close)
-	return p, rec
+	return appPoolWithTracer(t, rec), rec
 }
 
 // --- AC-3/AC-7: an open run refuses the move into queued ---------------------

@@ -283,15 +283,18 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - For `Test-first: yes` subtasks, drive the Stage 2.5 red tests to green without weakening, skipping, or deleting any (if a test itself is wrong, flag it). Author no *new* tests (QA adds those in Stage 4).
 - **Migrations:** goose is timestamp-ordered (no Alembic-style `down_revision` to hand-set). Scaffold with `make migrate-create name=<slug>` **inside the worktree** so the timestamp is fresh relative to `main`; every tenant-owned table is born with `tenant_id` + the FORCE-RLS policy template; write a working `-- +goose Down`. The gateway applies migrations on deploy — a bad migration crash-loops the PR's own environment's backend, so verify `make migrate-up` + the reversibility round-trip locally first.
 - The executor handles all reads/edits/creation inside the worktree, commits, and (per its FIRST/MIDDLE/FINAL `Order` logic) handles `git push` and the PR draft/ready transitions.
-- After the executor finishes, run the relevant suites inside the worktree:
+- After the executor finishes, run the relevant suites inside the worktree. Send each suite's output to a log, never into this context:
   ```bash
-  (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)
-  (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)   # DB-backed; needs `make dev-db`
-  (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                     # SPAs
+  L="$WORKTREE_PATH/.ralph"; mkdir -p "$L"
+  (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)      > "$L/go.log"   2>&1; echo "go=$?"
+  (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)  > "$L/db.log"   2>&1; echo "db=$?"   # DB-backed; needs `make dev-db`
+  (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                   > "$L/spa.log"  2>&1; echo "spa=$?"  # SPAs
   # 2265 unit tests, ~13s. `pnpm -r test` alone would launch Playwright, because
   # e2e's `test` script IS the browser suite — hence the exclusion and test:unit.
-  (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit)
+  (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit) > "$L/unit.log" 2>&1; echo "unit=$?"
+  grep -hE '^(ok|FAIL|--- FAIL|Test Files|Tests)' "$L"/*.log | tail -40
   ```
+  A zero exit and its summary line are the pass evidence. Read a full log only when its suite exited non-zero. A suite transcript pasted into this context is re-read by every later request in the session, which is the one avoidable cost that grows with session length.
   Run them yourself. Do not accept a subagent's report of a suite as the suite's
   result: BUG-06 had two subagents report 1466 unit tests from the main checkout
   when the branch had 1489, and METR-01's subtask 05 reported all tests passing

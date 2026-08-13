@@ -24,8 +24,9 @@ import (
 type Store struct {
 	pool *pgxpool.Pool
 
-	// APPROVALS_ENFORCED. Inert until APPR-08-03/04/05 read it; the two write
-	// doors and the wire flag must all read THIS field, never re-derive it.
+	// APPROVALS_ENFORCED. The two write doors into queued and the wire flag must
+	// all read THIS field, never re-derive it
+	// (TestApprovalsEnforced_DeclaredOnceWrittenOnce).
 	approvalsEnforced bool
 }
 

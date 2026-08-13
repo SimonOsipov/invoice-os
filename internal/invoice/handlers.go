@@ -258,6 +258,13 @@ const revalidateBlockedReason = "Only draft invoices can be re-validated — edi
 // resolve-outside copy, which would be a wire lie here.
 const notApproverTransmitReason = "Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team."
 
+// awaitingApprovalReason is the ONE refusal sentence every approval-blocked door
+// emits, so a blocked caller's message never varies by door — the
+// notApproverTransmitReason precedent above. Deliberately distinguishable from
+// internal/approval's "no longer awaiting approval" 409, which means the inverse
+// (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
+const awaitingApprovalReason = "This invoice is waiting on approval — it can be submitted once an approver approves it."
+
 // submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
 // but the copy FORKS by status: draft points at a live, enabled Re-validate,
 // rejected points at a disabled one, so one shared sentence would lie on

@@ -392,6 +392,13 @@ var (
 	// sentinel: the invoice is not currently `failed`. A 409 in statusForErr,
 	// alongside ErrNotKeepable.
 	ErrNotResolvable = errors.New("invoice: not resolvable")
+
+	// ErrAwaitingApproval — an open approval run blocks the move into queued.
+	// Flag-gated at Store.Transition; statusForErr answers 409 with
+	// awaitingApprovalReason (TestStatusForErr_AwaitingApprovalIs409).
+	// NOT approval.ErrNotAwaitingApproval, which means the near-inverse
+	// (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
+	ErrAwaitingApproval = errors.New("invoice: awaiting approval")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

@@ -3,13 +3,14 @@
 //
 // POOL-FREE BY CONSTRUCTION, and that is the point. NewStore only stores the
 // pointer (store.go), so nil is safe here. Routed through dbTestPools instead,
-// every test below would t.Skip on every PR: internal/invoice sits in no CI job
-// that sets DATABASE_URL, and CI's go job runs a bare `go test ./...` with no
-// Postgres. Do not add a pool to this file.
+// every test below would t.Skip in CI's go job, which runs a bare `go test ./...`
+// with no Postgres — and rlsgate, which exits non-zero on ANY test-level SKIP,
+// would then fail the rls job that DOES run this package against a real DB
+// (ci.yml, `scripts/ci/rls-test-gate.sh ./internal/invoice/...`). Do not add a
+// pool to this file.
 package invoice
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -91,20 +92,20 @@ func TestNewStore_BothAritiesCompile(t *testing.T) {
 	}
 }
 
-// TestApprovalsEnforced_WrittenOnceReadNowhere is AC #6's inertness proof.
+// TestApprovalsEnforced_DeclaredOnceWrittenOnce pins the flag's shape: ONE field,
+// ONE write site. A second field or a second write is how the two write doors
+// start disagreeing about whether approvals are enforced — the thing store.go's
+// "never re-derive it" comment forbids.
 //
-// It is a source assertion rather than a behavioural one, and honestly so: every
-// method on Store reaches Postgres through s.pool or a caller-supplied tx (Create,
-// Get, List, Transition, Edit, CallerRole, the Mark*Tx family, …), so there is no
-// pool-free Store surface on which an ON store could be observed behaving like an
-// OFF one. "The field is written once and read nowhere in production code" is the
-// strongest claim testable at this subtask's boundary.
+// Retargeted from TestApprovalsEnforced_WrittenOnceReadNowhere (APPR-08-02's
+// inertness proof): APPR-08-03 adds the first read, so the reads==0 assertion is
+// gone. Read COUNT is deliberately not asserted in its place — 08-04 and 08-05
+// each add one more.
 //
 // An AST walk, not a grep, mirroring TestTransitionTx_DocCommentNamesEveryCaller:
 // comments never parse into a SelectorExpr, so a doc comment naming the field
-// cannot register as a read. APPR-08-03/04/05 are expected to delete this test
-// when they add the first real read.
-func TestApprovalsEnforced_WrittenOnceReadNowhere(t *testing.T) {
+// cannot register as a write.
+func TestApprovalsEnforced_DeclaredOnceWrittenOnce(t *testing.T) {
 	const field = "approvalsEnforced"
 
 	files, err := filepath.Glob("*.go")
@@ -114,7 +115,6 @@ func TestApprovalsEnforced_WrittenOnceReadNowhere(t *testing.T) {
 
 	fset := token.NewFileSet()
 	decls, writes := 0, 0
-	var reads []string
 
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {
@@ -125,8 +125,6 @@ func TestApprovalsEnforced_WrittenOnceReadNowhere(t *testing.T) {
 			t.Fatalf("parse %s: %v", path, err)
 		}
 
-		// Assignment targets first, so a write is not then counted as a read.
-		assigned := map[*ast.SelectorExpr]bool{}
 		ast.Inspect(f, func(n ast.Node) bool {
 			as, ok := n.(*ast.AssignStmt)
 			if !ok {
@@ -134,7 +132,6 @@ func TestApprovalsEnforced_WrittenOnceReadNowhere(t *testing.T) {
 			}
 			for _, lhs := range as.Lhs {
 				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == field {
-					assigned[sel] = true
 					writes++
 				}
 			}
@@ -142,16 +139,13 @@ func TestApprovalsEnforced_WrittenOnceReadNowhere(t *testing.T) {
 		})
 
 		ast.Inspect(f, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.Field:
-				for _, name := range node.Names {
-					if name.Name == field {
-						decls++
-					}
-				}
-			case *ast.SelectorExpr:
-				if node.Sel.Name == field && !assigned[node] {
-					reads = append(reads, fmt.Sprintf("%s:%d", path, fset.Position(node.Pos()).Line))
+			fld, ok := n.(*ast.Field)
+			if !ok {
+				return true
+			}
+			for _, name := range fld.Names {
+				if name.Name == field {
+					decls++
 				}
 			}
 			return true
@@ -163,8 +157,5 @@ func TestApprovalsEnforced_WrittenOnceReadNowhere(t *testing.T) {
 	}
 	if writes != 1 {
 		t.Errorf("found %d write site(s) of %s, want exactly 1 (WithApprovalsEnforced's closure) — a flag nothing writes is not plumbed", writes, field)
-	}
-	if len(reads) != 0 {
-		t.Errorf("found %d read site(s) of %s: %v — this subtask is inert (AC #6); the first real read belongs to APPR-08-03/04/05", len(reads), field, reads)
 	}
 }

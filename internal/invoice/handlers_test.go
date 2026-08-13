@@ -5728,3 +5728,68 @@ func TestRLS_GetHandlerUBLGateFromTheRealStore(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// APPR-08-03 (task-497, Mode A): the wire half of the transmit gate.
+// ---------------------------------------------------------------------------
+
+// TestStatusForErr_AwaitingApprovalIs409 (AC #1): the sentinel maps to 409 with
+// awaitingApprovalReason. Fails today on the status code — the sentinel has no arm,
+// so it falls through to the unmapped 500 default.
+func TestStatusForErr_AwaitingApprovalIs409(t *testing.T) {
+	status, msg := statusForErr(ErrAwaitingApproval)
+	if status != http.StatusConflict {
+		t.Errorf("statusForErr(ErrAwaitingApproval) status = %d, want 409", status)
+	}
+	if msg != awaitingApprovalReason {
+		t.Errorf("statusForErr(ErrAwaitingApproval) msg = %q, want %q", msg, awaitingApprovalReason)
+	}
+}
+
+// TestTransitionHandler_QueuedRefusedWhenAwaitingApproval: the store's refusal
+// surfaces unchanged through TransitionHandler — 409, and the body's error is
+// awaitingApprovalReason byte-for-byte. Fails today: 500 "internal server error".
+func TestTransitionHandler_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	called := 0
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		called++
+		if gotID != invoiceID {
+			t.Errorf("transition called with id %q, want %q", gotID, invoiceID)
+		}
+		if target != StatusQueued {
+			t.Errorf("transition called with target %q, want %q", target, StatusQueued)
+		}
+		return Invoice{}, ErrAwaitingApproval
+	}
+
+	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, `{"target":"queued"}`)
+
+	if called != 1 {
+		t.Errorf("transition called %d times, want 1", called)
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != awaitingApprovalReason {
+		t.Errorf("error = %q, want %q", resp.Error, awaitingApprovalReason)
+	}
+}
+
+// TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal (AC #2): the two
+// 409 sentences mean opposite things — internal/approval's says the run is already
+// closed, ours says it is still open — so a caller must be able to tell them apart.
+// Both literals are restated here independently of their consts, so a future edit
+// that collapses them cannot drift the oracle along with the bug.
+func TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal(t *testing.T) {
+	const want = "This invoice is waiting on approval — it can be submitted once an approver approves it."
+	const approvalPackage409 = "this invoice is no longer awaiting approval"
+
+	if awaitingApprovalReason != want {
+		t.Errorf("awaitingApprovalReason = %q, want %q", awaitingApprovalReason, want)
+	}
+	if strings.EqualFold(awaitingApprovalReason, approvalPackage409) {
+		t.Errorf("awaitingApprovalReason is indistinguishable from internal/approval's ErrNotAwaitingApproval copy %q", approvalPackage409)
+	}
+}

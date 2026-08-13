@@ -340,6 +340,10 @@ export interface ListInvoicesQuery {
   offset?: number
   q?: string
   entity_id?: string
+  // stub (APPR-08-07 Stage 2.5): declared for typecheck only. The `!== undefined` emit
+  // line below and its first caller (APPR-08-10's contract spec) land in Stage 3 --
+  // until then this field is accepted and silently dropped.
+  awaiting_approval?: boolean
 }
 
 export interface ListInvoicesResponse {

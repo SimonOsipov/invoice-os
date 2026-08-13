@@ -300,6 +300,12 @@ type ListFilter struct {
 	// footer count is a real server total, never a client-side arithmetic
 	// derivation of the other four ([filters-are-server-side]).
 	KeptAsIs bool
+
+	// AwaitingApproval (APPR-08-07) narrows to invoices an active approval policy is
+	// still holding: the exact negation of approval.TransmitClear -- the UNFLAGGED
+	// predicate, so APPROVALS_ENFORCED never gates it -- restricted to validated.
+	// Zero value applies no predicate, like every other bool above.
+	AwaitingApproval bool // stub (Stage 2.5): declared so the APPR-08-07 specs compile; List has no arm yet
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/

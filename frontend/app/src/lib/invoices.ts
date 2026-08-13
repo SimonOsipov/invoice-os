@@ -484,7 +484,10 @@ export async function listInvoices(
   if (opts.q) params.set('q', opts.q)
   if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
-  return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+  const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+  // EVERY row, never just the first (ROW-6). The envelope itself rides through whole --
+  // `pagination` is the source of the review screen's counts and pager.
+  return { ...res, invoices: res.invoices.map(normaliseInvoiceRow) }
 }
 
 // normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval`, the
@@ -492,10 +495,25 @@ export async function listInvoices(
 // (never `?? false`), nullable fields via `?? null`, a missing or non-object `approval`
 // to `null` (never `undefined`). Exported so the specs can drive it directly.
 //
-// stub (APPR-08-08 Mode A): the real body is Stage 3 work, and listInvoices does not
-// call it yet. The `normaliseInvoiceRow *` specs in invoices.test.ts are the oracle.
+// `run_state` is passed through UNTOUCHED, like `pending_role_title`: both are backend
+// copy, and a `?? ''` here would be the SPA-authored fallback [gates-on-the-wire]
+// forbids. Every other key rides the spread byte-identical (ROW-5).
 export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
-  return raw
+  const wire = raw.approval
+  // An array is `typeof 'object'` too, and a consumer reading `.run_state` off one gets
+  // undefined -- the same "the server did not say" case as a string or a number (ROW-1).
+  const approval: InvoiceApproval | null =
+    typeof wire === 'object' && wire !== null && !Array.isArray(wire)
+      ? {
+          run_state: wire.run_state,
+          pending_ord: wire.pending_ord ?? null,
+          pending_role_title: wire.pending_role_title ?? null,
+          pending_holder_warn: wire.pending_holder_warn === true,
+          due_at: wire.due_at ?? null,
+          overdue: wire.overdue === true,
+        }
+      : null
+  return { ...raw, approval }
 }
 
 // The register's own page size (mirrors REVIEW_PAGE_SIZE, reviewBatch.ts:702). Stays

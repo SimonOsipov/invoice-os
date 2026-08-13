@@ -526,8 +526,8 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
 
 // --- APPR-08-08 (task-499): the per-row `approval` envelope -----------------
 //
-// `normaliseInvoiceRow` is a STUB returning its input unchanged, and `listInvoices`
-// does not call it yet, so every ROW-* case below fails on its own assertion.
+// ROW-1..5 drive `normaliseInvoiceRow` directly; ROW-6 goes through `listInvoices`,
+// which is the only oracle that it maps over EVERY row rather than one.
 
 // wireRow builds an UNANNOTATED wire object and casts once, at the boundary. The
 // APPROVE-1/2/3/5 specs get the same effect for free by going through the fetch mock,

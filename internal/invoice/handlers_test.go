@@ -2391,9 +2391,9 @@ func TestGetHandler_RuleSetVersionMarshalsNull(t *testing.T) {
 
 // TestListHandler_NoRuleSetVersionKey: List must stay clean of
 // rule_set_version, unlike GET (TestGetHandler_CarriesRuleSetVersionKey,
-// M4-09-01) -- the domain Invoice's new RuleSetVersion field is json:"-",
-// so List (which marshals the domain type directly, no wrapper) never gains
-// the key. Unaffected by M4-09-01; kept GREEN, unchanged.
+// M4-09-01) -- the domain Invoice's RuleSetVersion field is json:"-", and
+// json:"-" survives embedding, so List's listItem wrapper (APPR-08-08) does
+// not gain the key either. Kept GREEN through M4-09-01 and APPR-08-08.
 func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invID := uuid.NewString()
@@ -4264,9 +4264,11 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 }
 
 // TestListHandler_NoActionFlagKeys (T14): List must stay clean of every
-// action-flag key, mirroring TestListHandler_NoRuleSetVersionKey -- they
-// live only on GetHandler's getResponse wrapper, never on the domain
-// Invoice struct List marshals directly. ALREADY GREEN at RED (neither key
+// action-flag key, mirroring TestListHandler_NoRuleSetVersionKey -- they live
+// only on GetHandler's getResponse wrapper, never on the domain Invoice nor on
+// List's own listItem wrapper (APPR-08-08), whose one sibling is `approval`.
+// The 13 literals below must NOT be widened to exclude `approval` -- that would
+// forbid the very key APPR-08-08 ships. ALREADY GREEN at RED (neither key
 // exists anywhere yet); kept as a permanent regression guard.
 func TestListHandler_NoActionFlagKeys(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}

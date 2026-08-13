@@ -1,12 +1,11 @@
-// task-499 (APPR-08-08, Mode A): DB-backed RED specs for (*Store).RowFacts -- the
-// list's row-approval read -- and for the end-to-end guarantee that APPROVALS_ENFORCED
-// never gates it.
+// task-499 (APPR-08-08): DB-backed specs for (*Store).RowFacts -- the list's
+// row-approval read -- and for the end-to-end guarantee that APPROVALS_ENFORCED never
+// gates it.
 //
-// (*Store).RowFacts is a stub returning an empty map at this stage, so every case
-// below fails on its own assertion. Each one carries a POSITIVE leg asserting a real,
-// populated answer: an "is empty" or "the two are equal" assertion alone would pass
-// against that stub for free, which is exactly the vacuous-oracle hole APPR-08-07's QA
-// found in this subtask's two predecessors.
+// Each case carries a POSITIVE leg asserting a real, populated answer: an "is empty" or
+// "the two are equal" assertion alone passes for free against a method that returns
+// nothing, which is exactly the vacuous-oracle hole APPR-08-07's QA found in this
+// subtask's two predecessors.
 //
 // Spec-to-test map (task-499 Test Specs table):
 //

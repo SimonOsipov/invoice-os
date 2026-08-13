@@ -1,10 +1,10 @@
-// task-499 (APPR-08-08, Mode A): RED specs for the per-row `approval` envelope on
-// GET /v1/invoices -- ListHandler's second seam, the listItem wrapper it marshals
-// through, and the 500-not-a-degraded-200 error contract.
+// task-499 (APPR-08-08): the per-row `approval` envelope on GET /v1/invoices --
+// ListHandler's second seam, the listItem wrapper it marshals through, and the
+// 500-not-a-degraded-200 error contract.
 //
-// Nothing under test is wired yet: ListHandler accepts `rowFacts` and IGNORES it,
-// still serving bare Invoice rows, and listItem carries no Approval sibling. Every
-// case below therefore fails on its own assertion, never on a compile error.
+// Every assertion below reads RAW bytes rather than a decoded struct: presence,
+// absence and explicit null are three different answers here, and a decode collapses
+// the first two.
 //
 // Spec-to-test map (task-499 Test Specs table):
 //

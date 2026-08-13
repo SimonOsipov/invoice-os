@@ -1555,14 +1555,22 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 	return out, nil
 }
 
-// RowFacts reads the list-row approval standing of a page of invoice ids.
-// Unlike ApprovalFacts above it must NOT consult s.approvalsEnforced: the flag
-// gates enforcement, not visibility (docs/approvals.md section 11).
-//
-// stub (APPR-08-08 Mode A): the real body wraps approval.RowFactsTx in ONE
-// db.WithinRequestTenantTx. TestStoreRowFacts_* are the specs.
+// RowFacts reads the list-row approval standing of a page of invoice ids in ONE
+// transaction. Unlike ApprovalFacts above it must NOT consult
+// s.approvalsEnforced: the flag gates enforcement, not visibility
+// (docs/approvals.md section 11, TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
+// RLS is the only tenant scope (TestStoreRowFacts_IsTenantScopedByRLS).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-	return map[string]approval.RowFacts{}, nil
+	var out map[string]approval.RowFacts
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		f, err := approval.RowFactsTx(ctx, tx, ids)
+		out = f
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System

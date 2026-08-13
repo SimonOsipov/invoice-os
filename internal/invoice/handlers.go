@@ -31,9 +31,10 @@ import (
 // types (createInvoiceRequest/lineItemWire/transitionRequest/
 // listPaginationWire/listInvoicesResponse) to avoid a same-package type
 // clash -- the JSON shapes match (same tags), only the Go type names differ.
-// Response bodies are the domain Invoice/[]Invoice types directly (portfolio
-// precedent: writeJSON(w, status, entity)), so no separate response DTO is
-// needed for Create/Get/Transition.
+// Create/Transition write the domain Invoice directly (portfolio precedent:
+// writeJSON(w, status, entity)), so neither needs a response DTO. Get and List
+// do wrap: getResponse adds qr_png_base64 and the action flags, listItem adds
+// approval -- both EMBED Invoice, so its keys keep their names and order.
 
 // lineItemReq is one entry of createRequest.LineItems AND of editReq.LineItems
 // (INVED-01-05): the create and edit line shapes are deliberately ONE type, not
@@ -106,11 +107,12 @@ type listPagination struct {
 }
 
 // listResponse is the GET /v1/invoices response body:
-// {"invoices":[...],"pagination":{...}}. Invoices is []Invoice (never a nil
-// slice from Store.List), so an empty result serializes "invoices":[] rather
-// than "invoices":null.
+// {"invoices":[...],"pagination":{...}}. Invoices is []listItem, and the
+// never-a-nil-slice guarantee is ListHandler's own make(), not Store.List's --
+// an empty result serializes "invoices":[] rather than "invoices":null
+// (TestListHandler_EmptyState).
 type listResponse struct {
-	Invoices   []Invoice      `json:"invoices"`
+	Invoices   []listItem     `json:"invoices"`
 	Pagination listPagination `json:"pagination"`
 }
 
@@ -118,11 +120,11 @@ type listResponse struct {
 // sibling. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
 // and RuleSetVersion is json:"-" for exactly that reason.
 //
-// stub (APPR-08-08 Mode A): the Approval sibling and this type's use by
-// ListHandler are Stage 3 work. TestListItem_InvoiceKeysUnmovedAndUnrenamed
-// is the spec.
+// No omitempty: a nil Approval emits explicit null, the honest answer for an
+// invoice with no approval run (TestListItem_InvoiceKeysUnmovedAndUnrenamed).
 type listItem struct {
 	Invoice
+	Approval *approval.RowFacts `json:"approval"`
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -578,15 +580,19 @@ const maxImportBatchIDs = 25
 // work. One value still produces a one-element ListFilter.ImportBatchIDs and
 // byte-identical semantics to today.
 //
-// rowFacts is accepted and IGNORED at this stage -- stub (APPR-08-08 Mode A).
-// Calling it, mapping items into listItem and 500ing on its error are Stage 3
-// work; TestListHandler_RowFacts* are the specs.
+// rowFacts (APPR-08-08) reads the page's approval standing in ONE call, keyed
+// on the store-returned inv.ID, and is skipped entirely on an empty page. Its
+// error is a 500, deliberately the OPPOSITE of GetHandler's approvalFacts arm
+// below, which logs and stays 200: that value feeds a GATE whose zero means
+// "deny", a real and safe answer, whereas these are DISPLAYED facts whose only
+// available default is approval:null -- a positive claim ("this invoice has no
+// approval run"), so serving it on a read fault is a silent lie on a compliance
+// surface. Do not harmonise the two. TestListHandler_RowFactsErrorIs500.
 func ListHandler(
 	list func(ctx context.Context, f ListFilter) ([]Invoice, int, error),
 	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error),
 	log *slog.Logger,
 ) http.HandlerFunc {
-	_ = rowFacts // stub
 	if log == nil {
 		log = slog.Default()
 	}
@@ -743,8 +749,37 @@ func ListHandler(
 			return
 		}
 
+		// inv.ID, never a caller-supplied spelling: APPR-08-01's DEFECT QA-1 (a
+		// non-canonical uuid is absent from RowFactsTx's map, so it silently reads
+		// "no run") is unreachable only because these ids came from the store.
+		// TestListHandler_ApprovalKeyedOnTheStoreReturnedRowID.
+		ids := make([]string, 0, len(items))
+		for _, inv := range items {
+			ids = append(ids, inv.ID)
+		}
+		facts := map[string]approval.RowFacts{}
+		if len(ids) > 0 {
+			facts, err = rowFacts(r.Context(), ids)
+			if err != nil {
+				log.ErrorContext(r.Context(), "invoice: list row facts", slog.Any("err", err))
+				writeError(w, http.StatusInternalServerError, "internal server error")
+				return
+			}
+		}
+
+		// make, not var: a nil []listItem marshals "invoices":null
+		// (TestListHandler_EmptyState).
+		rows := make([]listItem, 0, len(items))
+		for _, inv := range items {
+			row := listItem{Invoice: inv}
+			if f, ok := facts[inv.ID]; ok {
+				row.Approval = &f
+			}
+			rows = append(rows, row)
+		}
+
 		writeJSON(w, http.StatusOK, listResponse{
-			Invoices:   items,
+			Invoices:   rows,
 			Pagination: listPagination{Limit: filter.Limit, Offset: filter.Offset, Total: total},
 		})
 	}

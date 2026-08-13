@@ -679,6 +679,39 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(screen.getByTestId('detail-submit')).toBeTruthy()
   })
 
+  // APPR-08-04: the detail screen is skipReasonLabel's third production consumer and the
+  // only one that renders a single invoice's skip as a banner. submitGate never consults
+  // the approval run, so an approver sees an ENABLED Submit on a gated invoice and this
+  // banner is the whole explanation. The copy is asserted verbatim, not via
+  // skipReasonLabel, because this is where it meets the operator.
+  it('an awaiting_approval skip renders the reason and leaves the invoice submittable', async () => {
+    const stillSubmittable = detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true })
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }), [], {
+      detailSequence: [stillSubmittable],
+      submitResponses: [
+        {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              results: [{ invoice_id: ID, enqueued: false, status: 'validated', reason: 'awaiting_approval' }],
+            }),
+        },
+      ],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+
+    const skip = await screen.findByTestId('detail-submit-skipped')
+    expect(skip.textContent).toContain('Waiting on approval — an approver must approve it first')
+    expect(skip.textContent).not.toContain('awaiting_approval')
+    expect(screen.queryByTestId('detail-submit-error')).toBeNull()
+    expect(screen.getByTestId('detail-submit')).toBeTruthy()
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('VALIDATED'))
+  })
+
   it('a request-level failure surfaces an error, not a skip', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }), [], {
       submitResponses: [{ ok: false, status: 500, json: () => Promise.resolve({ error: 'Internal error' }) }],

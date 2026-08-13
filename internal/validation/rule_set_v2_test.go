@@ -52,6 +52,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -705,8 +706,9 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // internal/validation/**, one of the two named §c e2e artifacts,
 // validationApi.test.ts, the seed migrations, or pnpm-lock.yaml (the plan's own
 // "no Category-A hit exists outside this scope" claim). The allowlist is
-// detectionHitAllowed below; internal/approval/** was added to it for
-// approval_policy_versions.version and is narrowed there, not exempted.
+// detectionHitAllowed below; internal/approval/** and frontend/app/src/** were
+// added to it for the approval-policy version (a different version entirely) and
+// are narrowed there, not exempted.
 //
 // EXECUTOR NOTE (M4-04-01 Stage 3): this test originally also asserted
 // `wantCount == 90`. That assertion was REMOVED, for two reasons, and the
@@ -807,8 +809,9 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 		file = strings.TrimPrefix(file, "./")
 		if !detectionHitAllowed(file, line) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
-				"internal/validation/**, a non-rule-set version pin in internal/approval/**, the "+
-				"two §c e2e artifacts, validationApi.test.ts, the version-defining seed "+
+				"internal/validation/**, a non-rule-set version pin in internal/approval/**, a "+
+				"Policy.version/activeVersion pin in frontend/app/src/**, the two §c e2e "+
+				"artifacts, validationApi.test.ts, the version-defining seed "+
 				"migrations, or pnpm-lock.yaml [RS-V2-14 scope]", line)
 		}
 	}
@@ -821,15 +824,18 @@ func detectionHitAllowed(file, line string) bool {
 	// approval_policy_versions.version is a different version entirely: per-policy,
 	// minted by the policy store, never read from rule_sets. Narrowed to hits that
 	// name no rule-set construct, so a genuine rule-set v1 pin written inside
-	// internal/approval/ still trips this guard. loadV1 is on the list because it is
-	// the regex's own third alternative and names no policy construct anywhere.
+	// internal/approval/ still trips this guard.
 	if strings.HasPrefix(file, "internal/approval/") {
-		haystack := strings.ToLower(line)
-		for _, ruleSetMarker := range []string{"ruleset", "rule_set", "loadv1"} {
-			if strings.Contains(haystack, ruleSetMarker) {
-				return false
-			}
-		}
+		return !namesRuleSetConstruct(line)
+	}
+	// The SPA's Policy.version / Policy.activeVersion (APPR-09) is that same
+	// approval-policy version, not the rule-set version. Narrowed twice -- the line
+	// must name no rule-set construct AND every identifier it pins to 1 must be
+	// exactly version or activeVersion -- so a real rule-set v1 pin written in the
+	// SPA still trips this guard. Falls through instead of returning false, leaving
+	// validationApi.test.ts's rule_set_version hits on the named allowlist below.
+	if strings.HasPrefix(file, "frontend/app/src/") &&
+		!namesRuleSetConstruct(line) && pinsOnlyPolicyVersion(line) {
 		return true
 	}
 	return strings.HasPrefix(file, "internal/validation/") ||
@@ -849,9 +855,46 @@ func detectionHitAllowed(file, line string) bool {
 		file == "pnpm-lock.yaml"
 }
 
-// TestRuleSetV2_DetectionAllowlistScope pins the internal/approval carve-out to
-// the shape it was opened for. A directory-wide exemption would make every one
-// of the "still trips" rows below pass silently.
+// namesRuleSetConstruct reports whether a grep hit names a rule-set construct, which
+// disqualifies it from every carve-out granted to a same-named non-rule-set version.
+// loadV1 is on the list because it is the detection regex's own third alternative and
+// names no policy construct anywhere.
+func namesRuleSetConstruct(line string) bool {
+	haystack := strings.ToLower(line)
+	for _, ruleSetMarker := range []string{"ruleset", "rule_set", "loadv1"} {
+		if strings.Contains(haystack, ruleSetMarker) {
+			return true
+		}
+	}
+	return false
+}
+
+// versionPinIdent captures the identifier a detection hit pins to 1 -- `version: 1`,
+// `activeVersion: 1`, `p.version).toBe(1)`. A dot ends the identifier, so `p.version`
+// captures version while rule_set_version and ruleSetVersion capture the whole name.
+var versionPinIdent = regexp.MustCompile(`(?i)([a-z0-9_$]*version)[[:space:]]*(?::|==|!=|<>|=)[[:space:]]*1\b|([a-z0-9_$]*version)\)?[[:space:]]*\.toBe\(1\)`)
+
+// pinsOnlyPolicyVersion reports whether every version this line pins to 1 is the SPA
+// Policy's own version/activeVersion field. A line that pins some other version -- or
+// that matched the detection regex on loadV1 alone, pinning none -- is not exempt.
+func pinsOnlyPolicyVersion(line string) bool {
+	matches := versionPinIdent.FindAllStringSubmatch(line, -1)
+	if len(matches) == 0 {
+		return false
+	}
+	for _, m := range matches {
+		switch strings.ToLower(m[1] + m[2]) {
+		case "version", "activeversion":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// TestRuleSetV2_DetectionAllowlistScope pins the internal/approval and
+// frontend/app/src carve-outs to the shape each was opened for. A directory-wide
+// exemption would make every one of the "still trips" rows below pass silently.
 func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 	cases := []struct {
 		name string
@@ -879,6 +922,25 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`internal/submission/worker.go:9:  if v.Version == 1 {`, false},
 		{"internal/validation, which owns rule sets", "internal/validation/engine_test.go",
 			`internal/validation/engine_test.go:9:  RuleSet{Version: 1}`, true},
+
+		{"a SPA policy fixture's first version", "frontend/app/src/lib/policies.fixture.ts",
+			`frontend/app/src/lib/policies.fixture.ts:33:    version: 1,`, true},
+		{"a SPA policy's active version", "frontend/app/src/lib/policies.fixture.ts",
+			`frontend/app/src/lib/policies.fixture.ts:34:    activeVersion: 1,`, true},
+		{"a SPA assertion on a policy's active version", "frontend/app/src/lib/policies.test.ts",
+			`frontend/app/src/lib/policies.test.ts:504:    expect(result[0].activeVersion).toBe(1)`, true},
+		{"a wire rule-set version pin in the SPA", "frontend/app/src/lib/policies.ts",
+			`frontend/app/src/lib/policies.ts:9:  const res = { rule_set_version: 1 }`, false},
+		{"a camel-case ruleSetVersion pin in the SPA", "frontend/app/src/lib/policies.ts",
+			`frontend/app/src/lib/policies.ts:9:  const ruleSetVersion = 1`, false},
+		{"a rule-set object's own version pinned in the SPA", "frontend/app/src/lib/policies.test.ts",
+			`frontend/app/src/lib/policies.test.ts:9:    expect(ruleSet.version).toBe(1)`, false},
+		{"the rule-set v1 loader called from the SPA", "frontend/app/src/lib/policies.ts",
+			`frontend/app/src/lib/policies.ts:9:  return loadV1()`, false},
+		{"some other version pinned in the SPA", "frontend/app/src/lib/policies.ts",
+			`frontend/app/src/lib/policies.ts:9:  const schemaVersion = 1`, false},
+		{"a policy version pin outside the SPA source tree", "frontend/app/e2e/policies.spec.ts",
+			`frontend/app/e2e/policies.spec.ts:9:    version: 1,`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

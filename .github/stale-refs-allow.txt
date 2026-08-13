@@ -28,3 +28,9 @@ Named in 5 approval steps
 Ngozi Balogun +1
 Engagement Manager +1
 Folake Adesina +1
+
+# --- orphaned fixture -----------------------------------------------------
+# `Policy.updated` values in a module APPR-09 left fully unimported. Nothing
+# reads them, so no reference here can break; APPR-10 deletes the file and
+# this entry goes with it.
+file:e2e/topology/policyFixtures.ts

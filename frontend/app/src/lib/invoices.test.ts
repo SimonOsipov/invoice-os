@@ -640,6 +640,45 @@ describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pa
       expect(result.invoices[2].approval?.due_at).toBeNull()
     })
   })
+
+  // ROW-7 pins a DECISION, not an accident (QA, task-499). `run_state` is the one
+  // approval field with no fallback: the five others are enumerated in the plan's
+  // fail-closed list and this one is not, so the shipped behaviour had to be either
+  // chosen or corrected. It is chosen.
+  //
+  // A `?? ''` here would be an SPA-authored default [gates-on-the-wire] forbids, and it
+  // buys nothing: '' is as un-matchable as undefined against any real state, so a
+  // consumer branching on `run_state === 'open'` reads false either way -- the fallback
+  // would only disguise a malformed wire as a well-formed one. Nulling the whole object
+  // instead would silently reclassify a malformed row as "no approval run", a positive
+  // claim no spec pins.
+  //
+  // What makes the pass-through sound is that the Go side structurally cannot omit the
+  // key: RowFacts.RunState is a plain string with no omitempty, asserted through this
+  // very handler by TestListHandler_NonNullApprovalAlwaysCarriesRunState. Change either
+  // side and both tests must move together.
+  it('ROW-7: run_state passes through untouched -- no `?? \'\'`, and a malformed row is not re-classified', () => {
+    // Any state the backend sends survives byte-identical, including one this SPA has
+    // never heard of -- there is no allow-list here, deliberately.
+    for (const state of ['open', 'approved', 'rejected', 'cancelled', 'some_future_state']) {
+      const got = normaliseInvoiceRow(wireRow({ approval: { ...fullApproval, run_state: state } }))
+      expect(got.approval?.run_state, state).toBe(state)
+    }
+
+    // The pinned decision: a wire object with no `run_state` keeps its object shape and
+    // reads undefined. The Go wire cannot produce this; the test exists so that changing
+    // the answer is a deliberate edit rather than a silent one.
+    const malformed = normaliseInvoiceRow(wireRow({ approval: { pending_ord: 1 } }))
+    expect(malformed.approval, 'a malformed approval must NOT be nulled -- that would claim "no approval run"').not.toBeNull()
+    expect(malformed.approval?.run_state).toBeUndefined()
+    expect(malformed.approval?.run_state, 'an SPA-authored \'\' would disguise a malformed wire as a well-formed one').not.toBe('')
+    // The other five fields still normalise, so the pass-through is scoped to this key.
+    expect(malformed.approval?.pending_ord).toBe(1)
+    expect(malformed.approval?.pending_role_title).toBeNull()
+    expect(malformed.approval?.pending_holder_warn).toBe(false)
+    expect(malformed.approval?.due_at).toBeNull()
+    expect(malformed.approval?.overdue).toBe(false)
+  })
 })
 
 describe('violationSummary (AC-2, Stage 2.5)', () => {

@@ -582,8 +582,8 @@ const maxImportBatchIDs = 25
 //
 // rowFacts (APPR-08-08) reads the page's approval standing in ONE call, keyed
 // on the store-returned inv.ID, and is skipped entirely on an empty page. Its
-// error is a 500, deliberately the OPPOSITE of GetHandler's approvalFacts arm
-// below, which logs and stays 200: that value feeds a GATE whose zero means
+// error is a 500, deliberately the OPPOSITE of GetHandler's approvalFacts arm,
+// which logs and stays 200: that value feeds a GATE whose zero means
 // "deny", a real and safe answer, whereas these are DISPLAYED facts whose only
 // available default is approval:null -- a positive claim ("this invoice has no
 // approval run"), so serving it on a read fault is a silent lie on a compliance

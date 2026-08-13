@@ -21,13 +21,18 @@
 package invoice
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/approval"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // wantArmedRowFacts is what an armInvoice'd fixture must answer: an open run whose
@@ -137,6 +142,73 @@ func TestStoreRowFacts_IsTenantScopedByRLS(t *testing.T) {
 	}
 	if len(leaked) != 0 {
 		t.Errorf("RowFacts (foreign tenant) = %+v, want an empty map -- tenant %s must learn nothing about tenant %s's invoice", leaked, otherTenant, fx.tenantID)
+	}
+}
+
+// TestStoreRowFacts_TenantlessContextErrors: the premise ListHandler's whole 500
+// contract rests on, and nothing else asserts it. If this method answered an EMPTY MAP
+// for a context carrying no identity, the handler's error arm would never fire and a
+// tenant-less read would serve 200 with approval:null on every row -- the silent lie
+// AC-4 exists to prevent, arriving through the one door AC-4 does not watch.
+//
+// db.WithinRequestTenantTx returns ErrNoTenant before it touches the pool
+// (platform/db/tenant.go), so this needs no fixture -- only a real store.
+func TestStoreRowFacts_TenantlessContextErrors(t *testing.T) {
+	_, app := dbTestPools(t)
+	store := NewStore(app, WithApprovalsEnforced(true))
+
+	got, err := store.RowFacts(context.Background(), []string{uuid.NewString()})
+	if err == nil {
+		t.Fatalf("RowFacts(no identity) = %+v, nil -- want an error; answering an empty map would read as \"no invoice has a run\" and downgrade the 500 to a silent 200", got)
+	}
+	if !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("RowFacts(no identity) error = %v, want db.ErrNoTenant", err)
+	}
+	if got != nil {
+		t.Errorf("RowFacts(no identity) map = %+v, want nil -- a caller that ignored the error must get nothing, not a usable empty answer", got)
+	}
+}
+
+// TestStoreRowFacts_EmptyIDSlice: ListHandler skips the seam on an empty page (AC-5),
+// so this is the defense in depth behind that skip. An empty ask must be an empty
+// answer and no error -- never a query that degenerates into "every invoice in the
+// tenant", which is what an unguarded `id = ANY($1)` would become if the parameter were
+// ever expanded rather than bound.
+//
+// The armed control proves the store and fixture are live, so the empty answer is the
+// empty ASK rather than a store that answers nothing for everyone.
+func TestStoreRowFacts_EmptyIDSlice(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	fx := seedApprovalFactsFixture(t, super, "APPR-08-08-EMPTYIDS", true)
+	fx.armInvoice(t, super, app, "appr-08-08-emptyids")
+	store := NewStore(app, WithApprovalsEnforced(true))
+
+	// Control: this tenant really does have an armed invoice to over-return.
+	armed, err := store.RowFacts(fx.ctx, []string{fx.invID})
+	if err != nil {
+		t.Fatalf("RowFacts (control): %v", err)
+	}
+	if _, ok := armed[fx.invID]; !ok {
+		t.Fatalf("RowFacts (control) = %+v, want an entry for %s -- without it the empty-ask leg proves nothing", armed, fx.invID)
+	}
+
+	for _, tc := range []struct {
+		name string
+		ids  []string
+	}{
+		{"empty slice", []string{}},
+		{"nil slice", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := store.RowFacts(fx.ctx, tc.ids)
+			if err != nil {
+				t.Fatalf("RowFacts(%s): %v, want no error", tc.name, err)
+			}
+			if len(got) != 0 {
+				t.Errorf("RowFacts(%s) = %+v, want an empty map -- asking about no invoices must never answer about some", tc.name, got)
+			}
+		})
 	}
 }
 

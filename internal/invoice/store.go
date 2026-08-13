@@ -1495,6 +1495,27 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	return role, nil
 }
 
+// ApprovalFacts is one invoice's approval standing as internal/invoice reads it:
+// approval.GateFacts with the transmit verdict already resolved against
+// APPROVALS_ENFORCED. TransmitClear is the ONLY field the flag touches -- the
+// other three feed can_approve/can_reject, which ship unflagged
+// (docs/approvals.md section 11).
+type ApprovalFacts struct {
+	TransmitClear   bool
+	RunState        string
+	PendingStepOrd  *int
+	CallerHoldsRole bool
+}
+
+// ApprovalFacts reads id's approval standing for the caller. The approval read
+// runs whatever the flag says; only TransmitClear folds it
+// (TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff). An error returns the
+// ZERO value, whose TransmitClear is false, so a caller that ignores the error
+// still fails closed.
+func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, error) {
+	return ApprovalFacts{TransmitClear: true}, nil // stub
+}
+
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
 // (M4-04-05's extraction moved the SOLE-writer-of-invoices.status role down

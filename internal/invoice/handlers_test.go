@@ -217,6 +217,24 @@ func marshalEdit(t *testing.T, body editInvoiceRequest) string {
 // resolved_outside_handlers_test.go injects role-specific stubs of its own.
 func adminRoleStub(ctx context.Context) (string, error) { return "admin", nil }
 
+// clearApprovalStub is the shared approvalFacts stub for GetHandler call sites
+// that do not exercise the approval arm itself. It is approval-CLEAR on purpose:
+// a blocked default would let every submit_blocked_reason spec in this package
+// pass on the awaiting-approval sentence instead of the status one it names.
+func clearApprovalStub(ctx context.Context, id string) (ApprovalFacts, error) {
+	return ApprovalFacts{TransmitClear: true}, nil
+}
+
+// fixedApprovalStub is fixedRoleStub's idiom for the approval seam.
+func fixedApprovalStub(clear bool, err error) func(ctx context.Context, id string) (ApprovalFacts, error) {
+	return func(ctx context.Context, id string) (ApprovalFacts, error) {
+		if err != nil {
+			return ApprovalFacts{}, err
+		}
+		return ApprovalFacts{TransmitClear: clear}, nil
+	}
+}
+
 func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
@@ -225,7 +243,7 @@ func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoic
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, adminRoleStub, nil).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, clearApprovalStub, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -2512,7 +2530,7 @@ func TestGetHandler_UnrenderableQRPayloadIsLogged(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	GetHandler(get, adminRoleStub, logger).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, clearApprovalStub, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -4250,7 +4268,7 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -4293,7 +4311,7 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4421,7 +4439,7 @@ func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4471,7 +4489,7 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", rec.Code, rec.Body.String())
@@ -4501,6 +4519,10 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 // from production, so these pin the copy non-tautologically.
 const exactSubmitBlockedReasonDraft = "Only validated invoices can be submitted — re-validate this invoice first."
 const exactSubmitBlockedReasonRejected = "Only validated invoices can be submitted — edit this invoice and re-validate it first."
+
+// exactSubmitBlockedReasonDefault is submitBlockedReason's default arm -- the
+// sentence a status made editable by a widened legalTransitions must carry.
+const exactSubmitBlockedReasonDefault = "Only validated invoices can be submitted."
 
 // TestGetHandler_SubmitBlockedReasonAllStatuses (G1): table over all 7
 // statuses; expected raw JSON is hard-coded per status, never produced by
@@ -4642,6 +4664,12 @@ func TestGetHandler_SubmitBlockedReasonNullWhenSubmittable(t *testing.T) {
 // true; submit_blocked_reason on failed must become non-null via the
 // default arm -- the one spec that separates "derived from canEdit/
 // canSubmit" from a hardcoded {draft,rejected} switch.
+// EXTENDED for APPR-08-05: the original failed-invoice assertion is kept and
+// tightened from "not null" to the exact default-arm sentence -- "not null" would
+// be satisfied by the awaiting-approval sentence too, which is a different arm.
+// Two axes are added under the SAME perturbed table: the failed row at BOTH
+// approval verdicts (the approval arm must never mask a status arm), and a
+// validated row at both (the approval arm is itself derived, not a status switch).
 func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
 	orig := legalTransitions
 	t.Cleanup(func() { legalTransitions = orig })
@@ -4660,6 +4688,45 @@ func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
 	if strings.Contains(body, `"submit_blocked_reason":null`) {
 		t.Errorf("body = %s, want a non-null submit_blocked_reason for failed once failed->draft is a legal edge -- must call canEdit(inv.Status), not restate a hardcoded {draft,rejected} switch", body)
 	}
+
+	reasonAt := func(t *testing.T, s Status, clear bool) *string {
+		t.Helper()
+		invID := uuid.NewString()
+		getAt := func(ctx context.Context, gotID string) (Invoice, error) {
+			return Invoice{ID: invID, Status: s}, nil
+		}
+		rec, resp := doInvoiceGetGated(t, getAt, fixedRoleStub("admin", nil), fixedApprovalStub(clear, nil), &id, invID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		return resp.SubmitBlockedReason
+	}
+	assertReason := func(t *testing.T, got *string, want string) {
+		t.Helper()
+		switch {
+		case want == "" && got != nil:
+			t.Errorf("submit_blocked_reason = %q, want null", *got)
+		case want != "" && got == nil:
+			t.Errorf("submit_blocked_reason = null, want %q", want)
+		case want != "" && got != nil && *got != want:
+			t.Errorf("submit_blocked_reason = %q, want %q", *got, want)
+		}
+	}
+
+	// failed is editable under the perturbed table but still not submittable, so
+	// the STATUS default arm answers at both verdicts.
+	t.Run("failed_approval_clear", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusFailed, true), exactSubmitBlockedReasonDefault)
+	})
+	t.Run("failed_approval_blocked", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusFailed, false), exactSubmitBlockedReasonDefault)
+	})
+	t.Run("validated_approval_clear", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusValidated, true), "")
+	})
+	t.Run("validated_approval_blocked", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusValidated, false), wantAwaitingApprovalReason)
+	})
 }
 
 // QA adversarial: a zero-value/unrecognized Status must not panic
@@ -5257,9 +5324,9 @@ func TestRoutes_BothResolveInBothDirections(t *testing.T) {
 		mux = http.NewServeMux()
 		if literalFirst {
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, nil))
 		} else {
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, nil))
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
 		}
 		return mux, getCalled, summaryCalled

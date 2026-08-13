@@ -307,7 +307,9 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 // submitGate checks role BEFORE status, deliberately the reverse of
 // resolveOutsideGate above: a preparer told "re-validate this invoice first"
 // would run a re-validation that still cannot end in a submit.
-func submitGate(s Status, role string) (bool, *string) {
+//
+// approvalClear is accepted and ignored. // stub
+func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
 		return false, &r
@@ -324,7 +326,14 @@ func submitGate(s Status, role string) (bool, *string) {
 // fetched invoice's status. It is not assumed to honor Store.CallerRole's own
 // "never errors" contract -- an error from it fails closed (not-an-approver),
 // never a 5xx.
-func GetHandler(get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
+//
+// approvalFacts is accepted and never called. // stub
+func GetHandler(
+	get func(ctx context.Context, id string) (Invoice, error),
+	callerRole func(ctx context.Context) (string, error),
+	approvalFacts func(ctx context.Context, id string) (ApprovalFacts, error),
+	log *slog.Logger,
+) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -372,7 +381,7 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 			role = ""
 		}
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
-		canSubmitInv, submitReason := submitGate(inv.Status, role)
+		canSubmitInv, submitReason := submitGate(inv.Status, role, true) // stub
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be

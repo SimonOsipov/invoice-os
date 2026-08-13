@@ -194,3 +194,53 @@ func callSiteIndex(src, name string) int {
 	}
 	return -1
 }
+
+// TestInvoiceMain_WiresApprovalFactsIntoGetHandler (APPR-08-05 AC #8): the third
+// argument to invoice.GetHandler is store.ApprovalFacts, not a clear literal or a
+// closure -- the flag folds inside that method, so bypassing it hands every caller
+// an unconditional can_submit. AST, so gofmt or a renamed store variable cannot
+// break the anchor (part (c) above's idiom).
+func TestInvoiceMain_WiresApprovalFactsIntoGetHandler(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+	var found bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "GetHandler" {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "invoice" {
+			return true
+		}
+		found = true
+
+		if len(call.Args) != 4 {
+			t.Errorf("invoice.GetHandler in cmd/invoice/main.go has %d argument(s), want 4 (get, callerRole, approvalFacts, logger)", len(call.Args))
+			return false
+		}
+		arg, ok := call.Args[2].(*ast.SelectorExpr)
+		if !ok {
+			t.Errorf("invoice.GetHandler's third argument is %T, want the method value store.ApprovalFacts", call.Args[2])
+			return false
+		}
+		if arg.Sel.Name != "ApprovalFacts" {
+			t.Errorf("invoice.GetHandler's third argument is .%s, want .ApprovalFacts", arg.Sel.Name)
+		}
+		if recv, ok := arg.X.(*ast.Ident); !ok || recv.Name != "store" {
+			t.Errorf("invoice.GetHandler's third argument is not store.ApprovalFacts")
+		}
+		return false
+	})
+	if !found {
+		t.Error("no invoice.GetHandler( call found in cmd/invoice/main.go — this test's anchor moved")
+	}
+}

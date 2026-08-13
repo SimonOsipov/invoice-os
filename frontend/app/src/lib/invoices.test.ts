@@ -768,6 +768,34 @@ describe('getInvoice', () => {
     expect(result.can_edit).toBe(false)
   })
 
+  // APPR-08-05: submit_blocked_reason gains a THIRD source -- awaitingApprovalReason
+  // (handlers.go), emitted when an approver views a validated invoice whose run is still
+  // open. Em dash is U+2014, copied from that const.
+  it('getInvoice: the awaiting-approval sentence passes through byte-identically', async () => {
+    const approvalReason = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: false, submit_blocked_reason: approvalReason }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(approvalReason)
+    expect(result.can_submit).toBe(false)
+  })
+
+  // The complement to the stringly-typed 'false' case above: `?? false` would let a
+  // stringly-typed "true" through as truthy, and an approval-blocked wire is exactly where
+  // that matters -- it would re-enable a Submit button the server just refused.
+  it('getInvoice: a stringly-typed "true" can_submit is denied', async () => {
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: 'true', submit_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_submit).toBe(false)
+  })
+
   // MUTATION ORACLE (QA): every other reason fixture in this file is already tidy, so a
   // `?.trim()` / `.normalize()` / whitespace-collapse slipped into getInvoice's normalizer
   // survives the whole suite. Pass-through means the bytes, not the visible words.
@@ -2829,6 +2857,14 @@ describe('no production source under src/ authors a submit-blocked sentence (APP
     // reconstruct any of them, nor the role sentence's verb phrase.
     expect(productionOnly('Only validated invoices can be sub' + 'mitted')).toEqual([])
     expect(productionOnly('can sub' + 'mit an invoice to NRS/MBS')).toEqual([])
+  })
+
+  it('the awaiting-approval sentence appears in no production file either (APPR-08-05)', () => {
+    // awaitingApprovalReason (handlers.go). Split on either side of the em dash, never
+    // through it. Deliberately NOT the same string as SKIP_REASON_LABELS.awaiting_approval,
+    // which is the SPA's own label for the batch endpoint's machine skip code.
+    expect(productionOnly('This invoice is waiting on appro' + 'val')).toEqual([])
+    expect(productionOnly('it can be sub' + 'mitted once an approver approves it')).toEqual([])
   })
 })
 

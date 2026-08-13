@@ -196,7 +196,7 @@ func TestGetHandler_RealStore_NeverValidatedEmitsExplicitNull(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())

@@ -119,7 +119,7 @@ func doInvoiceGetWithRole(t *testing.T, get func(ctx context.Context, id string)
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, callerRole, nil).ServeHTTP(rec, r)
+	GetHandler(get, callerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 	var resp getWithRoleBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)

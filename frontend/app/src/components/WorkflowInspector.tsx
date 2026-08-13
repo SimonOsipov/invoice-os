@@ -1,7 +1,8 @@
 // Workflows — the step inspector. One panel per node kind, plus the no-selection state.
 //
 // Every control funnels through `onPatch(id, patch)`, which the builder turns into
-// `updateNode` + `ctx.savePolicy`. The condition panel is the only one that writes two
+// `updateNode` on its LOCAL working tree — no control here reaches the network; Save draft
+// and Publish are the only writes. The condition panel is the only one that writes two
 // keys at once: switching `field` MUST reset `value`, because one slot holds three
 // domains (naira number / doc type / boolean) and a stale value from the previous
 // domain would make the rule sentence — and the simulator — read nonsense.

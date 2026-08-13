@@ -56,15 +56,35 @@ const SCOPE_OPTIONS = WF_SCOPE_OPTIONS.map((s) => ({ value: s, label: s }))
 // target, a module const rather than useId() — one builder renders at a time (the
 // InvoiceDetail.tsx:145-148 rationale).
 const PUBLISH_BLOCKED_REASON = 'Save your changes first — Publish seals the last saved draft.'
+// The second gate. `status === 'published'` is exactly "the top version is sealed"
+// (policy_store.go:49-58), and the publish handler selects `WHERE policy_id = $1 AND NOT
+// sealed` (policy_store.go:566-575), so publishing again earns a 409. The server's own
+// sentence for it, plus the remedy the server does not state.
+const PUBLISH_SEALED_REASON = 'This policy has no unpublished changes — edit and save a draft to publish again.'
 const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
 
 /**
- * What a publish would displace, off the last LANDED row. Three branches, because
- * `policyInForce` excludes self by design (policies.ts:192-195): without the first one, the
- * policy that IS in force renders 'nothing is in force'. Never off `Policy.status`, which
- * only says the top version is sealed.
+ * Why Publish cannot run, or null when it can. `dirty` is checked FIRST because saving is the
+ * remedy in both states at once: `PUT .../draft` always answers an unsealed top version
+ * (policy_store.go:464-468), so the save that clears `dirty` also clears the seal.
  */
-function publishConsequence(server: Policy, policies: readonly Policy[]): string {
+function publishBlockedReason(server: Policy, dirty: boolean): string | null {
+  if (dirty) return PUBLISH_BLOCKED_REASON
+  return server.status === 'published' ? PUBLISH_SEALED_REASON : null
+}
+
+/**
+ * What a publish would displace, off the last LANDED row — or null when nothing can be
+ * published, because promising to replace a version the server would refuse to replace is the
+ * false claim §5.3 exists to remove.
+ *
+ * `Policy.status` answers only "is the top version sealed", which is the whole of the first
+ * question and none of the second: WHICH policy governs is `activeVersion`, tenant-wide. Three
+ * branches after that, because `policyInForce` excludes self by design (policies.ts:193-195):
+ * without the first one, the policy that IS in force renders 'nothing is in force'.
+ */
+function publishConsequence(server: Policy, policies: readonly Policy[]): string | null {
+  if (server.status === 'published') return null
   if (server.activeVersion !== null) return `Publishing replaces v${server.activeVersion} of this policy, which is in force now. There is no undo.`
   const held = policyInForce(policies, server.id)
   return held ? `Publishing replaces «${held.name}», which is in force now. There is no undo.` : 'No policy is in force. Publishing puts this one in force.'
@@ -137,10 +157,18 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
     setSaved(false)
   }
 
-  // Reference equality, not a structural compare: the server re-mints every step id on each
-  // PUT draft (policies.ts:18), so a deep compare of a saved tree against its pre-save self
-  // differs on ids alone and reads dirty forever.
+  // Reference equality, not a structural compare — and NOT for the reason the plan gave: a deep
+  // compare does not read dirty forever, because `save()` assigns one object to both states. It
+  // errs the other way, reading clean on any edit that round-trips to identical content
+  // (clearing an already-empty tree), and it rests on JSON key order besides. Reference
+  // equality is false exactly when the two states are the same object. Pinned by 'an edit that
+  // changes no content still counts as unsaved'.
   const dirty = working !== server
+  // Both off `server`, the last landed row. `working.status` would answer identically — no
+  // reducer touches `status` (workflows.ts:16) — but the seal is a server fact, and reading it
+  // off the local tree would start being wrong the day a reducer does.
+  const blockedReason = publishBlockedReason(server, dirty)
+  const consequence = publishConsequence(server, ctx.policies)
 
   async function save() {
     setSaveError(null)
@@ -160,9 +188,11 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
     }
   }
 
-  // Re-seeds too, or the pill keeps reading DRAFT, `dirty` stays false so a second click
-  // re-publishes, and the consequence note flips to a false 'No policy is in force'. Selection
-  // survives: publish SEALS, it does not rewrite steps, so no id churns.
+  // Re-seeds too, and that re-seed is what closes the control: the sealed `status` it lands is
+  // what `publishBlockedReason` reads, so a second click is refused here rather than earning
+  // the server's 409. Without it the pill also keeps reading DRAFT and the note flips to a
+  // false 'No policy is in force'. Selection survives — publish SEALS, it rewrites no step, so
+  // no id churns.
   async function publish() {
     setPublishError(null)
     try {
@@ -337,9 +367,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             <button
               type="button"
               onClick={() => void publish()}
-              disabled={dirty}
-              title={dirty ? PUBLISH_BLOCKED_REASON : undefined}
-              aria-describedby={dirty ? PUBLISH_BLOCKED_REASON_ID : undefined}
+              disabled={blockedReason !== null}
+              title={blockedReason ?? undefined}
+              aria-describedby={blockedReason ? PUBLISH_BLOCKED_REASON_ID : undefined}
               className="v2-btn pf-btn"
               style={{
                 height: 36,
@@ -347,22 +377,25 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 fontSize: 13,
                 background: 'var(--action)',
                 color: 'var(--text-on-dark)',
-                ...(dirty ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                ...(blockedReason ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
               }}
             >
               Publish
             </button>
           </div>
-          {dirty && (
+          {blockedReason && (
             <div id={PUBLISH_BLOCKED_REASON_ID} data-testid="publish-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-              {PUBLISH_BLOCKED_REASON}
+              {blockedReason}
             </div>
           )}
-          {/* Unconditional: it names what Publish would displace, not whether it is clickable.
-              Behind the gate it would first appear one click from an act with no undo. */}
-          <div data-testid="publish-consequence" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-            {publishConsequence(server, ctx.policies)}
-          </div>
+          {/* Rendered whether or not Publish is clickable, so the consequence is read BEFORE
+              the save that arms it — but not once the version is sealed, where the only honest
+              answer is that there is nothing to publish, which the reason above already gives. */}
+          {consequence && (
+            <div data-testid="publish-consequence" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+              {consequence}
+            </div>
+          )}
           {saveError && <WriteError testId="policy-save-error">{saveError}</WriteError>}
           {publishError && <WriteError testId="policy-publish-error">{publishError}</WriteError>}
         </div>

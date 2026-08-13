@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { nodeSub, nodeTitle, roleOptions, simSub, simTitle, toOptions, type WfOption } from './WorkflowParts'
+import { nodeSub, nodeTitle, roleOptions, simSub, simTitle, SLA_OPTIONS, slaOptions, toOptions } from './WorkflowParts'
 import { toMember, type Member, type MembershipWire } from '../lib/members'
 import { resolve, type Role } from '../lib/roles'
 import type { ApprovalNode, AutoApproveNode, NotifyNode, RoleKey, Sla } from '../lib/workflows'
@@ -224,34 +224,34 @@ describe('toOptions', () => {
 // ============================================================================
 // `sla_hours` is a plain server int in 0..MaxInt32 (internal/approval/policy.go:278), so a
 // stored policy can carry an hour count outside SLA_OPTIONS' fixed four and must still render.
-//
-// Reached through a cast, not a named import: `slaOptions` does not exist yet, and importing
-// a missing export is a module error that would stop this file COLLECTING instead of failing
-// an assertion. Drop the cast once the export lands.
-type SlaOptions = (current: string) => WfOption[]
-
-async function slaOptions(): Promise<SlaOptions> {
-  const mod = (await import('./WorkflowParts')) as unknown as { slaOptions?: SlaOptions }
-  expect(typeof mod.slaOptions, 'WorkflowParts must export slaOptions(current)').toBe('function')
-  return mod.slaOptions as SlaOptions
-}
 
 describe('APPR-09-05 AC-7 — slaOptions and a stored deadline outside the four options', () => {
-  it('prepends the stored value, labelled in the list\'s own register', async () => {
-    const opts = (await slaOptions())('36')
+  it('prepends the stored value, labelled in the list\'s own register', () => {
+    const opts = slaOptions('36')
     expect(opts).toHaveLength(5)
     // 'Within 36 hours', not slaText's 'within 36h': options inside one dropdown read alike.
     expect(opts[0]).toEqual({ value: '36', label: 'Within 36 hours' })
   })
 
-  it('leaves the four shipped options alone for a value already in the list', async () => {
-    const opts = (await slaOptions())('24')
-    expect(opts.map((o) => o.value)).toEqual(['0', '24', '48', '72'])
+  it('leaves the four shipped options alone for a value already in the list', () => {
+    expect(slaOptions('24').map((o) => o.value)).toEqual(['0', '24', '48', '72'])
   })
 
-  it('does not prepend for the no-deadline sentinel', async () => {
-    const opts = (await slaOptions())('0')
+  it('does not prepend for the no-deadline sentinel', () => {
+    const opts = slaOptions('0')
     expect(opts).toHaveLength(4)
     expect(opts.filter((o) => o.value === '0')).toHaveLength(1)
+  })
+
+  it('treats an absent deadline as nothing to prepend, never as a blank option', () => {
+    expect(slaOptions('').map((o) => o.value)).toEqual(['0', '24', '48', '72'])
+  })
+
+  it('never mutates the shipped list', () => {
+    // The in-vocabulary arm returns SLA_OPTIONS itself, so a prepend that used `unshift`
+    // instead of a fresh array would leave every later dropdown carrying '36'.
+    slaOptions('36')
+    slaOptions('99')
+    expect(SLA_OPTIONS.map((o) => o.value)).toEqual(['0', '24', '48', '72'])
   })
 })

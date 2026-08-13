@@ -2,9 +2,10 @@
 // the policy LIST, and the BUILDER for whichever policy `ctx.editingPolicyId` names.
 //
 // Ported from the Claude Design prototype (Platform.dc.html ~L998-1280 markup,
-// ~L2285-2412 logic). Every write goes through a ctx verb that calls the gateway; all
-// builder-transient state (selection, drag, arm, drop hint, scenario inputs, save flash)
-// is local to WorkflowBuilder — nothing else in the app reads it.
+// ~L2285-2412 logic). Every write goes through a ctx verb that calls the gateway, but only
+// on Save draft or Publish: the edited TREE is local to WorkflowBuilder too, alongside its
+// transient state (selection, drag, arm, drop hint, scenario inputs, save flash). Nothing
+// else in the app reads any of it, and an unsaved tree is discarded when the builder closes.
 
 import { Fragment, useState, type ReactNode } from 'react'
 

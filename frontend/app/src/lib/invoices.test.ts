@@ -2301,6 +2301,10 @@ describe('isRowSelectable reads the approval fact (APPR-08-09)', () => {
       { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
     ]
 
+    // The selectableIds leg is load-bearing (QA Stage 4, task-500): `selectAllState([], …)`
+    // alone returns 'none' via `matched === 0` for ANY page, so it passed under the
+    // status-only stub too. A-sel-7 is the other discriminator.
+    expect(selectableIds(rows)).toEqual([])
     expect(selectAllState([], rows)).toBe('none')
   })
 
@@ -2346,6 +2350,100 @@ describe('isRowSelectable fails OPEN on an unrecognised run_state (APPR-08-09, d
 
   it('A-sel-11: fail-open never rescues a non-validated status', () => {
     expect(isRowSelectable({ ...draftInvoice, status: 'draft', approval: { ...OPEN_RUN, run_state: 'opened' } })).toBe(false)
+  })
+
+  it('A-sel-12: a non-object approval fails open too, and never throws', () => {
+    // normaliseInvoiceRow coerces a string/number/array/absent `approval` to null before a
+    // row reaches here (invoices.ts:501-517), so this pins the PREDICATE's own behaviour
+    // for the day someone builds a row without it -- `?.` only guards null/undefined.
+    const junk = ['open', 42, [], true, undefined]
+
+    for (const approval of junk) {
+      const row = { ...draftInvoice, status: 'validated' as InvoiceStatus, approval } as unknown as InvoiceRecord
+      expect(() => isRowSelectable(row), `approval=${JSON.stringify(approval) ?? 'undefined'}`).not.toThrow()
+      expect(isRowSelectable(row), `approval=${JSON.stringify(approval) ?? 'undefined'}`).toBe(true)
+    }
+  })
+})
+
+// QA Stage 4 (task-500) — the whole (status x run_state) surface, with LITERAL expected
+// values rather than I-sel-1's oracle, which recomputes the implementation's own
+// expression and so cannot catch a rule that is wrong in both places at once.
+//
+// `run_state` has five wire values: null (no run) plus the four the CHECK allows
+// (migrations/20260809232011_approval_runs.sql:40). Only 'open' blocks; the other four
+// read as selectable. That is EQUIVALENT to the server gate
+// (TransmitClear = !policyActive || approvedRun, gate.go:39) on every reachable state,
+// but only because of four invariants living outside the SPA: ApplyValidation always arms
+// (store.go:1938), a rejection demotes to draft in the same tx (decision.go:319),
+// every walk back to draft cancels the live run (engine.go:262), and 'approved' is EXISTS
+// over all runs while `run_state` is the newest one (gate.go:104). If any of those change,
+// this table is the SPA-side thing that must be re-decided.
+describe('isRowSelectable over the whole status x run_state surface (APPR-08-09, QA Stage 4)', () => {
+  const RUN_STATES = [null, 'open', 'approved', 'rejected', 'cancelled'] as const
+
+  it('A-sel-13: exactly four of the 35 combinations are selectable, and all four are validated', () => {
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+    const selectable: string[] = []
+
+    for (const status of statuses) {
+      for (const run_state of RUN_STATES) {
+        const approval = run_state === null ? null : { ...OPEN_RUN, run_state }
+        if (isRowSelectable({ ...draftInvoice, status, approval })) selectable.push(`${status}/${run_state ?? 'no-run'}`)
+      }
+    }
+
+    expect(selectable).toEqual([
+      'validated/no-run',
+      'validated/approved',
+      'validated/rejected',
+      'validated/cancelled',
+    ])
+  })
+
+  it('A-sel-14: an open run on every non-validated status is still non-selectable -- the status half dominates', () => {
+    const nonValidated: InvoiceStatus[] = ['draft', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of nonValidated) {
+      expect(isRowSelectable({ ...draftInvoice, status, approval: OPEN_RUN }), `status=${status}`).toBe(false)
+      expect(isRowSelectable({ ...draftInvoice, status, approval: null }), `status=${status}`).toBe(false)
+    }
+  })
+
+  it('A-sel-15: a page mixing all five run states selects the four non-open ids, in row order', () => {
+    const rows: InvoiceRecord[] = RUN_STATES.map((run_state) => ({
+      ...draftInvoice,
+      id: run_state ?? 'no-run',
+      status: 'validated' as InvoiceStatus,
+      approval: run_state === null ? null : { ...OPEN_RUN, run_state },
+    }))
+
+    expect(selectableIds(rows)).toEqual(['no-run', 'approved', 'rejected', 'cancelled'])
+    // 'some', not 'all': the open-run id is in the selection but not in `selectable`, so it
+    // can neither be counted nor inflate the comparison.
+    expect(selectAllState(['no-run', 'open'], rows)).toBe('some')
+    expect(selectAllState(['no-run', 'approved', 'rejected', 'cancelled', 'open'], rows)).toBe('all')
+  })
+
+  it('A-sel-16: when a run CLOSES between fetches the row becomes selectable again, but pruneSelection does not resurrect a dropped id', () => {
+    const open: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+    const closed: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: APPROVED_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+
+    // Fetch 1: the approver has not decided, so 'a' is dropped from the selection.
+    const afterOpen = pruneSelection(['a', 'b'], open)
+    expect(afterOpen).toEqual(['b'])
+
+    // Fetch 2: the run closed. 'a' is selectable again -- but prune is a filter, not a
+    // memory, so it cannot re-add what the previous tick removed. The user must re-tick.
+    expect(selectableIds(closed)).toEqual(['a', 'b'])
+    expect(pruneSelection(afterOpen, closed)).toEqual(['b'])
+    expect(pruneSelection(['a', 'b'], closed)).toEqual(['a', 'b'])
   })
 })
 

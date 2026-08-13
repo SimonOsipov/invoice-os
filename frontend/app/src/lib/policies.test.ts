@@ -1,15 +1,24 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '@invoice-os/api-client'
+
+import { createAuthedFetch } from './authedFetch'
 import {
+  createApprovalPolicy,
+  deleteApprovalPolicy,
+  listApprovalPolicies,
   nodesFromSteps,
   policyInForce,
   policyStanding,
+  publishApprovalPolicy,
+  putApprovalPolicyDraft,
   stepInputsFromNodes,
   toPolicy,
   type PolicyStepWire,
   type PolicyVersionWire,
   type PolicyWire,
 } from './policies'
+import type { AuthedFetch } from './portfolio'
 import { seedPolicies } from './policies.fixture'
 import { newPolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
 
@@ -395,5 +404,235 @@ describe('QA: policyStanding and policyInForce, without going through the seed',
     expect(none).toHaveLength(2)
     expect(policyInForce(none, 'a')).toBeNull()
     expect(policyInForce([], 'a')).toBeNull()
+  })
+})
+
+// ============================================================================
+// APPR-09-02 (task-506) — the five wrappers over the APPR-01 approval-policy routes
+// ============================================================================
+// Two doubles, matching two jobs (roles.test.ts:1108-1136):
+//  - URL / method / exact-wire-body specs drive the REAL createAuthedFetch with only
+//    `fetch` stubbed, so a stubbed 4xx yields a genuine ApiError instead of a
+//    re-implementation of apiFetch's contract.
+//  - The "propagates unchanged" spec injects a hand-rolled AuthedFetch double: apiFetch
+//    mints a FRESH ApiError per call, so instance identity is unprovable any other way.
+
+interface PolicyWireResponse {
+  ok: boolean
+  status: number
+  json: () => Promise<unknown>
+}
+
+function mockFetchOnce(response: PolicyWireResponse) {
+  const fetchMock = vi.fn().mockResolvedValue(response)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+const wireBase = 'https://gw'
+
+const authed = () => createAuthedFetch(() => 'tok', vi.fn())
+
+describe('AC-1 — each wrapper hits its own gateway path with its own method', () => {
+  it('each wrapper hits its own path with its own method', async () => {
+    const af = authed()
+    const cases: Array<{ body: unknown; run: () => Promise<unknown> }> = [
+      { body: { approval_policies: [] }, run: () => listApprovalPolicies(af, wireBase) },
+      { body: wire(), run: () => createApprovalPolicy(af, wireBase, 'Untitled policy') },
+      { body: wire(), run: () => putApprovalPolicyDraft(af, wireBase, 'p1', policy({ id: 'p1' })) },
+      { body: wire(), run: () => publishApprovalPolicy(af, wireBase, 'p1') },
+      { body: wire(), run: () => deleteApprovalPolicy(af, wireBase, 'p1') },
+    ]
+
+    const seen: Array<[string, string | undefined]> = []
+    for (const c of cases) {
+      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(c.body) })
+      await c.run()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      seen.push([url, init.method])
+    }
+
+    expect(seen).toHaveLength(5)
+    // The `/api/invoice` prefix is the gateway's, not the service's — a wrapper that drops
+    // it reaches nothing, and no body assertion elsewhere would notice.
+    expect(seen).toEqual([
+      ['https://gw/api/invoice/v1/approval-policies', 'GET'],
+      ['https://gw/api/invoice/v1/approval-policies', 'POST'],
+      ['https://gw/api/invoice/v1/approval-policies/p1/draft', 'PUT'],
+      ['https://gw/api/invoice/v1/approval-policies/p1/publish', 'POST'],
+      ['https://gw/api/invoice/v1/approval-policies/p1', 'DELETE'],
+    ])
+  })
+
+  it('create POSTs the name the caller gave, and nothing else', async () => {
+    const created = wire({ id: 'pol-9', name: 'Untitled policy', version: 1, steps: [], versions: [ver(1, false, false)] })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(created) })
+
+    const result = await createApprovalPolicy(authed(), wireBase, 'Untitled policy')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/approval-policies')
+    expect(init.method).toBe('POST')
+    // `scope: ""` and an absent key are indistinguishable server-side, so the wrapper sends
+    // only what its signature carries.
+    expect(init.body).toBe(JSON.stringify({ name: 'Untitled policy' }))
+    // Mapped, not handed back raw: `versions` is gone and `nodes` exists.
+    expect(result).toEqual(toPolicy(created))
+    expect(result.id).toBe('pol-9')
+    expect(result.activeVersion).toBeNull()
+  })
+
+  it('list unwraps the approval_policies envelope into mapped policies', async () => {
+    const listed = wire({
+      id: 'pol-1',
+      name: 'Standard approval policy',
+      version: 2,
+      steps: [step({ id: 's1', kind: 'approval', workflow_role_key: 'cfo', sla_hours: 48 })],
+      versions: [ver(2, false, false), ver(1, true, true)],
+    })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ approval_policies: [listed] }) })
+
+    const result = await listApprovalPolicies(authed(), wireBase)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('pol-1')
+    expect(result[0].version).toBe(2)
+    expect(result[0].activeVersion).toBe(1)
+    expect(result[0].nodes).toHaveLength(1)
+    expect((result[0].nodes[0] as ApprovalNode).role).toBe('cfo')
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBeUndefined()
+  })
+})
+
+describe('AC-2 — putApprovalPolicyDraft always sends steps', () => {
+  const nodes = [
+    { id: 'n1', type: 'approval', role: 'cfo', sla: '48', delegate: false },
+    { id: 'n2', type: 'condition', field: 'amount', op: '>', value: 1000, then: [{ id: 'n3', type: 'autoapprove' }], else: [] },
+  ] as Policy['nodes']
+
+  it('a name-only draft save still sends the whole step tree', async () => {
+    const next = policy({ id: 'p1', name: 'Capex sign-off', nodes })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
+
+    await putApprovalPolicyDraft(authed(), wireBase, 'p1', next)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/approval-policies/p1/draft')
+    expect(init.method).toBe('PUT')
+    const sent = JSON.parse(init.body as string) as { name?: string; steps?: unknown[] }
+    // The rename is the point of the save; the tree rides along because the PUT is a
+    // whole-tree REPLACE — an omitted `steps` is the server's 400, not a no-op merge.
+    expect(sent.name).toBe('Capex sign-off')
+    expect(Array.isArray(sent.steps)).toBe(true)
+    expect(sent.steps).toHaveLength(2)
+    expect(sent.steps).toEqual(stepInputsFromNodes(next.nodes))
+  })
+
+  it('an emptied canvas sends steps as an explicit empty array, never an absent key', async () => {
+    const next = policy({ id: 'p1', name: 'Capex sign-off', nodes: [] })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
+
+    await putApprovalPolicyDraft(authed(), wireBase, 'p1', next)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const sent = JSON.parse(init.body as string) as Record<string, unknown>
+    // JSON.stringify drops an undefined value, so the key check IS the assertion here:
+    // `steps: undefined` and `steps: []` are one line apart and only this tells them apart.
+    expect(Object.hasOwn(sent, 'steps')).toBe(true)
+    expect(sent.steps).toEqual([])
+    expect(sent.name).toBe('Capex sign-off')
+  })
+})
+
+describe('AC-3 — publishApprovalPolicy sends no body', () => {
+  it('publish sends no request body', async () => {
+    const published = wire({ id: 'p1', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(published) })
+
+    const result = await publishApprovalPolicy(authed(), wireBase, 'p1')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/approval-policies/p1/publish')
+    expect(init.method).toBe('POST')
+    // apiFetch always passes a `body` KEY holding undefined, so presence proves nothing.
+    expect(init.body).toBeUndefined()
+    // What kills a `body: {}` mutation: apiFetch sets the header only when a body exists.
+    expect((init.headers as Headers).get('content-type')).toBeNull()
+    // The request still went out authed — absence above is a choice, not a dead call.
+    expect((init.headers as Headers).get('authorization')).toBe('Bearer tok')
+    expect(result).toEqual(toPolicy(published))
+    expect(result.activeVersion).toBe(1)
+  })
+})
+
+describe('AC-4 — deleteApprovalPolicy discards the inert response', () => {
+  it('delete resolves void and never hands back the inert response', async () => {
+    // The server's DELETE answer carries only id/name/scope: a policy published at v3 still
+    // answers status 'draft', version 0, steps [] and versions []. Patching a client row
+    // from it corrupts that row.
+    const inert = wire({ id: 'p1', status: 'draft', version: 0, sealed: false, steps: [], versions: [] })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(inert) })
+
+    const result = await deleteApprovalPolicy(authed(), wireBase, 'p1')
+
+    expect(result).toBeUndefined()
+    // A wrapper that resolves undefined by never fetching would otherwise pass the line above.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/approval-policies/p1')
+    expect(init.method).toBe('DELETE')
+    expect(init.body).toBeUndefined()
+  })
+})
+
+describe('AC-5 — a non-2xx reaches the caller as the gateway wrote it', () => {
+  it("a 403 reaches the caller carrying the server's own sentence", async () => {
+    const msg = 'only an admin can change approval policies'
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: msg }) })
+
+    const caught = await createApprovalPolicy(authed(), wireBase, 'Untitled policy').catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).message).toBe(msg)
+    expect((caught as ApiError).status).toBe(403)
+    expect((caught as ApiError).kind).toBe('http')
+  })
+
+  it("a 409 reaches the caller carrying the server's own sentence", async () => {
+    const msg = 'an approval step names a workflow role that no longer exists'
+    mockFetchOnce({ ok: false, status: 409, json: () => Promise.resolve({ error: msg }) })
+
+    const caught = await publishApprovalPolicy(authed(), wireBase, 'p1').catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).message).toBe(msg)
+    expect((caught as ApiError).status).toBe(409)
+  })
+
+  it('a 400 on a foreign scope is not reshaped into client copy', async () => {
+    mockFetchOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'invalid request' }) })
+
+    const caught = await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1' })).catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).message).toBe('invalid request')
+    expect((caught as ApiError).status).toBe(400)
+  })
+
+  it('every wrapper propagates the ApiError instance itself, not a copy', async () => {
+    const boom = new ApiError('http', 'only an admin can change approval policies', 403)
+    const double = () => vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    await expect(listApprovalPolicies(double(), wireBase)).rejects.toBe(boom)
+    await expect(createApprovalPolicy(double(), wireBase, 'Untitled policy')).rejects.toBe(boom)
+    await expect(putApprovalPolicyDraft(double(), wireBase, 'p1', policy({ id: 'p1' }))).rejects.toBe(boom)
+    await expect(publishApprovalPolicy(double(), wireBase, 'p1')).rejects.toBe(boom)
+    await expect(deleteApprovalPolicy(double(), wireBase, 'p1')).rejects.toBe(boom)
   })
 })

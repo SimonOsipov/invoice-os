@@ -1,5 +1,6 @@
 // The approval-policy wire and its pure mappers.
 
+import type { AuthedFetch } from './portfolio'
 import type { BranchNode, CondOp, Policy, PolicyStatus, Sla, WfNode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -193,4 +194,32 @@ export function policyStanding(policy: Policy): string {
 /** The policy holding the tenant's single active slot, excluding `selfId`. */
 export function policyInForce(list: readonly Policy[], selfId: string): Policy | null {
   return list.find((p) => p.id !== selfId && p.activeVersion !== null) ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Wire
+// ---------------------------------------------------------------------------
+// Stubs (APPR-09-02, Stage 2.5). The specs in policies.test.ts are the contract; Stage 3
+// replaces every body below. Shape follows roles.ts:342-376 — `base` a parameter, no
+// try/catch anywhere, so ApiError reaches the UI unreshaped.
+
+export async function listApprovalPolicies(_f: AuthedFetch, _base: string): Promise<Policy[]> {
+  throw new Error('not implemented')
+}
+
+export async function createApprovalPolicy(_f: AuthedFetch, _base: string, _name: string): Promise<Policy> {
+  throw new Error('not implemented')
+}
+
+export async function putApprovalPolicyDraft(_f: AuthedFetch, _base: string, _id: string, _next: Policy): Promise<Policy> {
+  throw new Error('not implemented')
+}
+
+export async function publishApprovalPolicy(_f: AuthedFetch, _base: string, _id: string): Promise<Policy> {
+  throw new Error('not implemented')
+}
+
+/** The DELETE answer is INERT (status 'draft', version 0, steps []) — discard it, never patch a row from it. */
+export async function deleteApprovalPolicy(_f: AuthedFetch, _base: string, _id: string): Promise<void> {
+  throw new Error('not implemented')
 }

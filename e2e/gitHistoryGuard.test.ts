@@ -14,7 +14,7 @@
 // worktree does exist. That is how the first version of this file shipped red.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -70,19 +70,72 @@ describe('guard-git-history hook', () => {
   // `${CLAUDE_PROJECT_DIR}` is the directory the session started in, which for a
   // session that entered a worktree later is still the main checkout — measured
   // 2026-08-13, when that spelling pointed at a copy of this file that did not
-  // exist. Missing file is not a soft failure: python3 exits 2, the one code that
-  // BLOCKS, so every Bash call in the session is denied until it is fixed.
-  it('is registered as a PreToolUse(Bash) hook, resolved from the session repo', () => {
+  // exist.
+  const hookCommand = (): string => {
     const settings = JSON.parse(readFileSync(join(REPO, '.claude/settings.json'), 'utf8'))
     const commands = (settings.hooks?.PreToolUse ?? [])
       .filter((entry: { matcher?: string }) => /Bash/.test(entry.matcher ?? ''))
       .flatMap((entry: { hooks?: Array<{ command?: string }> }) => entry.hooks ?? [])
       .map((h: { command?: string }) => h.command ?? '')
-    const mine = commands.filter((c: string) => c.includes('guard-git-history.py'))
-    expect(mine, 'no PreToolUse(Bash) hook runs guard-git-history.py').toHaveLength(1)
-    expect(mine[0], 'the hook path must resolve from the session repository').toContain(
+      .filter((c: string) => c.includes('guard-git-history.py'))
+    expect(commands, 'no PreToolUse(Bash) hook runs guard-git-history.py').toHaveLength(1)
+    return commands[0]
+  }
+
+  it('is registered as a PreToolUse(Bash) hook, resolved from the session repo', () => {
+    expect(hookCommand(), 'the hook path must resolve from the session repository').toContain(
       'git rev-parse --show-toplevel',
     )
+  })
+
+  // The lockout this pins actually happened, 2026-08-13, immediately after PR #155
+  // merged. The session's repo root moved to a checkout that had not pulled the
+  // hook file yet; python3 exits 2 on a missing file, 2 is the ONE code that BLOCKS
+  // a PreToolUse hook, and so EVERY Bash call in the session was denied — including
+  // the `git pull` that would have fixed it. Any checkout predating the file does
+  // this: an old worktree, a `git checkout` of an earlier commit, a fresh clone.
+  //
+  // So the command must fail OPEN on a missing file. Deletion is caught instead by
+  // the test below, at merge time, where it is safe to be strict.
+  it('does not deny every Bash call when the hook file is absent', () => {
+    const bare = realpathSync(mkdtempSync(join(tmpdir(), 'guard-no-hook-')))
+    spawnSync('git', ['init', '-q', bare])
+    try {
+      const res = spawnSync('sh', ['-c', hookCommand()], {
+        cwd: bare,
+        input: '{"tool_name":"Bash","tool_input":{"command":"echo hi"}}',
+        encoding: 'utf8',
+      })
+      expect(
+        res.status,
+        `exit 2 here locks the session out of Bash entirely. stderr: ${res.stderr}`,
+      ).not.toBe(2)
+      expect(res.status, 'a repo with no hook file must be allowed through').toBe(0)
+    } finally {
+      rmSync(bare, { recursive: true, force: true })
+    }
+  })
+
+  // The runtime fails open, so THIS is what keeps the guard from silently vanishing.
+  it('the hook file it points at is present in the repo', () => {
+    expect(existsSync(HOOK), `${HOOK} is missing — the guard would silently do nothing`).toBe(true)
+  })
+
+  // Every other case here invokes the python directly. This one goes through the
+  // exact string settings.json registers, so a shell-quoting slip that makes the
+  // command always exit 0 cannot pass as "fails open, as designed".
+  it('still denies through the registered command when the file IS present', () => {
+    const res = spawnSync('sh', ['-c', hookCommand()], {
+      cwd: REPO,
+      input: JSON.stringify({
+        tool_name: 'Bash',
+        cwd: REPO,
+        tool_input: { command: 'git push --force origin main' },
+      }),
+      encoding: 'utf8',
+    })
+    expect(res.status, 'the registered command let a force push through').toBe(2)
+    expect(res.stderr).toMatch(/^Blocked:/)
   })
 
   // Floor. If `git worktree add` ever stops producing a LINKED worktree, the hook

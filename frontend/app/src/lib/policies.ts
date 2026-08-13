@@ -199,27 +199,42 @@ export function policyInForce(list: readonly Policy[], selfId: string): Policy |
 // ---------------------------------------------------------------------------
 // Wire
 // ---------------------------------------------------------------------------
-// Stubs (APPR-09-02, Stage 2.5). The specs in policies.test.ts are the contract; Stage 3
-// replaces every body below. Shape follows roles.ts:342-376 — `base` a parameter, no
-// try/catch anywhere, so ApiError reaches the UI unreshaped.
+// Shaped like roles.ts:342-376 — `base` a parameter, never `gatewayBase()` called here; no
+// wrapper catches, so a non-2xx rejects with the underlying ApiError unchanged.
+//
+// Unlike the roles and members wrappers, these project to `Policy` rather than handing the
+// wire up: `toPolicy` derives `activeVersion` from `versions`, which no caller should have
+// to know. Ids interpolate raw — a policy id is a server-minted uuid, not a slug.
 
-export async function listApprovalPolicies(_f: AuthedFetch, _base: string): Promise<Policy[]> {
-  throw new Error('not implemented')
+/** The one-key envelope; the other wrappers answer a bare policy. */
+export async function listApprovalPolicies(f: AuthedFetch, base: string): Promise<Policy[]> {
+  const body = await f<PoliciesResponseWire>(`${base}/api/invoice/v1/approval-policies`)
+  return body.approval_policies.map((w) => toPolicy(w))
 }
 
-export async function createApprovalPolicy(_f: AuthedFetch, _base: string, _name: string): Promise<Policy> {
-  throw new Error('not implemented')
+export async function createApprovalPolicy(f: AuthedFetch, base: string, name: string): Promise<Policy> {
+  const created = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies`, { method: 'POST', body: { name } })
+  return toPolicy(created)
 }
 
-export async function putApprovalPolicyDraft(_f: AuthedFetch, _base: string, _id: string, _next: Policy): Promise<Policy> {
-  throw new Error('not implemented')
+/** A whole-tree REPLACE: `steps` always rides along, empty included — the server 400s on an absent key. */
+export async function putApprovalPolicyDraft(f: AuthedFetch, base: string, id: string, next: Policy): Promise<Policy> {
+  const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, {
+    method: 'PUT',
+    // `scope` is forwarded, so a scope the server does not back earns its verbatim 400
+    // rather than a save that silently drops the choice and looks like it worked.
+    body: { name: next.name, scope: next.scope, steps: stepInputsFromNodes(next.nodes) },
+  })
+  return toPolicy(saved)
 }
 
-export async function publishApprovalPolicy(_f: AuthedFetch, _base: string, _id: string): Promise<Policy> {
-  throw new Error('not implemented')
+/** No body at all: the handler reads none, and `published_by` is taken from the caller's claim. */
+export async function publishApprovalPolicy(f: AuthedFetch, base: string, id: string): Promise<Policy> {
+  const published = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/publish`, { method: 'POST' })
+  return toPolicy(published)
 }
 
 /** The DELETE answer is INERT (status 'draft', version 0, steps []) — discard it, never patch a row from it. */
-export async function deleteApprovalPolicy(_f: AuthedFetch, _base: string, _id: string): Promise<void> {
-  throw new Error('not implemented')
+export async function deleteApprovalPolicy(f: AuthedFetch, base: string, id: string): Promise<void> {
+  await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}`, { method: 'DELETE' })
 }

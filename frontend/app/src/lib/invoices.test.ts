@@ -176,6 +176,26 @@ const draftInvoice: InvoiceRecord = {
   rule_set_version: null,
 }
 
+// Approval fixtures (APPR-08-09). `run_state` is the only field the predicate reads;
+// the rest mirror approval.RowFacts so these stay assignable to InvoiceApproval.
+const OPEN_RUN: InvoiceApproval = {
+  run_state: 'open',
+  pending_ord: 1,
+  pending_role_title: 'Reviewer',
+  pending_holder_warn: false,
+  due_at: null,
+  overdue: false,
+}
+
+const APPROVED_RUN: InvoiceApproval = {
+  run_state: 'approved',
+  pending_ord: null,
+  pending_role_title: null,
+  pending_holder_warn: false,
+  due_at: null,
+  overdue: false,
+}
+
 describe('invoiceStatusStyle', () => {
   it('I1: each of the 7 canonical states maps to a distinct, well-formed StatusStyle with an uppercased label', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
@@ -2154,13 +2174,22 @@ describe('DETAIL_SUBMIT_COPY', () => {
 })
 
 describe('selection helpers', () => {
-  it('I-sel-1: only validated rows are selectable', () => {
+  it('I-sel-1: only validated rows with no open approval run are selectable', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
     const rows: InvoiceRecord[] = statuses.map((status, i) => ({ ...draftInvoice, id: `inv-${i}`, status }))
 
+    // draftInvoice carries approval: null, so these rows keep their original meaning.
     expect(selectableIds(rows)).toEqual(['inv-1'])
+    // EXTENDED (APPR-08-09): the status dimension crossed with the approval fact.
+    // 7 x 3 = 21 cases, of which exactly two are true (validated+null, validated+approved).
     for (const row of rows) {
-      expect(isRowSelectable(row.status), `status=${row.status}`).toBe(row.status === 'validated')
+      for (const approval of [null, OPEN_RUN, APPROVED_RUN]) {
+        const expected = row.status === 'validated' && approval?.run_state !== 'open'
+        expect(
+          isRowSelectable({ ...row, approval }),
+          `status=${row.status} run_state=${approval?.run_state ?? 'null'}`,
+        ).toBe(expected)
+      }
     }
   })
 
@@ -2217,6 +2246,106 @@ describe('selectAllState', () => {
     const rows: InvoiceRecord[] = [{ ...draftInvoice, id: 'a', status: 'validated' }]
 
     expect(selectAllState(['stale-id'], rows)).not.toBe('all')
+  })
+})
+
+// RED specs (APPR-08-09, task-500, Stage 2.5/Mode A) — isRowSelectable must read the
+// row's approval fact, not just its status, so an awaiting-approval invoice cannot be
+// batch-selected into a submit the server would only skip. isRowSelectable's body is
+// still `row.status === 'validated'` (its `// stub` marker), so every spec below that
+// involves an open run fails on its assertion, never on an import or compile error.
+describe('isRowSelectable reads the approval fact (APPR-08-09)', () => {
+  it('A-sel-1: a validated row with an open run is NOT selectable', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: OPEN_RUN })).toBe(false)
+  })
+
+  it('A-sel-2: a validated row with an approved run IS selectable', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: APPROVED_RUN })).toBe(true)
+  })
+
+  it('A-sel-3: a validated row with no approval run at all IS selectable (AC #5, an unarmed tenant is unchanged)', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: null })).toBe(true)
+  })
+
+  it('A-sel-4: selectableIds excludes awaiting-approval rows from a mixed page', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'clear', status: 'validated', approval: null },
+      { ...draftInvoice, id: 'awaiting', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'approved', status: 'validated', approval: APPROVED_RUN },
+      { ...draftInvoice, id: 'draft', status: 'draft', approval: OPEN_RUN },
+    ]
+
+    expect(selectableIds(rows)).toEqual(['clear', 'approved'])
+  })
+
+  it('A-sel-5: pruneSelection drops an id whose row came back from the server with an open run', () => {
+    const before: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: null },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+    // The same selection survives the pre-fetch rows -- so the drop below is the approval
+    // fact biting, not an id that merely left the page.
+    expect(pruneSelection(['a', 'b'], before)).toEqual(['a', 'b'])
+
+    const afterRefetch: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+
+    expect(pruneSelection(['a', 'b'], afterRefetch)).toEqual(['b'])
+  })
+
+  it('A-sel-6: selectAllState reports none on a page where every row is awaiting approval', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
+    ]
+
+    expect(selectAllState([], rows)).toBe('none')
+  })
+
+  it("A-sel-7: selectAllState is none even when every open-run id sits in the selection -- a stale selection can't inflate past the empty guard", () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
+    ]
+
+    expect(selectAllState(['a', 'b'], rows)).toBe('none')
+  })
+})
+
+// FAIL-OPEN, pinned as a recorded decision rather than an accident (APPR-08-09, B5).
+// `InvoiceApproval.run_state` is a bare `string` with no union, and normaliseInvoiceRow
+// passes it through untouched ([gates-on-the-wire]), so anything that is not exactly
+// 'open' -- a typo, a case variant, an absent key -- reads as SELECTABLE. Accepted: the
+// column is CHECK-constrained, and the SERVER gate is authoritative (a wrongly-selectable
+// row is skipped with awaiting_approval), so this is a display inconsistency, never a
+// bypass. If a future change makes it fail CLOSED, these three specs are what must be
+// re-decided rather than silently flipped.
+describe('isRowSelectable fails OPEN on an unrecognised run_state (APPR-08-09, decision B5)', () => {
+  it("A-sel-8: an unknown run_state ('opened', 'OPEN') on a non-null approval reads as selectable", () => {
+    for (const run_state of ['opened', 'OPEN', 'Open', 'approved_pending']) {
+      expect(
+        isRowSelectable({ ...draftInvoice, status: 'validated', approval: { ...OPEN_RUN, run_state } }),
+        `run_state=${run_state}`,
+      ).toBe(true)
+    }
+  })
+
+  it('A-sel-9: an empty-string run_state on a non-null approval reads as selectable', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: { ...OPEN_RUN, run_state: '' } })).toBe(true)
+  })
+
+  it('A-sel-10: an absent run_state key on a non-null approval reads as selectable', () => {
+    // The wire cannot produce this today (RowFacts has no omitempty), and the type forbids
+    // it -- the cast is what makes the undefined branch reachable at all.
+    const noRunState = { ...OPEN_RUN, run_state: undefined } as unknown as InvoiceApproval
+
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: noRunState })).toBe(true)
+  })
+
+  it('A-sel-11: fail-open never rescues a non-validated status', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'draft', approval: { ...OPEN_RUN, run_state: 'opened' } })).toBe(false)
   })
 })
 

@@ -145,7 +145,7 @@ export function Row({
           data-testid="review-select"
           aria-label={`Select invoice ${r.invoice_number}`}
           checked={checked}
-          disabled={!isRowSelectable(r.status)}
+          disabled={!isRowSelectable(r)}
           // BOTH handlers stop propagation — the row's own onClick toggles expansion and
           // must never fire from a checkbox interaction.
           onClick={(e) => e.stopPropagation()}

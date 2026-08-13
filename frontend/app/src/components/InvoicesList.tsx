@@ -473,7 +473,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                     data-testid="invoice-select"
                     aria-label={`Select invoice ${r.invoice_number}`}
                     checked={selected.includes(r.id)}
-                    disabled={!isRowSelectable(r.status)}
+                    disabled={!isRowSelectable(r)}
                     // Both handlers stop propagation — the row's own onClick (whole-row
                     // navigation) must never fire from a checkbox interaction.
                     onClick={(e) => e.stopPropagation()}

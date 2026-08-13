@@ -773,3 +773,44 @@ describe('InvoicesList: resolved-failed marker', () => {
     expect(screen.getAllByTestId('invoice-resolved-marker'), 'exactly one resolved marker, not one per violation').toHaveLength(1)
   })
 })
+
+// RED spec (APPR-08-09, task-500, Stage 2.5/Mode A) — the observable form of AC #3's
+// parity claim. An awaiting-approval row renders the SAME disabled checkbox a not-yet-
+// validated row already renders: present, disabled, unchecked, no title, no tooltip, no
+// new copy ([selectable-parity-not-new-copy]). It fails today because isRowSelectable's
+// body is still status-only (its `// stub` marker), so the open-run row's checkbox is
+// enabled and select-all sweeps it in.
+describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-09)', () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  it('AC-3 parity: an awaiting-approval row keeps a PRESENT, disabled, unchecked checkbox and select-all counts 1', async () => {
+    const rows = [
+      row({ id: 'clear', invoice_number: 'INV-CLEAR', status: 'validated' }),
+      row({ id: 'awaiting', invoice_number: 'INV-AWAIT', status: 'validated', approval: openRun }),
+    ]
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-AWAIT')
+
+    const awaiting = screen.getByLabelText('Select invoice INV-AWAIT') as HTMLInputElement
+    // PRESENT, not hidden -- parity with a draft row, whose checkbox also renders disabled.
+    expect(awaiting, 'the checkbox renders; it is not absent').toBeTruthy()
+    expect(awaiting.disabled).toBe(true)
+    expect((screen.getByLabelText('Select invoice INV-CLEAR') as HTMLInputElement).disabled).toBe(false)
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+
+    const summary = await screen.findByTestId('batch-submit-summary')
+    expect(summary.textContent).toContain('1 selected on this page')
+    expect(awaiting.checked, 'select-all must not sweep in an awaiting-approval row').toBe(false)
+    expect((screen.getByLabelText('Select invoice INV-CLEAR') as HTMLInputElement).checked).toBe(true)
+  })
+})

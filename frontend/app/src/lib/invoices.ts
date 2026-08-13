@@ -1140,12 +1140,14 @@ export function singleSubmitOutcome(
 // Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`
 // invoices can be batch-submitted (Store.ApplyValidation is the only path into
 // `queued`), so selection is scoped to that one status throughout.
-export function isRowSelectable(status: InvoiceStatus): boolean {
-  return status === 'validated'
+// stub (APPR-08-09, Stage 2.5): the signature takes the row, but the approval half of
+// the predicate is NOT implemented — the A-sel-* specs fail on that assertion.
+export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>): boolean {
+  return row.status === 'validated'
 }
 
 export function selectableIds(rows: InvoiceRecord[]): string[] {
-  return rows.filter((row) => isRowSelectable(row.status)).map((row) => row.id)
+  return rows.filter((row) => isRowSelectable(row)).map((row) => row.id)
 }
 
 export function toggleSelection(sel: string[], id: string): string[] {

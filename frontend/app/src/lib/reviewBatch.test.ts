@@ -34,6 +34,7 @@ import {
   skipReasonLabel,
   type BatchSubmitResultItem,
   type EditFieldKey,
+  type InvoiceApproval,
   type InvoiceRecord,
   type InvoiceStatus,
   type RuleCount,
@@ -1659,6 +1660,49 @@ describe('bulkBarView: the page-scoped submit-all disables at zero eligible (BUL
 
     expect(view.submitAllLabel).toBe('Submit all 12 on this page for transmission')
     expect(view.canSubmitAll).toBe(true)
+  })
+})
+
+// RED specs (APPR-08-09, task-500, Stage 2.5/Mode A) — TEST-ONLY. reviewBatch.ts is NOT
+// modified by this subtask (AC #2): bulkBarView already reaches the predicate through
+// pruneSelection and selectableIds, so these two specs prove the ripple lands on the bulk
+// bar from the invoices.ts edit alone. They fail today because isRowSelectable's body is
+// still status-only (its `// stub` marker).
+//
+// DELIBERATELY NOT ASSERTED: `view.note`. reviewBatch.ts:1049 emits "Only VALIDATED rows
+// can be sent. N of the M on this page cannot." — which becomes FALSE the moment an
+// awaiting-approval row (which IS validated, and renders a VALIDATED pill) counts into
+// notReady. That copy defect is APPR-08-10's; asserting `note` here would pin the false
+// sentence as correct. BULK-8 above still passes because its fixtures carry approval:null.
+const OPEN_RUN: InvoiceApproval = {
+  run_state: 'open',
+  pending_ord: 1,
+  pending_role_title: 'Reviewer',
+  pending_holder_warn: false,
+  due_at: null,
+  overdue: false,
+}
+
+describe('bulkBarView inherits the approval gate without reviewBatch.ts changing (APPR-08-09)', () => {
+  it('BULK-A1: an awaiting-approval row leaves eligible and counts into notReady', () => {
+    const rows = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN })]
+
+    const view = bulkBarView(['a', 'b'], rows, 'idle', false)
+
+    expect(view.eligible).toEqual(['a'])
+    expect(view.notReady).toBe(1)
+    expect(view.submitAllLabel).toBe('Submit all 1 on this page for transmission')
+    expect(view.canSubmitAll).toBe(true)
+  })
+
+  it('BULK-A2: a page where every validated row has an open run disables submit-all entirely', () => {
+    const rows = Array.from({ length: 4 }, (_, i) => mkRow(`inv-${i}`, 'validated', { approval: OPEN_RUN }))
+
+    const view = bulkBarView([], rows, 'idle', false)
+
+    expect(view.canSubmitAll).toBe(false)
+    expect(view.notReady).toBe(4)
+    expect(view.eligible).toEqual([])
   })
 })
 

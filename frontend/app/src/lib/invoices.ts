@@ -67,8 +67,13 @@
 // export for that job is deleted outright rather than re-pointed -- a second list of
 // statuses is exactly the thing that drifts out of sync with the machine, which is what
 // happened when the backend widened Edit to accept `rejected` and the SPA did not follow.
-// The remaining status sets here (isInFlight for polling, isRowSelectable for batch
-// selection, INVOICE_STATUS_STYLE for pills) are NOT availability gates and stay.
+// isInFlight (polling) and INVOICE_STATUS_STYLE (pills) are NOT availability gates and
+// stay. isRowSelectable became one in APPR-08-09: it gates batch selection, reading the
+// row's `approval.run_state` off the wire rather than re-deriving the server's rule, and
+// failing open on anything else. Its `status === 'validated'` half is still a mirrored
+// status set that can drift the way the deleted one did; both are tolerated only because
+// the server's skip is authoritative -- a wrong answer costs a checkbox, never a bypass.
+// A gate that cannot make that claim reads the wire.
 //
 // verdictStatus(staleSinceEdit, inv) is the within-session fix-loop indicator (Core AC
 // #7) plus the on-load demoted-draft derivation (Core AC #5, task-188 item 4): 'stale'
@@ -1137,13 +1142,13 @@ export function singleSubmitOutcome(
   }
 }
 
-// Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`
-// invoices can be batch-submitted (Store.ApplyValidation is the only path into
-// `queued`), so selection is scoped to that one status throughout.
-// stub (APPR-08-09, Stage 2.5): the signature takes the row, but the approval half of
-// the predicate is NOT implemented — the A-sel-* specs fail on that assertion.
+// Selection helpers for the batch-submit list surface (M5-09-06). Selectable means
+// `validated` (Store.ApplyValidation is the only path into `queued`) AND no open approval
+// run -- the server skips an awaiting-approval row with `awaiting_approval` (APPR-08-09),
+// so selecting one can only buy a dead result. Fail-open on any other run_state is a
+// pinned decision, not an oversight: see A-sel-8..11.
 export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>): boolean {
-  return row.status === 'validated'
+  return row.status === 'validated' && row.approval?.run_state !== 'open'
 }
 
 export function selectableIds(rows: InvoiceRecord[]): string[] {
@@ -1155,8 +1160,8 @@ export function toggleSelection(sel: string[], id: string): string[] {
 }
 
 // Keeps only ids that are both still present in `rows` (didn't scroll/filter away) AND
-// still `validated` (didn't get submitted/edited/re-validated out from under a stale
-// selection since it was last computed).
+// still selectable (didn't get submitted/edited/re-validated, or fall under a newly
+// opened approval run, out from under a stale selection since it was last computed).
 export function pruneSelection(sel: string[], rows: InvoiceRecord[]): string[] {
   const selectable = new Set(selectableIds(rows))
   return sel.filter((id) => selectable.has(id))

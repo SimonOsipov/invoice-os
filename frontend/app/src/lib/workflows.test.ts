@@ -17,7 +17,6 @@ import {
   opLabel,
   parseLoc,
   policySummary,
-  publishPolicy,
   removePolicy,
   renamePolicy,
   replacePolicy,
@@ -57,10 +56,10 @@ const approvalNode = (id: string): ApprovalNode => ({ id, type: 'approval', role
 describe('seed integrity — firm (§2.1)', () => {
   it('ships exactly the three firm policies, in order, with their list-row metadata', () => {
     expect(SEED_FIRM_POLICIES).toHaveLength(3)
-    expect(SEED_FIRM_POLICIES.map((p) => [p.id, p.name, p.scope, p.status, p.updated])).toEqual([
-      ['polF1', 'Standard approval policy', 'All invoices', 'published', '2 days ago'],
-      ['polF2', 'Cross-border & FX', 'Foreign-currency invoices', 'published', '1 week ago'],
-      ['polF3', 'Government supply (B2G)', 'Document type · B2G', 'draft', '3 weeks ago'],
+    expect(SEED_FIRM_POLICIES.map((p) => [p.id, p.name, p.scope, p.status])).toEqual([
+      ['polF1', 'Standard approval policy', 'All invoices', 'published'],
+      ['polF2', 'Cross-border & FX', 'Foreign-currency invoices', 'published'],
+      ['polF3', 'Government supply (B2G)', 'Document type · B2G', 'draft'],
     ])
   })
 
@@ -104,9 +103,9 @@ describe('seed integrity — firm (§2.1)', () => {
 describe('seed integrity — inhouse (§2.2)', () => {
   it('ships exactly the two in-house policies, in order, with their list-row metadata', () => {
     expect(SEED_INHOUSE_POLICIES).toHaveLength(2)
-    expect(SEED_INHOUSE_POLICIES.map((p) => [p.id, p.name, p.scope, p.status, p.updated])).toEqual([
-      ['polH1', 'Company approval policy', 'All invoices', 'published', 'yesterday'],
-      ['polH2', 'Capital expenditure', 'Capex & fixed assets', 'draft', '5 days ago'],
+    expect(SEED_INHOUSE_POLICIES.map((p) => [p.id, p.name, p.scope, p.status])).toEqual([
+      ['polH1', 'Company approval policy', 'All invoices', 'published'],
+      ['polH2', 'Capital expenditure', 'Capex & fixed assets', 'draft'],
     ])
   })
 
@@ -183,6 +182,64 @@ describe('AC-1 — workflows.ts no longer exports a role list (Core AC 5)', () =
     // `Role` is a type — no runtime trace to assert; pnpm -r typecheck (AC-11) covers it.
     expect(seedPolicies().firm.map((p) => p.id)).toEqual(['polF1', 'polF2', 'polF3'])
     expect(seedPolicies().inhouse.map((p) => p.id)).toEqual(['polH1', 'polH2'])
+  })
+})
+
+describe('AC-4 — lib/workflows.ts is pure reducers over a tree, and nothing else', () => {
+  it('exports no seed, no store and no publish reducer', () => {
+    const names = Object.keys(Workflows)
+    // Control needle: a module that failed to load answers false to every check below,
+    // which reads exactly like a clean file.
+    expect(names.length).toBeGreaterThan(20)
+    expect(names).toContain('insertNode')
+    expect(names).toContain('replacePolicy')
+    expect(names).toContain('removePolicy')
+
+    expect('SEED_FIRM_POLICIES' in Workflows).toBe(false)
+    expect('SEED_INHOUSE_POLICIES' in Workflows).toBe(false)
+    expect('seedPolicies' in Workflows).toBe(false)
+    // Saving no longer publishes — the server seals a version, on its own verb.
+    expect('publishPolicy' in Workflows).toBe(false)
+    expect('touch' in Workflows).toBe(false)
+  })
+
+  it('no reducer stamps `updated`, and none demotes a published policy', () => {
+    const p = polF1()
+    expect(p.status).toBe('published')
+    const produced: Policy[] = [
+      insertNode(p, 'root', 0, approvalNode('n1')),
+      deleteNode(p, 'f1n2'),
+      moveNode(p, 'f1n1', 'root', 2),
+      updateNode(p, 'f1n1', { sla: '24' }),
+      appendNode(p, 'approval').policy,
+      clearSteps(p),
+      renamePolicy(p, 'Renamed'),
+      rescopePolicy(p, 'Consumer invoices (B2C)'),
+    ]
+    expect(produced).toHaveLength(8)
+    for (const next of produced) {
+      expect(Object.hasOwn(next, 'updated')).toBe(false)
+      expect(next.status).toBe('published')
+    }
+    expect(Object.hasOwn(newPolicy(), 'updated')).toBe(false)
+  })
+})
+
+describe('AC-3 — the list shape App.tsx’s ctx verbs patch (§4.4)', () => {
+  // `savePolicy` and `deletePolicy` go through replacePolicy / removePolicy above. Append
+  // has no reducer and needs none; what it does need is the ORDER, because the server
+  // answers ORDER BY created_at, id and a prepend would put the new row where a refetch
+  // will not.
+  it('createPolicy appends, because the server orders by created_at then id', () => {
+    const list = seedPolicies().firm.slice(0, 2)
+    expect(list).toHaveLength(2)
+    const created = { ...newPolicy(), id: 'pol-server-9' }
+
+    const after = [...list, created]
+
+    expect(after.map((p) => p.id)).toEqual(['polF1', 'polF2', 'pol-server-9'])
+    expect(after[0]).toBe(list[0])
+    expect(after[1]).toBe(list[1])
   })
 })
 
@@ -324,7 +381,6 @@ describe('insertNode', () => {
     expect(ids(after.nodes)).toEqual(['f1n1', 'new1', 'f1n2', 'f1n4', 'f1n7'])
     expect(after).not.toBe(before)
     expect(ids(before.nodes)).toEqual(['f1n1', 'f1n2', 'f1n4', 'f1n7'])
-    expect(after.updated).toBe('just now')
   })
 
   it('inserts into a branch lane without touching the sibling lane or the other nodes', () => {
@@ -352,13 +408,16 @@ describe('insertNode', () => {
 })
 
 describe('deleteNode', () => {
-  it('removes a root node and stamps updated', () => {
+  it('editing a node leaves status alone — the server decides what a save does to a version', () => {
     const before = polF1()
+    expect(before.status).toBe('published')
     const after = deleteNode(before, 'f1n2')
     expect(ids(after.nodes)).toEqual(['f1n1', 'f1n4', 'f1n7'])
     expect(after).not.toBe(before)
     expect(ids(before.nodes)).toEqual(['f1n1', 'f1n2', 'f1n4', 'f1n7'])
-    expect(after.updated).toBe('just now')
+    // The reducer edits a tree; sealing a version is the server's own verb.
+    expect(after.status).toBe('published')
+    expect(Object.hasOwn(after, 'updated')).toBe(false)
   })
 
   it('removes a branch node, leaving the condition and its other lane in place', () => {
@@ -389,7 +448,6 @@ describe('appendNode (§8.4 — palette click always lands at the root tail)', (
     expect(ids(policy.nodes)).toEqual(['f1n1', 'f1n2', 'f1n4', 'f1n7', nodeId])
     expect(policy).not.toBe(before)
     expect(before.nodes).toHaveLength(4)
-    expect(policy.updated).toBe('just now')
   })
 
   it('appends to the root tail even for a condition (the one type that is root-only)', () => {
@@ -444,7 +502,6 @@ describe('moveNode (§4.3 — remove-then-insert with the t -= 1 correction)', (
     const after = moveNode(before, 'f1n7', 'f1n2:then', 1)
     expect(ids(after.nodes)).toEqual(['f1n1', 'f1n2', 'f1n4'])
     expect(ids((after.nodes[1] as ConditionNode).then)).toEqual(['f1n3', 'f1n7'])
-    expect(after.updated).toBe('just now')
     expect(ids(before.nodes)).toEqual(['f1n1', 'f1n2', 'f1n4', 'f1n7'])
   })
 
@@ -480,7 +537,6 @@ describe('updateNode', () => {
     const before = polF1()
     const after = updateNode(before, 'f1n1', { sla: '24' })
     expect(after.nodes[0]).toEqual({ id: 'f1n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true })
-    expect(after.updated).toBe('just now')
     expect(before.nodes[0]).toMatchObject({ sla: '48' })
   })
 
@@ -513,50 +569,23 @@ describe('policy-level reducers', () => {
     const before = polF1()
     const after = clearSteps(before)
     expect(after.nodes).toEqual([])
-    expect(after).toMatchObject({ id: 'polF1', name: 'Standard approval policy', scope: 'All invoices', updated: 'just now' })
+    expect(after).toMatchObject({ id: 'polF1', name: 'Standard approval policy', scope: 'All invoices' })
     expect(before.nodes).toHaveLength(4)
   })
 
-  // Name and scope route through the same write path as the node edits, so a PUBLISHED
-  // policy demotes to draft here too (prototype `wfSetName`/`wfSetScope` -> `wfMutate`).
-  it('renamePolicy rewrites only the name, and demotes a published policy', () => {
+  it('renamePolicy rewrites only the name', () => {
     const before = polF1()
     expect(before.status).toBe('published')
     const after = renamePolicy(before, 'Renamed')
-    expect(after).toEqual({ ...before, name: 'Renamed', updated: 'just now', status: 'draft' })
+    expect(after).toEqual({ ...before, name: 'Renamed' })
     expect(before.name).toBe('Standard approval policy')
   })
 
-  it('rescopePolicy rewrites only the scope, and demotes a published policy', () => {
+  it('rescopePolicy rewrites only the scope', () => {
     const before = polF1()
     const after = rescopePolicy(before, 'Consumer invoices (B2C)')
-    expect(after).toEqual({ ...before, scope: 'Consumer invoices (B2C)', updated: 'just now', status: 'draft' })
+    expect(after).toEqual({ ...before, scope: 'Consumer invoices (B2C)' })
     expect(before.scope).toBe('All invoices')
-  })
-
-  // The demotion is what makes Save meaningful: edit a live policy and it stops claiming
-  // to be published until it is saved again. A draft stays a draft.
-  it('editing a node demotes a published policy, and leaves a draft alone', () => {
-    const published = polF1()
-    expect(deleteNode(published, 'f1n7').status).toBe('draft')
-    const draft = seedPolicies().firm[2]
-    expect(draft.status).toBe('draft')
-    expect(deleteNode(draft, 'f3n4').status).toBe('draft')
-  })
-
-  // §8.2: saving IS publishing — there is no separate publish action, and no save-as-draft.
-  it('publishPolicy flips a draft to published', () => {
-    const draft = seedPolicies().firm[2]
-    expect(draft.status).toBe('draft')
-    const after = publishPolicy(draft)
-    expect(after.status).toBe('published')
-    expect(after.updated).toBe('just now')
-    expect(after.nodes).toBe(draft.nodes)
-    expect(draft.status).toBe('draft')
-  })
-
-  it('publishPolicy is idempotent on an already-published policy', () => {
-    expect(publishPolicy(polF1()).status).toBe('published')
   })
 
   it('replacePolicy swaps by id, keeping order, length and sibling identity', () => {
@@ -583,7 +612,7 @@ describe('policy-level reducers', () => {
   })
 
   it('newPolicy starts as an empty draft', () => {
-    expect(newPolicy()).toMatchObject({ name: 'Untitled policy', scope: 'All invoices', status: 'draft', updated: 'just now', nodes: [] })
+    expect(newPolicy()).toMatchObject({ name: 'Untitled policy', scope: 'All invoices', status: 'draft', nodes: [] })
     expect(newPolicy().id).not.toBe(newPolicy().id)
   })
 })
@@ -846,12 +875,13 @@ describe('delegateTo', () => {
     expect(Object.hasOwn(cleared.nodes[0], 'delegateTo')).toBe(true)
   })
 
-  it('goes through touch() like every other node edit', () => {
+  it('delegateTo rides the ordinary patch path and leaves status alone', () => {
     const before = polH1()
     expect(before.status).toBe('published')
     const after = updateNode(before, 'h1n1', { delegateTo: 'Tunde Adeyemi' })
-    expect(after.updated).toBe('just now')
-    expect(after.status).toBe('draft')
+    expect((after.nodes[0] as ApprovalNode).delegateTo).toBe('Tunde Adeyemi')
+    expect(after.status).toBe('published')
+    expect(Object.hasOwn(after, 'updated')).toBe(false)
   })
 
   it('never mutates the policy it was given', () => {

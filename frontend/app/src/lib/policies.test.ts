@@ -20,7 +20,7 @@ import {
 } from './policies'
 import type { AuthedFetch } from './portfolio'
 import { seedPolicies } from './policies.fixture'
-import { newPolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
+import { newPolicy, removePolicy, replacePolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // The wire helpers spell every one of the ten Step keys, because the server never omits
@@ -802,5 +802,129 @@ describe('QA: the non-http failure kinds reach the caller unreshaped', () => {
       expect((caught as ApiError).status, name).toBe(401)
       expect((caught as ApiError).message, name).toBe('unauthorized')
     }
+  })
+})
+
+// ============================================================================
+// APPR-09-03 (task-507) — the four ctx write verbs App.tsx composes over the wrappers
+// ============================================================================
+// createPolicy/savePolicy/deletePolicy/publishPolicy stay INLINE closures in App.tsx, the
+// setMemberStatus precedent, and Workspace cannot mount in jsdom (it needs a session and a
+// live entities fetch). The harnesses below reproduce that composition exactly — wire call,
+// then patch the mirror through the reducer App.tsx uses — so these specs pin the contract
+// Stage 3's App.tsx has to satisfy. Same shape as roles.test.ts:1338-1400.
+
+describe('AC-3 / AC-1 — the ctx write verbs', () => {
+  async function harnessCreatePolicy(af: AuthedFetch, mirror: readonly Policy[], name: string) {
+    const created = await createApprovalPolicy(af, wireBase, name)
+    // Append: the server answers ORDER BY created_at, id, so the new row belongs last.
+    return { created, mirror: [...mirror, created] }
+  }
+
+  async function harnessSavePolicy(af: AuthedFetch, mirror: readonly Policy[], next: Policy) {
+    const saved = await putApprovalPolicyDraft(af, wireBase, next.id, next)
+    return { saved, mirror: replacePolicy(mirror, saved) }
+  }
+
+  async function harnessDeletePolicy(af: AuthedFetch, mirror: readonly Policy[], id: string) {
+    await deleteApprovalPolicy(af, wireBase, id)
+    return removePolicy(mirror, id)
+  }
+
+  it('createPolicy stages the SERVER row last, leaving the rows before it identical', async () => {
+    const created = toPolicy(wire({ id: 'pol-9', name: 'Untitled policy' }))
+    const before = [policy({ id: 'polA' }), policy({ id: 'polB' })]
+    const af = vi.fn().mockResolvedValue(wire({ id: 'pol-9', name: 'Untitled policy' }))
+
+    const { created: result, mirror } = await harnessCreatePolicy(af as unknown as AuthedFetch, before, 'Untitled policy')
+
+    expect(mirror).toHaveLength(3)
+    expect(mirror.map((p) => p.id)).toEqual(['polA', 'polB', 'pol-9'])
+    expect(result).toEqual(created)
+    expect(mirror[0]).toBe(before[0])
+    expect(mirror[1]).toBe(before[1])
+  })
+
+  it('savePolicy patches the mirror off the SERVER row, never off the policy it sent', async () => {
+    // The server re-mints every step id on a PUT draft and bumps the version, so the row the
+    // caller composed is already stale by the time the response lands.
+    const sent = policy({ id: 'p1', name: 'Capex sign-off', version: 2, nodes: [{ id: 'local-1', type: 'autoapprove' }] })
+    const af = vi
+      .fn()
+      .mockResolvedValue(wire({ id: 'p1', name: 'Capex sign-off', version: 3, steps: [step({ id: 'srv-1', kind: 'autoapprove' })], versions: [ver(3, false, false), ver(2, true, true)] }))
+
+    const { saved, mirror } = await harnessSavePolicy(af as unknown as AuthedFetch, [policy({ id: 'p0' }), sent], sent)
+
+    expect(mirror).toHaveLength(2)
+    expect(mirror[1]).toBe(saved)
+    expect(mirror[1]).not.toBe(sent)
+    expect(mirror[1].version).toBe(3)
+    expect(mirror[1].activeVersion).toBe(2)
+    expect(mirror[1].nodes.map((n) => n.id)).toEqual(['srv-1'])
+    // The sibling is not rebuilt: replacePolicy swaps one row, it does not remap the list.
+    expect(mirror[0].id).toBe('p0')
+  })
+
+  it('deletePolicy removes by id and never patches from the inert DELETE response', async () => {
+    // The DELETE answer is inert (status 'draft', version 0, steps []) — the wrapper resolves
+    // undefined precisely so there is no row available to patch from.
+    const af = vi.fn().mockResolvedValue(wire({ id: 'p1', status: 'draft', version: 0, steps: [], versions: [] }))
+    const before = [policy({ id: 'polA' }), policy({ id: 'polB' }), policy({ id: 'polC' })]
+
+    const mirror = await harnessDeletePolicy(af as unknown as AuthedFetch, before, 'polB')
+
+    expect(mirror).toHaveLength(2)
+    expect(mirror.map((p) => p.id)).toEqual(['polA', 'polC'])
+    expect(mirror[0]).toBe(before[0])
+    expect(mirror[1]).toBe(before[2])
+  })
+
+  it('a rejected write leaves the mirror untouched — nothing writes before the await', async () => {
+    const boom = new ApiError('http', 'only an admin can change approval policies', 403)
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+    const before = [policy({ id: 'polA' })]
+
+    await expect(harnessCreatePolicy(af, before, 'Untitled policy')).rejects.toBe(boom)
+    await expect(harnessSavePolicy(af, before, policy({ id: 'polA' }))).rejects.toBe(boom)
+    await expect(harnessDeletePolicy(af, before, 'polA')).rejects.toBe(boom)
+    expect(before.map((p) => p.id)).toEqual(['polA'])
+  })
+})
+
+describe('AC-2 — publishing is the one verb a single-row patch cannot mirror', () => {
+  // The active slot is TENANT-wide, so publishing B DEACTIVATES A. Publish's own response
+  // describes B alone: patching the mirror from it leaves A still claiming the slot on
+  // screen. Only a refetch of the whole list carries the second change.
+  it('publish’s response cannot report the deactivation it caused on another policy', async () => {
+    const a = policy({ id: 'polA', version: 1, activeVersion: 1, status: 'published' })
+    const b = policy({ id: 'polB', version: 1, activeVersion: null, status: 'draft' })
+    const mirror = [a, b]
+    expect(mirror.filter((p) => p.activeVersion !== null)).toHaveLength(1)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'polB', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] })) })
+    const published = await publishApprovalPolicy(authed(), wireBase, 'polB')
+    expect(published.activeVersion).toBe(1)
+
+    const patched = replacePolicy(mirror, published)
+    // Two policies in force: a tenant state the server's unique index cannot produce.
+    expect(patched.filter((p) => p.activeVersion !== null).map((p) => p.id)).toEqual(['polA', 'polB'])
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          approval_policies: [
+            wire({ id: 'polA', status: 'published', version: 1, versions: [ver(1, true, false)] }),
+            wire({ id: 'polB', status: 'published', version: 1, sealed: true, versions: [ver(1, true, true)] }),
+          ],
+        }),
+    })
+    const refetched = await listApprovalPolicies(authed(), wireBase)
+
+    expect(refetched).toHaveLength(2)
+    expect(refetched.filter((p) => p.activeVersion !== null).map((p) => p.id)).toEqual(['polB'])
+    expect(refetched[0].activeVersion).toBeNull()
+    expect(policyStanding(refetched[0])).toBe('Not in force')
   })
 })

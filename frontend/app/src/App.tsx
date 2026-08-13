@@ -292,12 +292,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     { immediate: base != null },
   )
   const policiesState = membersViewState(base, policiesAsync.status)
-  // Guarded, unlike the two mirrors below: `start` nulls `data`, and publishing refetches
-  // the whole list, so an ungated write would blank the policies for that round trip.
+  // Guarded on the STATUS, unlike the two mirrors below: `start` nulls `data` and publishing
+  // refetches from a populated screen, so an ungated write blanks the list for that round
+  // trip. Truthiness alone cannot be the gate — `success` nulls `data` on the empty branch
+  // too, so a tenant that deleted its last policy would keep a ghost list forever.
   const [policies, setPolicies] = useState<Policy[]>([])
   useEffect(() => {
-    if (policiesAsync.data) setPolicies(policiesAsync.data)
-  }, [policiesAsync.data])
+    if (policiesAsync.status === 'ready' || policiesAsync.status === 'empty') setPolicies(policiesAsync.data ?? [])
+  }, [policiesAsync.status, policiesAsync.data])
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null)
   // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
   // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because

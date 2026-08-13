@@ -133,9 +133,9 @@ describe('APPR-04-06 QA: the error guard fires before any node-shape assumption'
 
 describe('APPR-09-03 QA: the save control writes a draft and nothing else', () => {
   function saveButton(): HTMLElement {
-    // Matched on the handler's own control, not on copy: the label is 'Save & publish'
-    // today and subtask 05 splits it into 'Save draft' / 'Publish'. Both spellings start
-    // with 'Save', so this survives that rename while still naming one button.
+    // Matched on the handler's own control, not on copy: the label is 'Save' today (AC-8
+    // dropped the false '& publish') and subtask 05 splits it into 'Save draft' /
+    // 'Publish'. Both spellings start with 'Save', so this survives that split.
     const buttons = Array.from(document.querySelectorAll('button')).filter((b) => /^Save/.test(b.textContent ?? ''))
     expect(buttons, 'no Save control rendered at all').toHaveLength(1)
     return buttons[0]

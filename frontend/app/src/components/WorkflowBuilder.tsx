@@ -244,7 +244,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             Clear steps
           </button>
           <button type="button" onClick={save} className="v2-btn pf-btn" style={{ height: 36, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)' }}>
-            {saved ? 'Saved' : 'Save & publish'}
+            {saved ? 'Saved' : 'Save'}
           </button>
         </div>
       </div>

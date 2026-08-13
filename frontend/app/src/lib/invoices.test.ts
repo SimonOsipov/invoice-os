@@ -1601,9 +1601,10 @@ describe('mbsPathToEditField', () => {
 })
 
 describe('skipReasonLabel', () => {
-  it('I-skip-1: skipReasonLabel maps both reachable reasons and passes others through', () => {
+  it('I-skip-1: skipReasonLabel maps all three reachable reasons and passes others through', () => {
     expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
     expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
+    expect(skipReasonLabel('awaiting_approval')).toBe('Waiting on approval — an approver must approve it first')
     expect(skipReasonLabel('wat')).toBe('wat')
   })
 })

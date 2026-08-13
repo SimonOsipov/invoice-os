@@ -961,6 +961,9 @@ export function diffEditInput(original: InvoiceRecord, form: EditFormState): Inv
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_validated: 'Not validated — validate it first',
   duplicate_request: 'Already submitted with this request',
+  // stub (APPR-08-04 Mode A): the copy ships now; Stage 3 rewrites the comment above to
+  // three reasons and corrects its citation to batch_submit.go.
+  awaiting_approval: 'Waiting on approval — an approver must approve it first',
 }
 
 export function skipReasonLabel(reason: string): string {

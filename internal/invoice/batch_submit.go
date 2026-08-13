@@ -43,6 +43,10 @@ var errBatchSubmitInjectedTestFailure = errors.New("invoice: batch submit test-i
 const (
 	batchSubmitReasonNotValidated = "not_validated"
 	batchSubmitReasonDuplicate    = "duplicate_request"
+	// stub (APPR-08-04 Mode A): the token exists so batch_submit_gate_test.go compiles.
+	// The gate read and the guard arm that emit it are Stage 3, as is updating the
+	// "two reachable" prose above and on BatchSubmitResultItem.
+	batchSubmitReasonAwaitingApproval = "awaiting_approval"
 )
 
 // deriveBatchSubmitKey builds the per-invoice outbox key from the request's single

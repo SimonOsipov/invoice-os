@@ -277,3 +277,80 @@ func TestBatchSubmitHandler_BodySizeCap(t *testing.T) {
 		}
 	})
 }
+
+// --- APPR-08-04 (task-501, Mode A): AC #7 ------------------------------------
+
+// TestBatchSubmitHandler_NormalisesInvoiceIdsToCanonicalForm (AC #7): the handler parses
+// every id to VALIDATE it, then forwards req.InvoiceIDs raw. uuid.Parse accepts UPPERCASE,
+// {braced}, urn:uuid: and 32-hex-no-dash, so a non-canonical id reaches the store — where
+// the gate's map is keyed on Postgres's canonical text and that id reads absent. Reusing
+// the parse result closes it for every production caller. Fails today: each spelling is
+// forwarded verbatim.
+func TestBatchSubmitHandler_NormalisesInvoiceIdsToCanonicalForm(t *testing.T) {
+	canonical := uuid.NewString()
+	if strings.ToUpper(canonical) == canonical {
+		t.Fatalf("fixture id %q has no lowercase hex digits — the case this test exists for is not exercised", canonical)
+	}
+
+	spellings := map[string]string{
+		"uppercase":         strings.ToUpper(canonical),
+		"braced":            "{" + canonical + "}",
+		"urn":               "urn:uuid:" + canonical,
+		"32 hex no dash":    strings.ReplaceAll(canonical, "-", ""),
+		"already canonical": canonical,
+	}
+
+	for name, spelling := range spellings {
+		t.Run(name, func(t *testing.T) {
+			var captured []string
+			submit := func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error) {
+				captured = append([]string(nil), in.InvoiceIDs...)
+				return BatchSubmitResult{Results: []BatchSubmitResultItem{}}, nil
+			}
+			identity := &auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+			body := marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: []string{spelling}, IdempotencyKey: "key-1"})
+
+			rec, _ := doBatchSubmit(t, submit, identity, body)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if len(captured) != 1 {
+				t.Fatalf("submit saw %d id(s), want 1", len(captured))
+			}
+			if captured[0] != canonical {
+				t.Errorf("submit saw %q, want the canonical %q", captured[0], canonical)
+			}
+		})
+	}
+
+	t.Run("one uuid in four spellings reaches the store as four identical strings", func(t *testing.T) {
+		var captured []string
+		submit := func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error) {
+			captured = append([]string(nil), in.InvoiceIDs...)
+			return BatchSubmitResult{Results: []BatchSubmitResultItem{}}, nil
+		}
+		identity := &auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		ids := []string{
+			canonical,
+			strings.ToUpper(canonical),
+			"{" + canonical + "}",
+			"urn:uuid:" + canonical,
+		}
+		body := marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: ids, IdempotencyKey: "key-1"})
+
+		rec, _ := doBatchSubmit(t, submit, identity, body)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if len(captured) != len(ids) {
+			t.Fatalf("submit saw %d id(s), want %d (positions are never deduplicated at the handler)", len(captured), len(ids))
+		}
+		for i, got := range captured {
+			if got != canonical {
+				t.Errorf("submit saw ids[%d] = %q, want the canonical %q", i, got, canonical)
+			}
+		}
+	})
+}

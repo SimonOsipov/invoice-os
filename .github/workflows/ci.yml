@@ -520,6 +520,11 @@ jobs:
         run: pnpm --filter @invoice-os/ops-console test
       - name: Unit tests (landing)
         run: pnpm --filter @invoice-os/landing test
+      # Shipped with 50 tests and no runner: this SPA appeared nowhere in this file
+      # until 2026-08-13. workspaceCoverage.test.ts now fails when the next package
+      # arrives the same way.
+      - name: Unit tests (support-console)
+        run: pnpm --filter @invoice-os/support-console test
       # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
       # until this line. Cheap and deployment-free: they assert local seam logic
@@ -598,13 +603,57 @@ jobs:
           esac
           go run ./internal/tools/stalerefs -base "$BASE" -head HEAD
 
+  # A force push after a PR is open for review deletes the commits a reviewer
+  # actually read, and leaves the approval pointing at history nobody has seen.
+  # Nothing local can catch it: the rewritten commits are gone from the branch,
+  # and a subagent's shell commands are not written to the session transcript.
+  # GitHub's PR timeline is the only record, so the check has to live here.
+  #
+  # It is narrow on purpose. Both force pushes this repo has seen (PR #115 on
+  # 2026-07-29, PR #140 on 2026-08-06) landed while the PR was still a draft and
+  # destroyed nothing, so drafts are left alone. It also clears itself: a fresh
+  # review after the rewrite is the actual remedy and turns the check green with
+  # no file to edit and no rule to override.
+  #
+  # .claude/hooks/guard-git-history.py denies the same push before it leaves the
+  # machine. That hook only covers sessions that have it loaded; this covers the
+  # repository.
+  history-rewrite:
+    name: History rewrite
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The gate asserts an ABSENCE, so it proves it can still decide before its
+      # verdict is trusted — the pinned cases include PR #140's real timeline.
+      - name: Prove the gate still decides (pinned real timelines)
+        run: go test ./internal/tools/forcepushgate/ -count=1
+      - name: Check the branch was not force-pushed under a review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/$PR" > pr.json
+          # --paginate emits one array per page; --jq '.[]' + jq -s rejoins them
+          # into the single array the gate expects. Without this a >100-event
+          # timeline decodes as one page and the rest is silently dropped.
+          gh api --paginate "repos/${{ github.repository }}/issues/$PR/timeline" --jq '.[]' \
+            | jq -s '.' > timeline.json
+          go run ./internal/tools/forcepushgate -pr pr.json -timeline timeline.json
+
   # Single always-running gate. Mark THIS check ("CI") required in branch
   # protection (M1-05): it passes when the triggered jobs pass or are skipped,
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit, stale-refs]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit, stale-refs, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -620,6 +669,7 @@ jobs:
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           echo "stale-refs:    ${{ needs.stale-refs.result }}"
+          echo "history-rewrite: ${{ needs.history-rewrite.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
           fi
@@ -653,5 +703,10 @@ jobs:
           # indistinguishable from a clean scan.
           if [ "${{ needs.stale-refs.result }}" != "success" ]; then
             echo "::error::Stale-reference scan failed"; exit 1
+          fi
+          # Skips legitimately: it only runs on pull_request, so a push build has
+          # no PR to ask about.
+          if [ "${{ needs.history-rewrite.result }}" = "failure" ] || [ "${{ needs.history-rewrite.result }}" = "cancelled" ]; then
+            echo "::error::Branch was force-pushed after review — a fresh review clears this"; exit 1
           fi
           echo "All triggered CI jobs passed (skipped jobs are OK)."

@@ -287,7 +287,14 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
   (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)
   (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)   # DB-backed; needs `make dev-db`
   (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                     # SPAs
+  # 2265 unit tests, ~13s. `pnpm -r test` alone would launch Playwright, because
+  # e2e's `test` script IS the browser suite — hence the exclusion and test:unit.
+  (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit)
   ```
+  Run them yourself. Do not accept a subagent's report of a suite as the suite's
+  result: BUG-06 had two subagents report 1466 unit tests from the main checkout
+  when the branch had 1489, and METR-01's subtask 05 reported all tests passing
+  while one was failing and red was already pushed.
 - **Checkpoint:** `EXECUTION_DONE`
 
 #### Stage 4: QA Verification

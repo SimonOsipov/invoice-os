@@ -1092,6 +1092,68 @@ describe('getInvoice', () => {
     expect(result.approve_blocked_reason).toBe(reasonText)
     expect(result.reject_blocked_reason).toBe(reasonText)
   })
+
+  // APPR-08-06 QA (Mode B): APPROVE-6 gives both reasons the SAME string, so a
+  // normalizer that reads one wire key into the other key's slot survives it. Every
+  // other key here is distinct too -- a normalizer line copied from its neighbour and
+  // half-edited is the likeliest way these four go wrong, and tsc cannot see it.
+  it('APPROVE-7: each key reads its OWN wire key, never a neighbour', async () => {
+    const wire = {
+      ...draftInvoice,
+      can_approve: true,
+      approve_blocked_reason: 'approve reason',
+      can_reject: false,
+      reject_blocked_reason: 'reject reason',
+      can_edit: false,
+      can_submit: false,
+      submit_blocked_reason: 'submit reason',
+      can_view_ubl: false,
+      ubl_blocked_reason: 'ubl reason',
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: 'resolve reason',
+      can_revalidate: false,
+      revalidate_blocked_reason: 'revalidate reason',
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_approve).toBe(true)
+    expect(result.can_reject).toBe(false)
+    expect(result.approve_blocked_reason).toBe('approve reason')
+    expect(result.reject_blocked_reason).toBe('reject reason')
+    // The neighbours the four could plausibly be cross-wired to, pinned in the same
+    // response so a swap anywhere in the block shows up here.
+    expect(result.submit_blocked_reason).toBe('submit reason')
+    expect(result.ubl_blocked_reason).toBe('ubl reason')
+    expect(result.resolve_outside_blocked_reason).toBe('resolve reason')
+    expect(result.revalidate_blocked_reason).toBe('revalidate reason')
+  })
+
+  // The mirror of APPROVE-7 with the two booleans flipped: a cross-wire that happens
+  // to agree on one fixture cannot agree on both.
+  it('APPROVE-8: the two booleans are independent, in both directions', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ...draftInvoice, can_approve: false, can_reject: true }),
+    })
+    const rejectOnly = await getInvoice(af, base, 'inv-1')
+    expect(rejectOnly.can_approve).toBe(false)
+    expect(rejectOnly.can_reject).toBe(true)
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ...draftInvoice, can_approve: true, can_reject: false }),
+    })
+    const approveOnly = await getInvoice(af, base, 'inv-1')
+    expect(approveOnly.can_approve).toBe(true)
+    expect(approveOnly.can_reject).toBe(false)
+  })
 })
 
 // RED specs (task-400, BUG-04-04, Mode A) -- getInvoiceUbl is a throwing stub, so every

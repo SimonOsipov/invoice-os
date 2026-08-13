@@ -6,24 +6,51 @@
 // The commands marked "historical" are copied from this project's own session
 // transcripts, so the guard is measured against what actually happened rather
 // than against what a rule imagined.
-import { describe, expect, it } from 'vitest'
+//
+// The worktree cases run against a THROWAWAY repository built in beforeAll, not
+// against the checkout the suite happens to be sitting in. CI clones this repo
+// flat — no linked worktree — so a test anchored on the ambient layout reports
+// "allowed" for every worktree case and passes as a false green locally, where a
+// worktree does exist. That is how the first version of this file shipped red.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)))
 const HOOK = join(REPO, '.claude/hooks/guard-git-history.py')
-const MAIN = spawnSync('git', ['-C', REPO, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-  encoding: 'utf8',
-}).stdout.trim().replace(/\/\.git$/, '')
-// The session cwd must be a real linked worktree: the guard derives the main
-// checkout by asking git, and git cannot answer for a path that does not exist.
-// REPO is this suite's own worktree, so it is one by construction.
-const WORKTREE = REPO
-const WORKTREE_ARG = join(MAIN, '.claude/worktrees/example')
 
-function runHook(command: string, cwd: string = WORKTREE) {
+let fixture = ''
+let MAIN = ''
+let WORKTREE = ''
+const WORKTREE_ARG = '/tmp/example-worktree'
+
+function git(cwd: string, ...args: string[]) {
+  const res = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
+  if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`)
+  return res.stdout.trim()
+}
+
+beforeAll(() => {
+  // realpath: on macOS the temp dir is a symlink (/var -> /private/var) and git
+  // reports the resolved path, so an unresolved cwd would never compare equal.
+  fixture = realpathSync(mkdtempSync(join(tmpdir(), 'guard-git-history-')))
+  MAIN = join(fixture, 'main')
+  WORKTREE = join(fixture, 'wt')
+  spawnSync('git', ['init', '-q', MAIN], { encoding: 'utf8' })
+  git(MAIN, 'config', 'user.email', 'test@example.invalid')
+  git(MAIN, 'config', 'user.name', 'Test')
+  git(MAIN, 'commit', '-q', '--allow-empty', '-m', 'init')
+  git(MAIN, 'worktree', 'add', '-q', '--detach', WORKTREE)
+})
+
+afterAll(() => {
+  if (fixture) rmSync(fixture, { recursive: true, force: true })
+})
+
+function runHook(command: string, cwd: string) {
   const payload = JSON.stringify({
     hook_event_name: 'PreToolUse',
     tool_name: 'Bash',
@@ -33,40 +60,6 @@ function runHook(command: string, cwd: string = WORKTREE) {
   const res = spawnSync('python3', [HOOK], { input: payload, encoding: 'utf8' })
   return { code: res.status, stderr: res.stderr }
 }
-
-const DENIED: Array<[string, string]> = [
-  ['plain force push', 'git push --force origin feature/x'],
-  ['short flag', 'git push -f'],
-  ['force-with-lease', 'git push --force-with-lease origin HEAD'],
-  ['refspec form', 'git push origin +main:main'],
-  ['force push after a cd', 'cd /tmp && git push --force'],
-  [
-    'historical M4-10: hard-reset of main from a worktree session',
-    'MAIN=' + MAIN + '\necho "### before: $(git -C "$MAIN" rev-parse main)"\ngit -C "$MAIN" reset --hard b9f014284a40f29b2295a3b8',
-  ],
-  ['merge into main from a worktree session', 'git -C ' + MAIN + ' merge origin/main'],
-  ['checkout in main from a worktree session', 'cd ' + MAIN + ' && git checkout main'],
-  ['pull in main via a nested variable', 'ROOT=' + MAIN + '\ngit -C "$ROOT" pull --ff-only'],
-]
-
-const ALLOWED: Array<[string, string, string?]> = [
-  ['an ordinary push', 'git push origin feature/x'],
-  ['a commit in the worktree', 'git add -A && git commit -m "fix: thing"'],
-  ['an amend in the worktree', 'git commit --amend -m "fix: thing"'],
-  ['RALPH Phase 0 fetch on main', 'git -C ' + MAIN + ' fetch origin main'],
-  ['RALPH Phase 0 worktree add', 'git -C ' + MAIN + ' worktree add -b feature/x ' + WORKTREE_ARG + ' origin/main'],
-  ['post-merge worktree remove', 'git -C ' + MAIN + ' worktree remove ' + WORKTREE_ARG],
-  ['post-merge branch delete', 'git -C ' + MAIN + ' branch -d feature/x'],
-  ['reading main', 'git -C ' + MAIN + ' rev-parse main'],
-  ['a hard reset inside the worktree itself', 'git reset --hard HEAD~1'],
-  ['a checkout inside the worktree itself', 'git checkout -- .'],
-  // The user's own session lives in the main checkout; the guard stays out of it.
-  ['a checkout in main from a main-checkout session', 'git checkout main', MAIN],
-  ['a hard reset in main from a main-checkout session', 'git reset --hard origin/main', MAIN],
-  // Must not match its own documentation or a search for the banned strings.
-  ['grepping for the banned strings', 'grep -rn "force-push|--force|git rebase|reset --hard" RALPH_PROMPT.md'],
-  ['no git at all', 'pnpm -r test'],
-]
 
 describe('guard-git-history hook', () => {
   // A hook file that no settings block runs is the same defect workspaceCoverage
@@ -79,8 +72,7 @@ describe('guard-git-history hook', () => {
   // 2026-08-13, when that spelling pointed at a copy of this file that did not
   // exist. Missing file is not a soft failure: python3 exits 2, the one code that
   // BLOCKS, so every Bash call in the session is denied until it is fixed.
-  // `git rev-parse --show-toplevel` answers for the worktree the session is in.
-  it('is actually registered as a PreToolUse(Bash) hook, resolved from the session repo', () => {
+  it('is registered as a PreToolUse(Bash) hook, resolved from the session repo', () => {
     const settings = JSON.parse(readFileSync(join(REPO, '.claude/settings.json'), 'utf8'))
     const commands = (settings.hooks?.PreToolUse ?? [])
       .filter((entry: { matcher?: string }) => /Bash/.test(entry.matcher ?? ''))
@@ -93,27 +85,64 @@ describe('guard-git-history hook', () => {
     )
   })
 
-  it('resolved the main checkout it is guarding', () => {
-    expect(MAIN, 'could not derive the main checkout from git').toMatch(/\/[^/]+$/)
-    expect(MAIN.endsWith('/.git')).toBe(false)
+  // Floor. If `git worktree add` ever stops producing a LINKED worktree, the hook
+  // sees cwd == main, exempts itself by design, and every worktree case below
+  // passes as "allowed" — a green suite proving nothing.
+  it('built a real linked worktree to test against', () => {
+    const common = git(WORKTREE, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    expect(common, 'the fixture worktree does not share MAIN.git').toBe(join(MAIN, '.git'))
+    expect(WORKTREE).not.toBe(MAIN)
   })
 
-  it.each(DENIED)('denies: %s', (_label, command) => {
-    const { code, stderr } = runHook(command)
-    expect(code, `expected a denial, hook allowed it:\n${command}`).toBe(2)
-    expect(stderr).toMatch(/^Blocked:/)
+  describe('denies', () => {
+    it('a plain force push', () => expect(runHook('git push --force origin feature/x', WORKTREE).code).toBe(2))
+    it('the short flag', () => expect(runHook('git push -f', WORKTREE).code).toBe(2))
+    it('force-with-lease', () => expect(runHook('git push --force-with-lease origin HEAD', WORKTREE).code).toBe(2))
+    it('the refspec form', () => expect(runHook('git push origin +main:main', WORKTREE).code).toBe(2))
+    it('a force push after a cd', () => expect(runHook('cd /tmp && git push --force', WORKTREE).code).toBe(2))
+
+    it('historical M4-10: a hard reset of main from a worktree session', () => {
+      const cmd = `MAIN=${MAIN}\necho "### before: $(git -C "$MAIN" rev-parse HEAD)"\ngit -C "$MAIN" reset --hard b9f014284a40f29b2295a3b8`
+      const { code, stderr } = runHook(cmd, WORKTREE)
+      expect(code, stderr).toBe(2)
+      expect(stderr).toContain('git reset')
+    })
+
+    it('a merge into main from a worktree session', () =>
+      expect(runHook(`git -C ${MAIN} merge origin/main`, WORKTREE).code).toBe(2))
+    it('a checkout in main from a worktree session', () =>
+      expect(runHook(`cd ${MAIN} && git checkout main`, WORKTREE).code).toBe(2))
+    it('a pull in main reached through a nested variable', () =>
+      expect(runHook(`ROOT=${MAIN}\ngit -C "$ROOT" pull --ff-only`, WORKTREE).code).toBe(2))
   })
 
-  it.each(ALLOWED)('allows: %s', (_label, command, cwd) => {
-    const { code, stderr } = runHook(command, cwd ?? WORKTREE)
-    expect(code, `expected this to be allowed but the hook denied it:\n${command}\n${stderr}`).toBe(0)
-  })
+  describe('allows', () => {
+    // Both arguments are lazy: MAIN and WORKTREE do not exist until beforeAll runs.
+    const allowed = (label: string, command: () => string, cwd: () => string) =>
+      it(label, () => {
+        const { code, stderr } = runHook(command(), cwd())
+        expect(code, `denied something it should allow:\n${command()}\n${stderr}`).toBe(0)
+      })
 
-  // Floor: if the payload shape ever changes and the hook stops seeing commands,
-  // every case above would pass as an "allow" and the suite would read as green.
-  it('is actually reading the command out of the payload', () => {
-    expect(runHook('git push --force').code, 'the hook denied nothing at all').toBe(2)
-    expect(DENIED.length).toBeGreaterThanOrEqual(8)
-    expect(ALLOWED.length).toBeGreaterThanOrEqual(12)
+    allowed('an ordinary push', () => 'git push origin feature/x', () => WORKTREE)
+    allowed('a commit in the worktree', () => 'git add -A && git commit -m "fix: thing"', () => WORKTREE)
+    allowed('an amend in the worktree', () => 'git commit --amend -m "fix: thing"', () => WORKTREE)
+    allowed('a hard reset inside the worktree itself', () => 'git reset --hard HEAD~1', () => WORKTREE)
+    allowed('a checkout inside the worktree itself', () => 'git checkout -- .', () => WORKTREE)
+    allowed('RALPH Phase 0 fetch on main', () => `git -C ${MAIN} fetch origin main`, () => WORKTREE)
+    allowed('RALPH Phase 0 worktree add', () => `git -C ${MAIN} worktree add -b feature/x ${WORKTREE_ARG}`, () => WORKTREE)
+    allowed('post-merge worktree remove', () => `git -C ${MAIN} worktree remove ${WORKTREE_ARG}`, () => WORKTREE)
+    allowed('post-merge branch delete', () => `git -C ${MAIN} branch -d feature/x`, () => WORKTREE)
+    allowed('reading main', () => `git -C ${MAIN} rev-parse HEAD`, () => WORKTREE)
+    // The user's own session lives in the main checkout; the guard stays out of it.
+    allowed('a checkout in main from a main-checkout session', () => 'git checkout main', () => MAIN)
+    allowed('a hard reset in main from a main-checkout session', () => 'git reset --hard origin/main', () => MAIN)
+    // Must not match its own documentation or a search for the banned strings.
+    allowed(
+      'grepping for the banned strings',
+      () => 'grep -rn "force-push|--force|git rebase|reset --hard" RALPH_PROMPT.md',
+      () => WORKTREE,
+    )
+    allowed('no git at all', () => 'pnpm -r test', () => WORKTREE)
   })
 })

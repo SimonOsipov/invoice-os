@@ -17,7 +17,7 @@ import { chevDownGlyph } from '../glyphs'
 import { Icon } from '../icons'
 import { fmtPlain } from '../lib/format'
 import { roleOf, type Role } from '../lib/roles'
-import { findNode, ruleText, slaText, type BranchNode, type NodeType, type Policy, type PolicyStatus, type WfDocType } from '../lib/workflows'
+import { findNode, ruleText, slaText, WF_SLA_OPTIONS, type BranchNode, type NodeType, type Policy, type PolicyStatus, type WfDocType } from '../lib/workflows'
 
 /**
  * What the builder is currently about to place: either a fresh block from the palette
@@ -130,6 +130,15 @@ export const SLA_OPTIONS: WfOption[] = [
   { value: '48', label: 'Within 48 hours' },
   { value: '72', label: 'Within 72 hours' },
 ]
+
+/**
+ * `sla_hours` is any int the server accepts, so a stored deadline outside the four above is
+ * PREPENDED rather than dropped — `roleOptions`' shape. Labelled in SLA_OPTIONS' own register,
+ * not `slaText`'s 'within 36h': options inside one dropdown must read alike.
+ */
+export function slaOptions(current: string): WfOption[] {
+  return current && !WF_SLA_OPTIONS.includes(current) ? [{ value: current, label: `Within ${current} hours` }, ...SLA_OPTIONS] : SLA_OPTIONS
+}
 
 export const FIELD_OPTIONS: WfOption[] = [
   { value: 'amount', label: 'Invoice amount' },

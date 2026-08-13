@@ -15,7 +15,7 @@ import {
   isDocType,
   OP_OPTIONS,
   ruleText,
-  SLA_OPTIONS,
+  slaOptions,
   toOptions,
   WfAmountInput,
   WfSelect,
@@ -48,6 +48,11 @@ const ANY_REVIEWER = ''
 // Deliberately NOT the same wording as the option above it: the option names the fallback,
 // the note states the eligibility rule. §11.3 writes them differently — do not harmonise.
 const DELEGATE_NOTE = 'Only members with the Reviewer access role can be a delegate.'
+
+// The delegation window: `delegate`/`delegateTo` have no server column (lib/policies.ts:73-75),
+// so the choice is lost on every save. Stated rather than hidden — APPR-10 owns the storage and
+// the disabling; until then the control stays interactive and says so.
+const DELEGATION_NOT_STORED = 'Delegation is not stored yet — this choice is not saved.'
 
 /** The read-only hint under a select — the typography MemberParts' Reviewer hint already uses. */
 function hintStyle(amber = false) {
@@ -120,11 +125,14 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
                 Manage roles
               </button>
             </div>
-            <WfSelect label="Deadline" value={node.sla} options={SLA_OPTIONS} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
+            <WfSelect label="Deadline" value={node.sla} options={slaOptions(node.sla)} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
               <WfToggle on={node.delegate} onToggle={() => patch({ delegate: !node.delegate })} label="Allow delegation" />
             </div>
+            {/* Outside the guard below, so the warning shows in BOTH toggle states — DELEGATE_NOTE
+                already occupies the in-guard slot and speaks only to the picker. */}
+            <div style={hintStyle()}>{DELEGATION_NOT_STORED}</div>
             {node.delegate && (
               <div style={{ marginTop: 12 }}>
                 <WfSelect

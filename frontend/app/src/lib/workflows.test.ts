@@ -23,9 +23,6 @@ import {
   replacePolicy,
   rescopePolicy,
   ruleText,
-  SEED_FIRM_POLICIES,
-  SEED_INHOUSE_POLICIES,
-  seedPolicies,
   SIM_DEFAULT,
   simulate,
   slaText,
@@ -41,6 +38,7 @@ import {
   type WfNode,
 } from './workflows'
 import * as Workflows from './workflows'
+import { SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES, seedPolicies } from './policies.fixture'
 
 // --- fixtures ---------------------------------------------------------------
 // Every reducer test starts from a fresh clone, never from the frozen seed constants.
@@ -664,6 +662,13 @@ describe('derived labels (§5.1)', () => {
     expect(slaText('24')).toBe('within 24h')
     expect(slaText('48')).toBe('within 48h')
     expect(slaText('72')).toBe('within 72h')
+  })
+
+  // The server accepts any sla_hours, so a policy can carry an SLA outside WF_SLA_OPTIONS.
+  // This is a TYPECHECK spec: vitest strips types, so its only red is tsc rejecting '36'.
+  it('slaText renders an off-vocabulary SLA rather than blanking', () => {
+    expect(slaText('36')).toBe('within 36h')
+    expect(slaText('0')).toBe('no deadline')
   })
 })
 

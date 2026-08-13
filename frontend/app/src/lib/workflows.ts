@@ -28,8 +28,11 @@ export type RoleKey = string
 /**
  * Whole hours, as a STRING — '0' is the sentinel for "no deadline", which is why this
  * is not a number (0 hours and no-deadline would otherwise be the same value).
+ *
+ * An ALIAS, not a union: `sla_hours` is a plain server int, so a stored policy may carry
+ * an hour count outside the four options below and must still render (`slaText`).
  */
-export type Sla = '0' | '24' | '48' | '72'
+export type Sla = string
 export const WF_SLA_OPTIONS: readonly Sla[] = ['0', '24', '48', '72']
 
 export type WfDocType = 'B2B' | 'B2G' | 'B2C'
@@ -93,6 +96,14 @@ export type Policy = {
   status: PolicyStatus
   /** A human string ('2 days ago'), not a date — the prototype has no clock here. */
   updated: string
+  /** The version `nodes` belongs to — the HIGHEST version, not necessarily the live one. */
+  version: number
+  /**
+   * The version actually in force, or null when another policy holds the slot. The active
+   * slot is TENANT-wide (`approval_policy_versions_one_active ON (tenant_id)`), so at most
+   * one policy per store may carry a non-null value.
+   */
+  activeVersion: number | null
   nodes: WfNode[]
 }
 
@@ -141,6 +152,10 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
     scope: 'All invoices',
     status: 'published',
     updated: '2 days ago',
+    // Only polF1 and polH1 hold an active version: the tenant-wide unique index allows
+    // exactly one per store, so a second would model a tenant the server cannot produce.
+    version: 1,
+    activeVersion: 1,
     nodes: [
       A('f1n1', 'fin_mgr', '48', true),
       C('f1n2', '>', 250_000_000, [A('f1n3', 'fin_dir', '48')]),
@@ -154,6 +169,8 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
     scope: 'Foreign-currency invoices',
     status: 'published',
     updated: '1 week ago',
+    version: 1,
+    activeVersion: null,
     nodes: [A('f2n1', 'fin_mgr', '48'), C('f2n2', '>', 500_000_000, [A('f2n3', 'fin_dir', '48')]), A('f2n4', 'compliance', '24')],
   },
   {
@@ -162,6 +179,8 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
     scope: 'Document type · B2G',
     status: 'draft',
     updated: '3 weeks ago',
+    version: 1,
+    activeVersion: null,
     nodes: [A('f3n1', 'fin_dir', '48'), C('f3n2', '>', 1_000_000_000, [A('f3n3', 'cfo', '72')]), A('f3n4', 'compliance', '24')],
   },
 ]
@@ -173,6 +192,8 @@ export const SEED_INHOUSE_POLICIES: readonly Policy[] = [
     scope: 'All invoices',
     status: 'published',
     updated: 'yesterday',
+    version: 1,
+    activeVersion: 1,
     nodes: [
       A('h1n1', 'line_mgr', '48', true),
       C('h1n2', '>', 500_000_000, [A('h1n3', 'fin_dir', '48')]),
@@ -187,6 +208,8 @@ export const SEED_INHOUSE_POLICIES: readonly Policy[] = [
     scope: 'Capex & fixed assets',
     status: 'draft',
     updated: '5 days ago',
+    version: 1,
+    activeVersion: null,
     nodes: [
       A('h2n1', 'line_mgr', '48'),
       A('h2n2', 'fin_dir', '48'),
@@ -306,7 +329,7 @@ export function newNode(type: NodeType): WfNode {
 }
 
 export function newPolicy(): Policy {
-  return { id: newPolicyId(), name: 'Untitled policy', scope: 'All invoices', status: 'draft', updated: 'just now', nodes: [] }
+  return { id: newPolicyId(), name: 'Untitled policy', scope: 'All invoices', status: 'draft', updated: 'just now', version: 1, activeVersion: null, nodes: [] }
 }
 
 /**

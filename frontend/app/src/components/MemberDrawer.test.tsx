@@ -133,6 +133,8 @@ describe('APPR-04-06 AC4: drawer copy this subtask does not own stays byte-uncha
       scope: 'All invoices',
       status: 'draft',
       updated: 'now',
+      version: 1,
+      activeVersion: null,
       nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
     }
     render(
@@ -218,6 +220,8 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
       scope: 'All invoices',
       status: 'draft',
       updated: 'now',
+      version: 1,
+      activeVersion: null,
       nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
     }
     render(

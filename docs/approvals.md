@@ -595,9 +595,10 @@ appearing to route something.
 > (`frontend/app/src/lib/policies.ts`) have live callers in `App.tsx`, and a draft edit goes
 > to `PUT /v1/approval-policies/{id}/draft`. Selecting one of the five unsupported scopes is
 > therefore **refused by the rule above** — `400 invalid request` — where the screen
-> previously accepted an unstorable scope and displayed it as published. Rendering that
-> refusal at the control is **APPR-09-05's** work; until it lands the write fails without
-> saying so.
+> previously accepted an unstorable scope and displayed it as published. The builder now
+> renders that refusal verbatim in its own write-error slot (`policy-save-error` /
+> `policy-publish-error`, `WorkflowBuilder.tsx`), and the in-flight lock clears in a `finally`
+> so the form re-opens over it rather than stranding the user in a dead one.
 >
 > Deleting them from the palette is **APPR-10's unbuilt work**, under the rule that **a
 > control which fails invisibly is removed, while a control that announces its own

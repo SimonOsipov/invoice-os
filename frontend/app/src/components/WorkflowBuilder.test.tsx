@@ -684,12 +684,12 @@ describe('APPR-09-05 QA: two writes, one after the other', () => {
 })
 
 // ----------------------------------------------------------------------------
-// APPR-09-06 (task-510) AC-5 — RED. The in-flight guard
+// APPR-09-06 (task-510) AC-5 — the in-flight guard
 // ----------------------------------------------------------------------------
 // `save()`/`publish()` re-seed `working` from the answer, so a keystroke typed inside the round
-// trip is silently overwritten. Before subtask 05 this could not happen — every keystroke was
-// its own PUT. The shipped remedy is one `submitting` flag disabling the form for the duration
-// (RoleModal.tsx:73,:197; EntityFormModal.tsx:64; MemberDrawer.tsx:272), cleared in `finally`.
+// trip used to be silently overwritten. Before subtask 05 it could not happen — every keystroke
+// was its own PUT. The remedy is one `submitting` flag disabling the form for the duration
+// (RoleModal.tsx:74,:203; EntityFormModal.tsx:64; MemberDrawer.tsx:272), cleared in `finally`.
 // The spec these replace — 'a re-seed that lands after an edit DISCARDS it' — recorded the race
 // and said in its own comment that a real guard must REPLACE it rather than work around it.
 //
@@ -795,9 +795,10 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
   })
 
   it('a publish in flight shuts Publish WITHOUT claiming the tree is unsaved', () => {
-    // `blockedReason` is null here — the tree is clean and the top version is not yet sealed.
-    // So `disabled` must gain `|| submitting`, while `title`, `aria-describedby` and the visible
-    // note stay keyed on `blockedReason` ALONE: 'Save your changes first' is not true mid-publish.
+    // `blockedReason` is null here — the tree is clean and the top version is not yet sealed —
+    // so `|| submitting` is what shuts `disabled`, while `title`, `aria-describedby` and the
+    // visible note stay keyed on `blockedReason` ALONE: 'Save your changes first' is untrue
+    // mid-publish, and stating the wrong reason is worse than stating none.
     const self = policyWith('fin_mgr')
     const pub = deferred<Policy>()
     const publishPolicy = vi.fn(() => pub.promise)
@@ -851,6 +852,136 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
     expect(await screen.findByText(refusal)).toBeTruthy()
     expect(inert(nameInput()), 'a refused write left the form permanently dead').toBe(false)
     expect(inert(save), 'the user cannot retry the write that was just refused').toBe(false)
+  })
+
+  // --------------------------------------------------------------------------
+  // QA (Stage 4) — adversarial coverage the RED set did not carry
+  // --------------------------------------------------------------------------
+
+  it('a refused save can be RETRIED, and the retry reaches the gateway', async () => {
+    // Re-opening the form is half the property; the other half is that the flag did not merely
+    // flip a style. MemberDrawer.test.tsx:163's shape — the rejection clears and the second
+    // write goes through.
+    const self = policyWith('fin_mgr')
+    const refusal = 'only an admin can change approval policies'
+    const savePolicy = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('http', refusal, 403))
+      .mockResolvedValueOnce({ ...self, name: 'Server name' })
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy })} policy={self} />)
+
+    fireEvent.click(saveButton())
+    expect(await screen.findByText(refusal)).toBeTruthy()
+
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(nameInput().value, 'the retry never landed').toBe('Server name'))
+    expect(savePolicy, 'the flag never cleared, so the retry never reached the gateway').toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('policy-save-error'), 'the stale refusal survived a successful retry').toBeNull()
+  })
+
+  it('a REFUSED publish re-opens the form too — the `finally` is on BOTH verbs', () => {
+    // `save()` and `publish()` carry their own try/finally. A `finally` present on one and
+    // missing on the other strands the user in a dead form on exactly one of the two refusals,
+    // and every spec above would still be green.
+    const self = policyWith('fin_mgr')
+    const pub = deferred<Policy>()
+    const refusal = 'this policy is already published'
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], publishPolicy: vi.fn(() => pub.promise) })} policy={self} />)
+
+    fireEvent.click(publishButton())
+    expect(inert(nameInput()), 'the publish never locked the form, so the re-open below is vacuous').toBe(true)
+
+    pub.reject(new ApiError('http', refusal, 409))
+
+    return screen.findByText(refusal).then(() => {
+      expect(inert(nameInput()), 'a refused publish left the form permanently dead').toBe(false)
+      expect(publishButton().disabled, 'the user cannot retry the publish that was just refused').toBe(false)
+    })
+  })
+
+  it('ONE flag covers both verbs — Publish is inert inside a SAVE round trip', () => {
+    // Cross-verb, which no spec above reaches: the publish specs lock publish-during-publish and
+    // the save specs lock save-during-save. A second flag per verb would pass both and still let
+    // a publish fire against a tree the save is about to re-seed.
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    const publishPolicy = vi.fn()
+    render(
+      <WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise), publishPolicy })} policy={self} />,
+    )
+    // The tree is clean and the top version unsealed, so `blockedReason` is null and Publish is
+    // open on its own terms — without this, `|| submitting` would not be what shuts it.
+    expect(publishButton().disabled, 'Publish was already shut, so the flip below is vacuous').toBe(false)
+
+    fireEvent.click(saveButton())
+
+    expect(publishButton().disabled, 'a publish can fire against a tree the in-flight save is about to re-seed').toBe(true)
+    fireEvent.click(publishButton())
+    expect(publishPolicy).not.toHaveBeenCalled()
+    // Same rule as the publish path: a transient lock states no reason, and 'Save your changes
+    // first' is not the reason here either.
+    expect(screen.queryByTestId('publish-blocked-reason')).toBeNull()
+  })
+
+  it('a write still in flight at unmount neither warns nor throws', async () => {
+    // `setSubmitting(false)` in `finally` fires on a component that is gone. React 18 dropped the
+    // "setState on an unmounted component" warning, so this pins the console rather than assuming
+    // a warning would surface — a leaked timer or a stray throw here would be invisible otherwise.
+    const errors: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => void errors.push(args))
+    try {
+      const self = policyWith('fin_mgr')
+      const sav = deferred<Policy>()
+      render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+      fireEvent.click(saveButton())
+      expect(inert(nameInput()), 'the form never locked, so unmounting mid-flight proves nothing').toBe(true)
+
+      cleanup()
+      sav.resolve({ ...self, name: 'Server name' })
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(errors, `a write landing after unmount logged: ${JSON.stringify(errors)}`).toHaveLength(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // AUTHORED-VALUE pin, NOT a rendered check. jsdom applies no stylesheet and runs no layout,
+  // so this can only hold what the component asks for. It is here because the three wrappers
+  // are the one part of AC-5 whose correctness is geometric: a fieldset's UA defaults are a
+  // 2px groove border, ~0.35em/0.75em padding, a 2px inline margin and `min-inline-size:
+  // min-content` — the last of which would refuse to shrink inside the canvas column's
+  // `minmax(360px, 1fr)`. The `display: flex` belongs to the scope row alone: `WfSelect`'s root
+  // is `inline-block` (WorkflowParts.tsx:226) and was blockified for free as a direct flex item
+  // of that row; a block wrapper hands it back its line box, and the descender nudges the select
+  // off centre against the `Applies` label beside it. The rendered check is owed at the deploy
+  // gate. Verified statically alongside this: no `<legend>` and no anchor inside any of the
+  // three subtrees (a disabled fieldset reaches neither), and no CSS in `frontend/app/src/styles`
+  // or `packages/design-tokens` selects `fieldset` at all.
+  it('the three in-flight wrappers carry the shipped fieldset reset, and only the scope row is a flex box', () => {
+    const self = policyWith('fin_mgr')
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], roles: FIRM_ROLES })} policy={self} />)
+
+    const wrappers = Array.from(document.querySelectorAll('fieldset'))
+    expect(wrappers, 'the scope row, the canvas and the inspector').toHaveLength(3)
+
+    for (const fs of wrappers) {
+      const s = (fs as HTMLElement).style
+      expect([s.border, s.padding, s.margin], `a wrapper kept a fieldset UA default: ${fs.getAttribute('style')}`).toEqual([
+        '0px',
+        '0px',
+        '0px',
+      ])
+      expect(s.minInlineSize, 'min-content would refuse to shrink inside the canvas column').toBe('0')
+      expect(fs.querySelector('legend'), 'a legend re-introduces the notch the reset removes').toBeNull()
+      expect(fs.querySelector('a[href]'), '`disabled` does not reach an anchor, so one inside would stay live').toBeNull()
+    }
+
+    const flex = wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex')
+    expect(flex, 'exactly one wrapper blockifies its child').toHaveLength(1)
+    expect(flex[0].contains(screen.getByLabelText('Applies')), 'the flex wrapper is not the one around WfSelect').toBe(true)
   })
 })
 

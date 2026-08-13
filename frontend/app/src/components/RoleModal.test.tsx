@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
 import type { Role } from '../lib/roles'
+import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { RoleModal, type RoleModalSubject } from './RoleModal'
 
@@ -66,6 +67,30 @@ function renderModal(subject: RoleModalSubject, ctxOver: Record<string, unknown>
   const ctx = ctxWith(ctxOver)
   render(<RoleModal ctx={ctx} subject={subject} onClose={onClose} onFlash={onFlash} />)
   return { ctx, onClose, onFlash }
+}
+
+/** One approval step naming `role()`'s default key — the landed answer the gate must let through. */
+function policy(over: Partial<Policy> = {}): Policy {
+  return {
+    id: 'p1',
+    name: 'Test policy',
+    scope: 'All invoices',
+    status: 'draft',
+    version: 1,
+    activeVersion: null,
+    nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
+    ...over,
+  }
+}
+
+/** Swaps `ctx` under the SAME mount, so component state (`confirming`) survives the arriving status. */
+function renderModalRerenderable(ctxOver: Record<string, unknown> = {}) {
+  const subject: RoleModalSubject = { mode: 'edit', role: role() }
+  const el = (over: Record<string, unknown>) => (
+    <RoleModal ctx={ctxWith(over)} subject={subject} onClose={vi.fn()} onFlash={vi.fn()} />
+  )
+  const view = render(el(ctxOver))
+  return { rerender: (next: Record<string, unknown>) => view.rerender(el(next)) }
 }
 
 afterEach(cleanup)
@@ -271,14 +296,14 @@ describe('AC-7: the EntityFormModal in-flight idiom', () => {
 })
 
 // ============================================================================
-// APPR-09-06 (task-510) — RED. The delete confirm's usage claim
+// APPR-09-06 (task-510) — the delete confirm's usage claim
 // ============================================================================
-// `deleteRoleConfirm(role.title, steps(ctx.policies, role.key))` (RoleModal.tsx:309) reads the
-// array with no status gate. `roleUsage` returns the literal 'not used in any policy' at zero
-// (lib/roles.ts:207), so an unlanded fetch prints that sentence immediately above a Delete
-// button, on a role that IS used. `deleteRoleConfirm` has no third branch today, so the fix
-// needs one new copy string in lib/roles.ts — asserted here by what it must NOT say, since a
-// named import of a not-yet-added export cannot even collect.
+// The confirm used to read `ctx.policies` with no status gate, and `roleUsage` returns the
+// literal 'not used in any policy' at zero (lib/roles.ts:207) — so an unlanded fetch printed
+// that sentence immediately above a Delete button, on a role that IS used. The fork now runs
+// through `policiesLanded` (RoleModal.tsx:97) into `deleteRoleConfirmUnknownUsage`. Asserted by
+// what the block must NOT say rather than by the new string, so a fourth branch cannot satisfy
+// these by naming itself something else.
 
 describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a landed policies fetch', () => {
   function confirmText(): string {
@@ -313,14 +338,66 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
     expect(text).not.toContain('not used in any policy')
   })
 
-  // ALREADY GREEN on write, and kept as the over-widening guard (WorkflowBuilder.test.tsx:102's
-  // posture): today's code ignores the status entirely, so `steps([], key)` already yields the
-  // zero copy. What it pins is that the new gate does not swallow a genuinely landed-empty answer.
+  // The over-widening guard (WorkflowBuilder.test.tsx:102's posture), green before the gate
+  // landed and green after: it pins that the gate does not swallow a genuinely landed-empty
+  // answer. Killed by gating on `policies.length` instead of on the status.
   it('a landed-empty policy list still says the role is not used in any policy', () => {
     renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'empty' })
     fireEvent.click(screen.getByTestId('role-delete'))
 
     expect(confirmText(), 'the guard swallowed a genuinely landed-empty answer').toContain('It is not used in any policy.')
+  })
+
+  // ------------------------------------------------------------------------
+  // QA (Stage 4) — adversarial coverage the RED set did not carry
+  // ------------------------------------------------------------------------
+
+  it('a landed policy that names the role states the real usage — the confirm CAN make a claim', () => {
+    // The population floor under the two absences above: a fork that withheld the clause in
+    // EVERY state would satisfy them both, and the landed-empty spec above cannot see it
+    // (its landed sentence is the zero copy, which the withheld branch could also fake).
+    renderModal({ mode: 'edit', role: role() }, { policies: [policy()], policiesState: 'ready' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+
+    expect(confirmText()).toContain('1 approval step · 1 policy')
+    expect(confirmText()).toContain('Those steps will block until you point them somewhere else.')
+  })
+
+  it("'idle' — no gateway configured — is the LANDED side, matching the Workflows screen", () => {
+    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:581). A gate written as
+    // `surface === 'roster'` would withhold here and disagree with WorkflowsView.tsx:65-68,
+    // which renders its own no-policies-yet card on that same build.
+    renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'idle' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+
+    expect(confirmText()).toContain('It is not used in any policy.')
+  })
+
+  it('the claim appears the moment the fetch lands under an already-open confirm', () => {
+    // The confirm is not remounted by the arriving status: `confirming` is component state and
+    // the fork is computed per render. A guard that latched the withheld copy at open time —
+    // or that closed the confirm on the status change — would fail here.
+    const { rerender } = renderModalRerenderable({ policies: [], policiesState: 'loading' })
+    fireEvent.click(screen.getByTestId('role-delete'))
+    expect(confirmText(), 'the confirm did not open, so the flip below is vacuous').not.toContain('approval step')
+
+    rerender({ policies: [policy()], policiesState: 'ready' })
+
+    expect(screen.getByTestId('role-delete-confirm'), 'the arriving status closed the confirm').toBeTruthy()
+    expect(confirmText(), 'the withheld copy latched at open time instead of re-forking on the landed status').toContain(
+      '1 approval step · 1 policy',
+    )
+  })
+
+  it('the withheld CLAIM is not a withheld ACTION — Delete still reaches the gateway', () => {
+    // AC-1 gates the sentence, never the verb. `role-modal-error` still carries the server's own
+    // refusal if the delete is declined, so nothing is lost by letting the click through.
+    const deleteRole = vi.fn().mockResolvedValue(undefined)
+    renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'loading', deleteRole })
+    fireEvent.click(screen.getByTestId('role-delete'))
+    fireEvent.click(screen.getByTestId('role-delete-confirmed'))
+
+    expect(deleteRole, 'the unlanded gate swallowed the delete itself').toHaveBeenCalledWith('cfo')
   })
 })
 

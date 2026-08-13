@@ -65,9 +65,10 @@ const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
  * four layers without plumbing a prop through a shared component for a Members-only need:
  * HTML natively disables every descendant (1, unclickable and out of the tab order),
  * `pointerEvents: none` is a stronger (2) than any background swap, the sibling below is
- * (3), and `aria-describedby` on the fieldset is (4). No `<fieldset>` precedent exists in
- * `frontend/` — accepted over mutating `WfSelect`. `minInlineSize: 0` is mandatory: a
- * fieldset defaults to `min-content` and would refuse to shrink inside a 560px drawer.
+ * (3), and `aria-describedby` on the fieldset is (4). This was the first `<fieldset>` in
+ * `frontend/`, accepted over mutating `WfSelect`; WorkflowBuilder.tsx:69 now cites it back for
+ * the same trade. `minInlineSize: 0` is mandatory: a fieldset defaults to `min-content` and
+ * would refuse to shrink inside a 560px drawer.
  */
 function UnbackedField({ reason, noteId, children }: { reason: string; noteId: string; children: ReactNode }) {
   return (

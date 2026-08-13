@@ -23,7 +23,7 @@ const INTRO =
   'Each policy decides who signs off before an invoice is stamped and transmitted. Steps run top to bottom; conditions split the flow. Publishing a policy opens an approval on every matching invoice. Transmission is not held for approval yet.'
 
 // Two nodes, not one: `EmptyState` takes {title, message}, so the shipped sentence splits
-// at its em dash. Module scope, the RolesView.tsx:33-36 shape.
+// at its em dash. Module scope, the RolesView.tsx:34-37 shape.
 const EMPTY_TITLE = 'No approval policies yet'
 const EMPTY_MESSAGE = 'Every invoice transmits as soon as it validates. Create one to require sign-off first.'
 
@@ -67,7 +67,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
   // already do on that build.
   const surface = membersSurface(ctx.policiesState)
   // Two slots, never one. Create is a screen singleton so its reason is a bare string
-  // (RoleModal.tsx:74); delete is row-scoped so its reason is keyed by id
+  // (RoleModal.tsx:75); delete is row-scoped so its reason is keyed by id
   // (MembersView.tsx:78). One shared slot would let a create failure blank a row's reason.
   const [createError, setCreateError] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null)
@@ -147,7 +147,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
 }
 
 // The gateway's own sentence for a write it refused, verbatim. Inline rather than shared:
-// MembersTable.tsx:274-289, MemberDrawer.tsx:365-379 and RoleModal.tsx:292-299 each carry
+// MembersTable.tsx:274-289, MemberDrawer.tsx:365-379 and RoleModal.tsx:298-305 each carry
 // their own copy, so a local one is the convention, not a fourth divergence.
 function PolicyError({ testId, children }: { testId: string; children: ReactNode }) {
   return (

@@ -34,6 +34,20 @@ function role(over: Partial<Role> = {}): Role {
   return { key: 'finance-approver', title: 'Finance Approver', desc: 'Approves finance invoices', members: [], ...over }
 }
 
+/** One approval step naming `role()`'s default key — the landed answer the gate must let through. */
+function policy(over: Partial<Policy> = {}): Policy {
+  return {
+    id: 'p1',
+    name: 'Test policy',
+    scope: 'All invoices',
+    status: 'draft',
+    version: 1,
+    activeVersion: null,
+    nodes: [{ id: 'n1', type: 'approval', role: 'finance-approver', sla: '24', delegate: false }],
+    ...over,
+  }
+}
+
 function Harness({
   members = [],
   roles = [],
@@ -204,12 +218,12 @@ describe('AC-4: the roles-unassigned banner stays gated on the full roster surfa
 })
 
 // ============================================================================
-// APPR-09-06 (task-510) — RED. The fifth `ctx.policies` reader.
+// APPR-09-06 (task-510) — the fifth `ctx.policies` reader
 // ============================================================================
-// `roleUsage(steps(policies, role.key))` (RolesView.tsx:238) renders on EVERY card, gated only
-// by `rolesSurface(rolesState, membersState)` — policies are not in that ladder. Unlanded,
-// every footer reads 'not used in any policy', the same false claim as RoleModal's delete
-// confirm, at grid volume.
+// The card footer renders on EVERY card and was gated only by `rolesSurface(rolesState,
+// membersState)`, which does not carry policies — so an unlanded fetch read 'not used in any
+// policy' on every card at once, the same false claim as RoleModal's delete confirm at grid
+// volume. The footer now forks on `policiesLanded` (RolesView.tsx:181).
 
 describe('APPR-09-06 AC-1/AC-3: a role card claims policy usage only off a landed policies fetch', () => {
   /** Header / holders / footer. MembersTable.test.tsx:42's `row.children[2]` idiom — the
@@ -238,6 +252,69 @@ describe('APPR-09-06 AC-1/AC-3: a role card claims policy usage only off a lande
     expect(footerOf(screen.getByTestId('role-card')).textContent, 'the guard swallowed a genuinely landed-empty answer').toContain(
       'not used in any policy',
     )
+  })
+
+  // ------------------------------------------------------------------------
+  // QA (Stage 4) — adversarial coverage the RED set did not carry
+  // ------------------------------------------------------------------------
+
+  it('a landed policy that names the role prints the real count — the footer CAN make a claim', () => {
+    // The population floor under BOTH absences above: without this, a gate that blanked the
+    // footer in every state would satisfy every assertion in this describe.
+    render(
+      <Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[policy()]} policiesState="ready" />,
+    )
+
+    expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('1 approval step · 1 policy')
+  })
+
+  it('an errored policies fetch withholds the claim too, not only a loading one', () => {
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="error" />)
+
+    const footer = footerOf(screen.getByTestId('role-card'))
+    expect(footer.textContent, 'the footer did not render, so the absences below are vacuous').toContain('0 people')
+    expect(footer.textContent).not.toContain('not used in any policy')
+    expect(footer.textContent).not.toContain('—')
+  })
+
+  it("'idle' — no gateway configured — is the LANDED side, matching the Workflows screen", () => {
+    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:581), which WorkflowsView.tsx:65-68
+    // relies on to render its own no-policies-yet card on that build. A gate written as
+    // `surface === 'roster'` would disagree with the Workflows screen about the same fetch.
+    render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="idle" />)
+
+    expect(footerOf(screen.getByTestId('role-card')).textContent).toContain('not used in any policy')
+  })
+
+  it('a refetch WITHHOLDS the last landed count rather than printing it stale', () => {
+    // Reachable: createPolicy/deletePolicy call `policiesAsync.run()` (App.tsx:1037,:1046), which
+    // dispatches 'start' → status 'loading' while the mirror keeps the rows it just patched
+    // (App.tsx:299-301). So 'loading' WITH rows is a real state, and this pins which way it falls.
+    // DELIBERATE DIVERGENCE from MemberDrawer/MembersTable, which keep printing off the same
+    // stale rows — their gate is `stepsForMember`'s null-at-zero, which never makes a negative
+    // claim, so they have nothing to withhold. Withholding here is one round trip of silence
+    // against a sentence that could be wrong; the Workflows list blanks wholesale in the same
+    // window (WorkflowsView.tsx:116's `surface === 'loading'` arm).
+    render(
+      <Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[policy()]} policiesState="loading" />,
+    )
+
+    const footer = footerOf(screen.getByTestId('role-card'))
+    expect(footer.textContent, 'the footer did not render, so the absence below is vacuous').toContain('0 people')
+    expect(footer.textContent, 'the mid-refetch footer printed a count the fetch had not confirmed').not.toContain('approval step')
+  })
+
+  it('EVERY card blanks, not merely the first', () => {
+    const roles = [role(), role({ key: 'cfo', title: 'CFO' }), role({ key: 'ceo', title: 'CEO' })]
+    render(<Harness roles={roles} rolesState="ready" membersState="ready" policies={[]} policiesState="loading" />)
+
+    const cards = screen.getAllByTestId('role-card')
+    expect(cards, 'the grid rendered no cards, so the loop below is vacuous').toHaveLength(roles.length)
+    for (const card of cards) {
+      const footer = footerOf(card)
+      expect(footer.textContent, 'a card lost its footer, so its absence below is vacuous').toContain('0 people')
+      expect(footer.textContent, 'one card still claims "used nowhere" off an unlanded fetch').not.toContain('not used in any policy')
+    }
   })
 })
 

@@ -197,7 +197,7 @@ export function policyInForce(list: readonly Policy[], selfId: string): Policy |
 // ---------------------------------------------------------------------------
 // Wire
 // ---------------------------------------------------------------------------
-// Shaped like roles.ts:342-376 — `base` a parameter, never `gatewayBase()` called here; no
+// Shaped like roles.ts:350-384 — `base` a parameter, never `gatewayBase()` called here; no
 // wrapper catches, so a non-2xx rejects with the underlying ApiError unchanged.
 //
 // Unlike the roles and members wrappers, these project to `Policy` rather than handing the

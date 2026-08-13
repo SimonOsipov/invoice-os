@@ -337,4 +337,35 @@ describe('APPR-09-06 AC-2: an unlanded policies fetch renders no steps line at a
     expect(screen.queryByTestId('member-steps-named'), 'an unlanded policies fetch rendered a step count').toBeNull()
     expect(screen.queryByText(stepsNamedLine(0))).toBeNull()
   })
+
+  // QA (Stage 4). The DELIBERATE DIVERGENCE from RolesView and RoleModal, pinned so it reads
+  // as a decision rather than an oversight. Those two withhold their sentence whenever the
+  // status is unlanded, INCLUDING a refetch that still holds the last landed rows — reachable
+  // via createPolicy/deletePolicy, which dispatch 'start' while the mirror keeps its rows
+  // (App.tsx:299-301,:1037,:1046). This drawer does not, and does not need to: its gate is
+  // `stepsForMember`'s null-at-zero, so it can only ever be one round trip STALE, never
+  // negatively wrong. Withholding a true count to avoid a claim it never makes would blank a
+  // shipped section for nothing.
+  it('a refetch that still holds its rows keeps printing the count — the gate is the null, not the status', () => {
+    const policy: Policy = {
+      id: 'p1',
+      name: 'Test policy',
+      scope: 'All invoices',
+      status: 'draft',
+      version: 1,
+      activeVersion: null,
+      nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
+    }
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [role({ key: 'cfo', members: ['u2'] })], policies: [policy], policiesState: 'loading' })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(1))
+  })
 })

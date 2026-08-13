@@ -308,8 +308,8 @@ export type PlatformCtx = {
   // why the nav item sits in the firm-wide sidebar group (Sidebar.tsx).
   //
   // Only the list and "which policy is open" live here. Builder-transient state — node
-  // selection, the drag/drop hint, the scenario inputs, the saved flash — is local to
-  // WorkflowBuilder, and the list's two write-error slots are local to WorkflowsView:
+  // selection, the drag/drop hint, the scenario inputs, the saved flash, the in-flight write
+  // lock — is local to WorkflowBuilder, and the list's two write-error slots to WorkflowsView:
   // the ClientsView precedent, each derived from one view and read nowhere else.
   policies: Policy[]
   policiesState: AsyncStatus

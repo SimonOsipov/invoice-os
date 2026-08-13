@@ -307,8 +307,10 @@ export function canSaveRole(name: string): boolean {
 }
 
 /**
- * The inline delete-confirm sentence, naming the role and its usage. The blocking clause is
- * dropped entirely on an unused role: nothing points at it, so nothing can block.
+ * The inline delete-confirm sentence for a LANDED policies fetch, naming the role and its
+ * usage; `deleteRoleConfirmUnknownUsage` below is the same question when it has not landed.
+ * The blocking clause is dropped entirely on an unused role: nothing points at it, so nothing
+ * can block.
  */
 export function deleteRoleConfirm(title: string, roleSteps: RoleSteps): string {
   const usage = roleUsage(roleSteps)

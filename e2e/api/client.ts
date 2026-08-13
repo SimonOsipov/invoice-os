@@ -340,9 +340,6 @@ export interface ListInvoicesQuery {
   offset?: number
   q?: string
   entity_id?: string
-  // stub (APPR-08-07 Stage 2.5): declared for typecheck only. The `!== undefined` emit
-  // line below and its first caller (APPR-08-10's contract spec) land in Stage 3 --
-  // until then this field is accepted and silently dropped.
   awaiting_approval?: boolean
 }
 
@@ -361,6 +358,7 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
   if (query?.offset !== undefined) params.set('offset', String(query.offset))
   if (query?.q !== undefined) params.set('q', query.q)
   if (query?.entity_id !== undefined) params.set('entity_id', query.entity_id)
+  if (query?.awaiting_approval !== undefined) params.set('awaiting_approval', String(query.awaiting_approval))
   const qs = params.toString()
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }

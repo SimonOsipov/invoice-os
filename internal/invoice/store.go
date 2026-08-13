@@ -666,6 +666,19 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		if f.NeedsAttention {
 			conditions = append(conditions, `(status = 'rejected' OR (status = 'failed' AND kept_as_is_at IS NULL) OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
 		}
+		if f.AwaitingApproval {
+			// A THIRD predicate: only validated rows match, a status neither the
+			// needs_attention fragment above nor needs_fix below can reach
+			// (TestStoreList_AwaitingApprovalIsNotNeedsAttention, ...IsNotNeedsFix).
+			// Exact negation of approval.TransmitClear -- the UNFLAGGED predicate, so
+			// APPROVALS_ENFORCED never gates it (...IsTheExactNegationOfTransmitClear).
+			// invoices.id is qualified: approval_runs has its own id, so a bare id
+			// binds there and silently never matches.
+			conditions = append(conditions, `(status = 'validated'
+			  AND EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)
+			  AND NOT EXISTS (SELECT 1 FROM approval_runs r
+			                   WHERE r.invoice_id = invoices.id AND r.state = 'approved'))`)
+		}
 		if len(f.ImportBatchIDs) > 0 {
 			args = append(args, f.ImportBatchIDs)
 			conditions = append(conditions, fmt.Sprintf("import_batch_id = ANY($%d)", len(args)))

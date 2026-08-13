@@ -305,7 +305,7 @@ type ListFilter struct {
 	// still holding: the exact negation of approval.TransmitClear -- the UNFLAGGED
 	// predicate, so APPROVALS_ENFORCED never gates it -- restricted to validated.
 	// Zero value applies no predicate, like every other bool above.
-	AwaitingApproval bool // stub (Stage 2.5): declared so the APPR-08-07 specs compile; List has no arm yet
+	AwaitingApproval bool
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/

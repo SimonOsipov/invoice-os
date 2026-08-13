@@ -692,10 +692,24 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			keptAsIs = b
 		}
 
+		// awaiting_approval (APPR-08-07): invoices an active approval policy still holds.
+		// Never gated by APPROVALS_ENFORCED -- the flag gates enforcement, not visibility
+		// (docs/approvals.md §11).
+		awaitingApproval := false
+		if raw := query.Get("awaiting_approval"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "awaiting_approval must be a boolean")
+				return
+			}
+			awaitingApproval = b
+		}
+
 		filter := ListFilter{
 			Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention,
 			ImportBatchIDs: importBatchIDs, Status: statusFilter, NeedsFix: needsFix,
 			RuleKey: ruleKey, Query: q, KeptAsIs: keptAsIs,
+			AwaitingApproval: awaitingApproval,
 		}
 
 		items, total, err := list(r.Context(), filter)

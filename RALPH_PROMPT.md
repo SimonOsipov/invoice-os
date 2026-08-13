@@ -177,6 +177,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 #### a. Architecture — finalize the story
 - Spawn `product-architecture-spec` (Opus), CWD = `$WORKTREE_PATH`, passing the FULL basic story content (or build-plan row + milestone goal) and its Obsidian path. Instruct it to operate per its "Expanding a Basic Story" section.
 - **Diff every new control against its siblings.** When the story adds a control to an existing bar, panel or surface, compare its visibility and disabled treatment against the controls already there before the plan is final. A sibling's shipped decision is the spec; contradicting it on the same surface is a defect, not a choice. INVED-02 shipped a hidden button beside disabled ones and the decision was reversed after it was built.
+- **A story that changes a layout constant ships a layout assertion.** A layout constant is a width, a grid track, a clearance, an overflow or an alignment. When a subtask adds or changes one, name a topology layout assertion as that subtask's deliverable. The instrument already exists: `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560 / 1920 / 1440 / 1280), and `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Phase 3.5 states what such an assertion must claim — the relationship the constant encodes, never the raw dimension. Planning it here is what puts it in the FIRST deploy-gate run. The deployed environment is this project's only renderer, so an assertion written after that run costs a whole extra one. A 26px input, a label overflowing its pill and a 360px menu clearance all shipped from stories whose ACs never mentioned layout.
 - **Re-measure every fact the story asserts.** A basic story states facts, not only goals: a root cause, a mechanism, a count, another PR's shipped state, a precedent's preconditions, whether the prescribed fix can work. Treat each one as a hypothesis. Re-measure it inside the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`. Cite what you ran, never the conclusion alone. BUG-02 asserted three mechanisms and all three proved wrong; APPR-04's ground truth was wrong in thirteen places. When a corrected premise carries the story's scope, Phase 0.6d stops the run for it.
 - It rewrites the story file in Obsidian to final state: system design, **## Implementation Subtasks** (`[<STORY-ID>-NN]` with Category / Dependencies / Description / Acceptance Criteria / Order / Test-first classification + Test Specs tables for `Test-first: yes`), and a **## Decisions** section appending every assumption it made where the story was silent.
 - **Traceability rule (hard):** every derived AC and subtask must trace to the Objective or a Core AC (or the milestone's "Ships when true"). Nothing in Out of Scope may appear in any subtask.
@@ -282,15 +283,18 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - For `Test-first: yes` subtasks, drive the Stage 2.5 red tests to green without weakening, skipping, or deleting any (if a test itself is wrong, flag it). Author no *new* tests (QA adds those in Stage 4).
 - **Migrations:** goose is timestamp-ordered (no Alembic-style `down_revision` to hand-set). Scaffold with `make migrate-create name=<slug>` **inside the worktree** so the timestamp is fresh relative to `main`; every tenant-owned table is born with `tenant_id` + the FORCE-RLS policy template; write a working `-- +goose Down`. The gateway applies migrations on deploy — a bad migration crash-loops the PR's own environment's backend, so verify `make migrate-up` + the reversibility round-trip locally first.
 - The executor handles all reads/edits/creation inside the worktree, commits, and (per its FIRST/MIDDLE/FINAL `Order` logic) handles `git push` and the PR draft/ready transitions.
-- After the executor finishes, run the relevant suites inside the worktree:
+- After the executor finishes, run the relevant suites inside the worktree. Send each suite's output to a log, never into this context:
   ```bash
-  (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)
-  (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)   # DB-backed; needs `make dev-db`
-  (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                     # SPAs
+  L="$WORKTREE_PATH/.ralph"; mkdir -p "$L"
+  (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)      > "$L/go.log"   2>&1; echo "go=$?"
+  (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)  > "$L/db.log"   2>&1; echo "db=$?"   # DB-backed; needs `make dev-db`
+  (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                   > "$L/spa.log"  2>&1; echo "spa=$?"  # SPAs
   # 2265 unit tests, ~13s. `pnpm -r test` alone would launch Playwright, because
   # e2e's `test` script IS the browser suite — hence the exclusion and test:unit.
-  (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit)
+  (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit) > "$L/unit.log" 2>&1; echo "unit=$?"
+  grep -hE '^(ok|FAIL|--- FAIL|Test Files|Tests)' "$L"/*.log | tail -40
   ```
+  A zero exit and its summary line are the pass evidence. Read a full log only when its suite exited non-zero. A suite transcript pasted into this context is re-read by every later request in the session, which is the one avoidable cost that grows with session length.
   Run them yourself. Do not accept a subagent's report of a suite as the suite's
   result: BUG-06 had two subagents report 1466 unit tests from the main checkout
   when the branch had 1489, and METR-01's subtask 05 reported all tests passing

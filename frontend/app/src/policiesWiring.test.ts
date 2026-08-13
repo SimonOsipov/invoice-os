@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-os/api-client'
 
-import { membersViewState } from './lib/members'
+import { membersSurface, membersViewState } from './lib/members'
 import { newPolicy, type Policy } from './lib/workflows'
 import type { PlatformCtx } from './types'
 
@@ -173,6 +173,29 @@ describe('App.tsx wiring', () => {
     expect(refetching.length, 'no publish call site is followed by a refetch').toBeGreaterThan(0)
   })
 
+  // APPR-09-04 (task-508) QA. WorkflowsView's ladder reads `policiesState`, and only a fetch
+  // writes it — so a verb that patches the mirror alone leaves the screen stating the
+  // PREVIOUS fetch's claim. The two readings that produces are modelled below; this pins
+  // that App.tsx really closes them, which the model cannot see.
+  it('the two verbs that change the list length refetch the status the ladder reads', () => {
+    for (const verb of ['createPolicy', 'deletePolicy'] as const) {
+      const body = asyncFnBody(verb)
+      const awaitAt = body.search(/await \w*[Aa]pprovalPolicy\(/)
+      expect(awaitAt, `${verb} never awaits the gateway`).toBeGreaterThan(-1)
+
+      const runAt = body.indexOf('policiesAsync.run()')
+      expect(runAt, `${verb} patches the mirror and leaves policiesState stating the last fetch`).toBeGreaterThan(-1)
+      // After the await, so a REFUSED write never re-kicks a fetch that would have answered
+      // the same list back.
+      expect(runAt, `${verb} refetches before the server has answered`).toBeGreaterThan(awaitAt)
+    }
+
+    // Control, and the scope statement: `savePolicy` replaces one row and cannot change the
+    // list's length, so nothing it does can make the status wrong. It must NOT refetch —
+    // a refetch there would blank the builder's own list mid-edit for the round trip.
+    expect(asyncFnBody('savePolicy'), 'savePolicy refetches a length it cannot have changed').not.toContain('policiesAsync.run()')
+  })
+
   // QA (task-507). AC-1 says the mirror is patched off the SERVER's returned row. Nothing
   // pinned the ORDER: the harnesses in lib/policies.test.ts replicate App.tsx's composition
   // rather than reading it, so moving `setPolicies` above the `await` — an optimistic patch
@@ -228,7 +251,7 @@ describe('App.tsx wiring', () => {
 // ============================================================================
 // The mirror effect is three tokens of inline App.tsx that no jsdom test can mount, so it
 // is modelled here against the REAL reducer rather than restated. `applyEffect` is the
-// exact expression at App.tsx:298-300; `blankingEffect` is the `?? []` the two other
+// exact expression at App.tsx:299-302; `blankingEffect` is the `?? []` the two other
 // mirrors use, kept so each assertion says what the guard buys.
 
 describe('the policies mirror at the edges', () => {
@@ -236,7 +259,7 @@ describe('the policies mirror at the edges', () => {
   const B: Policy = { ...newPolicy(), id: 'polB', name: 'Capex' }
 
   /**
-   * App.tsx:296-300, verbatim. Keyed on the STATUS, not on data truthiness: `start` and the
+   * App.tsx:299-302, verbatim. Keyed on the STATUS, not on data truthiness: `start` and the
    * `success` empty branch both null `data`, so truthiness cannot tell an in-flight refetch
    * from a tenant that deleted its last policy. This is a hand-copy — the assertion that
    * App.tsx really carries this predicate is the source walk above.
@@ -245,6 +268,8 @@ describe('the policies mirror at the edges', () => {
     state.status === 'ready' || state.status === 'empty' ? (state.data ?? []) : mirror
   /** The members/roles idiom, for contrast. */
   const blankingEffect = (_mirror: Policy[], state: AsyncState<Policy[]>) => state.data ?? []
+  /** Which of the four surfaces WorkflowsView.tsx:67 picks. A live gateway throughout. */
+  const surfaceOf = (state: AsyncState<Policy[]>) => membersSurface(membersViewState('https://gw', state.status))
 
   it('a publish refetch never empties a loaded list, where the ungated idiom would', () => {
     let state = initialState<Policy[]>(true)
@@ -312,6 +337,50 @@ describe('the policies mirror at the edges', () => {
     expect(state.data, 'the empty branch nulls data too — truthiness alone cannot see this landing').toBeNull()
     mirror = applyEffect(mirror, state)
     expect(mirror, 'the tenant emptied the list and the mirror still shows a ghost').toEqual([])
+  })
+
+  // APPR-09-04 (task-508) QA. The mirror and the status are two channels, and a write verb
+  // can only patch the first. Both readings below were reachable on the shipped verbs and
+  // both are false claims a user acts on; App.tsx now refetches after create and delete,
+  // pinned by 'the two verbs that change the list length refetch the status the ladder reads'.
+  it('a create patched into the mirror alone leaves the screen claiming the tenant has none', () => {
+    let state = asyncReducer(initialState<Policy[]>(true), { type: 'success', data: [] })
+    let mirror = applyEffect([], state)
+    expect(surfaceOf(state), 'a tenant with no policies must start on the empty card').toBe('empty')
+    expect(mirror, 'the empty landing must clear the mirror').toEqual([])
+
+    // createPolicy's optimistic patch (App.tsx:1035) and nothing else — the POST's own row.
+    mirror = [...mirror, A]
+    expect(surfaceOf(state), 'the status is not a function of the mirror; only a fetch moves it').toBe('empty')
+    // ^ The defect: a policy exists, and on return from the builder the list says none does.
+
+    // The refetch is the only channel that can correct it. `start` first — the list shows a
+    // spinner for the round trip, which is why the ladder sits below the builder branch.
+    state = asyncReducer(state, { type: 'start' })
+    expect(surfaceOf(state)).toBe('loading')
+    expect(applyEffect(mirror, state), 'the in-flight refetch blanked the row the POST returned').toEqual([A])
+
+    state = asyncReducer(state, { type: 'success', data: [A] })
+    mirror = applyEffect(mirror, state)
+    expect(surfaceOf(state), 'the landed refetch must agree with the row it returned').toBe('roster')
+    expect(mirror.map((p) => p.id)).toEqual(['polA'])
+  })
+
+  it('a delete patched into the mirror alone leaves the screen counting a roster it no longer has', () => {
+    let state = asyncReducer(initialState<Policy[]>(true), { type: 'success', data: [A] })
+    let mirror = applyEffect([], state)
+    expect(surfaceOf(state), 'a loaded list must start on the roster arm').toBe('roster')
+
+    // deletePolicy's patch (App.tsx:1043) and nothing else.
+    mirror = mirror.filter((p) => p.id !== A.id)
+    expect(surfaceOf(state), 'only a fetch writes the status').toBe('roster')
+    expect(mirror, 'the roster arm now renders `0 POLICIES` over a blank column').toEqual([])
+
+    state = asyncReducer(state, { type: 'start' })
+    state = asyncReducer(state, { type: 'success', data: [] })
+    mirror = applyEffect(mirror, state)
+    expect(surfaceOf(state), 'the tenant emptied the list and the screen still claimed a roster').toBe('empty')
+    expect(mirror).toEqual([])
   })
 
   it('no gateway reports idle, never empty — a workspace without one has not been asked', () => {

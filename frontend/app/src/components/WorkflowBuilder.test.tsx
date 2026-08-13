@@ -178,9 +178,8 @@ describe('APPR-09-03 QA: the save control writes a draft and nothing else', () =
 // ============================================================================
 // APPR-09-04 (task-508) AC-8 — the builder promises only what it performs
 // ============================================================================
-// Subtask 03 made `save()` save-only, which left 'Save & publish' a live false promise.
-// Subtask 05 splits the control into 'Save draft' + 'Publish' and gives Publish a real
-// handler; until then no control may claim a publish at all.
+// `save()` writes a draft and nothing else. Subtask 05 adds a real Publish control; until
+// it lands, no control may claim a publish.
 
 describe('APPR-09-04 AC-8: no control claims a publish the code no longer performs', () => {
   it('no control in the builder claims to publish', () => {

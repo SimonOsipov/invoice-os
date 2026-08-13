@@ -307,10 +307,10 @@ export type PlatformCtx = {
   // same shape and reason. Per TENANT: switching company does not change them, which is
   // why the nav item sits in the firm-wide sidebar group (Sidebar.tsx).
   //
-  // Only the list and "which policy is open" live here. Everything transient inside
-  // the builder — node selection, the drag/drop hint, the scenario inputs, the saved
-  // flash — is local to WorkflowsView, following the ClientsView precedent: it is
-  // derived from that one view and nothing else reads it.
+  // Only the list and "which policy is open" live here. Builder-transient state — node
+  // selection, the drag/drop hint, the scenario inputs, the saved flash — is local to
+  // WorkflowBuilder, and the list's two write-error slots are local to WorkflowsView:
+  // the ClientsView precedent, each derived from one view and read nowhere else.
   policies: Policy[]
   policiesState: AsyncStatus
   policiesError: ApiError | null

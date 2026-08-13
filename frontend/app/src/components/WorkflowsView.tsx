@@ -54,11 +54,11 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
       : `Who must sign off before ${active.short} transmits an invoice.`
 
   // The ladder lives HERE, below WorkflowsView's `editing ? Builder : List` branch. Above
-  // it, a 'loading' arm would tear an open builder off screen the moment a publish refetch
-  // fires; the builder renders off the surviving mirror instead. Three accepted
-  // consequences: a fetch error while the builder is open surfaces only on return to the
-  // list, a refetch landing empty shows the stale policy until then, and a publish's OWN
-  // failure is the Publish control's to surface, not this ladder's.
+  // it, a 'loading' arm would tear an open builder off screen on every refetch; the builder
+  // renders off the surviving mirror instead. Two accepted consequences: a fetch error
+  // while the builder is open surfaces only on return to the list, and a publish's OWN
+  // failure is the Publish control's to surface, not this ladder's. Pinned by
+  // 'the ladder belongs to the LIST and never reaches an open builder'.
   //
   // `membersSurface`, not a second copy: its 'roster' arm name reads oddly on a policy list,
   // but a `policiesSurface` would be the drift the shared mapper exists to prevent. Its

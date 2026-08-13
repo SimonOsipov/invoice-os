@@ -1,16 +1,9 @@
 // @vitest-environment jsdom
 //
-// APPR-09-03 QA (task-507). The screen had NO test file before this: `Updated
-// {policy.updated}` swapped to `policyStanding(policy)` at WorkflowsView.tsx:109 with no
-// oracle at all — verified by mutation, a hardcoded 'Updated recently' literal (with the
-// now-unused import deleted, so `noUnusedLocals` stays quiet) passed all 2026 app tests
-// and a clean tsc.
-//
-// Deliberately SMALL. Subtask 04 owns this screen's four-surface ladder, its EmptyState,
-// its testid wrapper and the INTRO copy, and adds nine more specs to this file; this one
-// pins only the cell the live swap moved.
+// WorkflowsView's oracle: the four-surface ladder and its gates, each row's two claims,
+// and the two write-error slots.
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -46,6 +39,18 @@ function listCtx(policies: Policy[], over: Record<string, unknown> = {}): Platfo
     createPolicy: vi.fn(async () => {}),
     deletePolicy: vi.fn(async () => {}),
     openPolicy: vi.fn(),
+    closePolicy: vi.fn(),
+    // The builder's own ctx fields (WorkflowBuilder.test.tsx:28-50). Present because the
+    // ladder's placement is only observable by rendering WorkflowsView with
+    // `editingPolicyId` set, which mounts the builder for real.
+    roles: [],
+    members: [],
+    rolesState: 'ready',
+    rolesError: null,
+    savePolicy: vi.fn(async (p: Policy) => p),
+    publishPolicy: vi.fn(async () => policy()),
+    setSettingsTab: vi.fn(),
+    nav: vi.fn(),
     ...over,
   } as unknown as PlatformCtx
 }
@@ -272,5 +277,191 @@ describe('APPR-09-04 AC-7: a refused delete says why, at the row it failed on', 
     // One shared slot would have blanked the row's reason to show the header's. Two distinct
     // failures are two distinct facts and the screen must hold both.
     expect(screen.getByText(DELETE_REFUSAL), 'the create failure cleared the row-scoped delete reason').toBeTruthy()
+  })
+})
+
+// ============================================================================
+// APPR-09-04 (task-508) Stage 4 QA — the invariants the AC rows leave open
+// ============================================================================
+// The rows above each pin one AC in isolation. These pin what only appears when the
+// surfaces are considered together: that exactly one of the four renders over every status
+// the fetch can report, that the ladder never reaches an open builder, and that the two
+// error slots survive each other in BOTH orders.
+
+const STATES = ['idle', 'loading', 'error', 'empty', 'ready'] as const
+
+describe('APPR-09-04 QA: exactly one surface, over every status the fetch can report', () => {
+  /** Which of the four surfaces are lit, by their own hooks. */
+  function lit(): string[] {
+    const shown = {
+      loading: document.querySelector('.apic-loading-spin') != null,
+      error: screen.queryByText('Something went wrong') != null,
+      empty: screen.queryByTestId('policies-empty') != null,
+      list: screen.queryByTestId('policies-list') != null,
+    }
+    return Object.entries(shown)
+      .filter(([, on]) => on)
+      .map(([name]) => name)
+  }
+
+  it('every status lights exactly one surface, and the one its own reading justifies', () => {
+    // 'idle' is the no-gateway build, folded into the empty card exactly as Members and
+    // Roles fold it (D4). Recorded, not repaired: on that build the card's sentence is
+    // false — nothing was ever asked — and that is an app-wide reading, not this screen's.
+    const expected: Record<(typeof STATES)[number], string> = {
+      idle: 'empty',
+      loading: 'loading',
+      error: 'error',
+      empty: 'empty',
+      ready: 'list',
+    }
+
+    for (const state of STATES) {
+      // A populated mirror throughout: a surface chosen off `policies.length` would agree
+      // with the roster arm on every row of this table and be caught by none of them.
+      render(<WorkflowsView ctx={listCtx([policy({ id: 'polA', name: 'Standard' })], { policiesState: state, policiesError: DOWN() })} />)
+      expect(lit(), `'${state}' did not render exactly its own surface`).toEqual([expected[state]])
+      cleanup()
+    }
+  })
+
+  it('the POLICIES count renders on the roster arm and on no other, over all five statuses', () => {
+    for (const state of STATES) {
+      render(<WorkflowsView ctx={listCtx([policy({ id: 'polA' })], { policiesState: state, policiesError: DOWN() })} />)
+
+      // Control: the toolbar renders over every surface, so an absent count below is the
+      // gate doing its job rather than a screen that rendered nothing at all.
+      expect(screen.getByText('Approval policies'), `the header must render over '${state}'`).toBeTruthy()
+
+      const counts = screen.queryAllByText(/POLICIES/).map((n) => n.textContent)
+      if (state === 'ready') expect(counts, 'the roster arm lost its count').toEqual(['1 POLICIES'])
+      else expect(counts, `the count claimed a roster over '${state}'`).toEqual([])
+      cleanup()
+    }
+  })
+
+  it('nothing refetches during a render — Retry is the only trigger this screen carries', () => {
+    const refetchPolicies = vi.fn()
+
+    for (const state of STATES) {
+      render(<WorkflowsView ctx={listCtx([policy({ id: 'polA' })], { policiesState: state, policiesError: DOWN(), refetchPolicies })} />)
+      expect(refetchPolicies, `rendering '${state}' kicked a fetch`).not.toHaveBeenCalled()
+      cleanup()
+    }
+
+    // The floor under that absence: the one trigger that SHOULD fire still does.
+    render(<WorkflowsView ctx={listCtx([], { policiesState: 'error', policiesError: DOWN(), refetchPolicies })} />)
+    fireEvent.click(screen.getByText('Retry'))
+    expect(refetchPolicies).toHaveBeenCalledTimes(1)
+  })
+
+  it('the empty card reads its title as the heading and its message as the body, not the reverse', () => {
+    render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
+
+    // `EmptyState` renders the title in a <div> and the message in a <p> (EmptyState.tsx:41-42).
+    // Both strings being present is not enough — swapping the two props keeps both on screen.
+    expect(screen.getByText(EMPTY_TITLE).tagName, 'the title is rendered as the body copy').toBe('DIV')
+    expect(screen.getByText(EMPTY_MESSAGE).tagName, 'the message is rendered as the heading').toBe('P')
+  })
+})
+
+describe('APPR-09-04 QA: the ladder belongs to the LIST and never reaches an open builder', () => {
+  const one = () => [policy({ id: 'polA', name: 'Standard approval policy' })]
+
+  it('an in-flight refetch leaves an open builder standing', () => {
+    // The state subtask 05's Publish produces on every click, and the state App's create
+    // now produces too: status 'loading' while the mirror still holds the edited policy.
+    render(<WorkflowsView ctx={listCtx(one(), { editingPolicyId: 'polA', policiesState: 'loading' })} />)
+
+    expect(screen.getByLabelText('Policy name'), 'a background refetch tore the open builder off screen').toBeTruthy()
+    expect(document.querySelector('.apic-loading-spin'), "the list's spinner rendered over the builder").toBeNull()
+    expect(screen.queryByText('Approval policies'), 'the list header rendered over the builder').toBeNull()
+  })
+
+  it('a fetch that fails while the builder is open leaves it standing, and the error waits on the list', () => {
+    const { unmount } = render(<WorkflowsView ctx={listCtx(one(), { editingPolicyId: 'polA', policiesState: 'error', policiesError: DOWN() })} />)
+
+    expect(screen.getByLabelText('Policy name'), 'a failed background fetch tore the open builder off screen').toBeTruthy()
+    expect(screen.queryByText('gateway is down'), 'F4: the error surfaces on RETURN to the list, not over the builder').toBeNull()
+    unmount()
+
+    // The other half of that accepted consequence, so the absence above is not read as the
+    // error having been swallowed outright.
+    render(<WorkflowsView ctx={listCtx(one(), { policiesState: 'error', policiesError: DOWN() })} />)
+    expect(screen.getByText('gateway is down')).toBeTruthy()
+  })
+
+  it('a policy deleted out from under an open builder falls back to the list rather than crashing', () => {
+    // App.tsx clears `editingPolicyId` on its own delete; this is the OTHER route — the row
+    // vanished from a refetch because someone else deleted it (F4, third bullet).
+    render(<WorkflowsView ctx={listCtx(one(), { editingPolicyId: 'polGone' })} />)
+
+    expect(screen.getByText('Approval policies'), 'a stale editingPolicyId blanked the screen').toBeTruthy()
+    expect(screen.getByText('1 POLICIES')).toBeTruthy()
+    expect(screen.queryByLabelText('Policy name'), 'the builder opened for a policy the list does not hold').toBeNull()
+  })
+})
+
+describe('APPR-09-04 QA: the two error slots survive each other, in both orders', () => {
+  const two = () => [policy({ id: 'polA', name: 'First policy' }), policy({ id: 'polB', name: 'Second policy' })]
+  const refusing = (message: string) => vi.fn(() => Promise.reject(new ApiError('http', message, 403)))
+
+  it('a refused delete leaves a standing create reason alone — the reverse of the AC-7 order', async () => {
+    const createPolicy = refusing(CREATE_REFUSAL)
+    const deletePolicy = refusing(DELETE_REFUSAL)
+    render(<WorkflowsView ctx={listCtx(two(), { createPolicy, deletePolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'New policy' }))
+    expect(await screen.findByText(CREATE_REFUSAL)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete First policy' }))
+    expect(await screen.findByText(DELETE_REFUSAL)).toBeTruthy()
+
+    expect(screen.getByText(CREATE_REFUSAL), "the delete failure cleared the create control's reason").toBeTruthy()
+  })
+
+  it('the reason sits immediately after the row that failed, and MOVES when another row fails', async () => {
+    const deletePolicy = refusing(DELETE_REFUSAL)
+    render(<WorkflowsView ctx={listCtx(two(), { deletePolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Second policy' }))
+    const first = await screen.findByTestId('policy-delete-error')
+    // Sibling ORDER inside the column, not merely "somewhere on screen": the Fragment puts
+    // the message directly after its own row, which is the whole anchoring claim.
+    expect(first.previousElementSibling?.textContent, 'the reason is anchored to the wrong row').toContain('Second policy')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete First policy' }))
+    await waitFor(() => {
+      const shown = screen.getAllByTestId('policy-delete-error')
+      expect(shown, 'both rows carry a reason at once — the slot became a per-row map').toHaveLength(1)
+      expect(shown[0].previousElementSibling?.textContent, 'the reason stayed on the row that failed first').toContain('First policy')
+    })
+  })
+
+  it('a retried create clears its own stale reason rather than leaving a refusal over a success', async () => {
+    let refuse = true
+    const createPolicy = vi.fn(() => (refuse ? Promise.reject(new ApiError('http', CREATE_REFUSAL, 403)) : Promise.resolve()))
+    render(<WorkflowsView ctx={listCtx([policy()], { createPolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'New policy' }))
+    expect(await screen.findByText(CREATE_REFUSAL)).toBeTruthy()
+
+    refuse = false
+    fireEvent.click(screen.getByRole('button', { name: 'New policy' }))
+    await waitFor(() => expect(screen.queryByTestId('policy-create-error'), 'a refusal outlived the retry that succeeded').toBeNull())
+    // The floor: the absence above would also hold if the second click did nothing at all.
+    expect(createPolicy).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('APPR-09-04 QA: the intro states what publishing does today', () => {
+  it('carries the interim second sentence and drops the claim the flag does not honour', () => {
+    render(<WorkflowsView ctx={listCtx([policy()])} />)
+
+    expect(
+      screen.getByText(/Publishing a policy opens an approval on every matching invoice\. Transmission is not held for approval yet\./),
+      'the intro lost the interim sentence APPR-14 removes when it flips the flag',
+    ).toBeTruthy()
+    expect(screen.queryByText(/applies it to every matching invoice/), 'the superseded claim is still on screen').toBeNull()
   })
 })

@@ -292,10 +292,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     { immediate: base != null },
   )
   const policiesState = membersViewState(base, policiesAsync.status)
-  // Guarded on the STATUS, unlike the two mirrors below: `start` nulls `data` and publishing
-  // refetches from a populated screen, so an ungated write blanks the list for that round
-  // trip. Truthiness alone cannot be the gate — `success` nulls `data` on the empty branch
-  // too, so a tenant that deleted its last policy would keep a ghost list forever.
+  // Guarded on the STATUS, unlike the two mirrors below: `start` nulls `data` and three
+  // write verbs refetch from a populated screen, so an ungated write blanks the list for
+  // that round trip. Truthiness alone cannot be the gate — `success` nulls `data` on the
+  // empty branch too, so a tenant that deleted its last policy would keep a ghost forever.
   const [policies, setPolicies] = useState<Policy[]>([])
   useEffect(() => {
     if (policiesAsync.status === 'ready' || policiesAsync.status === 'empty') setPolicies(policiesAsync.data ?? [])
@@ -1021,6 +1021,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // The four policy writes, the `setMemberStatus` shape below: call the gateway first,
   // then patch the mirror off the SERVER's own row, so a rejection reaches the caller
   // with nothing here to roll back.
+  //
+  // The two verbs that change the list's LENGTH also refetch: WorkflowsView's ladder reads
+  // `policiesState`, which only a fetch writes, so a mirror patch alone leaves the screen
+  // making the previous fetch's claim. Pinned by policiesWiring.test.ts, 'the two verbs
+  // that change the list length refetch the status the ladder reads'.
 
   // Creating opens the builder in the same step: a blank row appended to the list with
   // nothing else happening reads as a click that did nothing. Appended, not prepended —
@@ -1029,6 +1034,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     const created = await createApprovalPolicy(authedFetch, base!, 'Untitled policy')
     setPolicies((list) => [...list, created])
     setEditingPolicyId(created.id)
+    policiesAsync.run()
   }
 
   // The DELETE response is inert, so the mirror drops the id rather than patching a row.
@@ -1037,6 +1043,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setPolicies((list) => removePolicy(list, id))
     // The builder is editing the policy that just stopped existing.
     setEditingPolicyId((cur) => (cur === id ? null : cur))
+    policiesAsync.run()
   }
 
   // The ONE write funnel for a policy's contents: the builder composes the next Policy

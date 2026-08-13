@@ -64,6 +64,14 @@ const PUBLISH_SEALED_REASON = 'This policy has no unpublished changes — edit a
 const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
 
 /**
+ * A wrapper where a bare `disabled` cannot land: `WfSelect` carries no such prop
+ * (WorkflowParts.tsx:216), and the canvas's drop and click-to-place handlers hang off divs.
+ * `MemberDrawer.tsx:64-71` pre-authorises this trade rather than plumbing a prop through a
+ * shared component.
+ */
+const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
+
+/**
  * Why Publish cannot run, or null when it can. `dirty` is checked FIRST because saving is the
  * remedy in both states at once: `PUT .../draft` always answers an unsealed top version
  * (policy_store.go:464-468), so the save that clears `dirty` also clears the seal.
@@ -133,6 +141,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // (WorkflowsView.tsx:71-73's rationale).
   const [saveError, setSaveError] = useState<string | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
+  // One flag for both verbs (RoleModal.tsx:73's shape). Both re-seed `working` from the answer,
+  // so a keystroke typed inside the round trip is overwritten when it lands.
+  const [submitting, setSubmitting] = useState(false)
 
   // The Saved flash. 1700ms, and re-clicking Save restarts it rather than stacking a
   // second timer — the effect's cleanup cancels the one in flight.
@@ -171,6 +182,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const consequence = publishConsequence(server, ctx.policies)
 
   async function save() {
+    if (submitting) return
+    setSubmitting(true)
     setSaveError(null)
     try {
       // ONE object into BOTH states. Cloning either side (`setServer({ ...saved })`) leaves
@@ -185,6 +198,10 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
       setDropHint(null)
     } catch (err) {
       setSaveError(toApiError(err).message)
+    } finally {
+      // `finally`, so a refusal re-opens the form over its error slot rather than stranding
+      // the user in a dead one.
+      setSubmitting(false)
     }
   }
 
@@ -194,6 +211,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // false 'No policy is in force'. Selection survives — publish SEALS, it rewrites no step, so
   // no id churns.
   async function publish() {
+    if (submitting) return
+    setSubmitting(true)
     setPublishError(null)
     try {
       const published = await ctx.publishPolicy(working.id)
@@ -201,6 +220,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
       setServer(published)
     } catch (err) {
       setPublishError(toApiError(err).message)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -339,6 +360,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             <input
               aria-label="Policy name"
               value={working.name}
+              disabled={submitting}
               onChange={(e) => applyEdit(renamePolicy(working, e.target.value))}
               style={{ flex: '0 0 auto', width: nameWidth(working.name), minWidth: 120, maxWidth: '100%', border: 0, borderBottom: '1.5px solid transparent', backgroundColor: 'transparent', color: 'var(--fg-1)', fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', padding: '2px 0' }}
             />
@@ -347,7 +369,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 9 }}>
             <span className="label">Applies</span>
-            <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={240} />
+            {/* `display: flex` keeps blockifying `WfSelect`'s inline-block root, which it got for
+                free as a direct flex item — a block container would give it a baseline and a
+                line-box descender, nudging the select off centre in this row. */}
+            <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, display: 'flex' }}>
+              <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={240} />
+            </fieldset>
           </div>
         </div>
 
@@ -355,19 +382,21 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             (WorkflowsView.tsx:86-99). */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flex: 'none', maxWidth: 360 }}>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" onClick={clear} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13 }}>
+            <button type="button" onClick={clear} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13 }}>
               Clear steps
             </button>
-            <button type="button" onClick={() => void save()} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 16px', fontSize: 13 }}>
+            <button type="button" onClick={() => void save()} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 16px', fontSize: 13 }}>
               {saved ? 'Saved' : 'Save draft'}
             </button>
             {/* Disabled-with-a-reason, never hidden: the visible sibling below is the only layer
                 a keyboard user and a text assertion can both reach. No `filter: 'none'` — that
-                neutralises .v2-btn-primary's :hover, and this carries neither. */}
+                neutralises .v2-btn-primary's :hover, and this carries neither.
+                `submitting` reaches `disabled` ALONE: a transient lock has no reason to state,
+                and 'Save your changes first' is untrue mid-publish. */}
             <button
               type="button"
               onClick={() => void publish()}
-              disabled={blockedReason !== null}
+              disabled={blockedReason !== null || submitting}
               title={blockedReason ?? undefined}
               aria-describedby={blockedReason ? PUBLISH_BLOCKED_REASON_ID : undefined}
               className="v2-btn pf-btn"
@@ -417,6 +446,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 onDragStart={(e) => startDrag({ kind: 'palette', type: b.type }, b.type, 'copy', e)}
                 onDragEnd={endDrag}
                 onClick={() => append(b.type)}
+                disabled={submitting}
                 // pf-upcard, not pf-btn: pf-btn would force a pill radius on a tile,
                 // and pf-upcard already carries exactly the hover this needs
                 // (border-color -> var(--action)).
@@ -437,40 +467,48 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) 320px', gap: 16, alignItems: 'start' }}>
-        <WorkflowCanvas
-          policy={working}
-          roles={ctx.roles}
-          selId={selId}
-          pending={pending}
-          canClickPlace={armed !== null}
-          armedNodeId={armed && armed.kind === 'move' ? armed.id : null}
-          dropHint={dropHint}
-          onSelect={selectNode}
-          onDelete={removeNode}
-          onArmNode={armNode}
-          onNodeDragStart={(id, e) => startDrag({ kind: 'move', id }, id, 'move', e)}
-          onDragEnd={endDrag}
-          onSlotOver={onSlotOver}
-          onSlotLeave={onSlotLeave}
-          onSlotDrop={onSlotDrop}
-          onSlotClick={onSlotClick}
-          resolve={line(resolve)}
-        />
-
-        <div style={{ position: 'sticky', top: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <WorkflowInspector
-            node={selected}
-            onPatch={patchNode}
-            onRemove={removeNode}
-            resolve={line(inspectorResolve)}
-            delegates={delegateCandidates(ctx.members)}
-            notifyOptions={notifyOptions}
-            roleOptions={roleChoices}
-            onManageRoles={() => {
-              ctx.setSettingsTab('roles')
-              ctx.nav('settings')
-            }}
+        {/* `pointerEvents` as well as `disabled`: the slot drop and click-to-place handlers hang
+            off divs, which a disabled fieldset does not reach. */}
+        <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, ...(submitting ? { pointerEvents: 'none' as const } : null) }}>
+          <WorkflowCanvas
+            policy={working}
+            roles={ctx.roles}
+            selId={selId}
+            pending={pending}
+            canClickPlace={armed !== null}
+            armedNodeId={armed && armed.kind === 'move' ? armed.id : null}
+            dropHint={dropHint}
+            onSelect={selectNode}
+            onDelete={removeNode}
+            onArmNode={armNode}
+            onNodeDragStart={(id, e) => startDrag({ kind: 'move', id }, id, 'move', e)}
+            onDragEnd={endDrag}
+            onSlotOver={onSlotOver}
+            onSlotLeave={onSlotLeave}
+            onSlotDrop={onSlotDrop}
+            onSlotClick={onSlotClick}
+            resolve={line(resolve)}
           />
+        </fieldset>
+
+        {/* The simulator stays OUTSIDE the fieldset: it writes only local `sim` state, so it
+            loses nothing to a re-seed. */}
+        <div style={{ position: 'sticky', top: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, ...(submitting ? { pointerEvents: 'none' as const } : null) }}>
+            <WorkflowInspector
+              node={selected}
+              onPatch={patchNode}
+              onRemove={removeNode}
+              resolve={line(inspectorResolve)}
+              delegates={delegateCandidates(ctx.members)}
+              notifyOptions={notifyOptions}
+              roleOptions={roleChoices}
+              onManageRoles={() => {
+                ctx.setSettingsTab('roles')
+                ctx.nav('settings')
+              }}
+            />
+          </fieldset>
           <WorkflowSimulator policy={working} roles={ctx.roles} sim={sim} onSim={setSim} resolve={line(resolve)} />
         </div>
       </div>

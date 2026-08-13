@@ -317,6 +317,14 @@ export function deleteRoleConfirm(title: string, roleSteps: RoleSteps): string {
   return `Delete ${title}? ${usage}. Those steps will block until you point them somewhere else.`
 }
 
+/**
+ * The same question with the usage clause WITHHELD — for a policies fetch that has not landed,
+ * where `steps` would read as "used nowhere". Claims no usage; the delete stays enabled.
+ */
+export function deleteRoleConfirmUnknownUsage(title: string): string {
+  return `Delete ${title}? Its policy usage could not be loaded, so any steps that name it will block until you point them somewhere else.`
+}
+
 // NOT IN BRIEF: §2 asks the header for "a one-line subtitle" and supplies neither line.
 export const NEW_ROLE_SUBTITLE = 'Name the seat and say who fills it.'
 export const EDIT_ROLE_SUBTITLE = 'Rename the seat, or change who fills it.'

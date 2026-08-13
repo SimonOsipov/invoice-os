@@ -13,11 +13,12 @@ import { useCallback, useState } from 'react'
 
 import { toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
-import { accessRoleLabel, emailLabel } from '../lib/members'
+import { accessRoleLabel, emailLabel, membersSurface } from '../lib/members'
 import {
   canSaveRole,
   deletedNotice,
   deleteRoleConfirm,
+  deleteRoleConfirmUnknownUsage,
   EDIT_ROLE_SUBTITLE,
   filterPickerMembers,
   hiddenInvitedFootnote,
@@ -90,6 +91,11 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // has no row for, which `selected.length` above would otherwise count with no way to untick.
   const hiddenSelected = pickerHiddenAmongSelected(selected, ctx.members)
   const canSave = canSaveRole(name)
+  // `steps` off an unlanded policies fetch reads as "used nowhere" — the [D-BUILDER-GUARD]
+  // class of bug. `membersSurface`, not `rolesSurface`: that one takes two statuses and is
+  // shared by two views, so folding policies in would be a new predicate.
+  const policiesSurface = membersSurface(ctx.policiesState)
+  const policiesLanded = policiesSurface !== 'loading' && policiesSurface !== 'error'
 
   function toggle(id: string) {
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
@@ -306,7 +312,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               style={{ padding: '11px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
             >
               <div style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>
-                {deleteRoleConfirm(role.title, steps(ctx.policies, role.key))}
+                {policiesLanded ? deleteRoleConfirm(role.title, steps(ctx.policies, role.key)) : deleteRoleConfirmUnknownUsage(role.title)}
               </div>
               <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
                 <button

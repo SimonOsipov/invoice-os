@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
+import { membersSurface } from '../lib/members'
 import {
   filterRoles,
   holderCount,
@@ -173,6 +174,11 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
   const held = holders(roles, members, role.key)
   const who = resolve(roles, members, role.key)
   const overflow = held.length - AVATAR_MAX
+  // `surface` above covers roles and members; policies are not in that ladder, and `steps` off
+  // an unlanded fetch reads as "used nowhere" on every card at once. Unlanded renders the EMPTY
+  // STRING — `ABSENT_LABEL`'s em dash claims "nothing here" in its own right (MembersTable.tsx:195).
+  const policiesSurface = membersSurface(ctx.policiesState)
+  const policiesLanded = policiesSurface !== 'loading' && policiesSurface !== 'error'
 
   return (
     // Content, not a control: no onClick and no hover treatment anywhere on the box —
@@ -235,7 +241,7 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
           row's height and every footer in it lands on one line. */}
       <div style={{ marginTop: 'auto', paddingTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
         <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
-          {roleUsage(steps(policies, role.key))}
+          {policiesLanded ? roleUsage(steps(policies, role.key)) : ''}
         </span>
         <span className="mono" style={{ flex: 'none', fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
           {holderCount(held.length)}

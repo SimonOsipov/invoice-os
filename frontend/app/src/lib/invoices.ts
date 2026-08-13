@@ -220,7 +220,7 @@ export interface InvoiceRecord {
 // a fallback string.
 //
 // REQUIRED and nullable (no `?`), matching the two keys above: getResponse tags none of
-// the three `omitempty` (handlers.go:214-221, pinned by
+// the three `omitempty` (handlers.go's getResponse, pinned by
 // TestGetHandler_ActionFlagsFalseNotOmitted), so all three are present on every status.
 // An optional `?` would compile just as well, which is exactly why it is wrong -- it
 // lets a consumer read `undefined` and treat "the server did not say" as an open

@@ -132,7 +132,7 @@ type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_tot
 // still show ~6 mono characters instead of ~5.
 const LINE_EDIT_GRID = '1fr 52px 70px 70px 70px 32px'
 
-function rowsFromInvoice(inv: InvoiceRecord): LineRowState[] {
+function rowsFromInvoice(inv: Pick<InvoiceRecord, 'line_items'>): LineRowState[] {
   return (inv.line_items ?? []).map((it) => ({
     description: it.description ?? '',
     quantity: it.quantity ?? '',
@@ -1111,7 +1111,7 @@ function InvoiceEditBody({
   ctx: PlatformCtx
   base: string
   invoiceId: string
-  inv: InvoiceRecord
+  inv: InvoiceDetailRecord
   onSaved: () => void
   onCancel: () => void
 }) {

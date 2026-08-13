@@ -214,14 +214,14 @@ export interface InvoiceRecord {
   failure_kind: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
-  // approval (APPR-08-08) -- a LIST-wire key: Go emits it on listItem only, never on
-  // getResponse. REQUIRED and nullable, and getInvoice normalises the absent key to
-  // `null`, so the declared type is true on a detail record too -- an `undefined` here
-  // would make isRowSelectable fail OPEN. That is the `rule_set_version` trap being
-  // AVOIDED (typed present, reads undefined on list rows -- reviewBatch.ts), not the
-  // precedent being followed. Declaring it on the base record differs in SHAPE from
-  // Go's listItem and client.ts's InvoiceListItem, which hang it off the list type
-  // alone; all three agree in MEANING -- `null` claims this invoice has no run.
+  // approval (APPR-08-08) -- a LIST-wire key ONLY: Go emits it on listItem, never on
+  // getResponse. InvoiceDetailRecord therefore Omits it, so a detail-path read is a
+  // COMPILE error rather than a runtime answer -- both `undefined?.run_state` and a
+  // fabricated `null` make isRowSelectable fail OPEN, and `null` also claims "this
+  // invoice has no run", which on a compliance surface is a lie. That is the
+  // `rule_set_version` trap AVOIDED (typed present, reads undefined on the wire that
+  // omits it -- reviewBatch.ts), not followed. On a list row it is REQUIRED and
+  // nullable: normaliseInvoiceRow makes that true for every row.
   approval: InvoiceApproval | null
 }
 
@@ -236,11 +236,12 @@ export interface InvoiceApproval {
   overdue: boolean
 }
 
-// getInvoice's own response shape: InvoiceRecord plus getResponse's OTHER sibling key,
-// `qr_png_base64` (handlers.go:189-192, M5-09-01/03). `rule_set_version` is redeclared
-// here identically, not moved off InvoiceRecord -- it stays there (listInvoices' element
-// type / the draftInvoice-style fixtures depend on it), this is just co-locating the two
-// getResponse-only keys on the type that actually represents a GET response.
+// getInvoice's own response shape: InvoiceRecord minus its list-only `approval`, plus
+// getResponse's OTHER sibling key `qr_png_base64` (getResponse, handlers.go,
+// M5-09-01/03). `rule_set_version` is redeclared here identically, not moved off
+// InvoiceRecord -- it stays there (listInvoices' element type / the draftInvoice-style
+// fixtures depend on it), this is just co-locating the two getResponse-only keys on the
+// type that actually represents a GET response.
 // `qr_png_base64` has no `omitempty` either (always present, explicit null when there is
 // no qr_payload or rendering failed) -- getInvoice's own `?? null` normalization is
 // defensive-only, the same posture already taken for `rule_set_version`.
@@ -262,9 +263,9 @@ export interface InvoiceApproval {
 // every action key added since, `can_approve`/`can_reject` and their reasons included
 // (APPR-08-06): all four are REQUIRED, never `?`. The ACTION FLAGS sit on
 // InvoiceDetailRecord ONLY, never InvoiceRecord -- TestListHandler_NoActionFlagKeys
-// keeps them off the list wire. `approval` is the one base-record exception: it is a
-// list row's own key (APPR-08-08), declared on InvoiceRecord above.
-export interface InvoiceDetailRecord extends InvoiceRecord {
+// keeps them off the list wire. `approval` runs the other way -- a list-only key
+// (APPR-08-08), Omitted here so it cannot be read off a detail record at all.
+export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   rule_set_version: number | null
   qr_png_base64: string | null
   can_edit: boolean
@@ -595,14 +596,12 @@ export async function violationSummary(
 // refusal alongside the role and status ones (APPR-08-05): on a validated invoice whose
 // approval run is still open, can_submit is false and this field explains why.
 //
-// `approval` is normalised for a different reason than the rest: the detail wire never
-// carries the key at all (it is listItem's), so without the `?? null` a detail record
-// reads `undefined` behind a required type and isRowSelectable fails OPEN.
+// `approval` is NOT normalised here: the detail wire never carries the key, so any value
+// this function put there would be invented. InvoiceDetailRecord Omits it instead.
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
   return {
     ...res,
-    approval: res.approval ?? null,
     rule_set_version: res.rule_set_version ?? null,
     qr_png_base64: res.qr_png_base64 ?? null,
     can_edit: res.can_edit === true,
@@ -774,7 +773,10 @@ export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
   return INVOICE_STATUS_STYLE[status] ?? MUTED_STYLE
 }
 
-export function verdictStatus(staleSinceEdit: boolean, inv: InvoiceRecord): 'stale' | 'current' {
+export function verdictStatus(
+  staleSinceEdit: boolean,
+  inv: Pick<InvoiceRecord, 'status' | 'rule_set_version_id' | 'violations'>,
+): 'stale' | 'current' {
   if (staleSinceEdit) return 'stale'
   const demotedSinceValidation =
     inv.status === 'draft' && inv.rule_set_version_id != null && !inv.violations.some((v) => v.severity === 'error')
@@ -1008,7 +1010,7 @@ export function computedLineSum(lines: ReadonlyArray<Pick<InvoiceLineItem, 'quan
 // InvoiceDetail.tsx, task-391, BUG-03-02).
 export type EditFormState = Record<EditFieldKey, string>
 
-export function formFromInvoice(inv: InvoiceRecord): EditFormState {
+export function formFromInvoice(inv: Pick<InvoiceRecord, EditFieldKey>): EditFormState {
   return {
     issue_date: toDateInputValue(inv.issue_date),
     supplier_tin: inv.supplier_tin ?? '',
@@ -1026,7 +1028,7 @@ export function formFromInvoice(inv: InvoiceRecord): EditFormState {
 // blank out the ones the user didn't touch. issue_date is special-cased: Go's *time.Time
 // decode rejects a bare date, so a bare YYYY-MM-DD is normalised to midnight UTC, and a
 // cleared date is dropped since PATCH cannot represent an explicit clear.
-export function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
+export function diffEditInput(original: Pick<InvoiceRecord, EditFieldKey>, form: EditFormState): InvoiceEditInput {
   const patch: InvoiceEditInput = {}
   for (const key of EDIT_FIELD_KEYS) {
     if (key === 'issue_date') {

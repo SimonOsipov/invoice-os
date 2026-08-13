@@ -22,6 +22,7 @@ import {
   skipReasonLabel,
   type InvoiceDetailRecord,
   type InvoiceListResponse,
+  type InvoiceRecord,
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
@@ -68,7 +69,6 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     kept_as_is_by: null,
     kept_as_is_reason: null,
     failure_kind: null,
-    approval: null,
     line_items: [],
     // null (never validated) sidesteps ViolationsTable entirely -- irrelevant to this
     // story's honest-line assertion, which only depends on status/rejection_reasons.
@@ -1341,7 +1341,7 @@ function registerCtx(): PlatformCtx {
   return ctx as unknown as PlatformCtx
 }
 
-function mockRegisterFetch(invoices: InvoiceDetailRecord[]) {
+function mockRegisterFetch(invoices: InvoiceRecord[]) {
   const body: InvoiceListResponse = { invoices, pagination: { limit: 50, offset: 0, total: invoices.length } }
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) }))
 }
@@ -1359,6 +1359,8 @@ describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () =
 
     for (const { label, buyer_tin } of states) {
       const record = detailRecord({ buyer_tin })
+      // Same invoice, two wires: the list carries `approval`, the detail one does not.
+      const listRow: InvoiceRecord = { ...record, approval: null }
 
       mockDetailFetch(record)
       render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1368,7 +1370,7 @@ describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () =
       const detailColor = detailTin.style.color
       cleanup()
 
-      mockRegisterFetch([record])
+      mockRegisterFetch([listRow])
       render(<InvoicesList ctx={registerCtx()} />)
       await screen.findByText(record.invoice_number)
       const listTin = screen.getByTestId('buyer-tin')
@@ -1393,6 +1395,8 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
     ['well-formed', '87654321-0002'],
   ] as const)('%s renders identical text and colour on InvoicesList, InvoiceDetail and ReviewRow', async (_label, buyerTin) => {
     const record = detailRecord({ buyer_tin: buyerTin as unknown as string | null })
+    // Same invoice, two wires: the list carries `approval`, the detail one does not.
+    const listRow: InvoiceRecord = { ...record, approval: null }
 
     mockDetailFetch(record)
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1402,7 +1406,7 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
     const detailColor = detailTin.style.color
     cleanup()
 
-    mockRegisterFetch([record])
+    mockRegisterFetch([listRow])
     render(<InvoicesList ctx={registerCtx()} />)
     await screen.findByText(record.invoice_number)
     const listTin = screen.getByTestId('buyer-tin')
@@ -1412,7 +1416,7 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
 
     render(
       <Row
-        r={record}
+        r={listRow}
         batches={[]}
         checked={false}
         expanded={false}

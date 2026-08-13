@@ -760,22 +760,6 @@ describe('getInvoice', () => {
     expect(withMissingKey.rule_set_version).toBeNull()
   })
 
-  // The detail wire never carries `approval` at all -- Go hangs it off listItem, not
-  // getResponse -- so this `?? null` is what keeps InvoiceRecord's REQUIRED `approval`
-  // honest on a detail record. Undefined there makes isRowSelectable fail OPEN
-  // (`undefined?.run_state !== 'open'` is true).
-  it('getInvoice: an omitted `approval` normalises to null, never undefined', async () => {
-    const { approval: _omitted, ...withoutKey } = draftInvoice
-    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutKey) })
-    const af = createAuthedFetch(() => 'tok', vi.fn())
-
-    const result = await getInvoice(af, base, 'inv-1')
-
-    expect(result.approval).toBeNull()
-    expect(result.approval).not.toBeUndefined()
-    expect('approval' in result).toBe(true)
-  })
-
   it('I9: rule_set_version:2 passes through unchanged; GET .../invoices/{id}', async () => {
     const validatedInvoice: InvoiceRecord = { ...draftInvoice, status: 'validated', rule_set_version: 2 }
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(validatedInvoice) })

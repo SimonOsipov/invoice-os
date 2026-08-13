@@ -810,6 +810,13 @@ maps that token to its own label (`SKIP_REASON_LABELS`,
 they are not the same string, and no mirror test links them — TypeScript cannot import a
 Go const. Unifying the
 copy would mean putting a sentence on the batch wire, which no story has asked for.
+APPR-08's AC-3 asks literally for "the same sentence the batch door's skip label carries"
+and its `[one-refusal-sentence]` decision for "ONE `awaitingApprovalReason` const [to
+serve] the 409, the batch skip label's copy and `submit_blocked_reason`" — **neither is met
+as written**, because the batch wire carries only the machine token and the same story's §10
+separately requires the SPA label sit "in the terse register of its two siblings", which the
+409 sentence is not; the story contradicts itself and the implementation followed the more
+specific instruction.
 
 **One exception, on the error path only.** `Store.ApprovalFacts` folds the flag into
 `TransmitClear` on its success path. When the read itself fails, it returns the zero

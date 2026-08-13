@@ -332,10 +332,18 @@ export interface Invoice {
   kept_as_is_at: string | null
   kept_as_is_by: string | null
   kept_as_is_reason: string | null
-  // approval (APPR-08-08) -- listItem's sibling, present on the LIST wire only, as an
-  // object or an explicit null. The api specs that assert it are APPR-08-10's.
-  approval: InvoiceApproval | null
   line_items?: InvoiceLineItem[]
+}
+
+// InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
+// ONE additive sibling. `approval` sits here and NOT on Invoice because Go declares it on
+// listItem only -- getResponse does not carry it, so a GET-detail consumer reading it off
+// Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
+// reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
+// Required, not optional: no omitempty on the Go field, so an invoice with no run emits
+// an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed).
+export interface InvoiceListItem extends Invoice {
+  approval: InvoiceApproval | null
 }
 
 // Mirrors approval.RowFacts (internal/approval/gate.go) field for field.
@@ -357,7 +365,7 @@ export interface ListInvoicesQuery {
 }
 
 export interface ListInvoicesResponse {
-  invoices: Invoice[]
+  invoices: InvoiceListItem[]
   pagination: Pagination
 }
 

@@ -683,10 +683,8 @@ describe('QA: putApprovalPolicyDraft forwards what the caller holds, and project
 
 describe('QA: the wrapper gates nothing the server owns', () => {
   it('sends a notify step the canvas left blank, with no client-side check', async () => {
-    // notify_target/notify_channel are plain nullable text with no CHECK
-    // (20260809210326_approval_policies.sql:98-99) and validateStepFields refuses only a
-    // NUL byte — so blanks SAVE, they do not 400. Gating them is the editor's job, and
-    // adding a gate here would hide that.
+    // The wrapper does not pre-validate: validateStepFields already rejects a blank
+    // notify target/channel server-side, and its 400 is what the user must see.
     const blank = policy({ id: 'p1', nodes: [{ id: 'n1', type: 'notify', target: '', channel: '' }] as Policy['nodes'] })
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
 

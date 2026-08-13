@@ -1536,17 +1536,31 @@ describe('bulkBarView: the count label carries its own scope (BULK-7, AC-1)', ()
   })
 })
 
-describe('bulkBarView: the note is absent at zero and names VALIDATED from the shipped helper, never a literal (BULK-8, AC-1)', () => {
-  it('BULK-8: notReady:0 -> note is null; the BULK-2 page -> the exact page-scoped disclosure, with the status word sourced from invoiceStatusStyle', () => {
+// REWRITTEN (APPR-08-10, task-502). The note used to name a status word, and that made it
+// false the moment a row this bar cannot send IS validated -- an open approval run holds a
+// validated row out of `eligible` while its own Verdict pill still reads VALIDATED. The
+// note's own doc comment in reviewBatch.ts already required it to name no cause; the
+// shipped string broke that rule, so removing the clause corrects a false claim rather
+// than making a new product decision. BULK-A3 below is the shape that falsified it.
+describe('bulkBarView: the note is absent at zero and names no cause, so it is true for every non-selectable row (BULK-8, AC-1)', () => {
+  it('BULK-8: notReady:0 -> note is null; the BULK-2 page -> the exact page-scoped count, naming no cause', () => {
     const allValidated = buildRows(5, 'validated')
     expect(bulkBarView([], allValidated, 'idle', false).note).toBeNull()
 
     const mixed = buildMixedReviewPage()
     const view = bulkBarView([], mixed, 'idle', false)
-    const expectedNote = `Only ${invoiceStatusStyle('validated').label} rows can be sent. 38 of the 50 on this page cannot.`
 
-    expect(view.note).toBe(expectedNote)
-    expect(view.note).toContain(invoiceStatusStyle('validated').label)
+    expect(view.note).toBe('38 of the 50 rows on this page cannot be sent.')
+  })
+
+  it('BULK-A3: two validated rows, one held by an open run -> the same sentence, still true', () => {
+    // The old copy read "Only VALIDATED rows can be sent. 1 of the 2 on this page cannot."
+    // on exactly this input -- both rows ARE validated, so it contradicted itself on
+    // screen. OPEN_RUN is declared at module scope further down; it is initialized during
+    // module evaluation, before any it() body runs.
+    const gated = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN })]
+
+    expect(bulkBarView([], gated, 'idle', false).note).toBe('1 of the 2 rows on this page cannot be sent.')
   })
 })
 
@@ -1663,17 +1677,14 @@ describe('bulkBarView: the page-scoped submit-all disables at zero eligible (BUL
   })
 })
 
-// RED specs (APPR-08-09, task-500, Stage 2.5/Mode A) — TEST-ONLY. reviewBatch.ts is NOT
-// modified by this subtask (AC #2): bulkBarView already reaches the predicate through
-// pruneSelection and selectableIds, so these two specs prove the ripple lands on the bulk
-// bar from the invoices.ts edit alone. They fail today because isRowSelectable's body is
-// still status-only (its `// stub` marker).
+// APPR-08-09 (task-500): bulkBarView reaches the approval predicate through pruneSelection
+// and selectableIds, so these two specs prove the ripple lands on the bulk bar from the
+// invoices.ts edit alone — reviewBatch.ts is not modified by that subtask.
 //
-// DELIBERATELY NOT ASSERTED: `view.note`. reviewBatch.ts:1049 emits "Only VALIDATED rows
-// can be sent. N of the M on this page cannot." — which becomes FALSE the moment an
-// awaiting-approval row (which IS validated, and renders a VALIDATED pill) counts into
-// notReady. That copy defect is APPR-08-10's; asserting `note` here would pin the false
-// sentence as correct. BULK-8 above still passes because its fixtures carry approval:null.
+// `view.note` is asserted by BULK-8/BULK-A3 above, not here. It was left unasserted at 09's
+// altitude because the shipped sentence was about to become false and pinning it would have
+// made the defect permanent; APPR-08-10 (task-502) rewrote the copy and those two specs
+// now own it.
 const OPEN_RUN: InvoiceApproval = {
   run_state: 'open',
   pending_ord: 1,

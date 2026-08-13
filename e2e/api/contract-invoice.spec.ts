@@ -312,6 +312,16 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       assertErrorEnvelope(res, 400, 'list limit=abc')
     })
 
+    // APPR-08-10: the awaiting_approval filter's reject half, alongside the other
+    // list-filter 400s rather than with the approval specs -- this is a query-param
+    // contract, and it needs no policy, no run and no armed invoice.
+    test('list ?awaiting_approval=maybe -> 400 {error: string}', async () => {
+      const res = await rawFetch('/api/invoice/v1/invoices?awaiting_approval=maybe', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      assertErrorEnvelope(res, 400, 'list awaiting_approval=maybe')
+    })
+
     test('empty-state via a high offset -> 200 {invoices: [], pagination.total numeric}', async () => {
       // The shared dev tenant already carries invoices from other specs, so
       // there is no truly empty list -- an offset beyond total is the
@@ -1244,7 +1254,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
 
-    test('journey: validate -> approve -> submit, independent of the absent transmit gate', async () => {
+    test('journey: validate -> approve -> submit, in either flag state', async () => {
       const { invoiceId, policyId } = await armedInvoice('cfo')
       try {
         const run = await getInvoiceApproval(token, invoiceId)
@@ -1255,16 +1265,110 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         const decided = await decideInvoiceApproval(token, invoiceId, { decision: 'approved' })
         expect(decided.state, 'approving the only step closes the run').toBe('approved')
 
-        // APPR-08's transmit gate does not exist yet, so this proves only the DECISION
-        // half of the path -- submit is not actually gated by the run's state today.
+        // Asserted on an APPROVED invoice specifically, which is the half true in BOTH
+        // flag states: flag off, ApprovalFacts folds TransmitClear to true; flag on, the
+        // approved run satisfies the gate's second disjunct. The deployed fleet runs the
+        // flag OFF, so nothing here may assert a flag-ON-only fact -- an undecided
+        // invoice's can_submit:false, the transitions 409 and the batch skip are all
+        // unobservable here and belong to APPR-14's deployed proof.
+        const detail = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        expect(detail.status, 'GET on the approved invoice should return 200').toBe(200)
+        const detailBody = detail.body as Record<string, unknown>
+        expect(detailBody.can_submit, 'an approved invoice is submittable for an admin').toBe(true)
+        expect(detailBody.submit_blocked_reason, 'an allowed gate names no refusal').toBeNull()
+
         const submitted = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/transitions`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: { target: 'queued' },
         })
-        expect(submitted.status, 'submit succeeds after approval, same as before the decision seam existed').toBe(200)
+        expect(submitted.status, 'the wire advertised can_submit, so the door it advertises must accept').toBe(200)
         const submittedBody = submitted.body as Record<string, unknown>
         expect(submittedBody.status, 'the invoice reaches queued').toBe('queued')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    // --- APPR-08-10: the flag-OFF observable surface -------------------------
+    //
+    // Everything below is true with APPROVALS_ENFORCED unset, which is what the fleet
+    // runs. The four detail keys, the per-row approval envelope and the awaiting_approval
+    // filter all ship UNFLAGGED by design (docs/approvals.md, "Not gated") -- the flag
+    // gates ENFORCEMENT, not visibility.
+
+    test('contract: the four approval flags are present and typed', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        // approveFlags() already asserts PRESENCE and the approve/reject agreement; this
+        // adds only the types, so the presence loop is not duplicated.
+        const body = await approveFlags(invoiceId, token)
+        for (const k of ['can_approve', 'can_reject']) {
+          expect(typeof body[k], `${k} should be a boolean, not a string or a number`).toBe('boolean')
+        }
+        for (const k of ['approve_blocked_reason', 'reject_blocked_reason']) {
+          const v = body[k]
+          expect(v === null || typeof v === 'string', `${k} should be string | null, was ${JSON.stringify(v)}`).toBe(true)
+        }
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('contract: list rows carry the approval key', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        // A DRAFT created after the publish sweep is never armed (arming is
+        // ApplyValidation's promoting branch), so it is the deterministic source of an
+        // explicit null -- the shared dev tenant's older rows are not.
+        const unarmed = await createInvoice(token, {
+          entity_id: entity.id,
+          ...cleanInvoiceFields(`INV-APPR-ROW-${freshTin()}`),
+        })
+
+        const res = await rawFetch('/api/invoice/v1/invoices?limit=50', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        expect(res.status, 'list should return 200').toBe(200)
+        const body = res.body as Record<string, unknown>
+        expect(Object.keys(body).sort(), 'the envelope still has exactly two keys').toEqual(['invoices', 'pagination'])
+
+        const rows = body.invoices as Record<string, unknown>[]
+        for (const row of rows) {
+          expect('approval' in row, `row ${row.id} should carry the approval key`).toBe(true)
+        }
+
+        const armedRow = rows.find((r) => r.id === invoiceId)
+        expect(armedRow, 'the freshly armed invoice should be on page 1 (created_at DESC)').toBeDefined()
+        const approval = armedRow?.approval as Record<string, unknown> | null
+        expect(approval, 'an armed invoice carries an approval object').not.toBeNull()
+        expect(approval?.run_state, 'the newest run of an armed invoice is open').toBe('open')
+
+        const unarmedRow = rows.find((r) => r.id === unarmed.id)
+        expect(unarmedRow, 'the fresh draft should be on page 1').toBeDefined()
+        expect(unarmedRow?.approval, 'a row with no run carries an explicit null, never an omitted key').toBeNull()
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('contract: awaiting_approval filter answers 200 and finds the armed invoice', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        // INSIDE the try, deliberately: deleteApprovalPolicy in the finally deactivates
+        // the version, and the filter's own EXISTS(is_active) conjunct then matches ZERO
+        // rows for the whole tenant -- the same assertion after the finally is a
+        // guaranteed false.
+        const res = await listInvoices(token, { awaiting_approval: true, limit: 50 })
+        expect(
+          res.invoices.some((i) => i.id === invoiceId),
+          'the armed, undecided invoice should be in the filtered page',
+        ).toBe(true)
+        // Never an exact total: publishing arms the WHOLE validated backlog, and this
+        // environment inherits whatever earlier specs left validated.
+        expect(res.pagination.total, 'the filtered total counts at least the armed invoice').toBeGreaterThanOrEqual(1)
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }

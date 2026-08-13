@@ -895,9 +895,19 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await expect(page.getByText(defaultStep, { exact: true }), 'the palette click appended an approval step').toBeVisible()
 
   // --- the builder's own list of seats ------------------------------------------------------
+  // Containment and ORDER, never full equality — the shape the deleted-step assertions at the
+  // foot of this test already use, for the same reason. workflow_roles is EXCLUDED from the
+  // per-PR reset and its deletes are soft, so a residue `E2E seat` from a dead run adds an
+  // option here without being wrong. A CI retry is the sharper case: `retries: 1` re-runs this
+  // whole test, and the first attempt's role is still live because its delete never ran — so
+  // an equality would make every retry fail by construction.
   const whoApproves = wfSelect(page, 'Who must approve')
   const seatTitles = SEED_INHOUSE_ROLE_CARDS.map((r) => r.title)
-  expect(await whoApproves.locator('option').allTextContents()).toEqual([...seatTitles, title])
+  const seatOptions = await whoApproves.locator('option').allTextContents()
+  expect(seatOptions, 'every seeded seat is selectable').toEqual(expect.arrayContaining([...seatTitles]))
+  expect(seatOptions, 'and so is the seat this test just created').toContain(title)
+  const offered = seatTitles.map((t) => seatOptions.indexOf(t))
+  expect(offered, 'seeded seats keep their server order').toEqual([...offered].sort((a, b) => a - b))
   await whoApproves.selectOption({ label: title })
 
   // The resolved holder, in the inspector's own wording — the canvas says `Tunde Adeyemi`,

@@ -359,7 +359,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Best-effort, idempotent on purpose — the shape roles.spec.ts:980-1013 and
+// Best-effort, idempotent on purpose — the shape roles.spec.ts:990-1023 and
 // contract-approvals.spec.ts:410-425 already use. On the happy path the test above deleted its
 // own row, so the id delete 404s and the sweep finds nothing; this exists for the run that dies
 // mid-journey. Hooks replay on retry (retries: 1 in CI) and a second delete is 404, so a throw

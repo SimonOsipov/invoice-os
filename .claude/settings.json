@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/hooks/guard-git-history.py\""
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/guard-git-history.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\""
           }
         ]
       }

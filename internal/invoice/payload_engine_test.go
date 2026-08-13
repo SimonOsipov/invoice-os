@@ -27,10 +27,10 @@
 // against the real engine routes through it (rooted, in fact, since it also
 // applies the "invoice" root -- [payload-mapper]/Decision N19).
 //
-// Every test below runs against internal/invoice/payload_qa_scaffold.go, a
-// QA Mode-A compile scaffold (NOT the mapper -- see that file's header).
-// Per-spec RED/pass status against that scaffold is called out in each
-// test's comment; the QA report summarizes all 21.
+// These 21 specs were authored Mode-A against a compile scaffold that was
+// never committed, so the per-spec "RED against the scaffold" notes below are
+// history, not a live claim. Every test here now runs against the SHIPPED
+// mapper, invoice.MBSPayload (payload.go).
 //
 // PAY-18 is the one DB-backed spec (Test Specs table): it loads the REAL
 // active rule set (v2, 19 rules per task-111/M4-04-01) via

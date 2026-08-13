@@ -79,11 +79,13 @@ All subtasks of a single build-plan task share one feature branch and one draft 
 | **Obsidian** | User stories + build plan | `mcp__obsidian-mcp-tools__*` — read the story + `Build Plan — 0 to MVP.html` |
 
 ## Documentation (docs/)
-Reference before making changes to related areas:
+Reference before making changes to related areas. Run `ls docs/` for the authoritative list — every file in it is a Stage 4 sweep target.
 - `docs/migrations.md` — goose harness, roles, gateway-as-migrator, GUC helper contract
 - `docs/deploy-model.md` — Railway dev deploy model, scale-to-zero
 - `docs/topology-e2e.md` — the unified dev-env deploy+verify workflow, prerequisites, secrets
 - `docs/add-a-service.md` — config-as-code recipe for a new Railway service
+- `docs/e2e-convention.md` — how the browser suites are organized, and what a spec may assume about the database
+- `docs/mock-app-adapter.md` — the mock Access Point Provider's reserved TINs and scripted outcomes
 
 Design references (for UI stories): the Claude Design **prototype** project `6269a212-5677-4abd-b8a9-08aad10b1c65` (`InvoiceOS Africa.dc.html` = landing, `Platform.dc.html` = `frontend/app`, `Ops Console.dc.html` = `frontend/ops-console`; all deployed to Netlify) and the **design system** project `999b7034-9f23-43d4-9229-51af7dde9f62`.
 
@@ -140,7 +142,7 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    git -C "$MAIN_CHECKOUT" worktree add -b "$BRANCH" "$WORKTREE_PATH" origin/main
    ```
 
-4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored (`.gitignore:38`), so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
+4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored (`.gitignore:43`), so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
    ```bash
    [ -f "$MAIN_CHECKOUT/CLAUDE.md" ] && ln -sfn "$MAIN_CHECKOUT/CLAUDE.md" "$WORKTREE_PATH/CLAUDE.md"
    ```
@@ -295,6 +297,12 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - Prove every AC test can fail. Change one source line so the behaviour breaks. Run that test. Record `<file:line changed> -> FAIL <TestName>` in the QA findings, one row per AC. A test that stays green under its own mutation does not prove its AC. Report that test as a QA failure. Mode-B tests need this most: nothing gave them a red phase.
 - When a test asserts over a collection, assert the collection is not empty. An empty collection satisfies every assertion inside the loop.
 - Prove any scan that reports an ABSENCE can still find something. A grep, a source walk or a forbidden-string guard that stops matching returns zero hits, and zero hits reads exactly like a clean repo. Defend it two ways, both already used here: a **control needle** that must be found (`filename_removed_test.go` searches for `func NewStore(` beside the banned symbol), and a **floor** on the population scanned (`envPosture.test.ts` requires at least 20 files). A scan asserting a POSITIVE — exactly N sites, this anchor exists — proves itself and needs neither. Offer no "zero hits" as evidence until you have shown that same command finding a planted hit. M4-04 burned five instruments this way, each blind to a different dimension, and every green was false.
+- Re-read every comment and doc your change made false. Fix them in the same commit. "It still says what it said" is not the test. The test is whether it is still TRUE. Sweep three places, in cost order:
+  1. Comments your diff did not edit, in files it did. `git diff main...HEAD -U15` lists them. BUG-02 swept all 12 sites it rewrote and still shipped a false 22P02 claim, which CodeRabbit caught.
+  2. Comments in files you never opened. No diff shows these, and they cost the most. Name the FACT your change altered. Grep the whole tree for that fact. The 2026-07-28 per-PR database reset touched 8 files, none of them a test, and left 25 e2e comments describing the world it had just replaced.
+  3. Every file in `docs/` — run `ls docs/` for the list. That same commit updated two of them and missed `docs/e2e-convention.md`, the file every spec cites.
+  Treat your own Stage 2.5 future-tense notes as suspects. Treat any comment a deferral left describing unbuilt work the same way.
+- State a shared fact in one place and cite that place. Do not copy the fact into every comment that depends on it. Twenty-five comments each holding a copy of "the dev database is never reset" is why one change produced twenty-five falsehoods.
 - Backend: verify tests pass, model/schema/RLS correctness. Frontend: Playwright MCP visual verification against the deployed dev SPA once available.
 - If issues found: spawn product-executor to fix, then re-verify.
 - Update the Backlog task's implementation_notes with QA findings.

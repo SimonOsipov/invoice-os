@@ -21,11 +21,10 @@
 // This keeps `go list -deps ./internal/invoice` free of internal/validation
 // -- [payload-mapper]'s 03-must-not-import-04 ban stays provably intact.
 //
-// Every test below runs against internal/invoice/payload_qa_scaffold.go, a
-// QA Mode-A compile scaffold (NOT the mapper -- see that file's header for
-// why it exists and exactly how it is deliberately wrong). Per-spec
-// RED/pass status against that scaffold is called out in each test's
-// comment; the QA report summarizes all 21.
+// These 21 specs were authored Mode-A against a compile scaffold that was
+// never committed, so the per-spec "RED against the scaffold" notes below are
+// history, not a live claim. Every test here now runs against the SHIPPED
+// mapper, invoice.MBSPayload (payload.go).
 package invoice
 
 import (

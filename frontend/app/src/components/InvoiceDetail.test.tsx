@@ -22,6 +22,7 @@ import {
   skipReasonLabel,
   type InvoiceDetailRecord,
   type InvoiceListResponse,
+  type InvoiceRecord,
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
@@ -82,6 +83,10 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     ubl_blocked_reason: null,
     can_resolve_outside: false,
     resolve_outside_blocked_reason: null,
+    can_approve: false,
+    approve_blocked_reason: null,
+    can_reject: false,
+    reject_blocked_reason: null,
     ...over,
   }
 }
@@ -677,6 +682,39 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     const skip = await screen.findByTestId('detail-submit-skipped')
     expect(skip.textContent).toContain(skipReasonLabel('not_validated'))
     expect(screen.getByTestId('detail-submit')).toBeTruthy()
+  })
+
+  // APPR-08-04: the detail screen is skipReasonLabel's third production consumer and the
+  // only one that renders a single invoice's skip as a banner. submitGate never consults
+  // the approval run, so an approver sees an ENABLED Submit on a gated invoice and this
+  // banner is the whole explanation. The copy is asserted verbatim, not via
+  // skipReasonLabel, because this is where it meets the operator.
+  it('an awaiting_approval skip renders the reason and leaves the invoice submittable', async () => {
+    const stillSubmittable = detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true })
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }), [], {
+      detailSequence: [stillSubmittable],
+      submitResponses: [
+        {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              results: [{ invoice_id: ID, enqueued: false, status: 'validated', reason: 'awaiting_approval' }],
+            }),
+        },
+      ],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+
+    const skip = await screen.findByTestId('detail-submit-skipped')
+    expect(skip.textContent).toContain('Waiting on approval — an approver must approve it first')
+    expect(skip.textContent).not.toContain('awaiting_approval')
+    expect(screen.queryByTestId('detail-submit-error')).toBeNull()
+    expect(screen.getByTestId('detail-submit')).toBeTruthy()
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('VALIDATED'))
   })
 
   it('a request-level failure surfaces an error, not a skip', async () => {
@@ -1303,7 +1341,7 @@ function registerCtx(): PlatformCtx {
   return ctx as unknown as PlatformCtx
 }
 
-function mockRegisterFetch(invoices: InvoiceDetailRecord[]) {
+function mockRegisterFetch(invoices: InvoiceRecord[]) {
   const body: InvoiceListResponse = { invoices, pagination: { limit: 50, offset: 0, total: invoices.length } }
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) }))
 }
@@ -1321,6 +1359,8 @@ describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () =
 
     for (const { label, buyer_tin } of states) {
       const record = detailRecord({ buyer_tin })
+      // Same invoice, two wires: the list carries `approval`, the detail one does not.
+      const listRow: InvoiceRecord = { ...record, approval: null }
 
       mockDetailFetch(record)
       render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1330,7 +1370,7 @@ describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () =
       const detailColor = detailTin.style.color
       cleanup()
 
-      mockRegisterFetch([record])
+      mockRegisterFetch([listRow])
       render(<InvoicesList ctx={registerCtx()} />)
       await screen.findByText(record.invoice_number)
       const listTin = screen.getByTestId('buyer-tin')
@@ -1355,6 +1395,8 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
     ['well-formed', '87654321-0002'],
   ] as const)('%s renders identical text and colour on InvoicesList, InvoiceDetail and ReviewRow', async (_label, buyerTin) => {
     const record = detailRecord({ buyer_tin: buyerTin as unknown as string | null })
+    // Same invoice, two wires: the list carries `approval`, the detail one does not.
+    const listRow: InvoiceRecord = { ...record, approval: null }
 
     mockDetailFetch(record)
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1364,7 +1406,7 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
     const detailColor = detailTin.style.color
     cleanup()
 
-    mockRegisterFetch([record])
+    mockRegisterFetch([listRow])
     render(<InvoicesList ctx={registerCtx()} />)
     await screen.findByText(record.invoice_number)
     const listTin = screen.getByTestId('buyer-tin')
@@ -1374,7 +1416,7 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
 
     render(
       <Row
-        r={record}
+        r={listRow}
         batches={[]}
         checked={false}
         expanded={false}

@@ -57,6 +57,7 @@ import {
   listInvoices,
   mbsPathToEditField,
   newIdempotencyKey,
+  normaliseInvoiceRow,
   pruneSelection,
   reasonFieldFlags,
   rejectionProvenance,
@@ -81,6 +82,7 @@ import {
   type BatchSubmitResultItem,
   type EditFieldKey,
   type EditFormState,
+  type InvoiceApproval,
   type InvoiceCreateInput,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
@@ -170,7 +172,28 @@ const draftInvoice: InvoiceRecord = {
   kept_as_is_by: null,
   kept_as_is_reason: null,
   failure_kind: null,
+  approval: null,
   rule_set_version: null,
+}
+
+// Approval fixtures (APPR-08-09). `run_state` is the only field the predicate reads;
+// the rest mirror approval.RowFacts so these stay assignable to InvoiceApproval.
+const OPEN_RUN: InvoiceApproval = {
+  run_state: 'open',
+  pending_ord: 1,
+  pending_role_title: 'Reviewer',
+  pending_holder_warn: false,
+  due_at: null,
+  overdue: false,
+}
+
+const APPROVED_RUN: InvoiceApproval = {
+  run_state: 'approved',
+  pending_ord: null,
+  pending_role_title: null,
+  pending_holder_warn: false,
+  due_at: null,
+  overdue: false,
 }
 
 describe('invoiceStatusStyle', () => {
@@ -521,6 +544,163 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
   })
 })
 
+// --- APPR-08-08 (task-499): the per-row `approval` envelope -----------------
+//
+// ROW-1..5 drive `normaliseInvoiceRow` directly; ROW-6 goes through `listInvoices`,
+// which is the only oracle that it maps over EVERY row rather than one.
+
+// wireRow builds an UNANNOTATED wire object and casts once, at the boundary. The
+// APPROVE-1/2/3/5 specs get the same effect for free by going through the fetch mock,
+// which TypeScript never checks; normaliseInvoiceRow is called directly, so the cast
+// has to be explicit -- and the malformed values are the whole point of the specs.
+const wireRow = (over: Record<string, unknown>): InvoiceRecord =>
+  ({ ...draftInvoice, ...over }) as unknown as InvoiceRecord
+
+// rowWithoutApproval is the OLDER-SERVER wire: the key is absent, not null.
+const rowWithoutApproval = (): InvoiceRecord => {
+  const clone: Record<string, unknown> = { ...draftInvoice }
+  delete clone.approval
+  return clone as unknown as InvoiceRecord
+}
+
+// fullApproval mirrors approval.RowFacts' six keys, all well-formed.
+const fullApproval: InvoiceApproval = {
+  run_state: 'open',
+  pending_ord: 0,
+  pending_role_title: 'Finance Lead',
+  pending_holder_warn: false,
+  due_at: '2026-08-20T09:00:00Z',
+  overdue: false,
+}
+
+describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pass', () => {
+  it('ROW-1: a missing or non-object `approval` normalises to null, never undefined', () => {
+    const missing = normaliseInvoiceRow(rowWithoutApproval())
+    expect(missing.approval).toBeNull()
+    expect(missing.approval).not.toBeUndefined()
+    expect('approval' in missing).toBe(true)
+
+    // A non-object is the same "the server did not say" case: a string/number/array
+    // would otherwise be handed to a consumer that reads `.run_state` off it.
+    for (const bogus of ['open', 7, [], true]) {
+      expect(normaliseInvoiceRow(wireRow({ approval: bogus })).approval, `approval=${JSON.stringify(bogus)}`).toBeNull()
+    }
+  })
+
+  it('ROW-2: pending_holder_warn/overdue are `=== true`, never truthy -- and a genuine true still survives', () => {
+    // The G2 idiom: `1` survives `?? false` AND plain truthiness, and the STRING
+    // "false" is truthy too. These two booleans drive a WARNING badge on the register,
+    // so anything that is not literally true must read false.
+    const hostile = normaliseInvoiceRow(
+      wireRow({ approval: { ...fullApproval, pending_holder_warn: 'true', overdue: 1 } }),
+    )
+    expect(hostile.approval?.pending_holder_warn).toBe(false)
+    expect(hostile.approval?.overdue).toBe(false)
+
+    // The permissive control -- without it a hardcoded `false` passes the two above.
+    const genuine = normaliseInvoiceRow(
+      wireRow({ approval: { ...fullApproval, pending_holder_warn: true, overdue: true } }),
+    )
+    expect(genuine.approval?.pending_holder_warn).toBe(true)
+    expect(genuine.approval?.overdue).toBe(true)
+  })
+
+  it('ROW-3: pending_role_title passes through byte-identically -- no SPA-authored fallback', () => {
+    // internal/approval's roleTitle answers "Deleted role" for a role that no longer
+    // exists, and read_model.go's holder copy uses an em dash (U+2014). That copy is
+    // the backend's ([gates-on-the-wire]); a default authored here is exactly the
+    // drift that decision forbids.
+    const title = 'Finance Lead — Lagos'
+    const got = normaliseInvoiceRow(wireRow({ approval: { ...fullApproval, pending_role_title: title } }))
+    expect(got.approval).not.toBeNull()
+    expect(got.approval?.pending_role_title).toBe(title)
+  })
+
+  it('ROW-4: the three nullable approval fields normalise to null when absent, never undefined', () => {
+    const got = normaliseInvoiceRow(wireRow({ approval: { run_state: 'open' } }))
+    expect(got.approval).not.toBeNull()
+    expect(got.approval?.run_state).toBe('open')
+    for (const key of ['pending_ord', 'pending_role_title', 'due_at'] as const) {
+      expect(got.approval?.[key], key).toBeNull()
+      expect(got.approval?.[key], key).not.toBeUndefined()
+    }
+  })
+
+  it('ROW-5: every non-approval key is left byte-identical -- the normaliser widens nothing else', () => {
+    const wire = wireRow({ approval: { ...fullApproval, overdue: 1 } })
+    const got = normaliseInvoiceRow(wire)
+
+    expect(Object.keys(got).sort()).toEqual(Object.keys(wire).sort())
+    for (const key of Object.keys(wire)) {
+      if (key === 'approval') continue
+      expect(got[key as keyof InvoiceRecord], key).toEqual(wire[key as keyof InvoiceRecord])
+    }
+  })
+
+  it('ROW-6: listInvoices normalises EVERY row, not just the first', () => {
+    // A single-row shortcut (`invoices[0]`) or a normaliser applied only to `.find(...)`
+    // would pass every case above and still ship raw wire on rows 2..n.
+    const envelope = {
+      invoices: [
+        { ...draftInvoice, id: 'inv-a', approval: { ...fullApproval, overdue: 1 } },
+        { ...draftInvoice, id: 'inv-b', approval: undefined },
+        { ...draftInvoice, id: 'inv-c', approval: { run_state: 'open' } },
+      ],
+      pagination: { limit: 50, offset: 0, total: 3 },
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(envelope) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    return listInvoices(af, base, {}).then((result) => {
+      expect(result.invoices).toHaveLength(3)
+      expect(result.invoices[0].approval?.overdue).toBe(false)
+      expect(result.invoices[1].approval).toBeNull()
+      expect(result.invoices[2].approval?.pending_ord).toBeNull()
+      expect(result.invoices[2].approval?.pending_role_title).toBeNull()
+      expect(result.invoices[2].approval?.due_at).toBeNull()
+    })
+  })
+
+  // ROW-7 pins a DECISION, not an accident (QA, task-499). `run_state` is the one
+  // approval field with no fallback: the five others are enumerated in the plan's
+  // fail-closed list and this one is not, so the shipped behaviour had to be either
+  // chosen or corrected. It is chosen.
+  //
+  // A `?? ''` here would be an SPA-authored default [gates-on-the-wire] forbids, and it
+  // buys nothing: '' is as un-matchable as undefined against any real state, so a
+  // consumer branching on `run_state === 'open'` reads false either way -- the fallback
+  // would only disguise a malformed wire as a well-formed one. Nulling the whole object
+  // instead would silently reclassify a malformed row as "no approval run", a positive
+  // claim no spec pins.
+  //
+  // What makes the pass-through sound is that the Go side structurally cannot omit the
+  // key: RowFacts.RunState is a plain string with no omitempty, asserted through this
+  // very handler by TestListHandler_NonNullApprovalAlwaysCarriesRunState. Change either
+  // side and both tests must move together.
+  it('ROW-7: run_state passes through untouched -- no `?? \'\'`, and a malformed row is not re-classified', () => {
+    // Any state the backend sends survives byte-identical, including one this SPA has
+    // never heard of -- there is no allow-list here, deliberately.
+    for (const state of ['open', 'approved', 'rejected', 'cancelled', 'some_future_state']) {
+      const got = normaliseInvoiceRow(wireRow({ approval: { ...fullApproval, run_state: state } }))
+      expect(got.approval?.run_state, state).toBe(state)
+    }
+
+    // The pinned decision: a wire object with no `run_state` keeps its object shape and
+    // reads undefined. The Go wire cannot produce this; the test exists so that changing
+    // the answer is a deliberate edit rather than a silent one.
+    const malformed = normaliseInvoiceRow(wireRow({ approval: { pending_ord: 1 } }))
+    expect(malformed.approval, 'a malformed approval must NOT be nulled -- that would claim "no approval run"').not.toBeNull()
+    expect(malformed.approval?.run_state).toBeUndefined()
+    expect(malformed.approval?.run_state, 'an SPA-authored \'\' would disguise a malformed wire as a well-formed one').not.toBe('')
+    // The other five fields still normalise, so the pass-through is scoped to this key.
+    expect(malformed.approval?.pending_ord).toBe(1)
+    expect(malformed.approval?.pending_role_title).toBeNull()
+    expect(malformed.approval?.pending_holder_warn).toBe(false)
+    expect(malformed.approval?.due_at).toBeNull()
+    expect(malformed.approval?.overdue).toBe(false)
+  })
+})
+
 describe('violationSummary (AC-2, Stage 2.5)', () => {
   it('SUMMARY-1: unwraps .rules and preserves the server order verbatim, never re-sorted', async () => {
     mockFetchOnce({
@@ -617,6 +797,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -646,6 +830,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -671,6 +859,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -717,6 +909,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -766,6 +962,34 @@ describe('getInvoice', () => {
 
     expect(result.submit_blocked_reason).toBe(roleReason)
     expect(result.can_edit).toBe(false)
+  })
+
+  // APPR-08-05: submit_blocked_reason gains a THIRD source -- awaitingApprovalReason
+  // (handlers.go), emitted when an approver views a validated invoice whose run is still
+  // open. Em dash is U+2014, copied from that const.
+  it('getInvoice: the awaiting-approval sentence passes through byte-identically', async () => {
+    const approvalReason = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: false, submit_blocked_reason: approvalReason }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(approvalReason)
+    expect(result.can_submit).toBe(false)
+  })
+
+  // The complement to the stringly-typed 'false' case above: `?? false` would let a
+  // stringly-typed "true" through as truthy, and an approval-blocked wire is exactly where
+  // that matters -- it would re-enable a Submit button the server just refused.
+  it('getInvoice: a stringly-typed "true" can_submit is denied', async () => {
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: 'true', submit_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_submit).toBe(false)
   })
 
   // MUTATION ORACLE (QA): every other reason fixture in this file is already tidy, so a
@@ -871,6 +1095,10 @@ describe('getInvoice', () => {
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -945,6 +1173,166 @@ describe('getInvoice', () => {
 
     expect(result.can_view_ubl).toBe(true)
     expect(result.ubl_blocked_reason).toBe('stale reason')
+  })
+
+  // --- APPR-08-06 (task-504): can_approve / can_reject fail-closed normalization ---
+  //
+  // These specs exist because `getInvoice` returns `{ ...res, ... }` and `res` is already
+  // typed `InvoiceDetailRecord`: OMITTING the four explicit normalization lines COMPILES,
+  // and tsc reports nothing. Without them the four keys bypass the fail-closed convention
+  // entirely and arrive as whatever the wire carried. Only a runtime spec catches that,
+  // which is what each `it` below is.
+
+  it('APPROVE-1: a non-boolean truthy can_approve is denied', async () => {
+    // Unannotated literal (the G2 idiom): the mutation oracle for `=== true` over
+    // `?? false` / plain truthiness. `1` survives both of those.
+    const wire = { ...draftInvoice, can_approve: 1, approve_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_approve).toBe(false)
+  })
+
+  it('APPROVE-2: a stringly-typed can_reject is denied', async () => {
+    // The nastiest wire value there is: the STRING "true" is truthy, and even the
+    // string "false" would be. Approve/reject are the two most destructive buttons on
+    // the screen, so anything that is not literally `true` must deny.
+    const wire = { ...draftInvoice, can_reject: 'true', reject_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_reject).toBe(false)
+  })
+
+  it('APPROVE-3: a wire missing either boolean fails closed, never undefined', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_reject: true }) })
+    const missingApprove = await getInvoice(af, base, 'inv-1')
+    expect(missingApprove.can_approve).toBe(false)
+    expect(missingApprove.can_approve).not.toBeUndefined()
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_approve: true }) })
+    const missingReject = await getInvoice(af, base, 'inv-1')
+    expect(missingReject.can_reject).toBe(false)
+    expect(missingReject.can_reject).not.toBeUndefined()
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_approve: undefined, can_reject: undefined }) })
+    const undef = await getInvoice(af, base, 'inv-1')
+    expect(undef.can_approve).toBe(false)
+    expect(undef.can_reject).toBe(false)
+  })
+
+  it('APPROVE-4: a genuine true survives -- the normalization is not a hardcoded false', async () => {
+    const wire = { ...draftInvoice, can_approve: true, approve_blocked_reason: null, can_reject: true, reject_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_approve).toBe(true)
+    expect(result.can_reject).toBe(true)
+  })
+
+  it('APPROVE-5: both reasons normalize to null when absent, never undefined', async () => {
+    const wire = { ...draftInvoice, can_approve: false, can_reject: false }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.approve_blocked_reason).toBeNull()
+    expect(result.approve_blocked_reason).not.toBeUndefined()
+    expect(result.reject_blocked_reason).toBeNull()
+    expect(result.reject_blocked_reason).not.toBeUndefined()
+  })
+
+  it('APPROVE-6: both reasons pass through byte-identically', async () => {
+    // internal/invoice/handlers.go's approvalGate rung 5, verbatim -- em dash U+2014.
+    // The SPA has no authority over this copy ([gates-on-the-wire]); a fallback string
+    // authored here is exactly the drift that decision forbids.
+    const reasonText =
+      "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+    const wire = {
+      ...draftInvoice,
+      can_approve: false,
+      approve_blocked_reason: reasonText,
+      can_reject: false,
+      reject_blocked_reason: reasonText,
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.approve_blocked_reason).toBe(reasonText)
+    expect(result.reject_blocked_reason).toBe(reasonText)
+  })
+
+  // APPR-08-06 QA (Mode B): APPROVE-6 gives both reasons the SAME string, so a
+  // normalizer that reads one wire key into the other key's slot survives it. Every
+  // other key here is distinct too -- a normalizer line copied from its neighbour and
+  // half-edited is the likeliest way these four go wrong, and tsc cannot see it.
+  it('APPROVE-7: each key reads its OWN wire key, never a neighbour', async () => {
+    const wire = {
+      ...draftInvoice,
+      can_approve: true,
+      approve_blocked_reason: 'approve reason',
+      can_reject: false,
+      reject_blocked_reason: 'reject reason',
+      can_edit: false,
+      can_submit: false,
+      submit_blocked_reason: 'submit reason',
+      can_view_ubl: false,
+      ubl_blocked_reason: 'ubl reason',
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: 'resolve reason',
+      can_revalidate: false,
+      revalidate_blocked_reason: 'revalidate reason',
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_approve).toBe(true)
+    expect(result.can_reject).toBe(false)
+    expect(result.approve_blocked_reason).toBe('approve reason')
+    expect(result.reject_blocked_reason).toBe('reject reason')
+    // The neighbours the four could plausibly be cross-wired to, pinned in the same
+    // response so a swap anywhere in the block shows up here.
+    expect(result.submit_blocked_reason).toBe('submit reason')
+    expect(result.ubl_blocked_reason).toBe('ubl reason')
+    expect(result.resolve_outside_blocked_reason).toBe('resolve reason')
+    expect(result.revalidate_blocked_reason).toBe('revalidate reason')
+  })
+
+  // The mirror of APPROVE-7 with the two booleans flipped: a cross-wire that happens
+  // to agree on one fixture cannot agree on both.
+  it('APPROVE-8: the two booleans are independent, in both directions', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ...draftInvoice, can_approve: false, can_reject: true }),
+    })
+    const rejectOnly = await getInvoice(af, base, 'inv-1')
+    expect(rejectOnly.can_approve).toBe(false)
+    expect(rejectOnly.can_reject).toBe(true)
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ...draftInvoice, can_approve: true, can_reject: false }),
+    })
+    const approveOnly = await getInvoice(af, base, 'inv-1')
+    expect(approveOnly.can_approve).toBe(true)
+    expect(approveOnly.can_reject).toBe(false)
   })
 })
 
@@ -1242,6 +1630,10 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       ubl_blocked_reason: null,
       can_resolve_outside: true,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -1381,6 +1773,10 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       ubl_blocked_reason: null,
       can_resolve_outside: false,
       resolve_outside_blocked_reason: null,
+      can_approve: false,
+      approve_blocked_reason: null,
+      can_reject: false,
+      reject_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)
@@ -1601,9 +1997,10 @@ describe('mbsPathToEditField', () => {
 })
 
 describe('skipReasonLabel', () => {
-  it('I-skip-1: skipReasonLabel maps both reachable reasons and passes others through', () => {
+  it('I-skip-1: skipReasonLabel maps all three reachable reasons and passes others through', () => {
     expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
     expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
+    expect(skipReasonLabel('awaiting_approval')).toBe('Waiting on approval — an approver must approve it first')
     expect(skipReasonLabel('wat')).toBe('wat')
   })
 })
@@ -1777,13 +2174,22 @@ describe('DETAIL_SUBMIT_COPY', () => {
 })
 
 describe('selection helpers', () => {
-  it('I-sel-1: only validated rows are selectable', () => {
+  it('I-sel-1: only validated rows with no open approval run are selectable', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
     const rows: InvoiceRecord[] = statuses.map((status, i) => ({ ...draftInvoice, id: `inv-${i}`, status }))
 
+    // draftInvoice carries approval: null, so these rows keep their original meaning.
     expect(selectableIds(rows)).toEqual(['inv-1'])
+    // EXTENDED (APPR-08-09): the status dimension crossed with the approval fact.
+    // 7 x 3 = 21 cases, of which exactly two are true (validated+null, validated+approved).
     for (const row of rows) {
-      expect(isRowSelectable(row.status), `status=${row.status}`).toBe(row.status === 'validated')
+      for (const approval of [null, OPEN_RUN, APPROVED_RUN]) {
+        const expected = row.status === 'validated' && approval?.run_state !== 'open'
+        expect(
+          isRowSelectable({ ...row, approval }),
+          `status=${row.status} run_state=${approval?.run_state ?? 'null'}`,
+        ).toBe(expected)
+      }
     }
   })
 
@@ -1840,6 +2246,204 @@ describe('selectAllState', () => {
     const rows: InvoiceRecord[] = [{ ...draftInvoice, id: 'a', status: 'validated' }]
 
     expect(selectAllState(['stale-id'], rows)).not.toBe('all')
+  })
+})
+
+// RED specs (APPR-08-09, task-500, Stage 2.5/Mode A) — isRowSelectable must read the
+// row's approval fact, not just its status, so an awaiting-approval invoice cannot be
+// batch-selected into a submit the server would only skip. isRowSelectable's body is
+// still `row.status === 'validated'` (its `// stub` marker), so every spec below that
+// involves an open run fails on its assertion, never on an import or compile error.
+describe('isRowSelectable reads the approval fact (APPR-08-09)', () => {
+  it('A-sel-1: a validated row with an open run is NOT selectable', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: OPEN_RUN })).toBe(false)
+  })
+
+  it('A-sel-2: a validated row with an approved run IS selectable', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: APPROVED_RUN })).toBe(true)
+  })
+
+  it('A-sel-3: a validated row with no approval run at all IS selectable (AC #5, an unarmed tenant is unchanged)', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: null })).toBe(true)
+  })
+
+  it('A-sel-4: selectableIds excludes awaiting-approval rows from a mixed page', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'clear', status: 'validated', approval: null },
+      { ...draftInvoice, id: 'awaiting', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'approved', status: 'validated', approval: APPROVED_RUN },
+      { ...draftInvoice, id: 'draft', status: 'draft', approval: OPEN_RUN },
+    ]
+
+    expect(selectableIds(rows)).toEqual(['clear', 'approved'])
+  })
+
+  it('A-sel-5: pruneSelection drops an id whose row came back from the server with an open run', () => {
+    const before: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: null },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+    // The same selection survives the pre-fetch rows -- so the drop below is the approval
+    // fact biting, not an id that merely left the page.
+    expect(pruneSelection(['a', 'b'], before)).toEqual(['a', 'b'])
+
+    const afterRefetch: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+
+    expect(pruneSelection(['a', 'b'], afterRefetch)).toEqual(['b'])
+  })
+
+  it('A-sel-6: selectAllState reports none on a page where every row is awaiting approval', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
+    ]
+
+    // The selectableIds leg is load-bearing (QA Stage 4, task-500): `selectAllState([], …)`
+    // alone returns 'none' via `matched === 0` for ANY page, so it passed under the
+    // status-only stub too. A-sel-7 is the other discriminator.
+    expect(selectableIds(rows)).toEqual([])
+    expect(selectAllState([], rows)).toBe('none')
+  })
+
+  it("A-sel-7: selectAllState is none even when every open-run id sits in the selection -- a stale selection can't inflate past the empty guard", () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
+    ]
+
+    expect(selectAllState(['a', 'b'], rows)).toBe('none')
+  })
+})
+
+// FAIL-OPEN, pinned as a recorded decision rather than an accident (APPR-08-09, B5).
+// `InvoiceApproval.run_state` is a bare `string` with no union, and normaliseInvoiceRow
+// passes it through untouched ([gates-on-the-wire]), so anything that is not exactly
+// 'open' -- a typo, a case variant, an absent key -- reads as SELECTABLE. Accepted: the
+// column is CHECK-constrained, and the SERVER gate is authoritative (a wrongly-selectable
+// row is skipped with awaiting_approval), so this is a display inconsistency, never a
+// bypass. If a future change makes it fail CLOSED, these three specs are what must be
+// re-decided rather than silently flipped.
+describe('isRowSelectable fails OPEN on an unrecognised run_state (APPR-08-09, decision B5)', () => {
+  it("A-sel-8: an unknown run_state ('opened', 'OPEN') on a non-null approval reads as selectable", () => {
+    for (const run_state of ['opened', 'OPEN', 'Open', 'approved_pending']) {
+      expect(
+        isRowSelectable({ ...draftInvoice, status: 'validated', approval: { ...OPEN_RUN, run_state } }),
+        `run_state=${run_state}`,
+      ).toBe(true)
+    }
+  })
+
+  it('A-sel-9: an empty-string run_state on a non-null approval reads as selectable', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: { ...OPEN_RUN, run_state: '' } })).toBe(true)
+  })
+
+  it('A-sel-10: an absent run_state key on a non-null approval reads as selectable', () => {
+    // The wire cannot produce this today (RowFacts has no omitempty), and the type forbids
+    // it -- the cast is what makes the undefined branch reachable at all.
+    const noRunState = { ...OPEN_RUN, run_state: undefined } as unknown as InvoiceApproval
+
+    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: noRunState })).toBe(true)
+  })
+
+  it('A-sel-11: fail-open never rescues a non-validated status', () => {
+    expect(isRowSelectable({ ...draftInvoice, status: 'draft', approval: { ...OPEN_RUN, run_state: 'opened' } })).toBe(false)
+  })
+
+  it('A-sel-12: a non-object approval fails open too, and never throws', () => {
+    // normaliseInvoiceRow coerces a string/number/array/absent `approval` to null before a
+    // row reaches here (invoices.ts:501-517), so this pins the PREDICATE's own behaviour
+    // for the day someone builds a row without it -- `?.` only guards null/undefined.
+    const junk = ['open', 42, [], true, undefined]
+
+    for (const approval of junk) {
+      const row = { ...draftInvoice, status: 'validated' as InvoiceStatus, approval } as unknown as InvoiceRecord
+      expect(() => isRowSelectable(row), `approval=${JSON.stringify(approval) ?? 'undefined'}`).not.toThrow()
+      expect(isRowSelectable(row), `approval=${JSON.stringify(approval) ?? 'undefined'}`).toBe(true)
+    }
+  })
+})
+
+// QA Stage 4 (task-500) — the whole (status x run_state) surface, with LITERAL expected
+// values rather than I-sel-1's oracle, which recomputes the implementation's own
+// expression and so cannot catch a rule that is wrong in both places at once.
+//
+// `run_state` has five wire values: null (no run) plus the four the CHECK allows
+// (migrations/20260809232011_approval_runs.sql:40). Only 'open' blocks; the other four
+// read as selectable. That is EQUIVALENT to the server gate
+// (TransmitClear = !policyActive || approvedRun, gate.go:39) on every reachable state,
+// but only because of four invariants living outside the SPA: ApplyValidation always arms
+// (store.go:1938), a rejection demotes to draft in the same tx (decision.go:319),
+// every walk back to draft cancels the live run (engine.go:262), and 'approved' is EXISTS
+// over all runs while `run_state` is the newest one (gate.go:104). If any of those change,
+// this table is the SPA-side thing that must be re-decided.
+describe('isRowSelectable over the whole status x run_state surface (APPR-08-09, QA Stage 4)', () => {
+  const RUN_STATES = [null, 'open', 'approved', 'rejected', 'cancelled'] as const
+
+  it('A-sel-13: exactly four of the 35 combinations are selectable, and all four are validated', () => {
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+    const selectable: string[] = []
+
+    for (const status of statuses) {
+      for (const run_state of RUN_STATES) {
+        const approval = run_state === null ? null : { ...OPEN_RUN, run_state }
+        if (isRowSelectable({ ...draftInvoice, status, approval })) selectable.push(`${status}/${run_state ?? 'no-run'}`)
+      }
+    }
+
+    expect(selectable).toEqual([
+      'validated/no-run',
+      'validated/approved',
+      'validated/rejected',
+      'validated/cancelled',
+    ])
+  })
+
+  it('A-sel-14: an open run on every non-validated status is still non-selectable -- the status half dominates', () => {
+    const nonValidated: InvoiceStatus[] = ['draft', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of nonValidated) {
+      expect(isRowSelectable({ ...draftInvoice, status, approval: OPEN_RUN }), `status=${status}`).toBe(false)
+      expect(isRowSelectable({ ...draftInvoice, status, approval: null }), `status=${status}`).toBe(false)
+    }
+  })
+
+  it('A-sel-15: a page mixing all five run states selects the four non-open ids, in row order', () => {
+    const rows: InvoiceRecord[] = RUN_STATES.map((run_state) => ({
+      ...draftInvoice,
+      id: run_state ?? 'no-run',
+      status: 'validated' as InvoiceStatus,
+      approval: run_state === null ? null : { ...OPEN_RUN, run_state },
+    }))
+
+    expect(selectableIds(rows)).toEqual(['no-run', 'approved', 'rejected', 'cancelled'])
+    // 'some', not 'all': the open-run id is in the selection but not in `selectable`, so it
+    // can neither be counted nor inflate the comparison.
+    expect(selectAllState(['no-run', 'open'], rows)).toBe('some')
+    expect(selectAllState(['no-run', 'approved', 'rejected', 'cancelled', 'open'], rows)).toBe('all')
+  })
+
+  it('A-sel-16: when a run CLOSES between fetches the row becomes selectable again, but pruneSelection does not resurrect a dropped id', () => {
+    const open: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+    const closed: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated', approval: APPROVED_RUN },
+      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+    ]
+
+    // Fetch 1: the approver has not decided, so 'a' is dropped from the selection.
+    const afterOpen = pruneSelection(['a', 'b'], open)
+    expect(afterOpen).toEqual(['b'])
+
+    // Fetch 2: the run closed. 'a' is selectable again -- but prune is a filter, not a
+    // memory, so it cannot re-add what the previous tick removed. The user must re-tick.
+    expect(selectableIds(closed)).toEqual(['a', 'b'])
+    expect(pruneSelection(afterOpen, closed)).toEqual(['b'])
+    expect(pruneSelection(['a', 'b'], closed)).toEqual(['a', 'b'])
   })
 })
 
@@ -2283,7 +2887,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 25 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 27 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -2321,6 +2925,11 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // BUG-06-04 (task-386): +1 -- failure_kind joins Invoice the same way.
       'failure_kind',
       'rule_set_version',
+      // APPR-08-08 (task-499): +1 -- `approval` is a listItem SIBLING, not an Invoice
+      // json tag, exactly like `rule_set_version` above. The title said 25 while this
+      // list already held 26 (rule_set_version was added without updating it); the
+      // count is 27 now and the title says so.
+      'approval',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]
@@ -2828,6 +3437,14 @@ describe('no production source under src/ authors a submit-blocked sentence (APP
     // reconstruct any of them, nor the role sentence's verb phrase.
     expect(productionOnly('Only validated invoices can be sub' + 'mitted')).toEqual([])
     expect(productionOnly('can sub' + 'mit an invoice to NRS/MBS')).toEqual([])
+  })
+
+  it('the awaiting-approval sentence appears in no production file either (APPR-08-05)', () => {
+    // awaitingApprovalReason (handlers.go). Split on either side of the em dash, never
+    // through it. Deliberately NOT the same string as SKIP_REASON_LABELS.awaiting_approval,
+    // which is the SPA's own label for the batch endpoint's machine skip code.
+    expect(productionOnly('This invoice is waiting on appro' + 'val')).toEqual([])
+    expect(productionOnly('it can be sub' + 'mitted once an approver approves it')).toEqual([])
   })
 })
 

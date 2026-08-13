@@ -318,7 +318,7 @@ func TestGetHandler_RealStore_NeverSubmittedRendersOutcomeDefaults(t *testing.T)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -362,7 +362,7 @@ func TestGetHandler_RealStore_SeededOutcomeRendersVerbatim(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -409,7 +409,7 @@ func TestListHandler_RealStore_SeededOutcomeRendersVerbatim(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	ListHandler(store.List, nil).ServeHTTP(rec, r)
+	ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -703,7 +703,7 @@ func TestGetHandler_RealStore_RejectionReasonsOrderAndContentPreservedVerbatim(t
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())

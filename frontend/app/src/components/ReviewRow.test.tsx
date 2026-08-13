@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import type { InvoiceDetailRecord, InvoiceRecord } from '../lib/invoices'
+import type { InvoiceApproval, InvoiceDetailRecord, InvoiceRecord } from '../lib/invoices'
 import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { Row } from './ReviewRow'
@@ -42,6 +42,7 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     kept_as_is_by: null,
     kept_as_is_reason: null,
     failure_kind: null,
+    approval: null,
     rule_set_version: null,
     ...over,
   }
@@ -64,6 +65,10 @@ function detailFixture(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRe
     ubl_blocked_reason: null,
     can_resolve_outside: false,
     resolve_outside_blocked_reason: null,
+    can_approve: false,
+    approve_blocked_reason: null,
+    can_reject: false,
+    reject_blocked_reason: null,
     ...over,
   }
 }
@@ -211,5 +216,63 @@ describe('ReviewRow row-expansion: the kept banner is a draft-only concept, not 
     const banner = await screen.findByTestId('review-kept-banner')
     expect(banner.textContent).toContain(ROW_EXPANSION_COPY.keptPrefix)
     expect(banner.textContent).toContain('Buyer confirmed the discrepancy is intentional.')
+  })
+})
+
+// QA Stage 4 gap-fill (task-500, APPR-08-09). ReviewRow.tsx's isRowSelectable call site
+// had NO render oracle: reverting it alone to `r.status` reddened nothing but tsc, while
+// the same revert in InvoicesList.tsx reddens its own parity spec. This is that spec's
+// twin -- the other half of AC #3's two-call-site claim.
+describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09, AC-3)', () => {
+  const openRun: InvoiceApproval = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  function selectBox(): HTMLInputElement {
+    return screen.getByTestId('review-select') as HTMLInputElement
+  }
+
+  it('RR-appr-1: awaiting-approval disables, clear-validated enables -- the enabled leg is what pins the call site to the ROW', () => {
+    renderRow({ status: 'validated', approval: openRun })
+    expect(selectBox().disabled, 'validated + open run is not selectable').toBe(true)
+    cleanup()
+
+    // The discriminator: a status-only call site reads `.status` off a string, gets
+    // undefined, and disables EVERY checkbox -- which the line above cannot tell apart.
+    renderRow({ status: 'validated', approval: null })
+    expect(selectBox().disabled, 'validated + no run stays selectable (AC #5)').toBe(false)
+    cleanup()
+
+    renderRow({ status: 'validated', approval: { ...openRun, run_state: 'approved' } })
+    expect(selectBox().disabled, 'validated + approved run stays selectable').toBe(false)
+  })
+
+  it('RR-appr-2: parity -- the awaiting-approval checkbox is the SAME disabled control a draft row already renders, with no added copy', () => {
+    renderRow({ status: 'draft', approval: null })
+    const draftBox = selectBox()
+    const draftShape = {
+      present: Boolean(draftBox),
+      disabled: draftBox.disabled,
+      title: draftBox.getAttribute('title'),
+      label: draftBox.getAttribute('aria-label'),
+    }
+    cleanup()
+
+    renderRow({ status: 'validated', approval: openRun })
+    const awaitingBox = selectBox()
+
+    expect({
+      present: Boolean(awaitingBox),
+      disabled: awaitingBox.disabled,
+      title: awaitingBox.getAttribute('title'),
+      label: awaitingBox.getAttribute('aria-label'),
+    }, 'awaiting-approval renders exactly the draft row shape').toEqual(draftShape)
+    // Stated absolutely too, so the pair cannot pass by both sprouting a tooltip.
+    expect(awaitingBox.getAttribute('title'), '[selectable-parity-not-new-copy]').toBeNull()
   })
 })

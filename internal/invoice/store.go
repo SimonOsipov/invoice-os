@@ -23,12 +23,32 @@ import (
 // transaction and RLS enforces isolation.
 type Store struct {
 	pool *pgxpool.Pool
+
+	// APPROVALS_ENFORCED. The two write doors into queued and the wire flag must
+	// all read THIS field, never re-derive it
+	// (TestApprovalsEnforced_DeclaredOnceWrittenOnce).
+	approvalsEnforced bool
+}
+
+// StoreOption configures a Store at construction. Variadic so the existing
+// NewStore(pool) call sites compile unchanged (TestNewStore_BothAritiesCompile).
+type StoreOption func(*Store)
+
+// WithApprovalsEnforced turns the transmit gate on. Default false: an unset flag
+// leaves both doors into queued as they were (TestNewStore_DefaultsToNotEnforced).
+func WithApprovalsEnforced(v bool) StoreOption {
+	return func(s *Store) { s.approvalsEnforced = v }
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's
-// lifecycle.
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+// lifecycle. Options apply in order, last wins
+// (TestStoreOptions_ApplyInOrderLastWins).
+func NewStore(pool *pgxpool.Pool, opts ...StoreOption) *Store {
+	s := &Store{pool: pool}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // scanner is the common Scan(...) surface of both pgx.Row (QueryRow) and
@@ -645,6 +665,19 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		}
 		if f.NeedsAttention {
 			conditions = append(conditions, `(status = 'rejected' OR (status = 'failed' AND kept_as_is_at IS NULL) OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
+		}
+		if f.AwaitingApproval {
+			// A THIRD predicate: only validated rows match, a status neither the
+			// needs_attention fragment above nor needs_fix below can reach
+			// (TestStoreList_AwaitingApprovalIsNotNeedsAttention, ...IsNotNeedsFix).
+			// Exact negation of approval.TransmitClear -- the UNFLAGGED predicate, so
+			// APPROVALS_ENFORCED never gates it (...IsTheExactNegationOfTransmitClear).
+			// invoices.id is qualified: approval_runs has its own id, so a bare id
+			// binds there and silently never matches.
+			conditions = append(conditions, `(status = 'validated'
+			  AND EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)
+			  AND NOT EXISTS (SELECT 1 FROM approval_runs r
+			                   WHERE r.invoice_id = invoices.id AND r.state = 'approved'))`)
 		}
 		if len(f.ImportBatchIDs) > 0 {
 			args = append(args, f.ImportBatchIDs)
@@ -1426,6 +1459,12 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // canSubmit is a deliberate literal, not canTransition(s, StatusQueued):
 // BatchSubmit hardwires its FROM state to validated, so submittability is
 // the endpoint's own contract, not an edge-table property.
+//
+// It is only HALF the positive predicate. The other half is
+// approval.TransmitClear (internal/approval/gate.go), which a validated invoice
+// must also satisfy before it may pass into queued. The two are composed in
+// submitGate (handlers.go), never here: approval is not a status property, so
+// this stays a pure status literal.
 func canSubmit(s Status) bool { return s == StatusValidated }
 
 // isApprover takes the memberships.role, not auth.Identity.Role -- the latter
@@ -1475,19 +1514,82 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	return role, nil
 }
 
+// ApprovalFacts is one invoice's approval standing as internal/invoice reads it:
+// approval.GateFacts with the transmit verdict already resolved against
+// APPROVALS_ENFORCED. TransmitClear is the ONLY field the flag touches -- the
+// other three feed can_approve/can_reject, which ship unflagged
+// (docs/approvals.md section 11).
+type ApprovalFacts struct {
+	TransmitClear   bool
+	RunState        string
+	PendingStepOrd  *int
+	CallerHoldsRole bool
+}
+
+// ApprovalFacts reads id's approval standing for the caller inside ONE
+// db.WithinRequestTenantTx -- CallerRole's wrapper above, for the same reason: a
+// read with no write needs no second transaction. The approval read runs
+// whatever the flag says; only TransmitClear folds it
+// (TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff), deliberately unlike
+// the two write doors, which skip the read entirely when the flag is off. An
+// error returns the ZERO value, whose TransmitClear is false, so a caller that
+// ignores the error still fails closed.
+func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, error) {
+	var out ApprovalFacts
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		f, err := approval.GateFactsTx(ctx, tx, id, actorFromContext(ctx).Subject)
+		if err != nil {
+			return err
+		}
+		out = ApprovalFacts{
+			TransmitClear:   !s.approvalsEnforced || approval.TransmitClear(f.PolicyActive, f.ApprovedRun),
+			RunState:        f.RunState,
+			PendingStepOrd:  f.PendingStepOrd,
+			CallerHoldsRole: f.CallerHoldsRole,
+		}
+		return nil
+	})
+	if err != nil {
+		return ApprovalFacts{}, err
+	}
+	return out, nil
+}
+
+// RowFacts reads the list-row approval standing of a page of invoice ids in ONE
+// transaction. Unlike ApprovalFacts above it must NOT consult
+// s.approvalsEnforced: the flag gates enforcement, not visibility
+// (docs/approvals.md section 11, TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
+// RLS is the only tenant scope (TestStoreRowFacts_IsTenantScopedByRLS).
+func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	var out map[string]approval.RowFacts
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		f, err := approval.RowFactsTx(ctx, tx, ids)
+		out = f
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
 // (M4-04-05's extraction moved the SOLE-writer-of-invoices.status role down
 // to transitionTx, which both callers must go through; Transition's own
 // observable behaviour is unchanged). Inside ONE db.WithinRequestTenantTx
 // closure:
-// SELECT status FROM invoices WHERE id=$1 FOR UPDATE locks and reads the
+// SELECT id, status FROM invoices WHERE id=$1 FOR UPDATE locks and reads the
 // current status (RLS-scoped, so a cross-tenant VALID uuid 0-rows same as a
 // genuinely nonexistent one; pgx.ErrNoRows -> ErrNotFound; a malformed
 // non-uuid id raises 22P02, mapped to ErrValidation, mirroring Get/Update/
 // Create -- CodeRabbit finding) -> a no-op (current==target)
 // -> ErrRedundantTransition (checked FIRST, [D4], before legality, and so
-// retained HERE rather than in transitionTx) -> then transitionTx on this
+// retained HERE rather than in transitionTx) -> then, on the ONE legal edge
+// into queued and only when APPROVALS_ENFORCED is on, the transmit gate:
+// approval.TransmitClearTx on this same tx, after the lock so the answer
+// cannot be stale (TestTransition_GateRunsAfterTheRowLock) -> not clear ->
+// ErrAwaitingApproval -> then transitionTx on this
 // same tx: an edge outside legalTransitions -> ErrIllegalTransition -> else
 // UPDATE status, INSERT invoice_status_history (from_status=current,
 // to_status=target, actor=Subject), and audit.Record("invoice.transitioned",
@@ -1506,10 +1608,11 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var lockedID string
 		var current Status
 		if err := tx.QueryRow(ctx,
-			`SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-		).Scan(&current); err != nil {
+			`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&lockedID, &current); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -1525,14 +1628,30 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 			return ErrRedundantTransition
 		}
 
+		// Keyed on the LOCKED row's id — TransmitClearTx maps Postgres's canonical
+		// uuid text, so a non-canonical id from the URL would read false
+		// (TestTransition_UppercaseIdOnAnApprovedInvoiceReachesQueued). The
+		// canTransition conjunct keeps an illegal edge reading ErrIllegalTransition
+		// (TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal).
+		if s.approvalsEnforced && target == StatusQueued && canTransition(current, target) {
+			clear, err := approval.TransmitClearTx(ctx, tx, []string{lockedID})
+			if err != nil {
+				return err
+			}
+			if !clear[lockedID] {
+				return ErrAwaitingApproval
+			}
+		}
+
 		var err error
 		if inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx)); err != nil {
 			return err
 		}
 
-		// -> draft ONLY (APPR-06-07, D30). validated -> queued deliberately leaves the
-		// run alone: cancelling there would erase the drift APPR-06-09's
-		// approval_run_orphaned detector reads during the ungated window.
+		// -> draft ONLY (APPR-06-07, D30). validated -> queued still leaves the run
+		// alone: cancelling there would erase the drift APPR-06-09's
+		// approval_run_orphaned detector reads. The gate above narrows that window
+		// rather than closing it — the edge still passes when no policy is active.
 		if target == StatusDraft {
 			if _, err := approval.CancelLiveRunTx(ctx, tx, id, actorFromContext(ctx).Subject); err != nil {
 				return err

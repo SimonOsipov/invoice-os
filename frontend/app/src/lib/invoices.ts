@@ -67,8 +67,22 @@
 // export for that job is deleted outright rather than re-pointed -- a second list of
 // statuses is exactly the thing that drifts out of sync with the machine, which is what
 // happened when the backend widened Edit to accept `rejected` and the SPA did not follow.
-// The remaining status sets here (isInFlight for polling, isRowSelectable for batch
-// selection, INVOICE_STATUS_STYLE for pills) are NOT availability gates and stay.
+// isInFlight (polling) and INVOICE_STATUS_STYLE (pills) are NOT availability gates and
+// stay. isRowSelectable became one in APPR-08-09, and -- unlike can_edit/can_revalidate
+// above -- it does NOT read its answer off the wire. The server's rule is `TransmitClear`
+// (`internal/approval`): `!policyActive || approvedRun`, and NEITHER input rides the row
+// wire. `approval.run_state` is a DIFFERENT fact -- the NEWEST run's state (`RowFactsTx`)
+// -- from which this file INFERS the gate, so it is a re-derivation from a PROXY. That
+// makes TWO mirrored residuals here, not one: the `status === 'validated'` status set,
+// and the inference itself. The inference matches the server on every reachable state
+// only because of four invariants living outside the SPA: validation always arms
+// (`ApplyValidation`), a rejection demotes in the same tx (`decideTx`), every walk back
+// to draft cancels the live run (`CancelLiveRunTx`), and `approved` is EXISTS over ALL
+// runs while `run_state` is only the newest (`TransmitClearTx`, `GateFactsTx`). Change
+// one and this file must be re-decided; invoices.test.ts's A-sel-13 pins the surface and
+// names all four. Both residuals are tolerated only because the server's skip is
+// authoritative -- a wrong answer costs a checkbox, never a bypass. A gate that cannot
+// make that claim reads the wire.
 //
 // verdictStatus(staleSinceEdit, inv) is the within-session fix-loop indicator (Core AC
 // #7) plus the on-load demoted-draft derivation (Core AC #5, task-188 item 4): 'stale'
@@ -200,13 +214,34 @@ export interface InvoiceRecord {
   failure_kind: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
+  // approval (APPR-08-08) -- a LIST-wire key ONLY: Go emits it on listItem, never on
+  // getResponse. InvoiceDetailRecord therefore Omits it, so a detail-path read is a
+  // COMPILE error rather than a runtime answer -- both `undefined?.run_state` and a
+  // fabricated `null` make isRowSelectable fail OPEN, and `null` also claims "this
+  // invoice has no run", which on a compliance surface is a lie. That is the
+  // `rule_set_version` trap AVOIDED (typed present, reads undefined on the wire that
+  // omits it -- reviewBatch.ts), not followed. On a list row it is REQUIRED and
+  // nullable: normaliseInvoiceRow makes that true for every row.
+  approval: InvoiceApproval | null
 }
 
-// getInvoice's own response shape: InvoiceRecord plus getResponse's OTHER sibling key,
-// `qr_png_base64` (handlers.go:189-192, M5-09-01/03). `rule_set_version` is redeclared
-// here identically, not moved off InvoiceRecord -- it stays there (listInvoices' element
-// type / the draftInvoice-style fixtures depend on it), this is just co-locating the two
-// getResponse-only keys on the type that actually represents a GET response.
+// One list row's approval standing, mirroring approval.RowFacts (gate.go) field for
+// field. `due_at` is the wire's RFC3339 string, not a Date.
+export interface InvoiceApproval {
+  run_state: string
+  pending_ord: number | null
+  pending_role_title: string | null
+  pending_holder_warn: boolean
+  due_at: string | null
+  overdue: boolean
+}
+
+// getInvoice's own response shape: InvoiceRecord minus its list-only `approval`, plus
+// getResponse's OTHER sibling key `qr_png_base64` (getResponse, handlers.go,
+// M5-09-01/03). `rule_set_version` is redeclared here identically, not moved off
+// InvoiceRecord -- it stays there (listInvoices' element type / the draftInvoice-style
+// fixtures depend on it), this is just co-locating the two getResponse-only keys on the
+// type that actually represents a GET response.
 // `qr_png_base64` has no `omitempty` either (always present, explicit null when there is
 // no qr_payload or rendering failed) -- getInvoice's own `?? null` normalization is
 // defensive-only, the same posture already taken for `rule_set_version`.
@@ -220,14 +255,17 @@ export interface InvoiceRecord {
 // a fallback string.
 //
 // REQUIRED and nullable (no `?`), matching the two keys above: getResponse tags none of
-// the three `omitempty` (handlers.go:214-221, pinned by
+// the three `omitempty` (handlers.go's getResponse, pinned by
 // TestGetHandler_ActionFlagsFalseNotOmitted), so all three are present on every status.
 // An optional `?` would compile just as well, which is exactly why it is wrong -- it
 // lets a consumer read `undefined` and treat "the server did not say" as an open
-// question, the fail-open shape [gates-on-the-wire] exists to remove. They sit on
-// InvoiceDetailRecord ONLY, never InvoiceRecord: ListHandler returns bare Invoice rows,
-// which carry no such keys.
-export interface InvoiceDetailRecord extends InvoiceRecord {
+// question, the fail-open shape [gates-on-the-wire] exists to remove. The same holds for
+// every action key added since, `can_approve`/`can_reject` and their reasons included
+// (APPR-08-06): all four are REQUIRED, never `?`. The ACTION FLAGS sit on
+// InvoiceDetailRecord ONLY, never InvoiceRecord -- TestListHandler_NoActionFlagKeys
+// keeps them off the list wire. `approval` runs the other way -- a list-only key
+// (APPR-08-08), Omitted here so it cannot be read off a detail record at all.
+export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   rule_set_version: number | null
   qr_png_base64: string | null
   can_edit: boolean
@@ -241,6 +279,14 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   // fail-closed convention as the four flags above.
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
+  // can_approve/can_reject and their reasons (APPR-08-06) -- same convention again.
+  // Approve and reject availability are IDENTICAL (one backend gate feeds both), so
+  // the two booleans always agree and the two reasons are the same string; they ship
+  // as two pairs because the screen renders two buttons, each needing its own slot.
+  can_approve: boolean
+  approve_blocked_reason: string | null
+  can_reject: boolean
+  reject_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -457,7 +503,36 @@ export async function listInvoices(
   if (opts.q) params.set('q', opts.q)
   if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
-  return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+  const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+  // EVERY row, never just the first (ROW-6). The envelope itself rides through whole --
+  // `pagination` is the source of the review screen's counts and pager.
+  return { ...res, invoices: res.invoices.map(normaliseInvoiceRow) }
+}
+
+// normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval`, the
+// same convention getInvoice applies to the action flags below: booleans via `=== true`
+// (never `?? false`), nullable fields via `?? null`, a missing or non-object `approval`
+// to `null` (never `undefined`). Exported so the specs can drive it directly.
+//
+// `run_state` is passed through UNTOUCHED, like `pending_role_title`: both are backend
+// copy, and a `?? ''` here would be the SPA-authored fallback [gates-on-the-wire]
+// forbids. Every other key rides the spread byte-identical (ROW-5).
+export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
+  const wire = raw.approval
+  // An array is `typeof 'object'` too, and a consumer reading `.run_state` off one gets
+  // undefined -- the same "the server did not say" case as a string or a number (ROW-1).
+  const approval: InvoiceApproval | null =
+    typeof wire === 'object' && wire !== null && !Array.isArray(wire)
+      ? {
+          run_state: wire.run_state,
+          pending_ord: wire.pending_ord ?? null,
+          pending_role_title: wire.pending_role_title ?? null,
+          pending_holder_warn: wire.pending_holder_warn === true,
+          due_at: wire.due_at ?? null,
+          overdue: wire.overdue === true,
+        }
+      : null
+  return { ...raw, approval }
 }
 
 // The register's own page size (mirrors REVIEW_PAGE_SIZE, reviewBatch.ts:702). Stays
@@ -505,16 +580,24 @@ export async function violationSummary(
   return res.rules
 }
 
-// The four action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The seven action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
 // defensive normalization on a permission-shaped flag only earns its keep fail-closed.
-// The three `*_blocked_reason` fields all keep `?? null` (their
+// Every key is listed EXPLICITLY even though `...res` is already typed
+// InvoiceDetailRecord: an omitted line compiles clean and tsc reports nothing, so the
+// APPROVE-1/2/3/5 specs are the only oracle that the fail-closed convention was applied.
+// The six `*_blocked_reason` fields all keep `?? null` (their
 // declared type is nullable, so `??` is reachable and idiomatic) and are passed through
 // BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
 // ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here
-// is exactly the drift that decision forbids.
+// is exactly the drift that decision forbids. submit_blocked_reason now carries an APPROVAL
+// refusal alongside the role and status ones (APPR-08-05): on a validated invoice whose
+// approval run is still open, can_submit is false and this field explains why.
+//
+// `approval` is NOT normalised here: the detail wire never carries the key, so any value
+// this function put there would be invented. InvoiceDetailRecord Omits it instead.
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
   return {
@@ -530,6 +613,10 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     ubl_blocked_reason: res.ubl_blocked_reason ?? null,
     can_resolve_outside: res.can_resolve_outside === true,
     resolve_outside_blocked_reason: res.resolve_outside_blocked_reason ?? null,
+    can_approve: res.can_approve === true,
+    approve_blocked_reason: res.approve_blocked_reason ?? null,
+    can_reject: res.can_reject === true,
+    reject_blocked_reason: res.reject_blocked_reason ?? null,
   }
 }
 
@@ -686,7 +773,10 @@ export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
   return INVOICE_STATUS_STYLE[status] ?? MUTED_STYLE
 }
 
-export function verdictStatus(staleSinceEdit: boolean, inv: InvoiceRecord): 'stale' | 'current' {
+export function verdictStatus(
+  staleSinceEdit: boolean,
+  inv: Pick<InvoiceRecord, 'status' | 'rule_set_version_id' | 'violations'>,
+): 'stale' | 'current' {
   if (staleSinceEdit) return 'stale'
   const demotedSinceValidation =
     inv.status === 'draft' && inv.rule_set_version_id != null && !inv.violations.some((v) => v.severity === 'error')
@@ -920,7 +1010,7 @@ export function computedLineSum(lines: ReadonlyArray<Pick<InvoiceLineItem, 'quan
 // InvoiceDetail.tsx, task-391, BUG-03-02).
 export type EditFormState = Record<EditFieldKey, string>
 
-export function formFromInvoice(inv: InvoiceRecord): EditFormState {
+export function formFromInvoice(inv: Pick<InvoiceRecord, EditFieldKey>): EditFormState {
   return {
     issue_date: toDateInputValue(inv.issue_date),
     supplier_tin: inv.supplier_tin ?? '',
@@ -938,7 +1028,7 @@ export function formFromInvoice(inv: InvoiceRecord): EditFormState {
 // blank out the ones the user didn't touch. issue_date is special-cased: Go's *time.Time
 // decode rejects a bare date, so a bare YYYY-MM-DD is normalised to midnight UTC, and a
 // cleared date is dropped since PATCH cannot represent an explicit clear.
-export function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
+export function diffEditInput(original: Pick<InvoiceRecord, EditFieldKey>, form: EditFormState): InvoiceEditInput {
   const patch: InvoiceEditInput = {}
   for (const key of EDIT_FIELD_KEYS) {
     if (key === 'issue_date') {
@@ -954,13 +1044,14 @@ export function diffEditInput(original: InvoiceRecord, form: EditFormState): Inv
   return patch
 }
 
-// not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason
-// values (batchSubmitReasonNotValidated/batchSubmitReasonDuplicate, handlers.go) --
-// anything else passes through verbatim rather than being swallowed, so an unknown
-// future reason still surfaces something to the operator.
+// not_validated/duplicate_request/awaiting_approval are the three reachable
+// BatchSubmitResultItem.reason values (the batchSubmitReason* consts,
+// internal/invoice/batch_submit.go) -- anything else passes through verbatim rather than
+// being swallowed, so an unknown future reason still surfaces something to the operator.
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_validated: 'Not validated — validate it first',
   duplicate_request: 'Already submitted with this request',
+  awaiting_approval: 'Waiting on approval — an approver must approve it first',
 }
 
 export function skipReasonLabel(reason: string): string {
@@ -1071,15 +1162,17 @@ export function singleSubmitOutcome(
   }
 }
 
-// Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`
-// invoices can be batch-submitted (Store.ApplyValidation is the only path into
-// `queued`), so selection is scoped to that one status throughout.
-export function isRowSelectable(status: InvoiceStatus): boolean {
-  return status === 'validated'
+// Selection helpers for the batch-submit list surface (M5-09-06). Selectable means
+// `validated` (Store.ApplyValidation is the only path into `queued`) AND no open approval
+// run -- the server skips an awaiting-approval row with `awaiting_approval` (APPR-08-09),
+// so selecting one can only buy a dead result. Fail-open on any other run_state is a
+// pinned decision, not an oversight: see A-sel-8..11.
+export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>): boolean {
+  return row.status === 'validated' && row.approval?.run_state !== 'open'
 }
 
 export function selectableIds(rows: InvoiceRecord[]): string[] {
-  return rows.filter((row) => isRowSelectable(row.status)).map((row) => row.id)
+  return rows.filter((row) => isRowSelectable(row)).map((row) => row.id)
 }
 
 export function toggleSelection(sel: string[], id: string): string[] {
@@ -1087,8 +1180,8 @@ export function toggleSelection(sel: string[], id: string): string[] {
 }
 
 // Keeps only ids that are both still present in `rows` (didn't scroll/filter away) AND
-// still `validated` (didn't get submitted/edited/re-validated out from under a stale
-// selection since it was last computed).
+// still selectable (didn't get submitted/edited/re-validated, or fall under a newly
+// opened approval run, out from under a stale selection since it was last computed).
 export function pruneSelection(sel: string[], rows: InvoiceRecord[]): string[] {
   const selectable = new Set(selectableIds(rows))
   return sel.filter((id) => selectable.has(id))

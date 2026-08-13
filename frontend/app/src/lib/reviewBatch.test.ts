@@ -34,6 +34,7 @@ import {
   skipReasonLabel,
   type BatchSubmitResultItem,
   type EditFieldKey,
+  type InvoiceApproval,
   type InvoiceRecord,
   type InvoiceStatus,
   type RuleCount,
@@ -1395,7 +1396,7 @@ describe('pagerNav: single-page boundary — a batch that fits in one page (PAGE
 //     below for the reachable, structural substitute: a source scan pinning WHERE the key
 //     is minted).
 //   - "an unknown skip reason passes through verbatim" is DROPPED as a duplicate of
-//     already-green invoices.test.ts I-skip-1 (:746, `skipReasonLabel('wat') === 'wat'`).
+//     already-green invoices.test.ts I-skip-1 (`skipReasonLabel('wat') === 'wat'`).
 //     BULK-10 below covers the genuinely new claim built on top of it (the *result row*
 //     built from that label), which I-skip-1 does not touch.
 // lib/invoices.ts and lib/invoices.test.ts are NOT touched by this subtask — both rows
@@ -1430,6 +1431,7 @@ function mkRow(id: string, status: InvoiceStatus, overrides: Partial<InvoiceReco
     kept_as_is_by: null,
     kept_as_is_reason: null,
     failure_kind: null,
+    approval: null,
     rule_set_version: null,
     ...overrides,
   }
@@ -1534,17 +1536,38 @@ describe('bulkBarView: the count label carries its own scope (BULK-7, AC-1)', ()
   })
 })
 
-describe('bulkBarView: the note is absent at zero and names VALIDATED from the shipped helper, never a literal (BULK-8, AC-1)', () => {
-  it('BULK-8: notReady:0 -> note is null; the BULK-2 page -> the exact page-scoped disclosure, with the status word sourced from invoiceStatusStyle', () => {
+// REWRITTEN (APPR-08-10, task-502). The note used to name a status word, and that made it
+// false the moment a row this bar cannot send IS validated -- an open approval run holds a
+// validated row out of `eligible` while its own Verdict pill still reads VALIDATED. The
+// note's own doc comment in reviewBatch.ts already required it to name no cause; the
+// shipped string broke that rule, so removing the clause corrects a false claim rather
+// than making a new product decision. BULK-A3 below is the shape that falsified it.
+describe('bulkBarView: the note is absent at zero and names no cause, so it is true for every non-selectable row (BULK-8, AC-1)', () => {
+  it('BULK-8: notReady:0 -> note is null; the BULK-2 page -> the exact page-scoped count, naming no cause', () => {
     const allValidated = buildRows(5, 'validated')
     expect(bulkBarView([], allValidated, 'idle', false).note).toBeNull()
 
     const mixed = buildMixedReviewPage()
     const view = bulkBarView([], mixed, 'idle', false)
-    const expectedNote = `Only ${invoiceStatusStyle('validated').label} rows can be sent. 38 of the 50 on this page cannot.`
 
-    expect(view.note).toBe(expectedNote)
-    expect(view.note).toContain(invoiceStatusStyle('validated').label)
+    expect(view.note).toBe('38 of the 50 rows on this page cannot be sent.')
+  })
+
+  it('BULK-A3: two validated rows, one held by an open run -> the same sentence, still true', () => {
+    // The old copy read "Only VALIDATED rows can be sent. 1 of the 2 on this page cannot."
+    // on exactly this input -- both rows ARE validated, so it contradicted itself on
+    // screen. OPEN_RUN is declared at module scope further down; it is initialized during
+    // module evaluation, before any it() body runs.
+    const gated = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN })]
+
+    expect(bulkBarView([], gated, 'idle', false).note).toBe('1 of the 2 rows on this page cannot be sent.')
+  })
+
+  it('BULK-A4: a single-row page whose one row cannot be sent reads "row", not "rows"', () => {
+    // Reachable from a search or a rule filter that narrows the page to one hit.
+    expect(bulkBarView([], [mkRow('a', 'queued')], 'idle', false).note).toBe(
+      '1 of the 1 row on this page cannot be sent.',
+    )
   })
 })
 
@@ -1658,6 +1681,46 @@ describe('bulkBarView: the page-scoped submit-all disables at zero eligible (BUL
 
     expect(view.submitAllLabel).toBe('Submit all 12 on this page for transmission')
     expect(view.canSubmitAll).toBe(true)
+  })
+})
+
+// APPR-08-09 (task-500): bulkBarView reaches the approval predicate through pruneSelection
+// and selectableIds, so these two specs prove the ripple lands on the bulk bar from the
+// invoices.ts edit alone — reviewBatch.ts is not modified by that subtask.
+//
+// `view.note` is asserted by BULK-8/BULK-A3 above, not here. It was left unasserted at 09's
+// altitude because the shipped sentence was about to become false and pinning it would have
+// made the defect permanent; APPR-08-10 (task-502) rewrote the copy and those two specs
+// now own it.
+const OPEN_RUN: InvoiceApproval = {
+  run_state: 'open',
+  pending_ord: 1,
+  pending_role_title: 'Reviewer',
+  pending_holder_warn: false,
+  due_at: null,
+  overdue: false,
+}
+
+describe('bulkBarView inherits the approval gate without reviewBatch.ts changing (APPR-08-09)', () => {
+  it('BULK-A1: an awaiting-approval row leaves eligible and counts into notReady', () => {
+    const rows = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN })]
+
+    const view = bulkBarView(['a', 'b'], rows, 'idle', false)
+
+    expect(view.eligible).toEqual(['a'])
+    expect(view.notReady).toBe(1)
+    expect(view.submitAllLabel).toBe('Submit all 1 on this page for transmission')
+    expect(view.canSubmitAll).toBe(true)
+  })
+
+  it('BULK-A2: a page where every validated row has an open run disables submit-all entirely', () => {
+    const rows = Array.from({ length: 4 }, (_, i) => mkRow(`inv-${i}`, 'validated', { approval: OPEN_RUN }))
+
+    const view = bulkBarView([], rows, 'idle', false)
+
+    expect(view.canSubmitAll).toBe(false)
+    expect(view.notReady).toBe(4)
+    expect(view.eligible).toEqual([])
   })
 })
 

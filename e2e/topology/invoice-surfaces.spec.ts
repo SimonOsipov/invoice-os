@@ -1121,7 +1121,9 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   const row = invoiceRowByNumber(page, invoiceNumber)
 
-  // AC-8: a failed row can never be batch-selected -- isRowSelectable is `validated`-only.
+  // AC-8: a failed row can never be batch-selected. isRowSelectable is `validated` AND no
+  // open approval run (APPR-08-09); a `failed` row fails the status half, so the second
+  // half never comes into it here.
   await expect(row.getByTestId('invoice-select')).toBeDisabled()
 
   await openInvoiceRow(page, invoiceNumber)

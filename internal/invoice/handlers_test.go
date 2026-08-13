@@ -66,6 +66,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
@@ -217,6 +218,33 @@ func marshalEdit(t *testing.T, body editInvoiceRequest) string {
 // resolved_outside_handlers_test.go injects role-specific stubs of its own.
 func adminRoleStub(ctx context.Context) (string, error) { return "admin", nil }
 
+// clearApprovalStub is the shared approvalFacts stub for GetHandler call sites
+// that do not exercise the approval arm itself. It is approval-CLEAR on purpose:
+// a blocked default would let every submit_blocked_reason spec in this package
+// pass on the awaiting-approval sentence instead of the status one it names.
+func clearApprovalStub(ctx context.Context, id string) (ApprovalFacts, error) {
+	return ApprovalFacts{TransmitClear: true}, nil
+}
+
+// emptyRowFactsStub is the shared rowFacts stub for ListHandler call sites that
+// do not exercise the row-approval envelope itself -- doInvoiceList hardwires it
+// exactly as doInvoiceGet hardwires adminRoleStub/clearApprovalStub, so all 47
+// callers stay byte-identical. An empty map means "no invoice on this page has
+// an approval run", which is what every pre-APPR-08-08 spec assumes.
+func emptyRowFactsStub(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	return map[string]approval.RowFacts{}, nil
+}
+
+// fixedApprovalStub is fixedRoleStub's idiom for the approval seam.
+func fixedApprovalStub(clear bool, err error) func(ctx context.Context, id string) (ApprovalFacts, error) {
+	return func(ctx context.Context, id string) (ApprovalFacts, error) {
+		if err != nil {
+			return ApprovalFacts{}, err
+		}
+		return ApprovalFacts{TransmitClear: clear}, nil
+	}
+}
+
 func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
@@ -225,7 +253,7 @@ func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoic
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, adminRoleStub, nil).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, clearApprovalStub, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -240,7 +268,7 @@ func doInvoiceList(t *testing.T, list func(ctx context.Context, f ListFilter) ([
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	ListHandler(list, nil).ServeHTTP(rec, r)
+	ListHandler(list, emptyRowFactsStub, nil).ServeHTTP(rec, r)
 	var resp listInvoicesResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -1178,7 +1206,7 @@ func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(
 		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+batchOther, nil)
 		r = r.WithContext(auth.WithIdentity(ctx, identity))
 		rec := httptest.NewRecorder()
-		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
 		var resp listInvoicesResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -1189,7 +1217,7 @@ func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(
 		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+uuid.NewString(), nil)
 		r = r.WithContext(auth.WithIdentity(ctx, identity))
 		rec := httptest.NewRecorder()
-		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
 		var resp listInvoicesResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -2363,9 +2391,9 @@ func TestGetHandler_RuleSetVersionMarshalsNull(t *testing.T) {
 
 // TestListHandler_NoRuleSetVersionKey: List must stay clean of
 // rule_set_version, unlike GET (TestGetHandler_CarriesRuleSetVersionKey,
-// M4-09-01) -- the domain Invoice's new RuleSetVersion field is json:"-",
-// so List (which marshals the domain type directly, no wrapper) never gains
-// the key. Unaffected by M4-09-01; kept GREEN, unchanged.
+// M4-09-01) -- the domain Invoice's RuleSetVersion field is json:"-", and
+// json:"-" survives embedding, so List's listItem wrapper (APPR-08-08) does
+// not gain the key either. Kept GREEN through M4-09-01 and APPR-08-08.
 func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invID := uuid.NewString()
@@ -2512,7 +2540,7 @@ func TestGetHandler_UnrenderableQRPayloadIsLogged(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	GetHandler(get, adminRoleStub, logger).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, clearApprovalStub, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -3663,6 +3691,21 @@ func TestGetHandler_ActionFlagsFalseNotOmitted(t *testing.T) {
 	if !strings.Contains(body, `"can_revalidate":false`) {
 		t.Errorf("body = %s, want the literal \"can_revalidate\":false (not omitted) on a non-editable status", body)
 	}
+	// APPR-08-06 (task-504), AC #6: the same no-omitempty rule for the approve
+	// pair. accepted is not validated, so rung 2 refuses and BOTH reasons are a
+	// non-null quoted string here -- the explicit-null half needs a gate-PASSING
+	// fixture and lives in TestGetHandler_ApproveReasonsExplicitNullWhenAllowed
+	// (doInvoiceGet hardwires clearApprovalStub, whose RunState is "").
+	for _, want := range []string{`"can_approve":false`, `"can_reject":false`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %s, want the literal %s (not omitted) on a non-approvable status", body, want)
+		}
+	}
+	for _, k := range []string{"approve_blocked_reason", "reject_blocked_reason"} {
+		if strings.Contains(body, `"`+k+`":null`) || !strings.Contains(body, `"`+k+`":"`) {
+			t.Errorf("body = %s, want %q to be a non-null quoted string on accepted -- rung 2 refuses a non-validated invoice", body, k)
+		}
+	}
 }
 
 // TestGetHandler_RevalidateBlockedReasonNullOnDraft (T8): a draft invoice
@@ -3815,7 +3858,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
 	// additive set -- the exact-count assertion below re-balances on its own.
 	// can_resolve_outside/resolve_outside_blocked_reason join the same way.
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason"}
+	// APPR-08-06 (task-504): can_approve/approve_blocked_reason/can_reject/
+	// reject_blocked_reason join the same additive set, 37 wire keys -> 41.
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
+		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -3972,6 +4018,10 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"can_view_ubl", "ubl_blocked_reason",
 		// appended after ubl_blocked_reason, so they land last of all.
 		"can_resolve_outside", "resolve_outside_blocked_reason",
+		// APPR-08-06 (task-504): appended after resolve_outside_blocked_reason,
+		// so THESE now land last of all -- one approvalGate call feeds both pairs,
+		// and the approve pair is declared before the reject pair.
+		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -4200,12 +4250,25 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	if !strings.Contains(body, `"can_edit":true`) {
 		t.Errorf("body = %s, want the literal \"can_edit\":true for failed once failed->draft is a legal edge -- GetHandler must call canEdit(inv.Status), not restate a hardcoded per-status switch (Core AC 4)", body)
 	}
+	// APPR-08-06 (task-504), AC #7 -- ANTI-COUPLING, the inverse claim to the
+	// assertion above. approvalGate's status rung is a LITERAL s != validated,
+	// mirroring decideTx's own (decision.go), so widening legalTransitions must
+	// NOT widen the approve pair the way it widens can_edit. The lever cannot
+	// reach these flags at all; the derivation oracle that CAN is
+	// TestGetHandler_ApproveFlagsTrackTheInjectedFacts, which varies ApprovalFacts.
+	for _, want := range []string{`"can_approve":false`, `"can_reject":false`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %s, want the literal %s on failed even with failed->draft made legal -- the approve flags must not inherit canEdit's widening", body, want)
+		}
+	}
 }
 
 // TestListHandler_NoActionFlagKeys (T14): List must stay clean of every
-// action-flag key, mirroring TestListHandler_NoRuleSetVersionKey -- they
-// live only on GetHandler's getResponse wrapper, never on the domain
-// Invoice struct List marshals directly. ALREADY GREEN at RED (neither key
+// action-flag key, mirroring TestListHandler_NoRuleSetVersionKey -- they live
+// only on GetHandler's getResponse wrapper, never on the domain Invoice nor on
+// List's own listItem wrapper (APPR-08-08), whose one sibling is `approval`.
+// The 13 literals below must NOT be widened to exclude `approval` -- that would
+// forbid the very key APPR-08-08 ships. ALREADY GREEN at RED (neither key
 // exists anywhere yet); kept as a permanent regression guard.
 func TestListHandler_NoActionFlagKeys(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
@@ -4221,7 +4284,12 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 	body := rec.Body.String()
 	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`,
 		// BUG-04-03 (task-399): the UBL gate is detail-only too.
-		`"can_view_ubl":`, `"ubl_blocked_reason":`} {
+		`"can_view_ubl":`, `"ubl_blocked_reason":`,
+		// The resolve-outside pair was never in this guard -- a pre-existing
+		// 2-key gap, closed here rather than widened to 6 by APPR-08-06.
+		`"can_resolve_outside":`, `"resolve_outside_blocked_reason":`,
+		// APPR-08-06 (task-504): the approve pair is detail-only too.
+		`"can_approve":`, `"approve_blocked_reason":`, `"can_reject":`, `"reject_blocked_reason":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
 		}
@@ -4250,7 +4318,7 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -4293,7 +4361,7 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4421,7 +4489,7 @@ func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4471,7 +4539,7 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", rec.Code, rec.Body.String())
@@ -4501,6 +4569,10 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 // from production, so these pin the copy non-tautologically.
 const exactSubmitBlockedReasonDraft = "Only validated invoices can be submitted — re-validate this invoice first."
 const exactSubmitBlockedReasonRejected = "Only validated invoices can be submitted — edit this invoice and re-validate it first."
+
+// exactSubmitBlockedReasonDefault is submitBlockedReason's default arm -- the
+// sentence a status made editable by a widened legalTransitions must carry.
+const exactSubmitBlockedReasonDefault = "Only validated invoices can be submitted."
 
 // TestGetHandler_SubmitBlockedReasonAllStatuses (G1): table over all 7
 // statuses; expected raw JSON is hard-coded per status, never produced by
@@ -4642,6 +4714,12 @@ func TestGetHandler_SubmitBlockedReasonNullWhenSubmittable(t *testing.T) {
 // true; submit_blocked_reason on failed must become non-null via the
 // default arm -- the one spec that separates "derived from canEdit/
 // canSubmit" from a hardcoded {draft,rejected} switch.
+// EXTENDED for APPR-08-05: the original failed-invoice assertion is kept and
+// tightened from "not null" to the exact default-arm sentence -- "not null" would
+// be satisfied by the awaiting-approval sentence too, which is a different arm.
+// Two axes are added under the SAME perturbed table: the failed row at BOTH
+// approval verdicts (the approval arm must never mask a status arm), and a
+// validated row at both (the approval arm is itself derived, not a status switch).
 func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
 	orig := legalTransitions
 	t.Cleanup(func() { legalTransitions = orig })
@@ -4660,6 +4738,45 @@ func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
 	if strings.Contains(body, `"submit_blocked_reason":null`) {
 		t.Errorf("body = %s, want a non-null submit_blocked_reason for failed once failed->draft is a legal edge -- must call canEdit(inv.Status), not restate a hardcoded {draft,rejected} switch", body)
 	}
+
+	reasonAt := func(t *testing.T, s Status, clear bool) *string {
+		t.Helper()
+		invID := uuid.NewString()
+		getAt := func(ctx context.Context, gotID string) (Invoice, error) {
+			return Invoice{ID: invID, Status: s}, nil
+		}
+		rec, resp := doInvoiceGetGated(t, getAt, fixedRoleStub("admin", nil), fixedApprovalStub(clear, nil), &id, invID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		return resp.SubmitBlockedReason
+	}
+	assertReason := func(t *testing.T, got *string, want string) {
+		t.Helper()
+		switch {
+		case want == "" && got != nil:
+			t.Errorf("submit_blocked_reason = %q, want null", *got)
+		case want != "" && got == nil:
+			t.Errorf("submit_blocked_reason = null, want %q", want)
+		case want != "" && got != nil && *got != want:
+			t.Errorf("submit_blocked_reason = %q, want %q", *got, want)
+		}
+	}
+
+	// failed is editable under the perturbed table but still not submittable, so
+	// the STATUS default arm answers at both verdicts.
+	t.Run("failed_approval_clear", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusFailed, true), exactSubmitBlockedReasonDefault)
+	})
+	t.Run("failed_approval_blocked", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusFailed, false), exactSubmitBlockedReasonDefault)
+	})
+	t.Run("validated_approval_clear", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusValidated, true), "")
+	})
+	t.Run("validated_approval_blocked", func(t *testing.T) {
+		assertReason(t, reasonAt(t, StatusValidated, false), wantAwaitingApprovalReason)
+	})
 }
 
 // QA adversarial: a zero-value/unrecognized Status must not panic
@@ -5257,9 +5374,9 @@ func TestRoutes_BothResolveInBothDirections(t *testing.T) {
 		mux = http.NewServeMux()
 		if literalFirst {
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, nil))
 		} else {
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, nil))
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
 		}
 		return mux, getCalled, summaryCalled
@@ -5726,5 +5843,70 @@ func TestRLS_GetHandlerUBLGateFromTheRealStore(t *testing.T) {
 				t.Errorf("ubl_blocked_reason = %q, want %q", got, tt.wantReason)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// APPR-08-03 (task-497, Mode A): the wire half of the transmit gate.
+// ---------------------------------------------------------------------------
+
+// TestStatusForErr_AwaitingApprovalIs409 (AC #1): the sentinel maps to 409 with
+// awaitingApprovalReason. Fails today on the status code — the sentinel has no arm,
+// so it falls through to the unmapped 500 default.
+func TestStatusForErr_AwaitingApprovalIs409(t *testing.T) {
+	status, msg := statusForErr(ErrAwaitingApproval)
+	if status != http.StatusConflict {
+		t.Errorf("statusForErr(ErrAwaitingApproval) status = %d, want 409", status)
+	}
+	if msg != awaitingApprovalReason {
+		t.Errorf("statusForErr(ErrAwaitingApproval) msg = %q, want %q", msg, awaitingApprovalReason)
+	}
+}
+
+// TestTransitionHandler_QueuedRefusedWhenAwaitingApproval: the store's refusal
+// surfaces unchanged through TransitionHandler — 409, and the body's error is
+// awaitingApprovalReason byte-for-byte. Fails today: 500 "internal server error".
+func TestTransitionHandler_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	called := 0
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		called++
+		if gotID != invoiceID {
+			t.Errorf("transition called with id %q, want %q", gotID, invoiceID)
+		}
+		if target != StatusQueued {
+			t.Errorf("transition called with target %q, want %q", target, StatusQueued)
+		}
+		return Invoice{}, ErrAwaitingApproval
+	}
+
+	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, `{"target":"queued"}`)
+
+	if called != 1 {
+		t.Errorf("transition called %d times, want 1", called)
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != awaitingApprovalReason {
+		t.Errorf("error = %q, want %q", resp.Error, awaitingApprovalReason)
+	}
+}
+
+// TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal (AC #2): the two
+// 409 sentences mean opposite things — internal/approval's says the run is already
+// closed, ours says it is still open — so a caller must be able to tell them apart.
+// Both literals are restated here independently of their consts, so a future edit
+// that collapses them cannot drift the oracle along with the bug.
+func TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal(t *testing.T) {
+	const want = "This invoice is waiting on approval — it can be submitted once an approver approves it."
+	const approvalPackage409 = "this invoice is no longer awaiting approval"
+
+	if awaitingApprovalReason != want {
+		t.Errorf("awaitingApprovalReason = %q, want %q", awaitingApprovalReason, want)
+	}
+	if strings.EqualFold(awaitingApprovalReason, approvalPackage409) {
+		t.Errorf("awaitingApprovalReason is indistinguishable from internal/approval's ErrNotAwaitingApproval copy %q", approvalPackage409)
 	}
 }

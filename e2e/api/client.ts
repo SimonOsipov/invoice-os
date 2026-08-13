@@ -335,15 +335,37 @@ export interface Invoice {
   line_items?: InvoiceLineItem[]
 }
 
+// InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
+// ONE additive sibling. `approval` sits here and NOT on Invoice because Go declares it on
+// listItem only -- getResponse does not carry it, so a GET-detail consumer reading it off
+// Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
+// reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
+// Required, not optional: no omitempty on the Go field, so an invoice with no run emits
+// an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed).
+export interface InvoiceListItem extends Invoice {
+  approval: InvoiceApproval | null
+}
+
+// Mirrors approval.RowFacts (internal/approval/gate.go) field for field.
+export interface InvoiceApproval {
+  run_state: string
+  pending_ord: number | null
+  pending_role_title: string | null
+  pending_holder_warn: boolean
+  due_at: string | null
+  overdue: boolean
+}
+
 export interface ListInvoicesQuery {
   limit?: number
   offset?: number
   q?: string
   entity_id?: string
+  awaiting_approval?: boolean
 }
 
 export interface ListInvoicesResponse {
-  invoices: Invoice[]
+  invoices: InvoiceListItem[]
   pagination: Pagination
 }
 
@@ -357,24 +379,28 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
   if (query?.offset !== undefined) params.set('offset', String(query.offset))
   if (query?.q !== undefined) params.set('q', query.q)
   if (query?.entity_id !== undefined) params.set('entity_id', query.entity_id)
+  if (query?.awaiting_approval !== undefined) params.set('awaiting_approval', String(query.awaiting_approval))
   const qs = params.toString()
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }
 
 // GetInvoiceResult is GetHandler's own response shape: Invoice plus getResponse's two
-// GET-only sibling keys (handlers.go's getResponse, handlers.go:232-245, no omitempty on
+// GET-only sibling keys (handlers.go's getResponse, no omitempty on
 // either). NOT added to Invoice itself -- rule_set_version is json:"-" on the shared Go
-// struct (invoice.go:117), so a list item never carries it structurally; only a GET
-// response does.
+// struct (Invoice.RuleSetVersion, internal/invoice/invoice.go), so a list item never
+// carries it structurally; only a GET response does.
 // CanEdit/CanRevalidate/RevalidateBlockedReason (INVED-01-08, [gates-on-the-wire]):
-// getResponse's three additive sibling keys (handlers.go:236-238), declared LAST on the Go
+// getResponse's three additive sibling keys, declared LAST on the Go
 // struct and none tagged omitempty -- present, explicit, on every status. Required (not
 // optional): a fail-open `?` would let a consumer read `undefined` as "the server didn't
 // say", exactly what [gates-on-the-wire] exists to prevent.
-// CanSubmit/SubmitBlockedReason (handlers.go:239-240): same convention, one call site later.
-// submit_blocked_reason carries a ROLE refusal as well as the status ones, so it is non-null
-// on statuses where can_edit is false -- do not narrow it off can_edit.
-// CanViewUBL/UBLBlockedReason (handlers.go:241-242, BUG-04-03): same no-omitempty
+// CanSubmit/SubmitBlockedReason: same convention, one call site later.
+// submit_blocked_reason carries THREE kinds of refusal, not one (submitGate, handlers.go):
+// a ROLE refusal, the status ones, and -- APPR-08-05 -- an APPROVAL refusal on a validated
+// invoice whose approval run is still open. So it is non-null on statuses where can_edit is
+// false, AND on validated, where can_submit would otherwise be true. Do not narrow it off
+// can_edit, and do not read a validated status as proof it is null.
+// CanViewUBL/UBLBlockedReason (BUG-04-03): same no-omitempty
 // convention; content-derived (ubl.Missing), never status-derived.
 export interface GetInvoiceResult extends Invoice {
   rule_set_version: number | null
@@ -388,6 +414,14 @@ export interface GetInvoiceResult extends Invoice {
   ubl_blocked_reason: string | null
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
+  // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
+  // no-omitempty convention. One backend gate feeds both pairs, so can_approve always
+  // equals can_reject and the two reasons are the same string. NOT gated by
+  // APPROVALS_ENFORCED -- the decision endpoint is unflagged.
+  can_approve: boolean
+  approve_blocked_reason: string | null
+  can_reject: boolean
+  reject_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

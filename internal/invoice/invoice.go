@@ -300,6 +300,12 @@ type ListFilter struct {
 	// footer count is a real server total, never a client-side arithmetic
 	// derivation of the other four ([filters-are-server-side]).
 	KeptAsIs bool
+
+	// AwaitingApproval (APPR-08-07) narrows to invoices an active approval policy is
+	// still holding: the exact negation of approval.TransmitClear -- the UNFLAGGED
+	// predicate, so APPROVALS_ENFORCED never gates it -- restricted to validated.
+	// Zero value applies no predicate, like every other bool above.
+	AwaitingApproval bool
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/
@@ -392,6 +398,13 @@ var (
 	// sentinel: the invoice is not currently `failed`. A 409 in statusForErr,
 	// alongside ErrNotKeepable.
 	ErrNotResolvable = errors.New("invoice: not resolvable")
+
+	// ErrAwaitingApproval — an open approval run blocks the move into queued.
+	// Flag-gated at Store.Transition; statusForErr answers 409 with
+	// awaitingApprovalReason (TestStatusForErr_AwaitingApprovalIs409).
+	// NOT approval.ErrNotAwaitingApproval, which means the near-inverse
+	// (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
+	ErrAwaitingApproval = errors.New("invoice: awaiting approval")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

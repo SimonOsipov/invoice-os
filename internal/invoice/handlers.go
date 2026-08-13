@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
@@ -30,9 +31,10 @@ import (
 // types (createInvoiceRequest/lineItemWire/transitionRequest/
 // listPaginationWire/listInvoicesResponse) to avoid a same-package type
 // clash -- the JSON shapes match (same tags), only the Go type names differ.
-// Response bodies are the domain Invoice/[]Invoice types directly (portfolio
-// precedent: writeJSON(w, status, entity)), so no separate response DTO is
-// needed for Create/Get/Transition.
+// Create/Transition write the domain Invoice directly (portfolio precedent:
+// writeJSON(w, status, entity)), so neither needs a response DTO. Get and List
+// do wrap: getResponse adds qr_png_base64 and the action flags, listItem adds
+// approval -- both EMBED Invoice, so its keys keep their names and order.
 
 // lineItemReq is one entry of createRequest.LineItems AND of editReq.LineItems
 // (INVED-01-05): the create and edit line shapes are deliberately ONE type, not
@@ -105,12 +107,24 @@ type listPagination struct {
 }
 
 // listResponse is the GET /v1/invoices response body:
-// {"invoices":[...],"pagination":{...}}. Invoices is []Invoice (never a nil
-// slice from Store.List), so an empty result serializes "invoices":[] rather
-// than "invoices":null.
+// {"invoices":[...],"pagination":{...}}. Invoices is []listItem, and the
+// never-a-nil-slice guarantee is ListHandler's own make(), not Store.List's --
+// an empty result serializes "invoices":[] rather than "invoices":null
+// (TestListHandler_EmptyState).
 type listResponse struct {
-	Invoices   []Invoice      `json:"invoices"`
+	Invoices   []listItem     `json:"invoices"`
 	Pagination listPagination `json:"pagination"`
+}
+
+// listItem is one GET /v1/invoices row: Invoice embedded, plus one additive
+// sibling. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
+// and RuleSetVersion is json:"-" for exactly that reason.
+//
+// No omitempty: a nil Approval emits explicit null, the honest answer for an
+// invoice with no approval run (TestListItem_InvoiceKeysUnmovedAndUnrenamed).
+type listItem struct {
+	Invoice
+	Approval *approval.RowFacts `json:"approval"`
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -229,6 +243,10 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 //
 // CanResolveOutside/ResolveOutsideBlockedReason follow the same two rules,
 // appended last of all, and come from resolveOutsideGate below.
+//
+// CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
+// follow the same two rules, appended last of all, and come from ONE
+// approvalGate call -- approve and reject availability are identical.
 type getResponse struct {
 	Invoice
 	RuleSetVersion              *int    `json:"rule_set_version"`
@@ -242,6 +260,10 @@ type getResponse struct {
 	UBLBlockedReason            *string `json:"ubl_blocked_reason"`
 	CanResolveOutside           bool    `json:"can_resolve_outside"`
 	ResolveOutsideBlockedReason *string `json:"resolve_outside_blocked_reason"`
+	CanApprove                  bool    `json:"can_approve"`
+	ApproveBlockedReason        *string `json:"approve_blocked_reason"`
+	CanReject                   bool    `json:"can_reject"`
+	RejectBlockedReason         *string `json:"reject_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -257,6 +279,17 @@ const revalidateBlockedReason = "Only draft invoices can be re-validated — edi
 // ErrNotPermitted: that sentinel's statusForErr arm answers with the
 // resolve-outside copy, which would be a wire lie here.
 const notApproverTransmitReason = "Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team."
+
+// awaitingApprovalReason is the ONE refusal sentence every approval-blocked door
+// emits, so a blocked caller's message never varies by door FOR THE SAME WIRE
+// FIELD — the notApproverTransmitReason precedent above. Those fields are the 409
+// body (statusForErr) and submit_blocked_reason (submitGate). The batch door has
+// no sentence field at all: BatchSubmitResultItem.Reason carries the machine token
+// awaiting_approval, which the SPA labels itself (docs/approvals.md §11).
+// Distinguishable on purpose from internal/approval's "no longer awaiting
+// approval" 409, which means the inverse
+// (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
+const awaitingApprovalReason = "This invoice is waiting on approval — it can be submitted once an approver approves it."
 
 // submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
 // but the copy FORKS by status: draft points at a live, enabled Re-validate,
@@ -300,12 +333,60 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 // submitGate checks role BEFORE status, deliberately the reverse of
 // resolveOutsideGate above: a preparer told "re-validate this invoice first"
 // would run a re-validation that still cannot end in a submit.
-func submitGate(s Status, role string) (bool, *string) {
+//
+// approvalClear is the LAST rung, after status: an invoice that is not validated
+// has no run to wait on, so the awaiting-approval sentence would be a lie there.
+// It arrives already folded against APPROVALS_ENFORCED (Store.ApprovalFacts), so
+// a flag-off deployment reads true and this arm is inert
+// (TestSubmitGate_AdminAndReviewerUnchanged).
+func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
 		return false, &r
 	}
-	return canSubmit(s), submitBlockedReason(s)
+	if !canSubmit(s) {
+		return false, submitBlockedReason(s)
+	}
+	if !approvalClear {
+		r := awaitingApprovalReason
+		return false, &r
+	}
+	return true, nil
+}
+
+// approvalGate is the detail page's approve/reject availability, mirroring
+// decideTx's refusal ladder rung for rung so the wire never offers a button the
+// endpoint would refuse. ONE gate feeds both pairs: decideTx branches on the
+// decision only after every rung, and reject's extra reason rule is
+// DecideHandler's body check, not an availability rung.
+//
+// Rung 4 is a conjunction, and rung 2 precedes the run rungs, because a dead run
+// keeps its later steps pending and a reject demotes the invoice back to draft:
+// TestApprovalGate_DeadRunWithALaterPendingStep and
+// TestApprovalGate_RejectedRunDemotedToDraft catch either half going missing.
+// Both halves of rung 4 answer decideTx's one ErrRunClosed, hence one sentence.
+func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
+	if !isApprover(role) {
+		r := "Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team."
+		return false, &r
+	}
+	if s != StatusValidated {
+		r := "Only a validated invoice can be approved or rejected."
+		return false, &r
+	}
+	if f.RunState == "" {
+		r := "This invoice has no approval run to decide on."
+		return false, &r
+	}
+	if f.RunState != "open" || f.PendingStepOrd == nil {
+		r := "This invoice's approval run is already closed."
+		return false, &r
+	}
+	if !f.CallerHoldsRole {
+		r := "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+		return false, &r
+	}
+	return true, nil
 }
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
@@ -317,7 +398,18 @@ func submitGate(s Status, role string) (bool, *string) {
 // fetched invoice's status. It is not assumed to honor Store.CallerRole's own
 // "never errors" contract -- an error from it fails closed (not-an-approver),
 // never a 5xx.
-func GetHandler(get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
+//
+// approvalFacts feeds submitGate's third rung. An error from it fails closed --
+// the zero ApprovalFacts reads TransmitClear false -- and is logged while the
+// response stays 200 (TestGetHandler_ApprovalFactsErrorFailsClosedNot500). It is
+// logged, unlike callerRole, because a failed approval read has no legitimate
+// reading: "" is a real answer for a non-member, a read fault never is.
+func GetHandler(
+	get func(ctx context.Context, id string) (Invoice, error),
+	callerRole func(ctx context.Context) (string, error),
+	approvalFacts func(ctx context.Context, id string) (ApprovalFacts, error),
+	log *slog.Logger,
+) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -364,8 +456,21 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 		if err != nil {
 			role = ""
 		}
+		// Keyed on the FETCHED row's id, never r.PathValue: Store.Get returns
+		// Postgres's canonical uuid text, so a braced or uppercase spelling in the
+		// URL cannot reach the approval read (Store.Transition's lockedID trap,
+		// TestGetHandler_ApprovalSeamKeyedOnTheFetchedRowId).
+		facts, err := approvalFacts(r.Context(), inv.ID)
+		if err != nil {
+			log.ErrorContext(r.Context(), "invoice: approval facts", slog.Any("err", err))
+			facts = ApprovalFacts{}
+		}
+
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
-		canSubmitInv, submitReason := submitGate(inv.Status, role)
+		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear)
+		// ONE call feeds both pairs, so can_approve and can_reject cannot diverge
+		// (TestApprovalGate_ApproveAndRejectNeverDiverge).
+		canDecide, decideReason := approvalGate(inv.Status, role, facts)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -389,6 +494,10 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 			UBLBlockedReason:            ublReason,
 			CanResolveOutside:           canResolveOutside,
 			ResolveOutsideBlockedReason: resolveOutsideReason,
+			CanApprove:                  canDecide,
+			ApproveBlockedReason:        decideReason,
+			CanReject:                   canDecide,
+			RejectBlockedReason:         decideReason,
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
@@ -474,7 +583,20 @@ const maxImportBatchIDs = 25
 // checked BEFORE uuid.Parse so the cap is never payable in unbounded parse
 // work. One value still produces a one-element ListFilter.ImportBatchIDs and
 // byte-identical semantics to today.
-func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, error), log *slog.Logger) http.HandlerFunc {
+//
+// rowFacts (APPR-08-08) reads the page's approval standing in ONE call, keyed
+// on the store-returned inv.ID, and is skipped entirely on an empty page. Its
+// error is a 500, deliberately the OPPOSITE of GetHandler's approvalFacts arm,
+// which logs and stays 200: that value feeds a GATE whose zero means
+// "deny", a real and safe answer, whereas these are DISPLAYED facts whose only
+// available default is approval:null -- a positive claim ("this invoice has no
+// approval run"), so serving it on a read fault is a silent lie on a compliance
+// surface. Do not harmonise the two. TestListHandler_RowFactsErrorIs500.
+func ListHandler(
+	list func(ctx context.Context, f ListFilter) ([]Invoice, int, error),
+	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error),
+	log *slog.Logger,
+) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -601,10 +723,24 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			keptAsIs = b
 		}
 
+		// awaiting_approval (APPR-08-07): invoices an active approval policy still holds.
+		// Never gated by APPROVALS_ENFORCED -- the flag gates enforcement, not visibility
+		// (docs/approvals.md §11).
+		awaitingApproval := false
+		if raw := query.Get("awaiting_approval"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "awaiting_approval must be a boolean")
+				return
+			}
+			awaitingApproval = b
+		}
+
 		filter := ListFilter{
 			Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention,
 			ImportBatchIDs: importBatchIDs, Status: statusFilter, NeedsFix: needsFix,
 			RuleKey: ruleKey, Query: q, KeptAsIs: keptAsIs,
+			AwaitingApproval: awaitingApproval,
 		}
 
 		items, total, err := list(r.Context(), filter)
@@ -617,8 +753,37 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			return
 		}
 
+		// inv.ID, never a caller-supplied spelling: APPR-08-01's DEFECT QA-1 (a
+		// non-canonical uuid is absent from RowFactsTx's map, so it silently reads
+		// "no run") is unreachable only because these ids came from the store.
+		// TestListHandler_ApprovalKeyedOnTheStoreReturnedRowID.
+		ids := make([]string, 0, len(items))
+		for _, inv := range items {
+			ids = append(ids, inv.ID)
+		}
+		facts := map[string]approval.RowFacts{}
+		if len(ids) > 0 {
+			facts, err = rowFacts(r.Context(), ids)
+			if err != nil {
+				log.ErrorContext(r.Context(), "invoice: list row facts", slog.Any("err", err))
+				writeError(w, http.StatusInternalServerError, "internal server error")
+				return
+			}
+		}
+
+		// make, not var: a nil []listItem marshals "invoices":null
+		// (TestListHandler_EmptyState).
+		rows := make([]listItem, 0, len(items))
+		for _, inv := range items {
+			row := listItem{Invoice: inv}
+			if f, ok := facts[inv.ID]; ok {
+				row.Approval = &f
+			}
+			rows = append(rows, row)
+		}
+
 		writeJSON(w, http.StatusOK, listResponse{
-			Invoices:   items,
+			Invoices:   rows,
 			Pagination: listPagination{Limit: filter.Limit, Offset: filter.Offset, Total: total},
 		})
 	}
@@ -1149,11 +1314,17 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 			writeError(w, http.StatusBadRequest, "idempotency_key exceeds the 218-char bound")
 			return
 		}
-		for _, id := range req.InvoiceIDs {
-			if _, err := uuid.Parse(id); err != nil {
+		// uuid.Parse accepts uppercase, {braced}, urn:uuid: and 32-hex-no-dash, so keep
+		// the parse result: the approval gate keys on Postgres's canonical text and a
+		// non-canonical id would read absent there
+		// (TestBatchSubmitHandler_NormalisesInvoiceIdsToCanonicalForm).
+		for i, id := range req.InvoiceIDs {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				writeError(w, http.StatusBadRequest, "invoice_ids must be well-formed UUIDs")
 				return
 			}
+			req.InvoiceIDs[i] = parsed.String()
 		}
 
 		result, err := submit(r.Context(), BatchSubmitInput{
@@ -1262,7 +1433,9 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 // practice since every handler checks identity first, but this is the
 // defense-in-depth mirror of portfolio's own statusForErr); ErrValidation is
 // 400 with the wrapped message; ErrNotFound is 404; ErrDuplicateNumber/
-// ErrRedundantTransition/ErrIllegalTransition are 409; anything else
+// ErrRedundantTransition/ErrIllegalTransition/ErrAwaitingApproval are 409;
+// the last answers with awaitingApprovalReason, the shared refusal sentence
+// (TestStatusForErr_AwaitingApprovalIs409); anything else
 // (including a 22P02 malformed-numeric-input pgconn error, [D15] accepted
 // residual) is 500 with a generic body -- this helper never leaks internals
 // into the response.
@@ -1291,6 +1464,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "redundant transition"
 	case errors.Is(err, ErrIllegalTransition):
 		return http.StatusConflict, "illegal transition"
+	case errors.Is(err, ErrAwaitingApproval):
+		return http.StatusConflict, awaitingApprovalReason
 	case errors.Is(err, ErrNotDraft):
 		return http.StatusConflict, "invoice is not a draft"
 	case errors.Is(err, ErrStaleValidation):

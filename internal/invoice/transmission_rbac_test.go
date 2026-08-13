@@ -540,7 +540,7 @@ func doInvoiceGetAs(t *testing.T, get func(ctx context.Context, id string) (Invo
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, callerRole, nil).ServeHTTP(rec, r)
+	GetHandler(get, callerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
 	var resp submitGateBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -591,7 +591,7 @@ func TestSubmitGate_RoleBeforeStatus(t *testing.T) {
 	// both wrong answers for a preparer, and both must become the role sentence.
 	for _, s := range []Status{StatusDraft, StatusRejected, StatusQueued, StatusAccepted} {
 		t.Run(string(s), func(t *testing.T) {
-			can, reason := submitGate(s, "preparer")
+			can, reason := submitGate(s, "preparer", true)
 			if can {
 				t.Error("can = true for a preparer, want false")
 			}
@@ -607,24 +607,51 @@ func TestSubmitGate_RoleBeforeStatus(t *testing.T) {
 
 // --- AC-2: an approver's two values are byte-identical to today's ------------
 
-func TestSubmitGate_AdminAndReviewerUnchanged(t *testing.T) {
-	// Hardcoded, never produced by calling canSubmit/submitBlockedReason, so
-	// this cannot degrade into a tautology. Empty reason means JSON null.
-	want := map[Status]struct {
-		can    bool
-		reason string
-	}{
-		StatusDraft:     {false, exactSubmitBlockedReasonDraft},
-		StatusValidated: {true, ""},
-		StatusQueued:    {false, ""},
-		StatusSubmitted: {false, ""},
-		StatusAccepted:  {false, ""},
-		StatusRejected:  {false, exactSubmitBlockedReasonRejected},
-		StatusFailed:    {false, ""},
+// submitGateWant is one oracle row. Empty reason means JSON null.
+type submitGateWant struct {
+	can    bool
+	reason string
+}
+
+// shippedSubmitGateOracle is submitGate's approver answer on today's table.
+// Hardcoded, never produced by calling canSubmit/submitBlockedReason, so the
+// tests reading it cannot degrade into a tautology. Package-level so the
+// approval-arm specs (submit_gate_approval_test.go) state their delta against
+// this one literal instead of restating it.
+var shippedSubmitGateOracle = map[Status]submitGateWant{
+	StatusDraft:     {false, exactSubmitBlockedReasonDraft},
+	StatusValidated: {true, ""},
+	StatusQueued:    {false, ""},
+	StatusSubmitted: {false, ""},
+	StatusAccepted:  {false, ""},
+	StatusRejected:  {false, exactSubmitBlockedReasonRejected},
+	StatusFailed:    {false, ""},
+}
+
+// assertSubmitGateRow compares one (can, reason) pair against one oracle row.
+func assertSubmitGateRow(t *testing.T, w submitGateWant, can bool, reason *string) {
+	t.Helper()
+	if can != w.can {
+		t.Errorf("can = %v, want %v", can, w.can)
 	}
+	switch {
+	case w.reason == "" && reason != nil:
+		t.Errorf("reason = %q, want nil", *reason)
+	case w.reason != "" && reason == nil:
+		t.Errorf("reason = nil, want %q", w.reason)
+	case w.reason != "" && reason != nil && *reason != w.reason:
+		t.Errorf("reason = %q, want %q", *reason, w.reason)
+	}
+}
+
+func TestSubmitGate_AdminAndReviewerUnchanged(t *testing.T) {
+	want := shippedSubmitGateOracle
 	if len(want) != len(allStatuses) {
 		t.Fatalf("oracle covers %d statuses, want all %d", len(want), len(allStatuses))
 	}
+	// approvalClear=true IS the "unchanged" condition: a flag-off deployment
+	// folds to clear, so every row here must stay byte-identical to the answer
+	// shipped before the approval arm existed.
 	for _, role := range []string{"admin", "reviewer"} {
 		for _, s := range allStatuses {
 			t.Run(string(s)+"_"+role, func(t *testing.T) {
@@ -632,18 +659,8 @@ func TestSubmitGate_AdminAndReviewerUnchanged(t *testing.T) {
 				if !ok {
 					t.Fatalf("no oracle entry for status %q", s)
 				}
-				can, reason := submitGate(s, role)
-				if can != w.can {
-					t.Errorf("can = %v, want %v", can, w.can)
-				}
-				switch {
-				case w.reason == "" && reason != nil:
-					t.Errorf("reason = %q, want nil", *reason)
-				case w.reason != "" && reason == nil:
-					t.Errorf("reason = nil, want %q", w.reason)
-				case w.reason != "" && reason != nil && *reason != w.reason:
-					t.Errorf("reason = %q, want %q", *reason, w.reason)
-				}
+				can, reason := submitGate(s, role, true)
+				assertSubmitGateRow(t, w, can, reason)
 			})
 		}
 	}

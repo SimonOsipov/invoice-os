@@ -122,6 +122,15 @@ const PREPARER_SUBJECT = 'c0000000-0000-0000-0000-000000000003'
 // bytes a running server emitted — assertErrorEnvelope never looks at the message.
 const NOT_APPROVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
 
+// APPR-08-06: approvalGate's sentences (internal/invoice/handlers.go), restated here so a
+// silent edit to the server cannot rewrite its own oracle. Deliberately distinct from
+// NOT_APPROVER_REASON above -- that one names the transmit door, this one the decision door.
+const APPROVE_NOT_APPROVER_REASON = 'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.'
+const APPROVE_NOT_VALIDATED_REASON = 'Only a validated invoice can be approved or rejected.'
+const APPROVE_RUN_CLOSED_REASON = "This invoice's approval run is already closed."
+const APPROVE_NOT_ROLE_HOLDER_REASON =
+  "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
   let entity: Entity
@@ -301,6 +310,16 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         headers: { Authorization: `Bearer ${token}` },
       })
       assertErrorEnvelope(res, 400, 'list limit=abc')
+    })
+
+    // APPR-08-10: the awaiting_approval filter's reject half, alongside the other
+    // list-filter 400s rather than with the approval specs -- this is a query-param
+    // contract, and it needs no policy, no run and no armed invoice.
+    test('list ?awaiting_approval=maybe -> 400 {error: string}', async () => {
+      const res = await rawFetch('/api/invoice/v1/invoices?awaiting_approval=maybe', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      assertErrorEnvelope(res, 400, 'list awaiting_approval=maybe')
     })
 
     test('empty-state via a high offset -> 200 {invoices: [], pagination.total numeric}', async () => {
@@ -1098,6 +1117,97 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
 
+    // --- APPR-08-06: the READ flags mirror this endpoint's own refusal ladder ---
+    //
+    // Each test below drives the wire flag AND the door it advertises on the same armed
+    // invoice, so the two can never drift apart unobserved -- the whole point of
+    // [gates-on-the-wire]. approveFlags() also asserts key PRESENCE, which is the e2e half
+    // of AC #2: a Go struct tag typo would drop the key on the deployed fleet only.
+    async function approveFlags(id: string, asToken: string): Promise<Record<string, unknown>> {
+      const res = await rawFetch(`/api/invoice/v1/invoices/${id}`, { headers: { Authorization: `Bearer ${asToken}` } })
+      expect(res.status, 'GET on an armed invoice should return 200').toBe(200)
+      const body = res.body as Record<string, unknown>
+      for (const k of ['can_approve', 'approve_blocked_reason', 'can_reject', 'reject_blocked_reason']) {
+        expect(k in body, `GET should carry ${k}`).toBe(true)
+      }
+      // ONE approvalGate call feeds both pairs, so they can never diverge on the wire.
+      expect(body.can_approve, 'can_approve and can_reject must agree').toBe(body.can_reject)
+      expect(body.approve_blocked_reason, 'both reasons must be the same sentence').toBe(body.reject_blocked_reason)
+      return body
+    }
+
+    test('GET approve flags open on an armed run, then close once the run is approved', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const armed = await approveFlags(invoiceId, token)
+        expect(armed.can_approve, 'a staffed admin on an open run with a pending step can decide').toBe(true)
+        expect(armed.approve_blocked_reason, 'an allowed gate names no refusal').toBeNull()
+
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'approved' },
+        })
+        expect(res.status, 'the flag advertised an approve, so the door must accept it').toBe(200)
+
+        // Approve closes the RUN and leaves the invoice validated, so the status rung
+        // still passes and the run rung is what refuses -- the loop the flags close.
+        const closed = await approveFlags(invoiceId, token)
+        expect(closed.can_approve, 'an approved run cannot be decided again').toBe(false)
+        expect(closed.approve_blocked_reason, 'the closed-run sentence, verbatim').toBe(APPROVE_RUN_CLOSED_REASON)
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('GET approve flags follow a reject through the demotion to draft', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'rejected', reason: 'missing purchase order' },
+        })
+        expect(res.status, 'setup: the reject should return 200').toBe(200)
+
+        // Reject's demoter walks the invoice back to draft while the run stays rejected,
+        // so the STATUS rung refuses here, ahead of the run rung. This is the production
+        // shape TestApprovalGate_RejectedRunDemotedToDraft pins in unit form.
+        const after = await approveFlags(invoiceId, token)
+        expect(after.status, 'reject demotes the invoice to draft').toBe('draft')
+        expect(after.can_approve, 'a draft invoice cannot be approved').toBe(false)
+        expect(after.approve_blocked_reason, 'the status sentence wins over the closed-run one').toBe(APPROVE_NOT_VALIDATED_REASON)
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test("GET approve flags refuse a preparer (AXIS 1) with the decision door's own sentence", async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+        const body = await approveFlags(invoiceId, preparerToken)
+        expect(body.can_approve, 'a preparer cannot decide any invoice').toBe(false)
+        expect(body.approve_blocked_reason, 'the role rung is first, ahead of the run rungs').toBe(APPROVE_NOT_APPROVER_REASON)
+        // Distinct from the transmit door's sentence: same shape, different door.
+        expect(body.approve_blocked_reason, 'the decision door has its own copy').not.toBe(NOT_APPROVER_REASON)
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('GET approve flags refuse an unstaffed approver (AXIS 2), matching the 403', async () => {
+      // quality_reviewer is seeded UNSTAFFED, the same fixture the AXIS-2 403 test uses.
+      const { invoiceId, policyId } = await armedInvoice('quality_reviewer')
+      try {
+        const body = await approveFlags(invoiceId, token)
+        expect(body.can_approve, 'an admin staffed to no workflow role cannot decide').toBe(false)
+        expect(body.approve_blocked_reason, 'the role-holder sentence, verbatim').toBe(APPROVE_NOT_ROLE_HOLDER_REASON)
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
     test('403: an approver not staffed to the pending role (AXIS 2)', async () => {
       // quality_reviewer is seeded UNSTAFFED (db/seed.dev.sql) -- token (…0001) is an
       // active admin, so it passes AXIS 1 but fails AXIS 2 on this policy.
@@ -1144,7 +1254,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
 
-    test('journey: validate -> approve -> submit, independent of the absent transmit gate', async () => {
+    test('journey: validate -> approve -> submit, in either flag state', async () => {
       const { invoiceId, policyId } = await armedInvoice('cfo')
       try {
         const run = await getInvoiceApproval(token, invoiceId)
@@ -1155,16 +1265,129 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         const decided = await decideInvoiceApproval(token, invoiceId, { decision: 'approved' })
         expect(decided.state, 'approving the only step closes the run').toBe('approved')
 
-        // APPR-08's transmit gate does not exist yet, so this proves only the DECISION
-        // half of the path -- submit is not actually gated by the run's state today.
+        // Asserted on an APPROVED invoice specifically, which is the half true in BOTH
+        // flag states: flag off, ApprovalFacts folds TransmitClear to true; flag on, the
+        // approved run satisfies the gate's second disjunct. The deployed fleet runs the
+        // flag OFF, so nothing here may assert a flag-ON-only fact -- an undecided
+        // invoice's can_submit:false, the transitions 409 and the batch skip are all
+        // unobservable here and belong to APPR-14's deployed proof.
+        const detail = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        expect(detail.status, 'GET on the approved invoice should return 200').toBe(200)
+        const detailBody = detail.body as Record<string, unknown>
+        expect(detailBody.can_submit, 'an approved invoice is submittable for an admin').toBe(true)
+        expect(detailBody.submit_blocked_reason, 'an allowed gate names no refusal').toBeNull()
+
         const submitted = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/transitions`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: { target: 'queued' },
         })
-        expect(submitted.status, 'submit succeeds after approval, same as before the decision seam existed').toBe(200)
+        expect(submitted.status, 'the wire advertised can_submit, so the door it advertises must accept').toBe(200)
         const submittedBody = submitted.body as Record<string, unknown>
         expect(submittedBody.status, 'the invoice reaches queued').toBe('queued')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    // --- APPR-08-10: the flag-OFF observable surface -------------------------
+    //
+    // Everything below is true with APPROVALS_ENFORCED unset, which is what the fleet
+    // runs. The four detail keys, the per-row approval envelope and the awaiting_approval
+    // filter all ship UNFLAGGED by design (docs/approvals.md, "Not gated") -- the flag
+    // gates ENFORCEMENT, not visibility.
+
+    test('contract: the four approval flags are present and typed', async () => {
+      // approveFlags() already asserts PRESENCE and the approve/reject agreement; this
+      // adds only the types, so the presence loop is not duplicated. Driven over TWO
+      // shapes so both arms of `string | null` are actually observed: an armed invoice a
+      // staffed admin can decide (booleans true, reasons null) and a bare draft the status
+      // rung refuses (booleans false, reasons strings). One shape alone would leave half
+      // the declared type unexercised.
+      const assertTypes = (body: Record<string, unknown>, label: string) => {
+        for (const k of ['can_approve', 'can_reject']) {
+          expect(typeof body[k], `${label}: ${k} should be a boolean`).toBe('boolean')
+        }
+        for (const k of ['approve_blocked_reason', 'reject_blocked_reason']) {
+          const v = body[k]
+          expect(v === null || typeof v === 'string', `${label}: ${k} should be string | null, was ${JSON.stringify(v)}`).toBe(true)
+        }
+      }
+
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const armed = await approveFlags(invoiceId, token)
+        assertTypes(armed, 'armed invoice')
+        expect(armed.can_approve, 'a staffed admin on an open run can decide').toBe(true)
+        expect(armed.approve_blocked_reason, 'an allowed gate names no refusal').toBeNull()
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+
+      const draft = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-APPR-TYPES-${freshTin()}`),
+      })
+      const bare = await approveFlags(draft.id, token)
+      assertTypes(bare, 'bare draft')
+      expect(bare.can_approve, 'a draft with no run cannot be decided').toBe(false)
+      expect(typeof bare.approve_blocked_reason, 'a refused gate names a sentence, not null').toBe('string')
+    })
+
+    test('contract: list rows carry the approval key', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        // A DRAFT created after the publish sweep is never armed (arming is
+        // ApplyValidation's promoting branch), so it is the deterministic source of an
+        // explicit null -- the shared dev tenant's older rows are not.
+        const unarmed = await createInvoice(token, {
+          entity_id: entity.id,
+          ...cleanInvoiceFields(`INV-APPR-ROW-${freshTin()}`),
+        })
+
+        const res = await rawFetch('/api/invoice/v1/invoices?limit=50', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        expect(res.status, 'list should return 200').toBe(200)
+        const body = res.body as Record<string, unknown>
+        expect(Object.keys(body).sort(), 'the envelope still has exactly two keys').toEqual(['invoices', 'pagination'])
+
+        const rows = body.invoices as Record<string, unknown>[]
+        for (const row of rows) {
+          expect('approval' in row, `row ${row.id} should carry the approval key`).toBe(true)
+        }
+
+        const armedRow = rows.find((r) => r.id === invoiceId)
+        expect(armedRow, 'the freshly armed invoice should be on page 1 (created_at DESC)').toBeDefined()
+        const approval = armedRow?.approval as Record<string, unknown> | null
+        expect(approval, 'an armed invoice carries an approval object').not.toBeNull()
+        expect(approval?.run_state, 'the newest run of an armed invoice is open').toBe('open')
+
+        const unarmedRow = rows.find((r) => r.id === unarmed.id)
+        expect(unarmedRow, 'the fresh draft should be on page 1').toBeDefined()
+        expect(unarmedRow?.approval, 'a row with no run carries an explicit null, never an omitted key').toBeNull()
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('contract: awaiting_approval filter answers 200 and finds the armed invoice', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        // INSIDE the try, deliberately: deleteApprovalPolicy in the finally deactivates
+        // the version, and the filter's own EXISTS(is_active) conjunct then matches ZERO
+        // rows for the whole tenant -- the same assertion after the finally is a
+        // guaranteed false.
+        const res = await listInvoices(token, { awaiting_approval: true, limit: 50 })
+        expect(
+          res.invoices.some((i) => i.id === invoiceId),
+          'the armed, undecided invoice should be in the filtered page',
+        ).toBe(true)
+        // Never an exact total: publishing arms the WHOLE validated backlog, and this
+        // environment inherits whatever earlier specs left validated.
+        expect(res.pagination.total, 'the filtered total counts at least the armed invoice').toBeGreaterThanOrEqual(1)
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }

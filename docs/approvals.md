@@ -773,6 +773,18 @@ whether anyone can **see** that a run is open.
 - `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
 - `can_submit` / `submit_blocked_reason` on the invoice wire.
 
+**One exception, on the error path only.** `Store.ApprovalFacts` folds the flag into
+`TransmitClear` on its success path. When the read itself fails, it returns the zero
+`ApprovalFacts` instead, and `GetHandler` does the same with a seam error — so
+`TransmitClear` reads false and the detail page renders a disabled Submit carrying the
+awaiting-approval sentence, whatever the flag says. That is deliberate: an unknown
+approval standing must not render an enabled button. The consequence to know is that a
+flag-off deployment hitting a database fault shows a blocked Submit on the detail page
+while `Submitter.BatchSubmit` — which skips the approval read entirely when the flag is
+off — still submits the same invoice. Pinned by
+`TestGetHandler_ApprovalFactsErrorFailsClosedNot500` and
+`TestStoreApprovalFacts_ErrorReturnsTheZeroValue`.
+
 **Not gated** — these run identically whatever the flag says:
 
 - **Arming.** Publishing a policy and validating an invoice open approval runs whether the

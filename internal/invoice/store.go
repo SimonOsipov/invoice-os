@@ -23,11 +23,29 @@ import (
 // transaction and RLS enforces isolation.
 type Store struct {
 	pool *pgxpool.Pool
+
+	// APPROVALS_ENFORCED. Inert until APPR-08-03/04/05 read it; the two write
+	// doors and the wire flag must all read THIS field, never re-derive it.
+	approvalsEnforced bool
+}
+
+// StoreOption configures a Store at construction. Variadic so the existing
+// NewStore(pool) call sites compile unchanged (TestNewStore_BothAritiesCompile).
+type StoreOption func(*Store)
+
+// WithApprovalsEnforced turns the transmit gate on. Default false: an unset flag
+// leaves both doors into queued as they were (TestNewStore_DefaultsToNotEnforced).
+//
+// stub (APPR-08-02 Mode A): sets nothing yet.
+func WithApprovalsEnforced(v bool) StoreOption {
+	return func(*Store) {}
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's
 // lifecycle.
-func NewStore(pool *pgxpool.Pool) *Store {
+//
+// stub (APPR-08-02 Mode A): opts are accepted but not applied.
+func NewStore(pool *pgxpool.Pool, opts ...StoreOption) *Store {
 	return &Store{pool: pool}
 }
 

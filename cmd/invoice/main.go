@@ -238,6 +238,17 @@ func fatal(logger *slog.Logger, format string, args ...any) {
 	os.Exit(1)
 }
 
+// parseEnvBool reads a boolean env value. Unset is false; a set-but-unparseable
+// value is an ERROR, never silently false — the permissive state here is "off",
+// so a typo would quietly reopen the transmit gate (TestParseEnvBool_Table).
+// Value-based and pure, so it needs no t.Setenv — same shape as
+// gateway.MockIssuerEnabled.
+//
+// stub (APPR-08-02 Mode A): always (false, nil).
+func parseEnvBool(raw string) (bool, error) {
+	return false, nil
+}
+
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {

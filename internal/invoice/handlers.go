@@ -308,13 +308,24 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 // resolveOutsideGate above: a preparer told "re-validate this invoice first"
 // would run a re-validation that still cannot end in a submit.
 //
-// approvalClear is accepted and ignored. // stub
+// approvalClear is the LAST rung, after status: an invoice that is not validated
+// has no run to wait on, so the awaiting-approval sentence would be a lie there.
+// It arrives already folded against APPROVALS_ENFORCED (Store.ApprovalFacts), so
+// a flag-off deployment reads true and this arm is inert
+// (TestSubmitGate_AdminAndReviewerUnchanged).
 func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
 		return false, &r
 	}
-	return canSubmit(s), submitBlockedReason(s)
+	if !canSubmit(s) {
+		return false, submitBlockedReason(s)
+	}
+	if !approvalClear {
+		r := awaitingApprovalReason
+		return false, &r
+	}
+	return true, nil
 }
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
@@ -327,7 +338,11 @@ func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 // "never errors" contract -- an error from it fails closed (not-an-approver),
 // never a 5xx.
 //
-// approvalFacts is accepted and never called. // stub
+// approvalFacts feeds submitGate's third rung. An error from it fails closed --
+// the zero ApprovalFacts reads TransmitClear false -- and is logged while the
+// response stays 200 (TestGetHandler_ApprovalFactsErrorFailsClosedNot500). It is
+// logged, unlike callerRole, because a failed approval read has no legitimate
+// reading: "" is a real answer for a non-member, a read fault never is.
 func GetHandler(
 	get func(ctx context.Context, id string) (Invoice, error),
 	callerRole func(ctx context.Context) (string, error),
@@ -380,8 +395,18 @@ func GetHandler(
 		if err != nil {
 			role = ""
 		}
+		// Keyed on the FETCHED row's id, never r.PathValue: Store.Get returns
+		// Postgres's canonical uuid text, so a braced or uppercase spelling in the
+		// URL cannot reach the approval read (Store.Transition's lockedID trap,
+		// TestGetHandler_ApprovalSeamKeyedOnTheFetchedRowId).
+		facts, err := approvalFacts(r.Context(), inv.ID)
+		if err != nil {
+			log.ErrorContext(r.Context(), "invoice: approval facts", slog.Any("err", err))
+			facts = ApprovalFacts{}
+		}
+
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
-		canSubmitInv, submitReason := submitGate(inv.Status, role, true) // stub
+		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be

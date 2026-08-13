@@ -505,16 +505,18 @@ export async function violationSummary(
   return res.rules
 }
 
-// The four action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The five action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
 // defensive normalization on a permission-shaped flag only earns its keep fail-closed.
-// The three `*_blocked_reason` fields all keep `?? null` (their
+// The four `*_blocked_reason` fields all keep `?? null` (their
 // declared type is nullable, so `??` is reachable and idiomatic) and are passed through
 // BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
 // ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here
-// is exactly the drift that decision forbids.
+// is exactly the drift that decision forbids. submit_blocked_reason now carries an APPROVAL
+// refusal alongside the role and status ones (APPR-08-05): on a validated invoice whose
+// approval run is still open, can_submit is false and this field explains why.
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
   return {

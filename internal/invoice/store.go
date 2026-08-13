@@ -1446,6 +1446,12 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // canSubmit is a deliberate literal, not canTransition(s, StatusQueued):
 // BatchSubmit hardwires its FROM state to validated, so submittability is
 // the endpoint's own contract, not an edge-table property.
+//
+// It is only HALF the positive predicate. The other half is
+// approval.TransmitClear (internal/approval/gate.go), which a validated invoice
+// must also satisfy before it may pass into queued. The two are composed in
+// submitGate (handlers.go), never here: approval is not a status property, so
+// this stays a pure status literal.
 func canSubmit(s Status) bool { return s == StatusValidated }
 
 // isApprover takes the memberships.role, not auth.Identity.Role -- the latter
@@ -1507,13 +1513,33 @@ type ApprovalFacts struct {
 	CallerHoldsRole bool
 }
 
-// ApprovalFacts reads id's approval standing for the caller. The approval read
-// runs whatever the flag says; only TransmitClear folds it
-// (TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff). An error returns the
-// ZERO value, whose TransmitClear is false, so a caller that ignores the error
-// still fails closed.
+// ApprovalFacts reads id's approval standing for the caller inside ONE
+// db.WithinRequestTenantTx -- CallerRole's wrapper above, for the same reason: a
+// read with no write needs no second transaction. The approval read runs
+// whatever the flag says; only TransmitClear folds it
+// (TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff), deliberately unlike
+// the two write doors, which skip the read entirely when the flag is off. An
+// error returns the ZERO value, whose TransmitClear is false, so a caller that
+// ignores the error still fails closed.
 func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, error) {
-	return ApprovalFacts{TransmitClear: true}, nil // stub
+	var out ApprovalFacts
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		f, err := approval.GateFactsTx(ctx, tx, id, actorFromContext(ctx).Subject)
+		if err != nil {
+			return err
+		}
+		out = ApprovalFacts{
+			TransmitClear:   !s.approvalsEnforced || approval.TransmitClear(f.PolicyActive, f.ApprovedRun),
+			RunState:        f.RunState,
+			PendingStepOrd:  f.PendingStepOrd,
+			CallerHoldsRole: f.CallerHoldsRole,
+		}
+		return nil
+	})
+	if err != nil {
+		return ApprovalFacts{}, err
+	}
+	return out, nil
 }
 
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System

@@ -364,16 +364,19 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
 // GetInvoiceResult is GetHandler's own response shape: Invoice plus getResponse's two
 // GET-only sibling keys (handlers.go's getResponse, handlers.go:232-245, no omitempty on
 // either). NOT added to Invoice itself -- rule_set_version is json:"-" on the shared Go
-// struct (invoice.go:117), so a list item never carries it structurally; only a GET
-// response does.
+// struct (Invoice.RuleSetVersion, internal/invoice/invoice.go), so a list item never
+// carries it structurally; only a GET response does.
 // CanEdit/CanRevalidate/RevalidateBlockedReason (INVED-01-08, [gates-on-the-wire]):
 // getResponse's three additive sibling keys (handlers.go:236-238), declared LAST on the Go
 // struct and none tagged omitempty -- present, explicit, on every status. Required (not
 // optional): a fail-open `?` would let a consumer read `undefined` as "the server didn't
 // say", exactly what [gates-on-the-wire] exists to prevent.
 // CanSubmit/SubmitBlockedReason (handlers.go:239-240): same convention, one call site later.
-// submit_blocked_reason carries a ROLE refusal as well as the status ones, so it is non-null
-// on statuses where can_edit is false -- do not narrow it off can_edit.
+// submit_blocked_reason carries THREE kinds of refusal, not one (submitGate, handlers.go):
+// a ROLE refusal, the status ones, and -- APPR-08-05 -- an APPROVAL refusal on a validated
+// invoice whose approval run is still open. So it is non-null on statuses where can_edit is
+// false, AND on validated, where can_submit would otherwise be true. Do not narrow it off
+// can_edit, and do not read a validated status as proof it is null.
 // CanViewUBL/UBLBlockedReason (handlers.go:241-242, BUG-04-03): same no-omitempty
 // convention; content-derived (ubl.Missing), never status-derived.
 export interface GetInvoiceResult extends Invoice {

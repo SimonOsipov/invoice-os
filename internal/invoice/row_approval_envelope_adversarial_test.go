@@ -250,7 +250,7 @@ func TestListHandler_RowFactsErrorIsLogged(t *testing.T) {
 
 // TestListHandler_NonNullApprovalAlwaysCarriesRunState: the premise the SPA's
 // normaliseInvoiceRow relies on. It passes `run_state` through UNTOUCHED -- no
-// `?? ”`, because a fallback here would be the SPA-authored copy [gates-on-the-wire]
+// `?? ""`, because a fallback here would be the SPA-authored copy [gates-on-the-wire]
 // forbids -- which is only sound because a non-null `approval` structurally cannot omit
 // the key: RowFacts.RunState is a plain string with no omitempty
 // (TestRowFacts_JSONTagsCarryNoOmitempty, package approval, pins the tag; this pins it

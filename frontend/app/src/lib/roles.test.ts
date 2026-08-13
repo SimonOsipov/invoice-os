@@ -316,7 +316,7 @@ function approvalRoles(policies: readonly Policy[]): string[] {
 const role = (key: string, title: string, desc: string, members: string[]): Role => ({ key, title, desc, members })
 
 /** A hand-built policy, for traversal facts no seeded policy exercises (see QA note below). */
-const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, scope: 'test', status: 'published', updated: 'now', version: 1, activeVersion: 1, nodes })
+const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, scope: 'test', status: 'published', version: 1, activeVersion: 1, nodes })
 
 describe('AC-2 — seed keys, titles, descriptions', () => {
   // The three tautological seed-shape tests this block used to open with (key order, firm

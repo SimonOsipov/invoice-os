@@ -2,13 +2,13 @@
 // the policy LIST, and the BUILDER for whichever policy `ctx.editingPolicyId` names.
 //
 // Ported from the Claude Design prototype (Platform.dc.html ~L998-1280 markup,
-// ~L2285-2412 logic). Mock-only: there is no approvals endpoint, so every write goes
-// through `ctx.savePolicy`, which App.tsx holds in useState. All builder-transient
-// state (selection, drag, arm, drop hint, scenario inputs, save flash) is local to
-// WorkflowBuilder — nothing else in the app reads it.
+// ~L2285-2412 logic). Every write goes through a ctx verb that calls the gateway; all
+// builder-transient state (selection, drag, arm, drop hint, scenario inputs, save flash)
+// is local to WorkflowBuilder — nothing else in the app reads it.
 
 import { WorkflowBuilder } from './WorkflowBuilder'
 import { PolicyStatusPill, wfBranchGlyph, wfCrossGlyph, wfPlusGlyph } from './WorkflowParts'
+import { policyStanding } from '../lib/policies'
 import { policySummary, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
@@ -54,7 +54,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
         </div>
         <button
           type="button"
-          onClick={ctx.createPolicy}
+          onClick={() => void ctx.createPolicy()}
           className="v2-btn pf-btn"
           style={{ height: 36, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)', gap: 7 }}
         >
@@ -76,7 +76,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {policies.map((p) => (
-            <PolicyRow key={p.id} policy={p} onEdit={() => ctx.openPolicy(p.id)} onDelete={() => ctx.deletePolicy(p.id)} />
+            <PolicyRow key={p.id} policy={p} onEdit={() => ctx.openPolicy(p.id)} onDelete={() => void ctx.deletePolicy(p.id)} />
           ))}
         </div>
       )}
@@ -106,7 +106,7 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
         </div>
       </div>
 
-      <div className="mono" style={{ flex: 'none', fontSize: 10, color: 'var(--fg-4)' }}>Updated {policy.updated}</div>
+      <div className="mono" style={{ flex: 'none', fontSize: 10, color: 'var(--fg-4)' }}>{policyStanding(policy)}</div>
 
       <button
         type="button"

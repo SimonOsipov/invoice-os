@@ -108,8 +108,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // where the brief places it — see NAV_RULES in glyphs.tsx.
   //
   // NAV_WORKFLOWS is the opposite case, and in firm mode it therefore sits in the
-  // FIRM-WIDE group: approval policies are stored PER WORKSPACE, not per client
-  // (lib/workflows.ts's PolicyStore is keyed firm/inhouse), so switching company does
+  // FIRM-WIDE group: approval policies are stored per TENANT, so switching company does
   // not change them and listing them under the CLIENT scope header would mislabel a
   // firm-wide dataset as the switched-to client's. This is a deliberate deviation from
   // the prototype, whose `clientScoped` array includes `workflows`.

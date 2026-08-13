@@ -19,7 +19,6 @@ function policyWith(role: string): Policy {
     name: 'Test policy',
     scope: 'All invoices',
     status: 'draft',
-    updated: 'now',
     version: 1,
     activeVersion: null,
     nodes: [{ id: 'n1', type: 'approval', role, sla: '24', delegate: false }],
@@ -97,7 +96,7 @@ describe('APPR-04-06 QA: the guard must not over-widen to the genuinely-landed-e
 
 describe('APPR-04-06 QA: the error guard fires before any node-shape assumption', () => {
   it('a policy with zero nodes still renders ErrorState, not a crash, when the roles fetch failed', () => {
-    const emptyPolicy: Policy = { id: 'p2', name: 'Empty policy', scope: 'All invoices', status: 'draft', updated: 'now', version: 1, activeVersion: null, nodes: [] }
+    const emptyPolicy: Policy = { id: 'p2', name: 'Empty policy', scope: 'All invoices', status: 'draft', version: 1, activeVersion: null, nodes: [] }
 
     expect(() =>
       render(

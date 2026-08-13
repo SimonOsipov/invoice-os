@@ -60,13 +60,13 @@ import {
   type Role,
 } from './lib/roles'
 import {
-  newPolicy,
-  removePolicy,
-  replacePolicy,
-  seedPolicies,
-  type Policy,
-  type PolicyStore,
-} from './lib/workflows'
+  createApprovalPolicy,
+  deleteApprovalPolicy,
+  listApprovalPolicies,
+  publishApprovalPolicy,
+  putApprovalPolicyDraft,
+} from './lib/policies'
+import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
@@ -285,15 +285,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   const rulesKey = customRulesKey(active.entityId)
   const customRules = customRulesFor(customRuleStore, rulesKey)
-  // Approval policies, PER WORKSPACE MODE (lib/workflows.ts) — deliberately NOT per
-  // client the way custom rules above are: the store is keyed firm/inhouse, so
-  // switching company in firm mode does not swap the set. Held here rather than in
-  // WorkflowsView so both the list and a half-built policy survive navigating away and
-  // back. `mode` is fixed by the signed-in persona, so this index is stable for the
-  // whole session.
-  const [policyStore, setPolicyStore] = useState<PolicyStore>(seedPolicies)
+  // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
+  // the mirror's guard. Per TENANT, so switching company does not swap the set.
+  const policiesAsync = useAsync<Policy[]>(
+    () => (base ? listApprovalPolicies(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null },
+  )
+  const policiesState = membersViewState(base, policiesAsync.status)
+  // Guarded, unlike the two mirrors below: `start` nulls `data`, and publishing refetches
+  // the whole list, so an ungated write would blank the policies for that round trip.
+  const [policies, setPolicies] = useState<Policy[]>([])
+  useEffect(() => {
+    if (policiesAsync.data) setPolicies(policiesAsync.data)
+  }, [policiesAsync.data])
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null)
-  const policies = policyStore[mode]
   // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
   // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because
   // one persona is one tenant and the server answers for that tenant alone.
@@ -314,8 +319,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setMembers(membersAsync.data ?? [])
   }, [membersAsync.data])
   // The approval seats a policy's steps point at — the `membersAsync` idiom immediately
-  // above, verbatim: ONE fetch, shared by the Roles tab and the Workflows builder, per
-  // tenant rather than per workspace mode (unlike `policies` above, which stays per-mode).
+  // above, verbatim: ONE fetch, shared by the Roles tab and the Workflows builder.
   const rolesAsync = useAsync<Role[]>(
     () => (base ? listWorkflowRoles(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
@@ -1004,13 +1008,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setOpenRuleKey((k) => (k === key ? null : k))
   }
 
-  // Same one-funnel shape as updateCustomRules above: resolve THIS workspace's policy
-  // list, run the pure reducer from lib/workflows.ts, store it back under the mode key.
-  // Every policy write goes through here, so no caller has to know the store is keyed.
-  function updatePolicies(fn: (list: Policy[]) => Policy[]) {
-    setPolicyStore((store) => ({ ...store, [mode]: fn(store[mode]) }))
-  }
-
   function openPolicy(id: string) {
     setEditingPolicyId(id)
   }
@@ -1019,25 +1016,43 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setEditingPolicyId(null)
   }
 
-  // Creating opens the builder in the same step: a blank "Untitled policy" row appended
-  // to the list with nothing else happening reads as a click that did nothing.
-  function createPolicy() {
-    const p = newPolicy()
-    updatePolicies((list) => [...list, p])
-    setEditingPolicyId(p.id)
+  // The four policy writes, the `setMemberStatus` shape below: call the gateway first,
+  // then patch the mirror off the SERVER's own row, so a rejection reaches the caller
+  // with nothing here to roll back.
+
+  // Creating opens the builder in the same step: a blank row appended to the list with
+  // nothing else happening reads as a click that did nothing. Appended, not prepended —
+  // the server orders by created_at then id.
+  async function createPolicy(): Promise<void> {
+    const created = await createApprovalPolicy(authedFetch, base!, 'Untitled policy')
+    setPolicies((list) => [...list, created])
+    setEditingPolicyId(created.id)
   }
 
-  function deletePolicy(id: string) {
-    updatePolicies((list) => removePolicy(list, id))
+  // The DELETE response is inert, so the mirror drops the id rather than patching a row.
+  async function deletePolicy(id: string): Promise<void> {
+    await deleteApprovalPolicy(authedFetch, base!, id)
+    setPolicies((list) => removePolicy(list, id))
     // The builder is editing the policy that just stopped existing.
     setEditingPolicyId((cur) => (cur === id ? null : cur))
   }
 
   // The ONE write funnel for a policy's contents: the builder composes the next Policy
   // with the pure reducers and hands the whole object back, so nothing here needs to
-  // know the node tree's shape.
-  function savePolicy(next: Policy) {
-    updatePolicies((list) => replacePolicy(list, next))
+  // know the node tree's shape. The row that lands is the server's — it re-mints every
+  // step id and may bump the version, so the composed one is already stale.
+  async function savePolicy(next: Policy): Promise<Policy> {
+    const saved = await putApprovalPolicyDraft(authedFetch, base!, next.id, next)
+    setPolicies((list) => replacePolicy(list, saved))
+    return saved
+  }
+
+  async function publishPolicy(id: string): Promise<Policy> {
+    const published = await publishApprovalPolicy(authedFetch, base!, id)
+    // Refetch, not a one-row patch: the active slot is TENANT-wide, so publishing this
+    // policy deactivates whichever other one held it — a change this response cannot report.
+    policiesAsync.run()
+    return published
   }
 
   // The one membership write the server backs. The row that lands is the SERVER's own,
@@ -1124,6 +1139,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     customRules,
     openRuleKey,
     policies,
+    policiesState,
+    policiesError: policiesAsync.error,
+    refetchPolicies: policiesAsync.run,
     editingPolicyId,
     members,
     membersState,
@@ -1186,6 +1204,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     createPolicy,
     deletePolicy,
     savePolicy,
+    publishPolicy,
     setMemberStatus,
     createRole,
     renameRole,

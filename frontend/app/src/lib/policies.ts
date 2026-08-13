@@ -167,8 +167,6 @@ export function toPolicy(wire: PolicyWire): Policy {
     name: wire.name,
     scope: wire.scope,
     status: wire.status as PolicyStatus,
-    // No wire source for this; the field is deleted in APPR-09-03.
-    updated: '',
     version: wire.version,
     activeVersion: wire.versions.find((v) => v.is_active)?.version ?? null,
     nodes: nodesFromSteps(wire.steps),

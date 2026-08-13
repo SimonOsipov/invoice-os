@@ -67,7 +67,6 @@ const policy = (over: Partial<Policy> = {}): Policy => ({
   name: 'Standard approval policy',
   scope: 'All invoices',
   status: 'draft',
-  updated: 'now',
   version: 1,
   activeVersion: null,
   nodes: [],

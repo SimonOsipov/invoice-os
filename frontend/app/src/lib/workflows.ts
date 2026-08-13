@@ -1,4 +1,6 @@
-// Approval policies (Workflows screen).
+// Approval policies (Workflows screen) — types and PURE reducers over one policy's node
+// tree. The wire and the list-level verbs live in lib/policies.ts; the seed trees are a
+// test fixture (lib/policies.fixture.ts).
 //
 // Ported from the Claude Design prototype Platform.dc.html: the screen markup
 // (~L998-1280), the `defaultPolicies()` seed and the `wf*` builder methods
@@ -6,16 +8,13 @@
 // 256KiB read truncation, so the derived bindings were reconstructed from the markup's
 // binding names — see the port spec. Anything reconstructed is marked below.
 //
-// Everything here is mock data + pure functions. There is no approvals endpoint (the
-// backend has no approval concept at all — the invoice lifecycle is
-// draft/validated/queued/submitted/accepted/rejected/failed, with nothing "awaiting
-// approval"), so this screen is deliberately shaped so that swapping these constants
-// for a fetch changes no component.
-//
 // The prototype MUTATES its policy tree in place (`wfMutate` + `Array.splice`). Every
 // reducer here is immutable instead — React state, and the mutating originals would
-// alias the seed constants across clients. The observable semantics are preserved,
-// including the `t -= 1` same-lane reindex in `moveNode`.
+// alias one tree across renders. The observable semantics are preserved, including the
+// `t -= 1` same-lane reindex in `moveNode`.
+//
+// No reducer touches `status`: a version is sealed by the server's own publish verb, so
+// a reducer that demoted a published policy would contradict what the server stored.
 
 import { fmt } from './format'
 
@@ -94,21 +93,16 @@ export type Policy = {
   name: string
   scope: string
   status: PolicyStatus
-  /** A human string ('2 days ago'), not a date — the prototype has no clock here. */
-  updated: string
   /** The version `nodes` belongs to — the HIGHEST version, not necessarily the live one. */
   version: number
   /**
    * The version actually in force, or null when another policy holds the slot. The active
    * slot is TENANT-wide (`approval_policy_versions_one_active ON (tenant_id)`), so at most
-   * one policy per store may carry a non-null value.
+   * one policy per tenant may carry a non-null value.
    */
   activeVersion: number | null
   nodes: WfNode[]
 }
-
-/** Which workspace's policy set: the firm's, or the in-house company's. */
-export type WorkflowMode = 'firm' | 'inhouse'
 
 /**
  * Scope options. The four scopes the seed actually uses are FORCED — the control is a
@@ -123,122 +117,6 @@ export const WF_SCOPE_OPTIONS: readonly string[] = [
   'Consumer invoices (B2C)',
   'Credit notes & adjustments',
 ]
-
-// ---------------------------------------------------------------------------
-// Seed policies
-// ---------------------------------------------------------------------------
-// Node ids are literal here rather than generated. The prototype's `id()` counter runs
-// across BOTH modes from one closure, and its condition children get lower ids than
-// their parent (JS evaluates `C(...)`'s arguments before its body). Nothing keys off
-// that ordering, so these are simply stable per-mode ids.
-
-const A = (id: string, role: RoleKey, sla: Sla, delegate = false): ApprovalNode => ({ id, type: 'approval', role, sla, delegate })
-const N = (id: string, target: string, channel: string): NotifyNode => ({ id, type: 'notify', target, channel })
-const AU = (id: string): AutoApproveNode => ({ id, type: 'autoapprove' })
-const C = (id: string, op: CondOp, value: number, then: BranchNode[] = [], els: BranchNode[] = []): ConditionNode => ({
-  id,
-  type: 'condition',
-  field: 'amount',
-  op,
-  value,
-  then,
-  else: els,
-})
-
-export const SEED_FIRM_POLICIES: readonly Policy[] = [
-  {
-    id: 'polF1',
-    name: 'Standard approval policy',
-    scope: 'All invoices',
-    status: 'published',
-    updated: '2 days ago',
-    // Only polF1 and polH1 hold an active version — a second per store would model a tenant
-    // the server cannot produce. Policy.activeVersion above states the constraint.
-    version: 1,
-    activeVersion: 1,
-    nodes: [
-      A('f1n1', 'fin_mgr', '48', true),
-      C('f1n2', '>', 250_000_000, [A('f1n3', 'fin_dir', '48')]),
-      C('f1n4', '>', 1_000_000_000, [A('f1n5', 'cfo', '72'), N('f1n6', 'Audit Committee', 'Email')]),
-      A('f1n7', 'compliance', '24'),
-    ],
-  },
-  {
-    id: 'polF2',
-    name: 'Cross-border & FX',
-    scope: 'Foreign-currency invoices',
-    status: 'published',
-    updated: '1 week ago',
-    version: 1,
-    activeVersion: null,
-    nodes: [A('f2n1', 'fin_mgr', '48'), C('f2n2', '>', 500_000_000, [A('f2n3', 'fin_dir', '48')]), A('f2n4', 'compliance', '24')],
-  },
-  {
-    id: 'polF3',
-    name: 'Government supply (B2G)',
-    scope: 'Document type · B2G',
-    status: 'draft',
-    updated: '3 weeks ago',
-    version: 1,
-    activeVersion: null,
-    nodes: [A('f3n1', 'fin_dir', '48'), C('f3n2', '>', 1_000_000_000, [A('f3n3', 'cfo', '72')]), A('f3n4', 'compliance', '24')],
-  },
-]
-
-export const SEED_INHOUSE_POLICIES: readonly Policy[] = [
-  {
-    id: 'polH1',
-    name: 'Company approval policy',
-    scope: 'All invoices',
-    status: 'published',
-    updated: 'yesterday',
-    version: 1,
-    activeVersion: 1,
-    nodes: [
-      A('h1n1', 'line_mgr', '48', true),
-      C('h1n2', '>', 500_000_000, [A('h1n3', 'fin_dir', '48')]),
-      // The only seeded autoapprove, and the only non-empty else in the whole seed.
-      C('h1n4', '>', 1_000_000_000, [A('h1n5', 'cfo', '72')], [AU('h1n6')]),
-      N('h1n7', 'Tax Team', 'In-app'),
-    ],
-  },
-  {
-    id: 'polH2',
-    name: 'Capital expenditure',
-    scope: 'Capex & fixed assets',
-    status: 'draft',
-    updated: '5 days ago',
-    version: 1,
-    activeVersion: null,
-    nodes: [
-      A('h2n1', 'line_mgr', '48'),
-      A('h2n2', 'fin_dir', '48'),
-      C('h2n3', '>', 1_000_000_000, [A('h2n4', 'cfo', '72'), A('h2n5', 'ceo', '72')]),
-    ],
-  },
-]
-
-/**
- * Policies by workspace, NOT by client. This follows the prototype, where the store is
- * `{firm, inhouse}` and `wfCurrent()` reads `policies[mode]` — switching company in firm
- * mode does not change the policy set. That is also why the Workflows nav item sits in
- * the FIRM-WIDE sidebar group rather than the client-scoped one (Sidebar.tsx), which is
- * a deliberate deviation from the prototype's own `clientScoped` list: a firm-wide
- * dataset under a "CLIENT" scope header would be mislabelled.
- */
-export type PolicyStore = Record<WorkflowMode, Policy[]>
-
-export function seedPolicies(): PolicyStore {
-  return { firm: clonePolicies(SEED_FIRM_POLICIES), inhouse: clonePolicies(SEED_INHOUSE_POLICIES) }
-}
-
-function clonePolicies(list: readonly Policy[]): Policy[] {
-  return list.map((p) => ({ ...p, nodes: p.nodes.map(cloneNode) }))
-}
-
-function cloneNode(n: WfNode): WfNode {
-  return n.type === 'condition' ? { ...n, then: n.then.map((c) => ({ ...c })), else: n.else.map((c) => ({ ...c })) } : { ...n }
-}
 
 // ---------------------------------------------------------------------------
 // Lanes
@@ -329,31 +207,20 @@ export function newNode(type: NodeType): WfNode {
 }
 
 export function newPolicy(): Policy {
-  return { id: newPolicyId(), name: 'Untitled policy', scope: 'All invoices', status: 'draft', updated: 'just now', version: 1, activeVersion: null, nodes: [] }
-}
-
-/**
- * Every write stamps `updated` AND demotes a published policy back to draft, matching
- * the prototype's single write path (`wfMutate`: `pol.updated = 'just now'; if
- * (pol.status === 'published') pol.status = 'draft'`). Editing a live policy must not
- * leave it labelled PUBLISHED while it no longer matches what was published — Save is
- * what re-publishes it (`publishPolicy`).
- */
-function touch(policy: Policy): Policy {
-  return { ...policy, updated: 'just now', status: policy.status === 'published' ? 'draft' : policy.status }
+  return { id: newPolicyId(), name: 'Untitled policy', scope: 'All invoices', status: 'draft', version: 1, activeVersion: null, nodes: [] }
 }
 
 export function insertNode(policy: Policy, laneKey: LaneKey, index: number, node: WfNode): Policy {
   if (!canDrop(node.type, laneKey)) return policy
   const lane = getLane(policy, laneKey)
-  return touch(withLane(policy, laneKey, spliced(lane, index, 0, node)))
+  return withLane(policy, laneKey, spliced(lane, index, 0, node))
 }
 
 export function deleteNode(policy: Policy, id: string): Policy {
   const found = findNode(policy, id)
   if (!found) return policy
   const lane = getLane(policy, found.laneKey)
-  return touch(withLane(policy, found.laneKey, spliced(lane, found.index, 1)))
+  return withLane(policy, found.laneKey, spliced(lane, found.index, 1))
 }
 
 /**
@@ -375,7 +242,7 @@ export function moveNode(policy: Policy, id: string, laneKey: LaneKey, index: nu
   if (laneKey === found.laneKey && found.index < t) t -= 1
 
   const dstLane = getLane(removed, laneKey)
-  return touch(withLane(removed, laneKey, spliced(dstLane, t, 0, found.node)))
+  return withLane(removed, laneKey, spliced(dstLane, t, 0, found.node))
 }
 
 /** Click-to-append from the palette: always the tail of the root lane. */
@@ -396,26 +263,19 @@ export function updateNode(policy: Policy, id: string, patch: NodePatch): Policy
   if (!found) return policy
   const lane = getLane(policy, found.laneKey)
   const merged = { ...lane[found.index], ...patch } as WfNode
-  return touch(withLane(policy, found.laneKey, spliced(lane, found.index, 1, merged)))
+  return withLane(policy, found.laneKey, spliced(lane, found.index, 1, merged))
 }
 
 export function clearSteps(policy: Policy): Policy {
-  return touch({ ...policy, nodes: [] })
+  return { ...policy, nodes: [] }
 }
 
-// Name and scope go through `touch` like every other edit — the prototype routes
-// wfSetName/wfSetScope through wfMutate, so renaming a published policy demotes it too.
 export function renamePolicy(policy: Policy, name: string): Policy {
-  return touch({ ...policy, name })
+  return { ...policy, name }
 }
 
 export function rescopePolicy(policy: Policy, scope: string): Policy {
-  return touch({ ...policy, scope })
-}
-
-/** Saving is what publishes a draft — the prototype has no separate publish action. */
-export function publishPolicy(policy: Policy): Policy {
-  return { ...policy, status: 'published', updated: 'just now' }
+  return { ...policy, scope }
 }
 
 export function replacePolicy(list: readonly Policy[], next: Policy): Policy[] {

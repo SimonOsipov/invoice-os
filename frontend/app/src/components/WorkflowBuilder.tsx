@@ -5,12 +5,9 @@
 // reducer from lib/workflows.ts and hands the whole object to `ctx.savePolicy` — the
 // single write funnel, so App.tsx never learns the node tree's shape.
 //
-// Two prototype behaviours are load-bearing and easy to lose:
-//   * every edit DEMOTES a published policy back to draft. That lives in the lib's write
-//     funnel (`touch` in lib/workflows.ts), not here, so it cannot be forgotten at a call
-//     site; `save` is the only path that publishes, via `publishPolicy`.
-//   * a condition may only sit in the root lane. Enforced by `canDrop` in the slot's
-//     dragover (no preventDefault ⇒ the browser refuses the drop) and again in `place`.
+// One prototype behaviour is load-bearing and easy to lose: a condition may only sit in
+// the root lane. Enforced by `canDrop` in the slot's dragover (no preventDefault ⇒ the
+// browser refuses the drop) and again in `place`.
 
 import { useEffect, useState, type DragEvent } from 'react'
 
@@ -31,7 +28,6 @@ import {
   moveNode,
   newNode,
   parseLoc,
-  publishPolicy,
   renamePolicy,
   rescopePolicy,
   updateNode,
@@ -87,11 +83,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   if (ctx.rolesState === 'loading' || ctx.rolesState === 'idle') return <Loading />
   if (ctx.rolesState === 'error') return ctx.rolesError ? <ErrorState error={ctx.rolesError} onRetry={ctx.refetchRoles} /> : null
 
-  // The reducers already demote a published policy to draft, so this just forwards.
-  const applyEdit = (next: Policy) => ctx.savePolicy(next)
+  const applyEdit = (next: Policy) => void ctx.savePolicy(next)
 
+  // Save only. Publishing seals a version, so publishing here would override the policy
+  // in force on every edit — the split Save / Publish controls land with the surface.
   function save() {
-    ctx.savePolicy(publishPolicy(policy))
+    void ctx.savePolicy(policy)
     setSaved(true)
   }
 

@@ -118,9 +118,14 @@ export const MANY_VIOLATION_KEYS = [
 ]
 
 // freshTin(): an NNNNNNNN-NNNN TIN with a correct Luhn check digit, generated
-// fresh per call so repeated runs against the un-reset live dev DB do not
-// collide on business_entities' duplicate-TIN partial index (there is no
-// DELETE endpoint — only offboard/onboard = archive/active). Replicates
+// fresh per call so nothing already in the database collides with it on
+// business_entities' duplicate-TIN partial index (there is no DELETE endpoint —
+// only offboard/onboard = archive/active). A run now starts from the curated
+// seed rather than from prior runs' residue (docs/e2e-convention.md "One
+// browser, serial"), but the three suites share one deployment with no reset
+// between them and a retry re-runs against what its first attempt left, so
+// "fresh" means fresh WITHIN the run — which is the collision that was ever
+// reachable from inside a spec anyway. Replicates
 // internal/portfolio/tin.go's luhnValid exactly: from the rightmost digit,
 // double every second digit (subtracting 9 if >9), sum all digits; valid iff
 // the sum is a multiple of 10.
@@ -129,8 +134,10 @@ export const MANY_VIOLATION_KEYS = [
 // per-process run seed combined with a module-level call counter — not
 // Date.now()/Math.random(), per the story's guidance for test code. The seed is
 // `process.pid % 10000` (see tinRunSeed below), so there are only 10,000 of
-// them and PIDs recycle: two runs whose PIDs are congruent mod 10000 emit
-// byte-identical TIN sequences. That is nonetheless adequate, because a
+// them and PIDs recycle: two suite PROCESSES whose PIDs are congruent mod 10000
+// emit byte-identical TIN sequences — and `test:api` and `test:topology` are two
+// such processes inside every single run, so this is not only a cross-run
+// concern. That is nonetheless adequate, because a
 // collision cannot produce a FALSE PASS — it fails loud. Postgres raises 23505 on
 // `business_entities_tenant_tin_uq` (UNIQUE (tenant_id, tin) WHERE tin IS NOT
 // NULL, migrations/20260709155011_business_entities.sql:55), which

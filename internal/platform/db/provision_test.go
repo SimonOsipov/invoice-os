@@ -142,20 +142,34 @@ func TestGatewayMainPassesRawEnvironmentToProvisioningGuard(t *testing.T) {
 	}
 	src := string(b)
 
-	idx := strings.Index(src, "db.Provision(")
+	// The window is the config literal ITSELF — from `db.ProvisionConfig{` to the
+	// line that closes it — not a character count around the call. A fixed count
+	// broke the moment the literal was hoisted into a variable so its
+	// ResetWillRun could be published on /healthz, and it had a standing
+	// fragility besides: main.go names app.Config.Environment in the prose above
+	// the literal (explaining why NOT to use it), so shrinking that comment
+	// pulled the prose in and false-failed the negative assertion below. Bounding
+	// on the literal excludes every comment outside it at any size.
+	idx := strings.Index(src, "db.ProvisionConfig{")
 	if idx == -1 {
 		idx = strings.Index(src, "BootstrapEnabled(")
 	}
 	if idx == -1 {
-		t.Fatal("cmd/gateway/main.go does not yet call db.Provision(...) or db.BootstrapEnabled(...) — task-128's boot-sequence wiring is not in place yet")
+		t.Fatal("cmd/gateway/main.go does not yet build a db.ProvisionConfig or call db.BootstrapEnabled(...) — task-128's boot-sequence wiring is not in place yet")
 	}
+	rel := strings.Index(src[idx:], "\n\t}\n")
+	if rel == -1 {
+		t.Fatalf("cannot find the end of cmd/gateway/main.go's db.ProvisionConfig literal from offset %d — reindented or reshaped; re-anchor this window rather than deleting it", idx)
+	}
+	window := src[idx : idx+rel]
 
-	// main.go:51 names app.Config.Environment in prose (explaining why NOT to use it) a
-	// few lines above this window's lower edge. Shrinking that comment block by more
-	// than ~4 lines pulls the prose into the window and false-fails this test.
-	start := max(0, idx-300)
-	end := min(len(src), idx+500)
-	window := src[start:end]
+	// Control needle: the window must contain a field this call site has always
+	// set. Without it a re-anchor that lands on an empty or wrong span leaves
+	// every assertion below passing on nothing — the exact way a source scan
+	// reports a clean repo when it has stopped reading the source at all.
+	if !strings.Contains(window, "MigrationDSN:") {
+		t.Fatalf("the extracted window does not contain MigrationDSN, so it is not cmd/gateway/main.go's ProvisionConfig literal and the checks below would pass having examined nothing — window:\n%s", window)
+	}
 
 	if !strings.Contains(window, `os.Getenv("ENVIRONMENT")`) {
 		t.Errorf("cmd/gateway/main.go's provisioning-guard call site does not read the raw os.Getenv(\"ENVIRONMENT\") near the call — window:\n%s", window)

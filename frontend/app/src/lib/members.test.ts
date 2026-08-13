@@ -1522,13 +1522,13 @@ describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', (
 })
 
 // ============================================================================
-// APPR-15-05 — Mode A RED specs for the live member wire and projection
+// APPR-15-05 — the live member wire and projection
 // ============================================================================
-// listMembers/setMembershipStatus/toMember/memberInitials/emailLabel/membersViewState
-// are stubbed to throw, and MEMBER_UNBACKED ships empty, so every spec below fails on
-// the stub — not on an import or compile error. filterMembers/classifyInvites are the
-// SHIPPED implementations, unchanged: their null-email specs fail because those two
-// still call `.toLowerCase()` on `email` unguarded (members.ts:640,731).
+// Authored as Mode A RED specs, and that RED phase is over: listMembers,
+// setMembershipStatus, toMember, memberInitials, emailLabel and membersViewState are
+// implemented, MEMBER_UNBACKED ships populated, and filterMembers/classifyInvites both
+// guard a null email with `(m.email ?? '').toLowerCase()`. Every spec below is green
+// against the shipped implementations.
 
 /** authedFetch.test.ts's / portfolio.test.ts's own helper, for the ApiError rethrow specs. */
 async function captureRejection(thunk: () => unknown): Promise<unknown> {

@@ -19,7 +19,7 @@
 // COUNT ASSERTIONS: the literal counts below ('3 POLICIES', toHaveCount(2)) are legal ONLY
 // because they count a fixed FRONTEND MOCK set that no test run can grow -- SEED_FIRM_POLICIES
 // is a module constant, not a table. persona-surfaces.spec.ts:19-23's ban on literal counts
-// is about LIVE, tenant-wide lists on a never-reset dev DB, and nothing here reads one. The
+// is about LIVE, tenant-wide lists on the deployment every suite shares, and nothing here reads one. The
 // one live list this file touches is the company switcher, and it is driven by INDEX and
 // asserted only with a `>= 2` floor for exactly that reason.
 //

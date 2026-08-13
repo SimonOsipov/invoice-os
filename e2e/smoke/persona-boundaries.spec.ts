@@ -55,8 +55,8 @@ import { collectErrors, expectRefused } from '../personaSession'
 // fires from the first-commit effect — before any fetch. The app never mounts <Workspace>,
 // so neither the sign-in mint nor /v1/me nor the entities/rollup reads ever run, and both
 // consoles are pure mock data. Zero gateway contact, zero database reads or writes, so
-// topology's `workers: 1` rationale (a shared, un-reset deployed database) does not apply
-// and this file is safe under smoke's `fullyParallel: true`.
+// topology's `workers: 1` rationale (one deployed database shared by every spec in the run)
+// does not apply and this file is safe under smoke's `fullyParallel: true`.
 
 for (const { persona, destination } of BOUNDARY_MATRIX.filter((c) => c.verdict === 'refuses')) {
   test(`${destination}: refuses the ${persona} persona and returns it to the landing page`, async ({ page }) => {

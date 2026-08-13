@@ -26,6 +26,7 @@ import { test, expect, type Page, type Request } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
+import { assertFillsColumn } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // collectErrors()/signInFirm(): the same console/pageerror + firm-persona
@@ -93,7 +94,7 @@ async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> 
 // signInFirm() alone leaves the switcher's default selection at whatever `clients[0]`
 // resolves to (portfolio's List `ORDER BY name ASC, id ASC`, internal/portfolio/store.go)
 // -- never the fresh entity, which sorts wherever its own Date.now()-suffixed name lands
-// among 25+ others on the shared, never-reset dev DB. Sidebar.tsx:
+// among the seeded portfolio and every other entity this run has created. Sidebar.tsx:
 // data-testid="company-switcher" (the toggle button) / "company-switcher-option" (each
 // row in the open dropdown).
 async function selectEntity(page: Page, entityName: string): Promise<void> {
@@ -713,8 +714,8 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
 
   // 7a. Dashboard rollup ready state (Gap 1). [dashboard-scope-per-client] means this
-  // page now shows the ACTIVE entity's OWN scoped total, not the shared dev DB's
-  // ever-growing tenant-wide count ([dashboard-ready-not-counted] is retired by that same
+  // page now shows the ACTIVE entity's OWN scoped total, not the tenant-wide count that
+  // every other spec in this run adds to ([dashboard-ready-not-counted] is retired by that same
   // change) -- so the exact value is technically knowable here (2: mix-clean plus the
   // now-fixed mix-violate), but this stays existence/ready-only rather than coupling this
   // arc's business-flow assertion to buildMixedCsv's exact row count: only the overview
@@ -752,7 +753,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
 
 test('submission surface: batch-select and submit a validated invoice, badge advances to ACCEPTED, and its detail shows a real IRN and a rendered QR', async ({
   page,
-}) => {
+}, testInfo) => {
   // Cold-fleet headroom, matching this file's own Day-60 precedent (line ~326) -- one
   // sign-in, one submit, one poll-driven badge flip and one detail round trip is
   // comfortable well inside the config's 60s default, but not guaranteed on a fleet still
@@ -797,23 +798,26 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   await openInvoiceRow(page, invoiceNumber)
   await assertFiscalRecord(page, invoiceNumber)
 
-  // The detail page fills its column at a wide viewport. BUG-03-05's `maxWidth: 1080`
-  // stranded 588px here (32% of the window) and its own check -- `width <= 1082` -- was
-  // SATISFIED by that, so it measured the symptom, not the defect. This measures the
-  // leftover band instead, which is zero only when nothing caps the container. Compared
-  // against the scroll container, not the window: the 252px sidebar sits outside it.
-  await page.setViewportSize({ width: 1920, height: 1080 })
-  const detailBox = await page.getByTestId('invoice-detail').boundingBox()
-  expect(detailBox, 'invoice-detail must be visible').toBeTruthy()
-
-  const mainBox = (await page.locator('main.pf-main .pf-scroll').boundingBox())!
-  const strandedBand = mainBox.x + mainBox.width - (detailBox!.x + detailBox!.width)
-  // 24px absorbs a scrollbar gutter (up to 10px on WebKit); the defect it guards against
-  // strands 588px at this viewport, so the two cases are nowhere near each other.
-  expect(
-    strandedBand,
-    `invoice detail must fill its column, not strand a band: ${Math.round(strandedBand)}px unused of ${Math.round(mainBox.width)}px`,
-  ).toBeLessThanOrEqual(24)
+  // The detail page fills its column at EVERY wide viewport, not just one.
+  // BUG-03-05's `maxWidth: 1080` stranded 588px here (32% of the window) and its own
+  // check -- `width <= 1082` -- was SATISFIED by that, so it measured the symptom, not
+  // the defect. layout.ts measures the leftover band on BOTH sides instead, which is
+  // zero only when nothing caps the container. Compared against the scroll container,
+  // not the window: the 252px sidebar sits outside it.
+  //
+  // Swept rather than pinned at 1920 (where it lived until this commit): a cap only
+  // strands what the window gives it room to strand, so the widest viewport is the one
+  // that exposes it, and 2560 exposes more of it than 1920 does.
+  const fit = await assertFillsColumn(
+    page,
+    page.getByTestId('invoice-detail'),
+    page.locator('main.pf-main .pf-scroll'),
+    'invoice detail',
+  )
+  await testInfo.attach('invoice-detail-column-fit.json', {
+    body: JSON.stringify({ invoiceNumber, fit }, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

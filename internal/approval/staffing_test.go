@@ -685,6 +685,9 @@ func TestStaffing_MemberRemovalPrunesEveryRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
+	if len(roles) != 2 {
+		t.Fatalf("ListRoles = %d roles, want 2 -- the loop below would assert nothing", len(roles))
+	}
 	for _, r := range roles {
 		for _, m := range r.Members {
 			if m == x {

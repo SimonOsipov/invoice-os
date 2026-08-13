@@ -1,0 +1,30 @@
+# Suppressions for the `stale-refs` CI job (internal/tools/stalerefs).
+#
+# The job fails a PR when no producer emits a string any more but a consumer
+# (e2e/, docs/, .github/) still quotes it. Two kinds of entry:
+#
+#   file:<path prefix>   hits under this path never count as stale references
+#   <the literal>        this exact string never counts
+#
+# Every entry needs a reason above it. If you are adding one because a test
+# broke, update the test instead — that is the finding, not the noise.
+
+# --- forbidden-copy registries -------------------------------------------
+# These files exist to ARCHIVE retired product copy and assert it never ships
+# again. A hit in one is the file doing its job: the string is listed there
+# BECAUSE nothing produces it any more.
+file:e2e/envCopyStrings.ts
+file:e2e/envCopy.test.ts
+
+# --- assembled copy -------------------------------------------------------
+# Strings the app builds at runtime from a template rather than storing whole.
+# `git grep` cannot see the producer because the producer is an expression:
+# roles.ts builds `Named in ${n} approval steps · those steps will block`, so
+# the fully-rendered sentence exists only in the fixture that expects it.
+# Measured false-positive class: 1 PR in 32 before this list existed.
+Named in 2 approval steps
+Named in 2 approval steps · those steps will block
+Named in 5 approval steps
+Ngozi Balogun +1
+Engagement Manager +1
+Folake Adesina +1

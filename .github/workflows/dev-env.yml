@@ -579,10 +579,12 @@ jobs:
       - name: Wait for gateway /healthz 200 on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
+          IS_PR: ${{ github.event_name == 'pull_request' }}
         run: |
           echo "Waiting for $GATEWAY_URL/healthz to report build $EXPECTED_BUILD ..."
           ok=0
           seen=""
+          reset=""
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
@@ -600,7 +602,12 @@ jobs:
             body=$(curl -fsS --connect-timeout 5 --max-time 10 "$GATEWAY_URL/healthz" 2>/dev/null || echo '')
             seen=$(printf '%s' "$body" | jq -r '.build // empty' 2>/dev/null || echo '')
             if [ -n "$seen" ] && [ "$seen" = "$EXPECTED_BUILD" ]; then
-              echo "  gateway healthy on $seen (schema migrated, reset+seed complete)"
+              # Read db_reset out of the SAME body that carried the matching
+              # build. A second curl can land on a different container while a
+              # rolling deploy is still in progress, which is the whole reason
+              # the build field exists.
+              reset=$(printf '%s' "$body" | jq -r '.db_reset // empty' 2>/dev/null || echo '')
+              echo "  gateway healthy on $seen (schema migrated, seed complete; db_reset=${reset:-none})"
               ok=1
               break
             fi
@@ -608,6 +615,34 @@ jobs:
           done
           if [ "$ok" != "1" ]; then
             echo "::error::$GATEWAY_URL/healthz did not report build $EXPECTED_BUILD within 900s (last seen: '${seen:-none}'). An empty build means the gateway predates the /healthz build field or the stamp step did not run; a DIFFERENT build means the new container never replaced the old one. If /healthz never answered at all, this is also the ONLY Postgres liveness proof: most likely cause is Postgres reaching deployment SUCCESS with NO VOLUME attached — it keeps raw TCP open but never speaks the wire protocol, so the gateway's boot-time migration never completes. Verify reconcile-fork actually created the volume before assuming a generic gateway problem."
+            exit 1
+          fi
+
+          # The reset barrier, asserted in both directions from one field.
+          #
+          # A PR environment is a FORK of the persistent environment's Postgres
+          # VOLUME, so it is born holding every row that environment holds — the
+          # gateway TRUNCATEs and re-seeds it at boot (Decision [pr-only-reset],
+          # internal/platform/db/reset.go) and the E2E suites downstream assume
+          # that happened. Both of that reset's inputs are hand-set Railway
+          # variables (GATEWAY_DB_RESET on the gateway service, plus the
+          # Railway-injected environment name) and BOTH fail closed and silent:
+          # lose the variable when a service is recreated and every later run
+          # tests against inherited residue with a green fleet and nothing red.
+          # This is the only place that becomes visible.
+          #
+          # And the mirror image, on the push/dispatch path: db_reset must be
+          # false against the PERSISTENT environment, whose data has no fork
+          # underneath it to fall back to. db.ResetEnabled already excludes it by
+          # environment-name shape; this is what would notice if that stopped
+          # being true.
+          if [ "$IS_PR" = "true" ]; then
+            if [ "$reset" != "true" ]; then
+              echo "::error::gateway is serving $EXPECTED_BUILD but reports db_reset='${reset:-none}' — the PR fork was NOT reset, so it still holds whatever the persistent environment's Postgres held when this environment was forked. 'none' means the gateway predates the /healthz db_reset field; 'false' means a guard said no: check GATEWAY_DB_RESET=true is still set on the gateway service (it fails closed and is lost when a service is recreated) and that RAILWAY_ENVIRONMENT_NAME is the pr-<N> shape db.ResetEnabled allowlists. Running E2E here would verify against residue."
+              exit 1
+            fi
+          elif [ "$reset" = "true" ]; then
+            echo "::error::gateway reports db_reset=true against the PERSISTENT environment. db.ResetEnabled is supposed to make that impossible by environment-name shape — its allowlist has been widened, or this run is not targeting the environment it thinks it is. The next boot TRUNCATEs live tenant data that has no fork underneath it."
             exit 1
           fi
 
@@ -804,6 +839,16 @@ jobs:
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke
+      # All three suites write to the SAME e2e/playwright-report/, and every
+      # upload used to sit after every suite — so the "smoke" and "api" artifacts
+      # both contained whatever the LAST suite left behind. Park each report the
+      # moment its suite ends, before the next one overwrites it.
+      - name: Park the smoke report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-smoke
+          fi
       - name: API E2E (typed contract suite)
         # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
         # must complete before topology's rule-dependent assertions run (D4).
@@ -814,34 +859,52 @@ jobs:
         # browser project). Does not touch the database directly (M4-22-05) --
         # PERF-03/04/05 now read over HTTP instead; api/db.ts is deleted.
         run: pnpm --filter @invoice-os/e2e test:api
+      - name: Park the API report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-api
+          fi
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
         # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).
         run: pnpm --filter @invoice-os/e2e test:topology
+      - name: Park the topology report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-topology
+          fi
+      # `if: always()`, not `if: failure()`. A spec that fails and then passes on
+      # its retry leaves this job GREEN, so the failure-only upload could never
+      # capture the one case with no other evidence. Measured over the 7 most
+      # recent green Dev Env runs: 5 contained a retry-pass across 6 specs, and
+      # every one of those reports was discarded. flakyReporter names them in the
+      # job summary; these artifacts are how you then read the trace.
       - name: Upload smoke Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: smoke-playwright-report
-          path: e2e/playwright-report/
-          if-no-files-found: warn
+          path: e2e/report-smoke/
+          if-no-files-found: ignore
           retention-days: 7
       - name: Upload API Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-api
-          path: e2e/playwright-report/
-          if-no-files-found: warn
+          path: e2e/report-api/
+          if-no-files-found: ignore
           retention-days: 7
       - name: Upload topology Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: topology-playwright-report
-          path: e2e/playwright-report/
-          if-no-files-found: warn
+          path: e2e/report-topology/
+          if-no-files-found: ignore
           retention-days: 7
 
   # NOTE: there is still no scale-down job here — teardown is a separate

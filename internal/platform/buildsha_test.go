@@ -39,3 +39,44 @@ func TestHealthzCarriesBuild(t *testing.T) {
 		t.Errorf("build field = %q, want %q", body["build"], BuildSHA)
 	}
 }
+
+// DBReset rides the same probe, but only where something set it: the gateway is
+// the one binary that provisions, and the other seven services' /healthz bodies
+// must stay exactly what they were. dev-env.yml's health-gate distinguishes
+// "false" (a guard said no) from an absent field (a build too old to carry it),
+// and reports them differently — so an empty value must not serialize as one.
+func TestHealthzCarriesDBResetOnlyWhenSet(t *testing.T) {
+	t.Cleanup(func(original string) func() {
+		return func() { DBReset = original }
+	}(DBReset))
+
+	for _, c := range []struct {
+		set       string
+		wantField string
+		wantOK    bool
+	}{
+		{"", "", false},
+		{"true", "true", true},
+		{"false", "false", true},
+	} {
+		DBReset = c.set
+
+		rec := httptest.NewRecorder()
+		healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))
+
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("DBReset=%q: decode %q: %v", c.set, rec.Body.String(), err)
+		}
+		got, ok := body["db_reset"]
+		if ok != c.wantOK {
+			t.Errorf("DBReset=%q: db_reset present = %v, want %v (body %q)", c.set, ok, c.wantOK, rec.Body.String())
+		}
+		if got != c.wantField {
+			t.Errorf("DBReset=%q: db_reset = %q, want %q", c.set, got, c.wantField)
+		}
+		if body["build"] != BuildSHA {
+			t.Errorf("DBReset=%q: build field = %q, want %q — the existing gate must keep working", c.set, body["build"], BuildSHA)
+		}
+	}
+}

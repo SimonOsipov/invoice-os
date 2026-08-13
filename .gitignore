@@ -23,6 +23,11 @@ frontend/**/.verify/
 # ---- Playwright (e2e smoke suite) ----
 e2e/test-results/
 e2e/playwright-report/
+# Per-suite reports parked by dev-env.yml before the next suite overwrites
+# playwright-report/ (the three artifacts used to all hold the last suite's run).
+e2e/report-smoke/
+e2e/report-api/
+e2e/report-topology/
 e2e/blob-report/
 e2e/.playwright/
 

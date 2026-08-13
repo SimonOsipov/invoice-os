@@ -42,9 +42,10 @@
 // leaving the file/directory layout to the implementation (:24-25). A persona-named api
 // spec is what makes the asymmetry above visibly closed.
 //
-// ASSERTION DISCIPLINE. The deployed dev DB is shared and never reset
-// (docs/e2e-convention.md "One browser, serial"), and this tenant's counts grow every run
-// (topology/persona-surfaces.spec.ts:296-304 leaves >=2 validated invoices behind per run).
+// ASSERTION DISCIPLINE. All three suites share one deployment with no reset between them
+// (docs/e2e-convention.md "One browser, serial"), and this tenant's counts grow as the run
+// proceeds (topology/persona-surfaces.spec.ts:296-304 leaves >=2 validated invoices behind,
+// and a retried test re-runs against what its first attempt already wrote).
 // So every assertion here is containment by an id/invoice_number THIS FILE created, a
 // `>=`, a single row's own fields, or — for the rollup — a before/after DELTA measured
 // inside one test. Never `toHaveLength`, never `pagination.total === n`, never
@@ -120,9 +121,9 @@ async function createValidatedInvoice(
 
 // findEntityById(): pages the entity list to the end rather than assuming page 1. Unlike
 // the invoice list, GET /v1/entities is ordered `name ASC, id ASC`
-// (internal/portfolio/store.go:115) — NOT by recency — so a tenant that accrues a few
-// entities per run against the never-reset dev DB will eventually push this file's rows
-// off the default 50-row page (internal/portfolio/portfolio.go:224-234), and a
+// (internal/portfolio/store.go:115) — NOT by recency — so the seeded portfolio plus the
+// entities this run's other specs create can push this file's rows off the default 50-row
+// page (internal/portfolio/portfolio.go:224-234), and a
 // non-containment would then read as an RLS/list defect rather than as paging. Same shape
 // as perf.spec.ts:138-149's findInvoiceId; limit 200 is the server's clamp maximum.
 async function findEntityById(token: string, id: string): Promise<Entity | undefined> {
@@ -213,7 +214,7 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
     expect(fetched.tin, 'the echoed TIN should be the canonical digits-only form').toBe(canonicalTin(tinOne))
 
     // The envelope, from the caller's default request — populated, never an absolute total
-    // (this tenant accumulates entities from every prior run against the un-reset dev DB).
+    // (this tenant carries its seeded entities plus whatever else this run has created).
     const { pagination } = await listEntities(token)
     expect(pagination.offset, 'the default offset should be 0').toBe(0)
     expect(pagination.limit, 'the default page size should be a positive integer').toBeGreaterThan(0)
@@ -302,8 +303,9 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
     // to fixture reality is the half the browser layer structurally cannot supply.
     //
     // An ABSOLUTE assertion here would rot: this tenant's validated count is already
-    // non-zero and grows every run (persona-surfaces.spec.ts:296-304), and the dev DB is
-    // never reset. The delta is sound because the api suite runs serial (workers:1) and
+    // non-zero at seed and grows as the run proceeds (persona-surfaces.spec.ts:296-304),
+    // and a retry re-runs this test against its own first attempt's writes. The delta
+    // survives all of that because the api suite runs serial (workers:1) and
     // dev-env.yml runs it BEFORE the topology suite, so nothing mutates this tenant between
     // the two reads — and it stays sound on a CI retry, which re-measures its own bracket.
     const before = await rollup(token)

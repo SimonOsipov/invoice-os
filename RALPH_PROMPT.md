@@ -79,11 +79,13 @@ All subtasks of a single build-plan task share one feature branch and one draft 
 | **Obsidian** | User stories + build plan | `mcp__obsidian-mcp-tools__*` — read the story + `Build Plan — 0 to MVP.html` |
 
 ## Documentation (docs/)
-Reference before making changes to related areas:
+Reference before making changes to related areas. Run `ls docs/` for the authoritative list — every file in it is a Stage 4 sweep target.
 - `docs/migrations.md` — goose harness, roles, gateway-as-migrator, GUC helper contract
 - `docs/deploy-model.md` — Railway dev deploy model, scale-to-zero
 - `docs/topology-e2e.md` — the unified dev-env deploy+verify workflow, prerequisites, secrets
 - `docs/add-a-service.md` — config-as-code recipe for a new Railway service
+- `docs/e2e-convention.md` — how the browser suites are organized, and what a spec may assume about the database
+- `docs/mock-app-adapter.md` — the mock Access Point Provider's reserved TINs and scripted outcomes
 
 Design references (for UI stories): the Claude Design **prototype** project `6269a212-5677-4abd-b8a9-08aad10b1c65` (`InvoiceOS Africa.dc.html` = landing, `Platform.dc.html` = `frontend/app`, `Ops Console.dc.html` = `frontend/ops-console`; all deployed to Netlify) and the **design system** project `999b7034-9f23-43d4-9229-51af7dde9f62`.
 
@@ -140,7 +142,7 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    git -C "$MAIN_CHECKOUT" worktree add -b "$BRANCH" "$WORKTREE_PATH" origin/main
    ```
 
-4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored (`.gitignore:38`), so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
+4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored (`.gitignore:43`), so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
    ```bash
    [ -f "$MAIN_CHECKOUT/CLAUDE.md" ] && ln -sfn "$MAIN_CHECKOUT/CLAUDE.md" "$WORKTREE_PATH/CLAUDE.md"
    ```
@@ -175,6 +177,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 #### a. Architecture — finalize the story
 - Spawn `product-architecture-spec` (Opus), CWD = `$WORKTREE_PATH`, passing the FULL basic story content (or build-plan row + milestone goal) and its Obsidian path. Instruct it to operate per its "Expanding a Basic Story" section.
 - **Diff every new control against its siblings.** When the story adds a control to an existing bar, panel or surface, compare its visibility and disabled treatment against the controls already there before the plan is final. A sibling's shipped decision is the spec; contradicting it on the same surface is a defect, not a choice. INVED-02 shipped a hidden button beside disabled ones and the decision was reversed after it was built.
+- **Re-measure every fact the story asserts.** A basic story states facts, not only goals: a root cause, a mechanism, a count, another PR's shipped state, a precedent's preconditions, whether the prescribed fix can work. Treat each one as a hypothesis. Re-measure it inside the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`. Cite what you ran, never the conclusion alone. BUG-02 asserted three mechanisms and all three proved wrong; APPR-04's ground truth was wrong in thirteen places. When a corrected premise carries the story's scope, Phase 0.6d stops the run for it.
 - It rewrites the story file in Obsidian to final state: system design, **## Implementation Subtasks** (`[<STORY-ID>-NN]` with Category / Dependencies / Description / Acceptance Criteria / Order / Test-first classification + Test Specs tables for `Test-first: yes`), and a **## Decisions** section appending every assumption it made where the story was silent.
 - **Traceability rule (hard):** every derived AC and subtask must trace to the Objective or a Core AC (or the milestone's "Ships when true"). Nothing in Out of Scope may appear in any subtask.
 - **Checkpoint:** `STORY_FINALIZED`
@@ -182,6 +185,7 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 #### b. QA-Verify debate — UNATTENDED disposition
 - Run the `/qa-verify` protocol against the finalized story: `product-qa-spec` critic (Sonnet) vs `product-architecture-spec` architect (Opus), ≤3 rounds, citation-required — including the Intent-Integrity checks (AC→Objective traceability, Out-of-scope leakage = mechanical).
 - Use the protocol's **Unattended Mode** disposition table: mechanical+resolved+cited → auto-apply; judgment / unresolved / uncited → **conservative default** (option closest to the story's explicit text, smaller scope) + prominent log entry. NEVER block on the user here — Phase 0.6d re-tests these defaults and is the only step that may stop for one.
+- **A finding that falsifies a premise is not a wording fix.** Record it in `## Decisions` as `premise — CORRECTED`, then let Phase 0.6d judge it. Repairing the sentence and auto-applying it is how M4-03 buried one.
 - Append the run to the story's `… QA Debate Log.md`, marking each disposition `auto-applied | conservative-default (reason)`.
 - **Checkpoint:** `PLAN_VERIFIED`
 
@@ -193,13 +197,14 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 
 #### d. Critical-fork gate — the ONE place the run stops
 
-A conservative default is right for a technical fork and wrong for a policy one. Before any code exists, test every entry in `## Decisions` — including the QA-debate conservative defaults — against three questions:
+A conservative default is right for a technical fork and wrong for a policy one. It is also wrong for a fact that turned out false. Before any code exists, test every entry in `## Decisions` — the QA-debate conservative defaults and Phase 0.6a's `premise —` entries included — against four questions:
 
 - Does it decide **who is allowed** to do something?
 - Does it decide **what the system claims** to an outside party: the authority, the customer, the audit record?
 - Does it let the system **silently override a human's action**?
+- Does a **corrected premise** take away something this story's scope needs: a shipped screen, an endpoint, a merged PR, a seeded row?
 
-Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark.
+Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark. M4-03 would have tripped the fourth: its QA debate recorded "PR #54 is OPEN, not shipped", graded it MECHANICAL, softened three provenance labels, and shipped a feature the user could not reach.
 
 **First, check whether the user already answered it.** A story that came from an epic may inherit decisions taken once for the whole epic. Look in the story's own epic folder (`User Stories/<EPIC>/`) for a file whose frontmatter carries `type: decision-log`; fall back to a filename matching `*Decision Log*.md`. Most stories have no such file — then this paragraph does nothing and the gate proceeds exactly as below.
 
@@ -222,7 +227,7 @@ When the user answers, record each choice in `## Decisions` tagged `user — <wh
 **Stated boundary:** the gate runs where planning runs. A pre-planned story skips Phase 0.6 and therefore skips this gate, so critical forks already defaulted inside an architect-level story are not caught here.
 
 #### e. Decisions surfacing (non-blocking)
-- When spawning the FIRST subtask's executor (Phase 1), instruct it to include in the draft PR description: the story's **## Decisions** section (PM defaults + architect assumptions + conservative-default dispositions) and a pointer to the QA Debate Log. Phase 0.6d already cleared every critical fork, so this is a review surface, not a gate — the run does NOT wait for input; completion gates remain CI + Phase 3.5.
+- When spawning the FIRST subtask's executor (Phase 1), instruct it to include in the draft PR description: the story's **## Decisions** section (PM defaults + architect assumptions + conservative-default dispositions + Phase 0.6a's `premise —` entries) and a pointer to the QA Debate Log. Phase 0.6d already cleared every critical fork, so this is a review surface, not a gate — the run does NOT wait for input; completion gates remain CI + Phase 3.5.
 
 Then proceed to Phase 1 exactly as for a pre-planned story.
 
@@ -282,13 +287,29 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
   (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)
   (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)   # DB-backed; needs `make dev-db`
   (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                     # SPAs
+  # 2265 unit tests, ~13s. `pnpm -r test` alone would launch Playwright, because
+  # e2e's `test` script IS the browser suite — hence the exclusion and test:unit.
+  (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit)
   ```
+  Run them yourself. Do not accept a subagent's report of a suite as the suite's
+  result: BUG-06 had two subagents report 1466 unit tests from the main checkout
+  when the branch had 1489, and METR-01's subtask 05 reported all tests passing
+  while one was failing and red was already pushed.
 - **Checkpoint:** `EXECUTION_DONE`
 
 #### Stage 4: QA Verification
 - Spawn `product-qa-spec` (Mode B) in its default critique disposition (skeptical, anchors on acceptance criteria not the diff, cites evidence per verdict).
 - Pass: acceptance criteria, implementation plan, changed files, Definition of Done.
 - For `Test-first: yes` subtasks, confirm the Stage 2.5 AC tests are now green and still meaningful (would fail if behavior regressed), then *add* adversarial / edge / negative coverage (including a cross-tenant RLS refusal assertion for any new tenant-owned table).
+- Prove every AC test can fail. Change one source line so the behaviour breaks. Run that test. Record `<file:line changed> -> FAIL <TestName>` in the QA findings, one row per AC. A test that stays green under its own mutation does not prove its AC. Report that test as a QA failure. Mode-B tests need this most: nothing gave them a red phase.
+- When a test asserts over a collection, assert the collection is not empty. An empty collection satisfies every assertion inside the loop.
+- Prove any scan that reports an ABSENCE can still find something. A grep, a source walk or a forbidden-string guard that stops matching returns zero hits, and zero hits reads exactly like a clean repo. Defend it two ways, both already used here: a **control needle** that must be found (`filename_removed_test.go` searches for `func NewStore(` beside the banned symbol), and a **floor** on the population scanned (`envPosture.test.ts` requires at least 20 files). A scan asserting a POSITIVE — exactly N sites, this anchor exists — proves itself and needs neither. Offer no "zero hits" as evidence until you have shown that same command finding a planted hit. M4-04 burned five instruments this way, each blind to a different dimension, and every green was false.
+- Re-read every comment and doc your change made false. Fix them in the same commit. "It still says what it said" is not the test. The test is whether it is still TRUE. Sweep three places, in cost order:
+  1. Comments your diff did not edit, in files it did. `git diff main...HEAD -U15` lists them. BUG-02 swept all 12 sites it rewrote and still shipped a false 22P02 claim, which CodeRabbit caught.
+  2. Comments in files you never opened. No diff shows these, and they cost the most. Name the FACT your change altered. Grep the whole tree for that fact. The 2026-07-28 per-PR database reset touched 8 files, none of them a test, and left 25 e2e comments describing the world it had just replaced.
+  3. Every file in `docs/` — run `ls docs/` for the list. That same commit updated two of them and missed `docs/e2e-convention.md`, the file every spec cites.
+  Treat your own Stage 2.5 future-tense notes as suspects. Treat any comment a deferral left describing unbuilt work the same way.
+- State a shared fact in one place and cite that place. Do not copy the fact into every comment that depends on it. Twenty-five comments each holding a copy of "the dev database is never reset" is why one change produced twenty-five falsehoods.
 - Backend: verify tests pass, model/schema/RLS correctness. Frontend: Playwright MCP visual verification against the deployed dev SPA once available.
 - If issues found: spawn product-executor to fix, then re-verify.
 - Update the Backlog task's implementation_notes with QA findings.
@@ -349,7 +370,7 @@ Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This i
 4. **Spawn `product-qa-spec`** (default critique disposition) to verify **each** original acceptance criterion against the green run:
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion (topology proves cross-tenant refusal; the milestone demo script — e.g. M3-11 — proves the wedge flow).
    - **UI ACs (rendered surfaces)** → drive the deployed dev SPA read-only with the standalone Playwright MCP, authenticated as the seeded user, and capture each touched surface (including interactive states) to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` / layout against the Claude Design **prototype** (`.dc.html`, deployed to Netlify — confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a real fail; uncited taste is advisory → escalate to the user, never bounce the executor.
-   - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling — never by the raw measurement. A width assertion passes on the very bug it should catch: a cap and its placement are two facts, and measuring the cap proves nothing about placement (BUG-03-05 shipped 32% dead space under a green `width <= 1080`). Capture at 1280 / 1440 / 1920 / 2560 when the AC is about layout.
+   - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling — never by the raw measurement. A width assertion passes on the very bug it should catch: a cap and its placement are two facts, and measuring the cap proves nothing about placement (BUG-03-05 shipped 32% dead space under a green `width <= 1080`). **This fires whenever the diff adds or changes a layout constant** — a width, a grid track, a clearance, an overflow, an alignment — not only when an AC names layout. Three of these shipped from stories whose ACs never mentioned layout: a 26px input, a label overflowing its pill, a 360px menu clearance under a 189.73px menu. **Measure widest first.** `e2e/topology/layout.ts` sweeps 2560 / 1920 / 1440 / 1280 and returns the numbers to attach. A cap strands only what the window gives it room to strand — the same defect leaves 588px at 1920 and 1228px at 2560 — and every other sweep in `e2e/` stops at 1280.
    - A holistic "looks done" is not allowed — every AC needs its own evidence (a passing job/assertion, or a screenshot).
 5. **Fix loop (cap 2 cycles):** batch ALL fails (failed ACs + real fidelity deltas) into one report → spawn `product-executor` to fix inside the worktree → push (this re-fires `dev-env.yml` on `synchronize`) → **wait** for the new run → re-verify only the failed ACs / unresolved deltas. Every bounce must cite an AC id, a design-system rule, or a prototype CSS rule. After **2** cycles, stop and **escalate remaining fails to the user** — each dev-env run provisions/rebuilds a full 11-service environment from scratch and is expensive.
 6. **Log** to the story's `… QA Debate Log.md` under `## Post-Deploy QA — <date>`: per-AC verdict + evidence (CI job / E2E assertion / screenshot), fidelity delta references (for UI stories), fix cycles used, the `dev-env.yml` run id(s), and any design-system citations / advisory notes.
@@ -468,7 +489,7 @@ An agent parses these instructions with no one to ask when a sentence is ambiguo
 | Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-23) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
 | Title-parsing Backlog tasks to find a story's subtasks | Use the `story:<slug>` label |
 | Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs (or a build-plan row) = BASIC → run Phase 0.6 |
-| Blocking on the user in any unattended phase | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR |
+| Blocking on the user in any unattended phase | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR. Phase 0.6d is the single exception |
 | Architect inventing scope while expanding a basic story | Every derived AC/subtask traces to Objective/Core AC/"Ships when true"; Out-of-scope leakage = mechanical fail |
 | Bouncing the executor on uncited taste | UI fails must cite a design-system rule or a prototype CSS rule; pure taste is advisory → escalate |
 | Renaming a variable and checking only that the rename landed | Grep every OTHER variable's rendered value for the OLD name before merge — M4-22's DSNs still interpolated the deleted names and rendered empty |

@@ -36,9 +36,27 @@ func (rd *readiness) snapshot() map[string]ReadyCheck {
 	return out
 }
 
+// DBReset is "true" or "false" once a process has run boot-time database
+// provisioning, and empty on every process that does not — which is every
+// service except the gateway. /healthz omits the field entirely while it is
+// empty, so the other services' bodies are byte-identical to before it existed.
+//
+// The gateway sets it from db.ProvisionConfig.ResetWillRun — the same predicate
+// db.Provision branched on, never a second copy. It is published because the
+// PR-environment reset is armed by a hand-set Railway variable
+// (GATEWAY_DB_RESET) that fails CLOSED AND SILENT: lose it when a service is
+// recreated and the E2E suites go quietly back to running against inherited
+// residue, with a green fleet and nothing to say otherwise. dev-env.yml's
+// health-gate asserts this field on every PR run.
+var DBReset string
+
 // healthzHandler is a liveness probe: 200 as long as the process is running.
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "build": BuildSHA})
+	body := map[string]string{"status": "ok", "build": BuildSHA}
+	if DBReset != "" {
+		body["db_reset"] = DBReset
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // readyzHandler runs every registered readiness check. All pass → 200; any

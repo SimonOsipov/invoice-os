@@ -6,7 +6,9 @@
 // This is the only guard against a desc/description slip, a null `members`, or a lost
 // staffing order reaching the SPA: roles.test.ts covers the pure functions, not the wire.
 //
-// WRITES to a SHARED, never-reset environment, so, following contract-tenancy.spec.ts:
+// WRITES to a shared environment, and workflow_roles is one of the tables the per-PR reset
+// deliberately EXCLUDES (resetTables), so these rows really do outlive the run that made
+// them. Following contract-tenancy.spec.ts:
 //   - titles come from freshRoleTitle(), unique per run — here for identifiability in the
 //     cleanup sweep, not constraint safety: duplicate titles are legal;
 //   - staffing targets are SEED-ONLY subjects, never …0001/…0002 (the sign-in personas);

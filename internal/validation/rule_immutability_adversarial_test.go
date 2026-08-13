@@ -6,8 +6,8 @@
 //
 //   - bulk / multi-row ops (a no-WHERE content UPDATE hitting every sealed
 //     rule at once; a bulk enabled-only flip across a whole sealed version,
-//     the exact shape internal/platform/db/demo_reset_test.go's
-//     setAllRulesEnabled/disableRule already rely on)
+//     the exact shape internal/platform/db/seed_demo_test.go's
+//     TestSeedReenablesDisabledRules already relies on)
 //   - reparent OUT of a sealed version (RIL-06 only covers reparent INTO;
 //     Guard A's UPDATE branch checks OLD's parent too, so the outbound
 //     direction needs its own probe)
@@ -94,9 +94,11 @@ func TestRILAdv_BulkContentUpdateNoWhereRejected(t *testing.T) {
 
 // TestRILAdv_BulkEnabledFlipAcrossSealedVersionAllowed: a single UPDATE that
 // flips `enabled` for every rule under one sealed version at once -- the
-// exact shape internal/platform/db/demo_reset_test.go's setAllRulesEnabled
-// (bulk `UPDATE rules SET enabled = true`) and disableRule already depend
-// on. Must succeed for every affected row; the carve-out is column-scoped,
+// exact shape internal/platform/db/seed_demo_test.go's
+// TestSeedReenablesDisabledRules already depends on (its cleanup runs the
+// bulk `UPDATE rules SET enabled = true WHERE enabled = false`, and
+// db/seed.dev.sql:127 runs the same statement on every boot).
+// Must succeed for every affected row; the carve-out is column-scoped,
 // not row-count-scoped. Rolled-back super tx (proves the guard behavior
 // without leaving the whole sealed v2 rule-set toggled).
 func TestRILAdv_BulkEnabledFlipAcrossSealedVersionAllowed(t *testing.T) {
@@ -123,7 +125,7 @@ func TestRILAdv_BulkEnabledFlipAcrossSealedVersionAllowed(t *testing.T) {
 	tag, err := tx.Exec(ctx, `UPDATE rules SET enabled = NOT enabled WHERE rule_set_version_id = $1`, v2ID)
 	if err != nil {
 		t.Fatalf("bulk enabled-only UPDATE across sealed v2: %v -- must succeed "+
-			"(matches internal/platform/db/demo_reset_test.go's setAllRulesEnabled/disableRule bulk usage)", err)
+			"(matches db/seed.dev.sql:127's bulk enabled-only repair, which runs on every boot)", err)
 	}
 	if got := tag.RowsAffected(); got != int64(preCount) {
 		t.Errorf("RowsAffected = %d, want %d (every rule under sealed v2 flipped)", got, preCount)

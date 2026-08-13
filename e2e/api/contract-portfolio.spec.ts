@@ -2,8 +2,8 @@
 // through the SAME typed seam (api/client.ts) every api/ spec shares. Setup
 // goes through the typed wrappers (createEntity, offboardEntity) +
 // freshTin() (M3-14's isolation convention: every created entity gets its
-// own fresh Luhn-valid TIN, so repeated runs against the un-reset live dev
-// DB never collide on business_entities' duplicate-TIN partial index). The
+// own fresh Luhn-valid TIN, so nothing else this run created collides with it
+// on business_entities' duplicate-TIN partial index). The
 // assertions UNDER TEST go through rawFetch (M3-15-01), so the exact HTTP
 // status + envelope shape is directly observable — unlike apiFetch, which
 // normalizes a non-2xx into a thrown ApiError.
@@ -217,9 +217,9 @@ test.describe('portfolio contract (API E2E, over the deployed gateway)', () => {
       // q ILIKEs both name and tin (internal/portfolio/store.go:95-97), so a
       // token that was never used as either is guaranteed no-match. freshTin()
       // already guarantees per-run uniqueness (pid-derived run seed + a
-      // module-level call counter — fixtures.ts) even against the un-reset
-      // live dev DB, so embedding it here is enough; no separate random
-      // generator is needed.
+      // module-level call counter — fixtures.ts), which covers every row this
+      // run can have written, so embedding it here is enough; no separate
+      // random generator is needed.
       const noMatchToken = `M3-15-03-no-match-${freshTin()}`
       const list = await listEntities(token, { q: noMatchToken, limit: 200 })
       expect(list.entities).toEqual([])

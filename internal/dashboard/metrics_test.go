@@ -496,6 +496,9 @@ func TestMetrics_DenAlwaysEqualsInvoiceCount(t *testing.T) {
 			}
 		}
 	}
+	if len(got.Totals.Metrics) == 0 {
+		t.Fatal("Totals.Metrics is empty -- the loop below would assert nothing")
+	}
 	for key, m := range got.Totals.Metrics {
 		if m.Den != 7 {
 			t.Errorf("Totals metric %s: den = %d, want 7 (tenant-wide invoice count)", key, m.Den)

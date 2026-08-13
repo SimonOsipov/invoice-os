@@ -76,6 +76,9 @@ func TestV4_V3ContentIsUnmutated(t *testing.T) {
 		t.Fatalf("count(rules under v3) = %d, want 19 (v3 must be unmutated by the v4 publish) [AC-1]", len(v3Rows))
 	}
 
+	if len(v2Rows) == 0 {
+		t.Fatal("no v2 rules read back -- the loop below would assert nothing")
+	}
 	for key, v2r := range v2Rows {
 		v3r, ok := v3Rows[key]
 		if !ok {

@@ -130,8 +130,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
 
   // Local only. Every edit reaches the server through Save draft, never through a keystroke —
   // a per-keystroke PUT composes each request from the last LANDED name and drops the
-  // characters in between.
-  const applyEdit = setWorking
+  // characters in between. The flash ends with the edit: 'Saved' next to 'Save your changes
+  // first' would keep claiming a landed write for the rest of its 1700ms.
+  function applyEdit(next: Policy) {
+    setWorking(next)
+    setSaved(false)
+  }
 
   // Reference equality, not a structural compare: the server re-mints every step id on each
   // PUT draft (policies.ts:18), so a deep compare of a saved tree against its pre-save self

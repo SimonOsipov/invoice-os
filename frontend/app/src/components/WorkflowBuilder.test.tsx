@@ -1064,6 +1064,82 @@ describe('APPR-09-06 follow-up: each write control names the verb in flight', ()
   })
 })
 
+// ----------------------------------------------------------------------------
+// APPR-09-06 follow-up — the paint tracks the lock
+// ----------------------------------------------------------------------------
+// Measured on the deployed build: mid-write both controls carried `disabled` while rendering
+// pixel-identical to their live state — same background, `cursor: pointer`, opacity 1. The
+// `disabled` ATTRIBUTE took two causes, the disabled APPEARANCE took one.
+//
+// These read the INLINE style, not `getComputedStyle`: jsdom applies no stylesheet, which is
+// exactly why a green 2137-spec suite never saw this. The inline layer is also where the fix
+// belongs — it is what outranks `.v2-btn-ghost:hover` (app-layer.css:215).
+
+describe('APPR-09-06 follow-up: a control shut by a write in flight is PAINTED shut', () => {
+  it('Publish takes the muted paint on the same condition as its `disabled`', () => {
+    const self = policyWith('fin_mgr')
+    const pub = deferred<Policy>()
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], publishPolicy: vi.fn(() => pub.promise) })} policy={self} />)
+
+    // Held: this control is a direct child of the header row, so no render below detaches it.
+    const publish = publishButton()
+    // Live AND painted live, or the flip below passes on a control that was never the action
+    // colour to begin with — `blockedReason` is null here, so nothing else has muted it.
+    expect(publish.disabled, 'Publish is already shut, so the click starts no write').toBe(false)
+    expect(publish.style.background, 'Publish is not painted as the action, so the mute below proves nothing').toBe('var(--action)')
+    expect(publish.style.color).toBe('var(--text-on-dark)')
+    expect(publish.style.cursor, 'a live control carries no inline cursor — `.asc-app .v2-btn` supplies `pointer`').toBe('')
+
+    fireEvent.click(publish)
+
+    expect(publish.disabled, 'the lock never closed, so the paint assertions below are vacuous').toBe(true)
+    expect(publish.style.background, 'a dead Publish is still painted as the action').toBe('var(--bg-3)')
+    expect(publish.style.color, 'a dead Publish still carries the on-dark label colour').toBe('var(--fg-4)')
+    expect(publish.style.cursor, 'a dead Publish still invites the click').toBe('not-allowed')
+    // The other half of the split, re-pinned HERE so the fix above cannot drag the reason
+    // layers along with the paint: the paint tracks BOTH causes, the reason tracks only
+    // `blockedReason`. Duplicates the guard at :822 on purpose — that spec is what this
+    // change had to survive.
+    expect(screen.queryByTestId('publish-blocked-reason'), 'a publish in flight renders "Save your changes first", which is untrue').toBeNull()
+    expect(publish.title, 'the tooltip states a reason that does not apply mid-publish').toBeFalsy()
+    expect(publish.getAttribute('aria-describedby')).toBeNull()
+
+    pub.resolve({ ...self, status: 'published', version: 1, activeVersion: 1 })
+  })
+
+  it('Clear steps takes the ghost mute, where it carried no disabled paint at all', async () => {
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+    // Re-queried rather than held, matching the thunks at :753: a future `<fieldset>` around
+    // this row would remount the button, and a node captured beforehand would be detached.
+    const clear = () => screen.getByRole('button', { name: 'Clear steps' }) as HTMLButtonElement
+    expect(clear().disabled, 'Clear steps is already shut, so the flip below is vacuous').toBe(false)
+    // A live ghost draws its whole look from `.v2-btn-ghost` — nothing inline to mute.
+    expect(clear().style.background, 'a live ghost is painted inline, so the mute below proves nothing').toBe('')
+    expect(clear().style.color).toBe('')
+    expect(clear().style.cursor).toBe('')
+
+    fireEvent.click(saveButton())
+
+    expect(clear().disabled, 'the lock never closed, so the paint assertions below are vacuous').toBe(true)
+    // `transparent` inline is not a no-op: it outranks `.v2-btn-ghost:hover`, which would
+    // otherwise light a dead control up under the pointer.
+    expect(clear().style.background, 'a dead Clear steps still lights up on hover').toBe('transparent')
+    expect(clear().style.borderColor, 'a dead Clear steps keeps the live border weight').toBe('var(--line-1)')
+    expect(clear().style.color, 'a dead Clear steps still reads as live text').toBe('var(--fg-4)')
+    expect(clear().style.cursor, 'a dead Clear steps still invites the click').toBe('not-allowed')
+
+    sav.resolve({ ...self, name: 'Server name' })
+    await waitFor(() => expect(clear().disabled).toBe(false))
+    // Idle again, and unpainted again — the mute is tied to the write, not latched by it.
+    expect(clear().style.background, 'the mute outlived the write it describes').toBe('')
+    expect(clear().style.color).toBe('')
+    expect(clear().style.cursor).toBe('')
+  })
+})
+
 describe('APPR-09-05 QA AC-5: the two error slots survive each other', () => {
   function rejecting(err: ApiError) {
     return vi.fn(() => Promise.reject(err))

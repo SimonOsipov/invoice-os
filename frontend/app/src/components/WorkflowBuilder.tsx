@@ -72,6 +72,13 @@ const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 
 /**
+ * The ghost variant's disabled paint (MemberDrawer.tsx:145's shape, kept local rather than
+ * shared). Inline, so it outranks `.v2-btn-ghost:hover`, which would otherwise repaint a dead
+ * control on hover.
+ */
+const DISABLED_GHOST = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
+
+/**
  * Why Publish cannot run, or null when it can. `dirty` is checked FIRST because saving is the
  * remedy in both states at once: `PUT .../draft` always answers an unsealed top version
  * (policy_store.go:464-468), so the save that clears `dirty` also clears the seal.
@@ -386,7 +393,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             (WorkflowsView.tsx:86-99). */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flex: 'none', maxWidth: 360 }}>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" onClick={clear} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13 }}>
+            <button type="button" onClick={clear} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13, ...(submitting ? DISABLED_GHOST : null) }}>
               Clear steps
             </button>
             <button type="button" onClick={() => void save()} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 16px', fontSize: 13 }}>
@@ -395,8 +402,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             {/* Disabled-with-a-reason, never hidden: the visible sibling below is the only layer
                 a keyboard user and a text assertion can both reach. No `filter: 'none'` — that
                 neutralises .v2-btn-primary's :hover, and this carries neither.
-                `submitting` reaches `disabled` ALONE: a transient lock has no reason to state,
-                and 'Save your changes first' is untrue mid-publish. */}
+                The paint tracks BOTH causes and the reason only ONE: a dead button must not stay
+                painted as the action (RoleModal.tsx:370-383), but a transient lock has no reason
+                to state, and 'Save your changes first' is untrue mid-publish. */}
             <button
               type="button"
               onClick={() => void publish()}
@@ -410,7 +418,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 fontSize: 13,
                 background: 'var(--action)',
                 color: 'var(--text-on-dark)',
-                ...(blockedReason ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                ...(blockedReason !== null || submitting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
               }}
             >
               {pendingVerb === 'publish' ? 'Publishing…' : 'Publish'}

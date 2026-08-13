@@ -1,11 +1,8 @@
-// main_test.go: APPR-08-02 RED spec (Mode A) for parseEnvBool and the
-// APPROVALS_ENFORCED wire-up. cmd/invoice/ had no test file before this one;
-// the wiring scan mirrors cmd/submission/main_test.go's idiom (read the sibling
-// source, anchor, assert in a window) and ci_gate_test.go's AST walk for the
-// argument shape, which reformatting cannot break.
-//
-// This subtask does NOT wire the flag into main() — that is Stage 3's job — so
-// TestInvoiceMain_WiresTheApprovalsEnforcedFlag is RED here by design.
+// main_test.go: APPR-08-02, parseEnvBool and the APPROVALS_ENFORCED wire-up.
+// cmd/invoice/ had no test file before this one; the wiring scan mirrors
+// cmd/submission/main_test.go's idiom (read the sibling source, anchor, assert in a
+// window) and ci_gate_test.go's AST walk for the argument shape, which reformatting
+// cannot break.
 package main
 
 import (

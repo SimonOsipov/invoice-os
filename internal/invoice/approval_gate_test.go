@@ -1,9 +1,6 @@
-// APPR-08-06 Mode A: RED specs for approvalGate -- the detail page's approve/reject
-// availability -- and for its four wire keys. Production is stubbed (approvalGate
-// returns false, nil), so every BEHAVIOURAL spec below fails on an assertion. The
-// structural guards (key presence, wire order, occurrence count) are green at RED by
-// design: the four keys are stubbed onto getResponse so the key-set tests can be
-// updated honestly.
+// APPR-08-06: approvalGate -- the detail page's approve/reject availability -- and its
+// four wire keys. Behavioural specs pin the five-rung ladder; structural guards pin key
+// presence, wire order and occurrence count.
 package invoice
 
 import (
@@ -362,8 +359,7 @@ func TestGetHandler_ApproveFlagsTrackTheInjectedFacts(t *testing.T) {
 
 // TestGetHandler_ApproveFlagsAreLastInWireOrder (AC #2/#4): writeJSON marshals with
 // json.NewEncoder, so declaration order IS wire order -- appending the four LAST is
-// what keeps every pre-existing key's position untouched. Green at RED by design:
-// the four keys ship stubbed so the key-set guards can be updated honestly.
+// what keeps every pre-existing key's position untouched.
 func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	rec, _ := doInvoiceGetGated(t, invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(liveRunFacts()), &id, uuid.NewString())

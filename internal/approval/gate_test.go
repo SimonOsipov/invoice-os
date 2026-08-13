@@ -1,8 +1,7 @@
 package approval
 
 // The transmit gate under a real Postgres: TransmitClear and the three tx-scoped reads
-// that feed it. Written before gate.go's bodies exist, so every spec here starts RED
-// against its stubs.
+// that feed it.
 //
 // Run locally with `DEV_DB_PORT=5433 make test-approvals`; in CI the rls job's gate step
 // fails the build on any skip.

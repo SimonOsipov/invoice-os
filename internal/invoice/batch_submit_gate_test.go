@@ -1,7 +1,6 @@
-// APPR-08-04 (task-501, Mode A): RED specs for the transmit gate inside
-// Submitter.BatchSubmit — the batch door. The read, the guard arm and the canonical-id
-// keying are not written yet, so every refusal assertion below fails; the permissive
-// cases are controls that pin what the guard must NOT touch.
+// APPR-08-04 (task-501): the transmit gate inside Submitter.BatchSubmit — the batch
+// door: the read, the guard arm and the canonical-id keying. The permissive cases are
+// controls that pin what the guard must NOT touch.
 //
 // batch_submit_test.go / batch_submit_adversarial_test.go keep their M5-04-07 scope and
 // are not edited. Fixtures come from apply_validation_arming_test.go and
@@ -138,8 +137,7 @@ func TestBatchSubmit_SubmitterGetsTheFlaggedStoreInMain(t *testing.T) {
 // --- AC #2/#4: an open run skips the item, it does not fail the batch --------
 
 // TestBatchSubmit_AwaitingApprovalSkip: flag ON, active policy, an open run -> one skipped
-// item carrying the invoice's REAL status, no queue row, no transition. Fails today: the
-// invoice enqueues.
+// item carrying the invoice's REAL status, no queue row, no transition.
 func TestBatchSubmit_AwaitingApprovalSkip(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -256,8 +254,7 @@ func TestBatchSubmit_DuplicateIdsStillResolveOnceUnderTheGate(t *testing.T) {
 // --- AC #2: one read, after the locks, and only under the flag ---------------
 
 // TestBatchSubmit_ApprovalReadRunsAfterTheRowLocks: the approval read follows EVERY
-// per-distinct-id lock, per the invoices -> approval_* lock order. Fails today: no
-// approval statement is issued at all.
+// per-distinct-id lock, per the invoices -> approval_* lock order.
 func TestBatchSubmit_ApprovalReadRunsAfterTheRowLocks(t *testing.T) {
 	super, _ := dbTestPools(t)
 	tracedApp, rec := tracedAppPool(t)

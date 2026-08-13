@@ -1,8 +1,7 @@
-// APPR-08-03 (task-497, Mode A): RED specs for the transmit gate inside
-// Store.Transition. The guard is not written yet, so every refusal assertion below
-// fails; the permissive cases are controls that pin what the guard must NOT touch.
-// Fixtures come from apply_validation_arming_test.go, the harness from
-// store_test.go / transition_adversarial_test.go (same package).
+// APPR-08-03 (task-497): the transmit gate inside Store.Transition. The permissive
+// cases are controls that pin what the guard must NOT touch. Fixtures come from
+// apply_validation_arming_test.go, the harness from store_test.go /
+// transition_adversarial_test.go (same package).
 //
 // Run: DATABASE_URL=… DATABASE_SUPERUSER_URL=… go test -p 1 -count=1 ./internal/invoice/...
 // (`make test-rls` runs internal/platform/db only; CI's rls job runs this package
@@ -125,7 +124,7 @@ func tracedAppPool(t *testing.T) (*pgxpool.Pool, *sqlRecorder) {
 
 // TestTransition_QueuedRefusedWhenAwaitingApproval: flag ON, active policy, an open
 // run -> ErrAwaitingApproval, and the whole tx rolls back (status, history and
-// audit all unchanged). Fails today: the transition succeeds.
+// audit all unchanged).
 func TestTransition_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -154,7 +153,7 @@ func TestTransition_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
 
 // TestTransition_QueuedRefusedWhenValidatedWithNoRun: an invoice under an active
 // policy with NO run at all is not clear either — TransmitClear fails closed on an
-// absent answer, which is what the seeded backlog looks like. Fails today.
+// absent answer, which is what the seeded backlog looks like.
 func TestTransition_QueuedRefusedWhenValidatedWithNoRun(t *testing.T) {
 	super, app := dbTestPools(t)
 

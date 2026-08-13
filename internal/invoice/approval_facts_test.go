@@ -1,7 +1,5 @@
-// APPR-08-05 Mode A: RED specs for (*Store).ApprovalFacts, the read-only sibling of
-// CallerRole that feeds GetHandler's third seam. Production is a stub returning
-// ApprovalFacts{TransmitClear: true} without touching the DB, so every spec below
-// fails on an assertion. Fixtures come from apply_validation_arming_test.go, the
+// APPR-08-05: (*Store).ApprovalFacts, the read-only sibling of CallerRole that feeds
+// GetHandler's third seam. Fixtures come from apply_validation_arming_test.go, the
 // tracer from transition_gate_test.go / transition_gate_adversarial_test.go.
 package invoice
 

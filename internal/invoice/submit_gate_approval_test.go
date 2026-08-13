@@ -1,7 +1,5 @@
-// APPR-08-05 Mode A: RED specs for can_submit's approval arm -- submitGate's third
-// rung and GetHandler's third seam. Production is stubbed (submitGate ignores
-// approvalClear, GetHandler never calls approvalFacts), so the behavioural specs
-// below fail on assertions.
+// APPR-08-05: can_submit's approval arm -- submitGate's third rung and GetHandler's
+// third seam (approvalFacts).
 package invoice
 
 import (

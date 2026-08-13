@@ -96,7 +96,7 @@ test('firm Workflows (mock policy fixtures): the policy list renders, and the po
   // --- disjointness, firm half ------------------------------------------------------------
   // The mirror of persona-surfaces.spec.ts's in-house check, asserted here because this is
   // where the firm list is already on screen. Two disjoint sets is what "the store is keyed
-  // firm/inhouse" (lib/workflows.ts:204) means observationally -- and a seed crossed between
+  // firm/inhouse" (lib/workflows.ts's PolicyStore) means observationally -- and a seed crossed between
   // the two modes is the failure it catches.
   for (const p of MOCK_INHOUSE_POLICIES) {
     await expect(screen.getByText(p.name, { exact: true })).toHaveCount(0)

@@ -210,7 +210,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(violations.locator('tbody tr').first().locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
 
   // --- Workflows ------------------------------------------------------------------------
-  // Pins MOCK FIXTURE BEHAVIOUR (SEED_INHOUSE_POLICIES, lib/workflows.ts:167-186), not a
+  // Pins MOCK FIXTURE BEHAVIOUR (SEED_INHOUSE_POLICIES in lib/workflows.ts), not a
   // backend contract -- there is no approvals endpoint; ctx.savePolicy lives in App.tsx
   // useState. [workflows-included]'s recorded trade-off: sweeping it is still worth doing,
   // because a persona-conditional render breaking is exactly what this story guards.
@@ -218,7 +218,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   //
   // PERSONA-01-04 (task-273) added the DEPTH below the existing name assertions -- the
   // count, the status pills, the `scope · summary` lines, and the ABSENCE of every firm
-  // policy name (SEED_FIRM_POLICIES, lib/workflows.ts:135-165). Same mock-only caveat, and
+  // policy name (SEED_FIRM_POLICIES in lib/workflows.ts). Same mock-only caveat, and
   // it is worth restating because those strings LOOK like data: they pin frontend constants
   // (see topology/policyFixtures.ts's header), never a server, and must be re-derived from
   // live reads the day an approvals endpoint lands. That subtask also filed the in-house
@@ -255,7 +255,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   }
   // Disjointness, in-house half -- the mirror of topology/workflows.spec.ts's check, asserted
   // here because this is where the in-house list is already on screen. Two disjoint sets is
-  // what "the store is keyed firm/inhouse" (lib/workflows.ts:204) means observationally, and
+  // what "the store is keyed firm/inhouse" (lib/workflows.ts's PolicyStore) means observationally, and
   // the seeds getting crossed between the two modes is the failure it catches.
   for (const p of MOCK_FIRM_POLICIES) {
     await expect(wfScreen.getByText(p.name, { exact: true })).toHaveCount(0)

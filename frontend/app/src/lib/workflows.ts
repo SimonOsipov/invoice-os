@@ -152,8 +152,8 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
     scope: 'All invoices',
     status: 'published',
     updated: '2 days ago',
-    // Only polF1 and polH1 hold an active version: the tenant-wide unique index allows
-    // exactly one per store, so a second would model a tenant the server cannot produce.
+    // Only polF1 and polH1 hold an active version — a second per store would model a tenant
+    // the server cannot produce. Policy.activeVersion above states the constraint.
     version: 1,
     activeVersion: 1,
     nodes: [

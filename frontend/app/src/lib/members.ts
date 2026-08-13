@@ -277,7 +277,7 @@ export function classifyInvites(existing: readonly Member[], addresses: readonly
 
 // Reducers. All three allocate UNCONDITIONALLY (`map` / `filter` / spread), so a miss returns
 // a new array holding the same values rather than the input reference — that is the
-// `replacePolicy`/`removePolicy` form (workflows.ts:396-402), picked over rules.ts:253-268's
+// `replacePolicy`/`removePolicy` form (workflows.ts), picked over rules.ts:253-268's
 // `return rules as CustomRule[]` because the two house precedents disagree and only the
 // always-allocate one satisfies §15.1. Every reducer keys off `id`, never email.
 

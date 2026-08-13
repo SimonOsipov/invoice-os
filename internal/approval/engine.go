@@ -21,7 +21,7 @@ type runStep struct {
 	NotifyChannel   *string
 }
 
-// materialise ports the SPA's simulate (frontend/app/src/lib/workflows.ts:491-505): one
+// materialise ports the SPA's simulate (frontend/app/src/lib/workflows.ts): one
 // pass over the sealed root lane, where a condition emits exactly one of its lanes and no
 // step of its own. `auto` is REPORTED here and applied once, downstream in ArmTx — this
 // function rewrites no kind, decides no state and never truncates the walk.
@@ -74,7 +74,7 @@ func materialise(tree []Step, total *decimal.Decimal) (steps []runStep, auto boo
 }
 
 // evalCondition ports the amount arm of the SPA's evalCondition
-// (frontend/app/src/lib/workflows.ts:462-471). Each side folds to zero when absent or
+// (frontend/app/src/lib/workflows.ts). Each side folds to zero when absent or
 // unparseable, mirroring its `Number(x) || 0` — a NULL invoices.total and a NULL
 // cond_amount both read as 0.
 func evalCondition(op string, condAmount *string, total *decimal.Decimal) bool {
@@ -101,7 +101,7 @@ func evalCondition(op string, condAmount *string, total *decimal.Decimal) bool {
 		return a.LessThanOrEqual(v)
 	}
 	// Deliberate deviation from the mock, whose ladder falls through to `<=`
-	// (workflows.ts:470). The only reachable case here is a NULL cond_op, and an
+	// (workflows.ts's evalCondition). The only reachable case here is a NULL cond_op, and an
 	// unspecified condition must take the else lane rather than silently mean "≤".
 	return false
 }

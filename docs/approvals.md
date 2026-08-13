@@ -587,7 +587,7 @@ appearing to route something.
 
 > **Not yet removed from the editor — and nothing rejects them there.** The scope dropdown
 > still offers all six options: `WF_SCOPE_OPTIONS`
-> (`frontend/app/src/lib/workflows.ts:107-114`) still declares them and
+> (`frontend/app/src/lib/workflows.ts`) still declares them and
 > `WorkflowBuilder.tsx:56` still maps the whole list into the rendered select. Three of
 > them also still appear as scopes on mock policy data.
 >

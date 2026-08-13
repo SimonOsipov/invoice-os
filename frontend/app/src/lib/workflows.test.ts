@@ -665,7 +665,8 @@ describe('derived labels (§5.1)', () => {
   })
 
   // The server accepts any sla_hours, so a policy can carry an SLA outside WF_SLA_OPTIONS.
-  // This is a TYPECHECK spec: vitest strips types, so its only red is tsc rejecting '36'.
+  // Its RED was tsc rejecting '36' before Sla widened — vitest strips types. It still bites
+  // at runtime: an slaText that blanked an off-vocabulary value would fail here.
   it('slaText renders an off-vocabulary SLA rather than blanking', () => {
     expect(slaText('36')).toBe('within 36h')
     expect(slaText('0')).toBe('no deadline')

@@ -11,7 +11,7 @@ import {
   type PolicyWire,
 } from './policies'
 import { seedPolicies } from './policies.fixture'
-import type { ApprovalNode, ConditionNode, NotifyNode, Policy } from './workflows'
+import { newPolicy, type ApprovalNode, type ConditionNode, type NotifyNode, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // The wire helpers spell every one of the ten Step keys, because the server never omits
@@ -223,5 +223,177 @@ describe('policyStanding / policyInForce (AC-2)', () => {
     // Wrapped, not passed bare to map — map would feed the index in as a second argument.
     expect(store.firm.map((p) => policyStanding(p))).toEqual(['v1 in force', 'Not in force', 'Never published'])
     expect(store.inhouse.map((p) => policyStanding(p))).toEqual(['v1 in force', 'Never published'])
+  })
+})
+
+// --- QA additions -----------------------------------------------------------
+// Everything below covers a line the AC specs above leave un-pinned: each one was written
+// against a mutation that survived the original fourteen.
+
+describe('QA: toPolicy projects every wire field, not only the version pair', () => {
+  it('carries id, name, scope and the step tree straight through', () => {
+    const p = toPolicy(
+      wire({
+        id: 'pol-7',
+        name: 'Capex sign-off',
+        scope: 'Capex & fixed assets',
+        steps: [step({ id: 's9', kind: 'approval', workflow_role_key: 'cfo', sla_hours: 24 })],
+      }),
+    )
+    expect(p.id).toBe('pol-7')
+    expect(p.name).toBe('Capex sign-off')
+    // Carried verbatim: WF_SCOPE_OPTIONS is the EDITOR's list, not a filter on what may arrive.
+    expect(p.scope).toBe('Capex & fixed assets')
+    expect(p.nodes).toHaveLength(1)
+    expect((p.nodes[0] as ApprovalNode).role).toBe('cfo')
+  })
+
+  it('carries a status outside the SPA union rather than defaulting it (AC-1)', () => {
+    // The wire types `status` as string precisely so a value the server grows is visible
+    // here instead of being silently rewritten to 'draft'.
+    expect(toPolicy(wire({ status: 'archived' })).status).toBe('archived')
+    expect(toPolicy(wire({ status: 'published' })).status).toBe('published')
+  })
+
+  it('reports no active version for a policy carrying no versions at all', () => {
+    const p = toPolicy(wire({ version: 1, versions: [] }))
+    expect(p.activeVersion).toBeNull()
+    expect(p.version).toBe(1)
+  })
+
+  it('maps a stepless policy to an empty node list, both directions', () => {
+    expect(toPolicy(wire({ steps: [] })).nodes).toEqual([])
+    expect(nodesFromSteps([])).toEqual([])
+    expect(stepInputsFromNodes([])).toEqual([])
+  })
+})
+
+describe('QA: node identity is the SERVER step id', () => {
+  it('carries the wire id onto every node, at the root and inside both lanes', () => {
+    const nodes = nodesFromSteps([
+      step({ id: 'srv-a', kind: 'approval', workflow_role_key: 'cfo', sla_hours: 24 }),
+      step({ id: 'srv-n', kind: 'notify', notify_target: 'Tax Team', notify_channel: 'Email' }),
+      step({
+        id: 'srv-c',
+        kind: 'condition',
+        cond_op: '>',
+        cond_amount: '1000.00',
+        then: [step({ id: 'srv-t', kind: 'approval', workflow_role_key: 'ceo', sla_hours: 72 })],
+        else: [step({ id: 'srv-e', kind: 'autoapprove' })],
+      }),
+    ])
+    expect(nodes).toHaveLength(3)
+    expect(nodes.map((n) => n.id)).toEqual(['srv-a', 'srv-n', 'srv-c'])
+    const cond = nodes[2] as ConditionNode
+    expect(cond.then.map((n) => n.id)).toEqual(['srv-t'])
+    expect(cond.else.map((n) => n.id)).toEqual(['srv-e'])
+  })
+})
+
+describe('QA: stepInputsFromNodes emits exactly what stepInput declares', () => {
+  it('emits no id — the server drops a client-supplied one at decode', () => {
+    const back = stepInputsFromNodes([
+      { id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false },
+      { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'Email' },
+      { id: 'n3', type: 'autoapprove' },
+      { id: 'n4', type: 'condition', field: 'amount', op: '>', value: 1000, then: [{ id: 'n5', type: 'autoapprove' }], else: [] },
+    ])
+    expect(back).toHaveLength(4)
+    for (const s of back) expect(Object.hasOwn(s, 'id')).toBe(false)
+    expect(back[3].then).toHaveLength(1)
+    expect(Object.hasOwn(back[3].then![0], 'id')).toBe(false)
+  })
+
+  it('emits the four kinds the server vocabulary accepts, spelled exactly', () => {
+    const back = stepInputsFromNodes([
+      { id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false },
+      { id: 'n2', type: 'condition', field: 'amount', op: '>', value: 1000, then: [], else: [] },
+      { id: 'n3', type: 'notify', target: 'Tax Team', channel: 'Email' },
+      { id: 'n4', type: 'autoapprove' },
+    ])
+    expect(back.map((s) => s.kind)).toEqual(['approval', 'condition', 'notify', 'autoapprove'])
+  })
+
+  it('sends a condition with both lanes empty as two empty arrays, never absent', () => {
+    const back = stepInputsFromNodes([{ id: 'c1', type: 'condition', field: 'amount', op: '>=', value: 500, then: [], else: [] }])
+    expect(back).toHaveLength(1)
+    expect(back[0].then).toEqual([])
+    expect(back[0].else).toEqual([])
+  })
+})
+
+describe('QA: the wire values the four SLA options cannot express', () => {
+  // The server bounds sla_hours at >= 0 and the column has no CHECK
+  // (migrations/20260809210326_approval_policies.sql), so a stored 0 is producible — and
+  // the SPA has no way to say "0 hours" that is not the no-deadline sentinel. Known lossy
+  // edge, pinned rather than fixed: a 0 read back saves as null.
+  it('collapses a stored 0-hour SLA onto the no-deadline sentinel', () => {
+    const nodes = nodesFromSteps([step({ kind: 'approval', workflow_role_key: 'cfo', sla_hours: 0 })])
+    expect(nodes).toHaveLength(1)
+    expect((nodes[0] as ApprovalNode).sla).toBe('0')
+    expect(stepInputsFromNodes(nodes)[0].sla_hours).toBeNull()
+  })
+
+  it('renders an SLA outside the four options rather than dropping the step', () => {
+    const nodes = nodesFromSteps([step({ kind: 'approval', workflow_role_key: 'cfo', sla_hours: 36 })])
+    expect(nodes).toHaveLength(1)
+    expect((nodes[0] as ApprovalNode).sla).toBe('36')
+    expect(stepInputsFromNodes(nodes)[0].sla_hours).toBe(36)
+  })
+
+  it('reads an approval step with no role key as the empty-string default', () => {
+    const nodes = nodesFromSteps([step({ kind: 'approval', workflow_role_key: null, sla_hours: 24 })])
+    expect(nodes).toHaveLength(1)
+    expect((nodes[0] as ApprovalNode).role).toBe('')
+  })
+
+  it('reads a notify step with no target or channel as empty strings, not undefined', () => {
+    const nodes = nodesFromSteps([step({ kind: 'notify', notify_target: null, notify_channel: null })])
+    expect(nodes).toHaveLength(1)
+    const n = nodes[0] as NotifyNode
+    expect(n.target).toBe('')
+    expect(n.channel).toBe('')
+  })
+})
+
+describe('QA: cond_amount across the column the server allows', () => {
+  it('keeps a scaled threshold through the round trip', () => {
+    const nodes = nodesFromSteps([step({ kind: 'condition', cond_op: '>', cond_amount: '250.55' })])
+    expect(nodes).toHaveLength(1)
+    expect((nodes[0] as ConditionNode).value).toBe(250.55)
+    expect(stepInputsFromNodes(nodes)[0].cond_amount).toBe('250.55')
+  })
+
+  it('survives the largest value numeric(14,2) holds', () => {
+    // condAmountCeiling (internal/approval/policy.go) is 1e12, exclusive, at scale 2.
+    const nodes = nodesFromSteps([step({ kind: 'condition', cond_op: '<', cond_amount: '999999999999.99' })])
+    expect(nodes).toHaveLength(1)
+    expect((nodes[0] as ConditionNode).value).toBe(999_999_999_999.99)
+    expect(stepInputsFromNodes(nodes)[0].cond_amount).toBe('999999999999.99')
+  })
+})
+
+describe('QA: policyStanding and policyInForce, without going through the seed', () => {
+  // M12/M14: before these two, dropping either term of the activeVersion === null branch
+  // and mislabelling the equal-version branch were caught ONLY by the seed-store test.
+  it('names the in-force version when the top version is the live one', () => {
+    expect(policyStanding(policy({ version: 1, activeVersion: 1, status: 'published' }))).toBe('v1 in force')
+    expect(policyStanding(policy({ version: 3, activeVersion: 3, status: 'published' }))).toBe('v3 in force')
+  })
+
+  it('says Not in force for a version-1 policy that was published and lost the slot', () => {
+    expect(policyStanding(policy({ version: 1, activeVersion: null, status: 'published' }))).toBe('Not in force')
+  })
+
+  it('calls a brand-new policy Never published', () => {
+    expect(policyStanding(newPolicy())).toBe('Never published')
+    expect(newPolicy().activeVersion).toBeNull()
+  })
+
+  it('policyInForce reports null when the list holds no active policy, and when it is empty', () => {
+    const none = [policy({ id: 'a' }), policy({ id: 'b' })]
+    expect(none).toHaveLength(2)
+    expect(policyInForce(none, 'a')).toBeNull()
+    expect(policyInForce([], 'a')).toBeNull()
   })
 })

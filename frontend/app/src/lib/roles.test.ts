@@ -694,7 +694,7 @@ describe('AC-6 — canSaveRole gates on the name alone', () => {
 describe('AC-7 — deleteRoleConfirm names the role and its usage', () => {
   it('a used role names its usage sentence and warns those steps will block', () => {
     // 'compliance' (Tax Reviewer) is named once each in polF1/polF2/polF3 — three approval
-    // steps across three policies (workflows.ts:162-183).
+    // steps across three policies (SEED_FIRM_POLICIES in workflows.ts).
     const usage = roleSteps(SEED_FIRM_POLICIES, 'compliance')
     expect(usage).toEqual({
       total: 3,

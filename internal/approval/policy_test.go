@@ -37,7 +37,7 @@ import (
 const scopeAllInvoices = "All invoices"
 
 // removedScopes are the five WF_SCOPE_OPTIONS entries the server refuses, copied
-// byte-for-byte from frontend/app/src/lib/workflows.ts:107-114. The B2G entry's
+// byte-for-byte from frontend/app/src/lib/workflows.ts. The B2G entry's
 // separator is U+00B7 MIDDLE DOT, pinned by TestPolicy_NormalizeScopeTable.
 var removedScopes = []string{
 	"Foreign-currency invoices",

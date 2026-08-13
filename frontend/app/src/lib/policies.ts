@@ -5,13 +5,13 @@ import type { BranchNode, CondOp, Policy, PolicyStatus, Sla, WfNode } from './wo
 // ---------------------------------------------------------------------------
 // Wire types, mirrored field-for-field from internal/approval/policy.go:17-93
 // ---------------------------------------------------------------------------
-// No omitempty on any response field, and Step/Policy both carry a value-receiver
-// MarshalJSON substituting [] for a nil lane — so `steps`, `versions`, `then` and `else`
-// are always arrays, never null. Key sets: Policy 8, Step 10, PolicyVersion 5.
+// The marshalling facts these types rest on (no omitempty, [] never null, the fixed key
+// counts) are stated at that source and in the sibling mirror e2e/api/client.ts. Not
+// restated here — three copies of a countable fact is three places for it to rot.
 //
-// `kind` and `status` are `string` here, not the narrowed unions e2e/api/client.ts:657,682
-// uses. That mirror and this one differ on purpose: a value the server states is carried
-// verbatim and cast at the projection, never defaulted (the members.ts:509,551 precedent).
+// One deliberate difference from that mirror: `kind` and `status` are `string`, not its
+// narrowed unions. A value the server states is carried verbatim and cast at the
+// projection, never defaulted (the members.ts:508,551 precedent).
 
 export type PolicyStepWire = {
   /** Server-minted uuid, re-minted on EVERY PUT draft — never assert a value across a save. */

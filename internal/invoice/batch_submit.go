@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
@@ -38,14 +39,13 @@ import (
 // unrelated error (see that test's own doc comment for why the distinction is load-bearing).
 var errBatchSubmitInjectedTestFailure = errors.New("invoice: batch submit test-injected failure after last enqueue")
 
-// The two reachable skip reasons ([partial-batch] eligibility table, task-231 System
+// The three reachable skip reasons ([partial-batch] eligibility table, task-231 System
 // Design). Every other outcome is a hard-fail (ErrNotFound/ErrValidation), never a skip.
+// frontend/app/src/lib/invoices.ts's SKIP_REASON_LABELS keys on these exact literals;
+// TestBatchSubmitReasonTokens_PinTheWireLiterals holds them still.
 const (
-	batchSubmitReasonNotValidated = "not_validated"
-	batchSubmitReasonDuplicate    = "duplicate_request"
-	// stub (APPR-08-04 Mode A): the token exists so batch_submit_gate_test.go compiles.
-	// The gate read and the guard arm that emit it are Stage 3, as is updating the
-	// "two reachable" prose above and on BatchSubmitResultItem.
+	batchSubmitReasonNotValidated     = "not_validated"
+	batchSubmitReasonDuplicate        = "duplicate_request"
 	batchSubmitReasonAwaitingApproval = "awaiting_approval"
 )
 
@@ -85,7 +85,9 @@ type BatchSubmitInput struct {
 
 // BatchSubmitResultItem is one invoice's outcome in a BatchSubmitResult (task-231 System
 // Design response body). Reason is empty (omitted from the wire) when Enqueued is true --
-// the two reachable skip reasons are batchSubmitReasonNotValidated/batchSubmitReasonDuplicate.
+// the three reachable skip reasons are batchSubmitReasonNotValidated /
+// batchSubmitReasonDuplicate / batchSubmitReasonAwaitingApproval. InvoiceID echoes the
+// CANONICAL uuid text, not the caller's spelling.
 type BatchSubmitResultItem struct {
 	InvoiceID string `json:"invoice_id"`
 	Enqueued  bool   `json:"enqueued"`
@@ -156,15 +158,25 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 		// BatchSubmit). Unknown/cross-tenant ids (0 rows under RLS) hard-fail the whole
 		// request via ErrNotFound; a non-uuid id would raise 22P02, but that is already
 		// rejected pre-tx by BatchSubmitHandler.
+		//
+		// Everything below the lock is keyed on the LOCKED row's id -- TransmitClearTx
+		// maps Postgres's canonical uuid text, so an uppercase/{braced}/32-hex spelling
+		// would read absent, hence false, hence a wrong refusal
+		// (TestBatchSubmit_UppercaseIdOnAnApprovedInvoiceEnqueues). The seen guard stays
+		// on the caller's raw string so two spellings of one uuid still collapse onto one
+		// derived key (TestBatchSubmit_SameIdInTwoSpellingsResolvesOnce).
 		statuses := make(map[string]Status, len(in.InvoiceIDs))
+		canonical := make(map[string]string, len(in.InvoiceIDs))
+		distinct := make([]string, 0, len(in.InvoiceIDs))
 		for _, id := range in.InvoiceIDs {
-			if _, seen := statuses[id]; seen {
+			if _, seen := canonical[id]; seen {
 				continue
 			}
+			var lockedID string
 			var status Status
 			if err := tx.QueryRow(ctx,
-				`SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-			).Scan(&status); err != nil {
+				`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
+			).Scan(&lockedID, &status); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrNotFound
 				}
@@ -173,20 +185,47 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 				}
 				return err
 			}
-			statuses[id] = status
+			canonical[id] = lockedID
+			statuses[lockedID] = status
+			distinct = append(distinct, lockedID)
+		}
+
+		// After every row lock, per the invoices -> approval_* lock order (decision.go).
+		// One call over the distinct set, so the cost is constant in batch size
+		// (TestBatchSubmit_ApprovalReadIsConstantInBatchSize).
+		var clear map[string]bool
+		if s.store.approvalsEnforced {
+			var err error
+			if clear, err = approval.TransmitClearTx(ctx, tx, distinct); err != nil {
+				return err
+			}
 		}
 
 		// Classify per REQUESTED LIST POSITION (duplicates preserved, one result item
 		// per position) using the eligibility already resolved above.
 		results := make([]BatchSubmitResultItem, 0, len(in.InvoiceIDs))
 		anyEnqueued := false
-		for _, id := range in.InvoiceIDs {
+		for _, raw := range in.InvoiceIDs {
+			id := canonical[raw]
 			if statuses[id] != StatusValidated {
 				results = append(results, BatchSubmitResultItem{
 					InvoiceID: id,
 					Enqueued:  false,
 					Status:    string(statuses[id]),
 					Reason:    batchSubmitReasonNotValidated,
+				})
+				continue
+			}
+
+			// The approvalsEnforced conjunct is load-bearing: clear is nil with the flag
+			// off and a nil-map read yields false, which would skip every invoice in
+			// every batch (TestBatchSubmit_FlagOffWithNilClearMapDoesNotSkipEverything).
+			if s.store.approvalsEnforced && !clear[id] {
+				results = append(results, BatchSubmitResultItem{
+					InvoiceID: id,
+					Enqueued:  false,
+					Status:    string(statuses[id]),
+					Reason:    batchSubmitReasonAwaitingApproval,
 				})
 				continue
 			}

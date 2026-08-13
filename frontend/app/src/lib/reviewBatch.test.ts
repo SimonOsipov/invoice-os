@@ -1395,7 +1395,7 @@ describe('pagerNav: single-page boundary — a batch that fits in one page (PAGE
 //     below for the reachable, structural substitute: a source scan pinning WHERE the key
 //     is minted).
 //   - "an unknown skip reason passes through verbatim" is DROPPED as a duplicate of
-//     already-green invoices.test.ts I-skip-1 (:746, `skipReasonLabel('wat') === 'wat'`).
+//     already-green invoices.test.ts I-skip-1 (`skipReasonLabel('wat') === 'wat'`).
 //     BULK-10 below covers the genuinely new claim built on top of it (the *result row*
 //     built from that label), which I-skip-1 does not touch.
 // lib/invoices.ts and lib/invoices.test.ts are NOT touched by this subtask — both rows

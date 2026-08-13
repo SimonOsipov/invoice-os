@@ -954,15 +954,13 @@ export function diffEditInput(original: InvoiceRecord, form: EditFormState): Inv
   return patch
 }
 
-// not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason
-// values (batchSubmitReasonNotValidated/batchSubmitReasonDuplicate, handlers.go) --
-// anything else passes through verbatim rather than being swallowed, so an unknown
-// future reason still surfaces something to the operator.
+// not_validated/duplicate_request/awaiting_approval are the three reachable
+// BatchSubmitResultItem.reason values (the batchSubmitReason* consts,
+// internal/invoice/batch_submit.go) -- anything else passes through verbatim rather than
+// being swallowed, so an unknown future reason still surfaces something to the operator.
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_validated: 'Not validated — validate it first',
   duplicate_request: 'Already submitted with this request',
-  // stub (APPR-08-04 Mode A): the copy ships now; Stage 3 rewrites the comment above to
-  // three reasons and corrects its citation to batch_submit.go.
   awaiting_approval: 'Waiting on approval — an approver must approve it first',
 }
 

@@ -1156,11 +1156,17 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 			writeError(w, http.StatusBadRequest, "idempotency_key exceeds the 218-char bound")
 			return
 		}
-		for _, id := range req.InvoiceIDs {
-			if _, err := uuid.Parse(id); err != nil {
+		// uuid.Parse accepts uppercase, {braced}, urn:uuid: and 32-hex-no-dash, so keep
+		// the parse result: the approval gate keys on Postgres's canonical text and a
+		// non-canonical id would read absent there
+		// (TestBatchSubmitHandler_NormalisesInvoiceIdsToCanonicalForm).
+		for i, id := range req.InvoiceIDs {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				writeError(w, http.StatusBadRequest, "invoice_ids must be well-formed UUIDs")
 				return
 			}
+			req.InvoiceIDs[i] = parsed.String()
 		}
 
 		result, err := submit(r.Context(), BatchSubmitInput{

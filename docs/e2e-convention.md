@@ -99,10 +99,13 @@ assertion as though it proved a contract is the failure this rule prevents; refu
 write it at all leaves a shipped screen untested. So: write it, and label it.
 
 The approval-policy list was the other example until APPR-09: the endpoints are real
-(`docs/approvals.md`) and `App.tsx` fetches them, so `e2e/topology/workflows.spec.ts` and
-`persona-surfaces.spec.ts` are being re-derived against live data (APPR-09-07/08). Until
-those land, both still assert against `e2e/topology/policyFixtures.ts` and describe
-themselves in-file as mock-only.
+(`docs/approvals.md`) and `App.tsx` fetches them, so both specs over that surface are being
+re-derived against live data (APPR-09-07/08). `e2e/topology/workflows.spec.ts` has landed —
+it creates its own policy through the UI, imports no fixture, and never publishes
+(`[topology-never-publishes]`: a publish seals a version permanently and takes the tenant's
+one active slot on a shared deployment). `persona-surfaces.spec.ts` still holds the in-house
+half, still asserts against `e2e/topology/policyFixtures.ts`, and still describes itself
+in-file as mock-only, until APPR-09-08 lands.
 
 Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The

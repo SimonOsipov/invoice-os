@@ -1015,11 +1015,12 @@ export interface BulkBarView {
 // PREVIOUS page's ids on the wire, gets a 200, and leaves nothing to notice.
 //
 // `notReady` is page-scoped and cause-FREE on purpose. A non-selectable row may be a
-// draft failing a rule, a draft awaiting re-validation, or already queued/submitted/
-// accepted/rejected/failed -- only its own verdict pill knows which, so the note answers
-// the one question this bar can honestly answer ("why did select-all pick 12 of 50?")
-// and names no cause. The status word is interpolated from invoiceStatusStyle, never
-// written as a literal, so it cannot drift from the pill in the Verdict column.
+// draft failing a rule, a draft awaiting re-validation, already queued/submitted/
+// accepted/rejected/failed, or -- since APPR-08-09 -- validated but held by an open
+// approval run. That last one is why the note names no cause AND no status: such a row
+// IS validated and its verdict pill says so, so no status word can be true of the whole
+// `notReady` set. The note answers the one question this bar can honestly answer
+// ("why did select-all pick 12 of 50?").
 export function bulkBarView(
   selected: string[],
   rows: InvoiceRecord[],
@@ -1046,7 +1047,7 @@ export function bulkBarView(
     countLabel: `${n} selected on this page`,
     note:
       notReady > 0
-        ? `Only ${invoiceStatusStyle('validated').label} rows can be sent. ${notReady} of the ${rows.length} on this page cannot.`
+        ? `${notReady} of the ${rows.length} rows on this page cannot be sent.`
         : null,
     submitLabel: `Submit ${n} for transmission`,
     // Singular at one, so the confirmation never reads "Send 1 invoices".

@@ -610,8 +610,9 @@ export function ReviewInvoicesTab({
 
           {/* Page-scoped and cause-free — it answers "why did select-all pick 12 of 50?",
               which is the only version of §7.3's split note this screen can honestly make:
-              a non-selectable row may be failing, mid-edit, or already sent, and only its
-              own verdict pill knows which. */}
+              a non-selectable row may be failing, mid-edit, already sent, or validated and
+              held by an open approval run. That last one's verdict pill reads VALIDATED,
+              so the pill does not distinguish it — which is why the note names no cause. */}
           {bar.note != null && (
             <p data-testid="review-bulk-note" style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>
               {bar.note}

@@ -68,12 +68,21 @@
 // statuses is exactly the thing that drifts out of sync with the machine, which is what
 // happened when the backend widened Edit to accept `rejected` and the SPA did not follow.
 // isInFlight (polling) and INVOICE_STATUS_STYLE (pills) are NOT availability gates and
-// stay. isRowSelectable became one in APPR-08-09: it gates batch selection, reading the
-// row's `approval.run_state` off the wire rather than re-deriving the server's rule, and
-// failing open on anything else. Its `status === 'validated'` half is still a mirrored
-// status set that can drift the way the deleted one did; both are tolerated only because
-// the server's skip is authoritative -- a wrong answer costs a checkbox, never a bypass.
-// A gate that cannot make that claim reads the wire.
+// stay. isRowSelectable became one in APPR-08-09, and -- unlike can_edit/can_revalidate
+// above -- it does NOT read its answer off the wire. The server's rule is `TransmitClear`
+// (`internal/approval`): `!policyActive || approvedRun`, and NEITHER input rides the row
+// wire. `approval.run_state` is a DIFFERENT fact -- the NEWEST run's state (`RowFactsTx`)
+// -- from which this file INFERS the gate, so it is a re-derivation from a PROXY. That
+// makes TWO mirrored residuals here, not one: the `status === 'validated'` status set,
+// and the inference itself. The inference matches the server on every reachable state
+// only because of four invariants living outside the SPA: validation always arms
+// (`ApplyValidation`), a rejection demotes in the same tx (`decideTx`), every walk back
+// to draft cancels the live run (`CancelLiveRunTx`), and `approved` is EXISTS over ALL
+// runs while `run_state` is only the newest (`TransmitClearTx`, `GateFactsTx`). Change
+// one and this file must be re-decided; invoices.test.ts's A-sel-13 pins the surface and
+// names all four. Both residuals are tolerated only because the server's skip is
+// authoritative -- a wrong answer costs a checkbox, never a bypass. A gate that cannot
+// make that claim reads the wire.
 //
 // verdictStatus(staleSinceEdit, inv) is the within-session fix-loop indicator (Core AC
 // #7) plus the on-load demoted-draft derivation (Core AC #5, task-188 item 4): 'stale'

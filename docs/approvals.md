@@ -592,8 +592,9 @@ appearing to route something.
 > them also still appear as scopes on mock policy data.
 >
 > Selecting one and saving is **not** refused, because **nothing is sent**. The builder is
-> not wired to this API at all — the SPA makes no call to `/v1/approval-policies` anywhere,
-> and its `publishPolicy` is a local object transform. The screen accepts an unstorable
+> not wired to this API at all — the SPA's `/v1/approval-policies` wrappers
+> (`frontend/app/src/lib/policies.ts`) have no caller yet, and `publishPolicy` is a local
+> object transform. The screen accepts an unstorable
 > scope and displays it as published. The server's refusal is real but only reachable by
 > calling the API directly; the editor will not start meeting it until **APPR-09** wires
 > the builder to the server.

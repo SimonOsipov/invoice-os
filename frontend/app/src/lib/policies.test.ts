@@ -636,3 +636,173 @@ describe('AC-5 — a non-2xx reaches the caller as the gateway wrote it', () => 
     await expect(deleteApprovalPolicy(double(), wireBase, 'p1')).rejects.toBe(boom)
   })
 })
+
+// --- QA additions: the wrappers ---------------------------------------------
+// Each spec below was written against a mutation the eleven AC specs let through.
+
+function mockFetchRejectingOnce(err: unknown) {
+  const fetchMock = vi.fn().mockRejectedValue(err)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('QA: putApprovalPolicyDraft forwards what the caller holds, and projects what comes back', () => {
+  it("sends the policy's own scope, never a hardcoded default", async () => {
+    // scope is a *string on putDraftRequest (policy.go:104), so an absent key leaves the
+    // stored scope untouched while a present foreign one earns normalizeScope's 400. Both
+    // halves — presence AND the forwarded value — are the wrapper's job.
+    for (const scope of ['All invoices', 'Capex & fixed assets']) {
+      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
+      await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1', scope }))
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const sent = JSON.parse(init.body as string) as Record<string, unknown>
+      expect(Object.hasOwn(sent, 'scope'), scope).toBe(true)
+      expect(sent.scope, scope).toBe(scope)
+    }
+  })
+
+  it('projects the saved draft through toPolicy rather than handing back the raw wire', async () => {
+    const saved = wire({
+      id: 'p1',
+      version: 3,
+      steps: [step({ id: 's1', kind: 'approval', workflow_role_key: 'cfo', sla_hours: 48 })],
+      versions: [ver(3, false, false), ver(2, true, true)],
+    })
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(saved) })
+
+    const result = await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1' }))
+
+    expect(result).toEqual(toPolicy(saved))
+    // The two fields only the projection produces: the wire carries neither.
+    expect(result.activeVersion).toBe(2)
+    expect(result.nodes).toHaveLength(1)
+    expect((result.nodes[0] as ApprovalNode).role).toBe('cfo')
+    expect(Object.hasOwn(result, 'versions')).toBe(false)
+  })
+})
+
+describe('QA: the wrapper gates nothing the server owns', () => {
+  it('sends a notify step the canvas left blank, with no client-side check', async () => {
+    // notify_target/notify_channel are plain nullable text with no CHECK
+    // (20260809210326_approval_policies.sql:98-99) and validateStepFields refuses only a
+    // NUL byte — so blanks SAVE, they do not 400. Gating them is the editor's job, and
+    // adding a gate here would hide that.
+    const blank = policy({ id: 'p1', nodes: [{ id: 'n1', type: 'notify', target: '', channel: '' }] as Policy['nodes'] })
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
+
+    await putApprovalPolicyDraft(authed(), wireBase, 'p1', blank)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const sent = JSON.parse(init.body as string) as { steps: Array<Record<string, unknown>> }
+    expect(sent.steps).toHaveLength(1)
+    expect(sent.steps[0].kind).toBe('notify')
+    expect(sent.steps[0].notify_target).toBe('')
+    expect(sent.steps[0].notify_channel).toBe('')
+  })
+
+  it("sends a tree past the 64 KiB cap whole — the cap is the server's to enforce", async () => {
+    // maxPolicyBodyBytes wraps the handler in a MaxBytesReader (policy_handlers.go:126).
+    // A client-side slice would turn that 400 into a silent partial save.
+    const many = Array.from({ length: 1500 }, (_, i) => ({
+      id: `n${i}`,
+      type: 'approval',
+      role: 'finance_manager',
+      sla: '48',
+      delegate: false,
+    })) as Policy['nodes']
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
+
+    await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1', nodes: many }))
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect((init.body as string).length).toBeGreaterThan(64 * 1024)
+    const sent = JSON.parse(init.body as string) as { steps: unknown[] }
+    expect(sent.steps).toHaveLength(1500)
+  })
+
+  it("returns the cap's own 400 sentence, not a client-side size complaint", async () => {
+    mockFetchOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'invalid request body' }) })
+
+    const caught = await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1' })).catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).message).toBe('invalid request body')
+    expect((caught as ApiError).status).toBe(400)
+  })
+})
+
+describe('QA: the list envelope at its edges', () => {
+  it('resolves an empty array for a tenant holding no policies', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ approval_policies: [] }) })
+    await expect(listApprovalPolicies(authed(), wireBase)).resolves.toEqual([])
+  })
+
+  it('fails loudly when the envelope key is absent, rather than reporting an empty tenant', async () => {
+    // The key is never absent on the wire (no omitempty, [] never null). Defaulting it to
+    // [] would render a broken response as "no policies yet" — the one reading a user acts on.
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+
+    const caught = await listApprovalPolicies(authed(), wireBase).catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(TypeError)
+    expect(caught).not.toEqual([])
+  })
+})
+
+describe('QA: the non-http failure kinds reach the caller unreshaped', () => {
+  it('carries a network failure through as kind network with a null status', async () => {
+    for (const run of [
+      (f: AuthedFetch) => listApprovalPolicies(f, wireBase),
+      (f: AuthedFetch) => publishApprovalPolicy(f, wireBase, 'p1'),
+    ]) {
+      mockFetchRejectingOnce(new TypeError('Failed to fetch'))
+      const onUnauthorized = vi.fn()
+
+      const caught = await run(createAuthedFetch(() => 'tok', onUnauthorized)).catch((e: unknown) => e)
+
+      expect(caught).toBeInstanceOf(ApiError)
+      expect((caught as ApiError).kind).toBe('network')
+      expect((caught as ApiError).status).toBeNull()
+      expect((caught as ApiError).message).toBe('Failed to fetch')
+      // Only a 401 is a sign-out; an unreachable gateway must not evict the session.
+      expect(onUnauthorized).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rejects malformed on a 200 whose body will not parse, never a half-mapped policy', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.reject(new SyntaxError('Unexpected token <')) })
+
+    const caught = await listApprovalPolicies(authed(), wireBase).catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).kind).toBe('malformed')
+    expect((caught as ApiError).message).toBe('malformed response body')
+    expect((caught as ApiError).status).toBe(200)
+  })
+
+  it('fires onUnauthorized once on a 401 and still rejects with that same error', async () => {
+    const runs: Array<{ name: string; run: (f: AuthedFetch) => Promise<unknown> }> = [
+      { name: 'list', run: (f) => listApprovalPolicies(f, wireBase) },
+      { name: 'create', run: (f) => createApprovalPolicy(f, wireBase, 'Untitled policy') },
+      { name: 'putDraft', run: (f) => putApprovalPolicyDraft(f, wireBase, 'p1', policy({ id: 'p1' })) },
+      { name: 'publish', run: (f) => publishApprovalPolicy(f, wireBase, 'p1') },
+      { name: 'delete', run: (f) => deleteApprovalPolicy(f, wireBase, 'p1') },
+    ]
+    expect(runs).toHaveLength(5)
+
+    for (const { name, run } of runs) {
+      mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+      const onUnauthorized = vi.fn()
+
+      const caught = await run(createAuthedFetch(() => 'tok', onUnauthorized)).catch((e: unknown) => e)
+
+      // The side-effect fires AND the error still propagates: authedFetch catches only to
+      // sign out, then rethrows the same instance.
+      expect(onUnauthorized, name).toHaveBeenCalledTimes(1)
+      expect(caught, name).toBeInstanceOf(ApiError)
+      expect((caught as ApiError).status, name).toBe(401)
+      expect((caught as ApiError).message, name).toBe('unauthorized')
+    }
+  })
+})

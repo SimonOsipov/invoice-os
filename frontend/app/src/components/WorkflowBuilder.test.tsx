@@ -478,7 +478,7 @@ describe('APPR-09-05 QA AC-3: a sealed version is the second thing that blocks P
     // What `PUT .../draft` really answers: a fresh unsealed v3 over the still-active v2.
     const savePolicy = vi.fn(async (p: Policy) => ({ ...p, status: 'draft' as const, version: 3 }))
     render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed], savePolicy })} policy={sealed} />)
-    expect(publishButton().disabled, 'the policy is already publishable, so the re-open below is vacuous').toBe(true)
+    expect(publishButton().disabled, 'the seal left Publish open, so the re-open below is vacuous').toBe(true)
 
     fireEvent.change(screen.getByLabelText('Policy name'), { target: { value: 'Renamed policy' } })
     fireEvent.click(saveButton())

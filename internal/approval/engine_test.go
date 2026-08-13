@@ -59,7 +59,7 @@ func TestEvalCondition_AmountMatchesSPA(t *testing.T) {
 			ptr("250000000.00"), dec("250000001.00"), true, true, false, false,
 		},
 		{
-			"exact boundary, ₦1bn seed threshold (f1n4/h1n4/h2n3 in the workflows.ts seed)",
+			"exact boundary, ₦1bn seed threshold (f1n4/h1n4/h2n3 in the policies.fixture.ts seed)",
 			ptr("1000000000.00"), dec("1000000000.00"), false, true, false, true,
 		},
 		{
@@ -231,7 +231,7 @@ func stepCond(op, amount string, then, els []Step) Step {
 }
 
 // polF1..polH2 transcribe the SPA seed's five policies (SEED_FIRM_POLICIES and
-// SEED_INHOUSE_POLICIES in workflows.ts) into the nested Step shape. Each returns a fresh
+// SEED_INHOUSE_POLICIES in policies.fixture.ts) into the nested Step shape. Each returns a fresh
 // tree per call, mirroring workflows.test.ts's clone-per-call polF1 helper. The
 // never-taken lanes are left nil rather than
 // []Step{}, since a hand-built literal may hold either (policy.go:19-30's Then/Else are
@@ -264,7 +264,7 @@ func polF3() []Step {
 }
 
 // polH1's h1n4 is the only seeded condition with a non-empty else — the only lane in
-// the whole seed that can reach an autoapprove (h1n4 in the workflows.ts seed).
+// the whole seed that can reach an autoapprove (h1n4 in the policies.fixture.ts seed).
 func polH1() []Step {
 	return []Step{
 		stepApproval("line_mgr", 48),

@@ -106,7 +106,8 @@ publishes (`[topology-never-publishes]`: a publish seals a version permanently a
 tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` builds and
 deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
 now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
-nothing seeds `approval_policies`, so there is no row any spec may name. `policyFixtures.ts`
+nothing seeds `approval_policies`, so `persona-surfaces.spec.ts` has no pre-existing row to
+name; `workflows.spec.ts` and `roles.spec.ts` name only rows they create. `policyFixtures.ts`
 is imported by nothing and stays on disk for APPR-10 to delete.
 
 Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry

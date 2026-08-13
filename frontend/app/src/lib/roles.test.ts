@@ -339,7 +339,7 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
     const firmRoles = approvalRoles(SEED_FIRM_POLICIES)
     const inhouseRoles = approvalRoles(SEED_INHOUSE_POLICIES)
     // Guards against a vacuous pass — SEED_FIRM_POLICIES/SEED_INHOUSE_POLICIES are already
-    // shipped (workflows.ts), so these lists are real and non-empty regardless of roles.ts.
+    // shipped (policies.fixture.ts), so these lists are real and non-empty regardless of roles.ts.
     expect(firmRoles.length).toBeGreaterThan(0)
     expect(inhouseRoles.length).toBeGreaterThan(0)
     for (const key of firmRoles) expect(firmKeys.has(key)).toBe(true)
@@ -694,7 +694,7 @@ describe('AC-6 — canSaveRole gates on the name alone', () => {
 describe('AC-7 — deleteRoleConfirm names the role and its usage', () => {
   it('a used role names its usage sentence and warns those steps will block', () => {
     // 'compliance' (Tax Reviewer) is named once each in polF1/polF2/polF3 — three approval
-    // steps across three policies (SEED_FIRM_POLICIES in workflows.ts).
+    // steps across three policies (SEED_FIRM_POLICIES in policies.fixture.ts).
     const usage = roleSteps(SEED_FIRM_POLICIES, 'compliance')
     expect(usage).toEqual({
       total: 3,

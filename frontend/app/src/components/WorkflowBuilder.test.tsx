@@ -174,3 +174,35 @@ describe('APPR-09-03 QA: the save control writes a draft and nothing else', () =
     expect(publishPolicy).not.toHaveBeenCalled()
   })
 })
+
+// ============================================================================
+// APPR-09-04 (task-508) AC-8 — the builder promises only what it performs
+// ============================================================================
+// Subtask 03 made `save()` save-only, which left 'Save & publish' a live false promise.
+// Subtask 05 splits the control into 'Save draft' + 'Publish' and gives Publish a real
+// handler; until then no control may claim a publish at all.
+
+describe('APPR-09-04 AC-8: no control claims a publish the code no longer performs', () => {
+  it('no control in the builder claims to publish', () => {
+    // A PUBLISHED policy on purpose: `PolicyStatusPill` renders the literal 'PUBLISHED' in
+    // the header (WorkflowBuilder.tsx:233). Scoping to <button> is what separates a status
+    // report from a promise — a screen-wide /publish/i check would fail on that pill.
+    const live: Policy = { ...policyWith('fin_mgr'), status: 'published', activeVersion: 1 }
+    render(<WorkflowBuilder ctx={builderCtx()} policy={live} />)
+
+    expect(screen.getByText('PUBLISHED'), 'the status pill must still report the sealed version').toBeTruthy()
+
+    const buttons = Array.from(document.querySelectorAll('button'))
+    expect(buttons.length, 'the builder rendered no controls, so the scan below is vacuous').toBeGreaterThan(0)
+    const claiming = buttons.filter((b) => /publish/i.test(b.textContent ?? '')).map((b) => b.textContent)
+    expect(claiming, 'a control promises a publish that save() does not perform').toEqual([])
+  })
+
+  it('the save control still exists and is the only one', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    // The floor under the absence above: deleting the button outright would satisfy it too.
+    const save = Array.from(document.querySelectorAll('button')).filter((b) => /^Save/.test(b.textContent ?? ''))
+    expect(save, 'the builder lost its save control').toHaveLength(1)
+  })
+})

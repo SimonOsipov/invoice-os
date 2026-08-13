@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiError, asyncReducer, initialState } from '@invoice-os/api-client'
+import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-os/api-client'
 
 import { membersViewState } from './lib/members'
 import { newPolicy, type Policy } from './lib/workflows'
@@ -132,22 +132,33 @@ describe('App.tsx wiring', () => {
     }
   })
 
-  it('never blanks the policies mirror during a refetch', () => {
+  // APPR-09-04 (task-508) D1. This spec used to ban `?? []` on every `setPolicies` line,
+  // which pinned the DEFECT: the only predicate that ban leaves is `if (policiesAsync.data)`,
+  // and `success` nulls `data` on the empty branch too, so a tenant that deleted its last
+  // policy keeps a ghost list forever. The ban moves to the optimistic patches; the mirror
+  // effect is now pinned on the STATUS, which is the one channel that separates "in flight"
+  // from "landed empty".
+  it('the policies mirror is written only by a LANDED fetch — held in flight, cleared when the tenant empties it', () => {
     const lines = APP.split('\n')
     const writes = lines.map((line, i) => ({ line, at: i + 1 })).filter((l) => l.line.includes('setPolicies('))
     expect(writes.length, 'App.tsx holds no policies mirror at all').toBeGreaterThan(0)
 
-    // `asyncReducer`'s `start` nulls `data`, so `?? []` empties the list for the round trip —
-    // the exact flash the mirror exists to prevent. Members and roles never hit it because
-    // they only ever patch; publish is the one verb that refetches.
-    for (const w of writes) expect(w.line, `App.tsx:${w.at} blanks the mirror`).not.toContain('?? []')
-
-    const fromAsync = writes.filter((w) => w.line.includes('.data'))
+    const fromAsync = writes.filter((w) => w.line.includes('policiesAsync.data'))
     expect(fromAsync.length, 'no mirror effect reads the async data').toBeGreaterThan(0)
     for (const w of fromAsync) {
       const window = lines.slice(Math.max(0, w.at - 3), w.at).join('\n')
       expect(window, `App.tsx:${w.at} writes the mirror ungated`).toMatch(/if\s*\(/)
+      // `start` nulls `data`, so 'loading' must fall through and hold the previous list.
+      expect(window, `App.tsx:${w.at} overwrites the mirror without waiting for a landed list`).toMatch(/status\s*===\s*'ready'/)
+      // The fix: a landed-empty fetch is authoritative, and only the status says so.
+      expect(window, `App.tsx:${w.at} keys the mirror on data truthiness, so a landed-empty fetch can never clear it`).toMatch(/status\s*===\s*'empty'/)
     }
+
+    // The three optimistic patches take a function and carry no async data, so `?? []` there
+    // would be a plain blanking bug with no gate to justify it.
+    const patches = writes.filter((w) => !w.line.includes('policiesAsync.data'))
+    expect(patches.length, 'App.tsx patches the mirror nowhere — the verbs are gone').toBeGreaterThan(0)
+    for (const w of patches) expect(w.line, `App.tsx:${w.at} blanks the mirror`).not.toContain('?? []')
   })
 
   it('refetches the whole list on publish rather than patching one row (AC-2)', () => {
@@ -224,68 +235,83 @@ describe('the policies mirror at the edges', () => {
   const A: Policy = { ...newPolicy(), id: 'polA', name: 'Standard' }
   const B: Policy = { ...newPolicy(), id: 'polB', name: 'Capex' }
 
-  /** App.tsx:298-300, verbatim. */
-  const applyEffect = (mirror: Policy[], data: Policy[] | null) => (data ? data : mirror)
+  /**
+   * App.tsx:296-300, verbatim. Keyed on the STATUS, not on data truthiness: `start` and the
+   * `success` empty branch both null `data`, so truthiness cannot tell an in-flight refetch
+   * from a tenant that deleted its last policy. This is a hand-copy — the assertion that
+   * App.tsx really carries this predicate is the source walk above.
+   */
+  const applyEffect = (mirror: Policy[], state: AsyncState<Policy[]>) =>
+    state.status === 'ready' || state.status === 'empty' ? (state.data ?? []) : mirror
   /** The members/roles idiom, for contrast. */
-  const blankingEffect = (_mirror: Policy[], data: Policy[] | null) => data ?? []
+  const blankingEffect = (_mirror: Policy[], state: AsyncState<Policy[]>) => state.data ?? []
 
   it('a publish refetch never empties a loaded list, where the ungated idiom would', () => {
     let state = initialState<Policy[]>(true)
     state = asyncReducer(state, { type: 'success', data: [A, B] })
-    let mirror = applyEffect([], state.data)
+    let mirror = applyEffect([], state)
     expect(mirror.map((p) => p.id), 'the list must load before the refetch is meaningful').toEqual(['polA', 'polB'])
 
     // publishPolicy calls policiesAsync.run(), which dispatches 'start' first.
     state = asyncReducer(state, { type: 'start' })
     expect(state.data, 'asyncReducer.start no longer nulls data — this spec is testing nothing').toBeNull()
 
-    expect(applyEffect(mirror, state.data).map((p) => p.id)).toEqual(['polA', 'polB'])
+    expect(applyEffect(mirror, state).map((p) => p.id)).toEqual(['polA', 'polB'])
     // The counterfactual, stated so the guard is not mistaken for decoration.
-    expect(blankingEffect(mirror, state.data)).toEqual([])
+    expect(blankingEffect(mirror, state)).toEqual([])
 
     state = asyncReducer(state, { type: 'success', data: [B, A] })
-    mirror = applyEffect(mirror, state.data)
+    mirror = applyEffect(mirror, state)
     expect(mirror.map((p) => p.id), 'the landed refetch must still overwrite the mirror wholesale').toEqual(['polB', 'polA'])
   })
 
   it('a failed refetch keeps the loaded list AND reports the failure — the two are separate channels', () => {
     let state = asyncReducer(initialState<Policy[]>(true), { type: 'success', data: [A, B] })
-    const mirror = applyEffect([], state.data)
+    const mirror = applyEffect([], state)
 
     const boom = new ApiError('http', 'only an admin can read approval policies', 403)
     state = asyncReducer(state, { type: 'error', error: boom })
 
     expect(state.status).toBe('error')
     expect(state.error, 'the gateway message must reach the surface unreshaped').toBe(boom)
-    expect(applyEffect(mirror, state.data).map((p) => p.id)).toEqual(['polA', 'polB'])
+    expect(applyEffect(mirror, state).map((p) => p.id)).toEqual(['polA', 'polB'])
   })
 
   it('an EMPTY tenant and a FAILED fetch are indistinguishable by length — only policiesState separates them', () => {
     const empty = asyncReducer(initialState<Policy[]>(true), { type: 'success', data: [] })
     const failed = asyncReducer(initialState<Policy[]>(true), { type: 'error', error: new ApiError('http', 'gateway is down', 503) })
 
-    // Both null `data`, so both leave the mirror at []. This is why WorkflowsView's ladder
-    // must branch on `ctx.policiesState` (subtask 04 AC-1) and never on `policies.length`.
+    // Both null `data`, and from a cold mirror both leave it at [] — one because the landed
+    // list really is empty, the other because the failed fetch is held. Indistinguishable by
+    // length, which is why WorkflowsView's ladder must branch on `ctx.policiesState`
+    // (subtask 04 AC-1) and never on `policies.length`.
     expect(empty.data).toBeNull()
     expect(failed.data).toBeNull()
-    expect(applyEffect([], empty.data)).toEqual([])
-    expect(applyEffect([], failed.data)).toEqual([])
+    expect(applyEffect([], empty)).toEqual([])
+    expect(applyEffect([], failed)).toEqual([])
 
     expect(empty.status).toBe('empty')
     expect(failed.status).toBe('error')
   })
 
-  it('a refetch landing EMPTY leaves the mirror stale — the state, not the list, is what says so', () => {
-    // The cost the guard buys the flash with: `success` nulls `data` on the empty branch too,
-    // so a tenant whose last policy was deleted elsewhere keeps rendering here until the
-    // policiesState ladder lands. Recorded, not repaired — subtask 04 gates on the state.
+  // APPR-09-04 (task-508) D1. This spec asserted the stale mirror as if it were correct.
+  // Rewritten: holding through an in-flight refetch and clearing on a landed-empty one are
+  // two different arms of one predicate, and both are asserted here so a fix to either half
+  // cannot quietly break the other.
+  it('a refetch landing EMPTY clears the mirror — a tenant that deleted its last policy is not shown a ghost', () => {
     let state = asyncReducer(initialState<Policy[]>(true), { type: 'success', data: [A] })
-    const mirror = applyEffect([], state.data)
-    expect(mirror.map((p) => p.id)).toEqual(['polA'])
+    let mirror = applyEffect([], state)
+    expect(mirror.map((p) => p.id), 'the list must load before the refetch is meaningful').toEqual(['polA'])
+
+    // The anti-blanking half first: whatever fixes the empty branch must not cost this.
+    state = asyncReducer(state, { type: 'start' })
+    expect(applyEffect(mirror, state).map((p) => p.id), 'an in-flight refetch blanked the list').toEqual(['polA'])
 
     state = asyncReducer(state, { type: 'success', data: [] })
     expect(state.status).toBe('empty')
-    expect(applyEffect(mirror, state.data).map((p) => p.id)).toEqual(['polA'])
+    expect(state.data, 'the empty branch nulls data too — truthiness alone cannot see this landing').toBeNull()
+    mirror = applyEffect(mirror, state)
+    expect(mirror, 'the tenant emptied the list and the mirror still shows a ghost').toEqual([])
   })
 
   it('no gateway reports idle, never empty — a workspace without one has not been asked', () => {

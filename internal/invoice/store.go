@@ -1501,13 +1501,17 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 // to transitionTx, which both callers must go through; Transition's own
 // observable behaviour is unchanged). Inside ONE db.WithinRequestTenantTx
 // closure:
-// SELECT status FROM invoices WHERE id=$1 FOR UPDATE locks and reads the
+// SELECT id, status FROM invoices WHERE id=$1 FOR UPDATE locks and reads the
 // current status (RLS-scoped, so a cross-tenant VALID uuid 0-rows same as a
 // genuinely nonexistent one; pgx.ErrNoRows -> ErrNotFound; a malformed
 // non-uuid id raises 22P02, mapped to ErrValidation, mirroring Get/Update/
 // Create -- CodeRabbit finding) -> a no-op (current==target)
 // -> ErrRedundantTransition (checked FIRST, [D4], before legality, and so
-// retained HERE rather than in transitionTx) -> then transitionTx on this
+// retained HERE rather than in transitionTx) -> then, on the ONE legal edge
+// into queued and only when APPROVALS_ENFORCED is on, the transmit gate:
+// approval.TransmitClearTx on this same tx, after the lock so the answer
+// cannot be stale (TestTransition_GateRunsAfterTheRowLock) -> not clear ->
+// ErrAwaitingApproval -> then transitionTx on this
 // same tx: an edge outside legalTransitions -> ErrIllegalTransition -> else
 // UPDATE status, INSERT invoice_status_history (from_status=current,
 // to_status=target, actor=Subject), and audit.Record("invoice.transitioned",
@@ -1526,10 +1530,11 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var lockedID string
 		var current Status
 		if err := tx.QueryRow(ctx,
-			`SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-		).Scan(&current); err != nil {
+			`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&lockedID, &current); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -1545,14 +1550,30 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 			return ErrRedundantTransition
 		}
 
+		// Keyed on the LOCKED row's id — TransmitClearTx maps Postgres's canonical
+		// uuid text, so a non-canonical id from the URL would read false
+		// (TestTransition_UppercaseIdOnAnApprovedInvoiceReachesQueued). The
+		// canTransition conjunct keeps an illegal edge reading ErrIllegalTransition
+		// (TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal).
+		if s.approvalsEnforced && target == StatusQueued && canTransition(current, target) {
+			clear, err := approval.TransmitClearTx(ctx, tx, []string{lockedID})
+			if err != nil {
+				return err
+			}
+			if !clear[lockedID] {
+				return ErrAwaitingApproval
+			}
+		}
+
 		var err error
 		if inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx)); err != nil {
 			return err
 		}
 
-		// -> draft ONLY (APPR-06-07, D30). validated -> queued deliberately leaves the
-		// run alone: cancelling there would erase the drift APPR-06-09's
-		// approval_run_orphaned detector reads during the ungated window.
+		// -> draft ONLY (APPR-06-07, D30). validated -> queued still leaves the run
+		// alone: cancelling there would erase the drift APPR-06-09's
+		// approval_run_orphaned detector reads. The gate above narrows that window
+		// rather than closing it — the edge still passes when no policy is active.
 		if target == StatusDraft {
 			if _, err := approval.CancelLiveRunTx(ctx, tx, id, actorFromContext(ctx).Subject); err != nil {
 				return err

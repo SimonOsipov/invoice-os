@@ -1269,7 +1269,9 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 // practice since every handler checks identity first, but this is the
 // defense-in-depth mirror of portfolio's own statusForErr); ErrValidation is
 // 400 with the wrapped message; ErrNotFound is 404; ErrDuplicateNumber/
-// ErrRedundantTransition/ErrIllegalTransition are 409; anything else
+// ErrRedundantTransition/ErrIllegalTransition/ErrAwaitingApproval are 409;
+// the last answers with awaitingApprovalReason, the shared refusal sentence
+// (TestStatusForErr_AwaitingApprovalIs409); anything else
 // (including a 22P02 malformed-numeric-input pgconn error, [D15] accepted
 // residual) is 500 with a generic body -- this helper never leaks internals
 // into the response.
@@ -1298,6 +1300,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "redundant transition"
 	case errors.Is(err, ErrIllegalTransition):
 		return http.StatusConflict, "illegal transition"
+	case errors.Is(err, ErrAwaitingApproval):
+		return http.StatusConflict, awaitingApprovalReason
 	case errors.Is(err, ErrNotDraft):
 		return http.StatusConflict, "invoice is not a draft"
 	case errors.Is(err, ErrStaleValidation):

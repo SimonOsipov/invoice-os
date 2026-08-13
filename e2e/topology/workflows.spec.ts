@@ -5,11 +5,12 @@
 // and this header is stale: stop and re-plan"). It has. APPR-09 wired the list, the builder,
 // Save draft, Publish and delete to internal/approval over five real routes, so the whole
 // coverage was re-planned rather than patched: nothing below asserts a frontend constant,
-// and policyFixtures.ts is no longer imported here (it stays on disk — settingsFixtures.ts
-// and persona-surfaces.spec.ts still import it; retiring it is APPR-10's).
+// and policyFixtures.ts is no longer imported here. APPR-09-08 then took its last importer,
+// persona-surfaces.spec.ts, so the file now sits on disk unimported for APPR-10 to delete.
 //
-// The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, still against
-// those fixtures. Nothing in this file signs in as in-house.
+// The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, and is now a
+// heading, a tenant-driven subtitle and a terminal-arm settle — seed-independent, because
+// nothing seeds approval_policies. Nothing in this file signs in as in-house.
 //
 // THIS SPEC CREATES ITS OWN POLICY, THROUGH THE UI. docs/e2e-convention.md:63-74 decides
 // that: every spec creates per-run-unique data, acts on rows it created, and asserts
@@ -255,7 +256,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
 
   // --- 13. the reload IS the per-tenant proof ------------------------------------------------
   // `?persona=` is stripped at boot and lib/session.ts rehydrates from localStorage, so the
-  // session survives (roles.spec.ts:807 already relies on this). `view` and `editingPolicyId`
+  // session survives (roles.spec.ts:837 already relies on this). `view` and `editingPolicyId`
   // are NOT persisted, so the nav and the builder are re-driven by hand below.
   await page.reload()
   await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
@@ -358,7 +359,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Best-effort, idempotent on purpose — the shape roles.spec.ts:882-893 and
+// Best-effort, idempotent on purpose — the shape roles.spec.ts:980-1013 and
 // contract-approvals.spec.ts:410-425 already use. On the happy path the test above deleted its
 // own row, so the id delete 404s and the sweep finds nothing; this exists for the run that dies
 // mid-journey. Hooks replay on retry (retries: 1 in CI) and a second delete is 404, so a throw

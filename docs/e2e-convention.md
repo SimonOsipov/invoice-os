@@ -98,14 +98,16 @@ over it still agree; it will need revisiting when a real endpoint lands. Writing
 assertion as though it proved a contract is the failure this rule prevents; refusing to
 write it at all leaves a shipped screen untested. So: write it, and label it.
 
-The approval-policy list was the other example until APPR-09: the endpoints are real
-(`docs/approvals.md`) and `App.tsx` fetches them, so both specs over that surface are being
-re-derived against live data (APPR-09-07/08). `e2e/topology/workflows.spec.ts` has landed —
-it creates its own policy through the UI, imports no fixture, and never publishes
-(`[topology-never-publishes]`: a publish seals a version permanently and takes the tenant's
-one active slot on a shared deployment). `persona-surfaces.spec.ts` still holds the in-house
-half, still asserts against `e2e/topology/policyFixtures.ts`, and still describes itself
-in-file as mock-only, until APPR-09-08 lands.
+The approval-policy list was the other example until APPR-09, and is no longer one: the
+endpoints are real (`docs/approvals.md`), `App.tsx` fetches them, and both specs over that
+surface have been re-derived against live data (APPR-09-07/08). `e2e/topology/workflows.spec.ts`
+holds the firm half — it creates its own policy through the UI, imports no fixture, and never
+publishes (`[topology-never-publishes]`: a publish seals a version permanently and takes the
+tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` builds and
+deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
+now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
+nothing seeds `approval_policies`, so there is no row any spec may name. `policyFixtures.ts`
+is imported by nothing and stays on disk for APPR-10 to delete.
 
 Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The

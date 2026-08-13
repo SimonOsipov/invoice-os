@@ -1,5 +1,5 @@
-// Settings › Members and Settings › Roles, driven as BOTH personas, plus the one journey
-// that creates a seat, points a step at it, reloads to prove it stuck, and deletes it.
+// Settings › Members and Settings › Roles, driven as BOTH personas, plus the one journey that
+// creates a seat, builds a policy whose step names it, proves both stuck, and deletes both.
 //
 // LIVE, end to end. Settings › Roles is a real screen over five routes: GET/POST
 // /api/invoice/v1/workflow-roles, PATCH/DELETE /workflow-roles/{key} and
@@ -46,16 +46,26 @@
 //
 // RELOAD is no longer special. Role definitions and staffing are server rows now, so a
 // mid-test `page.reload()` re-fetches the same data rather than wiping an in-memory store —
-// Test 3 uses exactly that to prove the round trip is real (AC-8). The one mutation in this
-// file that STILL needs no cleanup is the policy step Test 3 repoints at its new seat:
-// approval POLICIES remain frontend `useState` (APPR-05/09's problem, not this one), so every
-// `signInAs` reseeds them from scratch and the repoint never touches a database. The ROLE that
-// step points at is a real row, which is why only that half gets the `test.afterAll` sweep
-// below, modelled on contract-approvals.spec.ts:86-94: the two halves of Test 3's mutation now
-// have different lifetimes, and a single cleanup story would be wrong for one of them.
+// Test 3 uses exactly that to prove the round trip is real (AC-8).
+//
+// APPROVAL POLICIES ARE SERVER ROWS TOO, since APPR-09. Test 3 used to repoint a step inside
+// a SEEDED policy and to need no cleanup for it, on the reasoning that policies were frontend
+// `useState` that every `signInAs` reseeded. Both halves of that are false now: nothing seeds
+// approval_policies at all, and a repoint that is SAVED is a row that outlives the run. So
+// Test 3 creates its own policy, saves once, and deletes it through the UI — and the
+// `test.afterAll` below sweeps both halves of its mutation, the role by title prefix and the
+// policy by id first, name second. Modelled on contract-approvals.spec.ts's sweep and on
+// topology/workflows.spec.ts, which mints its own policy exactly this way.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { listWorkflowRoles, login, deleteWorkflowRole, PERSONAS } from '../api/client'
+import {
+  deleteApprovalPolicy,
+  deleteWorkflowRole,
+  listApprovalPolicies,
+  listWorkflowRoles,
+  login,
+  PERSONAS,
+} from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import {
   MEMBERS_TABLE_HEADS,
@@ -63,7 +73,6 @@ import {
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
   SUSPEND_EXPLANATION,
-  SUSPENDED_STEPS_NOTE,
   UNBACKED,
   type SeededMember,
 } from './settingsFixtures'
@@ -75,11 +84,17 @@ import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 // deleted MOCK_* fixture. `who`/`warn` are the APPR-04-02 predicate's own output: only an
 // ACTIVE admin or reviewer is a legal approver, so a seat held only by a preparer (both
 // `Preparer` cards) or only by a suspended reviewer (in-house `CFO`) renders its holder's
-// name in the warn/red tone, same as an empty seat. `usage`/`holders` are unaffected by that
-// predicate (roleUsage() counts EVERY seeded holder and EVERY policy step regardless of
-// approver eligibility) and come straight from the still-mock policy store
-// (lib/workflows.ts's SEED_FIRM_POLICIES/SEED_INHOUSE_POLICIES) plus the raw
-// workflow_role_members row count — re-derived below, not assumed unchanged.
+// name in the warn/red tone, same as an empty seat. `holders` is unaffected by that predicate
+// (holderCount counts EVERY seeded holder regardless of approver eligibility) and comes
+// straight from the raw workflow_role_members row count — re-derived below, not assumed
+// unchanged.
+//
+// A card's USAGE line carries no literal here, and cannot: `roleUsage` is a function of the
+// tenant-wide POLICY list, which neither Test 1 nor Test 2 owns. Nothing seeds
+// approval_policies, so every seeded seat reads `not used in any policy` on a clean
+// deployment — and one stray policy left by a dead run flips that for whichever seats it
+// names. The shape is asserted instead; see USAGE_SHAPE below. Exact usage strings survive in
+// exactly one place, Test 3, over the policy Test 3 itself creates.
 interface SeedRoleCard {
   /** role.key — names the drawer's pill toggle, `${idPrefix}-wfrole-${key}` (MemberParts.tsx). */
   key: string
@@ -91,11 +106,20 @@ interface SeedRoleCard {
   who: string
   /** `resolve()`'s warn: true whenever no ACTIVE approver holds the seat. */
   warn: boolean
-  /** `roleUsage(steps(policies, key))`. The card uppercases it in CSS; matched case-insensitively. */
-  usage: string
-  /** `holderCount(held.length)` — ALL seeded holders, active or not. Same CSS uppercase. */
+  /** `holderCount(held.length)` — ALL seeded holders, active or not. The card uppercases it in CSS. */
   holders: string
 }
+
+/**
+ * `roleUsage`'s two arms, and the whole of its range — asserted as a SHAPE because the value
+ * is not this test's to own (see above). This keeps APPR-09-06's gain rather than dropping it:
+ * RolesView renders the EMPTY STRING on this line while the policies fetch is loading or has
+ * errored, and '' matches neither alternative, so a card that claims nothing still fails.
+ * Case-insensitive because the card uppercases in CSS; anchored so no wider node can match.
+ * The two nouns singularise INDEPENDENTLY, so all four combinations are legal and the pattern
+ * does not try to pin which one is right — `roles.test.ts` owns the singularisation claim.
+ */
+const USAGE_SHAPE = /^(not used in any policy|\d+ approval steps? · \d+ (policy|policies))$/i
 
 // …0004 Musa Danjuma holds two seats (fin_mgr, fin_dir), which is where the roster cell's
 // `+N` form comes from. …0003/…0006 hold `preparer` between them — both PREPARERS, so
@@ -108,7 +132,6 @@ const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Prepares and imports client invoices',
     who: 'Folake Adesina +1',
     warn: true,
-    usage: 'not used in any policy',
     holders: '2 people',
   },
   {
@@ -117,7 +140,6 @@ const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'First sign-off on a client invoice',
     who: 'Musa Danjuma',
     warn: false,
-    usage: '2 approval steps · 2 policies',
     holders: '1 person',
   },
   {
@@ -126,7 +148,6 @@ const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Second sign-off above ₦250m',
     who: 'Musa Danjuma',
     warn: false,
-    usage: '3 approval steps · 3 policies',
     holders: '1 person',
   },
   {
@@ -135,7 +156,6 @@ const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Checks VAT, WHT and TIN detail before filing',
     who: 'Chiamaka Nwosu',
     warn: false,
-    usage: '3 approval steps · 3 policies',
     holders: '1 person',
   },
   {
@@ -144,7 +164,6 @@ const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Signs off invoices above ₦1bn',
     who: 'Chinedu Okafor',
     warn: false,
-    usage: '2 approval steps · 2 policies',
     holders: '1 person',
   },
   {
@@ -153,7 +172,6 @@ const SEED_FIRM_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Second-partner review on flagged engagements',
     who: 'Nobody assigned',
     warn: true,
-    usage: 'not used in any policy',
     holders: '0 people',
   },
 ]
@@ -168,7 +186,6 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Accounts Payable',
     who: 'Zainab Lawal',
     warn: true,
-    usage: 'not used in any policy',
     holders: '1 person',
   },
   {
@@ -177,7 +194,6 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Requesting dept.',
     who: 'Emeka Uzowulu',
     warn: false,
-    usage: '2 approval steps · 2 policies',
     holders: '1 person',
   },
   {
@@ -186,7 +202,6 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Finance',
     who: 'Nobody assigned',
     warn: true,
-    usage: 'not used in any policy',
     holders: '0 people',
   },
   {
@@ -195,7 +210,6 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Finance',
     who: 'Tunde Adeyemi',
     warn: false,
-    usage: 'not used in any policy',
     holders: '1 person',
   },
   {
@@ -204,7 +218,6 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Finance',
     who: 'Ngozi Balogun +1',
     warn: false,
-    usage: '2 approval steps · 2 policies',
     holders: '2 people',
   },
   {
@@ -213,7 +226,6 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Tax & Compliance',
     who: 'Ibrahim Bello',
     warn: false,
-    usage: 'not used in any policy',
     holders: '1 person',
   },
   {
@@ -222,10 +234,9 @@ const SEED_INHOUSE_ROLE_CARDS: readonly SeedRoleCard[] = [
     desc: 'Executive',
     who: 'Adebayo Ogunlesi',
     warn: true,
-    usage: '2 approval steps · 2 policies',
     holders: '1 person',
   },
-  { key: 'ceo', title: 'CEO', desc: 'Executive', who: 'Nobody assigned', warn: true, usage: '1 approval step · 1 policy', holders: '0 people' },
+  { key: 'ceo', title: 'CEO', desc: 'Executive', who: 'Nobody assigned', warn: true, holders: '0 people' },
 ]
 
 /** `unassignedNotice(n)` plus the ' · '-joined titles beneath it — one banner shape, two tabs. */
@@ -276,21 +287,19 @@ const INHOUSE_ROSTER_CELLS: readonly SeedRosterCell[] = [{ member: 'Ngozi Balogu
 const FIRM_PICKER_SELECTABLE = SEED_FIRM_MEMBERS.length
 const INHOUSE_PICKER_SELECTABLE = SEED_INHOUSE_MEMBERS.length
 
-// `stepsForMember` unions every seat …0004 holds in ONE traversal — 5 steps (2 from fin_mgr,
-// 3 from fin_dir) across 3 distinct policies, not two rows of 2 and 3.
-const FIRM_TWO_SEAT_STEPS: { member: string; held: readonly string[]; named: string; policies: string } = {
+// …0004 Musa Danjuma holds TWO seats, which is what makes his drawer's pill loop a real check
+// rather than an all-false one. The drawer's step count and its policy list used to be
+// asserted here too; both are gone with the seeded policies that produced them. `stepsForMember`
+// answers null at zero (lib/roles.ts, pinned by MemberDrawer.test.tsx:242), so on a tenant with
+// no policies those elements do not render at all — the assertions would not be merely wrong,
+// they would have nothing to match.
+const FIRM_TWO_SEAT_MEMBER: { member: string; held: readonly string[] } = {
   member: 'Musa Danjuma',
   held: ['fin_mgr', 'fin_dir'],
-  named: 'Named in 5 approval steps',
-  policies: 'Standard approval policy · Cross-border & FX · Government supply (B2G)',
 }
 
-/** …0012 Adebayo Ogunlesi holds `cfo` alone, which two in-house policy steps name. */
-const INHOUSE_SUSPENDED_STEPS: { member: string; named: string; rowWarning: string } = {
-  member: 'Adebayo Ogunlesi',
-  named: 'Named in 2 approval steps',
-  rowWarning: 'Named in 2 approval steps · those steps will block',
-}
+/** …0012 Adebayo Ogunlesi: SUSPENDED, and the sole `cfo` holder. His STATUS is the live fact. */
+const INHOUSE_SUSPENDED_MEMBER = 'Adebayo Ogunlesi'
 
 /** `drawerRoleHelper('reviewer')` — the non-preparer arm. Free of the seed. */
 const DRAWER_ROLE_HELPER = 'Roles decide which approval steps this person can act on.'
@@ -366,9 +375,11 @@ function wfSelect(page: Page, label: string) {
 
 /**
  * One role card, whole, found by its EXACT title — never `.nth(index)`, which a residue card
- * elsewhere in the grid could shift. `usage`/`holders` are matched case-insensitively (the
- * card uppercases both in CSS); `desc` exactly (`-webkit-line-clamp` truncates the render, not
- * the DOM). `who`'s tone is checked separately, below.
+ * elsewhere in the grid could shift. `holders` is matched case-insensitively (the card
+ * uppercases it in CSS); `desc` exactly (`-webkit-line-clamp` truncates the render, not the
+ * DOM). `who`'s tone is checked separately, below. The usage line is matched by SHAPE — see
+ * USAGE_SHAPE: this test does not own the tenant's policy list, so it cannot name the value,
+ * but a card that renders nothing there is still a failure.
  */
 async function expectRoleCard(page: Page, role: SeedRoleCard): Promise<void> {
   const card = roleCard(page, role.title)
@@ -377,7 +388,7 @@ async function expectRoleCard(page: Page, role: SeedRoleCard): Promise<void> {
   const who = card.getByText(role.who, { exact: true })
   await expect(who, `${role.title} holder line`).toBeVisible()
   await expectHolderTone(who, role.warn, `${role.title} holder line`)
-  await expect(card.getByText(role.usage), `${role.title} usage line`).toBeVisible()
+  await expect(card.getByText(USAGE_SHAPE), `${role.title} usage line`).toBeVisible()
   await expect(card.getByText(role.holders), `${role.title} holder count`).toBeVisible()
 }
 
@@ -385,7 +396,7 @@ async function expectRoleCard(page: Page, role: SeedRoleCard): Promise<void> {
  * `who.warn` renders as an inline `color: var(--status-red-text)` (else `var(--fg-2)`) —
  * RolesView.tsx:227-231. Checked on the literal CSS-variable reference the DOM carries, not
  * the browser's *resolved* color: this file's own font-weight check on the active nav item
- * (below persona-surfaces.spec.ts:355-357) already flagged a resolved design-system color as
+ * (below persona-surfaces.spec.ts:338-340) already flagged a resolved design-system color as
  * "a moving target" across engines, which `element.style.color` never is — it echoes back
  * exactly what React wrote, the same property the unit suite checks directly
  * (InvoicesList.test.tsx's `tin.style.color`).
@@ -494,10 +505,6 @@ test('firm Settings: the live member directory, the live role grid, and every co
   // are gone with the fields no membership row carries.
   await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
-  // The suspended row carries no blocking warning: the warning is derived from the STEPS a
-  // person's roles are named in, and …0007 holds none. Status alone must not raise it.
-  await expect(page.getByTestId('member-steps-warning')).toHaveCount(0)
-
   // --- invite: rendered, dead, and saying so ------------------------------------------------
   await expectDisabledWithReason(
     page.getByTestId('members-invite'),
@@ -548,19 +555,17 @@ test('firm Settings: the live member directory, the live role grid, and every co
   await expect(page.getByTestId('members-unassigned')).toContainText(FIRM_UNASSIGNED.notice)
 
   // --- the drawer: pill toggles, and three controls with nothing behind them ------------------
-  const twoSeat = FIRM_TWO_SEAT_STEPS
+  const twoSeat = FIRM_TWO_SEAT_MEMBER
   await memberRow(page, twoSeat.member).getByText(twoSeat.member, { exact: true }).click()
   const drawer = page.getByTestId('member-drawer')
   await expect(drawer).toBeVisible()
+  // The pill loop is the membership-derived half, and the one that survives: it reads which
+  // seats this person holds, not which policy steps name them.
   for (const role of SEED_FIRM_ROLE_CARDS) {
     const pressed = String(twoSeat.held.includes(role.key))
     await expect(page.getByTestId(`drawer-wfrole-${role.key}`), `${role.title} pill`).toHaveAttribute('aria-pressed', pressed)
   }
   await expect(page.getByTestId('drawer-wfrole-helper')).toHaveText(DRAWER_ROLE_HELPER)
-  // Every seat this person holds, unioned in ONE traversal: a policy naming two of their
-  // roles is one row here, not two.
-  await expect(page.getByTestId('member-steps-named')).toHaveText(twoSeat.named)
-  await expect(drawer).toContainText(twoSeat.policies)
 
   // Access role: shown at the person's REAL role rather than hidden, and unchangeable. The
   // radios sit inside a card each; the reason is one visible sentence beneath all three.
@@ -612,7 +617,8 @@ test('firm Settings: the live member directory, the live role grid, and every co
 
   // Disjointness, firm half. Scoped to the grid and EXACT: `Preparer` is a substring of this
   // mode's own `Invoice Preparer`, so a containment check here would fail for the wrong
-  // reason. Two disjoint sets is what "the store is keyed firm/inhouse" means observationally.
+  // reason. This is a RLS claim, not a client-side one — `workflow_roles` is one table and a
+  // tenant claim is the only filter on it, which is why the two grids share no title.
   const grid = page.getByTestId('roles-grid')
   for (const role of SEED_INHOUSE_ROLE_CARDS) {
     await expect(grid.getByText(role.title, { exact: true }), `${role.title} must not leak into firm`).toHaveCount(0)
@@ -674,16 +680,15 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   await expect(page.getByTestId('members-unassigned')).toContainText(INHOUSE_UNASSIGNED.notice)
 
   // --- the suspended holder's row and drawer --------------------------------------------------
-  // …0012's status is a SERVER value. It is what puts the red pill on the row, the blocking
-  // strip under it, and the amber note in the drawer — three surfaces off one column.
-  const suspended = INHOUSE_SUSPENDED_STEPS
-  await expect(page.getByTestId('member-steps-warning')).toHaveText(suspended.rowWarning)
-
-  await memberRow(page, suspended.member).getByText(suspended.member, { exact: true }).click()
+  // …0012's status is a SERVER value, and it is what reverses the danger-zone control below.
+  // The row's blocking strip and the drawer's amber note used to be asserted here as well;
+  // both are derived from the STEPS his seat is named in, and with nothing seeding
+  // approval_policies neither element renders at all. MembersTable.test.tsx and
+  // MemberDrawer.test.tsx own those two claims, against a fixture that can supply the steps.
+  const suspended = INHOUSE_SUSPENDED_MEMBER
+  await memberRow(page, suspended).getByText(suspended, { exact: true }).click()
   const drawer = page.getByTestId('member-drawer')
   await expect(drawer).toBeVisible()
-  await expect(page.getByTestId('member-steps-named')).toHaveText(suspended.named)
-  await expect(page.getByTestId('member-drawer-steps-warning')).toHaveText(SUSPENDED_STEPS_NOTE)
 
   // The direction of travel reverses on a suspended row, and the explanation does NOT travel
   // with it: the sentence describes what suspension does, so beside `Reactivate` it would
@@ -734,16 +739,40 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Test 3's policy, at module scope so the `test.afterAll` sweep can reach it. The id is
+// LEARNED from the create POST and never predicted; the per-run name lands only on the first
+// Save draft, which is why the sweep goes by id first and by name second.
+let createdPolicyId: string | null = null
+const POLICY_NAME_SWEEP = /^E2E policy \d+$/
+/** What `ctx.createPolicy()` names the row before Save draft renames it. */
+const UNSAVED_POLICY_NAME = 'Untitled policy'
+
 // ---------------------------------------------------------------------------------------
-// Test 3 -- create a seat, point a step at it, reload to prove it stuck, delete it
+// Test 3 -- create a seat, build a policy that points a step at it, delete the seat
 // ---------------------------------------------------------------------------------------
-// In-house because the mutation needs a person the picker will offer and a policy with a
-// seeded root step to repoint. The holder is …0010 Tunde Adeyemi, who holds exactly ONE seat
-// (Financial Controller) — so staffing him into a second one moves his roster cell from a
-// bare title to the `X +1` form, tooltip and all, and the transition is asserted from both
-// ends. Nobody in this workspace holds zero seats; the em-dash case is the firm's …0007
-// (Test 1), who is read-only.
-test('in-house: a created role survives a reload, is selectable on a step, and blocks that step once deleted', async ({ page }) => {
+// In-house because the mutation needs a person the picker will offer. The holder is …0010
+// Tunde Adeyemi, who holds exactly ONE seat (Financial Controller) — so staffing him into a
+// second one moves his roster cell from a bare title to the `X +1` form, tooltip and all, and
+// the transition is asserted from both ends. Nobody in this workspace holds zero seats; the
+// em-dash case is the firm's …0007 (Test 1), who is read-only.
+//
+// THE POLICY IS BUILT HERE, not seeded. This test used to open `Company approval policy` and
+// repoint its first root step; nothing seeds approval_policies, so that row does not exist.
+// It also never clicked Save draft, which mattered more than the missing row: `applyEdit` is
+// local to the builder (WorkflowBuilder.tsx) while `roleUsage` reads `ctx.policies`, which
+// only `savePolicy` patches (App.tsx). So the repoint has to be SAVED or the usage line, the
+// delete-confirm sentence and the blocked step below could not read what this test claims
+// they read. One Save draft is enough: the PUT sends name, scope and steps together
+// (lib/policies.ts).
+//
+// [topology-never-publishes] holds here as it does in workflows.spec.ts — create, save,
+// delete; NEVER publish. A publish seals a version permanently and takes the tenant's ONE
+// active slot on a deployment three suites share.
+test('in-house: a created role survives a reload, is selectable on a step this test builds, and blocks it once deleted', async ({
+  page,
+}) => {
+  // One sign-in, one reload, two role writes, two policy writes and several list refetches.
+  test.setTimeout(180_000)
   const errors = collectErrors(page)
 
   // Per-run-unique, so nothing else in this run (nor this test's own pre-retry attempt, nor
@@ -755,11 +784,12 @@ test('in-house: a created role survives a reload, is selectable on a step, and b
   const desc = 'Signs off the browser journey'
   const holder = 'Tunde Adeyemi'
   const heldSeat = 'Financial Controller'
-  // The first root step of the published in-house policy. Repointing it is what gives the
-  // deletion below something to break. This half of the mutation needs no cleanup of its own
-  // — see the header: policies are still frontend `useState`, and `signInAs` reseeds them.
-  const policyName = 'Company approval policy'
-  const seededStep = 'Line Manager must approve'
+  // Same per-run-unique discipline for the policy, and the same sweep shape.
+  const policyName = `E2E policy ${stamp}`
+  // `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts), seeded for THIS
+  // tenant as `Finance Manager` — so a step appended and left alone renders this, and the
+  // repoint below is observable as a change rather than as a first paint.
+  const defaultStep = 'Finance Manager must approve'
 
   await signInAs(page, 'inhouse')
   await expect(sidebar(page)).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
@@ -822,11 +852,49 @@ test('in-house: a created role survives a reload, is selectable on a step, and b
   await settingsTab(page, 'Members').click()
   await expectRosterCell(page, { member: holder, text: `${heldSeat} +1`, tooltip: `${heldSeat}\n${title}` })
 
-  // --- the builder's own list of seats ------------------------------------------------------
+  // --- build the policy whose step will name that seat --------------------------------------
+  // The terminal arm first. The h1 and the subtitle render ABOVE the ladder, so `New policy`
+  // is clickable before the list has landed, and a create fired into that window races the
+  // fetch already in flight.
   await goTo(page, 'Workflows')
-  await page.getByText(policyName, { exact: true }).click()
-  // Selection TOGGLES, so this card is clicked exactly once.
-  await page.getByText(seededStep, { exact: true }).click()
+  await expect(
+    page.locator('[data-testid="policies-list"], [data-testid="policies-empty"]'),
+    'the policies fetch must land before this test creates one',
+  ).toBeVisible()
+
+  // Armed BEFORE the click. `ctx.createPolicy()` mints the row as `Untitled policy` and the
+  // per-run name lands only on Save draft, so between those two writes the id is the only
+  // handle the sweep has — contract-approvals.spec.ts's rule, an id is only ever learned,
+  // never predicted.
+  const createPost = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/v1/approval-policies'),
+  )
+  // `createPolicy` also refetches the whole list right after the POST (App.tsx). That GET
+  // lands on top of the builder's server copy, so it is awaited here rather than left to race
+  // the edits below.
+  const createRefetch = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/v1/approval-policies'),
+  )
+  await page.getByRole('button', { name: 'New policy' }).click()
+  const createRes = await createPost
+  expect(createRes.ok(), `POST /v1/approval-policies answered HTTP ${createRes.status()}`).toBeTruthy()
+  createdPolicyId = ((await createRes.json()) as { id: string }).id
+  expect(createdPolicyId, 'the created id is what the afterAll sweep deletes first').toBeTruthy()
+  await createRefetch
+
+  // Creating opens the builder on the new policy in the same step (App.tsx).
+  const nameInput = page.getByLabel('Policy name')
+  await expect(nameInput, 'the create opened the builder').toHaveValue(UNSAVED_POLICY_NAME)
+  await nameInput.fill(policyName)
+  await expect(nameInput).toHaveValue(policyName)
+
+  // A palette CLICK appends at the root tail AND selects the new node (`append`,
+  // WorkflowBuilder.tsx), so the inspector opens on it with no drag at all. The drag handlers
+  // are topology/workflows.spec.ts's claim, not this file's.
+  await page.locator('button.pf-upcard', { hasText: 'Someone must sign off' }).click()
+  await expect(page.getByText(defaultStep, { exact: true }), 'the palette click appended an approval step').toBeVisible()
+
+  // --- the builder's own list of seats ------------------------------------------------------
   const whoApproves = wfSelect(page, 'Who must approve')
   const seatTitles = SEED_INHOUSE_ROLE_CARDS.map((r) => r.title)
   expect(await whoApproves.locator('option').allTextContents()).toEqual([...seatTitles, title])
@@ -836,6 +904,17 @@ test('in-house: a created role survives a reload, is selectable on a step, and b
   // the inspector `Currently: Tunde Adeyemi`, off one resolution.
   await expect(page.getByText(`Currently: ${holder}`, { exact: true })).toBeVisible()
   await expect(page.getByText(`${title} must approve`, { exact: true })).toBeVisible()
+
+  // --- save it, ONCE -------------------------------------------------------------------------
+  // Load-bearing, not hygiene: `applyEdit` is local to the builder, and everything below reads
+  // `roleUsage`, which is computed off `ctx.policies` — a mirror only `savePolicy` patches. One
+  // PUT carries the name and the tree together (lib/policies.ts), so one click is the whole
+  // write. The settle is the blocked reason DISAPPEARING, never the 'Saved' flash: that flash
+  // lives 1700ms and asserting inside it races a cold gateway, whereas the reason is gone
+  // exactly when `dirty` is false, which is exactly when the write landed.
+  await expect(page.getByTestId('publish-blocked-reason'), 'an unsaved tree is not publishable').toBeVisible()
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+  await expect(page.getByTestId('publish-blocked-reason'), 'the policy and its step reached the server').toHaveCount(0)
 
   // --- delete it, from the affordance the inspector offers ----------------------------------
   await page.getByRole('button', { name: 'Manage roles', exact: true }).click()
@@ -855,8 +934,8 @@ test('in-house: a created role survives a reload, is selectable on a step, and b
   await expect(roleCard(page, title), 'the deleted card is gone').toHaveCount(0)
 
   // --- the step it pointed at now blocks -----------------------------------------------------
-  // No policy was rewritten by the delete: the published policy still names the key, and the
-  // step renders the truth rather than a raw id.
+  // No policy was rewritten by the delete: the saved draft still names the key, and the step
+  // renders the truth rather than a raw id.
   await goTo(page, 'Workflows')
   await expect(page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true })).toBeVisible()
   await page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true }).click()
@@ -870,24 +949,65 @@ test('in-house: a created role survives a reload, is selectable on a step, and b
   const seatPositions = seatTitles.map((t) => deletedStepOptions.indexOf(t))
   expect(seatPositions, 'seeded seats keep their server order').toEqual([...seatPositions].sort((a, b) => a - b))
 
+  // --- clean up the policy this test built ---------------------------------------------------
+  // Layer one of two. The row's own control (WorkflowsView.tsx), by its aria-label — the same
+  // delete topology/workflows.spec.ts drives. It stopPropagation()s before onDelete, so the
+  // click cannot fall through to the row's onEdit. Layer two is the afterAll below, for the
+  // run that dies before reaching this line.
+  await page.getByRole('button', { name: 'All policies' }).click()
+  const wfScreen = page.locator('[data-screen-label="Workflow builder"]')
+  await wfScreen.getByRole('button', { name: `Delete ${policyName}`, exact: true }).click()
+  await expect(wfScreen.getByText(policyName, { exact: true }), 'the policy this test built is gone').toHaveCount(0)
+
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Best-effort, idempotent-on-purpose safety net for the mutation above — modelled on
-// contract-approvals.spec.ts:86-94. On the happy path Test 3 already deletes its own role
-// through the UI, so this finds nothing; it exists for the run where Test 3 fails before
-// reaching that step and would otherwise leave a live probe row behind. Matches by the
-// per-run-unique title PREFIX, not the exact stamp, so it also self-heals a prior failed
-// run's residue.
+// Best-effort, idempotent-on-purpose safety net for BOTH halves of Test 3's mutation — the
+// shape contract-approvals.spec.ts and topology/workflows.spec.ts already use. On the happy
+// path Test 3 deletes its own role and its own policy through the UI, so this finds nothing;
+// it exists for the run that dies mid-journey. Hooks replay on retry (retries: 1 in CI) and a
+// second delete is 404, so a throw here is expected and must never mask a real assertion
+// failure.
+//
+// Both sweeps match by the per-run-unique PREFIX rather than the exact stamp, so they also
+// self-heal a prior failed run's residue. Nothing else mints either name in THIS tenant:
+// contract-approvals.spec.ts names its rows `Probe Policy <seed>-<n>` and workflows.spec.ts
+// its `APPR09 <stamp>`, and both run as tenant A.
+//
+// If even this sweep dies, the stray is a policy that was never published — Test 3 does not
+// publish at all — so it can never hold the tenant's one active slot, and Test 1/2's usage
+// assertions are shape-matched (USAGE_SHAPE) precisely so a stray cannot turn them red.
 test.afterAll(async () => {
   const token = await login(PERSONAS.B)
-  const live = await listWorkflowRoles(token)
-  const strays = live.workflow_roles.filter((r) => /^E2E seat \d+$/.test(r.title))
-  for (const role of strays) {
+
+  const liveRoles = await listWorkflowRoles(token)
+  for (const role of liveRoles.workflow_roles.filter((r) => /^E2E seat \d+$/.test(r.title))) {
     try {
       await deleteWorkflowRole(token, role.key)
     } catch {
       // already deleted, or never created
+    }
+  }
+
+  // ID FIRST, name second: between `New policy` and the first `Save draft` the row is named
+  // `Untitled policy`, which no per-run prefix can match.
+  if (createdPolicyId) {
+    try {
+      await deleteApprovalPolicy(token, createdPolicyId)
+    } catch {
+      // already deleted by the test itself
+    }
+  }
+
+  const livePolicies = await listApprovalPolicies(token)
+  const strayPolicies = livePolicies.approval_policies.filter(
+    (p) => POLICY_NAME_SWEEP.test(p.name) || p.name === UNSAVED_POLICY_NAME,
+  )
+  for (const stray of strayPolicies) {
+    try {
+      await deleteApprovalPolicy(token, stray.id)
+    } catch {
+      // already deleted by the line above
     }
   }
 })

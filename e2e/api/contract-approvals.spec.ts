@@ -394,6 +394,9 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
   let liveRoleKey: string
   const createdPolicyIds: string[] = []
   const createdRoleKeys: string[] = []
+  // Tenant B's own rows, swept separately: the loop below deletes with A's token, which 404s
+  // on a B row and would leave it live in an environment nothing resets.
+  const createdPolicyIdsB: string[] = []
 
   test.beforeAll(async () => {
     token = await login(PERSONAS.A)
@@ -420,6 +423,18 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
         await deleteWorkflowRole(token, key)
       } catch {
         // already deleted, or never created
+      }
+    }
+    // B's rows need B's own token — see the array's declaration. Gated on length so the
+    // common case never pays for a second sign-in.
+    if (createdPolicyIdsB.length > 0) {
+      const tokenB = await login(PERSONAS.B)
+      for (const id of createdPolicyIdsB) {
+        try {
+          await deleteApprovalPolicy(tokenB, id)
+        } catch {
+          // already deleted, or never created
+        }
       }
     }
   })
@@ -779,5 +794,64 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     // reaching the store is the slip this test exists to catch.
     expect(ids, 'no client-supplied root id survived').not.toContain('wn1000')
     expect(ids, 'no client-supplied nested id survived').not.toContain('wn1001')
+  })
+
+  // APPR-09-08 AC-7. The shape api/isolation.spec.ts AC3 uses for portfolio: an owner
+  // positive control, 404 rather than 403 (RLS row-invisibility, not authz — Decision A9),
+  // and an owner re-read proving zero side effects.
+  //
+  // WHAT THIS ADDS, stated honestly. The DB layer already proves cross-tenant get/delete/put/
+  // publish, with controls of its own — internal/approval/policy_crud_test.go's
+  // TestPolicy_CrossTenantGetIsNotFound and policy_delete_test.go's
+  // TestDeletePolicy_CrossTenantIsNotFound. Those drive the store against a pool the test
+  // wires by hand. What had no proof anywhere is the same refusal THROUGH THE DEPLOYED
+  // GATEWAY: the JWT → tenant-claim → RLS path the SPA actually calls. api/isolation.spec.ts
+  // makes exactly that claim for portfolio and stops at /v1/me and /v1/memberships for
+  // tenancy; approval policies were outside both.
+  //
+  // Three things make the refusal REAL rather than incidental:
+  //   - B is an ACTIVE ADMIN of her own tenant (api/isolation.spec.ts AC1 pins
+  //     meB.user.role === 'admin'), so requireActiveAdmin cannot be what stops her — the
+  //     403 sentence this file pins elsewhere is a different refusal;
+  //   - the message is pinned, which separates an RLS 404 from a route-level one;
+  //   - B creates her own policy first, or the absence check would pass vacuously against an
+  //     empty list — nothing seeds this table.
+  test('AC-7: tenant B can neither read nor delete tenant A policy — 404 not 403, and A row untouched', async () => {
+    const probeA = await createPolicyProbe()
+    const tokenB = await login(PERSONAS.B)
+
+    // Registered for the B sweep BEFORE any assertion below can abort the test.
+    const probeB = await createApprovalPolicy(tokenB, { name: freshPolicyName() })
+    createdPolicyIdsB.push(probeB.id)
+
+    // The positive control and the negative in one read: B's list is not empty, and A's row
+    // is not in it. Containment, never a length — neither tenant's list is this test's to size.
+    const idsB = (await listApprovalPolicies(tokenB)).approval_policies.map((p) => p.id)
+    expect(idsB, "B's own list carries the policy B just created").toContain(probeB.id)
+    expect(idsB, "and never carries A's").not.toContain(probeA.id)
+
+    const readB = await rawFetch(`/api/invoice/v1/approval-policies/${probeA.id}`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    })
+    assertWireError(readB, 404, "B reading A's policy by id")
+    expect((readB.body as Record<string, unknown>).error, 'the row-invisibility 404, not a route-level one').toBe(
+      'approval policy not found',
+    )
+
+    const deleteB = await rawFetch(`/api/invoice/v1/approval-policies/${probeA.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${tokenB}` },
+    })
+    assertWireError(deleteB, 404, "B deleting A's policy")
+    expect((deleteB.body as Record<string, unknown>).error, 'the row-invisibility 404, not a route-level one').toBe(
+      'approval policy not found',
+    )
+
+    // Zero side effect: a 404 response could in principle mask a delete that went through
+    // anyway. DELETE here is soft (deleted_at IS NULL is the existence predicate), so A's own
+    // read is what proves the row is still live rather than merely still present.
+    const afterAttack = await getApprovalPolicy(token, probeA.id)
+    expect(afterAttack.id, "A's row survives B's refused delete").toBe(probeA.id)
+    expect(afterAttack.name, 'and is unchanged').toBe(probeA.name)
   })
 })

@@ -5,7 +5,7 @@
 // genuinely deleted -- roleOf's fallback (lib/roles.ts:63) can't tell "not fetched yet"
 // from "fetched and gone". The guard belongs HERE, not in WorkflowsView (which forwards
 // ctx whole and reads no role data) -- see the story's [D-BUILDER-GUARD].
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -33,7 +33,15 @@ function builderCtx(over: Record<string, unknown> = {}): PlatformCtx {
     rolesState: 'ready',
     rolesError: null,
     refetchRoles: vi.fn(),
-    savePolicy: vi.fn(),
+    // The four policy fields the ctx gained in APPR-09-03. Present so a reader can never
+    // see `undefined` — the double cast below disables property checking, so nothing else
+    // would say they are missing.
+    policies: [],
+    policiesState: 'ready',
+    policiesError: null,
+    refetchPolicies: vi.fn(),
+    savePolicy: vi.fn(async (p: Policy) => p),
+    publishPolicy: vi.fn(async () => policyWith('fin_mgr')),
     closePolicy: vi.fn(),
     setSettingsTab: vi.fn(),
     nav: vi.fn(),
@@ -109,5 +117,60 @@ describe('APPR-04-06 QA: the error guard fires before any node-shape assumption'
 
     expect(screen.getByText('roles gateway is down')).toBeTruthy()
     expect(screen.queryByText(/Role no longer exists/)).toBeNull()
+  })
+})
+
+// ============================================================================
+// APPR-09-03 QA (task-507) — saving must not seal a version
+// ============================================================================
+// Publishing is now a separate server verb that SEALS a version and takes the tenant's
+// single active slot. Wiring it into the one existing button would re-publish on every
+// Save, silently overriding whichever policy is in force — [save-and-publish-are-two-verbs].
+// Subtask 05 splits the control; until then the button must only save.
+//
+// Verified by mutation: `save()` changed to `void ctx.savePolicy(policy).then(() =>
+// ctx.publishPolicy(policy.id))` passed all 2026 app tests and a clean tsc before this spec.
+
+describe('APPR-09-03 QA: the save control writes a draft and nothing else', () => {
+  function saveButton(): HTMLElement {
+    // Matched on the handler's own control, not on copy: the label is 'Save & publish'
+    // today and subtask 05 splits it into 'Save draft' / 'Publish'. Both spellings start
+    // with 'Save', so this survives that rename while still naming one button.
+    const buttons = Array.from(document.querySelectorAll('button')).filter((b) => /^Save/.test(b.textContent ?? ''))
+    expect(buttons, 'no Save control rendered at all').toHaveLength(1)
+    return buttons[0]
+  }
+
+  it('clicking Save calls savePolicy once and publishPolicy never', () => {
+    const savePolicy = vi.fn(async (p: Policy) => p)
+    const publishPolicy = vi.fn(async () => policyWith('fin_mgr'))
+    const policy = policyWith('fin_mgr')
+
+    render(<WorkflowBuilder ctx={builderCtx({ savePolicy, publishPolicy })} policy={policy} />)
+    fireEvent.click(saveButton())
+
+    // Positive first: a spec that only asserted the absence would pass on a button that
+    // was wired to nothing at all.
+    expect(savePolicy).toHaveBeenCalledTimes(1)
+    expect(savePolicy).toHaveBeenCalledWith(policy)
+    expect(publishPolicy, 'Save sealed a version — it must not publish').not.toHaveBeenCalled()
+  })
+
+  it('an ordinary edit writes a draft too — no edit path reaches publishPolicy', () => {
+    const savePolicy = vi.fn(async (p: Policy) => p)
+    const publishPolicy = vi.fn(async () => policyWith('fin_mgr'))
+
+    // PUBLISHED on purpose: the demotion `touch` used to apply is gone, so this is also
+    // where an edit path that re-introduced it would show up.
+    const live: Policy = { ...policyWith('fin_mgr'), status: 'published', activeVersion: 1 }
+    render(<WorkflowBuilder ctx={builderCtx({ savePolicy, publishPolicy })} policy={live} />)
+    fireEvent.change(screen.getByLabelText('Policy name'), { target: { value: 'Renamed policy' } })
+
+    expect(savePolicy).toHaveBeenCalledTimes(1)
+    expect(savePolicy.mock.calls[0][0].name).toBe('Renamed policy')
+    // The reducers no longer demote, so an edit must leave a published policy published —
+    // the server decides what a save does to a version.
+    expect(savePolicy.mock.calls[0][0].status).toBe('published')
+    expect(publishPolicy).not.toHaveBeenCalled()
   })
 })

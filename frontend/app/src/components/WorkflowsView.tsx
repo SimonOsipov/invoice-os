@@ -35,7 +35,7 @@ export function WorkflowsView({ ctx }: { ctx: PlatformCtx }) {
 function PolicyList({ ctx }: { ctx: PlatformCtx }) {
   const { policies, mode, active } = ctx
   // Copy forks on mode, structure never does — the Rules screen's rule. Policies are
-  // held per WORKSPACE, not per client, so firm mode says "across the firm" rather
+  // held per TENANT, not per client, so firm mode says "across the firm" rather
   // than naming the switched-to company.
   const subtitle =
     mode === 'firm'

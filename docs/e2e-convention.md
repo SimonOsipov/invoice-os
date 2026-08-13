@@ -93,13 +93,18 @@ runs in `node`, so the repo has no DOM component-test layer, and a browser check
 only place a control, a route guard, or a scroll-spy can be exercised at all.
 
 **Mock-backed assertions pin fixtures, not contracts — and the spec must say so in-file.**
-A spec asserting an ops-console counter or an approval-policy list asserts that a seeded
-fixture and a pure function over it still agree; it will need revisiting when a real
-endpoint lands (`frontend/app/src/lib/workflows.ts:9` — "There is no approvals endpoint").
-Writing such an assertion as though it proved a contract is the failure this rule prevents;
-refusing to write it at all leaves a shipped screen untested. So: write it, and label it.
+A spec asserting an ops-console counter asserts that a seeded fixture and a pure function
+over it still agree; it will need revisiting when a real endpoint lands. Writing such an
+assertion as though it proved a contract is the failure this rule prevents; refusing to
+write it at all leaves a shipped screen untested. So: write it, and label it.
 
-Mock-only `app` surfaces follow the same rule. **Workflows, Reports and Settings** carry
+The approval-policy list was the other example until APPR-09: the endpoints are real
+(`docs/approvals.md`) and `App.tsx` fetches them, so `e2e/topology/workflows.spec.ts` and
+`persona-surfaces.spec.ts` are being re-derived against live data (APPR-09-07/08). Until
+those land, both still assert against `e2e/topology/policyFixtures.ts` and describe
+themselves in-file as mock-only.
+
+Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The
 company switcher and onboarding dashboard are not nav surfaces and hold no
 coverage cell — note that the switcher *is* **operated** by `workflows.spec.ts` and

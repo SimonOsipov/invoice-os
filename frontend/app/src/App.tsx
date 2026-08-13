@@ -467,7 +467,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     // Custom rules are per client, so the incoming client has a different set — a
     // drawer left open would keep describing a rule from the company just left.
     setOpenRuleKey(null)
-    // Policies are per workspace, so the SET is unchanged — but the switch lands on the
+    // Policies are per tenant, so the SET is unchanged — but the switch lands on the
     // dashboard, and leaving this set means the next visit to Workflows reopens the
     // builder mid-edit instead of the policy list the user asked for.
     setEditingPolicyId(null)

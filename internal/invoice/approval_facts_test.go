@@ -160,10 +160,12 @@ func TestStoreApprovalFacts_CarriesRunStatePendingOrdAndHoldsRole(t *testing.T) 
 	if got.RunState != "open" {
 		t.Errorf("RunState = %q, want %q", got.RunState, "open")
 	}
-	if got.PendingStepOrd == nil {
-		t.Fatalf("PendingStepOrd = nil, want a pointer to 0 -- the seeded policy has one pending kind='approval' step at ord 0")
-	}
-	if *got.PendingStepOrd != 0 {
+	// t.Error, not t.Fatalf: CallerHoldsRole below is a separate field and must be
+	// observable even while PendingStepOrd is still nil.
+	switch {
+	case got.PendingStepOrd == nil:
+		t.Error("PendingStepOrd = nil, want a pointer to 0 -- the armed run has one pending kind='approval' step at ord 0")
+	case *got.PendingStepOrd != 0:
 		t.Errorf("PendingStepOrd = %d, want 0", *got.PendingStepOrd)
 	}
 	if !got.CallerHoldsRole {

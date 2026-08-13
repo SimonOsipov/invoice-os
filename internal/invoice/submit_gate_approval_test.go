@@ -205,17 +205,21 @@ func TestGetHandler_ApprovalFactsErrorFailsClosedNot500(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
 	}
+	// Logged FIRST and with t.Error, never t.Fatalf: the fail-closed half copies
+	// callerRole's convention, but the LOGGING half has no callerRole precedent
+	// (all three of those sites log nothing), so it must be independently
+	// observable rather than masked by a body assertion above it.
+	if buf.Len() == 0 {
+		t.Error("expected the approval-read failure to be logged via the injected *slog.Logger, but the log buffer is empty")
+	}
 	if resp.CanSubmit {
 		t.Error("can_submit = true after a seam error, want false -- the zero ApprovalFacts reads TransmitClear false")
 	}
-	if resp.SubmitBlockedReason == nil {
-		t.Fatalf("submit_blocked_reason = null, want %q", wantAwaitingApprovalReason)
-	}
-	if *resp.SubmitBlockedReason != wantAwaitingApprovalReason {
+	switch {
+	case resp.SubmitBlockedReason == nil:
+		t.Errorf("submit_blocked_reason = null, want %q", wantAwaitingApprovalReason)
+	case *resp.SubmitBlockedReason != wantAwaitingApprovalReason:
 		t.Errorf("submit_blocked_reason = %q, want %q", *resp.SubmitBlockedReason, wantAwaitingApprovalReason)
-	}
-	if buf.Len() == 0 {
-		t.Error("expected the approval-read failure to be logged via the injected *slog.Logger, but the log buffer is empty")
 	}
 }
 

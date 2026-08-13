@@ -35,18 +35,19 @@ type StoreOption func(*Store)
 
 // WithApprovalsEnforced turns the transmit gate on. Default false: an unset flag
 // leaves both doors into queued as they were (TestNewStore_DefaultsToNotEnforced).
-//
-// stub (APPR-08-02 Mode A): sets nothing yet.
 func WithApprovalsEnforced(v bool) StoreOption {
-	return func(*Store) {}
+	return func(s *Store) { s.approvalsEnforced = v }
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's
-// lifecycle.
-//
-// stub (APPR-08-02 Mode A): opts are accepted but not applied.
+// lifecycle. Options apply in order, last wins
+// (TestStoreOptions_ApplyInOrderLastWins).
 func NewStore(pool *pgxpool.Pool, opts ...StoreOption) *Store {
-	return &Store{pool: pool}
+	s := &Store{pool: pool}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // scanner is the common Scan(...) surface of both pgx.Row (QueryRow) and

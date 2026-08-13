@@ -742,6 +742,69 @@ first. This is handed to APPR-09, which points the builder at the server.
 
 ---
 
+## 11. The APPROVALS_ENFORCED flag
+
+**The default is OFF.** `APPROVALS_ENFORCED` is read exactly once — in
+`cmd/invoice/main.go`, by `parseEnvBool` — and reaches the store as
+`invoice.WithApprovalsEnforced`, an option on `invoice.NewStore`. Unset means off: the
+transmit gate enforces nothing and both doors into `queued` behave exactly as they did
+before this epic.
+
+A **set-but-unparseable** value stops the boot (`fatal`, logged at ERROR); it never falls
+back to off. The permissive state is already the default, so a typo must be loud rather
+than quietly leave the gate open. Accepted values are `strconv.ParseBool`'s set and
+nothing else — `1 t T TRUE true True 0 f F FALSE false False`. Whitespace is **not**
+trimmed and `yes`/`on` are **not** accepted; each of those stops the boot.
+
+Only the invoice service reads the variable. `cmd/submission` and
+`tools/revalidate-invoices` build their own `invoice.Store` and deliberately leave it at
+the default: neither owns a route **into** `queued`, so the flag would be inert in both.
+Reading it in three binaries would be two more places an operator must keep consistent
+for no behavioural gain.
+
+### It gates enforcement, not visibility
+
+The flag decides whether an open approval run **refuses** a transmit. It does not decide
+whether anyone can **see** that a run is open.
+
+**Gated by the flag** — with it off, these behave as they did before the gate landed:
+
+- `Store.Transition` refusing a move into `queued` while a run is open.
+- `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
+- `can_submit` / `submit_blocked_reason` on the invoice wire.
+
+**Not gated** — these run identically whatever the flag says:
+
+- **Arming.** Publishing a policy and validating an invoice open approval runs whether the
+  flag is on or off. Runs, their steps and their decisions exist either way; the flag only
+  decides whether an open one stops a transmit.
+- `can_approve` / `can_reject`.
+- The per-row `approval` facts on `GET /v1/invoices`.
+- The `awaiting_approval` list filter.
+
+So with the flag off an operator still sees the whole approval surface — runs open,
+approvers approve or reject, rows report the step they are waiting on — and invoices still
+transmit. That is deliberate: every read surface can be exercised in production before the
+refusal is switched on.
+
+### APPR-14 owns the flip
+
+**APPR-14 owns turning it on**, and owns the flag-ON deployed proof with it. No
+environment sets `APPROVALS_ENFORCED` today, so every environment is off. The repo carries
+no deployment configuration for it either — the Go services ship no `.env.example`
+(`docs/add-a-service.md`) and the dev-environment workflow rewrites only URL variables, so
+Railway is where it will be set.
+
+### Flipping it alone changes nothing on a seeded dev tenant
+
+`db/seed.dev.sql` publishes **no approval policy**. The dev tenant therefore has no active
+policy version, and with no active version nothing arms — no run opens, so there is no open
+run for the gate to refuse (§2 has the full no-active-policy behaviour). Setting
+`APPROVALS_ENFORCED=true` against a freshly seeded environment is observably a no-op. To
+watch the gate act, publish a policy first, then validate an invoice under it.
+
+---
+
 ## Appendix — error reference
 
 Every response the policy endpoints can return, and what to do about it. Look up the

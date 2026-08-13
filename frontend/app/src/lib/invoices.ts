@@ -224,7 +224,9 @@ export interface InvoiceRecord {
 // TestGetHandler_ActionFlagsFalseNotOmitted), so all three are present on every status.
 // An optional `?` would compile just as well, which is exactly why it is wrong -- it
 // lets a consumer read `undefined` and treat "the server did not say" as an open
-// question, the fail-open shape [gates-on-the-wire] exists to remove. They sit on
+// question, the fail-open shape [gates-on-the-wire] exists to remove. The same holds for
+// every action key added since, `can_approve`/`can_reject` and their reasons included
+// (APPR-08-06): all four are REQUIRED, never `?`. They sit on
 // InvoiceDetailRecord ONLY, never InvoiceRecord: ListHandler returns bare Invoice rows,
 // which carry no such keys.
 export interface InvoiceDetailRecord extends InvoiceRecord {
@@ -513,12 +515,15 @@ export async function violationSummary(
   return res.rules
 }
 
-// The five action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The seven action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
 // defensive normalization on a permission-shaped flag only earns its keep fail-closed.
-// The four `*_blocked_reason` fields all keep `?? null` (their
+// Every key is listed EXPLICITLY even though `...res` is already typed
+// InvoiceDetailRecord: an omitted line compiles clean and tsc reports nothing, so the
+// APPROVE-1/2/3/5 specs are the only oracle that the fail-closed convention was applied.
+// The six `*_blocked_reason` fields all keep `?? null` (their
 // declared type is nullable, so `??` is reachable and idiomatic) and are passed through
 // BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
 // ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here
@@ -540,6 +545,10 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     ubl_blocked_reason: res.ubl_blocked_reason ?? null,
     can_resolve_outside: res.can_resolve_outside === true,
     resolve_outside_blocked_reason: res.resolve_outside_blocked_reason ?? null,
+    can_approve: res.can_approve === true,
+    approve_blocked_reason: res.approve_blocked_reason ?? null,
+    can_reject: res.can_reject === true,
+    reject_blocked_reason: res.reject_blocked_reason ?? null,
   }
 }
 

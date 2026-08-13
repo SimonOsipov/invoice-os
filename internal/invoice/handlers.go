@@ -342,9 +342,33 @@ func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 // decision only after every rung, and reject's extra reason rule is
 // DecideHandler's body check, not an availability rung.
 //
-// stub (APPR-08-06 Mode A): the ladder is not implemented yet.
+// Rung 4 is a conjunction, and rung 2 precedes the run rungs, because a dead run
+// keeps its later steps pending and a reject demotes the invoice back to draft:
+// TestApprovalGate_DeadRunWithALaterPendingStep and
+// TestApprovalGate_RejectedRunDemotedToDraft catch either half going missing.
+// Both halves of rung 4 answer decideTx's one ErrRunClosed, hence one sentence.
 func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
-	return false, nil // stub
+	if !isApprover(role) {
+		r := "Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team."
+		return false, &r
+	}
+	if s != StatusValidated {
+		r := "Only a validated invoice can be approved or rejected."
+		return false, &r
+	}
+	if f.RunState == "" {
+		r := "This invoice has no approval run to decide on."
+		return false, &r
+	}
+	if f.RunState != "open" || f.PendingStepOrd == nil {
+		r := "This invoice's approval run is already closed."
+		return false, &r
+	}
+	if !f.CallerHoldsRole {
+		r := "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+		return false, &r
+	}
+	return true, nil
 }
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as

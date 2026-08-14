@@ -177,8 +177,9 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   expect(invoiceTotal, 'the fixtures above must leave this tenant with invoices to count').toBeGreaterThan(0)
   // No data-testid on this dashboard ([no-testids-on-portfolio-dashboard]); `.pf-dash-row-a
   // > .pf-grid-2` is the KPI grid and is unique on the screen. The title match is an
-  // ANCHORED REGEX on purpose: hasText with a plain string is a case-insensitive substring,
-  // so 'Invoices' would also match the "Failing invoices" tile and blow strict mode.
+  // ANCHORED REGEX on purpose: hasText with a plain string is a case-insensitive substring
+  // match, so a bare 'Invoices' would blow strict mode against any future sibling tile
+  // whose label also contains the word.
   const invoicesKpiValue = page
     .locator('.pf-dash-row-a .pf-grid-2 > div')
     .filter({ has: page.locator('.card-title', { hasText: /^Invoices$/ }) })

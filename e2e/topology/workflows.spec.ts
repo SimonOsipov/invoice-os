@@ -10,7 +10,9 @@
 //
 // The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, and is now a
 // heading, a tenant-driven subtitle and a terminal-arm settle — seed-independent, because
-// nothing seeds approval_policies. Nothing in this file signs in as in-house.
+// either terminal arm satisfies it. internal/demopolicy seeds ONE policy onto the IN-HOUSE
+// tenant; the FIRM tenant this file drives still carries none. Nothing in this file signs
+// in as in-house.
 //
 // THIS SPEC CREATES ITS OWN POLICY, THROUGH THE UI. docs/e2e-convention.md:63-74 decides
 // that: every spec creates per-run-unique data, acts on rows it created, and asserts

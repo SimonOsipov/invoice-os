@@ -19,6 +19,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
+	"github.com/SimonOsipov/invoice-os/internal/demopolicy"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -153,6 +154,18 @@ func main() {
 	if res, err := demodocs.Seed(context.Background(), pool, docSvc.Store, app.Logger); err != nil {
 		app.Logger.Error("invoice: demo source documents", "error", err,
 			"documents", res.DocumentsStored, "invoices", res.InvoicesLinked)
+	}
+
+	// Give the in-house demo tenant one active approval policy and re-arm its
+	// validated backlog, so awaiting_approval is non-zero and the Approvals badge
+	// is observable on the deploy gate. Runs on EVERY boot, not just the first:
+	// the gateway's db.Reset truncates approval_runs and leaves the policy
+	// standing. Here rather than in the gateway, which is a different process.
+	// Non-fatal, matching demodocs above -- a crash-loop costs an environment, a
+	// missing demo policy costs one assertion.
+	if res, err := demopolicy.Seed(context.Background(), pool, app.Logger); err != nil {
+		app.Logger.Error("invoice: demo approval policy", "error", err,
+			"outcome", res.Note, "backlog_found", res.BacklogFound, "runs_armed", res.RunsArmed)
 	}
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)

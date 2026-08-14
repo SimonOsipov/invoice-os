@@ -895,13 +895,37 @@ no deployment configuration for it either — the Go services ship no `.env.exam
 (`docs/add-a-service.md`) and the dev-environment workflow rewrites only URL variables, so
 Railway is where it will be set.
 
-### Flipping it alone changes nothing on a seeded dev tenant
+### Flipping it alone changes nothing on a seeded dev tenant — except the in-house one
 
-`db/seed.dev.sql` publishes **no approval policy**. The dev tenant therefore has no active
-policy version, and with no active version nothing arms — no run opens, so there is no open
-run for the gate to refuse (§2 has the full no-active-policy behaviour). Setting
-`APPROVALS_ENFORCED=true` against a freshly seeded environment is observably a no-op. To
-watch the gate act, publish a policy first, then validate an invoice under it.
+`db/seed.dev.sql` publishes **no approval policy**. Three of the four seeded tenants
+therefore have no active policy version, and with no active version nothing arms — no run
+opens, so there is no open run for the gate to refuse (§2 has the full no-active-policy
+behaviour). Setting `APPROVALS_ENFORCED=true` against those is observably a no-op. To watch
+the gate act, publish a policy first, then validate an invoice under it.
+
+**The in-house demo tenant (`22222222-…`, Honeywell Group) is the exception, and it is the
+only seeded approval policy in the fleet.** The invoice service writes it at boot —
+`internal/demopolicy`, named `Company approval policy`: one root condition `total >
+100,000`, a `fin_dir` approval on the `then` lane, an autoapprove on the `else` lane,
+sealed and active with `published_by = 'system'`. The firm tenant `11111111-…` carries
+none. The allowlist is a package variable, not configuration, because `ENVIRONMENT` reads
+`development` on production and gating on it would be fail-open. Three of that tenant's
+four validated invoices sit above the threshold, so its `awaiting_approval` reads 3 while
+`counts.validated` reads 4 — the gap is what makes the Approvals badge observable on the
+deploy gate rather than coincidentally non-zero.
+
+The seeder **converges** rather than inserting-if-absent: it re-runs the validated-backlog
+sweep on every boot, whether or not it wrote the policy on that boot, because the gateway's
+`db.Reset` truncates `approval_runs` and deliberately leaves the three policy tables
+standing. A seeder that no-opped on finding its own policy would arm nothing on the second
+deploy, and `awaiting_approval` would silently equal `counts.validated`.
+
+**Known residual, recorded and undefended.** A gateway restarted out of band — a
+single-service redeploy, an OOM, a manual restart — runs `Reset` again and re-truncates
+`approval_runs`, and nothing re-runs the seeder, because the invoice service did not
+restart. The fleet stays green, `/healthz` stays 200, and `awaiting_approval` silently
+reads `counts.validated` with no alarm anywhere. **Recovery is one operator action: restart
+the invoice service.**
 
 ---
 

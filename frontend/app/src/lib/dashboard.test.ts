@@ -311,6 +311,24 @@ describe('scopedBucket', () => {
   it('firm mode with an entityId absent from `clients` (zero invoices, INNER JOIN) resolves EMPTY_BUCKET, never totals', () => {
     expect(scopedBucket(false, 'e-no-invoices', rollup)).toEqual(EMPTY_BUCKET)
   })
+
+  // Both legs in one test on purpose: the in-house leg returns rollup.totals by
+  // reference and carries any new field for free, so only the firm leg's
+  // field-by-field rebuild can silently drop one.
+  it('scopedBucket carries awaiting_approval on both legs', () => {
+    const r: Rollup = {
+      totals: { counts: counts({ validated: 9 }), needs_attention: 3, awaiting_approval: 7, metrics: {}, top_violations: [] },
+      clients: [
+        { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, awaiting_approval: 2, metrics: {}, top_violations: [] },
+      ],
+      top_violations: [],
+    }
+
+    expect(scopedBucket(true, null, r).awaiting_approval).toBe(7)
+    expect(scopedBucket(false, 'e1', r).awaiting_approval).toBe(2)
+    expect(scopedBucket(false, 'e-no-invoices', r).awaiting_approval).toBe(0)
+    expect(EMPTY_BUCKET.awaiting_approval).toBe(0)
+  })
 })
 
 // QA adversarial coverage (Mode B, task-189) — appended post-implementation. These are NOT

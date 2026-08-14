@@ -42,10 +42,11 @@ const (
 // violation), AC-3). TopViolations has no `omitempty`: an empty scope still
 // marshals "top_violations":[], never null.
 type Bucket struct {
-	Counts         Counts            `json:"counts"`
-	NeedsAttention int               `json:"needs_attention"`
-	Metrics        map[string]Metric `json:"metrics"`
-	TopViolations  []RuleCount       `json:"top_violations"`
+	Counts           Counts            `json:"counts"`
+	NeedsAttention   int               `json:"needs_attention"`
+	AwaitingApproval int               `json:"awaiting_approval"`
+	Metrics          map[string]Metric `json:"metrics"`
+	TopViolations    []RuleCount       `json:"top_violations"`
 }
 
 // Client is one per-entity row. Bucket is embedded ANONYMOUSLY so

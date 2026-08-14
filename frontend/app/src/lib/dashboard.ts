@@ -62,6 +62,7 @@ export type Metrics = Record<string, Metric>
 export interface RollupBucket {
   counts: Counts
   needs_attention: number
+  awaiting_approval: number
   metrics: Metrics
   top_violations: RuleCount[]
 }
@@ -75,6 +76,7 @@ export interface RollupClient {
   entity_name: string
   counts: Counts
   needs_attention: number
+  awaiting_approval: number
   metrics: Metrics
   top_violations: RuleCount[]
 }

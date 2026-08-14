@@ -40,6 +40,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -199,6 +201,113 @@ func seedResolvedFailed(t *testing.T, super *pgxpool.Pool, tenantID, entityID, n
 	return id
 }
 
+// --- approval fixtures -----------------------------------------------------
+
+// seedApprovalPolicy inserts one approval_policies row plus one
+// approval_policy_versions row for tenantID. When active, `sealed` is written
+// first: approval_policy_versions_active_is_sealed forbids an active-but-unsealed
+// row, and approval_policy_versions_one_active caps the tenant at one active
+// version, so a tenant may take active=true only once.
+func seedApprovalPolicy(t *testing.T, super *pgxpool.Pool, tenantID string, active bool) (policyID, versionID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		tenantID, "dashboard fixture policy "+uuid.NewString(),
+	).Scan(&policyID); err != nil {
+		t.Fatalf("seed approval_policies: %v", err)
+	}
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed)
+		 VALUES ($1, $2, 1, $3) RETURNING id`,
+		tenantID, policyID, active,
+	).Scan(&versionID); err != nil {
+		t.Fatalf("seed approval_policy_versions: %v", err)
+	}
+	if active {
+		if _, err := super.Exec(ctx,
+			`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, versionID,
+		); err != nil {
+			t.Fatalf("activate approval_policy_versions: %v", err)
+		}
+	}
+	t.Cleanup(func() { dropApprovalRows(super, tenantID) })
+	return policyID, versionID
+}
+
+// activateApprovalVersion flips a sealed version's is_active on. Sealing first is
+// the same ordering constraint seedApprovalPolicy documents.
+func activateApprovalVersion(t *testing.T, super *pgxpool.Pool, versionID string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET sealed = true WHERE id = $1`, versionID,
+	); err != nil {
+		t.Fatalf("seal approval_policy_versions: %v", err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, versionID,
+	); err != nil {
+		t.Fatalf("activate approval_policy_versions: %v", err)
+	}
+}
+
+// seedApprovalRun inserts one approval_runs row at `state` against invoiceID.
+// Its own cleanup must outrank the invoice's: approval_runs -> invoices is ON
+// DELETE RESTRICT, so a surviving run silently blocks seedInvoice's delete.
+func seedApprovalRun(t *testing.T, super *pgxpool.Pool, tenantID, invoiceID, versionID, state string) string {
+	t.Helper()
+	var id string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, state, content_fingerprint)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		tenantID, invoiceID, versionID, state, "dashboard-fixture-"+uuid.NewString(),
+	).Scan(&id); err != nil {
+		t.Fatalf("seed approval_runs (state=%q): %v", state, err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM approval_runs WHERE id = $1`, id)
+	})
+	return id
+}
+
+// dropApprovalRows clears a tenant's approval tables bottom-up with triggers and
+// FK checks off -- approval_policy_versions_seal_guard refuses to DELETE a sealed
+// row, and that refusal also blocks seedTenant's cascading tenant delete. Mirrors
+// internal/approval's teardownSealedApprovalFixture.
+func dropApprovalRows(super *pgxpool.Pool, tenantID string) {
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		return
+	}
+	for _, table := range []string{
+		"approval_decisions", "approval_run_steps", "approval_runs",
+		"approval_policy_steps", "approval_policy_versions", "approval_policies",
+	} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
+			return
+		}
+	}
+	_ = tx.Commit(ctx)
+}
+
+// countApprovalRuns reads a tenant's run count as the superuser -- used to prove a
+// fixture really has ZERO runs rather than assuming it.
+func countApprovalRuns(t *testing.T, super *pgxpool.Pool, tenantID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM approval_runs WHERE tenant_id = $1`, tenantID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count approval_runs: %v", err)
+	}
+	return n
+}
+
 // --- DASH-01..13, DASH-15 --------------------------------------------------
 
 // DASH-01: tenant A with one entity and one invoice in each of the 7
@@ -326,6 +435,14 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 	seedInvoiceAtStatus(t, super, tenantID, e3, "DASH-04-3a", "failed")
 	seedInvoiceAtStatus(t, super, tenantID, e3, "DASH-04-3b", "failed")
 
+	// One validated invoice per entity under an active policy, and an approved run
+	// on e3's -- so awaiting_approval (2) differs from counts.validated (3) and the
+	// oracle cannot be satisfied by wiring the new field to the validated count.
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+	seedInvoiceAtStatus(t, super, tenantID, e2, "DASH-04-2c", "validated")
+	e3Validated := seedInvoiceAtStatus(t, super, tenantID, e3, "DASH-04-3c", "validated")
+	seedApprovalRun(t, super, tenantID, e3Validated, versionID, "approved")
+
 	store := NewStore(app)
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
@@ -339,6 +456,7 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 
 	var wantCounts Counts
 	var wantNeeds int
+	var wantAwaiting int
 	for _, c := range got.Clients {
 		wantCounts.Draft += c.Counts.Draft
 		wantCounts.Validated += c.Counts.Validated
@@ -348,6 +466,7 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 		wantCounts.Rejected += c.Counts.Rejected
 		wantCounts.Failed += c.Counts.Failed
 		wantNeeds += c.NeedsAttention
+		wantAwaiting += c.AwaitingApproval
 	}
 	if got.Totals.Counts != wantCounts {
 		t.Errorf("Totals.Counts = %+v, want %+v (element-wise sum of Clients)", got.Totals.Counts, wantCounts)
@@ -355,13 +474,19 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 	if got.Totals.NeedsAttention != wantNeeds {
 		t.Errorf("Totals.NeedsAttention = %d, want %d (sum of Clients' needs_attention)", got.Totals.NeedsAttention, wantNeeds)
 	}
+	if got.Totals.AwaitingApproval != wantAwaiting {
+		t.Errorf("Totals.AwaitingApproval = %d, want %d (sum of Clients' awaiting_approval)", got.Totals.AwaitingApproval, wantAwaiting)
+	}
 
-	wantExact := Counts{Draft: 1, Validated: 1, Rejected: 1, Accepted: 1, Failed: 2}
+	wantExact := Counts{Draft: 1, Validated: 3, Rejected: 1, Accepted: 1, Failed: 2}
 	if got.Totals.Counts != wantExact {
-		t.Errorf("Totals.Counts = %+v, want %+v (known seeded totals: 1 draft, 1 validated, 1 rejected, 1 accepted, 2 failed)", got.Totals.Counts, wantExact)
+		t.Errorf("Totals.Counts = %+v, want %+v (known seeded totals: 1 draft, 3 validated, 1 rejected, 1 accepted, 2 failed)", got.Totals.Counts, wantExact)
 	}
 	if got.Totals.NeedsAttention != 3 { // 1 rejected + 2 failed; draft/validated/accepted never count
 		t.Errorf("Totals.NeedsAttention = %d, want 3 (1 rejected + 2 failed)", got.Totals.NeedsAttention)
+	}
+	if got.Totals.AwaitingApproval != 2 { // 3 validated under an active policy, minus e3's approved run
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (3 validated under an active policy, minus the one with an approved run)", got.Totals.AwaitingApproval)
 	}
 }
 
@@ -825,5 +950,276 @@ func TestStoreRollup_ResolvedFailedIsolatedPerClient(t *testing.T) {
 	}
 	if got.Totals.NeedsAttention != 1 {
 		t.Errorf("Totals.NeedsAttention = %d, want 1", got.Totals.NeedsAttention)
+	}
+}
+
+// --- awaiting_approval -----------------------------------------------------
+
+// The count is validated-only and an overlay on Counts, never an eighth state:
+// under an active policy every unapproved validated invoice is blocked from
+// transmit, and nothing else is.
+func TestStoreRollup_AwaitingApprovalCountsValidatedUnderAnActivePolicy(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-A tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-A entity")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-2", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-3", "draft")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (both validated invoices)", got.Totals.AwaitingApproval)
+	}
+	if row := got.Clients[0]; row.AwaitingApproval != 2 {
+		t.Errorf("Clients[0].AwaitingApproval = %d, want 2", row.AwaitingApproval)
+	}
+	if got.Totals.Counts.Validated != 2 {
+		t.Errorf("Totals.Counts.Validated = %d, want 2 (the overlay must not disturb the state counts)", got.Totals.Counts.Validated)
+	}
+	if got.Totals.Counts.Draft != 1 {
+		t.Errorf("Totals.Counts.Draft = %d, want 1", got.Totals.Counts.Draft)
+	}
+	if got.Totals.NeedsAttention != 0 {
+		t.Errorf("Totals.NeedsAttention = %d, want 0 (a clean draft and two validated rows flag nothing)", got.Totals.NeedsAttention)
+	}
+}
+
+// The count keys on approval_policy_versions.is_active, not on a policy row
+// existing. The second leg activates the same version and re-reads: without it
+// the zero-assertion alone would be satisfied by the field never being populated.
+func TestStoreRollup_AwaitingApprovalIsZeroWithNoActivePolicy(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-B tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-B entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, false)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-B-1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-B-2", "validated")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 0 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 0 (the policy version is not active)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.Counts.Validated != 2 {
+		t.Fatalf("Totals.Counts.Validated = %d, want 2 -- the fixture is wrong, so the zero above proves nothing", got.Totals.Counts.Validated)
+	}
+
+	activateApprovalVersion(t, super, versionID)
+
+	got, err = store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup after activation: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("after activating the same version, Totals.AwaitingApproval = %d, want 2", got.Totals.AwaitingApproval)
+	}
+}
+
+// An approved run satisfies TransmitClear, so its invoice leaves the count while
+// its unapproved sibling stays.
+func TestStoreRollup_AwaitingApprovalExcludesAnApprovedRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-C tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-C entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-C-1", "validated")
+	approved := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-C-2", "validated")
+	seedApprovalRun(t, super, tenantID, approved, versionID, "approved")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 1 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 1 (the approved run's invoice is transmit-clear)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.Counts.Validated != 2 {
+		t.Errorf("Totals.Counts.Validated = %d, want 2 (an approved run does not change the state count)", got.Totals.Counts.Validated)
+	}
+}
+
+// Blocked means an active policy AND no approved run -- exactly !TransmitClear.
+// A rejected run is not an approved one, so its invoice still counts.
+func TestStoreRollup_AwaitingApprovalCountsAValidatedInvoiceWhoseOnlyRunWasRejected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-D tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-D entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	rejected := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-D-1", "validated")
+	seedApprovalRun(t, super, tenantID, rejected, versionID, "rejected")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 1 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 1 (a rejected run is not an approved one)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.NeedsAttention != 0 {
+		t.Errorf("Totals.NeedsAttention = %d, want 0 (needs_attention never reaches a validated row)", got.Totals.NeedsAttention)
+	}
+}
+
+// The vacuity property subtask 06's convergence contract rests on: the predicate's
+// second conjunct is NOT EXISTS (an approved run), which an invoice with zero runs
+// satisfies vacuously. An unarmed tenant therefore reads awaiting_approval ==
+// counts.validated, and that has to be an asserted fact, not a reading of the SQL.
+func TestStoreRollup_AwaitingApprovalCountsAnUnarmedValidatedInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-E tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-E entity")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-E-1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-E-2", "validated")
+
+	if n := countApprovalRuns(t, super, tenantID); n != 0 {
+		t.Fatalf("fixture has %d approval_runs, want 0 -- this test is only about the zero-run case", n)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (zero runs satisfies NOT EXISTS (approved run) vacuously)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.AwaitingApproval != got.Totals.Counts.Validated {
+		t.Errorf("Totals.AwaitingApproval = %d, Totals.Counts.Validated = %d -- with nothing armed they must coincide",
+			got.Totals.AwaitingApproval, got.Totals.Counts.Validated)
+	}
+}
+
+// bucketIntFieldFloor is a FLOOR, never an equality: 7 Counts + NeedsAttention +
+// AwaitingApproval. An equality would turn this vacuity guard into a change
+// detector that reds on a correct new field.
+const bucketIntFieldFloor = 9
+
+// bucketIntFields flattens a Bucket's int fields, recursing one level into nested
+// structs (Counts). Maps and slices are skipped -- they are not element-wise
+// summable scalars.
+func bucketIntFields(b Bucket) map[string]int {
+	out := map[string]int{}
+	v := reflect.ValueOf(b)
+	tp := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		f, name := v.Field(i), tp.Field(i).Name
+		switch f.Kind() {
+		case reflect.Int:
+			out[name] = int(f.Int())
+		case reflect.Struct:
+			ft := f.Type()
+			for j := 0; j < f.NumField(); j++ {
+				if f.Field(j).Kind() == reflect.Int {
+					out[name+"."+ft.Field(j).Name] = int(f.Field(j).Int())
+				}
+			}
+		}
+	}
+	return out
+}
+
+// The generic sibling of TestStoreRollup_TotalsEqualSumOfClients: that one is a
+// hand-written per-field loop, so a new Bucket scalar gets no assertion from it.
+// This walks Bucket by reflection instead, and so covers the field after this one.
+func TestStoreRollup_EveryNumericBucketFieldIsTheSumOfClients(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-F tenant")
+	e1 := seedEntity(t, super, tenantID, "APPR-11-F entity 1")
+	e2 := seedEntity(t, super, tenantID, "APPR-11-F entity 2")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, e1, "APPR-11-F-1a", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, e1, "APPR-11-F-1b", "rejected")
+	seedInvoiceAtStatus(t, super, tenantID, e2, "APPR-11-F-2a", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, e2, "APPR-11-F-2b", "failed")
+	approved := seedInvoiceAtStatus(t, super, tenantID, e2, "APPR-11-F-2c", "validated")
+	seedApprovalRun(t, super, tenantID, approved, versionID, "approved")
+	seedInvoiceWithViolations(t, super, tenantID, e1, "APPR-11-F-1c", "draft",
+		`[{"rule_key":"supplier-tin-required","severity":"error","message":"x"}]`)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- every per-field assertion below is vacuous on an empty slice", len(got.Clients))
+	}
+
+	totals := bucketIntFields(got.Totals)
+	if len(totals) < bucketIntFieldFloor {
+		names := make([]string, 0, len(totals))
+		for name := range totals {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		t.Fatalf("walked %d int fields on Bucket %v, want at least %d -- a Bucket scalar is missing, so this sum property covers nothing",
+			len(totals), names, bucketIntFieldFloor)
+	}
+
+	sums := map[string]int{}
+	for _, cl := range got.Clients {
+		for name, n := range bucketIntFields(cl.Bucket) {
+			sums[name] += n
+		}
+	}
+	if len(sums) != len(totals) {
+		t.Fatalf("walked %d int fields on Clients' buckets but %d on Totals -- the two walks disagree", len(sums), len(totals))
+	}
+	for name, want := range sums {
+		if totals[name] != want {
+			t.Errorf("Totals.%s = %d, want %d (element-wise sum of Clients)", name, totals[name], want)
+		}
+	}
+	// Without this the newest field's sum is 0 == 0 on both sides and proves nothing:
+	// the fixture arms two entities precisely so the sum has something to carry.
+	if sums["AwaitingApproval"] == 0 {
+		t.Errorf("the fixture summed AwaitingApproval to 0 across every client, so the sum property above is vacuous for it")
+	}
+	if sums["NeedsAttention"] == 0 {
+		t.Errorf("the fixture summed NeedsAttention to 0 across every client, so the sum property above is vacuous for it")
 	}
 }

@@ -562,6 +562,7 @@ export interface Counts {
 export interface DashboardBucket {
   counts: Counts
   needs_attention: number
+  awaiting_approval: number
 }
 
 export interface DashboardClient extends DashboardBucket {

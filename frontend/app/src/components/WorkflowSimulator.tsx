@@ -57,8 +57,8 @@ export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
             {result.auto && ' · AUTO-APPROVED PATH'}
           </div>
 
-          {/* Above the step list, not below it: under the list it would vanish on the
-              "NO APPROVAL NEEDED" arm. Hint register, never a fourth mono verdict line. */}
+          {/* Above the step list because it explains the notify rows below it — pinned by T5-12.
+              Hint register, never a fourth mono verdict line. */}
           {notified && (
             <div data-testid="sim-notify-not-delivered" style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)', marginBottom: 12 }}>
               This path reaches a notify step — the target and channel are recorded, but no message goes out yet.

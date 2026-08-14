@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
 import type { Role } from '../lib/roles'
-import { SIM_DEFAULT, type Policy } from '../lib/workflows'
+import { SIM_DEFAULT, type NotifyNode, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { WorkflowBuilder } from './WorkflowBuilder'
 // Rendered bare by the R15 oracle only — every other spec reaches them through the builder.
@@ -2188,5 +2188,125 @@ describe('APPR-10-05: the notify panel’s control set', () => {
       ['SELECT', 'Notify'],
       ['SELECT', 'Channel'],
     ])
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APPR-10-05 QA (task-517) — four specs, each written against a mutation that
+// survived the shipped set.
+// ----------------------------------------------------------------------------
+
+/** A notify inside ONE lane of a condition. `> ₦1bn` against SIM_DEFAULT's ₦750m takes `else`. */
+function lanedNotifyPolicy(lane: 'then' | 'else'): Policy {
+  const notify: NotifyNode = { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' }
+  return {
+    ...policyWith('fin_mgr'),
+    nodes: [
+      {
+        id: 'c1',
+        type: 'condition',
+        field: 'amount',
+        op: '>',
+        value: 1_000_000_000,
+        then: lane === 'then' ? [notify] : [],
+        else: lane === 'else' ? [notify] : [],
+      },
+    ],
+  }
+}
+
+/** One policy carrying all four node types, so the inspector's four arms are reachable in one render. */
+function everyKindPolicy(): Policy {
+  return {
+    ...policyWith('fin_mgr'),
+    nodes: [
+      { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+      { id: 'c1', type: 'condition', field: 'amount', op: '>', value: 250_000_000, then: [], else: [] },
+      { id: 'a1', type: 'autoapprove' },
+      { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' },
+    ],
+  }
+}
+
+describe('APPR-10-05 QA AC-2: the gate reads the path that ran, not the policy that holds it', () => {
+  // The shipped T5-5 pairs a ROOT-level notify against a policy with no notify at all, so a gate
+  // written over `policy.nodes` rather than `result.steps` passes it. That gate would claim a
+  // message was reached on a lane the scenario never took — the exact false statement D-F forbids.
+  it('T5-10: a notify in the UNTAKEN lane carries no claim, and the same notify in the TAKEN lane does', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={lanedNotifyPolicy('then')} />)
+
+    // The notify is really in the policy and really on the canvas — otherwise the absence below
+    // is just T5-5's no-notify case again, and proves nothing new.
+    expect(within(canvasPanel()).getByText(NOTIFY_CARD), 'the untaken lane never rendered its notify card').toBeTruthy()
+    expect(within(simulatorPanel()).getByLabelText(SCENARIO_AMOUNT), 'the simulator never mounted').toBeTruthy()
+    expect(within(simulatorPanel()).queryByText(NOTIFY_CARD), 'the untaken lane put a step in the simulated path').toBeNull()
+    expect(claimIn(simulatorPanel(), SIM_NOTIFY_CLAIM_ID), 'a lane the scenario never took carries a claim about its notify step').toBeNull()
+
+    cleanup()
+
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={lanedNotifyPolicy('else')} />)
+    expect(within(simulatorPanel()).getByText(NOTIFY_CARD), 'the taken lane dropped its notify step').toBeTruthy()
+    expect(claimIn(simulatorPanel(), SIM_NOTIFY_CLAIM_ID), 'the taken lane reached a notify step and carries no claim about it').toBeTruthy()
+  })
+})
+
+describe('APPR-10-05 QA AC-1: the inspector claim belongs to the notify arm alone', () => {
+  // R19 rests the whole four-way argument on "a node has exactly one type", but nothing pinned the
+  // claim to the notify arm. Rendered outside it, the sentence lands on the approval, condition and
+  // autoapprove panels — a delivery denial on a step that never notifies anyone.
+  it('T5-11: selecting an approval, a condition or an autoapprove step shows no delivery claim', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={everyKindPolicy()} />)
+
+    const OTHER_ARMS: [string, string, string][] = [
+      ['approval', 'Engagement Manager must approve', 'Who must approve'],
+      ['condition', 'Amount greater than ₦250,000,000', 'If this field'],
+      ['autoapprove', 'Auto-approve', ''],
+    ]
+    for (const [kind, card, label] of OTHER_ARMS) {
+      fireEvent.click(within(canvasPanel()).getByText(card))
+      const panel = inspectorPanel()
+      // The arm really mounted — without this the absence below would also pass on an empty panel.
+      if (label) expect(control(within(panel).getByLabelText(label)).tagName, `the ${kind} arm is not on screen`).toBe('SELECT')
+      else expect(within(panel).getByText(/clears with no manual sign-off/i), 'the autoapprove arm is not on screen').toBeTruthy()
+      expect(claimIn(panel, NOTIFY_CLAIM_ID), `the ${kind} panel carries a claim about notify delivery`).toBeNull()
+    }
+
+    // The positive control for all three absences above: the same query on the notify arm resolves.
+    fireEvent.click(within(canvasPanel()).getByText(NOTIFY_CARD))
+    expect(claimIn(inspectorPanel(), NOTIFY_CLAIM_ID), 'the notify panel lost its claim, so the three absences prove nothing').toBeTruthy()
+  })
+})
+
+describe('APPR-10-05 QA AC-2: the simulator claim reads before the rows it explains', () => {
+  it('T5-12: the claim precedes the notify row in document order', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+
+    const panel = simulatorPanel()
+    const claim = claimIn(panel, SIM_NOTIFY_CLAIM_ID)
+    expect(claim, 'the claim does not exist, so its position proves nothing').toBeTruthy()
+    const row = within(panel).getByText(NOTIFY_CARD)
+
+    // DOCUMENT_POSITION_FOLLOWING: `row` comes after `claim`. Moving the div below the step list
+    // leaves every containment assertion in T5-8 intact and only flips this bit.
+    expect(claim!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING, 'the claim reads after the rows it explains').toBeGreaterThan(0)
+  })
+})
+
+describe('APPR-10-05 QA AC-2: the simulator claim is held to the inspector claim’s register', () => {
+  // T5-4b applies R18 to the inspector sentence only. The simulator sentence is the one the
+  // scenario reader sees, and nothing stopped it denying storage or borrowing DELEGATE_NOTE's clause.
+  it('T5-13: it denies DELIVERY, affirms the value is kept, and borrows no neighbour’s clause', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+
+    const claim = claimIn(simulatorPanel(), SIM_NOTIFY_CLAIM_ID)
+    expect(claim, `the simulator renders no [data-testid="${SIM_NOTIFY_CLAIM_ID}"]`).toBeTruthy()
+    const text = claimText(claim!)
+    expect(text, 'the simulator claim node is empty').not.toBe('')
+
+    expect(DELIVERY_ACT.test(text), `the claim never names the act it denies: ${text}`).toBe(true)
+    expect(DENIAL.test(text), `the claim denies nothing: ${text}`).toBe(true)
+    expect(STORAGE_AFFIRMED.test(text), `the claim never says the target and channel are kept: ${text}`).toBe(true)
+    expect(STORAGE_DENIED.test(text), `the claim says the value is not kept, which is false — it is persisted, sealed and materialised: ${text}`).toBe(false)
+    expect(/not available yet/i.test(text), `the claim borrows DELEGATE_NOTE's own clause: ${text}`).toBe(false)
   })
 })

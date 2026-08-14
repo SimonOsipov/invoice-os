@@ -34,3 +34,14 @@ Folake Adesina +1
 # reads them, so no reference here can break; APPR-10 deletes the file and
 # this entry goes with it.
 file:e2e/topology/policyFixtures.ts
+
+# --- retired policy scopes ------------------------------------------------
+# Scope strings APPR-10 removed from the editor. `docs/approvals.md` section 6
+# names them BECAUSE the server permanently refuses them — same reason as the
+# registries above: the doc is doing its job. The vocabulary itself survives in
+# Go as `removedScopes` (internal/approval/policy_test.go), but stalerefs reads
+# _test.go as testish, so that does not count as a producer.
+#
+# One line and not five: the other four retired scopes still have real
+# producers, and a suppression with no finding behind it cannot be falsified.
+Credit notes & adjustments

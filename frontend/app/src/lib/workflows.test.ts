@@ -244,21 +244,25 @@ describe('AC-3 — the list shape App.tsx’s ctx verbs patch (§4.4)', () => {
 })
 
 describe('WF_SCOPE_OPTIONS (§2.4)', () => {
-  // The control is a plain <select value={policy.scope}>, so a seeded scope missing from
-  // this list makes that policy's select render blank. Derived, never hardcoded.
-  it('covers every scope string the seed actually uses', () => {
-    const seeded = [...new Set(ALL_SEED.map((p) => p.scope))]
-    expect(seeded.length).toBeGreaterThan(0)
-    for (const scope of seeded) expect(WF_SCOPE_OPTIONS).toContain(scope)
+  // The seeded-scope containment test that stood here is deleted, not repaired: the fixture
+  // still carries scopes the server refuses, and policies.test.ts:253-254 proves this list is
+  // the EDITOR's own, never a filter on what may arrive.
+  it('mirrors the only scope the server stores', () => {
+    // Transcribed from internal/approval/policy.go:125 (policyScopeAll), refused by
+    // normalizeScope at :372-379 and by the CHECK at
+    // migrations/20260809210326_approval_policies.sql:59. Never read from the Go source.
+    const SERVER_SCOPE = 'All invoices'
+    expect([...WF_SCOPE_OPTIONS]).toEqual([SERVER_SCOPE])
   })
 
   it('covers the default scope a brand-new policy is created with', () => {
     expect(WF_SCOPE_OPTIONS).toContain(newPolicy().scope)
   })
 
-  it('is the 6 distinct entries the markup’s placeholder count pins', () => {
-    expect(WF_SCOPE_OPTIONS).toHaveLength(6)
-    expect(new Set(WF_SCOPE_OPTIONS).size).toBe(6)
+  it('is the one distinct entry the editor offers', () => {
+    expect(WF_SCOPE_OPTIONS).toEqual(['All invoices'])
+    expect(WF_SCOPE_OPTIONS).toHaveLength(1)
+    expect(new Set(WF_SCOPE_OPTIONS).size).toBe(1)
   })
 })
 

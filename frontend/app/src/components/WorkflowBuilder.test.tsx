@@ -1239,3 +1239,50 @@ describe('APPR-09-05: the builder carries exactly two write controls', () => {
     expect(buttons.filter((b) => /publish/i.test(b.textContent ?? '')), 'the builder lost its Publish control, or grew a second one').toHaveLength(1)
   })
 })
+
+// ----------------------------------------------------------------------------
+// APPR-10-01 — the Applies control offers only the scope the server stores
+// ----------------------------------------------------------------------------
+// RED before the change: the select still renders six options and the sentence does not
+// exist. A LITERAL, per the same rule as the copy consts above.
+
+const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
+
+/** The scope <select>, descended from the aria-labelled <label> wrapper `hideLabel` produces. */
+function scopeSelect(): HTMLSelectElement {
+  return control(screen.getByLabelText('Applies')) as HTMLSelectElement
+}
+
+describe('APPR-10-01 AC-1/AC-2: the scope select offers one option', () => {
+  it('renders exactly the one scope the server will store', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    const sel = scopeSelect()
+    expect(sel.tagName, 'the handle resolved to the label wrapper, so the option count below is vacuous').toBe('SELECT')
+    expect(Array.from(sel.options).map((o) => o.value), 'the editor still offers scopes the server refuses').toEqual(['All invoices'])
+  })
+})
+
+describe('APPR-10-01 AC-3: the row says per-scope routing is not available', () => {
+  it('the sentence is on screen exactly once, in the hint register', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    // getByText never matches a title/aria attribute, so finding it IS the visible-node assertion.
+    const note = screen.getByText(SCOPE_NOT_ROUTED)
+    expect(screen.getAllByText(SCOPE_NOT_ROUTED), 'the sentence renders more than once').toHaveLength(1)
+    expect(hintColor(note), 'an explanation renders grey, not amber').toBe('var(--fg-3)')
+  })
+})
+
+describe('APPR-10-01 AC-11: the scope select stays enabled at rest', () => {
+  // KEEP-GREEN pin, green before the change: D-A takes one option plus copy, and rejects the
+  // four-layer disabled recipe on this control. The comment at :627 is APPR-10-04's, about
+  // the delegation toggle, and must not be read as licence to disable this one.
+  it('carries no disabled, on itself or on a wrapper', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    const sel = scopeSelect()
+    expect(sel.disabled, 'D-A: the scope select is explained, not disabled').toBe(false)
+    expect(inert(sel), 'D-A: a disabled fieldset ancestor disables it just as well').toBe(false)
+  })
+})

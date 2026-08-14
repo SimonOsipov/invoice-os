@@ -42,7 +42,7 @@ export interface SurfaceDef {
 }
 
 // The COMPLETE catalogue of app-SPA nav surfaces: every constant reachable from
-// Sidebar.tsx's navGroups (:115-127, 9 firm-mode items + 8 in-house), paired with the label
+// Sidebar.tsx's navGroups (:111-123, 9 firm-mode items + 8 in-house), paired with the label
 // glyphs.tsx renders for it (:63-110). Complete from this subtask onward, which is what lets
 // personas.test.ts's G3 assert equality against the live Sidebar rather than containment.
 //

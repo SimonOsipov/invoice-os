@@ -49,7 +49,7 @@ const HEADS = ['Person', 'Access role', 'Workflow roles', 'Status', '']
 // truncates.
 //
 // The Settings content box is ~1116px at a 1440px viewport (1440 - 252 sidebar,
-// Sidebar.tsx:132 - 72 page padding, SettingsView.tsx:47), so at 744 the table no longer
+// Sidebar.tsx:128 - 72 page padding, SettingsView.tsx:47), so at 744 the table no longer
 // overflows it — the three deleted columns took ~300px with them. The scroll container
 // below is kept anyway: it is what stops an overflow at a narrow viewport scrolling the
 // WHOLE Settings page sideways, dragging the h1 and the tab strip with it (App.tsx:800's

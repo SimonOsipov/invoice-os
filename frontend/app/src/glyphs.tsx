@@ -63,7 +63,7 @@ export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']}
 export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
 
 // Every NAV_* glyph renders at this size; the icon column is sized to fit it with room to
-// spare so label x-offset never depends on which glyph is in play (Sidebar.tsx:238).
+// spare so label x-offset never depends on which glyph is in play (Sidebar.tsx:234).
 export const NAV_ICON_SIZE = 17
 export const NAV_ICON_COL = 18
 export const navIconColStyle: CSSProperties = {

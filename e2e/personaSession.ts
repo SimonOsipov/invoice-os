@@ -11,7 +11,7 @@ import { resolveTarget } from './targets'
 // Each destination's own proof that it actually drew for a signed-in persona — not that the
 // shell HTML was served. All three are verified rendered:
 //   app     -> the green dot the sidebar's user card renders ONLY once /v1/me has resolved
-//              (Sidebar.tsx:263), i.e. the backend round trip completed, not just a mount.
+//              (Sidebar.tsx:259), i.e. the backend round trip completed, not just a mount.
 //              The same discriminator the four existing signInFirm copies already wait on.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
 //   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
@@ -57,13 +57,13 @@ export async function expectRefused(page: Page, id: PersonaId, destination: Dest
   expect(page.url(), `expected ${url} to refuse persona "${id}" and redirect to ${landingUrl}`).toContain(landingUrl)
 }
 
-// The app sidebar's nav labels, in render order. Scoped to the <nav> (Sidebar.tsx:216) so it
-// picks up neither the company-switcher button in the header div above it (:147) nor the
-// group-label divs (:220), both of which a bare `button` or text sweep would catch.
+// The app sidebar's nav labels, in render order. Scoped to the <nav> (Sidebar.tsx:212) so it
+// picks up neither the company-switcher button in the header div above it (:143) nor the
+// group-label divs (:216), both of which a bare `button` or text sweep would catch.
 //
 // Badge stripping: a nav button renders `<label span><badge span?>`, and the label span is
-// unclassed, so nth-child on it is brittle. Badges are always numeric (String(...) at :83 and
-// :91) and no nav label ends in a digit, so trimming a trailing run of digits off the
+// unclassed, so nth-child on it is brittle. Badges are always numeric (String(...) at :84 and
+// :88) and no nav label ends in a digit, so trimming a trailing run of digits off the
 // button's text is both sufficient and stable.
 export async function sidebarRoster(page: Page): Promise<string[]> {
   const labels = await page.locator('aside.pf-sidebar nav.pf-nav-list button.pf-nav').allTextContents()

@@ -86,7 +86,7 @@ async function goTo(page: Page, label: string): Promise<void> {
 }
 
 // navLabelSpan()/navIconSpan(): the two unclassed spans a nav button renders around its
-// glyph (Sidebar.tsx:238-240). getByText resolves to the INNERMOST element carrying that
+// glyph (Sidebar.tsx:234-236). getByText resolves to the INNERMOST element carrying that
 // exact text, so it lands on the label span even when a badge sibling makes the button's
 // own text longer; :has(svg) isolates the icon wrapper the same way, since that is the
 // only span with an <svg> descendant.
@@ -114,7 +114,7 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
 //
 // Known latent limit, shared with both existing copies and NOT introduced here: the
 // dropdown is position:absolute inside .pf-shell (height:100vh, overflow:hidden) with no
-// max-height (Sidebar.tsx:158), so once a firm tenant owns more entities than fit the
+// max-height (Sidebar.tsx:154), so once a firm tenant owns more entities than fit the
 // viewport, the option for a late-sorting name is unreachable and this click fails with
 // "outside of the viewport". Bounded today by per-PR ephemeral environments; a product fix,
 // not a test one.
@@ -123,7 +123,7 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
   await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
-// The two rosters, derived from Sidebar.tsx:115-127 (navGroups) x glyphs.tsx:62-110 (each
+// The two rosters, derived from Sidebar.tsx:111-123 (navGroups) x glyphs.tsx:62-110 (each
 // NavDef's label). Firm mode splits into a CLIENT group of 6 and a FIRM-WIDE group of 3;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
@@ -302,7 +302,7 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   const stamp = Date.now()
   const entity = await createEntity(token, { name: `PERSONA-01 approvals ${stamp}`, tin: freshTin() })
   // TWO validated fixtures, not one: with a single invoice a badge that renders a boolean
-  // ("1" whenever anything is validated) would be indistinguishable from a real count.
+  // ("1" whenever anything is awaiting approval) would be indistinguishable from a real count.
   const validatedNumbers = [`INV-P01-APPR-1-${stamp}`, `INV-P01-APPR-2-${stamp}`]
   for (const number of validatedNumbers) {
     await createValidatedInvoice(token, entity.id, number)
@@ -315,12 +315,12 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   // Same endpoint, same field, same tenant on both sides: the Sidebar calls
   // getRollup -> GET /api/dashboard/v1/rollup (lib/dashboard.ts:102-104), scopedBucket()
   // returns rollup.totals for in-house (:234-247, in-house branch at :235), and the badge
-  // is bucket.awaiting_approval (Sidebar.tsx:92); rollup(token) below hits the identical
+  // is bucket.awaiting_approval (Sidebar.tsx:88); rollup(token) below hits the identical
   // route and reads the identical field. The browser's in-house session mints a token for
   // the same subject/tenant as PERSONAS.B (frontend/app/src/auth.ts).
   const live = await rollup(token)
   const expectedAwaiting = live.totals.awaiting_approval
-  // The badge is ABSENT, not "0", when the count is zero (Sidebar.tsx:92) -- so this guard
+  // The badge is ABSENT, not "0", when the count is zero (Sidebar.tsx:88) -- so this guard
   // is what keeps the assertion below from being vacuous rather than mere defensiveness.
   // awaiting_approval only counts validated invoices an ACTIVE approval policy blocks, so
   // this is the guard that goes red on an environment whose seeded policy or whose runs
@@ -332,7 +332,7 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   // so the two fields differ only by the seeder's one APPROVED run -- and while they differ,
   // a badge still wired to counts.validated cannot satisfy the assertion below.
   expect(expectedAwaiting, 'awaiting_approval must differ from counts.validated, else this oracle cannot tell the two fields apart').not.toBe(live.totals.counts.validated)
-  // The badge span is the only className="mono" inside a nav button (Sidebar.tsx:240-244);
+  // The badge span is the only className="mono" inside a nav button (Sidebar.tsx:236-240);
   // the glyph beside it is an inline <svg> carrying no text, so this cannot pick up the
   // label. Scoped to the aside; in-house renders no company switcher, so every in-scope
   // button is a nav button.
@@ -341,10 +341,10 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
 
   // --- The click did something: the active-nav state moves to Approvals. ------------------
   // App.tsx:266's nav('approvals') sets view='invoices' + filter='Pending', and
-  // Sidebar.tsx:128-129 turns that pair into activeNav='approvals'. That highlight is the
+  // Sidebar.tsx:124-125 turns that pair into activeNav='approvals'. That highlight is the
   // ONLY thing in the rendered tree that distinguishes Approvals from Invoices (see the
   // comment on clause 2 below), and it carries no class, aria-current or data attribute --
-  // Sidebar.tsx:235 expresses it purely as inline style. font-weight is the discriminator
+  // Sidebar.tsx:231 expresses it purely as inline style. font-weight is the discriminator
   // used here rather than the accent bar's colour, which resolves to a design-system token
   // whose serialized value is a moving target. Asserted as a TRANSITION (before -> after)
   // and PAIRED against Invoices, so "everything is bold" cannot pass it.
@@ -358,7 +358,7 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   // WEAK CORROBORATOR — not a full-strength assertion, and deliberately so.
   // Approvals is not a separate screen: App.tsx:266's nav('approvals') sets
   // view='invoices' + filter='Pending', and ctx.filter's ONLY consumer is
-  // Sidebar.tsx:129's active-nav highlight — InvoicesList.tsx never reads it, so
+  // Sidebar.tsx:125's active-nav highlight — InvoicesList.tsx never reads it, so
   // this opens the UNFILTERED Invoices list (finding F-A, recorded in
   // [PERSONA-01-07], not fixed here per [approvals-filter-not-fixed]). These rows
   // would be visible whether or not the badge is correct, so this catches only a
@@ -388,7 +388,7 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
 // opened them.
 //
 // No fixtures: the roster renders regardless of data. approvalsItem is unconditionally in
-// navGroups (Sidebar.tsx:125); only its BADGE is conditional.
+// navGroups (Sidebar.tsx:121); only its BADGE is conditional.
 //
 // Left on the config's 60s default even though it is the only 60s test doing TWO full
 // sign-ins: it creates no fixtures, makes no writes, and runs third, by which point Test 1
@@ -478,7 +478,7 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
 // Sidebar.tsx wraps each nav glyph in an UNSIZED span, so a glyph's own width leaks into
 // where its label starts. Scope choice: FIRM_ROSTER, which spans BOTH firm nav groups
 // (CLIENT: Overview/Invoices/Validation/Rules/Customers/Reports, FIRM-WIDE: Workflows/
-// Clients/Settings, Sidebar.tsx:117-118) -- required, not incidental: NAV_CLIENTS (the
+// Clients/Settings, Sidebar.tsx:113-114) -- required, not incidental: NAV_CLIENTS (the
 // 14px forked glyph) lives in FIRM-WIDE and NAV_VALIDATION (the 16px shieldGlyph) lives in
 // CLIENT, so scoping to a single group would miss one of the two reported defects.
 //

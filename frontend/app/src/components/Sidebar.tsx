@@ -85,11 +85,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   }
   const approvalsItem: SidebarNavItem = {
     ...NAV_APPROVALS,
-    // The real 7-state lifecycle has no "awaiting approval" status. `validated` (passed
-    // the gate, not yet batch-submitted) is the closest live equivalent to the old mock's
-    // Pending count — batch-submitting a selection IS the approval action in this
-    // workflow (InvoicesList.tsx), so a validated invoice is exactly one still awaiting it.
-    badge: active.onboarding || bucket == null ? null : bucket.counts.validated > 0 ? String(bucket.counts.validated) : null,
+    badge: active.onboarding || bucket == null ? null : bucket.awaiting_approval > 0 ? String(bucket.awaiting_approval) : null,
   }
 
   // The nav is GROUPED BY SCOPE, because a flat list gave no signal about which

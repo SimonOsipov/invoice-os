@@ -870,9 +870,9 @@ off — still submits the same invoice. Pinned by
   SPA turns it into a block.
 - The `awaiting_approval` list filter.
 - The `awaiting_approval` **count** on the dashboard rollup's `Bucket`
-  (`internal/dashboard/store.go`, `GET /v1/rollup`). It is on the wire only — no SPA
-  surface reads it yet; the Approvals nav badge and the dashboard tiles are later APPR-11
-  subtasks. It is the list filter's predicate copied with the query's `i.` alias added,
+  (`internal/dashboard/store.go`, `GET /v1/rollup`). The Approvals nav badge
+  (`Sidebar.tsx`, `bucket.awaiting_approval`) reads it; the dashboard tiles are a later
+  APPR-11 subtask. It is the list filter's predicate copied with the query's `i.` alias added,
   and the two copies are held textually identical by
   `TestStoreRollup_AwaitingApprovalSQLMatchesTheInvoiceListFilter`, so the count and the
   filtered list cannot disagree about what the word denotes. It is ungated for the same

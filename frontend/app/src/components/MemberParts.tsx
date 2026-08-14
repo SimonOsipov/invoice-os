@@ -37,9 +37,9 @@ import { WfSelect, type WfOption } from './WorkflowParts'
 
 // The PERSON avatar, not the company one. Both exist in this app and the difference is a
 // deliberate signal, not drift: a COMPANY is a rounded rect in --action-tint on --action
-// at weight 700 (Sidebar.tsx:151/:177/:196, ClientsView.tsx:160, CustomersView.tsx:110,
+// at weight 700 (Sidebar.tsx:147/:173/:192, ClientsView.tsx:160, CustomersView.tsx:110,
 // SignIn.tsx:73), and a PERSON is a dark circle in --slate-800 on --text-on-dark at
-// weight 600 — Sidebar.tsx:255, until now the only person avatar in the product.
+// weight 600 — Sidebar.tsx:251, until now the only person avatar in the product.
 //
 // A members table is people, so it takes the person chip. The `isYou` row settles it: it
 // renders the same human the sidebar footer renders two inches away, and the seed sources
@@ -49,7 +49,7 @@ import { WfSelect, type WfOption } from './WorkflowParts'
 // §15.3's plan named --action-tint/--action for the default chip; that is the company
 // family. Picked, not blended.
 const CHIP_TONE: Record<MemberStatus, { background: string; color: string; border: string }> = {
-  // Sidebar.tsx:255, verbatim. The transparent border keeps all three variants the same
+  // Sidebar.tsx:251, verbatim. The transparent border keeps all three variants the same
   // box, since `box-sizing: border-box` means the dashed variant's border eats 2px.
   active: { background: 'var(--slate-800)', color: 'var(--text-on-dark)', border: '1px solid transparent' },
   // §10.1. The app's dashed idiom is always `1px dashed var(--line-3)` over a transparent
@@ -121,7 +121,7 @@ export function MemberStatusPill({ status }: { status: MemberStatus }) {
   )
 }
 
-/** §6's "small YOU chip" — the micro-badge idiom (RulesView.tsx:163, Sidebar.tsx:241). */
+/** §6's "small YOU chip" — the micro-badge idiom (RulesView.tsx:163, Sidebar.tsx:237). */
 export function YouChip() {
   return (
     <span
@@ -492,7 +492,7 @@ export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
 // ---------------------------------------------------------------------------
 
 // The app's popover shadow, and its second use — the first is the Sidebar company
-// switcher (Sidebar.tsx:159). Off-system already: the three shipped shadow tokens
+// switcher (Sidebar.tsx:155). Off-system already: the three shipped shadow tokens
 // (--shadow-elegant / -soft / -card, tokens/colors.css:62-64) are a hero panel, a floating
 // chip and a resting card, none of them this. Named here rather than inlined a second time
 // so the duplication is visible, and reused verbatim rather than swapped for
@@ -518,7 +518,7 @@ export type MenuAction = {
 
 /**
  * The per-row `⋯` menu. The app had no row menu before this, so the anatomy is taken from
- * the only popover it does have, the Sidebar company switcher (Sidebar.tsx:143-190): a
+ * the only popover it does have, the Sidebar company switcher (Sidebar.tsx:139-186): a
  * `position: relative` wrapper, an absolute panel at `calc(100% + 6px)` in --bg-2 with a
  * --line-2 hairline, --radius-md, the same long soft shadow and `popIn 140ms`
  * (platform.css:30-39), and `.pf-menu-item` rows.
@@ -569,7 +569,7 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
         className="pf-btn"
         // `.pf-btn` is forced to `border-radius: var(--radius-pill) !important`
         // (app-layer.css:194-197), so this square icon button renders as a circle. Taken
-        // deliberately: `.pf-signout` (Sidebar.tsx:275-283) is the same 28px transparent
+        // deliberately: `.pf-signout` (Sidebar.tsx:271-279) is the same 28px transparent
         // circle already shipped, and the radius is only visible while open or hovered.
         style={{
           display: 'inline-flex',

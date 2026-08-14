@@ -85,7 +85,7 @@ export function MemberRoleMatrix() {
         }}
       >
         {MATRIX_HEADING}
-        {/* Sidebar.tsx:156's rotation, verbatim — including the explicit `rotate(0deg)`,
+        {/* Sidebar.tsx:152's rotation, verbatim — including the explicit `rotate(0deg)`,
             which is what makes the chevron animate on the way back up as well. No new
             glyph: `chevDownGlyph` already exists and `[one-new-glyph]` was spent on
             `moreGlyph` in MEMB-01-04. */}

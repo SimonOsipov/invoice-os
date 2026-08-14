@@ -343,7 +343,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(row, 'the unsaved condition left with the builder').toContainText('1 approval')
 
   const switcher = page.getByTestId('company-switcher')
-  // The switcher button holds exactly two text spans (Sidebar.tsx:151-154): the client's short
+  // The switcher button holds exactly two text spans (Sidebar.tsx:147-150): the client's short
   // name (unclassed) and the TIN line (.mono). `span > span` excludes the initials and chevron
   // spans, whose parent is the button itself.
   const switcherName = switcher.locator('span > span:not(.mono)')

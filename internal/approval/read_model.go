@@ -325,8 +325,8 @@ func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string) (exists map[
 	return exists, titles, holders, nil
 }
 
-// isApprover mirrors internal/invoice/store.go:1412 -- kept in sync by inspection, not import
-// (unexported across packages). Also mirrors roles.ts's isApprover (roles.ts:405-407).
+// isApprover mirrors internal/invoice/store.go:1472 -- kept in sync by inspection, not import
+// (unexported across packages). Also mirrors roles.ts's isApprover (roles.ts:415-417).
 func isApprover(accessRole string) bool {
 	return accessRole == "admin" || accessRole == "reviewer"
 }

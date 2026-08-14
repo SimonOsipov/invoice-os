@@ -249,7 +249,7 @@ type EditInput struct {
 // tenant-wide (CI caught this on a shared, never-reset dev DB; see
 // ListHandler's doc comment, handlers.go). EntityID fixes it by narrowing
 // BEFORE the limit applies, in SQL. NeedsAttention is a plain bool: true
-// applies the verbatim dashboard predicate (Store.List's doc comment);
+// applies the dashboard predicate's twin (Store.List's doc comment);
 // false/omitted applies no predicate ([needs-attention-bool-true-only] — no
 // "not-needs-attention" branch).
 //

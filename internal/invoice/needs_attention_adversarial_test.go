@@ -358,3 +358,94 @@ func TestListFilterDeepEqualStillDiscriminates_ImportBatchIDsDivergence(t *testi
 		t.Fatalf("reflect.DeepEqual(%+v, %+v) = true, want false -- DeepEqual is order-sensitive even though ANY($n) is not", base, reordered)
 	}
 }
+
+// --- QA adversarial coverage (Mode B): the approval-rejected arm ------------
+
+// The list fragment's own newest-run table. Only 'rejected' puts the draft on the
+// page; 'cancelled' and 'approved' are exercised nowhere else on this side.
+func TestStoreList_OnlyARejectedNewestRunReturnsTheDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "APPR-11-02-QA list-states tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-02-QA list-states entity")
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "APPR-11-02-QA list-states policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	c := tenantCtx(tenantID)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+	t1 := t0.Add(time.Hour)
+
+	// Every row carries a rejection underneath, so the rows differ ONLY in newest state.
+	seedWithNewest := func(label, newest string) string {
+		t.Helper()
+		id := seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-ls-"+label, string(StatusDraft), `[]`)
+		old := seedApprovalRunFor(t, super, tenantID, id, versionID)
+		closeApprovalRunFor(t, super, old, "rejected", "approver")
+		setRunOpenedAt(t, super, old, t0)
+		newRun := seedApprovalRunFor(t, super, tenantID, id, versionID)
+		if newest != "open" {
+			closeApprovalRunFor(t, super, newRun, newest, "approver")
+		}
+		setRunOpenedAt(t, super, newRun, t1)
+		return id
+	}
+
+	openID := seedWithNewest("open", "open")
+	approvedID := seedWithNewest("approved", "approved")
+	cancelledID := seedWithNewest("cancelled", "cancelled")
+	rejectedID := seedWithNewest("rejected", "rejected")
+
+	items, total, err := store.List(c, ListFilter{NeedsAttention: true, Limit: 100})
+	if err != nil {
+		t.Fatalf("List(NeedsAttention: true): %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1 (only the newest-rejected draft)", total)
+	}
+	want := map[string]bool{rejectedID: true}
+	if got := idSet(items); !reflect.DeepEqual(got, want) {
+		t.Errorf("ids = %v, want exactly %v -- open %s / approved %s / cancelled %s must all stay off the page",
+			sortedIDs(got), sortedIDs(want), openID, approvedID, cancelledID)
+	}
+}
+
+// The list fragment's approval arm is scoped by RLS and by its correlation on
+// invoices.id, not by a manual tenant predicate: tenant A's rejected run must never
+// put anything on tenant B's page. Mirrors the rollup's own
+// TestRLS_RollupApprovalRejectedIsTenantScoped for the second copy of the predicate.
+func TestRLS_ListNeedsAttentionApprovalArmIsTenantScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	tenantA := seedTenant(t, super, "APPR-11-02-QA list-RLS tenant A")
+	tenantB := seedTenant(t, super, "APPR-11-02-QA list-RLS tenant B")
+	entityA := seedEntity(t, super, tenantA, "APPR-11-02-QA list-RLS A entity")
+	entityB := seedEntity(t, super, tenantB, "APPR-11-02-QA list-RLS B entity")
+	policyA := seedApprovalPolicyFor(t, super, tenantA, "APPR-11-02-QA list-RLS A policy")
+	versionA := seedApprovalPolicyVersionFor(t, super, tenantA, policyA)
+
+	sentBackA := seedInvoiceWithViolations(t, super, tenantA, entityA, "APPR-11-02-QA-lrls-A1", string(StatusDraft), `[]`)
+	runA := seedApprovalRunFor(t, super, tenantA, sentBackA, versionA)
+	closeApprovalRunFor(t, super, runA, "rejected", "approver")
+
+	cleanB := seedInvoiceWithViolations(t, super, tenantB, entityB, "APPR-11-02-QA-lrls-B1", string(StatusDraft), `[]`)
+
+	itemsA, totalA, err := store.List(tenantCtx(tenantA), ListFilter{NeedsAttention: true, Limit: 100})
+	if err != nil {
+		t.Fatalf("List as A: %v", err)
+	}
+	if got := idSet(itemsA); totalA != 1 || !got[sentBackA] {
+		t.Fatalf("A's page = %v (total %d), want exactly [%s] -- B's zero below proves nothing otherwise",
+			sortedIDs(got), totalA, sentBackA)
+	}
+
+	itemsB, totalB, err := store.List(tenantCtx(tenantB), ListFilter{NeedsAttention: true, Limit: 100})
+	if err != nil {
+		t.Fatalf("List as B: %v", err)
+	}
+	if totalB != 0 || len(itemsB) != 0 {
+		t.Errorf("B's page = %v (total %d), want empty -- A's rejected run must not reach B's clean draft %s",
+			sortedIDs(idSet(itemsB)), totalB, cleanB)
+	}
+}

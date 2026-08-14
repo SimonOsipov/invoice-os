@@ -10,11 +10,14 @@
 //	Core AC #2/#3 TestStoreList_NeedsAttentionMatchesDashboardRollup (drift guard)
 //	AC #4         TestRLS_ListNeedsAttention_TenantIsolated
 //
-// The verbatim predicate under test (copied from internal/dashboard/store.go
-// Rollup's own count(*) FILTER clause, alias dropped):
+// The predicate under test, a hand-maintained twin of internal/dashboard/store.go
+// Rollup's own count(*) FILTER clause (store.go's f.NeedsAttention doc comment
+// names the two licensed differences):
 //
-//	status IN ('rejected', 'failed')
+//	status = 'rejected'
+//	  OR (status = 'failed' AND kept_as_is_at IS NULL)
 //	  OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb)
+//	  OR (status = 'draft' AND the newest approval_runs row closed 'rejected')
 //
 // Run: `make test-rls`, or directly, e.g.:
 //
@@ -47,8 +50,8 @@ func setRunOpenedAt(t *testing.T, super *pgxpool.Pool, runID string, openedAt ti
 	mustExec(t, super, `UPDATE approval_runs SET opened_at = $1 WHERE id = $2`, openedAt, runID)
 }
 
-// matchesNeedsAttentionPredicate reports whether inv satisfies the verbatim
-// dashboard predicate, evaluated in Go against the ALREADY-SCANNED row (not a
+// matchesNeedsAttentionPredicate reports whether inv satisfies the dashboard
+// predicate, evaluated in Go against the ALREADY-SCANNED row (not a
 // second SQL query) -- rejected always matches, failed matches unless
 // resolved (kept_as_is_at set); a draft matches iff its
 // violations contain a severity:"error" entry (hasBlockingViolation,
@@ -81,7 +84,7 @@ func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice, latestRunState ma
 
 // TestStoreList_NeedsAttentionMatchesDashboardRollup (Core AC #2/#3, the
 // drift-guard teeth): seeds ONE tenant + entity with a deliberate mix
-// exercising every branch of the verbatim predicate --
+// exercising every branch of the predicate --
 //
 //	TRUE : rejected, failed, draft-with-severity:"error", draft whose newest
 //	       approval run closed 'rejected'

@@ -265,10 +265,11 @@ test('list surface: real rows render with real status badges, and Needs attentio
 
   // attn: created with the bad fixture, then validated via the API (not the
   // UI -- this test is the LIST surface, not the detail fix loop the second
-  // scenario below drives). A blocking violation on a draft invoice is exactly
-  // the needs_attention=true predicate (internal/invoice/needs_attention_test.go's
-  // matchesNeedsAttentionPredicate: rejected/failed always match; a draft
-  // matches iff it carries a severity:"error" violation).
+  // scenario below drives). A blocking violation on a draft invoice enters
+  // needs_attention (internal/invoice/needs_attention_test.go's
+  // matchesNeedsAttentionPredicate: rejected matches, failed matches unless kept;
+  // a draft matches on a severity:"error" violation or a newest approval run that
+  // closed 'rejected' -- this flow creates no approval runs).
   const attnNumber = `INV-M409-ATTN-${Date.now()}`
   const attn = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(attnNumber) })
   await validateInvoice(token, attn.id)

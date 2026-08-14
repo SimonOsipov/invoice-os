@@ -389,7 +389,7 @@ describe('APPR-09-05 AC-4: Publish states its consequence before the click', () 
   })
 
   it('Publish names THIS policy when it holds the slot itself', () => {
-    // policyInForce excludes self by design (policies.ts:193-195), so with only the story's two
+    // policyInForce excludes self by design (policies.ts:192-194), so with only the story's two
     // branches the policy that IS in force renders the false 'No policy is in force'.
     //
     // 'v2 in force · v3 draft' — the ONLY shape in which this branch is publishable.
@@ -1984,7 +1984,7 @@ describe('APPR-10-02 QA: the one-key scenario is copied, never mutated in place'
 // follow a typo into the product.
 //
 // G2: the inspector and the simulator co-render in one sticky column (WorkflowBuilder.tsx:519, :533),
-// and `nodeTitle`/`simTitle` both return `Notify ${target}` (WorkflowParts.tsx:79, :97). Every query
+// and `nodeTitle`/`simTitle` both return `Notify ${target}` (WorkflowParts.tsx:79, :100). Every query
 // below is panel-scoped for that reason — a bare `screen.getByText` throws on this fixture.
 
 const NOTIFY_CLAIM_ID = 'notify-not-delivered'
@@ -2117,7 +2117,7 @@ describe('APPR-10-05 AC-2: the simulator claims it only where a notify step ran'
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
 
     const panel = simulatorPanel()
-    // `simSub`'s notify arm, upper-cased (WorkflowParts.tsx:104). Pinned pure at
+    // `simSub`'s notify arm, upper-cased (WorkflowParts.tsx:105). Pinned pure at
     // WorkflowParts.test.ts:159-164 — this is the RENDERED half no pure-function test can reach.
     expect(within(panel).getAllByText('IN-APP'), 'the notify row lost its own channel sub-line').toHaveLength(1)
     expect(within(panel).getAllByText(NOTIFY_CARD), 'the notify row lost its own title').toHaveLength(1)

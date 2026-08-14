@@ -98,7 +98,7 @@ function publishBlockedReason(server: Policy, dirty: boolean): string | null {
  *
  * `Policy.status` answers only "is the top version sealed", which is the whole of the first
  * question and none of the second: WHICH policy governs is `activeVersion`, tenant-wide. Three
- * branches after that, because `policyInForce` excludes self by design (policies.ts:193-195):
+ * branches after that, because `policyInForce` excludes self by design (policies.ts:192-194):
  * without the first one, the policy that IS in force renders 'nothing is in force'.
  */
 function publishConsequence(server: Policy, policies: readonly Policy[]): string | null {

@@ -149,9 +149,14 @@ export function inhouseNotifyTargets(current: string): string[] {
   return out
 }
 
-/** Active members whose access role is `reviewer` — admins excluded, per §11.3. */
+/**
+ * Active members holding an approver role — `admin` or `reviewer`, per APPR-00 Q1.
+ * The pair is transcribed, not imported: this module never imports roles.ts (header above).
+ * `APPR-00 Q1 — the inline approver pair agrees with lib/roles.ts` catches it drifting from
+ * its siblings, lib/roles.ts:415-417 (`isApprover`) and internal/approval/read_model.go:330-332.
+ */
 export function delegateCandidates(list: readonly Member[]): string[] {
-  return list.filter((m) => m.status === 'active' && m.role === 'reviewer').map((m) => m.name)
+  return list.filter((m) => m.status === 'active' && (m.role === 'admin' || m.role === 'reviewer')).map((m) => m.name)
 }
 
 /** The §9 last-admin lock reads this: at length 1, that admin cannot be demoted or suspended. */

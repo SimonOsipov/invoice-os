@@ -49,7 +49,7 @@ export type ApprovalNode = {
    * the seed never writes it: that is what keeps every existing fixture and the whole-node
    * `toEqual` in workflows.test.ts compiling and passing untouched.
    *
-   * `''` and ABSENT both mean "Anyone with the Reviewer role" — `WfSelect` is `value: string`
+   * `''` and ABSENT both mean "Anyone with the Admin or Reviewer role" — `WfSelect` is `value: string`
    * and cannot emit absence, so the default is the empty-string sentinel (the same idiom the
    * invite modal's `NO_WF_ROLE` uses). Round-tripping the toggle off and on therefore leaves
    * the key present as `''`, which is the default, not a stored choice.

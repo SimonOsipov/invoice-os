@@ -31,11 +31,11 @@ const TITLES: Record<WfNode['type'], string> = {
 // the default is a SENTINEL option valued `''`, the idiom the invite modal's `NO_WF_ROLE`
 // uses for the same reason. `''` and absent both mean "anyone", so nothing maps it back out:
 // toggling delegation off and on leaves the key present as `''`, still the default.
-const ANY_REVIEWER = ''
+const ANY_APPROVER = ''
 
 // Deliberately NOT the same wording as the option above it: the option names the fallback,
-// the note states the eligibility rule. §11.3 writes them differently — do not harmonise.
-const DELEGATE_NOTE = 'Only members with the Reviewer access role can be a delegate.'
+// the note states the eligibility rule — do not harmonise.
+const DELEGATE_NOTE = 'Only Admins and Reviewers can be a delegate. Delegation is not available yet.'
 
 // The delegation window: `delegate`/`delegateTo` have no server column (lib/policies.ts:73-75),
 // so the choice is lost on every save. Stated rather than hidden — APPR-10 owns the storage and
@@ -56,7 +56,7 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
    * imports `lib/members.ts`, and never learns which mode it is in.
    */
   resolve: (position: RoleKey) => Resolved
-  /** Active members holding the Reviewer access role, in both modes. */
+  /** Active members holding an approver role — Admin or Reviewer — in both modes. */
   delegates: string[]
   /**
    * ALWAYS passed, because the notify fork has to happen somewhere and it cannot happen here.
@@ -125,8 +125,8 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
               <div style={{ marginTop: 12 }}>
                 <WfSelect
                   label="Delegate to"
-                  value={node.delegateTo ?? ANY_REVIEWER}
-                  options={[{ value: ANY_REVIEWER, label: 'Anyone with the Reviewer role' }, ...toOptions(delegates)]}
+                  value={node.delegateTo ?? ANY_APPROVER}
+                  options={[{ value: ANY_APPROVER, label: 'Anyone with the Admin or Reviewer role' }, ...toOptions(delegates)]}
                   onChange={(v) => patch({ delegateTo: v })}
                 />
                 <div style={hintStyle()}>{DELEGATE_NOTE}</div>

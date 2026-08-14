@@ -34,10 +34,18 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // aggregate query). needs_attention cuts across draft/rejected/failed
 // (AC-3): rejected always counts, failed counts unless resolved outside
 // (kept_as_is_at set), a draft counts only when its violations contain an
-// error-severity entry. TopViolations is grouped per entity_id AND rule_key
-// and attached to each Client; the root/Totals list is the Go-side sum
-// across entities, re-sorted invoices DESC then rule_key ASC (map iteration
-// order isn't deterministic, so the sort can't be skipped).
+// error-severity entry. awaiting_approval is the SECOND overlay and a sibling
+// of needs_attention, never an eighth state: validated invoices an active
+// policy blocks, the predicate copied from the awaiting_approval list filter
+// (internal/invoice/store.go) so the badge and the filtered list cannot
+// disagree about the word. Its NOT EXISTS (approved run) conjunct is satisfied
+// VACUOUSLY by an invoice with zero runs, so a tenant with an active policy but
+// nothing armed reads awaiting_approval == counts.validated
+// (TestStoreRollup_AwaitingApprovalCountsAnUnarmedValidatedInvoice).
+// TopViolations is grouped per entity_id AND rule_key and attached to each
+// Client; the root/Totals list is the Go-side sum across entities, re-sorted
+// invoices DESC then rule_key ASC (map iteration order isn't deterministic, so
+// the sort can't be skipped).
 func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	clients := []Client{}
 	ruleSums := map[string]int{}
@@ -45,7 +53,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`WITH flagged AS (
-			    SELECT i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
+			    SELECT i.id, i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
 			           (i.status = 'draft' AND i.rule_set_version_id IS NULL)                       AS is_never_validated,
 			           (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)    AS is_blocked_by_rules,
 			           (i.status = 'rejected' OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)) AS is_failed_in_transmission,
@@ -82,6 +90,15 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			              OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)
 			              OR (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)
 			       ) AS needs_attention,
+			       -- Copied from the awaiting_approval list filter (internal/invoice/store.go),
+			       -- alias added. i.id is qualified: approval_runs has its own id, and a bare
+			       -- id binds there and silently never matches.
+			       count(*) FILTER (
+			           WHERE i.status = 'validated'
+			             AND EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)
+			             AND NOT EXISTS (SELECT 1 FROM approval_runs r
+			                              WHERE r.invoice_id = i.id AND r.state = 'approved')
+			       ) AS awaiting_approval,
 			       count(*)                                            AS total,
 			       count(*) FILTER (WHERE i.is_never_validated)        AS never_validated,
 			       count(*) FILTER (WHERE i.is_blocked_by_rules)       AS blocked_by_rules,
@@ -110,7 +127,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 				&c.EntityID, &c.EntityName,
 				&c.Counts.Draft, &c.Counts.Validated, &c.Counts.Queued, &c.Counts.Submitted,
 				&c.Counts.Accepted, &c.Counts.Rejected, &c.Counts.Failed,
-				&c.NeedsAttention, &total,
+				&c.NeedsAttention, &c.AwaitingApproval, &total,
 				&neverValidated, &blockedByRules, &failedInTransmission,
 				&readinessNum, &barFieldNum, &barTaxNum, &barIdentNum, &vatKobo,
 			); err != nil {
@@ -189,6 +206,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 		totals.Counts.Rejected += c.Counts.Rejected
 		totals.Counts.Failed += c.Counts.Failed
 		totals.NeedsAttention += c.NeedsAttention
+		totals.AwaitingApproval += c.AwaitingApproval
 		addMetrics(totals.Metrics, c.Metrics)
 	}
 

@@ -56,8 +56,10 @@ export interface Metric {
 }
 export type Metrics = Record<string, Metric>
 
-// dashboard.go Bucket — the 7-state counts plus the overlapping needs_attention overlay
-// (rejected ∪ failed ∪ drafts-with-an-error-severity-violation). Never a donut input.
+// dashboard.go Bucket — the 7-state counts plus TWO overlapping overlays, neither ever a
+// donut input: needs_attention (rejected ∪ failed ∪ drafts-with-an-error-severity-violation)
+// and awaiting_approval (validated invoices an active approval policy blocks). They
+// partition by invoice status, so neither is derivable from the other — do not merge them.
 // Sibling of RollupClient below — kept in sync by hand, not by `extends`.
 export interface RollupBucket {
   counts: Counts
@@ -218,7 +220,7 @@ export function entityHealth(clients: RollupClient[], entityId: string): EntityH
 // re-show every OTHER client's numbers under this one's name, exactly the bug
 // [dashboard-scope-per-client] replaces.
 const EMPTY_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }
-export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] }
+export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
 // Resolves which Bucket a CLIENT-scoped surface renders for the current selection
 // ([dashboard-scope-per-client]). In-house has ZERO business_entities rows
@@ -232,7 +234,13 @@ export function scopedBucket(isInhouse: boolean, entityId: string | null, rollup
   if (entityId == null) return EMPTY_BUCKET
   const client = rollup.clients.find((c) => c.entity_id === entityId)
   return client
-    ? { counts: client.counts, needs_attention: client.needs_attention, metrics: client.metrics, top_violations: client.top_violations }
+    ? {
+        counts: client.counts,
+        needs_attention: client.needs_attention,
+        awaiting_approval: client.awaiting_approval,
+        metrics: client.metrics,
+        top_violations: client.top_violations,
+      }
     : EMPTY_BUCKET
 }
 

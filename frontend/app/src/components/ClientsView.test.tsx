@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
+import type { Rollup } from '../lib/dashboard'
 import type { Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 import { ClientsView } from './ClientsView'
@@ -22,8 +23,17 @@ function isRollupUrl(url: string): boolean {
   return new URL(url).pathname.endsWith('/rollup')
 }
 
-const ZERO_ROLLUP = {
-  totals: { counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }, needs_attention: 0 },
+// Annotated `: Rollup` like ReportsView.test.tsx's sibling fixture: it is only ever fed to
+// a `Promise<unknown>`, so without the annotation a new required RollupBucket field is
+// omitted here silently while every annotated fixture fails typecheck.
+const ZERO_ROLLUP: Rollup = {
+  totals: {
+    counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
+    needs_attention: 0,
+    awaiting_approval: 0,
+    metrics: {},
+    top_violations: [],
+  },
   clients: [],
   top_violations: [],
 }

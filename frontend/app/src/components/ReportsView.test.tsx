@@ -33,6 +33,7 @@ const ZERO_ROLLUP: Rollup = {
   totals: {
     counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
     needs_attention: 0,
+    awaiting_approval: 0,
     metrics: {},
     top_violations: [],
   },

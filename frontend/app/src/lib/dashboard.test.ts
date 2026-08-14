@@ -70,9 +70,9 @@ function counts(overrides: Partial<Counts> = {}): Counts {
 }
 
 const rollupFixture: Rollup = {
-  totals: { counts: counts({ draft: 1 }), needs_attention: 1, metrics: {}, top_violations: [] },
+  totals: { counts: counts({ draft: 1 }), needs_attention: 1, awaiting_approval: 0, metrics: {}, top_violations: [] },
   clients: [
-    { entity_id: 'e1', entity_name: 'Okafor & Partners', counts: counts({ draft: 1 }), needs_attention: 1, metrics: {}, top_violations: [] },
+    { entity_id: 'e1', entity_name: 'Okafor & Partners', counts: counts({ draft: 1 }), needs_attention: 1, awaiting_approval: 0, metrics: {}, top_violations: [] },
   ],
   top_violations: [{ rule_key: 'supplier-tin-format', invoices: 1 }],
 }
@@ -221,14 +221,14 @@ describe('resolveCtaLabel', () => {
 
 describe('isEmptyRollup', () => {
   it('DASH-T17: all-zero totals.counts is empty', () => {
-    const r: Rollup = { totals: { counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
+    const r: Rollup = { totals: { counts: counts(), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
 
     expect(isEmptyRollup(r)).toBe(true)
   })
 
   it('DASH-T18: any non-zero total count is not empty', () => {
     const r: Rollup = {
-      totals: { counts: counts({ draft: 1 }), needs_attention: 0, metrics: {}, top_violations: [] },
+      totals: { counts: counts({ draft: 1 }), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [],
       top_violations: [],
     }
@@ -259,20 +259,20 @@ describe('dashboardViewState', () => {
 })
 
 describe('entityHealth', () => {
-  const clientA: RollupClient = { entity_id: 'A', entity_name: 'Acme', counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }
+  const clientA: RollupClient = { entity_id: 'A', entity_name: 'Acme', counts: counts(), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
   it('DASH-T21: an entity absent from clients reads no-invoices', () => {
     expect(entityHealth([clientA], 'Z')).toEqual({ kind: 'no-invoices' })
   })
 
   it('DASH-T22: an entity present with needs_attention:2 reads needs-attention with that count', () => {
-    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 2, metrics: {}, top_violations: [] }
+    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 2, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'needs-attention', count: 2 })
   })
 
   it('DASH-T23: an entity present with needs_attention:0 reads clear', () => {
-    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }
+    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'clear' })
   })
@@ -283,9 +283,9 @@ describe('entityHealth', () => {
 // architect's original DASH-T1-T23 table.
 describe('scopedBucket', () => {
   const rollup: Rollup = {
-    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3, metrics: {}, top_violations: [] },
+    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3, awaiting_approval: 0, metrics: {}, top_violations: [] },
     clients: [
-      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, metrics: {}, top_violations: [] },
+      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, awaiting_approval: 0, metrics: {}, top_violations: [] },
     ],
     top_violations: [],
   }
@@ -299,6 +299,7 @@ describe('scopedBucket', () => {
     expect(scopedBucket(false, 'e1', rollup)).toEqual({
       counts: counts({ validated: 4 }),
       needs_attention: 1,
+      awaiting_approval: 0,
       metrics: {},
       top_violations: [],
     })
@@ -406,7 +407,7 @@ describe('entityHealth — QA adversarial', () => {
   })
 
   it('QA-EH2: a present client with a large needs_attention count round-trips that exact count, uncapped/untruncated', () => {
-    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137, metrics: {}, top_violations: [] }
+    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientBig], 'BIG')).toEqual({ kind: 'needs-attention', count: 137 })
   })
@@ -426,7 +427,7 @@ describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero'
   for (const key of stateKeys) {
     it(`QA-IE-${key}: only "${key}" nonzero is not empty (guards a helper checking a subset of the 7 keys)`, () => {
       const r: Rollup = {
-        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0, metrics: {}, top_violations: [] },
+        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
         clients: [],
         top_violations: [],
       }
@@ -578,6 +579,7 @@ describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough
     totals: {
       counts: counts({ draft: 5 }),
       needs_attention: 3,
+      awaiting_approval: 0,
       metrics: totalsMetrics,
       top_violations: totalsViolations,
     },
@@ -587,6 +589,7 @@ describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough
         entity_name: 'Acme',
         counts: counts({ validated: 4 }),
         needs_attention: 1,
+        awaiting_approval: 0,
         metrics: clientMetrics,
         top_violations: clientViolations,
       },

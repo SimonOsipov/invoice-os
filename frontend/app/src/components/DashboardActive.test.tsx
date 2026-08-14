@@ -23,7 +23,7 @@ const ZERO_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, a
 function rollup(needsAttention: number, countsOver: Partial<Counts> = {}, metricsOver: Metrics = {}): Rollup {
   const counts: Counts = { ...ZERO_COUNTS, ...countsOver }
   return {
-    totals: { counts, needs_attention: needsAttention, metrics: metricsOver, top_violations: [] },
+    totals: { counts, needs_attention: needsAttention, awaiting_approval: 0, metrics: metricsOver, top_violations: [] },
     clients: [],
     top_violations: [],
   }
@@ -163,13 +163,14 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
 
   it('(e) AC-7: a firm-mode client renders its OWN top_violations, not the tenant-wide list', async () => {
     const data: Rollup = {
-      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [
         {
           entity_id: 'ent-1',
           entity_name: 'Dangote Cement PLC',
           counts: ZERO_COUNTS,
           needs_attention: 0,
+          awaiting_approval: 0,
           metrics: {},
           top_violations: [{ rule_key: 'client-only-rule', invoices: 4 }],
         },
@@ -196,6 +197,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
       totals: {
         counts: ZERO_COUNTS,
         needs_attention: 0,
+        awaiting_approval: 0,
         metrics: {
           readiness: { num: 40, den: 100 },
           blocked_by_rules: { num: 9, den: 0 },
@@ -210,6 +212,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
           entity_name: 'Dangote Cement PLC',
           counts: ZERO_COUNTS,
           needs_attention: 0,
+          awaiting_approval: 0,
           metrics: {
             readiness: { num: 92, den: 100 },
             bar_field_completeness: { num: 88, den: 100 },
@@ -258,9 +261,9 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
 
   it('(i) firm-mode client with zero metrics still resolves via the matched clients row, not EMPTY_BUCKET', async () => {
     const data: Rollup = {
-      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [
-        { entity_id: 'ent-2', entity_name: 'Zenith Traders', counts: { ...ZERO_COUNTS, draft: 5, submitted: 2 }, needs_attention: 0, metrics: {}, top_violations: [] },
+        { entity_id: 'ent-2', entity_name: 'Zenith Traders', counts: { ...ZERO_COUNTS, draft: 5, submitted: 2 }, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       ],
       top_violations: [],
     }
@@ -287,6 +290,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
       totals: {
         counts: { ...ZERO_COUNTS, draft: 99 },
         needs_attention: 0,
+        awaiting_approval: 0,
         metrics: { readiness: { num: 40, den: 100 } },
         top_violations: [{ rule_key: 'tenant-rule', invoices: 5 }],
       },
@@ -309,9 +313,9 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
 
   it('(k) firm-mode client with empty top_violations renders "No open failures", not the tenant-wide list', async () => {
     const data: Rollup = {
-      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }] },
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }] },
       clients: [
-        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       ],
       top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }],
     }
@@ -397,10 +401,10 @@ describe('DashboardActive trend re-anchor — adversarial (QA task-430)', () => 
 
   it('switching the selected client updates BOTH the ring and the trend together, with no stale value left behind', async () => {
     const data: Rollup = {
-      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [
-        { entity_id: 'ent-a', entity_name: 'Client A', counts: ZERO_COUNTS, needs_attention: 0, metrics: { readiness: { num: 30, den: 100 } }, top_violations: [] },
-        { entity_id: 'ent-b', entity_name: 'Client B', counts: ZERO_COUNTS, needs_attention: 0, metrics: { readiness: { num: 95, den: 100 } }, top_violations: [] },
+        { entity_id: 'ent-a', entity_name: 'Client A', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: { readiness: { num: 30, den: 100 } }, top_violations: [] },
+        { entity_id: 'ent-b', entity_name: 'Client B', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: { readiness: { num: 95, den: 100 } }, top_violations: [] },
       ],
       top_violations: [],
     }

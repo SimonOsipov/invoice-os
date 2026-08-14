@@ -833,9 +833,10 @@ describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
   // P5 — no `:disabled` rule exists anywhere in this repo, so the inline paint is mandatory
   // rather than stylistic. The PROPERTY NAME differs per control and one shared assertion would
   // pin the wrong name on one of them: app-layer.css:224-232 forbids the `background` shorthand
-  // on `.pf-select`, whose resting style sets `backgroundColor` (WorkflowParts.tsx:222), while
-  // `.pf-toggle` sets the shorthand (:273). Measured in jsdom: a select's `style.background`
-  // reads '' and a toggle's `style.backgroundColor` reads ''.
+  // on `.pf-select`, whose own resting style sets `backgroundColor` (WorkflowParts.tsx:235),
+  // while `WfToggle`'s resting style sets the shorthand (:303). Both are INLINE — the
+  // `.pf-toggle` class sets only a transition (platform.css:169-171). Measured in jsdom: a
+  // select's `style.background` reads '' and a toggle's `style.backgroundColor` reads ''.
   it('the select paints backgroundColor, the toggle paints background, and both mute the rest', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
@@ -1863,7 +1864,7 @@ function inspectorPanel(): HTMLElement {
 
 /**
  * What a control is CALLED on screen. A non-`hideLabel` WfSelect names its select through the
- * visible span inside the wrapping <label> (WorkflowParts.tsx:211-216) rather than an
+ * visible span inside the wrapping <label> (WorkflowParts.tsx:221-225) rather than an
  * aria-label, so neither source alone can enumerate a mixed panel.
  */
 function controlName(c: Element): string {

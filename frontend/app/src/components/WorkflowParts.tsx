@@ -277,9 +277,11 @@ export function WfAmountInput({ value, onChange, ariaLabel, marginBottom = 0 }: 
  * 34×18 switch. Same pf-toggle/pf-knob transitions the Rules screen uses.
  *
  * `disabled`/`title`/`ariaDescribedBy` mirror `WfSelect`'s, with two differences: the paint uses
- * the `background` SHORTHAND, which is what `.pf-toggle`'s resting style sets, and there is no
- * `aria-disabled` — native `disabled` on a `<button>` already covers focus, the keyboard and the
- * a11y tree. No `filter: 'none'`: `.pf-toggle` has no `:hover` rule (platform.css:167-171).
+ * the `background` SHORTHAND, matching the resting style below rather than `WfSelect`'s
+ * `backgroundColor` — nothing forbids the shorthand here, and overriding a shorthand with a
+ * longhand would leave the resting value half-standing. And there is no `aria-disabled`: native
+ * `disabled` on a `<button>` already covers focus, the keyboard and the a11y tree. No
+ * `filter: 'none'`: `.pf-toggle` sets only a transition, no `:hover` (platform.css:167-171).
  */
 export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy }: {
   on: boolean

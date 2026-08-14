@@ -939,6 +939,185 @@ describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
 })
 
 // ----------------------------------------------------------------------------
+// APPR-10-04 Stage 4 QA — the gaps the AC tests leave open
+// ----------------------------------------------------------------------------
+// Each block below was written against a MUTATION that survived the whole suite.
+
+describe('APPR-10-04 QA AC-6: the fieldset count holds with a step SELECTED', () => {
+  // The pin at :1274 renders the builder and never selects, so the inspector shows its
+  // no-selection card and the approval panel is not in the document at all. A `<fieldset>`
+  // added AROUND the delegation controls — the exact shortcut P28 exists to forbid — survives
+  // it untouched. Measured: with no `disabled` on that wrapper, nothing in the suite failed.
+  it('selecting an approval step adds no wrapper — still three, still one flex', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    // The panel is genuinely mounted, or the count below measures the no-selection card.
+    expect(screen.getByLabelText('Delegate to'), 'no approval panel is open, so this counts the wrong tree').toBeTruthy()
+
+    const wrappers = Array.from(document.querySelectorAll('fieldset'))
+    expect(wrappers, 'the scope row, the canvas and the inspector — the delegation recipe adds none').toHaveLength(3)
+    expect(wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex'), 'exactly one wrapper blockifies its child').toHaveLength(1)
+    // AC-2's distinction, stated as a tree property rather than per control: nothing inside the
+    // open inspector is shut by ancestry, so every `.disabled` above is the control's own.
+    const inspectorFieldsets = wrappers.filter((fs) => fs.contains(screen.getByLabelText('Delegate to')) && fs.hasAttribute('disabled'))
+    expect(inspectorFieldsets, 'a disabled fieldset now wraps the picker, which AC-2 rules out').toHaveLength(0)
+  })
+})
+
+describe('APPR-10-04 QA (G1/G2): the picker keeps its own wrapper, and the reason sits outside it', () => {
+  // `delegateNote()` is POSITIONAL — it climbs to the picker's nearest `div` ancestor and reads
+  // that node's LAST element child. G2 called the `marginTop: 12` wrapper load-bearing for
+  // exactly that reason, but no assertion held it: deleting the wrapper outright, and deleting
+  // only its margin, BOTH survived the suite. Without this, the helper silently re-points at the
+  // inspector body the first time anything is appended below the delegation block.
+  it('the wrapper is the picker\'s own div, holds the note, and excludes the reason', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const picker = control(screen.getByLabelText('Delegate to'))
+    const wrap = picker.closest('div') as HTMLElement
+    expect(wrap, 'the picker has no wrapping div, so delegateNote() reads whatever is above it').toBeTruthy()
+
+    const body = screen.getByTestId('step-inspector-body')
+    expect(wrap, 'the wrapper IS the inspector body — the picker lost its own div').not.toBe(body)
+    expect(body.contains(wrap), 'the wrapper is not inside the inspector body').toBe(true)
+    // AUTHORED-VALUE pin, the shape :1258 already uses: jsdom runs no layout, so this holds what
+    // the component ASKS for. The gap between the reason above and the picker below is the only
+    // thing separating two sentences and a control in a 320px column.
+    expect(wrap.style.marginTop, 'the picker block lost the gap that separates it from the reason above').toBe('12px')
+
+    const reason = delegationReason()
+    expect(wrap.contains(reason), 'the reason moved inside the picker block, where it can become delegateNote()\'s last child').toBe(false)
+
+    // The wrapper's last child must be the ELIGIBILITY note, which is what `delegateNote()`
+    // returns. Compared against that helper rather than restated, so the two cannot drift, and
+    // against the note's own properties so neither side can be satisfied by an empty node.
+    const last = wrap.lastElementChild
+    expect(last, 'the wrapper is empty, so the identity below is vacuous').toBeTruthy()
+    const note = delegateNote()
+    expect(note, 'delegateNote() read an empty node').not.toBe('')
+    expect(last!.textContent, 'the wrapper\'s last child is not the node delegateNote() returns').toBe(note)
+    expect(/Admin/.test(note) && /Reviewer/.test(note), `the located last child is not the eligibility note: ${note}`).toBe(true)
+    expect(note, 'delegateNote() re-pointed at the delegation reason').not.toBe(reasonText(reason))
+  })
+})
+
+describe('APPR-10-04 QA (R8): the recipe lands on the CONTROL, and nowhere else', () => {
+  // R8's trap is one-directional in the AC specs: they prove `title`/`aria-describedby` reach
+  // the `<select>`, but nothing forbade them ALSO landing on the `<label>` wrapper. Measured:
+  // adding both to the wrapper survived the whole suite. A `title` there raises a tooltip over
+  // the label text — the one place a disabled control's own tooltip cannot appear — and a second
+  // `aria-describedby` announces the sentence twice.
+  it('neither attribute leaks onto the <label> wrapper the aria-label lives on', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const wrappers = Array.from(document.querySelectorAll('label'))
+    expect(wrappers.length, 'no <label> rendered, so the sweep below proves nothing').toBeGreaterThan(0)
+    for (const l of wrappers) {
+      expect(l.getAttribute('title'), `a <label> carries the reason as a tooltip: ${l.textContent}`).toBeNull()
+      expect(l.getAttribute('aria-describedby'), `a <label> re-announces the reason: ${l.textContent}`).toBeNull()
+      expect(l.hasAttribute('disabled'), 'a <label> took the disabled attribute, which does nothing there').toBe(false)
+    }
+  })
+})
+
+describe('APPR-10-04 QA AC-4: which layer actually carries the reason', () => {
+  // The executor flagged that a `title` on a DISABLED form control will most likely never raise
+  // a tooltip — browsers suppress mouse events on disabled controls, so the hover that would
+  // show it never fires. That is not a reason to drop layer 4; it is the reason layer 3 exists.
+  // This pins the division of labour: `title` and `aria-describedby` are present and correct,
+  // and the VISIBLE text node is the only one a text query — or a reader who cannot focus the
+  // control — can reach.
+  it('title and aria-describedby are present, and the visible node is what carries the sentence', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const reason = delegationReason()
+    const text = reasonText(reason)
+    expect(text, 'the reason node is empty').not.toBe('')
+
+    const targets = delegationControls()
+    expect(targets.length, 'nothing was checked').toBeGreaterThan(0)
+    for (const [what, el] of targets) {
+      // Layer 4 is present — it just cannot be the one that does the work.
+      expect(el.getAttribute('title'), `${what} lost layer 4`).toBe(text)
+      // …and it is NOT reachable as text. `getByText` walks text nodes, never attributes, so a
+      // control whose only reason is a `title` would leave this query with nothing but the node.
+      expect(el.textContent?.includes(text), `${what} states the reason as its own text, not through a sibling`).toBe(false)
+    }
+    // Exactly one node in the whole document renders the sentence, and it is the sibling — not
+    // either control, and not a duplicate the two `aria-describedby` pointers made necessary.
+    const carriers = screen.getAllByText(text)
+    expect(carriers, 'the sentence renders somewhere other than the one reason node').toHaveLength(1)
+    expect(carriers[0], 'a control carries the sentence as its own text').toBe(reason)
+    expect(reason.tagName, 'the reason is itself a control, so it competes for the tab order').toBe('DIV')
+  })
+})
+
+describe('APPR-10-04 QA AC-8: the THIRD register is held the way the first two are', () => {
+  // `:743-750` pins the option label and the note against each other on IDENTITY *and*
+  // CONTAINMENT. The reason sentence joined that column as a third string and got identity
+  // only — measured: rewriting it to `Delegation is not available yet.` passed the whole suite,
+  // even though that is DELEGATE_NOTE's own clause, pinned as such at :709 and forbidden to
+  // this sentence in as many words (`must carry the disable in DIFFERENT words`).
+  //
+  // 320px of column carries all three at once. Each states a different thing — the option names
+  // the FALLBACK, the note states the ELIGIBILITY RULE, this states the DISABLE and its CAUSE —
+  // and two of them echoing each other is the failure this holds.
+  it('the reason neither repeats the note\'s pinned clause nor swallows either neighbour', () => {
+    const on: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true }] }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={on} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const reason = reasonText(delegationReason())
+    const note = delegateNote()
+    const picker = control(screen.getByLabelText('Delegate to')) as HTMLSelectElement
+    const label = Array.from(picker.options).find((o) => o.value === '')?.textContent ?? ''
+    // Every one of the three resolved to real copy, or the comparisons below are vacuous.
+    for (const [what, s] of [['the reason', reason], ['the note', note], ['the option label', label]] as [string, string][]) {
+      expect(s, `${what} read empty`).not.toBe('')
+    }
+
+    // `not available yet` belongs to DELEGATE_NOTE — :709 requires it there, which is exactly
+    // why this sentence may not borrow it.
+    expect(/not available yet/i.test(note), 'the clause moved off the note, so the exclusion below guards nothing').toBe(true)
+    expect(/not available yet/i.test(reason), `the reason repeats the note's own clause instead of stating the cause: ${reason}`).toBe(false)
+
+    // CONTAINMENT, not just identity — the half the reason never got.
+    for (const [what, other] of [['the eligibility note', note], ['the fallback option label', label]] as [string, string][]) {
+      expect(reason.includes(other), `the reason swallowed ${what} verbatim`).toBe(false)
+      expect(other.includes(reason), `${what} swallowed the reason verbatim`).toBe(false)
+    }
+  })
+})
+
+describe('APPR-10-04 QA AC-9: the sweep\'s two handles exist locally', () => {
+  // AC-9 runs only at the deploy gate, so the two `data-testid`s it resolves are unreachable by
+  // every local check. Measured: deleting `step-inspector-body` outright failed nothing here.
+  // These are the handles, pinned as literals on purpose — a spec that imported the constants
+  // would follow a rename into the e2e spec and stay green while the sweep broke.
+  it('the inspector body and the reason node carry the ids e2e/topology/workflows.spec.ts resolves', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const body = screen.getByTestId('step-inspector-body')
+    const reason = screen.getByTestId('delegation-blocked-reason')
+    // `outer` must actually contain `inner`, or `assertFillsColumn` measures two unrelated boxes
+    // and its gap arithmetic returns numbers that mean nothing.
+    expect(body.contains(reason), 'the reason is not inside the column the sweep measures against').toBe(true)
+    // The sweep compares the reason's gutters to the Deadline select's, so both must share ONE
+    // parent — the padded body itself. A nested inner box makes the comparison read its own
+    // wrapper's padding rather than the column's.
+    const deadlineLabel = screen.getByLabelText('Deadline').closest('label') as HTMLElement
+    expect(deadlineLabel, 'the Deadline select has no wrapping label for the sweep to measure').toBeTruthy()
+    expect(reason.parentElement, 'the reason node and the Deadline select no longer share a parent').toBe(deadlineLabel.parentElement)
+    expect(reason.parentElement, 'their shared parent is not the body the sweep anchors on').toBe(body)
+  })
+})
+
+// ----------------------------------------------------------------------------
 // APPR-09-05 Stage 4 QA — adversarial coverage
 // ----------------------------------------------------------------------------
 

@@ -105,8 +105,10 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
         </button>
       </div>
 
-      {/* The card's CONTENT column, not its root: the root has no padding of its own, so a
-          topology sweep anchored there would read this div's 15px as slack. */}
+      {/* The topology sweep's outer anchor. `boundingBox()` is the BORDER box, so this padding
+          counts as gutter either way — anchoring here rather than on the card root drops only
+          the root's 1px border, not the 15. The sweep compares two children of THIS div to each
+          other, which is what makes it a relationship rather than a bound. */}
       <div data-testid="step-inspector-body" style={{ padding: 15 }}>
         {node.type === 'approval' && res && (
           <>

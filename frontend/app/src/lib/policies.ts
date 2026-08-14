@@ -12,7 +12,7 @@ import type { BranchNode, CondOp, Policy, PolicyStatus, Sla, WfNode } from './wo
 //
 // One deliberate difference from that mirror: `kind` and `status` are `string`, not its
 // narrowed unions. A value the server states is carried verbatim and cast at the
-// projection, never defaulted (the members.ts:508,551 precedent).
+// projection, never defaulted (the members.ts:513,556 precedent).
 
 export type PolicyStepWire = {
   /** Server-minted uuid, re-minted on EVERY PUT draft — never assert a value across a save. */
@@ -152,8 +152,7 @@ function stepInput(n: WfNode): StepInputWire {
       return {
         kind: 'condition',
         cond_op: n.op,
-        // numeric(14,2) takes decimal TEXT. A non-amount `field` stringifies to something
-        // the column refuses, which is a loud 400 rather than a wrong stored amount.
+        // numeric(14,2) takes decimal TEXT.
         cond_amount: String(n.value),
         then: n.then.map((c) => stepInput(c)),
         else: n.else.map((c) => stepInput(c)),
@@ -219,8 +218,7 @@ export async function createApprovalPolicy(f: AuthedFetch, base: string, name: s
 export async function putApprovalPolicyDraft(f: AuthedFetch, base: string, id: string, next: Policy): Promise<Policy> {
   const saved = await f<PolicyWire>(`${base}/api/invoice/v1/approval-policies/${id}/draft`, {
     method: 'PUT',
-    // `scope` is forwarded, so a scope the server does not back earns its verbatim 400
-    // rather than a save that silently drops the choice and looks like it worked.
+    // `scope` is forwarded rather than dropped, so the server sees what the editor holds.
     body: { name: next.name, scope: next.scope, steps: stepInputsFromNodes(next.nodes) },
   })
   return toPolicy(saved)

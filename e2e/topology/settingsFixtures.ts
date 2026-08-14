@@ -8,8 +8,7 @@
 // UNBACKED_* -- display copy transcribed from frontend/app/src/lib/members.ts's
 // MEMBER_UNBACKED, PROTECTED_ADMIN_NOTE and the drawer's danger-zone strings. Transcribed,
 // never imported: this package has no dependency on frontend/app/src (e2e/tsconfig.json), and
-// a second copy is what catches a one-sided edit. See topology/policyFixtures.ts, which draws
-// the same line for policies.
+// a second copy is what catches a one-sided edit.
 //
 // Split out of roles.spec.ts's old combined fixture module (APPR-04-07): the other half
 // named a role store that no longer exists and was deleted, re-derived from scratch as

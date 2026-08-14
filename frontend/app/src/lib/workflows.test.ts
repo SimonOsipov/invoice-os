@@ -244,21 +244,25 @@ describe('AC-3 — the list shape App.tsx’s ctx verbs patch (§4.4)', () => {
 })
 
 describe('WF_SCOPE_OPTIONS (§2.4)', () => {
-  // The control is a plain <select value={policy.scope}>, so a seeded scope missing from
-  // this list makes that policy's select render blank. Derived, never hardcoded.
-  it('covers every scope string the seed actually uses', () => {
-    const seeded = [...new Set(ALL_SEED.map((p) => p.scope))]
-    expect(seeded.length).toBeGreaterThan(0)
-    for (const scope of seeded) expect(WF_SCOPE_OPTIONS).toContain(scope)
+  // The seeded-scope containment test that stood here is deleted, not repaired: the fixture
+  // still carries scopes the server refuses, and policies.test.ts:253-254 proves this list is
+  // the EDITOR's own, never a filter on what may arrive.
+  it('mirrors the only scope the server stores', () => {
+    // Transcribed from internal/approval/policy.go:125 (policyScopeAll), refused by
+    // normalizeScope at :372-379 and by the CHECK at
+    // migrations/20260809210326_approval_policies.sql:59. Never read from the Go source.
+    const SERVER_SCOPE = 'All invoices'
+    expect([...WF_SCOPE_OPTIONS]).toEqual([SERVER_SCOPE])
   })
 
   it('covers the default scope a brand-new policy is created with', () => {
     expect(WF_SCOPE_OPTIONS).toContain(newPolicy().scope)
   })
 
-  it('is the 6 distinct entries the markup’s placeholder count pins', () => {
-    expect(WF_SCOPE_OPTIONS).toHaveLength(6)
-    expect(new Set(WF_SCOPE_OPTIONS).size).toBe(6)
+  it('is the one distinct entry the editor offers', () => {
+    expect(WF_SCOPE_OPTIONS).toEqual(['All invoices'])
+    expect(WF_SCOPE_OPTIONS).toHaveLength(1)
+    expect(new Set(WF_SCOPE_OPTIONS).size).toBe(1)
   })
 })
 
@@ -540,10 +544,10 @@ describe('updateNode', () => {
     expect(before.nodes[0]).toMatchObject({ sla: '48' })
   })
 
-  it('patches a condition’s field and value together (the domain switch)', () => {
-    const after = updateNode(polF1(), 'f1n2', { field: 'docType', value: 'B2G' })
-    expect(after.nodes[1]).toMatchObject({ type: 'condition', field: 'docType', value: 'B2G', op: '>' })
-    // Branch contents survive a domain switch — the inspector only rewrites the test.
+  it('patches a condition’s field and value together', () => {
+    const after = updateNode(polF1(), 'f1n2', { field: 'amount', value: 900_000_000 })
+    expect(after.nodes[1]).toMatchObject({ type: 'condition', field: 'amount', value: 900_000_000, op: '>' })
+    // Branch contents survive — the inspector rewrites the test, never the lanes.
     expect(ids((after.nodes[1] as ConditionNode).then)).toEqual(['f1n3'])
   })
 
@@ -674,16 +678,15 @@ describe('derived labels (§5.1)', () => {
     expect(ruleText({ ...c, op: '<=', value: 1_000_000_000 })).toBe('Amount at most ₦1,000,000,000')
   })
 
-  it('ruleText renders the docType domain, ignoring the now-meaningless operator', () => {
-    const base = { ...(SEED_FIRM_POLICIES[0].nodes[1] as ConditionNode), field: 'docType' as const }
-    expect(ruleText({ ...base, value: 'B2G' })).toBe('Document type is B2G')
-    expect(ruleText({ ...base, value: 'B2C', op: '<=' })).toBe('Document type is B2C')
-  })
-
-  it('ruleText renders the newCustomer domain as either side of one boolean', () => {
-    const base = { ...(SEED_FIRM_POLICIES[0].nodes[1] as ConditionNode), field: 'newCustomer' as const }
-    expect(ruleText({ ...base, value: true })).toBe('Customer is new / unverified')
-    expect(ruleText({ ...base, value: false })).toBe('Customer is existing')
+  // APPR-10-02 QA. `CondField` is one literal, so this arm is unreachable through the typed
+  // API and a cast is the only way in — which is the point: workflows.ts:306-310 keeps it so a
+  // re-added field degrades to a label instead of to a wrong amount comparison. `evalCondition`
+  // made the OPPOSITE call and dropped its equivalent `return false` (workflows.ts:329-337), so
+  // a re-added field would render 'Condition' while still being EVALUATED as an amount. This
+  // pin is what makes that asymmetry fail loudly if either half is changed alone.
+  it('ruleText degrades an unknown field to a label rather than to an amount sentence', () => {
+    const alien = { ...(SEED_FIRM_POLICIES[0].nodes[1] as ConditionNode), field: 'somethingElse' } as unknown as ConditionNode
+    expect(ruleText(alien)).toBe('Condition')
   })
 
   it('slaText treats “0” as the no-deadline sentinel, not as zero hours', () => {
@@ -721,25 +724,161 @@ describe('evalCondition (§6.1)', () => {
     expect(evalCondition(amountCond('<=', 250_000_000), ctx({ amount: 250_000_001 }))).toBe(false)
   })
 
-  it('matches the docType domain exactly, ignoring the operator', () => {
-    const c: ConditionNode = { id: 'c', type: 'condition', field: 'docType', op: '>', value: 'B2G', then: [], else: [] }
-    expect(evalCondition(c, ctx({ docType: 'B2G' }))).toBe(true)
-    expect(evalCondition(c, ctx({ docType: 'B2B' }))).toBe(false)
-    expect(evalCondition(c, ctx({ docType: 'B2C' }))).toBe(false)
-    // The scenario amount is irrelevant in this domain.
-    expect(evalCondition(c, ctx({ docType: 'B2G', amount: 0 }))).toBe(true)
+  // APPR-10-02 (task-514) T2-6. `toEqual` fails on a surplus key, so this is also the pin
+  // that the two retired scenario dimensions left SIM_DEFAULT rather than merely going unread.
+  it('the shipped default scenario is ₦750,000,000 and nothing else', () => {
+    expect(SIM_DEFAULT).toEqual({ amount: 750_000_000 })
   })
 
-  it('matches the newCustomer domain on both sides of the boolean', () => {
-    const isNew: ConditionNode = { id: 'c', type: 'condition', field: 'newCustomer', op: '>', value: true, then: [], else: [] }
-    expect(evalCondition(isNew, ctx({ newCustomer: true }))).toBe(true)
-    expect(evalCondition(isNew, ctx({ newCustomer: false }))).toBe(false)
-    expect(evalCondition({ ...isNew, value: false }, ctx({ newCustomer: false }))).toBe(true)
-    expect(evalCondition({ ...isNew, value: false }, ctx({ newCustomer: true }))).toBe(false)
+  // APPR-10-02 QA. Deleting the `if (n.field === 'amount')` wrapper (rather than only its
+  // sibling branches) moved the two `Number(…) || 0` guards up one scope. Nothing pinned them
+  // before, so the move was unfalsifiable: these three are the guards' first coverage.
+  it('a NaN threshold or a NaN scenario reads as 0 rather than poisoning the comparison', () => {
+    const nan = Number.NaN
+    // NaN is false for BOTH `>` and `<=`, so an ungarded NaN makes the two operators agree —
+    // which is exactly the shape these assertions rule out.
+    expect(evalCondition(amountCond('>', nan), ctx({ amount: 1 })), 'a NaN threshold stopped reading as 0').toBe(true)
+    expect(evalCondition(amountCond('<=', nan), ctx({ amount: 1 })), 'a NaN threshold stopped reading as 0').toBe(false)
+    expect(evalCondition(amountCond('>', 1), ctx({ amount: nan })), 'a NaN scenario stopped reading as 0').toBe(false)
+    expect(evalCondition(amountCond('<=', 1), ctx({ amount: nan })), 'a NaN scenario stopped reading as 0').toBe(true)
   })
 
-  it('the shipped default scenario is ₦750,000,000 · B2B · returning customer', () => {
-    expect(SIM_DEFAULT).toEqual({ amount: 750_000_000, docType: 'B2B', newCustomer: false })
+  it('a null threshold or a null scenario reads as 0', () => {
+    const nul = null as unknown as number
+    expect(evalCondition(amountCond('>=', nul), ctx({ amount: 0 }))).toBe(true)
+    expect(evalCondition(amountCond('>', nul), ctx({ amount: 0 }))).toBe(false)
+    expect(evalCondition(amountCond('<', 1), ctx({ amount: nul }))).toBe(true)
+  })
+
+  it('a real zero survives the guard — `|| 0` must not rewrite a threshold of 0', () => {
+    // The guard's failure mode in the other direction: 0 is falsy, so a guard that reached for
+    // a sentinel instead of 0 would make `>= 0` and `> 0` answer alike here.
+    expect(evalCondition(amountCond('>=', 0), ctx({ amount: 0 }))).toBe(true)
+    expect(evalCondition(amountCond('>', 0), ctx({ amount: 0 }))).toBe(false)
+    expect(evalCondition(amountCond('<=', 0), ctx({ amount: 0 }))).toBe(true)
+    expect(evalCondition(amountCond('<', 0), ctx({ amount: 0 }))).toBe(false)
+    expect(evalCondition(amountCond('>', 0), ctx({ amount: 1 }))).toBe(true)
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APPR-10-05 (task-517) T5-1/T5-2/T5-3/T5-3b — the TS→Go mirror
+// ----------------------------------------------------------------------------
+// RED BY STRUCTURE, NOT BY BEHAVIOUR. Every arithmetic outcome below is already pinned TS-only
+// at :712-761 (APPR-10-02 QA), so writing these as plain assertions would be green on arrival.
+// The novelty is GO_EVAL_CONDITION: a local literal oracle re-typed by hand from
+// internal/approval/engine.go:93-101, with the zero-folding of :81-91 applied to the nil rows.
+// Deleting the table is what turns this block red — the FK-11 shape (lib/invoices.test.ts:4486-4491),
+// where the Go fact is the local array and the TS symbol is the thing under test. Never import or
+// read the Go source: "a test that asserts against the constant it is checking asserts nothing"
+// (internal/approval/policy_test.go:35-36).
+//
+// THE FIFTH ARM IS DELIBERATELY UNASSERTED. On an unknown or absent operator TS falls through to
+// `<=` (lib/workflows.ts:338); Go returns false (internal/approval/engine.go:103-106, which
+// documents the deviation). A row for one would encode that divergence as agreement, so every row
+// carries an op from {>, >=, <, <=} and the last spec here holds that exclusion falsifiable.
+//
+// Values stay inside binary fractions a double represents exactly. Go's decimal scale and the
+// scientific-notation rows at internal/approval/engine_test.go:96-124 have no TS counterpart.
+describe('evalCondition mirrors Go’s amount arm (§6.1, APPR-10-05)', () => {
+  type GoRow = {
+    group: 'boundary' | 'folds-to-zero' | 'zero'
+    op: ConditionNode['op']
+    /** Go `condAmount *string` — `null` is its nil, `NaN` a string `decimal.NewFromString` refuses. */
+    cond: number | null
+    /**
+     * Go `total *decimal.Decimal` — `null` is its nil. The NaN rows are TS-only: a
+     * `decimal.Decimal` has no NaN, so they pin that `Number(…) || 0` lands where Go's nil fold does.
+     */
+    total: number | null
+    want: boolean
+  }
+
+  // Transcribed from internal/approval/engine.go:93-101 (the four `case` arms) and :81-91 (both
+  // sides fold to decimal.Zero when absent or unparseable). Hand-typed, never read from either side.
+  const GO_EVAL_CONDITION: readonly GoRow[] = [
+    // `a.GreaterThan(v)` — engine.go:94-95
+    { group: 'boundary', op: '>', cond: 500_000_000, total: 499_999_999, want: false },
+    { group: 'boundary', op: '>', cond: 500_000_000, total: 500_000_000, want: false },
+    { group: 'boundary', op: '>', cond: 500_000_000, total: 500_000_001, want: true },
+    // `a.GreaterThanOrEqual(v)` — engine.go:96-97
+    { group: 'boundary', op: '>=', cond: 500_000_000, total: 499_999_999, want: false },
+    { group: 'boundary', op: '>=', cond: 500_000_000, total: 500_000_000, want: true },
+    { group: 'boundary', op: '>=', cond: 500_000_000, total: 500_000_001, want: true },
+    // `a.LessThan(v)` — engine.go:98-99
+    { group: 'boundary', op: '<', cond: 500_000_000, total: 499_999_999, want: true },
+    { group: 'boundary', op: '<', cond: 500_000_000, total: 500_000_000, want: false },
+    { group: 'boundary', op: '<', cond: 500_000_000, total: 500_000_001, want: false },
+    // `a.LessThanOrEqual(v)` — engine.go:100-101
+    { group: 'boundary', op: '<=', cond: 500_000_000, total: 499_999_999, want: true },
+    { group: 'boundary', op: '<=', cond: 500_000_000, total: 500_000_000, want: true },
+    { group: 'boundary', op: '<=', cond: 500_000_000, total: 500_000_001, want: false },
+    // Kobo, in quarter-naira steps: exact in a double AND exact in Go's decimal.
+    { group: 'boundary', op: '>', cond: 1_000_000.25, total: 1_000_000.25, want: false },
+    { group: 'boundary', op: '>', cond: 1_000_000.25, total: 1_000_000.5, want: true },
+    { group: 'boundary', op: '<=', cond: 1_000_000.25, total: 1_000_000.25, want: true },
+    { group: 'boundary', op: '<=', cond: 1_000_000.25, total: 1_000_000.5, want: false },
+
+    // A nil / unparseable cond_amount reads 0 on both sides — engine.go:81-86 vs `Number(n.value) || 0`.
+    { group: 'folds-to-zero', op: '>', cond: null, total: 1, want: true },
+    { group: 'folds-to-zero', op: '>', cond: Number.NaN, total: 1, want: true },
+    { group: 'folds-to-zero', op: '<=', cond: null, total: 1, want: false },
+    { group: 'folds-to-zero', op: '<=', cond: Number.NaN, total: 1, want: false },
+    // A nil invoices.total reads 0 on both sides — engine.go:88-91 vs `Number(ctx.amount) || 0`.
+    { group: 'folds-to-zero', op: '>', cond: 1, total: null, want: false },
+    { group: 'folds-to-zero', op: '>', cond: 1, total: Number.NaN, want: false },
+    { group: 'folds-to-zero', op: '<=', cond: 1, total: null, want: true },
+    { group: 'folds-to-zero', op: '<=', cond: 1, total: Number.NaN, want: true },
+    // Both absent: 0 against 0, which is where the two folds meet.
+    { group: 'folds-to-zero', op: '>', cond: null, total: null, want: false },
+    { group: 'folds-to-zero', op: '>=', cond: null, total: null, want: true },
+    { group: 'folds-to-zero', op: '<', cond: null, total: null, want: false },
+    { group: 'folds-to-zero', op: '<=', cond: null, total: null, want: true },
+
+    // A REAL zero, which Go parses as decimal.Zero and TS must not rewrite through `|| 0`.
+    { group: 'zero', op: '>', cond: 0, total: 0, want: false },
+    { group: 'zero', op: '>=', cond: 0, total: 0, want: true },
+    { group: 'zero', op: '<', cond: 0, total: 0, want: false },
+    { group: 'zero', op: '<=', cond: 0, total: 0, want: true },
+    { group: 'zero', op: '>', cond: 0, total: 1, want: true },
+    { group: 'zero', op: '<', cond: 0, total: 1, want: false },
+  ]
+
+  /** The rows of one group, refusing to run on an empty selection. */
+  const rows = (group: GoRow['group']): GoRow[] => {
+    const sel = GO_EVAL_CONDITION.filter((r) => r.group === group)
+    expect(sel.length, `no ${group} row survived the filter, so the loop below asserts nothing`).toBeGreaterThan(0)
+    return sel
+  }
+
+  const run = (r: GoRow): boolean =>
+    evalCondition(
+      { id: 'c', type: 'condition', field: 'amount', op: r.op, value: r.cond as number, then: [], else: [] },
+      { amount: r.total as number },
+    )
+
+  const label = (r: GoRow) => `amount ${String(r.total)} ${r.op} threshold ${String(r.cond)}`
+
+  it('T5-1: the four operators answer as the Go table does, at, above and below the threshold', () => {
+    const boundary = rows('boundary')
+    expect(new Set(boundary.map((r) => r.op)), 'the boundary rows do not cover all four Go case arms').toEqual(new Set(WF_OPS))
+    for (const r of boundary) expect(run(r), label(r)).toBe(r.want)
+  })
+
+  it('T5-2: an absent or unparseable side folds to 0, the way Go’s decimal.Zero defaults do', () => {
+    for (const r of rows('folds-to-zero')) expect(run(r), label(r)).toBe(r.want)
+  })
+
+  it('T5-3: a real 0 threshold and a real 0 amount survive the fold on both sides', () => {
+    for (const r of rows('zero')) expect(run(r), label(r)).toBe(r.want)
+  })
+
+  // The exclusion, held falsifiable rather than left to the comment above: TS falls through to
+  // `<=` at lib/workflows.ts:338, Go returns false at internal/approval/engine.go:103-106.
+  it('T5-3b: the oracle asserts nothing about an unknown or absent operator', () => {
+    expect(GO_EVAL_CONDITION.length, 'the oracle table is empty, so the exclusion below guards nothing').toBeGreaterThan(0)
+    const ops = [...new Set(GO_EVAL_CONDITION.map((r) => r.op))].sort()
+    expect(ops, 'a row reaches outside the four arms the two sides agree on').toEqual([...WF_OPS].sort())
   })
 })
 

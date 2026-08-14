@@ -6,7 +6,7 @@
 // Save draft, Publish and delete to internal/approval over five real routes, so the whole
 // coverage was re-planned rather than patched: nothing below asserts a frontend constant,
 // and policyFixtures.ts is no longer imported here. APPR-09-08 then took its last importer,
-// persona-surfaces.spec.ts, so the file now sits on disk unimported for APPR-10 to delete.
+// persona-surfaces.spec.ts, and APPR-10 deleted the file.
 //
 // The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, and is now a
 // heading, a tenant-driven subtitle and a terminal-arm settle — seed-independent, because
@@ -30,7 +30,7 @@
 // promise: Publish is DISABLED while the tree is dirty.
 //
 // Assertion 8's ORDER is load-bearing and does not read left-to-right. `save()` assigns one
-// object to both `working` and `server` (WorkflowBuilder.tsx:193-197), so `dirty` is false
+// object to both `working` and `server` (WorkflowBuilder.tsx:203-207), so `dirty` is false
 // the instant a save lands and Publish becomes ENABLED. The only window where "Publish is
 // disabled" is a true claim is between an edit and its save, so the assertion is interleaved
 // into the rename rather than following it.
@@ -95,6 +95,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import { deleteApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
+import { assertFillsColumn, WIDE_WIDTHS } from './layout'
 import { FIRM_PERSONA } from './targets'
 
 // Per-run-unique, and shaped so the sweep below can recognise it without the id.
@@ -102,7 +103,7 @@ const POLICY_NAME = `APPR09 ${Date.now()}`
 const NAME_SWEEP = /^APPR09 \d+$/
 // What `ctx.createPolicy()` names the row before Save draft renames it.
 const UNSAVED_NAME = 'Untitled policy'
-// `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts:206), seeded for the firm
+// `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts:194), seeded for the firm
 // tenant as `Engagement Manager` (db/seed.dev.sql:65), so a placed step renders this.
 const PLACED_STEP = 'Engagement Manager must approve'
 const PUBLISH_DIRTY_REASON = 'Save your changes first — Publish seals the last saved draft.'
@@ -133,7 +134,7 @@ function approvalChip(page: Page): Locator {
 }
 
 function conditionChip(page: Page): Locator {
-  return page.locator('button.pf-upcard', { hasText: 'Branch on amount or type' })
+  return page.locator('button.pf-upcard', { hasText: 'Branch on amount' })
 }
 
 type DragKind = 'dragstart' | 'dragover' | 'drop' | 'dragend'
@@ -143,7 +144,7 @@ type DragKind = 'dragstart' | 'dragover' | 'drop' | 'dragend'
  * `dispatchEvent` means a handler called `preventDefault()`. `cancelable` is what makes that
  * return value mean anything; `bubbles` is what lets React's root delegation see it at all.
  * A `DataTransfer` rides on every one because only `startDrag` reads it
- * (WorkflowBuilder.tsx:264-273) and it costs nothing to hand the others one too.
+ * (WorkflowBuilder.tsx:274-283) and it costs nothing to hand the others one too.
  */
 function dispatchDrag(target: Locator, kind: DragKind): Promise<boolean> {
   return target.evaluate(
@@ -152,7 +153,7 @@ function dispatchDrag(target: Locator, kind: DragKind): Promise<boolean> {
   )
 }
 
-test('firm Workflows, live: a policy built through the canvas survives a reload, stays keyed per TENANT, and the canvas refuses an illegal drop', async ({ page }) => {
+test('firm Workflows, live: a policy built through the canvas survives a reload, stays keyed per TENANT, and the canvas refuses an illegal drop', async ({ page }, testInfo) => {
   // One sign-in, one reload, five gateway writes and three list refetches.
   test.setTimeout(120_000)
   const errors = collectErrors(page)
@@ -221,7 +222,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByTestId('publish-blocked-reason')).toHaveText(PUBLISH_DIRTY_REASON)
 
   // The blocked reason DISAPPEARING is the settle, not the 'Saved' flash: that flash lives for
-  // 1700ms (WorkflowBuilder.tsx:154-158) and asserting inside it races a cold gateway. The
+  // 1700ms (WorkflowBuilder.tsx:164-168) and asserting inside it races a cold gateway. The
   // reason is gone exactly when `dirty` is false, which is exactly when the write landed.
   await page.getByRole('button', { name: 'Save draft', exact: true }).click()
   await expect(page.getByTestId('publish-blocked-reason'), 'the rename landed').toHaveCount(0)
@@ -249,6 +250,45 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'the dispatched drop placed a step').toBeVisible()
   await expect(page.getByText('Drop step here'), 'onSlotDrop ends the drag').toHaveCount(0)
 
+  // --- 11b. LAYOUT: the delegation reason shares the gutters of the control it explains -------
+  // APPR-10-04 AC-9. jsdom applies no stylesheet and runs no layout, so the unit suite can only
+  // hold what the component ASKS for; the rendered check is owed here. Two sentences and a
+  // picker land in a FIXED 320px column (WorkflowBuilder.tsx:490,
+  // `gridTemplateColumns: 'minmax(360px, 1fr) 320px'`), which is where a reason node that
+  // over-flows or gets inset would show.
+  //
+  // RELATIONSHIP, never a raw width — layout.ts's own header: a width assertion passes on the
+  // very bug it should catch. The reason node must share the inspector BODY's content gutters
+  // with the `Deadline` select above it, at every width, so the two sweeps are compared to each
+  // other rather than to a number.
+  //
+  // PLACEMENT is load-bearing. The drop above auto-selects the placed step (`place()` calls
+  // `setSelId`, WorkflowBuilder.tsx:299), so the inspector is already open — and `save()` clears
+  // the selection ([selection-clears-on-save], WorkflowBuilder.tsx:210), so this cannot move
+  // below step 12.
+  const inspectorBody = page.getByTestId('step-inspector-body')
+  const reasonFit = await assertFillsColumn(page, page.getByTestId('delegation-blocked-reason'), inspectorBody, 'the delegation reason')
+  const deadlineFit = await assertFillsColumn(
+    page,
+    page.getByLabel('Deadline').locator('xpath=ancestor::label[1]'),
+    inspectorBody,
+    'the Deadline select',
+  )
+  expect(reasonFit.length, 'the reason sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
+  expect(deadlineFit.length, 'the control sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
+  for (const [i, fit] of reasonFit.entries()) {
+    const ctrl = deadlineFit[i]
+    expect(fit.width, 'the two sweeps measured different viewports').toBe(ctrl.width)
+    // 1px, not 0: sub-pixel rounding only. A reason node inset inside the control it explains —
+    // the defect this exists for — strands whole digits, nowhere near this bound.
+    expect(Math.abs(fit.left - ctrl.left), `the reason node's LEFT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
+    expect(Math.abs(fit.right - ctrl.right), `the reason node's RIGHT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
+  }
+  await testInfo.attach('delegation-reason-column-fit.json', {
+    body: JSON.stringify({ reason: reasonFit, deadline: deadlineFit }, null, 2),
+    contentType: 'application/json',
+  })
+
   // --- 12. save the placed step -------------------------------------------------------------
   await expect(page.getByTestId('publish-blocked-reason'), 'placing a step makes the tree dirty again').toBeVisible()
   await page.getByRole('button', { name: 'Save draft', exact: true }).click()
@@ -275,7 +315,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByLabel('Policy name'), 'the builder reopened on this policy').toHaveValue(POLICY_NAME)
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'the saved step renders in the reopened builder').toBeVisible()
 
-  // A palette CLICK appends locally and touches no network (WorkflowBuilder.tsx:253-257). It is
+  // A palette CLICK appends locally and touches no network (WorkflowBuilder.tsx:263-267). It is
   // never saved: leaving via `All policies` discards it, which assertion 16 then re-asserts.
   await conditionChip(page).click()
   await expect(page.getByText('IF TRUE →', { exact: true }), 'the palette click appended a condition').toBeVisible()

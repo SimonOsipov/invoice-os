@@ -769,8 +769,8 @@ func TestPutDraft_CondAmountScaleIsCanonicalInTheResponse(t *testing.T) {
 
 // --- AC-5: scope ---------------------------------------------------------------
 
-// TestPutDraft_ForeignScopeRejected: each of the five scopes the SPA still offers and
-// the server refuses is ErrValidation with nothing written — not the raw 23514 the
+// TestPutDraft_ForeignScopeRejected: each of the five retired scopes the server refuses
+// is ErrValidation with nothing written — not the raw 23514 the
 // column would raise, which policyStatusForErr answers 500 rather than 400. The
 // trailing control keeps the zero-write assertions from passing against a store that
 // refuses everything.

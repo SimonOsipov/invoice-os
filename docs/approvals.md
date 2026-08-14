@@ -575,7 +575,8 @@ approval_policies_scope_check
 that value before the value ever reaches SQL. Any other string is a `400 invalid
 request`; a value that somehow reached the column directly would be a `23514`.
 
-Five further scope options exist in the product's scope dropdown:
+Five further scope options were offered by the product's scope dropdown until APPR-10
+removed them:
 
 - `Foreign-currency invoices`
 - `Document type · B2G`
@@ -583,28 +584,25 @@ Five further scope options exist in the product's scope dropdown:
 - `Consumer invoices (B2C)`
 - `Credit notes & adjustments`
 
-**The server already refuses every one of them**, by the rule just above. None has any
-backing invoice classification, so a policy carrying one would route nothing while
-appearing to route something.
+**The server refuses every one of them**, by the rule just above, and always did. None has
+any backing invoice classification, so a policy carrying one would route nothing while
+appearing to route something. They remain the server's refusal vocabulary: the five
+strings are pinned as `removedScopes` (`internal/approval/policy_test.go`), which is what
+`TestCreatePolicy_ForeignScopeRejected` and `TestPutDraft_ForeignScopeRejected` feed the
+API to prove the refusal holds.
 
-> **Not yet removed from the editor.** The scope dropdown still offers all six options:
-> `WF_SCOPE_OPTIONS` (`frontend/app/src/lib/workflows.ts`) declares them and
-> `WorkflowBuilder.tsx` maps the whole list into the rendered `Applies` select.
+> **The editor and the `CHECK` now agree** (APPR-10). `WF_SCOPE_OPTIONS`
+> (`frontend/app/src/lib/workflows.ts`) declares exactly one entry, `All invoices`, and
+> `WorkflowBuilder.tsx` maps that list into the rendered `Applies` select — so the dropdown
+> can no longer compose a policy the column would reject. The select stays enabled and
+> carries a sentence stating that per-scope routing is not yet available: it is a control
+> that declares its own limits, not one that fails silently. `removedScopes` has no live TS
+> twin any more; it is a permanent server-side refusal table.
 >
-> **The editor now reaches this API** (APPR-09): the SPA's `/v1/approval-policies` wrappers
-> (`frontend/app/src/lib/policies.ts`) have live callers in `App.tsx`, and a draft edit goes
-> to `PUT /v1/approval-policies/{id}/draft`. Selecting one of the five unsupported scopes is
-> therefore **refused by the rule above** — `400 invalid request` — where the screen
-> previously accepted an unstorable scope and displayed it as published. The builder now
-> renders that refusal verbatim in its own write-error slot (`policy-save-error` /
-> `policy-publish-error`, `WorkflowBuilder.tsx`), and the in-flight lock clears in a `finally`
-> so the form re-opens over it rather than stranding the user in a dead one.
->
-> Deleting them from the palette is **APPR-10's unbuilt work**, under the rule that **a
-> control which fails invisibly is removed, while a control that announces its own
-> disabled state is kept and labelled.** A scope dropdown looks identical whether or not
-> it routes anything, which puts these five in the first category. Until that lands, the
-> `CHECK` above is the *storage* truth and the dropdown is not.
+> Before that, with the editor live against this API (APPR-09), selecting one of the five
+> earned a `400 invalid request`, which the builder rendered verbatim in its write-error
+> slot (`policy-save-error` / `policy-publish-error`, `WorkflowBuilder.tsx`). Earlier still,
+> against mock data, the screen accepted an unstorable scope and displayed it as published.
 
 Amount-threshold `condition` steps are unaffected and remain the supported way to express
 escalation, because they read the invoice's real total rather than an unpopulated
@@ -724,10 +722,11 @@ NULL` is both the existence predicate and the idempotency mechanism.
 
 ## 10. Handed forward
 
-One gap that is real, verified, and deliberately left for the stories that follow. Two
-others have since been **satisfied** and are recorded below as shipped: the arming engine
-reads the active tree from the database rather than from the API, and the policy list no
-longer claims an update time it has no column for.
+Two gaps that are real, verified, and deliberately left for the stories that follow: the
+active version's step tree has no endpoint, and notify steps deliver nothing. Two others
+have since been **satisfied** and are recorded below as shipped: the arming engine reads
+the active tree from the database rather than from the API, and the policy list no longer
+claims an update time it has no column for.
 
 ### The in-force step tree is not obtainable from the API
 
@@ -759,6 +758,27 @@ Two consequences, both correctness-relevant:
 
 The natural fix is a dedicated read of the active version's tree. It is not in scope here
 and has no owner yet.
+
+### Notify steps deliver no message — and nothing would fail if that changed
+
+A notify step persists its target and its channel, and the arming engine materialises it as a
+`skipped` run step. **No message is dispatched, on any channel.** APPR-10 put that on the screen:
+one sentence in the step inspector, one in the simulator's result, each rendered beside the
+controls it qualifies.
+
+Both sentences rest on a repo-wide **absence**, and an absence is not something a test can pin.
+Verified at the time of writing: no mail, SMS or push dependency in any `package.json`; the AWS
+SDK is `service/s3` only, with no SES, SNS or Pinpoint; and of seven River job kinds exactly two
+run in production — `submission_submit` and `submission_poll`, both registered in
+`internal/submission/worker.go`. Nothing sends.
+
+**No guard was built for this, deliberately.** A test asserting "none of these transport names
+appear" passes on any transport not in its list, so its green would be indistinguishable from a
+real absence — the failure mode `stale-refs` avoids by pinning known positives, which an absence
+list has no way to construct. What reduces the risk instead is routing, not proof: each sentence
+is a single named constant behind a stable `data-testid`, and both ids are pinned in
+`WorkflowBuilder.test.tsx`. **Whoever adds a transport must edit those two constants to keep the
+screen honest, and this entry is where they are told to.** That is a signpost, not a gate.
 
 ### No `updated` timestamp exists — and the list no longer claims one (shipped)
 

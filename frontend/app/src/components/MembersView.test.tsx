@@ -432,3 +432,44 @@ describe('isYou can still be suspended when not the protected admin', () => {
     expect(matches.length).toBeGreaterThan(0)
   })
 })
+
+// ----------------------------------------------------------------------------
+// APPR-10-04 Stage 4 QA — the primitive widened under this screen
+// ----------------------------------------------------------------------------
+
+describe('APPR-10-04 QA AC-1: the Access role filter is untouched by WfSelect\'s new props', () => {
+  // APPR-10-04 gave the Workflows-owned `WfSelect` its first `disabled`/`title`/
+  // `ariaDescribedBy`, and disabled them on the delegation controls two screens away. All three
+  // props are OPTIONAL and this call site (MembersView.tsx:127) passes none — but "the source
+  // diff is empty" is not the same claim as "the rendered control did not move", and an
+  // unconditional paint or a defaulted `disabled` inside the shared primitive would satisfy
+  // every Workflows spec while muting this toolbar. This is the RENDERED half of AC-1.
+  it('renders live, unpainted, and still filters', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const filter = screen.getByLabelText('Access role') as HTMLElement
+    // `hideLabel` puts the aria-label on the <label> wrapper, so descend to the control.
+    const select = (filter.tagName === 'LABEL' ? filter.querySelector('select') : filter) as HTMLSelectElement
+    expect(select, 'the Access role filter is not a <select>, so the properties below read nothing').toBeTruthy()
+    expect(select.tagName).toBe('SELECT')
+
+    expect(select.disabled, 'the shared primitive shut a control this story never opened').toBe(false)
+    expect(select.closest('fieldset[disabled]'), 'this call site has no fieldset ancestor and must not grow one').toBeNull()
+    expect(select.getAttribute('title'), 'the primitive defaulted a tooltip onto a live control').toBeNull()
+    expect(select.getAttribute('aria-describedby'), 'the primitive defaulted an aria pointer onto a live control').toBeNull()
+
+    // The resting paint, not merely "not the disabled paint" — an unconditional spread is caught
+    // by the first two, a defaulted-away resting style only by these.
+    expect(select.style.backgroundColor, 'the filter lost its resting background').toBe('var(--bg-1)')
+    expect(select.style.color, 'the filter lost its resting foreground').toBe('var(--fg-1)')
+    expect(select.style.cursor, 'the filter paints itself dead').toBe('pointer')
+
+    // Still WIRED, not merely still painted: the roster narrows to the chosen role.
+    const options = Array.from(select.options).map((o) => o.value)
+    expect(options.length, 'the filter has no options, so the change below proves nothing').toBeGreaterThan(1)
+    expect(screen.getByText('Other Person'), 'the fixture row is missing before the filter runs').toBeTruthy()
+    fireEvent.change(select, { target: { value: 'admin' } })
+    expect(select.value, 'the change never landed, so the filter was inert').toBe('admin')
+    expect(screen.queryByText('Other Person'), 'the filter no longer narrows the roster').toBeNull()
+  })
+})

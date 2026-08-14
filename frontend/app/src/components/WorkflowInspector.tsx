@@ -2,18 +2,12 @@
 //
 // Every control funnels through `onPatch(id, patch)`, which the builder turns into
 // `updateNode` on its LOCAL working tree — no control here reaches the network; Save draft
-// and Publish are the only writes. The condition panel is the only one that writes two
-// keys at once: switching `field` MUST reset `value`, because one slot holds three
-// domains (naira number / doc type / boolean) and a stale value from the previous
-// domain would make the rule sentence — and the simulator — read nonsense.
+// and Publish are the only writes.
 
 import {
   AMOUNT_PRESETS,
   CHANNEL_OPTIONS,
-  CUST_OPTIONS,
-  DOC_OPTIONS,
   FIELD_OPTIONS,
-  isDocType,
   OP_OPTIONS,
   ruleText,
   slaOptions,
@@ -24,7 +18,7 @@ import {
   type WfOption,
 } from './WorkflowParts'
 import type { Resolved } from '../lib/roles'
-import type { CondField, CondOp, NodePatch, RoleKey, Sla, WfDocType, WfNode } from '../lib/workflows'
+import type { CondField, CondOp, NodePatch, RoleKey, Sla, WfNode } from '../lib/workflows'
 
 const TITLES: Record<WfNode['type'], string> = {
   approval: 'Approval step',
@@ -33,27 +27,32 @@ const TITLES: Record<WfNode['type'], string> = {
   autoapprove: 'Auto-approve',
 }
 
-/** The value a condition takes when its field flips domain. */
-const FIELD_DEFAULT: Record<CondField, number | WfDocType | boolean> = {
-  amount: 100_000_000,
-  docType: 'B2B',
-  newCustomer: true,
-}
-
 // `delegateTo` has no "unset" value a <select> can emit — `WfSelect` is `value: string` — so
 // the default is a SENTINEL option valued `''`, the idiom the invite modal's `NO_WF_ROLE`
 // uses for the same reason. `''` and absent both mean "anyone", so nothing maps it back out:
 // toggling delegation off and on leaves the key present as `''`, still the default.
-const ANY_REVIEWER = ''
+const ANY_APPROVER = ''
 
 // Deliberately NOT the same wording as the option above it: the option names the fallback,
-// the note states the eligibility rule. §11.3 writes them differently — do not harmonise.
-const DELEGATE_NOTE = 'Only members with the Reviewer access role can be a delegate.'
+// the note states the eligibility rule — do not harmonise.
+const DELEGATE_NOTE = 'Only Admins and Reviewers can be a delegate. Delegation is not available yet.'
 
-// The delegation window: `delegate`/`delegateTo` have no server column (lib/policies.ts:73-75),
-// so the choice is lost on every save. Stated rather than hidden — APPR-10 owns the storage and
-// the disabling; until then the control stays interactive and says so.
-const DELEGATION_NOT_STORED = 'Delegation is not stored yet — this choice is not saved.'
+// The delegation window: `delegate`/`delegateTo` are dropped on write (lib/policies.ts:145) and
+// forced false on read (:131), so both controls ship SHUT with all four layers and this sentence
+// is layer 3. A third register again — the option names the fallback, DELEGATE_NOTE states the
+// eligibility rule, this states the disable and its cause.
+const DELEGATION_BLOCKED = 'Delegation is switched off — the server has nowhere to store it yet.'
+
+// The subject is DELIVERY, never storage: target and channel are persisted, sealed into the
+// version and materialised onto the run step as `skipped` — nothing in the repo dispatches them.
+// Copy reading "not saved" would be the false statement this story removes.
+const NOTIFY_NOT_DELIVERED = 'The target and channel are saved with the policy, but no message is sent yet.'
+
+// ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it. A
+// deliberate deviation from INVED-02, where every disabled control gets its own id
+// (InvoiceDetail.tsx:150-159) — there the causes differ per control, here one cause shuts both,
+// and a second copy of the sentence would put two matches under one `getAllByText`.
+const DELEGATION_BLOCKED_ID = 'delegation-blocked-reason-text'
 
 /** The read-only hint under a select — the typography MemberParts' Reviewer hint already uses. */
 function hintStyle(amber = false) {
@@ -69,7 +68,7 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
    * imports `lib/members.ts`, and never learns which mode it is in.
    */
   resolve: (position: RoleKey) => Resolved
-  /** Active members holding the Reviewer access role, in both modes. */
+  /** Active members holding an approver role — Admin or Reviewer — in both modes. */
   delegates: string[]
   /**
    * ALWAYS passed, because the notify fork has to happen somewhere and it cannot happen here.
@@ -111,7 +110,11 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
         </button>
       </div>
 
-      <div style={{ padding: 15 }}>
+      {/* The topology sweep's outer anchor. `boundingBox()` is the BORDER box, so this padding
+          counts as gutter either way — anchoring here rather than on the card root drops only
+          the root's 1px border, not the 15. The sweep compares two children of THIS div to each
+          other, which is what makes it a relationship rather than a bound. */}
+      <div data-testid="step-inspector-body" style={{ padding: 15 }}>
         {node.type === 'approval' && res && (
           <>
             <WfSelect label="Who must approve" value={node.role} options={roleOptions} onChange={(v) => patch({ role: v as RoleKey })} />
@@ -129,22 +132,34 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
             <WfSelect label="Deadline" value={node.sla} options={slaOptions(node.sla)} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
-              <WfToggle on={node.delegate} onToggle={() => patch({ delegate: !node.delegate })} label="Allow delegation" />
+              <WfToggle
+                on={node.delegate}
+                onToggle={() => patch({ delegate: !node.delegate })}
+                label="Allow delegation"
+                disabled
+                title={DELEGATION_BLOCKED}
+                ariaDescribedBy={DELEGATION_BLOCKED_ID}
+              />
             </div>
-            {/* Outside the guard below, so the warning shows in BOTH toggle states — DELEGATE_NOTE
-                already occupies the in-guard slot and speaks only to the picker. */}
-            <div style={hintStyle()}>{DELEGATION_NOT_STORED}</div>
-            {node.delegate && (
-              <div style={{ marginTop: 12 }}>
-                <WfSelect
-                  label="Delegate to"
-                  value={node.delegateTo ?? ANY_REVIEWER}
-                  options={[{ value: ANY_REVIEWER, label: 'Anyone with the Reviewer role' }, ...toOptions(delegates)]}
-                  onChange={(v) => patch({ delegateTo: v })}
-                />
-                <div style={hintStyle()}>{DELEGATE_NOTE}</div>
-              </div>
-            )}
+            {/* Above the picker block, never inside it: `delegateNote()` reads that block's LAST
+                child positionally, and DELEGATE_NOTE has to stay the node it finds. */}
+            <div id={DELEGATION_BLOCKED_ID} data-testid="delegation-blocked-reason" style={hintStyle()}>
+              {DELEGATION_BLOCKED}
+            </div>
+            {/* No `{node.delegate && …}` guard: the toggle is shut, so behind one the picker would
+                be REMOVED rather than labelled. The wrapping div stays — see the comment above. */}
+            <div style={{ marginTop: 12 }}>
+              <WfSelect
+                label="Delegate to"
+                value={node.delegateTo ?? ANY_APPROVER}
+                options={[{ value: ANY_APPROVER, label: 'Anyone with the Admin or Reviewer role' }, ...toOptions(delegates)]}
+                onChange={(v) => patch({ delegateTo: v })}
+                disabled
+                title={DELEGATION_BLOCKED}
+                ariaDescribedBy={DELEGATION_BLOCKED_ID}
+              />
+              <div style={hintStyle()}>{DELEGATE_NOTE}</div>
+            </div>
           </>
         )}
 
@@ -154,37 +169,26 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
               label="If this field"
               value={node.field}
               options={FIELD_OPTIONS}
-              onChange={(v) => patch({ field: v as CondField, value: FIELD_DEFAULT[v as CondField] })}
+              // One option, so this never fires — `WfSelect` requires the prop.
+              onChange={(v) => patch({ field: v as CondField })}
               marginBottom={14}
             />
 
-            {node.field === 'amount' && (
-              <>
-                <WfSelect label="Is" value={node.op} options={OP_OPTIONS} onChange={(v) => patch({ op: v as CondOp })} marginBottom={12} />
-                <WfAmountInput value={typeof node.value === 'number' ? node.value : 0} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
-                <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-                  {AMOUNT_PRESETS.map((p) => (
-                    <button
-                      key={p.label}
-                      type="button"
-                      onClick={() => patch({ value: p.value })}
-                      className="pf-btn"
-                      style={{ flex: 1, height: 30, border: '1px solid var(--line-2)', background: 'var(--bg-1)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--fg-2)', cursor: 'pointer' }}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {node.field === 'docType' && (
-              <WfSelect label="Equals" value={isDocType(node.value) ? node.value : 'B2B'} options={DOC_OPTIONS} onChange={(v) => patch({ value: v as WfDocType })} marginBottom={12} />
-            )}
-
-            {node.field === 'newCustomer' && (
-              <WfSelect label="Is" value={String(!!node.value)} options={CUST_OPTIONS} onChange={(v) => patch({ value: v === 'true' })} marginBottom={12} />
-            )}
+            <WfSelect label="Is" value={node.op} options={OP_OPTIONS} onChange={(v) => patch({ op: v as CondOp })} marginBottom={12} />
+            <WfAmountInput value={node.value} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {AMOUNT_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => patch({ value: p.value })}
+                  className="pf-btn"
+                  style={{ flex: 1, height: 30, border: '1px solid var(--line-2)', background: 'var(--bg-1)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--fg-2)', cursor: 'pointer' }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
 
             <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 12, padding: '10px 12px' }}>
               <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginBottom: 3 }}>
@@ -202,6 +206,10 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
           <>
             <WfSelect label="Notify" value={node.target} options={notifyOptions} onChange={(v) => patch({ target: v })} marginBottom={14} />
             <WfSelect label="Channel" value={node.channel} options={CHANNEL_OPTIONS} onChange={(v) => patch({ channel: v })} />
+            {/* Same select-then-hint pairing as DELEGATE_NOTE above: `hintStyle` supplies the gap. */}
+            <div data-testid="notify-not-delivered" style={hintStyle()}>
+              {NOTIFY_NOT_DELIVERED}
+            </div>
           </>
         )}
 

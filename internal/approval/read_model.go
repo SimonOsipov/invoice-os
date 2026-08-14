@@ -325,8 +325,8 @@ func resolveRunRoles(ctx context.Context, tx pgx.Tx, keys []string) (exists map[
 	return exists, titles, holders, nil
 }
 
-// isApprover mirrors internal/invoice/store.go:1412 -- kept in sync by inspection, not import
-// (unexported across packages). Also mirrors roles.ts's isApprover (roles.ts:405-407).
+// isApprover mirrors internal/invoice/store.go:1472 -- kept in sync by inspection, not import
+// (unexported across packages). Also mirrors roles.ts's isApprover (roles.ts:415-417).
 func isApprover(accessRole string) bool {
 	return accessRole == "admin" || accessRole == "reviewer"
 }
@@ -417,7 +417,7 @@ func withExtra(primary string, extra int) string {
 	return primary
 }
 
-// holderName mirrors toMember's display_name ?? email ?? user_id ladder (members.ts:546).
+// holderName mirrors toMember's display_name ?? email ?? user_id ladder (members.ts:552).
 func holderName(displayName, email *string, userID string) string {
 	if displayName != nil {
 		return *displayName

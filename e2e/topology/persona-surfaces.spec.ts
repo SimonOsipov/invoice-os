@@ -212,7 +212,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   // LIVE, and deliberately thin. APPR-09 wired this list to internal/approval, so everything
   // this block used to assert below the subtitle -- the count, the status pills, the
   // `scope · summary` lines, the `Updated` stamps and the two policy NAMES -- was transcribed
-  // from topology/policyFixtures.ts, a frontend constant. Nothing seeds approval_policies, so
+  // from a frontend constant. Nothing seeds approval_policies, so
   // those strings describe rows that do not exist. They went with the import (APPR-09-08).
   //
   // The firm/in-house DISJOINTNESS proof went with them rather than being re-derived: this

@@ -12,12 +12,11 @@
 
 import type { ReactNode } from 'react'
 
-import { DOC_TYPE_DEFS } from '../data'
 import { chevDownGlyph } from '../glyphs'
 import { Icon } from '../icons'
 import { fmtPlain } from '../lib/format'
 import { roleOf, type Role } from '../lib/roles'
-import { findNode, ruleText, slaText, WF_SLA_OPTIONS, type BranchNode, type NodeType, type Policy, type PolicyStatus, type WfDocType } from '../lib/workflows'
+import { findNode, ruleText, slaText, WF_SLA_OPTIONS, type BranchNode, type NodeType, type Policy, type PolicyStatus } from '../lib/workflows'
 
 /**
  * What the builder is currently about to place: either a fresh block from the palette
@@ -140,25 +139,13 @@ export function slaOptions(current: string): WfOption[] {
   return current && !WF_SLA_OPTIONS.includes(current) ? [{ value: current, label: `Within ${current} hours` }, ...SLA_OPTIONS] : SLA_OPTIONS
 }
 
-export const FIELD_OPTIONS: WfOption[] = [
-  { value: 'amount', label: 'Invoice amount' },
-  { value: 'docType', label: 'Document type' },
-  { value: 'newCustomer', label: 'Customer' },
-]
+export const FIELD_OPTIONS: WfOption[] = [{ value: 'amount', label: 'Invoice amount' }]
 
 export const OP_OPTIONS: WfOption[] = [
   { value: '>', label: 'greater than' },
   { value: '>=', label: 'at least' },
   { value: '<', label: 'less than' },
   { value: '<=', label: 'at most' },
-]
-
-/** The one doc-type list in the app — the same triple the create flow renders. */
-export const DOC_OPTIONS: WfOption[] = DOC_TYPE_DEFS.map(([code, kind]) => ({ value: code, label: `${code} · ${kind}` }))
-
-export const CUST_OPTIONS: WfOption[] = [
-  { value: 'true', label: 'New / unverified' },
-  { value: 'false', label: 'Existing' },
 ]
 
 /**
@@ -181,10 +168,6 @@ export const AMOUNT_PRESETS: { label: string; value: number }[] = [
   { label: '₦500M', value: 500_000_000 },
   { label: '₦1B', value: 1_000_000_000 },
 ]
-
-export function isDocType(v: unknown): v is WfDocType {
-  return v === 'B2B' || v === 'B2G' || v === 'B2C'
-}
 
 // ---------------------------------------------------------------------------
 // Controls
@@ -213,7 +196,7 @@ export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: Poli
  * the `.asc-app` rule outranks any component background — so the caller draws one
  * beside it. This is the first styled <select> in the app; every other screen dodged it.
  */
-export function WfSelect({ label, value, options, onChange, height = 38, marginBottom = 0, hideLabel = false, width }: {
+export function WfSelect({ label, value, options, onChange, height = 38, marginBottom = 0, hideLabel = false, width, disabled, title, ariaDescribedBy }: {
   label: string
   value: string
   options: WfOption[]
@@ -223,6 +206,15 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
   /** For the scope row, where a sibling `.label` already names the control on screen. */
   hideLabel?: boolean
   width?: number | string
+  /**
+   * The persistent-disable recipe, all three landing on the `<select>` itself — never on the
+   * `<label>` wrapper, which `hideLabel` aria-labels and `getByLabelText` hands back. Optional
+   * and spread CONDITIONALLY: an unconditional paint would mute every other call site.
+   * No `filter: 'none'` — `.pf-select` carries no `:hover` and no filter rule to neutralise.
+   */
+  disabled?: boolean
+  title?: string
+  ariaDescribedBy?: string
 }) {
   return (
     <label style={{ display: hideLabel ? 'inline-block' : 'block', width, marginBottom }} aria-label={hideLabel ? label : undefined}>
@@ -236,7 +228,11 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
           className="pf-select"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box' }}
+          disabled={disabled}
+          title={title}
+          aria-describedby={ariaDescribedBy}
+          // `backgroundColor`, never the `background` shorthand — app-layer.css:224-232.
+          style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
         >
           {options.map((o) => (
             <option key={o.value} value={o.value}>
@@ -277,8 +273,24 @@ export function WfAmountInput({ value, onChange, ariaLabel, marginBottom = 0 }: 
   )
 }
 
-/** 34×18 switch. Same pf-toggle/pf-knob transitions the Rules screen uses. */
-export function WfToggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
+/**
+ * 34×18 switch. Same pf-toggle/pf-knob transitions the Rules screen uses.
+ *
+ * `disabled`/`title`/`ariaDescribedBy` mirror `WfSelect`'s, with two differences: the paint uses
+ * the `background` SHORTHAND, matching the resting style below rather than `WfSelect`'s
+ * `backgroundColor` — nothing forbids the shorthand here, and overriding a shorthand with a
+ * longhand would leave the resting value half-standing. And there is no `aria-disabled`: native
+ * `disabled` on a `<button>` already covers focus, the keyboard and the a11y tree. No
+ * `filter: 'none'`: `.pf-toggle` sets only a transition, no `:hover` (platform.css:167-171).
+ */
+export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy }: {
+  on: boolean
+  onToggle: () => void
+  label: string
+  disabled?: boolean
+  title?: string
+  ariaDescribedBy?: string
+}) {
   return (
     <button
       type="button"
@@ -286,8 +298,11 @@ export function WfToggle({ on, onToggle, label }: { on: boolean; onToggle: () =>
       aria-checked={on}
       aria-label={label}
       onClick={onToggle}
+      disabled={disabled}
+      title={title}
+      aria-describedby={ariaDescribedBy}
       className="pf-toggle"
-      style={{ flex: 'none', position: 'relative', display: 'inline-block', width: 34, height: 18, padding: 0, border: 0, borderRadius: 99, cursor: 'pointer', background: on ? 'var(--action)' : 'var(--line-3)' }}
+      style={{ flex: 'none', position: 'relative', display: 'inline-block', width: 34, height: 18, padding: 0, border: 0, borderRadius: 99, cursor: 'pointer', background: on ? 'var(--action)' : 'var(--line-3)', ...(disabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
     >
       <span className="pf-knob" style={{ position: 'absolute', top: 2, left: 2, width: 14, height: 14, borderRadius: 99, background: 'var(--bg-2)', transform: on ? 'translateX(16px)' : 'translateX(0)', boxShadow: 'var(--shadow-card)' }} />
     </button>

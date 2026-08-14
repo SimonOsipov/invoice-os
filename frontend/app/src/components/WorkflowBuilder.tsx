@@ -45,7 +45,7 @@ import type { PlatformCtx } from '../types'
 
 const PALETTE: { type: NodeType; name: string; desc: string }[] = [
   { type: 'approval', name: 'Approval', desc: 'Someone must sign off' },
-  { type: 'condition', name: 'Condition', desc: 'Branch on amount or type' },
+  { type: 'condition', name: 'Condition', desc: 'Branch on amount' },
   { type: 'notify', name: 'Notify', desc: 'Send a heads-up' },
   { type: 'autoapprove', name: 'Auto-approve', desc: 'Clear without sign-off' },
 ]
@@ -62,12 +62,15 @@ const PUBLISH_BLOCKED_REASON = 'Save your changes first — Publish seals the la
 // sentence for it, plus the remedy the server does not state.
 const PUBLISH_SEALED_REASON = 'This policy has no unpublished changes — edit and save a draft to publish again.'
 const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
+// Why the Applies select offers one option. An explanation, not a disabled reason (D-A):
+// the control stores exactly what it offers, so there is nothing to paint shut.
+const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
 
 /**
- * A wrapper where a bare `disabled` cannot land: `WfSelect` carries no such prop
- * (WorkflowParts.tsx:216), and the canvas's drop and click-to-place handlers hang off divs.
- * `MemberDrawer.tsx:64-71` pre-authorises this trade rather than plumbing a prop through a
- * shared component.
+ * The in-flight lock's wrapper. The canvas's drop and click-to-place handlers hang off divs,
+ * which no `disabled` prop reaches — so this stays a fieldset even though `WfSelect` now takes
+ * a `disabled` of its own (WorkflowParts.tsx:199) for the PERSISTENT recipe. A transient lock
+ * keeps the fieldset, per the split at :411-416; `MemberDrawer.tsx:64-71` records the same trade.
  */
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 
@@ -95,7 +98,7 @@ function publishBlockedReason(server: Policy, dirty: boolean): string | null {
  *
  * `Policy.status` answers only "is the top version sealed", which is the whole of the first
  * question and none of the second: WHICH policy governs is `activeVersion`, tenant-wide. Three
- * branches after that, because `policyInForce` excludes self by design (policies.ts:193-195):
+ * branches after that, because `policyInForce` excludes self by design (policies.ts:192-194):
  * without the first one, the policy that IS in force renders 'nothing is in force'.
  */
 function publishConsequence(server: Policy, policies: readonly Policy[]): string | null {
@@ -386,6 +389,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, display: 'flex' }}>
               <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={240} />
             </fieldset>
+          </div>
+          {/* A block sibling of the row, not a child of it: the row has no `flexWrap`, so
+              inside it this would sit beside the select. Carries its own marginTop — this
+              column supplies no `gap`. Unlabelled, or it would collide with getByLabelText('Applies'). */}
+          <div data-testid="scope-not-routed" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+            {SCOPE_NOT_ROUTED}
           </div>
         </div>
 

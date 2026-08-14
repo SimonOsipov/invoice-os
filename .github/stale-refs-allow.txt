@@ -29,8 +29,13 @@ Ngozi Balogun +1
 Engagement Manager +1
 Folake Adesina +1
 
-# --- orphaned fixture -----------------------------------------------------
-# `Policy.updated` values in a module APPR-09 left fully unimported. Nothing
-# reads them, so no reference here can break; APPR-10 deletes the file and
-# this entry goes with it.
-file:e2e/topology/policyFixtures.ts
+# --- retired policy scopes ------------------------------------------------
+# Scope strings APPR-10 removed from the editor. `docs/approvals.md` section 6
+# names them BECAUSE the server permanently refuses them — same reason as the
+# registries above: the doc is doing its job. The vocabulary itself survives in
+# Go as `removedScopes` (internal/approval/policy_test.go), but stalerefs reads
+# _test.go as testish, so that does not count as a producer.
+#
+# One line and not five: the other four retired scopes still have real
+# producers, and a suppression with no finding behind it cannot be falsified.
+Credit notes & adjustments

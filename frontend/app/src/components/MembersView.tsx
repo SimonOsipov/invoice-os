@@ -34,7 +34,7 @@ import type { PlatformCtx } from '../types'
 
 // A constant, not a derivation — the SLA_OPTIONS idiom in WorkflowParts.tsx.
 // 'all' is just another option; WfSelect's `value`/`onChange` are plain strings and the
-// caller narrows on the way back, the WorkflowInspector.tsx:78 idiom.
+// caller narrows on the way back, the WorkflowInspector.tsx:120 idiom.
 const ROLE_FILTER_OPTIONS: WfOption[] = [
   { value: 'all', label: 'All roles' },
   ...ACCESS_ROLES.map((r) => ({ value: r.id, label: r.label })),

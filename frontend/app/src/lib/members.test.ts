@@ -52,6 +52,9 @@ import {
   type MemberStatus,
   type MembershipWire,
 } from './members'
+// Legal in a spec: roles.ts imports members.ts, and the test graph has no cycle. The
+// approver pair is transcribed inline in members.ts; T3-6 below pins the two agree.
+import { isApprover } from './roles'
 
 // --- fixtures ---------------------------------------------------------------
 // The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
@@ -426,10 +429,11 @@ describe('notify targets (T1.29–T1.31, §11.4)', () => {
   })
 })
 
-describe('delegateCandidates (T1.32, §11.3)', () => {
-  it('lists the six active in-house reviewers and nobody else (T1.32)', () => {
+describe('delegateCandidates (T1.32, APPR-00 Q1)', () => {
+  it('lists every active in-house approver — the admin first, then the six active reviewers (T1.32)', () => {
     const candidates = delegateCandidates(inhouse())
     expect(candidates).toEqual([
+      'Ngozi Balogun', // admin — mh1 leads the roster, and filter/map keep input order
       'Yetunde Fashola',
       'Emeka Uzowulu',
       'Tunde Adeyemi',
@@ -439,8 +443,52 @@ describe('delegateCandidates (T1.32, §11.3)', () => {
     ])
     expect(candidates).not.toContain('Adebayo Ogunlesi') // suspended
     expect(candidates).not.toContain('Sadiq Ibrahim') // invited
-    expect(candidates).not.toContain('Ngozi Balogun') // admin, not reviewer
+    expect(candidates).toContain('Ngozi Balogun') // admin — INVERTED by APPR-00 Q1, was not.toContain
     expect(candidates).not.toContain('Zainab Lawal') // preparer
+  })
+})
+
+// --- APPR-10-03: the approver set widens to {admin, reviewer} ----------------
+
+describe('APPR-00 Q1 — the widened set stops at the approver pair', () => {
+  it('an active preparer is not a delegate candidate, in either mode', () => {
+    // KEEP-GREEN both sides of the widening: over-widening to "any active member" is the
+    // only change this catches.
+    expect(names(inhouse())).toContain('Zainab Lawal') // in the roster, so the exclusion is not vacuous
+    expect(names(firm())).toContain('Folake Adesina')
+    expect(delegateCandidates(inhouse())).not.toContain('Zainab Lawal')
+    expect(delegateCandidates(firm())).not.toContain('Folake Adesina')
+  })
+})
+
+describe('APPR-00 Q1 — the inline approver pair agrees with lib/roles.ts', () => {
+  it('delegateCandidates admits exactly the active members isApprover accepts', () => {
+    // members.ts cannot import roles.ts (one-way, members.ts:8-11), so the pair is
+    // transcribed twice. This is the pin that catches the two drifting apart.
+    const rows = inhouse()
+    const viaIsApprover = rows.filter((m) => m.status === 'active' && isApprover(m.role)).map((m) => m.name)
+    expect(viaIsApprover.length, 'isApprover admitted nobody, so the comparison below is vacuous').toBeGreaterThan(0)
+    expect(delegateCandidates(rows)).toEqual(viaIsApprover)
+  })
+})
+
+describe('APPR-00 Q1 — status still gates the newly-admitted admin role', () => {
+  /** Neither fixture carries a suspended or an invited ADMIN, so these rows are built here. */
+  const adminRow = (name: string, status: MemberStatus): Member => ({ ...inhouseRow(name, status), role: 'admin' })
+
+  it('excludes a suspended admin and an invited admin, and admits the active one', () => {
+    // The active admin is the positive control for the ROLE half — without it the two
+    // exclusions are satisfied by any predicate that refuses every admin, which is the rule
+    // Q1 retired. The reviewer is the control for the STATUS half.
+    const candidates = delegateCandidates([
+      adminRow('Amara Eze', 'suspended'),
+      adminRow('Bola Adewale', 'invited'),
+      adminRow('Dele Okonkwo', 'active'),
+      inhouseRow('Chika Obi', 'active'),
+    ])
+    expect(candidates).toEqual(['Dele Okonkwo', 'Chika Obi'])
+    expect(candidates).not.toContain('Amara Eze')
+    expect(candidates).not.toContain('Bola Adewale')
   })
 })
 
@@ -1511,13 +1559,15 @@ describe('needsClientPick — §7\'s zero-selected rule, now read by two compone
   })
 })
 
-// AC-14 — delegateCandidates is unchanged, and firm mode had no spec of its own
-// (T1.32 only ever ran in-house).
-describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', () => {
-  it('lists the two active firm reviewers and excludes the admin', () => {
+// APPR-00 Q1 — the approver set is {admin, reviewer} in BOTH modes, and firm mode had no
+// spec of its own (T1.32 only ever ran in-house).
+describe('APPR-00 Q1 — delegateCandidates admits the admin in firm mode too', () => {
+  it('lists the active firm admin first, then the two active firm reviewers', () => {
     const candidates = delegateCandidates(SEED_FIRM_MEMBERS)
-    expect(candidates).toEqual(['Musa Danjuma', 'Chiamaka Nwosu'])
-    expect(candidates).not.toContain('Chinedu Okafor') // admin, not reviewer
+    expect(candidates).toEqual(['Chinedu Okafor', 'Musa Danjuma', 'Chiamaka Nwosu'])
+    expect(candidates).toContain('Chinedu Okafor') // admin — INVERTED by APPR-00 Q1, was not.toContain
+    expect(candidates).not.toContain('Halima Yusuf') // reviewer, suspended
+    expect(candidates).not.toContain('Folake Adesina') // preparer
   })
 })
 
@@ -1638,12 +1688,14 @@ describe('AC-2 — toMember maps the wire row to a Member', () => {
 })
 
 describe('AC-2/[APPR-10 trap] — delegateCandidates survives the live projection', () => {
-  it('a projected active reviewer is a non-empty delegate candidate', () => {
+  it('a projected active reviewer AND a projected active admin are both delegate candidates', () => {
+    // Roster order, not role order: these rows are built reviewer-first, so the admin lands
+    // SECOND here and first in the two seed blocks above.
     const rows = [
       wire({ user_id: 'c1', role: 'reviewer', status: 'active', display_name: 'Musa Danjuma' }),
       wire({ user_id: 'c2', role: 'admin', status: 'active', display_name: 'Chinedu Okafor' }),
     ].map((w) => toMember(w, SELF_SUBJECT))
-    expect(delegateCandidates(rows)).toEqual(['Musa Danjuma'])
+    expect(delegateCandidates(rows)).toEqual(['Musa Danjuma', 'Chinedu Okafor'])
   })
 })
 
@@ -1808,6 +1860,41 @@ describe('activeAdmins/isProtectedAdmin — a short LIVE-shaped roster (4 rows) 
   it('a non-admin over the same roster is never protected', () => {
     const reviewer = live.find((m) => m.name === 'Reviewer One')!
     expect(isProtectedAdmin(live, reviewer)).toBe(false)
+  })
+})
+
+describe('QA APPR-00 Q1 — delegateCandidates, adversarial shapes', () => {
+  // Reviewer BEFORE admin, so this roster's ordering disagrees with both seed blocks.
+  const live = [
+    wire({ user_id: 'c1', role: 'preparer', status: 'active', display_name: 'Preparer One' }),
+    wire({ user_id: 'c2', role: 'reviewer', status: 'active', display_name: 'Reviewer One' }),
+    wire({ user_id: 'c3', role: 'admin', status: 'active', display_name: 'Admin One' }),
+    wire({ user_id: 'c4', role: 'reviewer', status: 'suspended', display_name: 'Reviewer Two' }),
+  ].map((w) => toMember(w, SELF_SUBJECT))
+
+  it('an off-union role is refused — the widened set is a closed pair, not a not-preparer test', () => {
+    // `toMember` keeps an unfamiliar role verbatim (see the VERBATIM spec above), so a role
+    // outside `AccessRole` really does reach this predicate.
+    const odd = toMember(wire({ user_id: 'c5', role: 'Auditor', status: 'active', display_name: 'Auditor One' }), SELF_SUBJECT)
+    const rows = [...live, odd]
+    expect(rows.map((m) => m.role as string), 'the projection dropped the odd role, so the exclusion below is vacuous').toContain('Auditor')
+    expect(delegateCandidates(rows)).not.toContain('Auditor One')
+    expect(delegateCandidates(rows)).toEqual(['Reviewer One', 'Admin One'])
+  })
+
+  it('order tracks the roster, not the role — reversing the rows reverses the candidates', () => {
+    const forward = delegateCandidates(live)
+    expect(forward.length, 'fewer than two candidates, so the ordering assertions are vacuous').toBeGreaterThan(1)
+    expect(forward).toEqual(['Reviewer One', 'Admin One'])
+    expect(delegateCandidates([...live].reverse())).toEqual(['Admin One', 'Reviewer One'])
+  })
+
+  it('an empty roster and an all-ineligible roster both give an empty list, not a throw', () => {
+    expect(() => delegateCandidates([])).not.toThrow()
+    expect(delegateCandidates([])).toEqual([])
+    const ineligible = live.filter((m) => !delegateCandidates(live).includes(m.name))
+    expect(ineligible.length, 'nothing ineligible in the fixture, so the empty result below is vacuous').toBeGreaterThan(0)
+    expect(delegateCandidates(ineligible)).toEqual([])
   })
 })
 

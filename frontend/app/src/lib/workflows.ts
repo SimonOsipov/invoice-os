@@ -6,7 +6,7 @@
 // (~L998-1280), the `defaultPolicies()` seed and the `wf*` builder methods
 // (~L2285-2412). The prototype's `renderVals()` glue for this screen was lost to a
 // 256KiB read truncation, so the derived bindings were reconstructed from the markup's
-// binding names — see the port spec. Anything reconstructed is marked below.
+// binding names — see the port spec.
 //
 // The prototype MUTATES its policy tree in place (`wfMutate` + `Array.splice`). Every
 // reducer here is immutable instead — React state, and the mutating originals would
@@ -34,8 +34,7 @@ export type RoleKey = string
 export type Sla = string
 export const WF_SLA_OPTIONS: readonly Sla[] = ['0', '24', '48', '72']
 
-export type WfDocType = 'B2B' | 'B2G' | 'B2C'
-export type CondField = 'amount' | 'docType' | 'newCustomer'
+export type CondField = 'amount'
 export type CondOp = '>' | '>=' | '<' | '<='
 export const WF_OPS: readonly CondOp[] = ['>', '>=', '<', '<=']
 
@@ -46,11 +45,12 @@ export type ApprovalNode = {
   sla: Sla
   delegate: boolean
   /**
-   * IN-HOUSE only — the named delegate, when `delegate` is on (MEMB-01 §11.3). OPTIONAL, and
+   * The named delegate. Offered in BOTH modes — `delegates` reaches the inspector unconditionally
+   * (WorkflowBuilder.tsx:524), and the mode forks on `resolve` are gone. OPTIONAL, and
    * the seed never writes it: that is what keeps every existing fixture and the whole-node
    * `toEqual` in workflows.test.ts compiling and passing untouched.
    *
-   * `''` and ABSENT both mean "Anyone with the Reviewer role" — `WfSelect` is `value: string`
+   * `''` and ABSENT both mean "Anyone with the Admin or Reviewer role" — `WfSelect` is `value: string`
    * and cannot emit absence, so the default is the empty-string sentinel (the same idiom the
    * invite modal's `NO_WF_ROLE` uses). Round-tripping the toggle off and on therefore leaves
    * the key present as `''`, which is the default, not a stored choice.
@@ -65,13 +65,8 @@ export type ConditionNode = {
   type: 'condition'
   field: CondField
   op: CondOp
-  /**
-   * One slot, three domains, switched on `field` — amount is a naira number, docType a
-   * WfDocType, newCustomer a boolean. The prototype stores all three here and every
-   * reader switches on `field`; keeping that shape means the inspector's field select
-   * needs no migration step when it flips domains.
-   */
-  value: number | WfDocType | boolean
+  /** The naira threshold — `field` has one domain, so this slot has one type. */
+  value: number
   then: BranchNode[]
   else: BranchNode[]
 }
@@ -105,18 +100,11 @@ export type Policy = {
 }
 
 /**
- * Scope options. The four scopes the seed actually uses are FORCED — the control is a
- * plain select over `policy.scope`, so a seeded scope missing from this list would make
- * that policy's select render blank. The last two are reconstructed.
+ * Scope options — the one value the server stores. `normalizeScope`
+ * (`internal/approval/policy.go:372-379`) and the column's own CHECK refuse anything else,
+ * so a longer list here would only offer routing the product cannot perform.
  */
-export const WF_SCOPE_OPTIONS: readonly string[] = [
-  'All invoices',
-  'Foreign-currency invoices',
-  'Document type · B2G',
-  'Capex & fixed assets',
-  'Consumer invoices (B2C)',
-  'Credit notes & adjustments',
-]
+export const WF_SCOPE_OPTIONS: readonly string[] = ['All invoices']
 
 // ---------------------------------------------------------------------------
 // Lanes
@@ -318,14 +306,12 @@ export function opLabel(op: CondOp): string {
 
 /**
  * The human sentence a condition card shows under its title. Copy is verbatim from the
- * prototype's `wfRuleText`, including the `'Condition'` fallback for a field this build
- * does not know — unreachable through the typed API, kept so an added field degrades to
- * a label rather than to a wrong amount comparison.
+ * prototype's `wfRuleText`. `CondField` is one literal, so the `'Condition'` fallback is
+ * unreachable — kept so an added field degrades to a label rather than to a wrong amount
+ * comparison.
  */
 export function ruleText(n: ConditionNode): string {
   if (n.field === 'amount') return `Amount ${opLabel(n.op)} ${fmt(Number(n.value))}`
-  if (n.field === 'docType') return `Document type is ${String(n.value)}`
-  if (n.field === 'newCustomer') return n.value ? 'Customer is new / unverified' : 'Customer is existing'
   return 'Condition'
 }
 
@@ -337,25 +323,19 @@ export function slaText(sla: Sla): string {
 // Scenario simulator
 // ---------------------------------------------------------------------------
 
-export type SimContext = { amount: number; docType: WfDocType; newCustomer: boolean }
+export type SimContext = { amount: number }
 
-export const SIM_DEFAULT: SimContext = { amount: 750_000_000, docType: 'B2B', newCustomer: false }
+export const SIM_DEFAULT: SimContext = { amount: 750_000_000 }
 
 export function evalCondition(n: ConditionNode, ctx: SimContext): boolean {
-  if (n.field === 'amount') {
-    // `|| 0` mirrors the prototype: a half-typed amount in the inspector must not turn
-    // the whole comparison into NaN (which is false for BOTH `>` and `<=`).
-    const a = Number(ctx.amount) || 0
-    const v = Number(n.value) || 0
-    if (n.op === '>') return a > v
-    if (n.op === '>=') return a >= v
-    if (n.op === '<') return a < v
-    return a <= v
-  }
-  if (n.field === 'docType') return ctx.docType === n.value
-  if (n.field === 'newCustomer') return !!ctx.newCustomer === !!n.value
-  // Unknown field takes the else lane rather than silently comparing amounts.
-  return false
+  // `|| 0` mirrors the prototype: a half-typed amount in the inspector must not turn
+  // the whole comparison into NaN (which is false for BOTH `>` and `<=`).
+  const a = Number(ctx.amount) || 0
+  const v = Number(n.value) || 0
+  if (n.op === '>') return a > v
+  if (n.op === '>=') return a >= v
+  if (n.op === '<') return a < v
+  return a <= v
 }
 
 /**

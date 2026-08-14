@@ -175,7 +175,7 @@ export function AmberNote({ children, testId, style }: { children: ReactNode; te
  *
  * NATIVE RADIOS, and the app's first. `frontend/app/src` contains no `type="radio"`, no
  * `role="radio"` and no `radiogroup`; the ARIA-on-button idiom it does have (RulesView.tsx:259,
- * WorkflowParts.tsx:264) is for TOGGLES, not for a three-way exclusive choice, and would need
+ * WorkflowParts.tsx:295-299) is for TOGGLES, not for a three-way exclusive choice, and would need
  * hand-rolled arrow-key handling. A real radio group gives roving focus, form semantics and
  * `:checked` for free. The card LOOK follows the app's selected-card idiom
  * (CreateUpload.tsx:178-198); its ARIA does not — that one carries no selected state at all,
@@ -185,7 +185,7 @@ export function AmberNote({ children, testId, style }: { children: ReactNode; te
  * Unselected cards sit on --bg-1 rather than CreateUpload's --bg-2. Same rule, different
  * ground: a card must be one step off the surface behind it, and this one is mounted on a
  * --bg-2 modal panel where --bg-2 would be invisible. It is the pair `WfSelect` already uses
- * for a control inside a panel (WorkflowParts.tsx:217).
+ * for a control inside a panel (WorkflowParts.tsx:235).
  */
 export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdProp, idPrefix }: {
   value: AccessRole

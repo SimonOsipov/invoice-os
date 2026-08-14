@@ -164,8 +164,8 @@ body {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
-/* Rules screen. The toggle appears on custom rules only — inherited rows draw a
-   lock instead, so there is no disabled variant of this control to style. */
+/* Rules screen, and the Workflows inspector, which wears this class on a disabled
+   toggle — that paint is inline, matching the repo (no `:disabled` rule anywhere). */
 .pf-toggle {
   transition: background 140ms ease-out;
 }

@@ -107,8 +107,8 @@ tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` b
 deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
 now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
 nothing seeds `approval_policies`, so `persona-surfaces.spec.ts` has no pre-existing row to
-name; `workflows.spec.ts` and `roles.spec.ts` name only rows they create. `policyFixtures.ts`
-is imported by nothing and stays on disk for APPR-10 to delete.
+name; `workflows.spec.ts` and `roles.spec.ts` name only rows they create. The mock fixture
+module that predated those live reads, `policyFixtures.ts`, was deleted by APPR-10.
 
 Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The

@@ -60,8 +60,8 @@ const MANAGE_ROLES = 'Manage roles'
 const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
 
 /**
- * The two controls with no `disabled` prop of their own — `ClientAccessPicker` holds state,
- * `DepartmentField` wraps the Workflows-owned `WfSelect`. A `<fieldset disabled>` gives all
+ * Two controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`, and
+ * `DepartmentField`'s `WfSelect` has one that would not reach it. A `<fieldset disabled>` gives all
  * four layers without plumbing a prop through a shared component for a Members-only need:
  * HTML natively disables every descendant (1, unclickable and out of the tab order),
  * `pointerEvents: none` is a stronger (2) than any background swap, the sibling below is

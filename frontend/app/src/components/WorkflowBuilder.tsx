@@ -67,10 +67,10 @@ const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
 const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
 
 /**
- * A wrapper where a bare `disabled` cannot land: `WfSelect` carries no such prop
- * (WorkflowParts.tsx:216), and the canvas's drop and click-to-place handlers hang off divs.
- * `MemberDrawer.tsx:64-71` pre-authorises this trade rather than plumbing a prop through a
- * shared component.
+ * The in-flight lock's wrapper. The canvas's drop and click-to-place handlers hang off divs,
+ * which no `disabled` prop reaches — so this stays a fieldset even though `WfSelect` now takes
+ * a `disabled` of its own (WorkflowParts.tsx:199) for the PERSISTENT recipe. A transient lock
+ * keeps the fieldset, per the split at :411-416; `MemberDrawer.tsx:64-71` records the same trade.
  */
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 

@@ -37,10 +37,17 @@ const ANY_APPROVER = ''
 // the note states the eligibility rule — do not harmonise.
 const DELEGATE_NOTE = 'Only Admins and Reviewers can be a delegate. Delegation is not available yet.'
 
-// The delegation window: `delegate`/`delegateTo` have no server column (lib/policies.ts:73-75),
-// so the choice is lost on every save. Stated rather than hidden — APPR-10 owns the storage and
-// the disabling; until then the control stays interactive and says so.
-const DELEGATION_NOT_STORED = 'Delegation is not stored yet — this choice is not saved.'
+// The delegation window: `delegate`/`delegateTo` are dropped on write (lib/policies.ts:145) and
+// forced false on read (:131), so both controls ship SHUT with all four layers and this sentence
+// is layer 3. A third register again — the option names the fallback, DELEGATE_NOTE states the
+// eligibility rule, this states the disable and its cause.
+const DELEGATION_BLOCKED = 'Delegation is switched off — the server has nowhere to store it yet.'
+
+// ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it. A
+// deliberate deviation from INVED-02, where every disabled control gets its own id
+// (InvoiceDetail.tsx:150-159) — there the causes differ per control, here one cause shuts both,
+// and a second copy of the sentence would put two matches under one `getAllByText`.
+const DELEGATION_BLOCKED_ID = 'delegation-blocked-reason-text'
 
 /** The read-only hint under a select — the typography MemberParts' Reviewer hint already uses. */
 function hintStyle(amber = false) {
@@ -98,7 +105,9 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
         </button>
       </div>
 
-      <div style={{ padding: 15 }}>
+      {/* The card's CONTENT column, not its root: the root has no padding of its own, so a
+          topology sweep anchored there would read this div's 15px as slack. */}
+      <div data-testid="step-inspector-body" style={{ padding: 15 }}>
         {node.type === 'approval' && res && (
           <>
             <WfSelect label="Who must approve" value={node.role} options={roleOptions} onChange={(v) => patch({ role: v as RoleKey })} />
@@ -116,22 +125,34 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
             <WfSelect label="Deadline" value={node.sla} options={slaOptions(node.sla)} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
-              <WfToggle on={node.delegate} onToggle={() => patch({ delegate: !node.delegate })} label="Allow delegation" />
+              <WfToggle
+                on={node.delegate}
+                onToggle={() => patch({ delegate: !node.delegate })}
+                label="Allow delegation"
+                disabled
+                title={DELEGATION_BLOCKED}
+                ariaDescribedBy={DELEGATION_BLOCKED_ID}
+              />
             </div>
-            {/* Outside the guard below, so the warning shows in BOTH toggle states — DELEGATE_NOTE
-                already occupies the in-guard slot and speaks only to the picker. */}
-            <div style={hintStyle()}>{DELEGATION_NOT_STORED}</div>
-            {node.delegate && (
-              <div style={{ marginTop: 12 }}>
-                <WfSelect
-                  label="Delegate to"
-                  value={node.delegateTo ?? ANY_APPROVER}
-                  options={[{ value: ANY_APPROVER, label: 'Anyone with the Admin or Reviewer role' }, ...toOptions(delegates)]}
-                  onChange={(v) => patch({ delegateTo: v })}
-                />
-                <div style={hintStyle()}>{DELEGATE_NOTE}</div>
-              </div>
-            )}
+            {/* Above the picker block, never inside it: `delegateNote()` reads that block's LAST
+                child positionally, and DELEGATE_NOTE has to stay the node it finds. */}
+            <div id={DELEGATION_BLOCKED_ID} data-testid="delegation-blocked-reason" style={hintStyle()}>
+              {DELEGATION_BLOCKED}
+            </div>
+            {/* No `{node.delegate && …}` guard: the toggle is shut, so behind one the picker would
+                be REMOVED rather than labelled. The wrapping div stays — see the comment above. */}
+            <div style={{ marginTop: 12 }}>
+              <WfSelect
+                label="Delegate to"
+                value={node.delegateTo ?? ANY_APPROVER}
+                options={[{ value: ANY_APPROVER, label: 'Anyone with the Admin or Reviewer role' }, ...toOptions(delegates)]}
+                onChange={(v) => patch({ delegateTo: v })}
+                disabled
+                title={DELEGATION_BLOCKED}
+                ariaDescribedBy={DELEGATION_BLOCKED_ID}
+              />
+              <div style={hintStyle()}>{DELEGATE_NOTE}</div>
+            </div>
           </>
         )}
 

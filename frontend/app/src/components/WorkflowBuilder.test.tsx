@@ -181,7 +181,7 @@ describe('APPR-09-03 QA: the save control writes a draft and nothing else', () =
 const PUBLISH_BLOCKED_REASON = 'Save your changes first — Publish seals the last saved draft.'
 const PUBLISH_SEALED_REASON = 'This policy has no unpublished changes — edit and save a draft to publish again.'
 const NO_POLICY_IN_FORCE = 'No policy is in force. Publishing puts this one in force.'
-const DELEGATION_NOT_STORED = 'Delegation is not stored yet — this choice is not saved.'
+const DELEGATION_BLOCKED_REASON = 'Delegation is switched off — the server has nowhere to store it yet.'
 
 const FIRM_ROLES: Role[] = [
   { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: [] },
@@ -743,9 +743,9 @@ describe('APPR-10-03 AC-3: the sentinel option names the approver set', () => {
     expect(label, 'the option and the note collapsed into one sentence').not.toBe(note)
     expect(note.includes(label), 'the note swallowed the option label verbatim').toBe(false)
     expect(label.includes(note), 'the option label swallowed the note verbatim').toBe(false)
-    // Neither may become DELEGATION_NOT_STORED, or the one-node count at :635 breaks.
-    expect(label).not.toBe(DELEGATION_NOT_STORED)
-    expect(note).not.toBe(DELEGATION_NOT_STORED)
+    // Neither may become DELEGATION_BLOCKED_REASON, or the one-node count at :706 breaks.
+    expect(label).not.toBe(DELEGATION_BLOCKED_REASON)
+    expect(note).not.toBe(DELEGATION_BLOCKED_REASON)
   })
 })
 
@@ -1007,8 +1007,9 @@ describe('APPR-09-05 QA: two writes, one after the other', () => {
  * jsdom's `.disabled` IDL property reflects the CONTENT ATTRIBUTE only, so a control inside a
  * `<fieldset disabled>` still reports `false`. This walks the ancestry the way the HTML spec's
  * "actually disabled" definition does, so the specs below hold whether the guard lands on the
- * control itself or on a wrapping fieldset — the trade MemberDrawer.tsx:64-71 pre-authorises for
- * `WfSelect`, which carries no `disabled` prop of its own (WorkflowParts.tsx:216-226).
+ * control itself or on a wrapping fieldset. Both paths are live: `WfSelect` and `WfToggle` carry
+ * their own `disabled` (WorkflowParts.tsx:199-249, :284-308), and the builder's three fieldsets
+ * still lock the scope row, the canvas and the inspector while a write is in flight.
  */
 function inert(el: Element): boolean {
   if ((el as HTMLInputElement).disabled) return true

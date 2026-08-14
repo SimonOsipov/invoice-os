@@ -45,7 +45,8 @@ export type ApprovalNode = {
   sla: Sla
   delegate: boolean
   /**
-   * IN-HOUSE only — the named delegate, when `delegate` is on (MEMB-01 §11.3). OPTIONAL, and
+   * The named delegate. Offered in BOTH modes — `delegates` reaches the inspector unconditionally
+   * (WorkflowBuilder.tsx:524), and the mode forks on `resolve` are gone. OPTIONAL, and
    * the seed never writes it: that is what keeps every existing fixture and the whole-node
    * `toEqual` in workflows.test.ts compiling and passing untouched.
    *

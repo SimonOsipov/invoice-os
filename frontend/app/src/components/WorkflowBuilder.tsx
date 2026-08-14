@@ -62,6 +62,9 @@ const PUBLISH_BLOCKED_REASON = 'Save your changes first — Publish seals the la
 // sentence for it, plus the remedy the server does not state.
 const PUBLISH_SEALED_REASON = 'This policy has no unpublished changes — edit and save a draft to publish again.'
 const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
+// Why the Applies select offers one option. An explanation, not a disabled reason (D-A):
+// the control stores exactly what it offers, so there is nothing to paint shut.
+const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
 
 /**
  * A wrapper where a bare `disabled` cannot land: `WfSelect` carries no such prop
@@ -386,6 +389,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, display: 'flex' }}>
               <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={240} />
             </fieldset>
+          </div>
+          {/* A block sibling of the row, not a child of it: the row has no `flexWrap`, so
+              inside it this would sit beside the select. Carries its own marginTop — this
+              column supplies no `gap`. Unlabelled, or it would collide with getByLabelText('Applies'). */}
+          <div data-testid="scope-not-routed" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+            {SCOPE_NOT_ROUTED}
           </div>
         </div>
 

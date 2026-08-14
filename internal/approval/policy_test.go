@@ -36,9 +36,9 @@ import (
 // that asserts against the constant it is checking asserts nothing.
 const scopeAllInvoices = "All invoices"
 
-// removedScopes are the five WF_SCOPE_OPTIONS entries the server refuses, copied
-// byte-for-byte from frontend/app/src/lib/workflows.ts. The B2G entry's
-// separator is U+00B7 MIDDLE DOT, pinned by TestPolicy_NormalizeScopeTable.
+// removedScopes are the five RETIRED scope strings the server refuses. APPR-10 deleted
+// them from the editor, so this is a permanent refusal table with no live TS twin. The
+// B2G entry's separator is U+00B7 MIDDLE DOT, pinned by TestPolicy_NormalizeScopeTable.
 var removedScopes = []string{
 	"Foreign-currency invoices",
 	"Document type · B2G",

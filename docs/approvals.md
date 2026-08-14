@@ -575,7 +575,8 @@ approval_policies_scope_check
 that value before the value ever reaches SQL. Any other string is a `400 invalid
 request`; a value that somehow reached the column directly would be a `23514`.
 
-Five further scope options exist in the product's scope dropdown:
+Five further scope options were offered by the product's scope dropdown until APPR-10
+removed them:
 
 - `Foreign-currency invoices`
 - `Document type · B2G`
@@ -583,28 +584,25 @@ Five further scope options exist in the product's scope dropdown:
 - `Consumer invoices (B2C)`
 - `Credit notes & adjustments`
 
-**The server already refuses every one of them**, by the rule just above. None has any
-backing invoice classification, so a policy carrying one would route nothing while
-appearing to route something.
+**The server refuses every one of them**, by the rule just above, and always did. None has
+any backing invoice classification, so a policy carrying one would route nothing while
+appearing to route something. They remain the server's refusal vocabulary: the five
+strings are pinned as `removedScopes` (`internal/approval/policy_test.go`), which is what
+`TestCreatePolicy_ForeignScopeRejected` and `TestPutDraft_ForeignScopeRejected` feed the
+API to prove the refusal holds.
 
-> **Not yet removed from the editor.** The scope dropdown still offers all six options:
-> `WF_SCOPE_OPTIONS` (`frontend/app/src/lib/workflows.ts`) declares them and
-> `WorkflowBuilder.tsx` maps the whole list into the rendered `Applies` select.
+> **The editor and the `CHECK` now agree** (APPR-10). `WF_SCOPE_OPTIONS`
+> (`frontend/app/src/lib/workflows.ts`) declares exactly one entry, `All invoices`, and
+> `WorkflowBuilder.tsx` maps that list into the rendered `Applies` select — so the dropdown
+> can no longer compose a policy the column would reject. The select stays enabled and
+> carries a sentence stating that per-scope routing is not yet available: it is a control
+> that declares its own limits, not one that fails silently. `removedScopes` has no live TS
+> twin any more; it is a permanent server-side refusal table.
 >
-> **The editor now reaches this API** (APPR-09): the SPA's `/v1/approval-policies` wrappers
-> (`frontend/app/src/lib/policies.ts`) have live callers in `App.tsx`, and a draft edit goes
-> to `PUT /v1/approval-policies/{id}/draft`. Selecting one of the five unsupported scopes is
-> therefore **refused by the rule above** — `400 invalid request` — where the screen
-> previously accepted an unstorable scope and displayed it as published. The builder now
-> renders that refusal verbatim in its own write-error slot (`policy-save-error` /
-> `policy-publish-error`, `WorkflowBuilder.tsx`), and the in-flight lock clears in a `finally`
-> so the form re-opens over it rather than stranding the user in a dead one.
->
-> Deleting them from the palette is **APPR-10's unbuilt work**, under the rule that **a
-> control which fails invisibly is removed, while a control that announces its own
-> disabled state is kept and labelled.** A scope dropdown looks identical whether or not
-> it routes anything, which puts these five in the first category. Until that lands, the
-> `CHECK` above is the *storage* truth and the dropdown is not.
+> Before that, with the editor live against this API (APPR-09), selecting one of the five
+> earned a `400 invalid request`, which the builder rendered verbatim in its write-error
+> slot (`policy-save-error` / `policy-publish-error`, `WorkflowBuilder.tsx`). Earlier still,
+> against mock data, the screen accepted an unstorable scope and displayed it as published.
 
 Amount-threshold `condition` steps are unaffected and remain the supported way to express
 escalation, because they read the invoice's real total rather than an unpopulated

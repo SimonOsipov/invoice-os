@@ -289,8 +289,8 @@ func TestPolicy_CreateAuditsInSameTx(t *testing.T) {
 
 // --- AC-2: normalization above the transaction --------------------------------
 
-// TestCreatePolicy_ForeignScopeRejected: each of the five scopes the SPA still offers
-// and the server refuses is ErrValidation with nothing written. A raw *pgconn.PgError
+// TestCreatePolicy_ForeignScopeRejected: each of the five retired scopes the server
+// refuses is ErrValidation with nothing written. A raw *pgconn.PgError
 // with code 23514 fails this test — policyStatusForErr takes sentinels only, so an
 // unmapped check violation answers 500 where the design promises 400. The trailing
 // positive control keeps the zero-row assertions from passing against a store that

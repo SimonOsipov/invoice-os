@@ -105,18 +105,11 @@ export type Policy = {
 }
 
 /**
- * Scope options. The four scopes the seed actually uses are FORCED — the control is a
- * plain select over `policy.scope`, so a seeded scope missing from this list would make
- * that policy's select render blank. The last two are reconstructed.
+ * Scope options — the one value the server stores. `normalizeScope`
+ * (`internal/approval/policy.go:372-379`) and the column's own CHECK refuse anything else,
+ * so a longer list here would only offer routing the product cannot perform.
  */
-export const WF_SCOPE_OPTIONS: readonly string[] = [
-  'All invoices',
-  'Foreign-currency invoices',
-  'Document type · B2G',
-  'Capex & fixed assets',
-  'Consumer invoices (B2C)',
-  'Credit notes & adjustments',
-]
+export const WF_SCOPE_OPTIONS: readonly string[] = ['All invoices']
 
 // ---------------------------------------------------------------------------
 // Lanes

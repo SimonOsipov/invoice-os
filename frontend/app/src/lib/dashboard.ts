@@ -1,9 +1,10 @@
 // App-side dashboard rollup data-access helpers (M4-10-01, task-189).
 //
 // Types mirror the wire shapes in internal/dashboard/dashboard.go: `Bucket` is embedded
-// anonymously in `Client`, so encoding/json promotes `counts`/`needs_attention` to the
-// row's top level — RollupClient below spells that promotion out explicitly rather than
-// modeling the Go embedding. `Rollup.clients`/`.top_violations` are never null on the
+// anonymously in `Client`, so encoding/json promotes EVERY Bucket key — `counts`, both
+// overlays, `metrics`, `top_violations` — to the row's top level. RollupClient below
+// spells that promotion out explicitly rather than modeling the Go embedding.
+// `Rollup.clients`/`.top_violations` are never null on the
 // wire (pre-declared []Client{}/[]RuleCount{}) but this module types them as plain arrays,
 // same as `InvoiceListResponse.invoices` in invoices.ts.
 //
@@ -70,8 +71,8 @@ export interface RollupBucket {
 }
 
 // dashboard.go Client — Bucket is embedded anonymously there, so counts/needs_attention/
-// metrics/top_violations promote to this row's top level on the wire; entity_id/
-// entity_name are the row's own fields. Only entities WITH at least one invoice appear
+// awaiting_approval/metrics/top_violations promote to this row's top level on the wire;
+// entity_id/entity_name are the row's own fields. Only entities WITH at least one invoice appear
 // here (INNER JOIN, store.go). Sibling of RollupBucket above — kept in sync by hand.
 export interface RollupClient {
   entity_id: string

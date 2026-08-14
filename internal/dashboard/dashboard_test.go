@@ -7,6 +7,7 @@ package dashboard
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -116,5 +117,40 @@ func TestRollupJSON_AwaitingApprovalPromotesOntoEveryClientRow(t *testing.T) {
 	}
 	if awaiting != 3 {
 		t.Errorf("client awaiting_approval = %d, want 3", awaiting)
+	}
+}
+
+// The all-zero wire shape, which is what an empty tenant actually serves. No
+// field carries omitempty, so both overlays and all seven counts must still be
+// present as explicit zeros -- an absent key reads as undefined in the two
+// TypeScript mirrors, not as 0.
+func TestRollupJSON_ZeroValueBucketStillEmitsBothOverlaysAndSevenCounts(t *testing.T) {
+	if n := reflect.TypeOf(Counts{}).NumField(); n != 7 {
+		t.Fatalf("Counts has %d fields, want exactly 7 -- awaiting_approval is a Bucket sibling, never an eighth state", n)
+	}
+
+	body, err := json.Marshal(Bucket{Metrics: map[string]Metric{}, TopViolations: []RuleCount{}})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		t.Fatalf("unmarshal bucket: %v", err)
+	}
+	for _, key := range []string{"counts", "needs_attention", "awaiting_approval", "metrics", "top_violations"} {
+		if _, ok := top[key]; !ok {
+			t.Errorf("all-zero bucket = %s, want an explicit %q key", body, key)
+		}
+	}
+	if got := string(top["awaiting_approval"]); got != "0" {
+		t.Errorf("all-zero bucket's awaiting_approval = %s, want 0", got)
+	}
+
+	var counts map[string]json.RawMessage
+	if err := json.Unmarshal(top["counts"], &counts); err != nil {
+		t.Fatalf("unmarshal counts: %v", err)
+	}
+	if len(counts) != 7 {
+		t.Errorf("all-zero counts = %s, want exactly 7 explicit-zero keys", top["counts"])
 	}
 }

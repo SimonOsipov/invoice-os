@@ -870,14 +870,16 @@ off — still submits the same invoice. Pinned by
   SPA turns it into a block.
 - The `awaiting_approval` list filter.
 - The `awaiting_approval` **count** on the dashboard rollup's `Bucket`
-  (`internal/dashboard/store.go`, `GET /v1/rollup`), which the Approvals nav badge and the
-  dashboard tiles render. It is the list filter's predicate copied verbatim with the
-  query's `i.` alias added — one definition, so the badge and the filtered list can never
-  disagree about what the word denotes — and it is ungated for the same reason the filter
-  is: it is a read surface, and the closing sentence below applies to it unchanged. Note
-  the token now carries **three** meanings in this document and only these two share a
-  predicate: the batch-submit skip reason above (`BatchSubmitResultItem.Reason`) is a
-  refusal, is gated, and is a different fact — do not merge them.
+  (`internal/dashboard/store.go`, `GET /v1/rollup`). It is on the wire only — no SPA
+  surface reads it yet; the Approvals nav badge and the dashboard tiles are later APPR-11
+  subtasks. It is the list filter's predicate copied with the query's `i.` alias added,
+  and the two copies are held textually identical by
+  `TestStoreRollup_AwaitingApprovalSQLMatchesTheInvoiceListFilter`, so the count and the
+  filtered list cannot disagree about what the word denotes. It is ungated for the same
+  reason the filter is: it is a read surface, and the closing sentence below applies to it
+  unchanged. Note the token now carries **three** meanings in this document and only these
+  two share a predicate: the batch-submit skip reason above (`BatchSubmitResultItem.Reason`)
+  is a refusal, is gated, and is a different fact — do not merge them.
 
 So with the flag off an operator still sees the whole approval surface — runs open,
 approvers approve or reject, rows report the step they are waiting on — and the server

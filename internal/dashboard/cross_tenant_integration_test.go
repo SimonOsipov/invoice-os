@@ -279,3 +279,75 @@ func TestRLS_DashboardTopViolationsCrossTenantSharedRuleKeyNotInflated(t *testin
 		{RuleKey: "shared-rule", Invoices: 50},
 	})
 }
+
+// The awaiting_approval arm reads two more tenant-owned tables inside the same
+// tenant transaction, and its active-policy conjunct is an UNCORRELATED
+// `EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)` -- no tenant
+// predicate of its own, so RLS is the entire defense. Tenant B holds no policy
+// row of any kind here: if that EXISTS leaked, B would read every validated
+// invoice as blocked the moment ANY tenant published a policy. Mirrors
+// internal/invoice's TestRLS_AwaitingApprovalActivePolicyDoesNotLeakAcrossTenants
+// on the rollup side.
+func TestRLS_DashboardRollupAwaitingApprovalCrossTenantIsolated(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "APPR-11-QA-rls tenant A")
+	tenantB := seedTenant(t, super, "APPR-11-QA-rls tenant B")
+	entityA := seedEntity(t, super, tenantA, "APPR-11-QA-rls A Corp")
+	entityB := seedEntity(t, super, tenantB, "APPR-11-QA-rls B Corp")
+
+	// A is armed: an active policy, two validated invoices, one already approved.
+	_, versionA := seedApprovalPolicy(t, super, tenantA, true)
+	seedInvoiceAtStatus(t, super, tenantA, entityA, "APPR-11-QA-rls-A1", "validated")
+	approvedA := seedInvoiceAtStatus(t, super, tenantA, entityA, "APPR-11-QA-rls-A2", "validated")
+	seedApprovalRun(t, super, tenantA, approvedA, versionA, "approved")
+
+	// B is unarmed: validated invoices, and no approval_policies row at all.
+	seedInvoiceAtStatus(t, super, tenantB, entityB, "APPR-11-QA-rls-B1", "validated")
+	seedInvoiceAtStatus(t, super, tenantB, entityB, "APPR-11-QA-rls-B2", "validated")
+
+	var bVersions int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = $1`, tenantB,
+	).Scan(&bVersions); err != nil {
+		t.Fatalf("count tenant B policy versions: %v", err)
+	}
+	if bVersions != 0 {
+		t.Fatalf("tenant B holds %d policy versions, want 0 -- the fixture does not test a leak", bVersions)
+	}
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+
+	gotA, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant A): %v", err)
+	}
+	if gotA.Totals.Counts.Validated != 2 {
+		t.Fatalf("tenant A's Totals.Counts.Validated = %d, want 2 -- the fixture did not land", gotA.Totals.Counts.Validated)
+	}
+	if gotA.Totals.AwaitingApproval != 1 {
+		t.Errorf("tenant A's Totals.AwaitingApproval = %d, want 1 (its own approved run must exclude exactly one of its two validated invoices)", gotA.Totals.AwaitingApproval)
+	}
+
+	gotB, err := store.Rollup(cB)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant B): %v", err)
+	}
+	if gotB.Totals.Counts.Validated != 2 {
+		t.Fatalf("tenant B's Totals.Counts.Validated = %d, want 2 -- the zero below would prove nothing", gotB.Totals.Counts.Validated)
+	}
+	if gotB.Totals.AwaitingApproval != 0 {
+		t.Errorf("tenant B's Totals.AwaitingApproval = %d, want 0 -- B publishes no policy, so a non-zero means tenant A's active version reached B through the uncorrelated EXISTS", gotB.Totals.AwaitingApproval)
+	}
+	for _, c := range gotB.Clients {
+		if c.EntityID == entityA {
+			t.Errorf("tenant B's Clients contains A's entity %s", entityA)
+		}
+		if c.AwaitingApproval != 0 {
+			t.Errorf("tenant B's client row %s carries AwaitingApproval = %d, want 0", c.EntityID, c.AwaitingApproval)
+		}
+	}
+}

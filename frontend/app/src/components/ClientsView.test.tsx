@@ -23,9 +23,11 @@ function isRollupUrl(url: string): boolean {
   return new URL(url).pathname.endsWith('/rollup')
 }
 
-// Annotated `: Rollup` like ReportsView.test.tsx's sibling fixture: it is only ever fed to
-// a `Promise<unknown>`, so without the annotation a new required RollupBucket field is
-// omitted here silently while every annotated fixture fails typecheck.
+// Annotated `: Rollup` like ReportsView.test.tsx's sibling fixture, which is what makes an
+// omitted RollupBucket field a typecheck error rather than a silent gap. The annotation is
+// INERT here today: the sibling ClientsView.test.ts shadows this file out of tsc's program
+// (TypeScript keeps only the highest-priority extension per basename, .ts over .tsx), so
+// nothing typechecks it. Keep the fixture exhaustive by hand until that name collision goes.
 const ZERO_ROLLUP: Rollup = {
   totals: {
     counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },

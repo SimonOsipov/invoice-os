@@ -1223,3 +1223,207 @@ func TestStoreRollup_EveryNumericBucketFieldIsTheSumOfClients(t *testing.T) {
 		t.Errorf("the fixture summed NeedsAttention to 0 across every client, so the sum property above is vacuous for it")
 	}
 }
+
+// --- QA adversarial coverage (Mode B) --------------------------------------
+
+// TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare anchors on the FIRST
+// ") AS needs_attention", so a second one added below it leaves that guard
+// pinning an arm nobody meant it to pin.
+func TestStoreRollup_NeedsAttentionSQLMarkerIsUnique(t *testing.T) {
+	src, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read store.go: %v", err)
+	}
+	if n := bytes.Count(src, []byte(") AS needs_attention")); n != 1 {
+		t.Errorf("store.go holds %d occurrences of `) AS needs_attention`, want exactly 1", n)
+	}
+}
+
+// normalizeSQL collapses whitespace runs so two copies of one fragment compare
+// on their clauses rather than their indentation.
+func normalizeSQL(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// sliceBetween returns the text between open and the first close after it. ok is
+// false when either marker is missing -- an absent marker must fail the caller,
+// never yield "" and compare equal to another "".
+func sliceBetween(src, open, closing string) (string, bool) {
+	i := strings.Index(src, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := src[i+len(open):]
+	j := strings.Index(rest, closing)
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// The rollup arm and the list filter are two hand-maintained copies of one
+// predicate; docs/approvals.md's "the badge and the filtered list can never
+// disagree" is only true while they stay textually identical modulo the alias.
+// Nothing else compares them at the source level.
+func TestStoreRollup_AwaitingApprovalSQLMatchesTheInvoiceListFilter(t *testing.T) {
+	dashSrc, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read store.go: %v", err)
+	}
+	invSrc, err := os.ReadFile("../invoice/store.go")
+	if err != nil {
+		t.Fatalf("read ../invoice/store.go: %v", err)
+	}
+
+	end := bytes.Index(dashSrc, []byte(") AS awaiting_approval"))
+	if end < 0 {
+		t.Fatal(`store.go: no ") AS awaiting_approval" marker -- has the arm been renamed?`)
+	}
+	start := bytes.LastIndex(dashSrc[:end], []byte("count(*) FILTER ("))
+	if start < 0 {
+		t.Fatal(`store.go: no "count(*) FILTER (" before ") AS awaiting_approval"`)
+	}
+	dashArm := normalizeSQL(string(dashSrc[start+len("count(*) FILTER (") : end]))
+	dashArm = strings.TrimPrefix(dashArm, "WHERE ")
+	// The alias is the ONLY licensed difference (AC-4): the rollup reads the
+	// flagged CTE as i, the list filter reads invoices unaliased.
+	dashArm = strings.ReplaceAll(dashArm, "i.status", "status")
+	dashArm = strings.ReplaceAll(dashArm, "i.id", "invoices.id")
+
+	listArm, ok := sliceBetween(string(invSrc), "(status = 'validated'", "'approved'))")
+	if !ok {
+		t.Fatal("../invoice/store.go: no awaiting_approval filter fragment found")
+	}
+	listArm = normalizeSQL("status = 'validated'" + listArm + "'approved')")
+
+	for _, clause := range []string{
+		"status = 'validated'",
+		"EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)",
+		"NOT EXISTS (SELECT 1 FROM approval_runs r",
+	} {
+		if !strings.Contains(dashArm, clause) {
+			t.Fatalf("the rollup arm lost the %q clause, so this comparison proves nothing:\n%s", clause, dashArm)
+		}
+		if !strings.Contains(listArm, clause) {
+			t.Fatalf("the list filter lost the %q clause, so this comparison proves nothing:\n%s", clause, listArm)
+		}
+	}
+	if dashArm != listArm {
+		t.Errorf("the two copies of the awaiting_approval predicate have drifted.\nrollup (alias normalized): %s\nlist filter:               %s", dashArm, listArm)
+	}
+}
+
+// EXISTS (an approved run), not the latest run's state: an invoice approved once
+// stays out of the count whatever closed after it, and one that never reached
+// approved stays in. Mirrors internal/invoice's
+// TestStoreList_AwaitingApprovalApprovedRunSurvivesALaterRun on the rollup side.
+func TestStoreRollup_AwaitingApprovalReadsRunHistoryNotTheLatestRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-QA-history tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-QA-history entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	seq := func(number string, states ...string) string {
+		id := seedInvoiceAtStatus(t, super, tenantID, entityID, number, "validated")
+		for _, state := range states {
+			seedApprovalRun(t, super, tenantID, id, versionID, state)
+		}
+		return id
+	}
+	approvedThenCancelled := seq("APPR-11-QA-h-ac", "approved", "cancelled")
+	cancelledThenApproved := seq("APPR-11-QA-h-ca", "cancelled", "approved")
+	approvedThenRejected := seq("APPR-11-QA-h-ar", "approved", "rejected")
+	seq("APPR-11-QA-h-rc", "rejected", "cancelled") // never approved -- counts
+	seq("APPR-11-QA-h-c", "cancelled")              // never approved -- counts
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.Counts.Validated != 5 {
+		t.Fatalf("Totals.Counts.Validated = %d, want 5 -- the fixture is wrong, so the count below proves nothing", got.Totals.Counts.Validated)
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (only the two invoices with no approved run anywhere in their history; %s, %s and %s each hold one)",
+			got.Totals.AwaitingApproval, approvedThenCancelled, cancelledThenApproved, approvedThenRejected)
+	}
+}
+
+// An active policy alone counts nothing: the predicate's first conjunct is a
+// status test, so a tenant with no validated invoice reads zero however armed.
+func TestStoreRollup_AwaitingApprovalIsZeroWithAnActivePolicyAndNoValidatedInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-QA-novalidated tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-QA-novalidated entity")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-1", "draft")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-2", "accepted")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-3", "queued")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1 -- the fixture is wrong, so the zero below proves nothing", len(got.Clients))
+	}
+	if got.Totals.AwaitingApproval != 0 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 0 (nothing is validated)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.Counts.Draft+got.Totals.Counts.Accepted+got.Totals.Counts.Queued != 3 {
+		t.Errorf("the three seeded non-validated invoices did not land: %+v", got.Totals.Counts)
+	}
+}
+
+// The two overlays partition by status -- needs_attention never reaches a
+// validated row, awaiting_approval reaches nothing else -- so neither may be
+// derived from the other. Asserted in both directions, per entity and in Totals.
+func TestStoreRollup_AwaitingApprovalAndNeedsAttentionAreIndependentOverlays(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-QA-overlay tenant")
+	awaitingOnly := seedEntity(t, super, tenantID, "APPR-11-QA-overlay awaiting")
+	attentionOnly := seedEntity(t, super, tenantID, "APPR-11-QA-overlay attention")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, awaitingOnly, "APPR-11-QA-ov-a1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, awaitingOnly, "APPR-11-QA-ov-a2", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n1", "rejected")
+	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n2", "failed")
+	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n3", "failed")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- every per-entity assertion below is vacuous otherwise", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[awaitingOnly]; row.AwaitingApproval != 2 || row.NeedsAttention != 0 {
+		t.Errorf("awaiting-only entity: AwaitingApproval = %d (want 2), NeedsAttention = %d (want 0)", row.AwaitingApproval, row.NeedsAttention)
+	}
+	if row := byEntity[attentionOnly]; row.NeedsAttention != 3 || row.AwaitingApproval != 0 {
+		t.Errorf("attention-only entity: NeedsAttention = %d (want 3), AwaitingApproval = %d (want 0)", row.NeedsAttention, row.AwaitingApproval)
+	}
+	if got.Totals.AwaitingApproval != 2 || got.Totals.NeedsAttention != 3 {
+		t.Errorf("Totals.AwaitingApproval = %d (want 2), Totals.NeedsAttention = %d (want 3) -- the two overlays must not track each other",
+			got.Totals.AwaitingApproval, got.Totals.NeedsAttention)
+	}
+}

@@ -86,7 +86,7 @@ async function goTo(page: Page, label: string): Promise<void> {
 }
 
 // navLabelSpan()/navIconSpan(): the two unclassed spans a nav button renders around its
-// glyph (Sidebar.tsx:234-236). getByText resolves to the INNERMOST element carrying that
+// glyph (Sidebar.tsx:234-235). getByText resolves to the INNERMOST element carrying that
 // exact text, so it lands on the label span even when a badge sibling makes the button's
 // own text longer; :has(svg) isolates the icon wrapper the same way, since that is the
 // only span with an <svg> descendant.
@@ -114,7 +114,7 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
 //
 // Known latent limit, shared with both existing copies and NOT introduced here: the
 // dropdown is position:absolute inside .pf-shell (height:100vh, overflow:hidden) with no
-// max-height (Sidebar.tsx:154), so once a firm tenant owns more entities than fit the
+// max-height (Sidebar.tsx:155), so once a firm tenant owns more entities than fit the
 // viewport, the option for a late-sorting name is unreachable and this click fails with
 // "outside of the viewport". Bounded today by per-PR ephemeral environments; a product fix,
 // not a test one.

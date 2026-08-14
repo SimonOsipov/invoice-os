@@ -169,7 +169,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   // --- 1. sign in, and guard the MODE before touching the nav ------------------------------
   // Without it a slow or failed persona hand-off surfaces as an opaque timeout further down
   // rather than as "the wrong workspace rendered". Stated as MODE and not tenant on purpose:
-  // Sidebar.tsx:41 hardcodes the org label in firm mode, so this string proves the FIRM branch
+  // Sidebar.tsx:42 hardcodes the org label in firm mode, so this string proves the FIRM branch
   // drew, not that /v1/me returned this tenant. The live-tenant proof is signInAs's own /v1/me
   // discriminator, which already ran.
   await signInAs(page, 'firm')

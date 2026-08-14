@@ -27,6 +27,9 @@ export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
 }) {
   const result = simulate(policy, sim)
   const approvals = result.steps.filter((s) => s.node.type === 'approval').length
+  // Gated, never unconditional: a claim about notify delivery on a path holding no notify step
+  // would be a new false statement.
+  const notified = result.steps.some((s) => s.node.type === 'notify')
 
   const summary =
     approvals === 0
@@ -53,6 +56,14 @@ export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
             {summary}
             {result.auto && ' · AUTO-APPROVED PATH'}
           </div>
+
+          {/* Above the step list, not below it: under the list it would vanish on the
+              "NO APPROVAL NEEDED" arm. Hint register, never a fourth mono verdict line. */}
+          {notified && (
+            <div data-testid="sim-notify-not-delivered" style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)', marginBottom: 12 }}>
+              This path reaches a notify step — the target and channel are recorded, but no message goes out yet.
+            </div>
+          )}
 
           {result.steps.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>

@@ -43,6 +43,11 @@ const DELEGATE_NOTE = 'Only Admins and Reviewers can be a delegate. Delegation i
 // eligibility rule, this states the disable and its cause.
 const DELEGATION_BLOCKED = 'Delegation is switched off — the server has nowhere to store it yet.'
 
+// The subject is DELIVERY, never storage: target and channel are persisted, sealed into the
+// version and materialised onto the run step as `skipped` — nothing in the repo dispatches them.
+// Copy reading "not saved" would be the false statement this story removes.
+const NOTIFY_NOT_DELIVERED = 'The target and channel are saved with the policy, but no message is sent yet.'
+
 // ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it. A
 // deliberate deviation from INVED-02, where every disabled control gets its own id
 // (InvoiceDetail.tsx:150-159) — there the causes differ per control, here one cause shuts both,
@@ -205,6 +210,10 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
           <>
             <WfSelect label="Notify" value={node.target} options={notifyOptions} onChange={(v) => patch({ target: v })} marginBottom={14} />
             <WfSelect label="Channel" value={node.channel} options={CHANNEL_OPTIONS} onChange={(v) => patch({ channel: v })} />
+            {/* Same select-then-hint pairing as DELEGATE_NOTE above: `hintStyle` supplies the gap. */}
+            <div data-testid="notify-not-delivered" style={hintStyle()}>
+              {NOTIFY_NOT_DELIVERED}
+            </div>
           </>
         )}
 

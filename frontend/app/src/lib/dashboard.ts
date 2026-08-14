@@ -58,10 +58,17 @@ export interface Metric {
 export type Metrics = Record<string, Metric>
 
 // dashboard.go Bucket — the 7-state counts plus TWO overlapping overlays, neither ever a
-// donut input: needs_attention (rejected ∪ failed ∪ drafts-with-an-error-severity-violation
-// ∪ drafts an approver sent back)
-// and awaiting_approval (validated invoices an active approval policy blocks). They
-// partition by invoice status, so neither is derivable from the other — do not merge them.
+// donut input.
+//   needs_attention, four arms: rejected ∪ failed-and-not-kept-as-is ∪ drafts holding an
+//   error-severity violation ∪ drafts whose latest approval run closed 'rejected'.
+//   awaiting_approval, three clauses: status 'validated' AND an active approval policy
+//   version exists AND the invoice has no approved run. It is the invoice list's own
+//   awaiting_approval filter predicate (internal/invoice/store.go), copied so the badge and
+//   the filtered list cannot disagree about the word.
+// The two partition by invoice status, so neither is derivable from the other — do not
+// merge them. ReportsView's 'Validation summary' reads NEITHER: it is violation-derived
+// from metrics.blocked_by_rules, because a transmission failure and an approver's "no" are
+// not validation failures.
 // Sibling of RollupClient below — kept in sync by hand, not by `extends`.
 export interface RollupBucket {
   counts: Counts

@@ -303,7 +303,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           its own button (standard zero-state pattern). The "Needs attention" toggle sits
           in the header row (not gated by async state) so it stays reachable even when the
           filtered result set is itself empty. */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: needsAttention ? 8 : 22 }}>
         <div>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             INVOICE REGISTER
@@ -334,6 +334,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           Needs attention
         </button>
       </div>
+
+      {/* The label alone doesn't say the filter now sweeps in approver send-backs. Its own
+          element, single text node — InvoicesList.test.tsx matches the sentence exactly. */}
+      {needsAttention && (
+        <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 22px', textAlign: 'right' }}>Includes invoices an approver sent back.</p>
+      )}
 
       {/* Rendered independent of both `selected.length > 0` (submit clears the
           selection, which would unmount a panel nested under that condition the instant

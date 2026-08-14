@@ -338,7 +338,7 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
     expect(text).not.toContain('not used in any policy')
   })
 
-  // The over-widening guard (WorkflowBuilder.test.tsx:102's posture), green before the gate
+  // The over-widening guard (WorkflowBuilder.test.tsx:104's posture), green before the gate
   // landed and green after: it pins that the gate does not swallow a genuinely landed-empty
   // answer. Killed by gating on `policies.length` instead of on the status.
   it('a landed-empty policy list still says the role is not used in any policy', () => {
@@ -364,7 +364,7 @@ describe('APPR-09-06 AC-1/AC-3: the delete confirmation claims usage only off a 
   })
 
   it("'idle' — no gateway configured — is the LANDED side, matching the Workflows screen", () => {
-    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:581). A gate written as
+    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:586). A gate written as
     // `surface === 'roster'` would withhold here and disagree with WorkflowsView.tsx:65-68,
     // which renders its own no-policies-yet card on that same build.
     renderModal({ mode: 'edit', role: role() }, { policies: [], policiesState: 'idle' })

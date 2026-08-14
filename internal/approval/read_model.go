@@ -417,7 +417,7 @@ func withExtra(primary string, extra int) string {
 	return primary
 }
 
-// holderName mirrors toMember's display_name ?? email ?? user_id ladder (members.ts:546).
+// holderName mirrors toMember's display_name ?? email ?? user_id ladder (members.ts:552).
 func holderName(displayName, email *string, userID string) string {
 	if displayName != nil {
 		return *displayName

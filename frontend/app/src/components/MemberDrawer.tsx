@@ -11,7 +11,7 @@
 // (1) THE PANEL IS `--bg-2`, WITH `--bg-1` BANDS — RuleDrawer has it the other way round.
 // Every control this drawer reuses was drawn for a `--bg-2` ground: `RoleCards` paints its
 // unselected cards `--bg-1` (MemberParts.tsx, and its docblock says so explicitly),
-// `WfSelect` paints its box `--bg-1` (WorkflowParts.tsx:217) and `ClientAccessPicker`'s
+// `WfSelect` paints its box `--bg-1` (WorkflowParts.tsx:235) and `ClientAccessPicker`'s
 // panel is `--bg-1` too. On RuleDrawer's `--bg-1` body all three would be ground-on-ground.
 // Fixed at the CALLER, per the architect: `RoleCards` is not edited, and the same
 // `--bg-2` card with a `--bg-1` band relationship already ships eight inches away on this
@@ -66,7 +66,7 @@ const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
  * HTML natively disables every descendant (1, unclickable and out of the tab order),
  * `pointerEvents: none` is a stronger (2) than any background swap, the sibling below is
  * (3), and `aria-describedby` on the fieldset is (4). This was the first `<fieldset>` in
- * `frontend/`, accepted over mutating `WfSelect`; WorkflowBuilder.tsx:69 now cites it back for
+ * `frontend/`, accepted over mutating `WfSelect`; WorkflowBuilder.tsx:73 now cites it back for
  * the same trade. `minInlineSize: 0` is mandatory: a fieldset defaults to `min-content` and
  * would refuse to shrink inside a 560px drawer.
  */

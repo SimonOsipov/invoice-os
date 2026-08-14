@@ -317,7 +317,7 @@ describe('APPR-09-05 AC-3: Publish is a separate verb, gated on a saved tree', (
   it('an edit that changes no content still counts as unsaved', () => {
     // The one case that separates `working !== server` from a structural compare, and the
     // reason the reference-equality idiom is pinned rather than merely preferred: `clearSteps`
-    // returns a new object unconditionally (workflows.ts:269-271), so clearing an ALREADY
+    // returns a new object unconditionally (workflows.ts:257-259), so clearing an ALREADY
     // empty tree is dirty. Conservative on purpose — the cost is one redundant Save.
     //
     // NOTE for the reader who expects the architect's stated failure mode: a JSON compare does
@@ -834,7 +834,7 @@ describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
   // rather than stylistic. The PROPERTY NAME differs per control and one shared assertion would
   // pin the wrong name on one of them: app-layer.css:224-232 forbids the `background` shorthand
   // on `.pf-select`, whose own resting style sets `backgroundColor` (WorkflowParts.tsx:235),
-  // while `WfToggle`'s resting style sets the shorthand (:303). Both are INLINE — the
+  // while `WfToggle`'s resting style sets the shorthand (:305). Both are INLINE — the
   // `.pf-toggle` class sets only a transition (platform.css:169-171). Measured in jsdom: a
   // select's `style.background` reads '' and a toggle's `style.backgroundColor` reads ''.
   it('the select paints backgroundColor, the toggle paints background, and both mute the rest', () => {
@@ -1201,7 +1201,7 @@ function nameInput(): HTMLInputElement {
 }
 
 /**
- * A `hideLabel` WfSelect carries its `aria-label` on the <label> WRAPPER (WorkflowParts.tsx:226),
+ * A `hideLabel` WfSelect carries its `aria-label` on the <label> WRAPPER (WorkflowParts.tsx:220),
  * so RTL hands back the wrapper rather than the control. Descend when that happens, or the
  * assertions below would read a fieldset ancestor and miss a `disabled` on the select itself.
  */
@@ -1441,7 +1441,7 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
   // 2px groove border, ~0.35em/0.75em padding, a 2px inline margin and `min-inline-size:
   // min-content` — the last of which would refuse to shrink inside the canvas column's
   // `minmax(360px, 1fr)`. The `display: flex` belongs to the scope row alone: `WfSelect`'s root
-  // is `inline-block` (WorkflowParts.tsx:226) and was blockified for free as a direct flex item
+  // is `inline-block` (WorkflowParts.tsx:220) and was blockified for free as a direct flex item
   // of that row; a block wrapper hands it back its line box, and the descender nudges the select
   // off centre against the `Applies` label beside it. The rendered check is owed at the deploy
   // gate. Verified statically alongside this: no `<legend>` and no anchor inside any of the

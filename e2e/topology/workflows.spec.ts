@@ -103,7 +103,7 @@ const POLICY_NAME = `APPR09 ${Date.now()}`
 const NAME_SWEEP = /^APPR09 \d+$/
 // What `ctx.createPolicy()` names the row before Save draft renames it.
 const UNSAVED_NAME = 'Untitled policy'
-// `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts:193), seeded for the firm
+// `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts:194), seeded for the firm
 // tenant as `Engagement Manager` (db/seed.dev.sql:65), so a placed step renders this.
 const PLACED_STEP = 'Engagement Manager must approve'
 const PUBLISH_DIRTY_REASON = 'Save your changes first — Publish seals the last saved draft.'

@@ -278,7 +278,7 @@ describe('APPR-09-06 AC-1/AC-3: a role card claims policy usage only off a lande
   })
 
   it("'idle' — no gateway configured — is the LANDED side, matching the Workflows screen", () => {
-    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:581), which WorkflowsView.tsx:65-68
+    // `membersSurface` folds 'idle' into 'empty' (lib/members.ts:586), which WorkflowsView.tsx:65-68
     // relies on to render its own no-policies-yet card on that build. A gate written as
     // `surface === 'roster'` would disagree with the Workflows screen about the same fetch.
     render(<Harness roles={[role()]} rolesState="ready" membersState="ready" policies={[]} policiesState="idle" />)

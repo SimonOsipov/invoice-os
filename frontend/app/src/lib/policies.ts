@@ -12,7 +12,7 @@ import type { BranchNode, CondOp, Policy, PolicyStatus, Sla, WfNode } from './wo
 //
 // One deliberate difference from that mirror: `kind` and `status` are `string`, not its
 // narrowed unions. A value the server states is carried verbatim and cast at the
-// projection, never defaulted (the members.ts:508,551 precedent).
+// projection, never defaulted (the members.ts:513,556 precedent).
 
 export type PolicyStepWire = {
   /** Server-minted uuid, re-minted on EVERY PUT draft — never assert a value across a save. */

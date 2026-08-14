@@ -1,0 +1,878 @@
+// Stage 2.5 specs for internal/demopolicy, written before the seeder exists.
+// demopolicy.go is a signatures-only stub whose Seed writes nothing, so every
+// DB-backed spec below is red on its own target assertion.
+//
+// Gated on DATABASE_URL + DATABASE_SUPERUSER_URL — the two DSNs the package
+// reads. A SKIP fails the CI step (scripts/ci/rls-test-gate.sh), so a DSN gap
+// is loud rather than an `ok`.
+//
+//	Run: DATABASE_URL="postgres://invoice_app:app@localhost:5433/invoice_os?sslmode=disable" \
+//	     DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5433/invoice_os?sslmode=disable" \
+//	     go test -p 1 -count=1 ./internal/demopolicy/...
+package demopolicy
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	dbsql "github.com/SimonOsipov/invoice-os/db"
+	"github.com/SimonOsipov/invoice-os/internal/approval"
+	"github.com/SimonOsipov/invoice-os/internal/dashboard"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+)
+
+const (
+	inhouseDemoTenantID = "22222222-2222-2222-2222-222222222222"
+	firmDemoTenantID    = "11111111-1111-1111-1111-111111111111"
+	devTenantAID        = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	devTenantBID        = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	// The seat the approval step must name. Hard-coded, never derived:
+	// approval.newRoleKey slugs to HYPHENS while db/seed.dev.sql writes
+	// underscores, and workflow_role_key has no FK, so a wrong key writes
+	// cleanly and blocks silently.
+	seededRoleKey = "fin_dir"
+)
+
+// The two names e2e/topology/roles.spec.ts's in-house sweep deletes
+// (POLICY_NAME_SWEEP / UNSAVED_POLICY_NAME, :746-748). DeletePolicy deactivates
+// the version in the same transaction, so a collision drops awaiting_approval to
+// 0 mid-run with a green sweep and no error.
+var (
+	policyNameSweep   = regexp.MustCompile(`^E2E policy \d+$`)
+	unsavedPolicyName = "Untitled policy"
+)
+
+// backlogTotals are the in-house demo tenant's four validated totals, measured
+// against localhost:5433 (DEMO-2026-9001/9003/9002/8003). Three above 100,000,
+// one below: awaiting_approval 3, counts.validated 4.
+var backlogTotals = []string{"258000.00", "210700.00", "180600.00", "94600.00"}
+
+// --- harness -----------------------------------------------------------------
+
+func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
+	t.Helper()
+	appURL := os.Getenv("DATABASE_URL")
+	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
+	if appURL == "" || superURL == "" {
+		t.Skip("demopolicy db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL")
+	}
+	ctx := context.Background()
+
+	s, err := pgxpool.New(ctx, superURL)
+	if err != nil {
+		t.Fatalf("connect superuser: %v", err)
+	}
+	t.Cleanup(s.Close)
+	if err := s.Ping(ctx); err != nil {
+		t.Fatalf("ping superuser (is the DB up and bootstrapped?): %v", err)
+	}
+
+	a, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatalf("connect app: %v", err)
+	}
+	t.Cleanup(a.Close)
+
+	return s, a
+}
+
+// fixture is a throwaway tenant shaped like the in-house demo tenant: one
+// entity, a live fin_dir seat with an ACTIVE holder, plus whatever validated
+// invoices the caller adds. Driving seedTenant against one of these is the
+// demodocs precedent (store_test.go:5-7): Seed's allowlist is hard-coded, so a
+// throwaway tenant is unreachable through it — which is the point.
+type fixture struct {
+	t        *testing.T
+	super    *pgxpool.Pool
+	app      *pgxpool.Pool
+	tenantID string
+	entityID string
+	memberID string
+	seats    int
+}
+
+func newFixture(t *testing.T, super, app *pgxpool.Pool, label string) *fixture {
+	t.Helper()
+	ctx := context.Background()
+	f := &fixture{t: t, super: super, app: app, tenantID: uuid.NewString()}
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'in_house')`, f.tenantID, label); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	// LIFO: the approval rows must go before the tenant delete — the seal guard
+	// raises 23001 when a cascade reaches a sealed version.
+	t.Cleanup(func() {
+		if _, err := super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, f.tenantID); err != nil {
+			t.Errorf("teardown tenant %s: %v", f.tenantID, err)
+		}
+	})
+	t.Cleanup(func() { teardownApprovalRows(t, super, f.tenantID) })
+
+	if err := super.QueryRow(ctx,
+		`INSERT INTO business_entities (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		f.tenantID, label+" supplier").Scan(&f.entityID); err != nil {
+		t.Fatalf("seed business_entities: %v", err)
+	}
+
+	// Two ACTIVE holders, matching Honeywell's measured fin_dir staffing.
+	f.memberID = f.addSeat(seededRoleKey, "Finance Director", "active")
+	f.addHolder(seededRoleKey, "active")
+	return f
+}
+
+// addSeat inserts one workflow_roles row and, unless memberStatus is "", one
+// holder at that membership status. Returns the holder's user id.
+func (f *fixture) addSeat(key, title, memberStatus string) string {
+	f.t.Helper()
+	if _, err := f.super.Exec(context.Background(),
+		`INSERT INTO workflow_roles (tenant_id, key, title) VALUES ($1, $2, $3)`,
+		f.tenantID, key, title); err != nil {
+		f.t.Fatalf("seed workflow_roles %q: %v", key, err)
+	}
+	if memberStatus == "" {
+		return ""
+	}
+	return f.addHolder(key, memberStatus)
+}
+
+func (f *fixture) addHolder(key, memberStatus string) string {
+	f.t.Helper()
+	ctx := context.Background()
+	userID := uuid.NewString()
+	if _, err := f.super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', $3)`,
+		f.tenantID, userID, memberStatus); err != nil {
+		f.t.Fatalf("seed membership (%s): %v", memberStatus, err)
+	}
+	if _, err := f.super.Exec(ctx,
+		`INSERT INTO workflow_role_members (tenant_id, workflow_role_id, user_id, ord)
+		 SELECT r.tenant_id, r.id, $2, $3 FROM workflow_roles r
+		  WHERE r.tenant_id = $1 AND r.key = $4 AND r.deleted_at IS NULL`,
+		f.tenantID, userID, f.seats, key); err != nil {
+		f.t.Fatalf("seed workflow_role_members (%s): %v", key, err)
+	}
+	f.seats++
+	return userID
+}
+
+// addValidatedInvoice inserts one validated invoice. total nil writes NULL —
+// what the import wizard's unmapped-column passthrough actually stores.
+func (f *fixture) addValidatedInvoice(number string, total *string) string {
+	f.t.Helper()
+	var id string
+	if err := f.super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status, issue_date,
+		                       buyer_tin, buyer_name, currency, subtotal, vat, total)
+		 VALUES ($1, $2, $3, 'validated', '2026-06-02',
+		         '20011122-0001', 'Zenith Freight', 'NGN', 1000.00, 75.00, $4::numeric)
+		 RETURNING id`,
+		f.tenantID, f.entityID, number, total).Scan(&id); err != nil {
+		f.t.Fatalf("seed validated invoice %s: %v", number, err)
+	}
+	return id
+}
+
+// addBacklog reproduces the in-house tenant's measured validated set, in order.
+func (f *fixture) addBacklog() []string {
+	f.t.Helper()
+	ids := make([]string, 0, len(backlogTotals))
+	for i := range backlogTotals {
+		ids = append(ids, f.addValidatedInvoice("DEMO-T-BACKLOG-"+string(rune('A'+i)), &backlogTotals[i]))
+	}
+	return ids
+}
+
+// teardownApprovalRows removes a tenant's approval rows bottom-up under
+// session_replication_role = 'replica': approval_policy_versions_seal_guard
+// raises 23001 on deleting a SEALED version, so a plain DELETE — and the tenant
+// cascade behind it — fails. Idiom from
+// internal/approval/policy_immutability_test.go's teardownSealedApprovalFixture.
+func teardownApprovalRows(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Errorf("teardown approval rows for %s: begin: %v", tenantID, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Errorf("teardown approval rows for %s: set session_replication_role: %v", tenantID, err)
+		return
+	}
+	for _, table := range []string{
+		"approval_decisions", "approval_run_steps", "approval_runs",
+		"approval_policy_steps", "approval_policy_versions", "approval_policies",
+	} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
+			t.Errorf("teardown approval rows for %s: delete %s: %v", tenantID, table, err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("teardown approval rows for %s: commit: %v", tenantID, err)
+	}
+}
+
+// wipeRuns removes the run ledger and leaves the three policy tables standing —
+// what db.Reset does (internal/platform/db/reset.go's resetTables and the
+// exclusion note above it), scoped to one tenant so the shared dev DB is not
+// truncated out from under a sibling suite. None of the three carries a trigger,
+// so no replica override is needed.
+func wipeRuns(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	for _, table := range []string{"approval_decisions", "approval_run_steps", "approval_runs"} {
+		if _, err := super.Exec(context.Background(),
+			`DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
+			t.Fatalf("wipe %s for %s: %v", table, tenantID, err)
+		}
+	}
+}
+
+// --- read-backs (superuser: RLS-bypassing, so a cross-tenant zero is real) ----
+
+func countRows(t *testing.T, super *pgxpool.Pool, table, tenantID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, tenantID).Scan(&n); err != nil {
+		t.Fatalf("count %s for %s: %v", table, tenantID, err)
+	}
+	return n
+}
+
+func validatedCount(t *testing.T, super *pgxpool.Pool, tenantID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND status = 'validated'`, tenantID).Scan(&n); err != nil {
+		t.Fatalf("count validated invoices for %s: %v", tenantID, err)
+	}
+	return n
+}
+
+type versionRow struct {
+	ID          string
+	Sealed      bool
+	IsActive    bool
+	PublishedBy *string
+}
+
+func versionsOf(t *testing.T, super *pgxpool.Pool, tenantID string) []versionRow {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT id::text, sealed, is_active, published_by FROM approval_policy_versions
+		  WHERE tenant_id = $1 ORDER BY version`, tenantID)
+	if err != nil {
+		t.Fatalf("read approval_policy_versions for %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+	var out []versionRow
+	for rows.Next() {
+		var v versionRow
+		if err := rows.Scan(&v.ID, &v.Sealed, &v.IsActive, &v.PublishedBy); err != nil {
+			t.Fatalf("scan approval_policy_versions: %v", err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read approval_policy_versions: %v", err)
+	}
+	return out
+}
+
+func policyNames(t *testing.T, super *pgxpool.Pool, tenantID string) []string {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT name FROM approval_policies WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY name`, tenantID)
+	if err != nil {
+		t.Fatalf("read approval_policies for %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan approval_policies: %v", err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read approval_policies: %v", err)
+	}
+	return out
+}
+
+// approvalStepRoleKeys returns the workflow_role_key of every kind='approval'
+// step the tenant's policy carries. A NULL key stays nil rather than "": the
+// column is nullable text with no FK, and the two are different defects.
+func approvalStepRoleKeys(t *testing.T, super *pgxpool.Pool, tenantID string) []*string {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT workflow_role_key FROM approval_policy_steps
+		  WHERE tenant_id = $1 AND kind = 'approval' ORDER BY ord`, tenantID)
+	if err != nil {
+		t.Fatalf("read approval_policy_steps for %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+	var out []*string
+	for rows.Next() {
+		var key *string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatalf("scan approval_policy_steps: %v", err)
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read approval_policy_steps: %v", err)
+	}
+	return out
+}
+
+// runStates counts the tenant's runs by state.
+func runStates(t *testing.T, super *pgxpool.Pool, tenantID string) map[string]int {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT state, count(*) FROM approval_runs WHERE tenant_id = $1 GROUP BY state`, tenantID)
+	if err != nil {
+		t.Fatalf("read approval_runs for %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			t.Fatalf("scan approval_runs: %v", err)
+		}
+		out[state] = n
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read approval_runs: %v", err)
+	}
+	return out
+}
+
+// runOf returns one invoice's newest run — RowFactsTx's own DISTINCT ON shape —
+// plus how many runs it carries at all.
+func runOf(t *testing.T, super *pgxpool.Pool, invoiceID string) (state string, closedBy *string, runs int) {
+	t.Helper()
+	ctx := context.Background()
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_runs WHERE invoice_id = $1`, invoiceID).Scan(&runs); err != nil {
+		t.Fatalf("count runs of %s: %v", invoiceID, err)
+	}
+	if runs == 0 {
+		return "", nil, 0
+	}
+	if err := super.QueryRow(ctx,
+		`SELECT state, closed_by FROM approval_runs WHERE invoice_id = $1
+		  ORDER BY opened_at DESC LIMIT 1`, invoiceID).Scan(&state, &closedBy); err != nil {
+		t.Fatalf("read newest run of %s: %v", invoiceID, err)
+	}
+	return state, closedBy, runs
+}
+
+// activeHolders is AC-5's resolution query: how many LIVE workflow_roles rows
+// carry the key, and how many of their holders are ACTIVE members. The
+// memberships join is the whole point — a member-row count passes a seat whose
+// only holder is suspended, producing a policy nobody can ever satisfy.
+func activeHolders(t *testing.T, super *pgxpool.Pool, tenantID, roleKey string) (roles, active int) {
+	t.Helper()
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(DISTINCT r.id),
+		        count(*) FILTER (WHERE ms.status = 'active')
+		   FROM workflow_roles r
+		   LEFT JOIN workflow_role_members m
+		          ON m.tenant_id = r.tenant_id AND m.workflow_role_id = r.id
+		   LEFT JOIN memberships ms
+		          ON ms.tenant_id = m.tenant_id AND ms.user_id = m.user_id
+		  WHERE r.tenant_id = $1 AND r.key = $2 AND r.deleted_at IS NULL`,
+		tenantID, roleKey).Scan(&roles, &active); err != nil {
+		t.Fatalf("resolve %q for %s: %v", roleKey, tenantID, err)
+	}
+	return roles, active
+}
+
+// rollupFor reads the dashboard rollup as a member of tenantID — the same
+// Store.Rollup that GET /api/dashboard/v1/rollup serves the badge from.
+func rollupFor(t *testing.T, app *pgxpool.Pool, tenantID, subject string) dashboard.Rollup {
+	t.Helper()
+	ctx := auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+	r, err := dashboard.NewStore(app).Rollup(ctx)
+	if err != nil {
+		t.Fatalf("dashboard Rollup for %s: %v", tenantID, err)
+	}
+	return r
+}
+
+// rowFactsOf reads the list-row approval standing the wire serves, through the
+// real read path rather than a hand-rolled query.
+func rowFactsOf(t *testing.T, app *pgxpool.Pool, tenantID string, ids []string) map[string]approval.RowFacts {
+	t.Helper()
+	var facts map[string]approval.RowFacts
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		facts, err = approval.RowFactsTx(context.Background(), tx, ids)
+		return err
+	}); err != nil {
+		t.Fatalf("RowFactsTx for %s: %v", tenantID, err)
+	}
+	return facts
+}
+
+// --- specs -------------------------------------------------------------------
+
+// AC-1/AC-2. The allowlist is the safety boundary, not ENVIRONMENT, and it is
+// asserted by VALUE so widening the blast radius cannot be a silent diff.
+func TestSeed_AllowlistExcludesTheFirmTenant(t *testing.T) {
+	if !slices.Contains(DemoTenants, inhouseDemoTenantID) {
+		t.Errorf("DemoTenants = %v, want it to contain the in-house demo tenant %s", DemoTenants, inhouseDemoTenantID)
+	}
+	if len(DemoTenants) != 1 {
+		t.Errorf("DemoTenants has %d entries (%v), want exactly 1", len(DemoTenants), DemoTenants)
+	}
+	for _, forbidden := range []string{firmDemoTenantID, devTenantAID, devTenantBID} {
+		if slices.Contains(DemoTenants, forbidden) {
+			t.Errorf("DemoTenants contains %s; only the in-house demo tenant may carry a seeded policy", forbidden)
+		}
+	}
+}
+
+// controlNeedle is what proves the scan below read the package's PRODUCTION
+// source rather than nothing at all. It is checked against the non-test files
+// only: this file names it in half a dozen messages, so scanning itself would
+// satisfy the control no matter what demopolicy.go holds.
+const controlNeedle = "DemoTenants"
+
+// AC-6, and a POSITIVE CONTROL: green before the implementation lands, and it
+// must stay green. The assertion ORDER is load-bearing — a glob that stops
+// matching, or a package that loses DemoTenants, fails loudly here instead of
+// reading as a clean scan of nothing.
+func TestSeed_DoesNotReadApprovalsEnforced(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob *.go: %v", err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("scanned %d .go file(s) in internal/demopolicy, want at least 2 — the absence assertion below would prove nothing", len(files))
+	}
+
+	var all, production strings.Builder
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		all.Write(b)
+		if !strings.HasSuffix(f, "_test.go") {
+			production.Write(b)
+		}
+	}
+	if production.Len() == 0 {
+		t.Fatalf("no non-test .go file among %v — the scan would only be reading its own suite", files)
+	}
+	if !strings.Contains(production.String(), controlNeedle) {
+		t.Fatalf("the control needle %s is absent from the package's production source — this scan cannot tell a clean package from a broken read", controlNeedle)
+	}
+
+	// Concatenated so the scan cannot match this file's own literal. Checked
+	// over every file, tests included: nothing here may touch the flag.
+	flag := "APPROVALS" + "_ENFORCED"
+	if strings.Contains(all.String(), flag) {
+		t.Errorf("internal/demopolicy mentions %s; the flag is APPR-14's and this package must neither read nor write it", flag)
+	}
+}
+
+// AC-4/AC-5. Fails on the slug mismatch AND on the unstaffed seat: the fixture
+// carries all three of Honeywell's measured shapes, so an assertion that passed
+// for cfo or fin_mgr would be caught by the preconditions first.
+func TestSeed_ResolvesTheWorkflowRoleKeyToAStaffedSeat(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy staffed seat")
+	f.addSeat("cfo", "Chief Financial Officer", "suspended")
+	f.addSeat("fin_mgr", "Finance Manager", "")
+	f.addValidatedInvoice("DEMO-T-STAFF-1", &backlogTotals[0])
+
+	for _, pre := range []struct {
+		key                string
+		wantRoles, wantAct int
+		why                string
+	}{
+		{seededRoleKey, 1, 2, "the staffed seat"},
+		{"cfo", 1, 0, "one holder, suspended — a member-row count would pass this"},
+		{"fin_mgr", 1, 0, "the unstaffed seat"},
+		{"fin-dir", 0, 0, "the hyphen slug newRoleKey mints must resolve to nothing"},
+	} {
+		roles, active := activeHolders(t, super, f.tenantID, pre.key)
+		if roles != pre.wantRoles || active != pre.wantAct {
+			t.Fatalf("fixture %q = %d role(s)/%d active holder(s), want %d/%d (%s)",
+				pre.key, roles, active, pre.wantRoles, pre.wantAct, pre.why)
+		}
+	}
+
+	if _, err := seedTenant(context.Background(), app, f.tenantID); err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+
+	keys := approvalStepRoleKeys(t, super, f.tenantID)
+	if len(keys) != 1 {
+		t.Fatalf("the seeded version carries %d approval step(s), want exactly 1", len(keys))
+	}
+	if keys[0] == nil {
+		t.Fatal("the approval step's workflow_role_key is NULL; the column has no FK, so it writes cleanly and blocks silently")
+	}
+	roles, active := activeHolders(t, super, f.tenantID, *keys[0])
+	if roles == 0 {
+		t.Errorf("workflow_role_key %q resolves to no live workflow_roles row", *keys[0])
+	}
+	if active == 0 {
+		t.Errorf("workflow_role_key %q has no ACTIVE holder — published and armed, every step of it blocks, with no error anywhere", *keys[0])
+	}
+}
+
+// D-34. Both sides of the threshold, against the real materialise/ArmTx path.
+func TestSeed_AboveThresholdInvoicesGetAnOpenRunAndBelowGetApproved(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy threshold")
+	above := f.addValidatedInvoice("DEMO-T-THR-ABOVE", &backlogTotals[2]) // 180,600
+	below := f.addValidatedInvoice("DEMO-T-THR-BELOW", &backlogTotals[3]) // 94,600
+
+	if _, err := seedTenant(context.Background(), app, f.tenantID); err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+
+	state, closedBy, runs := runOf(t, super, above)
+	if runs != 1 {
+		t.Errorf("the 180,600 invoice carries %d run(s), want 1", runs)
+	} else {
+		if state != "open" {
+			t.Errorf("the 180,600 invoice's run is %q, want open (the then-lane approval)", state)
+		}
+		if closedBy != nil {
+			t.Errorf("the open run names closed_by %q, want NULL", *closedBy)
+		}
+	}
+
+	state, closedBy, runs = runOf(t, super, below)
+	if runs != 1 {
+		t.Errorf("the 94,600 invoice carries %d run(s), want 1", runs)
+	} else {
+		if state != "approved" {
+			t.Errorf("the 94,600 invoice's run is %q, want approved (the else-lane autoapprove)", state)
+		}
+		if closedBy == nil || *closedBy != "system" {
+			t.Errorf("the approved run names closed_by %v, want \"system\"", closedBy)
+		}
+	}
+}
+
+// AC-11's named tripwire, re-founded on the shape the import actually produces:
+// the wizard maps only Invoice No, so total lands NULL and evalCondition folds
+// it to zero. The live consumer is e2e/topology/persona-surfaces.spec.ts:305-310,
+// which validates two in-house invoices at total 1075 on every gate run.
+func TestSeed_InhouseCanFileFixtureStaysOnTheAutoapproveLane(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy autoapprove lane")
+
+	small := "107.50"
+	gate := "1075.00"
+	lanes := []struct{ label, id string }{
+		{"a NULL total (what the import wizard stores)", f.addValidatedInvoice("DEMO-T-LANE-NULL", nil)},
+		{"total 1075 (persona-surfaces.spec.ts's createValidatedInvoice)", f.addValidatedInvoice("DEMO-T-LANE-GATE", &gate)},
+		{"total 107.50", f.addValidatedInvoice("DEMO-T-LANE-SMALL", &small)},
+	}
+	// Control: with no above-threshold row, a seeder carrying no condition at
+	// all — everything autoapproves — would satisfy the loop below.
+	control := f.addValidatedInvoice("DEMO-T-LANE-ABOVE", &backlogTotals[0])
+
+	if _, err := seedTenant(context.Background(), app, f.tenantID); err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+
+	for _, lane := range lanes {
+		state, _, runs := runOf(t, super, lane.id)
+		if runs != 1 {
+			t.Errorf("%s carries %d run(s), want 1", lane.label, runs)
+			continue
+		}
+		if state != "approved" {
+			t.Errorf("%s closed %q, want approved — lowering the 100,000 threshold breaks [inhouse-can-file] on the deploy gate with nothing linking cause to effect", lane.label, state)
+		}
+	}
+	if state, _, _ := runOf(t, super, control); state != "open" {
+		t.Errorf("the above-threshold control closed %q, want open — this test cannot tell an else-lane autoapprove from a policy with no condition", state)
+	}
+}
+
+// AC-3's oracle. The name is already forward-referenced by
+// e2e/topology/persona-surfaces.spec.ts:322-329 — do not rename it.
+func TestSeed_AwaitingApprovalIsNonZeroAndBelowValidated(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy rollup oracle")
+	f.addBacklog()
+
+	if _, err := seedTenant(context.Background(), app, f.tenantID); err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+
+	r := rollupFor(t, app, f.tenantID, f.memberID)
+	if got := r.Totals.AwaitingApproval; got != 3 {
+		t.Errorf("awaiting_approval = %d, want 3", got)
+	}
+	if got := r.Totals.Counts.Validated; got != 4 {
+		t.Errorf("counts.validated = %d, want 4", got)
+	}
+	// The two properties persona-surfaces.spec.ts asserts on the live build,
+	// restated so a regression names the surface it breaks.
+	if r.Totals.AwaitingApproval == 0 {
+		t.Error("awaiting_approval is 0, so the Approvals badge never renders and the gate's first guard goes red")
+	}
+	if r.Totals.AwaitingApproval == r.Totals.Counts.Validated {
+		t.Error("awaiting_approval equals counts.validated, so the topology oracle cannot tell the two fields apart")
+	}
+}
+
+// D-34. The Go-side mirror of isRowSelectable (frontend/app/src/lib/invoices.ts:1170-1172),
+// so a broken journey fails in `go test` and not first on the deploy gate.
+func TestSeed_SelectableRowsSurviveArming(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy selectable rows")
+	ids := f.addBacklog()
+
+	if _, err := seedTenant(context.Background(), app, f.tenantID); err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+
+	facts := rowFactsOf(t, app, f.tenantID, ids)
+	below := 0
+	for i, id := range ids {
+		fact, ok := facts[id]
+		if !ok {
+			t.Errorf("the invoice at %s has no approval facts; the wire sends approval:null and isRowSelectable fails OPEN", backlogTotals[i])
+			continue
+		}
+		// backlogTotals[3] is the only entry at or below 100,000.
+		if i == len(backlogTotals)-1 {
+			below++
+			if fact.RunState == "open" {
+				t.Errorf("the invoice at %s reports run_state=open, so isRowSelectable drops it from the batch", backlogTotals[i])
+			}
+			continue
+		}
+		if fact.RunState != "open" {
+			t.Errorf("the invoice at %s reports run_state=%q, want open — this mirror cannot discriminate if every row is selectable", backlogTotals[i], fact.RunState)
+		}
+	}
+	if below == 0 {
+		t.Fatal("no at-or-below-threshold invoice in the fixture, so the selectability loop asserted nothing")
+	}
+}
+
+// AC-7. A second boot must write nothing and raise nothing: a step INSERT after
+// the seal is 23001, is_active before sealed is 23514, a second active version
+// is 23505.
+func TestSeed_IsIdempotentAcrossBoots(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy idempotent")
+	f.addBacklog()
+	ctx := context.Background()
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("first seedTenant: %v", err)
+	}
+	if !first.VersionCreated {
+		t.Error("the first boot reports VersionCreated=false; nothing had published a policy yet")
+	}
+	if first.RunsArmed != len(backlogTotals) {
+		t.Errorf("the first boot armed %d run(s), want %d", first.RunsArmed, len(backlogTotals))
+	}
+
+	second, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("second seedTenant raised: %v", err)
+	}
+	if second.VersionCreated {
+		t.Error("the second boot created another version; one active version per tenant is a UNIQUE index")
+	}
+	if second.VersionID != first.VersionID {
+		t.Errorf("the second boot reports version %s, want the first boot's %s", second.VersionID, first.VersionID)
+	}
+	if second.BacklogFound != 0 || second.RunsArmed != 0 {
+		t.Errorf("the second boot found %d and armed %d, want 0 and 0 — the anti-join excludes every invoice the first sweep touched",
+			second.BacklogFound, second.RunsArmed)
+	}
+	for table, want := range map[string]int{
+		"approval_policies":        1,
+		"approval_policy_versions": 1,
+		"approval_policy_steps":    3,
+		"approval_runs":            len(backlogTotals),
+	} {
+		if got := countRows(t, super, table, f.tenantID); got != want {
+			t.Errorf("%s holds %d row(s) after two boots, want %d", table, got, want)
+		}
+	}
+}
+
+// D-34, THE tripwire — the difference between converging and insert-if-absent.
+// db.Reset truncates approval_runs and deliberately excludes the three policy
+// tables, and awaiting_approval's NOT EXISTS (approved run) is satisfied
+// VACUOUSLY by an invoice with zero runs. So an insert-if-absent seeder finds
+// its policy on deploy 2, no-ops, arms nothing, and awaiting_approval silently
+// becomes counts.validated. Its absence would ship a story whose oracle dies on
+// the second deploy.
+func TestSeed_AfterResetRearmsSeededInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy post-reset re-arm")
+	f.addBacklog()
+	ctx := context.Background()
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("first seedTenant: %v", err)
+	}
+	if got := rollupFor(t, app, f.tenantID, f.memberID).Totals.AwaitingApproval; got != 3 {
+		t.Fatalf("awaiting_approval after the first boot = %d, want 3", got)
+	}
+	if states := runStates(t, super, f.tenantID); states["open"] != 3 || states["approved"] != 1 {
+		t.Fatalf("runs after the first boot = %v, want 3 open + 1 approved", states)
+	}
+
+	wipeRuns(t, super, f.tenantID)
+
+	// Three controls. Without them the second boot's "3" could be the first
+	// boot's leftovers, or this test could stop exercising convergence at all.
+	if got := countRows(t, super, "approval_runs", f.tenantID); got != 0 {
+		t.Fatalf("the run wipe left %d run(s); the assertions below would read the first boot's work", got)
+	}
+	if got := countRows(t, super, "approval_policy_versions", f.tenantID); got != 1 {
+		t.Fatalf("the wipe removed the policy version too — db.Reset excludes the three policy tables, so this test no longer exercises the insert-if-absent branch")
+	}
+	if got := rollupFor(t, app, f.tenantID, f.memberID).Totals.AwaitingApproval; got != 4 {
+		t.Fatalf("awaiting_approval with the policy standing and no runs = %d, want 4 — the vacuous NOT EXISTS this whole test exists to catch", got)
+	}
+
+	second, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("second seedTenant: %v", err)
+	}
+	if second.VersionCreated {
+		t.Error("the second boot created a version; step 1 must no-op while step 2 still runs")
+	}
+	if second.VersionID != first.VersionID {
+		t.Errorf("the second boot reports version %s, want the first boot's %s", second.VersionID, first.VersionID)
+	}
+	if second.RunsArmed != len(backlogTotals) {
+		t.Errorf("the second boot armed %d run(s), want %d — an insert-if-absent seeder finds its policy, no-ops and arms nothing",
+			second.RunsArmed, len(backlogTotals))
+	}
+
+	r := rollupFor(t, app, f.tenantID, f.memberID)
+	if r.Totals.AwaitingApproval != 3 {
+		t.Errorf("awaiting_approval after the re-arm = %d, want 3 and NOT 4; at 4 the badge equals counts.validated and the topology oracle stops discriminating", r.Totals.AwaitingApproval)
+	}
+	if r.Totals.Counts.Validated != 4 {
+		t.Errorf("counts.validated = %d, want 4", r.Totals.Counts.Validated)
+	}
+	if states := runStates(t, super, f.tenantID); states["open"] != 3 || states["approved"] != 1 {
+		t.Errorf("runs after the re-arm = %v, want 3 open + 1 approved rebuilt", states)
+	}
+}
+
+// AC-1/AC-2, asserted by VALUE against live data: the journey-safety guarantee,
+// not a reasoned one. Touches the REAL in-house demo tenant.
+func TestSeed_ArmsOnlyTheInHouseDemoTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	// Self-seeds rather than assuming a seeded database: the CI job bootstraps
+	// and migrates but never runs db/seed.dev.sql, so the demo tenants' invoices
+	// exist only because some earlier suite seeded them. Same call and reason as
+	// internal/demodocs/store_test.go's TestRLS_DemoDocsLeavesTheSeededNoSourceInvoiceUnlinked.
+	// Last test in the file: db.Seed re-anchors created_at and re-enables every rule.
+	if err := db.Seed(ctx, os.Getenv("DATABASE_SUPERUSER_URL"), dbsql.FS); err != nil {
+		t.Fatalf("db.Seed (establish the real demo fixtures): %v", err)
+	}
+
+	// The blanket teardown below restores the baseline exactly only if the
+	// baseline is empty. Assert that rather than assume it, and register the
+	// teardown before Seed so a mid-way failure still cleans up.
+	for _, table := range []string{"approval_policies", "approval_policy_versions", "approval_policy_steps", "approval_runs"} {
+		if got := countRows(t, super, table, inhouseDemoTenantID); got != 0 {
+			t.Fatalf("the in-house demo tenant already holds %d %s row(s); this test's teardown would delete rows it did not create", got, table)
+		}
+	}
+	t.Cleanup(func() { teardownApprovalRows(t, super, inhouseDemoTenantID) })
+
+	// A throwaway tenant shaped exactly like a seedable one. Outside the
+	// allowlist it must stay untouched — the value assertion AC-2 demands.
+	outsider := newFixture(t, super, app, "demopolicy outside the allowlist")
+	outsider.addBacklog()
+	if slices.Contains(DemoTenants, outsider.tenantID) {
+		t.Fatalf("the throwaway tenant %s collided with the allowlist", outsider.tenantID)
+	}
+
+	// Control needles: "zero policy rows" proves nothing about a tenant that
+	// had nothing to arm in the first place.
+	for _, tenant := range []struct{ label, id string }{
+		{"the in-house demo tenant", inhouseDemoTenantID},
+		{"the firm demo tenant", firmDemoTenantID},
+		{"the throwaway tenant", outsider.tenantID},
+	} {
+		if n := validatedCount(t, super, tenant.id); n == 0 {
+			t.Fatalf("%s holds no validated invoice, so the assertions below would pass vacuously (has db/seed.dev.sql run?)", tenant.label)
+		}
+	}
+
+	if _, err := Seed(ctx, app, nil); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	versions := versionsOf(t, super, inhouseDemoTenantID)
+	if len(versions) != 1 {
+		t.Fatalf("the in-house tenant holds %d approval_policy_versions row(s), want exactly 1", len(versions))
+	}
+	if !versions[0].Sealed || !versions[0].IsActive {
+		t.Errorf("the seeded version is sealed=%v is_active=%v, want both true", versions[0].Sealed, versions[0].IsActive)
+	}
+	if n := countRows(t, super, "approval_runs", inhouseDemoTenantID); n == 0 {
+		t.Error("the in-house tenant got no run at all; the untouched assertions below are satisfied by a seeder that does nothing")
+	}
+
+	// The policy NAME must match neither of roles.spec.ts's in-house sweeps:
+	// DeletePolicy deactivates the governed version in the same transaction, so
+	// a collision drops awaiting_approval to 0 mid-run with nothing red.
+	for _, name := range policyNames(t, super, inhouseDemoTenantID) {
+		if name == unsavedPolicyName || policyNameSweep.MatchString(name) {
+			t.Errorf("the seeded policy is named %q, which e2e/topology/roles.spec.ts's in-house afterAll sweep deletes", name)
+		}
+	}
+
+	for _, tenant := range []struct{ label, id string }{
+		{"the FIRM demo tenant", firmDemoTenantID},
+		{"a throwaway tenant outside the allowlist", outsider.tenantID},
+	} {
+		if n := countRows(t, super, "approval_policy_versions", tenant.id); n != 0 {
+			t.Errorf("%s holds %d approval_policy_versions row(s), want 0", tenant.label, n)
+		}
+		if n := countRows(t, super, "approval_runs", tenant.id); n != 0 {
+			t.Errorf("%s holds %d approval_runs row(s), want 0", tenant.label, n)
+		}
+	}
+}

@@ -687,6 +687,32 @@ describe('APPR-10-03 AC-3: the sentinel option names the approver set', () => {
   })
 })
 
+describe('QA APPR-10-03: the picker offers the roster its own predicate admits', () => {
+  // `builderCtx` defaults to `members: []`, so every other spec renders a picker holding
+  // nothing but the sentinel. Without this one, `delegates={delegateCandidates(ctx.members)}`
+  // could be starved or re-narrowed in the component and no spec would notice.
+  // Reviewer BEFORE admin, so role order and roster order disagree.
+  const ROSTER: Member[] = [
+    { id: 'm1', name: 'Folake Adesina', initials: 'FA', email: null, role: 'preparer', status: 'active', isYou: false },
+    { id: 'm2', name: 'Musa Danjuma', initials: 'MD', email: null, role: 'reviewer', status: 'active', isYou: false },
+    { id: 'm3', name: 'Chinedu Okafor', initials: 'CO', email: null, role: 'admin', status: 'active', isYou: false },
+    { id: 'm4', name: 'Halima Yusuf', initials: 'HY', email: null, role: 'reviewer', status: 'suspended', isYou: false },
+  ]
+
+  it('names the active reviewer and the active admin in roster order, and nobody else', () => {
+    const on: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true }] }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES, members: ROSTER })} policy={on} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const picker = control(screen.getByLabelText('Delegate to')) as HTMLSelectElement
+    const named = Array.from(picker.options)
+      .filter((o) => o.value !== '')
+      .map((o) => o.textContent)
+    expect(named, 'the picker offers no named delegate at all, so the order below is vacuous').toHaveLength(2)
+    expect(named).toEqual(['Musa Danjuma', 'Chinedu Okafor'])
+  })
+})
+
 // ----------------------------------------------------------------------------
 // APPR-09-05 Stage 4 QA — adversarial coverage
 // ----------------------------------------------------------------------------

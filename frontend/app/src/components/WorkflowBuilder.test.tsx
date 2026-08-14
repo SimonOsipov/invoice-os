@@ -614,6 +614,20 @@ describe('APPR-09-05 AC-7: an off-vocabulary deadline stays visible', () => {
   })
 })
 
+/**
+ * The picker's eligibility note — the hint under the 'Delegate to' select. Located by
+ * POSITION, not by text: its wording is the thing the specs below assert.
+ */
+function delegateNote(): string {
+  const picker = control(screen.getByLabelText('Delegate to'))
+  const wrap = picker.closest('div')
+  expect(wrap, 'the delegate picker has no wrapping div, so the note cannot be located').toBeTruthy()
+  const note = wrap!.lastElementChild
+  expect(note, 'the delegate picker has no sibling hint').toBeTruthy()
+  expect(note!.contains(picker), 'the located node is the picker itself, so the assertions below are vacuous').toBe(false)
+  return note!.textContent ?? ''
+}
+
 describe('APPR-09-05 AC-9: the delegation controls say the choice is not stored', () => {
   it('the note is visible with the toggle OFF, and the toggle stays interactive', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
@@ -633,8 +647,43 @@ describe('APPR-09-05 AC-9: the delegation controls say the choice is not stored'
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
 
     expect(screen.getAllByText(DELEGATION_NOT_STORED), 'the note sits both inside and outside the delegate guard').toHaveLength(1)
-    // The picker's own eligibility note is a different sentence and must survive.
-    expect(screen.getByText('Only members with the Reviewer access role can be a delegate.')).toBeTruthy()
+    // The picker's own eligibility note is a different sentence and must survive. Asserted on
+    // its properties, not its literal: APPR-00 Q1 widened the eligible set to {admin, reviewer},
+    // and the sentence naming that set is the executor's to write.
+    const note = delegateNote()
+    expect(/Admin/.test(note), `the eligibility note does not name the Admin role: ${note}`).toBe(true)
+    expect(/Reviewer/.test(note), `the eligibility note does not name the Reviewer role: ${note}`).toBe(true)
+    expect(/not available yet/i.test(note), `the eligibility note does not say delegation is not available yet: ${note}`).toBe(true)
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APPR-10-03 — the delegate copy names the approver set {admin, reviewer}
+// ----------------------------------------------------------------------------
+
+describe('APPR-10-03 AC-3: the sentinel option names the approver set', () => {
+  it('the default option names both approver roles, and stays worded apart from the note', () => {
+    const on: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true }] }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={on} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const picker = control(screen.getByLabelText('Delegate to')) as HTMLSelectElement
+    const sentinel = Array.from(picker.options).find((o) => o.value === '')
+    expect(sentinel, "the picker lost its '' sentinel option, so the label below cannot be read").toBeTruthy()
+
+    const label = sentinel!.textContent ?? ''
+    expect(/Admin/.test(label), `the fallback option does not name the Admin role: ${label}`).toBe(true)
+    expect(/Reviewer/.test(label), `the fallback option does not name the Reviewer role: ${label}`).toBe(true)
+
+    // WorkflowInspector.tsx:36-37 — the option names the FALLBACK, the note states the
+    // ELIGIBILITY RULE. Two registers, deliberately not harmonised into one sentence.
+    const note = delegateNote()
+    expect(label, 'the option and the note collapsed into one sentence').not.toBe(note)
+    expect(note.includes(label), 'the note swallowed the option label verbatim').toBe(false)
+    expect(label.includes(note), 'the option label swallowed the note verbatim').toBe(false)
+    // Neither may become DELEGATION_NOT_STORED, or the one-node count at :635 breaks.
+    expect(label).not.toBe(DELEGATION_NOT_STORED)
+    expect(note).not.toBe(DELEGATION_NOT_STORED)
   })
 })
 

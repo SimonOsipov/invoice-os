@@ -34,8 +34,7 @@ export type RoleKey = string
 export type Sla = string
 export const WF_SLA_OPTIONS: readonly Sla[] = ['0', '24', '48', '72']
 
-export type WfDocType = 'B2B' | 'B2G' | 'B2C'
-export type CondField = 'amount' | 'docType' | 'newCustomer'
+export type CondField = 'amount'
 export type CondOp = '>' | '>=' | '<' | '<='
 export const WF_OPS: readonly CondOp[] = ['>', '>=', '<', '<=']
 
@@ -65,13 +64,8 @@ export type ConditionNode = {
   type: 'condition'
   field: CondField
   op: CondOp
-  /**
-   * One slot, three domains, switched on `field` — amount is a naira number, docType a
-   * WfDocType, newCustomer a boolean. The prototype stores all three here and every
-   * reader switches on `field`; keeping that shape means the inspector's field select
-   * needs no migration step when it flips domains.
-   */
-  value: number | WfDocType | boolean
+  /** The naira threshold — `field` has one domain, so this slot has one type. */
+  value: number
   then: BranchNode[]
   else: BranchNode[]
 }
@@ -311,14 +305,12 @@ export function opLabel(op: CondOp): string {
 
 /**
  * The human sentence a condition card shows under its title. Copy is verbatim from the
- * prototype's `wfRuleText`, including the `'Condition'` fallback for a field this build
- * does not know — unreachable through the typed API, kept so an added field degrades to
- * a label rather than to a wrong amount comparison.
+ * prototype's `wfRuleText`. `CondField` is one literal, so the `'Condition'` fallback is
+ * unreachable — kept so an added field degrades to a label rather than to a wrong amount
+ * comparison.
  */
 export function ruleText(n: ConditionNode): string {
   if (n.field === 'amount') return `Amount ${opLabel(n.op)} ${fmt(Number(n.value))}`
-  if (n.field === 'docType') return `Document type is ${String(n.value)}`
-  if (n.field === 'newCustomer') return n.value ? 'Customer is new / unverified' : 'Customer is existing'
   return 'Condition'
 }
 
@@ -330,25 +322,19 @@ export function slaText(sla: Sla): string {
 // Scenario simulator
 // ---------------------------------------------------------------------------
 
-export type SimContext = { amount: number; docType: WfDocType; newCustomer: boolean }
+export type SimContext = { amount: number }
 
-export const SIM_DEFAULT: SimContext = { amount: 750_000_000, docType: 'B2B', newCustomer: false }
+export const SIM_DEFAULT: SimContext = { amount: 750_000_000 }
 
 export function evalCondition(n: ConditionNode, ctx: SimContext): boolean {
-  if (n.field === 'amount') {
-    // `|| 0` mirrors the prototype: a half-typed amount in the inspector must not turn
-    // the whole comparison into NaN (which is false for BOTH `>` and `<=`).
-    const a = Number(ctx.amount) || 0
-    const v = Number(n.value) || 0
-    if (n.op === '>') return a > v
-    if (n.op === '>=') return a >= v
-    if (n.op === '<') return a < v
-    return a <= v
-  }
-  if (n.field === 'docType') return ctx.docType === n.value
-  if (n.field === 'newCustomer') return !!ctx.newCustomer === !!n.value
-  // Unknown field takes the else lane rather than silently comparing amounts.
-  return false
+  // `|| 0` mirrors the prototype: a half-typed amount in the inspector must not turn
+  // the whole comparison into NaN (which is false for BOTH `>` and `<=`).
+  const a = Number(ctx.amount) || 0
+  const v = Number(n.value) || 0
+  if (n.op === '>') return a > v
+  if (n.op === '>=') return a >= v
+  if (n.op === '<') return a < v
+  return a <= v
 }
 
 /**

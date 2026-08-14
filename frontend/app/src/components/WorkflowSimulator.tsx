@@ -1,5 +1,6 @@
 // Workflows — "Test a scenario". Runs the policy against one hypothetical invoice and
-// lists the steps that would actually fire.
+// lists the steps that would actually fire. The amount is the WHOLE scenario: `CondField`
+// has one domain, so a second input would take a value and change no rendered outcome.
 //
 // The scenario is scratch input, NOT policy data: it never goes near savePolicy, so
 // dialling the amount cannot demote a published policy to draft.
@@ -9,9 +10,9 @@
 // is not redundant with the row: `auto` stays set for the whole result, so the summary
 // still says the path was auto-approved even when later steps follow the ✓.
 
-import { NODE_TONE, DOC_OPTIONS, simSub, simTitle, WfAmountInput, WfSelect, WfToggle } from './WorkflowParts'
+import { NODE_TONE, simSub, simTitle, WfAmountInput } from './WorkflowParts'
 import type { Resolved, Role } from '../lib/roles'
-import { simulate, type Policy, type RoleKey, type SimContext, type WfDocType } from '../lib/workflows'
+import { simulate, type Policy, type RoleKey, type SimContext } from '../lib/workflows'
 
 export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
   policy: Policy
@@ -43,19 +44,9 @@ export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
         <div className="label" style={{ marginBottom: 6 }}>
           Invoice amount
         </div>
-        <WfAmountInput value={sim.amount} onChange={(amount) => onSim({ ...sim, amount })} ariaLabel="Scenario invoice amount in naira" marginBottom={8} />
-
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, marginBottom: 14 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <WfSelect label="Doc type" value={sim.docType} options={DOC_OPTIONS} onChange={(v) => onSim({ ...sim, docType: v as WfDocType })} height={36} />
-          </div>
-          <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <div className="label">New customer</div>
-            <div style={{ marginTop: 9 }}>
-              <WfToggle on={sim.newCustomer} onToggle={() => onSim({ ...sim, newCustomer: !sim.newCustomer })} label="Scenario is a new customer" />
-            </div>
-          </div>
-        </div>
+        {/* 14, not 8: the removed scenario row carried the clearance above the divider, and
+            the last element inherits it. */}
+        <WfAmountInput value={sim.amount} onChange={(amount) => onSim({ ...sim, amount })} ariaLabel="Scenario invoice amount in naira" marginBottom={14} />
 
         <div style={{ borderTop: '1px solid var(--line-1)', paddingTop: 13 }}>
           <div className="mono" style={{ fontSize: 10, fontWeight: 600, color: summaryColor, letterSpacing: '0.04em', marginBottom: 11 }}>

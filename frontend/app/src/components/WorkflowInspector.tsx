@@ -2,18 +2,12 @@
 //
 // Every control funnels through `onPatch(id, patch)`, which the builder turns into
 // `updateNode` on its LOCAL working tree — no control here reaches the network; Save draft
-// and Publish are the only writes. The condition panel is the only one that writes two
-// keys at once: switching `field` MUST reset `value`, because one slot holds three
-// domains (naira number / doc type / boolean) and a stale value from the previous
-// domain would make the rule sentence — and the simulator — read nonsense.
+// and Publish are the only writes.
 
 import {
   AMOUNT_PRESETS,
   CHANNEL_OPTIONS,
-  CUST_OPTIONS,
-  DOC_OPTIONS,
   FIELD_OPTIONS,
-  isDocType,
   OP_OPTIONS,
   ruleText,
   slaOptions,
@@ -24,20 +18,13 @@ import {
   type WfOption,
 } from './WorkflowParts'
 import type { Resolved } from '../lib/roles'
-import type { CondField, CondOp, NodePatch, RoleKey, Sla, WfDocType, WfNode } from '../lib/workflows'
+import type { CondField, CondOp, NodePatch, RoleKey, Sla, WfNode } from '../lib/workflows'
 
 const TITLES: Record<WfNode['type'], string> = {
   approval: 'Approval step',
   condition: 'Condition',
   notify: 'Notification',
   autoapprove: 'Auto-approve',
-}
-
-/** The value a condition takes when its field flips domain. */
-const FIELD_DEFAULT: Record<CondField, number | WfDocType | boolean> = {
-  amount: 100_000_000,
-  docType: 'B2B',
-  newCustomer: true,
 }
 
 // `delegateTo` has no "unset" value a <select> can emit — `WfSelect` is `value: string` — so
@@ -154,14 +141,15 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
               label="If this field"
               value={node.field}
               options={FIELD_OPTIONS}
-              onChange={(v) => patch({ field: v as CondField, value: FIELD_DEFAULT[v as CondField] })}
+              // One option, so this never fires — `WfSelect` requires the prop.
+              onChange={(v) => patch({ field: v as CondField })}
               marginBottom={14}
             />
 
             {node.field === 'amount' && (
               <>
                 <WfSelect label="Is" value={node.op} options={OP_OPTIONS} onChange={(v) => patch({ op: v as CondOp })} marginBottom={12} />
-                <WfAmountInput value={typeof node.value === 'number' ? node.value : 0} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
+                <WfAmountInput value={node.value} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
                 <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
                   {AMOUNT_PRESETS.map((p) => (
                     <button
@@ -176,14 +164,6 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
                   ))}
                 </div>
               </>
-            )}
-
-            {node.field === 'docType' && (
-              <WfSelect label="Equals" value={isDocType(node.value) ? node.value : 'B2B'} options={DOC_OPTIONS} onChange={(v) => patch({ value: v as WfDocType })} marginBottom={12} />
-            )}
-
-            {node.field === 'newCustomer' && (
-              <WfSelect label="Is" value={String(!!node.value)} options={CUST_OPTIONS} onChange={(v) => patch({ value: v === 'true' })} marginBottom={12} />
             )}
 
             <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 12, padding: '10px 12px' }}>

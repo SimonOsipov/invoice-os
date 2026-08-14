@@ -133,7 +133,7 @@ function approvalChip(page: Page): Locator {
 }
 
 function conditionChip(page: Page): Locator {
-  return page.locator('button.pf-upcard', { hasText: 'Branch on amount or type' })
+  return page.locator('button.pf-upcard', { hasText: 'Branch on amount' })
 }
 
 type DragKind = 'dragstart' | 'dragover' | 'drop' | 'dragend'

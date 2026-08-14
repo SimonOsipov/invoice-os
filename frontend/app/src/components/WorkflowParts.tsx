@@ -12,12 +12,11 @@
 
 import type { ReactNode } from 'react'
 
-import { DOC_TYPE_DEFS } from '../data'
 import { chevDownGlyph } from '../glyphs'
 import { Icon } from '../icons'
 import { fmtPlain } from '../lib/format'
 import { roleOf, type Role } from '../lib/roles'
-import { findNode, ruleText, slaText, WF_SLA_OPTIONS, type BranchNode, type NodeType, type Policy, type PolicyStatus, type WfDocType } from '../lib/workflows'
+import { findNode, ruleText, slaText, WF_SLA_OPTIONS, type BranchNode, type NodeType, type Policy, type PolicyStatus } from '../lib/workflows'
 
 /**
  * What the builder is currently about to place: either a fresh block from the palette
@@ -140,25 +139,13 @@ export function slaOptions(current: string): WfOption[] {
   return current && !WF_SLA_OPTIONS.includes(current) ? [{ value: current, label: `Within ${current} hours` }, ...SLA_OPTIONS] : SLA_OPTIONS
 }
 
-export const FIELD_OPTIONS: WfOption[] = [
-  { value: 'amount', label: 'Invoice amount' },
-  { value: 'docType', label: 'Document type' },
-  { value: 'newCustomer', label: 'Customer' },
-]
+export const FIELD_OPTIONS: WfOption[] = [{ value: 'amount', label: 'Invoice amount' }]
 
 export const OP_OPTIONS: WfOption[] = [
   { value: '>', label: 'greater than' },
   { value: '>=', label: 'at least' },
   { value: '<', label: 'less than' },
   { value: '<=', label: 'at most' },
-]
-
-/** The one doc-type list in the app — the same triple the create flow renders. */
-export const DOC_OPTIONS: WfOption[] = DOC_TYPE_DEFS.map(([code, kind]) => ({ value: code, label: `${code} · ${kind}` }))
-
-export const CUST_OPTIONS: WfOption[] = [
-  { value: 'true', label: 'New / unverified' },
-  { value: 'false', label: 'Existing' },
 ]
 
 /**
@@ -181,10 +168,6 @@ export const AMOUNT_PRESETS: { label: string; value: number }[] = [
   { label: '₦500M', value: 500_000_000 },
   { label: '₦1B', value: 1_000_000_000 },
 ]
-
-export function isDocType(v: unknown): v is WfDocType {
-  return v === 'B2B' || v === 'B2G' || v === 'B2C'
-}
 
 // ---------------------------------------------------------------------------
 // Controls

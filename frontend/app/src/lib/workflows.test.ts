@@ -544,10 +544,10 @@ describe('updateNode', () => {
     expect(before.nodes[0]).toMatchObject({ sla: '48' })
   })
 
-  it('patches a condition’s field and value together (the domain switch)', () => {
-    const after = updateNode(polF1(), 'f1n2', { field: 'docType', value: 'B2G' })
-    expect(after.nodes[1]).toMatchObject({ type: 'condition', field: 'docType', value: 'B2G', op: '>' })
-    // Branch contents survive a domain switch — the inspector only rewrites the test.
+  it('patches a condition’s field and value together', () => {
+    const after = updateNode(polF1(), 'f1n2', { field: 'amount', value: 900_000_000 })
+    expect(after.nodes[1]).toMatchObject({ type: 'condition', field: 'amount', value: 900_000_000, op: '>' })
+    // Branch contents survive — the inspector rewrites the test, never the lanes.
     expect(ids((after.nodes[1] as ConditionNode).then)).toEqual(['f1n3'])
   })
 
@@ -678,18 +678,6 @@ describe('derived labels (§5.1)', () => {
     expect(ruleText({ ...c, op: '<=', value: 1_000_000_000 })).toBe('Amount at most ₦1,000,000,000')
   })
 
-  it('ruleText renders the docType domain, ignoring the now-meaningless operator', () => {
-    const base = { ...(SEED_FIRM_POLICIES[0].nodes[1] as ConditionNode), field: 'docType' as const }
-    expect(ruleText({ ...base, value: 'B2G' })).toBe('Document type is B2G')
-    expect(ruleText({ ...base, value: 'B2C', op: '<=' })).toBe('Document type is B2C')
-  })
-
-  it('ruleText renders the newCustomer domain as either side of one boolean', () => {
-    const base = { ...(SEED_FIRM_POLICIES[0].nodes[1] as ConditionNode), field: 'newCustomer' as const }
-    expect(ruleText({ ...base, value: true })).toBe('Customer is new / unverified')
-    expect(ruleText({ ...base, value: false })).toBe('Customer is existing')
-  })
-
   it('slaText treats “0” as the no-deadline sentinel, not as zero hours', () => {
     expect(slaText('0')).toBe('no deadline')
     expect(slaText('24')).toBe('within 24h')
@@ -723,23 +711,6 @@ describe('evalCondition (§6.1)', () => {
     expect(evalCondition(amountCond('>=', 250_000_000), ctx({ amount: 249_999_999 }))).toBe(false)
     expect(evalCondition(amountCond('<', 250_000_000), ctx({ amount: 1 }))).toBe(true)
     expect(evalCondition(amountCond('<=', 250_000_000), ctx({ amount: 250_000_001 }))).toBe(false)
-  })
-
-  it('matches the docType domain exactly, ignoring the operator', () => {
-    const c: ConditionNode = { id: 'c', type: 'condition', field: 'docType', op: '>', value: 'B2G', then: [], else: [] }
-    expect(evalCondition(c, ctx({ docType: 'B2G' }))).toBe(true)
-    expect(evalCondition(c, ctx({ docType: 'B2B' }))).toBe(false)
-    expect(evalCondition(c, ctx({ docType: 'B2C' }))).toBe(false)
-    // The scenario amount is irrelevant in this domain.
-    expect(evalCondition(c, ctx({ docType: 'B2G', amount: 0 }))).toBe(true)
-  })
-
-  it('matches the newCustomer domain on both sides of the boolean', () => {
-    const isNew: ConditionNode = { id: 'c', type: 'condition', field: 'newCustomer', op: '>', value: true, then: [], else: [] }
-    expect(evalCondition(isNew, ctx({ newCustomer: true }))).toBe(true)
-    expect(evalCondition(isNew, ctx({ newCustomer: false }))).toBe(false)
-    expect(evalCondition({ ...isNew, value: false }, ctx({ newCustomer: false }))).toBe(true)
-    expect(evalCondition({ ...isNew, value: false }, ctx({ newCustomer: true }))).toBe(false)
   })
 
   // APPR-10-02 (task-514) T2-6. `toEqual` fails on a surplus key, so this is also the pin

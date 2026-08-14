@@ -169,9 +169,9 @@ export const CANON: CanonField[] = [
   { key: 'line_unit_price' },
 ]
 
-// Still read by the Workflows builder's doc-type condition (WorkflowParts.tsx's
-// DOC_OPTIONS) — it outlived the create form's own doc-type picker, which INVCR-01-03
-// removed because `invoices` has no doc-type column to file the choice into.
+// NO consumers — the Workflows builder's doc-type condition was the last one, and the
+// create form's picker went before it. Retained deliberately: this is the doc-type
+// vocabulary, and `invoices` still has no column to file a choice into.
 export const DOC_TYPE_DEFS: [string, string, string][] = [
   ['B2B', 'Business', 'Standard tax invoice'],
   ['B2G', 'Government', 'Routed to MDA portal'],

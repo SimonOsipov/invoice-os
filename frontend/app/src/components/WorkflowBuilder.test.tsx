@@ -783,7 +783,7 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
 
     fireEvent.click(saveButton())
 
-    expect(inert(control(screen.getByLabelText('Doc type'))), 'the simulator writes no server state and must stay usable').toBe(false)
+    expect(inert(control(screen.getByLabelText('Scenario invoice amount in naira'))), 'the simulator writes no server state and must stay usable').toBe(false)
     expect(inert(screen.getByRole('button', { name: /All policies/ })), 'the guard trapped the user inside the builder').toBe(false)
   })
 

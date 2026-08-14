@@ -45,7 +45,7 @@ import type { PlatformCtx } from '../types'
 
 const PALETTE: { type: NodeType; name: string; desc: string }[] = [
   { type: 'approval', name: 'Approval', desc: 'Someone must sign off' },
-  { type: 'condition', name: 'Condition', desc: 'Branch on amount or type' },
+  { type: 'condition', name: 'Condition', desc: 'Branch on amount' },
   { type: 'notify', name: 'Notify', desc: 'Send a heads-up' },
   { type: 'autoapprove', name: 'Auto-approve', desc: 'Clear without sign-off' },
 ]

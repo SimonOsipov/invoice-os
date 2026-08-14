@@ -30,7 +30,7 @@
 // promise: Publish is DISABLED while the tree is dirty.
 //
 // Assertion 8's ORDER is load-bearing and does not read left-to-right. `save()` assigns one
-// object to both `working` and `server` (WorkflowBuilder.tsx:193-197), so `dirty` is false
+// object to both `working` and `server` (WorkflowBuilder.tsx:203-207), so `dirty` is false
 // the instant a save lands and Publish becomes ENABLED. The only window where "Publish is
 // disabled" is a true claim is between an edit and its save, so the assertion is interleaved
 // into the rename rather than following it.
@@ -102,7 +102,7 @@ const POLICY_NAME = `APPR09 ${Date.now()}`
 const NAME_SWEEP = /^APPR09 \d+$/
 // What `ctx.createPolicy()` names the row before Save draft renames it.
 const UNSAVED_NAME = 'Untitled policy'
-// `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts:206), seeded for the firm
+// `newNode('approval')` defaults to role `fin_mgr` (lib/workflows.ts:193), seeded for the firm
 // tenant as `Engagement Manager` (db/seed.dev.sql:65), so a placed step renders this.
 const PLACED_STEP = 'Engagement Manager must approve'
 const PUBLISH_DIRTY_REASON = 'Save your changes first — Publish seals the last saved draft.'
@@ -143,7 +143,7 @@ type DragKind = 'dragstart' | 'dragover' | 'drop' | 'dragend'
  * `dispatchEvent` means a handler called `preventDefault()`. `cancelable` is what makes that
  * return value mean anything; `bubbles` is what lets React's root delegation see it at all.
  * A `DataTransfer` rides on every one because only `startDrag` reads it
- * (WorkflowBuilder.tsx:264-273) and it costs nothing to hand the others one too.
+ * (WorkflowBuilder.tsx:274-283) and it costs nothing to hand the others one too.
  */
 function dispatchDrag(target: Locator, kind: DragKind): Promise<boolean> {
   return target.evaluate(
@@ -221,7 +221,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByTestId('publish-blocked-reason')).toHaveText(PUBLISH_DIRTY_REASON)
 
   // The blocked reason DISAPPEARING is the settle, not the 'Saved' flash: that flash lives for
-  // 1700ms (WorkflowBuilder.tsx:154-158) and asserting inside it races a cold gateway. The
+  // 1700ms (WorkflowBuilder.tsx:164-168) and asserting inside it races a cold gateway. The
   // reason is gone exactly when `dirty` is false, which is exactly when the write landed.
   await page.getByRole('button', { name: 'Save draft', exact: true }).click()
   await expect(page.getByTestId('publish-blocked-reason'), 'the rename landed').toHaveCount(0)
@@ -275,7 +275,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByLabel('Policy name'), 'the builder reopened on this policy').toHaveValue(POLICY_NAME)
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'the saved step renders in the reopened builder').toBeVisible()
 
-  // A palette CLICK appends locally and touches no network (WorkflowBuilder.tsx:253-257). It is
+  // A palette CLICK appends locally and touches no network (WorkflowBuilder.tsx:263-267). It is
   // never saved: leaving via `All policies` discards it, which assertion 16 then re-asserts.
   await conditionChip(page).click()
   await expect(page.getByText('IF TRUE →', { exact: true }), 'the palette click appended a condition').toBeVisible()

@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
 import type { Role } from '../lib/roles'
-import type { Policy } from '../lib/workflows'
+import { SIM_DEFAULT, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { WorkflowBuilder } from './WorkflowBuilder'
 
@@ -1356,14 +1356,28 @@ describe('APPR-10-01 QA: a policy carrying a retired scope (the hazard D-B accep
 // ----------------------------------------------------------------------------
 // APPR-10-02 (task-514) — the condition domain reduces to amount
 // ----------------------------------------------------------------------------
-// `evalCondition` will read `ctx.amount` alone, which strands the simulator's other two
-// inputs: they would still take a value and still change no rendered outcome.
+// `evalCondition` reads `ctx.amount` alone (workflows.ts:329-337), so the scenario amount is
+// the whole scenario and the inspector's field select offers one domain.
 
 const SCENARIO_AMOUNT = 'Scenario invoice amount in naira'
 
 /** The simulator card, scoped off its own header so the query cannot stray into the inspector. */
 function simulatorPanel(): HTMLElement {
   return screen.getByText('Test a scenario').parentElement as HTMLElement
+}
+
+/** The inspector card, scoped off the header its Remove button lives in. */
+function inspectorPanel(): HTMLElement {
+  return screen.getByRole('button', { name: 'Remove' }).parentElement!.parentElement as HTMLElement
+}
+
+/**
+ * What a control is CALLED on screen. A non-`hideLabel` WfSelect names its select through the
+ * visible span inside the wrapping <label> (WorkflowParts.tsx:211-216) rather than an
+ * aria-label, so neither source alone can enumerate a mixed panel.
+ */
+function controlName(c: Element): string {
+  return c.getAttribute('aria-label') ?? c.closest('label')?.querySelector('span.label')?.textContent ?? c.textContent ?? ''
 }
 
 function conditionPolicy(): Policy {
@@ -1418,14 +1432,48 @@ describe('APPR-10-02 AC-4: the condition inspector offers the amount field alone
     expect(opts.map((o) => [o.value, o.textContent]), 'the retired domains are still selectable').toEqual([['amount', 'Invoice amount']])
   })
 
-  // KEEP-GREEN over-removal guard, not a RED: a fresh condition already defaults to
-  // `field: 'amount'`, so neither retired render arm mounts today either. It fails if the
-  // sweep takes the operator select — the one control that must survive beside the amount.
+  // Over-removal guard, never a RED: both retired render arms are gone from the source, and
+  // before that a fresh condition defaulted to `field: 'amount'` and never mounted them. It
+  // fails if the sweep takes the operator select — the control that must survive the amount.
   it('renders no Equals control, and exactly one Is control', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
     selectCondition()
 
-    expect(screen.queryByLabelText('Equals'), 'the doc-type render arm mounted').toBeNull()
+    expect(screen.queryByLabelText('Equals'), 'a second domain arm came back').toBeNull()
     expect(screen.getAllByLabelText('Is'), 'the operator select is the only Is the condition panel may carry').toHaveLength(1)
+  })
+
+  // APPR-10-02 QA. AC-4 names four things the panel MUST render and one it must not; the two
+  // specs above close the must-not and the option count only. This enumerates the whole card,
+  // so a sweep that took the amount input or a preset fails here rather than shipping.
+  it('renders the field select, the operator select, the amount input and the three presets — and nothing else', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
+    selectCondition()
+
+    const controls = Array.from(inspectorPanel().querySelectorAll('input, select, textarea, button'))
+    expect(controls.length, 'the panel query matched nothing, so the list below proves nothing').toBeGreaterThan(0)
+    expect(controls.map((c) => [c.tagName, controlName(c)]), 'the condition panel gained or lost a control').toEqual([
+      ['BUTTON', 'Remove'],
+      ['SELECT', 'If this field'],
+      ['SELECT', 'Is'],
+      ['INPUT', 'Threshold amount in naira'],
+      ['BUTTON', '₦100M'],
+      ['BUTTON', '₦500M'],
+      ['BUTTON', '₦1B'],
+    ])
+  })
+})
+
+describe('APPR-10-02 QA: the one-key scenario is copied, never mutated in place', () => {
+  it('typing an amount leaves the shipped SIM_DEFAULT at ₦750,000,000', () => {
+    // `sim` is seeded from the module constant itself (WorkflowBuilder.tsx:149), so an onSim
+    // that assigned into `sim` instead of spreading it would rewrite SIM_DEFAULT for every
+    // later render and every later test in the process. Cheap to pin, silent when it breaks.
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    fireEvent.change(screen.getByLabelText(SCENARIO_AMOUNT), { target: { value: '900000000' } })
+
+    expect((screen.getByLabelText(SCENARIO_AMOUNT) as HTMLInputElement).value, 'the scenario amount never took the keystroke').toBe('900,000,000')
+    expect(SIM_DEFAULT, 'the simulator wrote through to the module constant').toEqual({ amount: 750_000_000 })
   })
 })

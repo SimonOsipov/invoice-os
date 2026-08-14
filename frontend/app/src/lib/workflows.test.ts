@@ -678,6 +678,17 @@ describe('derived labels (§5.1)', () => {
     expect(ruleText({ ...c, op: '<=', value: 1_000_000_000 })).toBe('Amount at most ₦1,000,000,000')
   })
 
+  // APPR-10-02 QA. `CondField` is one literal, so this arm is unreachable through the typed
+  // API and a cast is the only way in — which is the point: workflows.ts:306-310 keeps it so a
+  // re-added field degrades to a label instead of to a wrong amount comparison. `evalCondition`
+  // made the OPPOSITE call and dropped its equivalent `return false` (workflows.ts:329-337), so
+  // a re-added field would render 'Condition' while still being EVALUATED as an amount. This
+  // pin is what makes that asymmetry fail loudly if either half is changed alone.
+  it('ruleText degrades an unknown field to a label rather than to an amount sentence', () => {
+    const alien = { ...(SEED_FIRM_POLICIES[0].nodes[1] as ConditionNode), field: 'somethingElse' } as unknown as ConditionNode
+    expect(ruleText(alien)).toBe('Condition')
+  })
+
   it('slaText treats “0” as the no-deadline sentinel, not as zero hours', () => {
     expect(slaText('0')).toBe('no deadline')
     expect(slaText('24')).toBe('within 24h')
@@ -717,6 +728,36 @@ describe('evalCondition (§6.1)', () => {
   // that the two retired scenario dimensions left SIM_DEFAULT rather than merely going unread.
   it('the shipped default scenario is ₦750,000,000 and nothing else', () => {
     expect(SIM_DEFAULT).toEqual({ amount: 750_000_000 })
+  })
+
+  // APPR-10-02 QA. Deleting the `if (n.field === 'amount')` wrapper (rather than only its
+  // sibling branches) moved the two `Number(…) || 0` guards up one scope. Nothing pinned them
+  // before, so the move was unfalsifiable: these three are the guards' first coverage.
+  it('a NaN threshold or a NaN scenario reads as 0 rather than poisoning the comparison', () => {
+    const nan = Number.NaN
+    // NaN is false for BOTH `>` and `<=`, so an ungarded NaN makes the two operators agree —
+    // which is exactly the shape these assertions rule out.
+    expect(evalCondition(amountCond('>', nan), ctx({ amount: 1 })), 'a NaN threshold stopped reading as 0').toBe(true)
+    expect(evalCondition(amountCond('<=', nan), ctx({ amount: 1 })), 'a NaN threshold stopped reading as 0').toBe(false)
+    expect(evalCondition(amountCond('>', 1), ctx({ amount: nan })), 'a NaN scenario stopped reading as 0').toBe(false)
+    expect(evalCondition(amountCond('<=', 1), ctx({ amount: nan })), 'a NaN scenario stopped reading as 0').toBe(true)
+  })
+
+  it('a null threshold or a null scenario reads as 0', () => {
+    const nul = null as unknown as number
+    expect(evalCondition(amountCond('>=', nul), ctx({ amount: 0 }))).toBe(true)
+    expect(evalCondition(amountCond('>', nul), ctx({ amount: 0 }))).toBe(false)
+    expect(evalCondition(amountCond('<', 1), ctx({ amount: nul }))).toBe(true)
+  })
+
+  it('a real zero survives the guard — `|| 0` must not rewrite a threshold of 0', () => {
+    // The guard's failure mode in the other direction: 0 is falsy, so a guard that reached for
+    // a sentinel instead of 0 would make `>= 0` and `> 0` answer alike here.
+    expect(evalCondition(amountCond('>=', 0), ctx({ amount: 0 }))).toBe(true)
+    expect(evalCondition(amountCond('>', 0), ctx({ amount: 0 }))).toBe(false)
+    expect(evalCondition(amountCond('<=', 0), ctx({ amount: 0 }))).toBe(true)
+    expect(evalCondition(amountCond('<', 0), ctx({ amount: 0 }))).toBe(false)
+    expect(evalCondition(amountCond('>', 0), ctx({ amount: 1 }))).toBe(true)
   })
 })
 

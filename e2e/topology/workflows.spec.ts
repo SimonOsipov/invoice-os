@@ -6,7 +6,7 @@
 // Save draft, Publish and delete to internal/approval over five real routes, so the whole
 // coverage was re-planned rather than patched: nothing below asserts a frontend constant,
 // and policyFixtures.ts is no longer imported here. APPR-09-08 then took its last importer,
-// persona-surfaces.spec.ts, so the file now sits on disk unimported for APPR-10 to delete.
+// persona-surfaces.spec.ts, and APPR-10 deleted the file.
 //
 // The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, and is now a
 // heading, a tenant-driven subtitle and a terminal-arm settle — seed-independent, because

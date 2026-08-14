@@ -1,6 +1,6 @@
 package approval
 
-// FK-11 style (frontend/app/src/lib/invoices.test.ts:3869-3874): expected strings are
+// FK-11 style (frontend/app/src/lib/invoices.test.ts:4486-4491): expected strings are
 // hand-transcribed from roles.ts, never read back from the Go port under test.
 
 import (

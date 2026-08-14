@@ -786,7 +786,10 @@ describe('evalCondition mirrors Go’s amount arm (§6.1, APPR-10-05)', () => {
     op: ConditionNode['op']
     /** Go `condAmount *string` — `null` is its nil, `NaN` a string `decimal.NewFromString` refuses. */
     cond: number | null
-    /** Go `total *decimal.Decimal` — `null` is its nil. */
+    /**
+     * Go `total *decimal.Decimal` — `null` is its nil. The NaN rows are TS-only: a
+     * `decimal.Decimal` has no NaN, so they pin that `Number(…) || 0` lands where Go's nil fold does.
+     */
     total: number | null
     want: boolean
   }

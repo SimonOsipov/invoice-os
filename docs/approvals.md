@@ -722,10 +722,11 @@ NULL` is both the existence predicate and the idempotency mechanism.
 
 ## 10. Handed forward
 
-One gap that is real, verified, and deliberately left for the stories that follow. Two
-others have since been **satisfied** and are recorded below as shipped: the arming engine
-reads the active tree from the database rather than from the API, and the policy list no
-longer claims an update time it has no column for.
+Two gaps that are real, verified, and deliberately left for the stories that follow: the
+active version's step tree has no endpoint, and notify steps deliver nothing. Two others
+have since been **satisfied** and are recorded below as shipped: the arming engine reads
+the active tree from the database rather than from the API, and the policy list no longer
+claims an update time it has no column for.
 
 ### The in-force step tree is not obtainable from the API
 
@@ -757,6 +758,27 @@ Two consequences, both correctness-relevant:
 
 The natural fix is a dedicated read of the active version's tree. It is not in scope here
 and has no owner yet.
+
+### Notify steps deliver no message — and nothing would fail if that changed
+
+A notify step persists its target and its channel, and the arming engine materialises it as a
+`skipped` run step. **No message is dispatched, on any channel.** APPR-10 put that on the screen:
+one sentence in the step inspector, one in the simulator's result, each rendered beside the
+controls it qualifies.
+
+Both sentences rest on a repo-wide **absence**, and an absence is not something a test can pin.
+Verified at the time of writing: no mail, SMS or push dependency in any `package.json`; the AWS
+SDK is `service/s3` only, with no SES, SNS or Pinpoint; and of seven River job kinds exactly two
+run in production — `submission_submit` and `submission_poll`, both registered in
+`internal/submission/worker.go`. Nothing sends.
+
+**No guard was built for this, deliberately.** A test asserting "none of these transport names
+appear" passes on any transport not in its list, so its green would be indistinguishable from a
+real absence — the failure mode `stale-refs` avoids by pinning known positives, which an absence
+list has no way to construct. What reduces the risk instead is routing, not proof: each sentence
+is a single named constant behind a stable `data-testid`, and both ids are pinned in
+`WorkflowBuilder.test.tsx`. **Whoever adds a transport must edit those two constants to keep the
+screen honest, and this entry is where they are told to.** That is a signpost, not a gate.
 
 ### No `updated` timestamp exists — and the list no longer claims one (shipped)
 

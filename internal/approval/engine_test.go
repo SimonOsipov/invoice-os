@@ -1,8 +1,8 @@
 package approval
 
 // evalCondition's oracle: evalCondition in frontend/app/src/lib/workflows.ts (its amount
-// arm), boundary values from workflows.test.ts's evalCondition block. Pure test —
-// never calls dbTestPools, so it cannot skip.
+// arm), boundary values from workflows.test.ts's evalCondition block — transcribed by hand,
+// never read back. Pure test — never calls dbTestPools, so it cannot skip.
 
 import (
 	"math/big"

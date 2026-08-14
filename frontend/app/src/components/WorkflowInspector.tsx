@@ -174,25 +174,21 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
               marginBottom={14}
             />
 
-            {node.field === 'amount' && (
-              <>
-                <WfSelect label="Is" value={node.op} options={OP_OPTIONS} onChange={(v) => patch({ op: v as CondOp })} marginBottom={12} />
-                <WfAmountInput value={node.value} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
-                <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-                  {AMOUNT_PRESETS.map((p) => (
-                    <button
-                      key={p.label}
-                      type="button"
-                      onClick={() => patch({ value: p.value })}
-                      className="pf-btn"
-                      style={{ flex: 1, height: 30, border: '1px solid var(--line-2)', background: 'var(--bg-1)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--fg-2)', cursor: 'pointer' }}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+            <WfSelect label="Is" value={node.op} options={OP_OPTIONS} onChange={(v) => patch({ op: v as CondOp })} marginBottom={12} />
+            <WfAmountInput value={node.value} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {AMOUNT_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => patch({ value: p.value })}
+                  className="pf-btn"
+                  style={{ flex: 1, height: 30, border: '1px solid var(--line-2)', background: 'var(--bg-1)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--fg-2)', cursor: 'pointer' }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
 
             <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 12, padding: '10px 12px' }}>
               <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginBottom: 3 }}>

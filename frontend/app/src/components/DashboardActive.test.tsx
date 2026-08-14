@@ -20,10 +20,15 @@ interface MockResponse {
 
 const ZERO_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }
 
-function rollup(needsAttention: number, countsOver: Partial<Counts> = {}, metricsOver: Metrics = {}): Rollup {
+function rollup(
+  needsAttention: number,
+  countsOver: Partial<Counts> = {},
+  metricsOver: Metrics = {},
+  awaitingApproval = 0,
+): Rollup {
   const counts: Counts = { ...ZERO_COUNTS, ...countsOver }
   return {
-    totals: { counts, needs_attention: needsAttention, awaiting_approval: 0, metrics: metricsOver, top_violations: [] },
+    totals: { counts, needs_attention: needsAttention, awaiting_approval: awaitingApproval, metrics: metricsOver, top_violations: [] },
     clients: [],
     top_violations: [],
   }
@@ -59,13 +64,15 @@ afterEach(() => {
 })
 
 describe('DashboardActive needs-attention chip (task-332, BUG-01-06, [overview-chip-relabelled-here])', () => {
-  it('AC-5: needs_attention > 0 reads the relabelled REJECTED / FAILED / BLOCKED chip', async () => {
+  it('AC-5: needs_attention > 0 reads the relabelled REJECTED / FAILED / BLOCKED / SENT BACK chip', async () => {
     mockRollupFetch(rollup(3, { rejected: 1, failed: 1 }))
 
     render(<DashboardActive ctx={dashCtx()} />)
 
-    expect(await screen.findByText('REJECTED / FAILED / BLOCKED')).toBeDefined()
+    expect(await screen.findByText('REJECTED / FAILED / BLOCKED / SENT BACK')).toBeDefined()
     expect(screen.queryByText('REJECTED / FAILED')).toBeNull()
+    // The un-widened string must be gone, not merely a prefix of the widened one.
+    expect(screen.queryByText('REJECTED / FAILED / BLOCKED')).toBeNull()
   })
 
   it('needs_attention === 0 still reads ALL CLEAR -- the relabel only touches the non-zero string', async () => {
@@ -75,6 +82,19 @@ describe('DashboardActive needs-attention chip (task-332, BUG-01-06, [overview-c
 
     expect(await screen.findByText('ALL CLEAR')).toBeDefined()
     expect(screen.queryByText(/REJECTED/)).toBeNull()
+    expect(screen.queryByText(/SENT BACK/)).toBeNull()
+  })
+
+  it('the explanatory sentence names all four causes', async () => {
+    mockRollupFetch(rollup(1, { rejected: 1 }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    expect(
+      await screen.findByText(
+        'Invoices rejected, failed, blocked by an error-severity validation issue, or sent back by an approver.',
+      ),
+    ).toBeDefined()
   })
 
   // The single highest-risk case in this subtask: the story's Core AC says
@@ -85,14 +105,17 @@ describe('DashboardActive needs-attention chip (task-332, BUG-01-06, [overview-c
   // the 3). A regression that re-derives the number from rejected+failed would render 0;
   // one that reused total/awaiting would render 7. getAllByText pins the count to
   // EXACTLY the two legitimate render sites that read bucket.needs_attention verbatim
-  // (the big panel number and the "Failing invoices" KPI tile) -- see DashboardActive.tsx
+  // (the big panel number and the "Exceptions" KPI tile) -- see DashboardActive.tsx
   // kpiValues, which threads the same `needsAttention` param into both.
+  // awaiting_approval is 5 so the fourth tile's delta ("5 awaiting approval") can neither
+  // equal the asserted 3 nor collide with any other bare number on the page.
   it('AC-5: the displayed count is bucket.needs_attention passed through untransformed, not re-derived from counts', async () => {
-    mockRollupFetch(rollup(3, { rejected: 0, failed: 0, draft: 7 }))
+    mockRollupFetch(rollup(3, { rejected: 0, failed: 0, draft: 7 }, {}, 5))
 
     render(<DashboardActive ctx={dashCtx()} />)
 
-    await screen.findByText('REJECTED / FAILED / BLOCKED') // wait for the ready state to settle
+    // Settle on a static tile title -- the pill copy is itself under test in this story.
+    await screen.findByText('Readiness score')
     // Exactly the two legitimate render sites read bucket.needs_attention verbatim; a
     // regression deriving from rejected+failed (0) or total/awaiting (7) would break
     // this count, not just add a stray "3" -- '0' and '7' both appear elsewhere on the
@@ -263,7 +286,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     const data: Rollup = {
       totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [
-        { entity_id: 'ent-2', entity_name: 'Zenith Traders', counts: { ...ZERO_COUNTS, draft: 5, submitted: 2 }, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
+        { entity_id: 'ent-2', entity_name: 'Zenith Traders', counts: { ...ZERO_COUNTS, draft: 5, validated: 3, submitted: 2 }, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       ],
       top_violations: [],
     }
@@ -280,9 +303,9 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
     expect(within(readinessTile).getByText('No invoices yet')).toBeDefined()
     const invoicesTile = screen.getByText('Invoices').parentElement!.parentElement!
-    expect(within(invoicesTile).getByText('7')).toBeDefined() // 5 draft + 2 submitted
-    const awaitingTile = screen.getByText('Awaiting submission').parentElement!.parentElement!
-    expect(within(awaitingTile).getByText('5')).toBeDefined() // draft only
+    expect(within(invoicesTile).getByText('10')).toBeDefined() // 5 draft + 3 validated + 2 submitted
+    const awaitingTile = screen.getByText('Not yet submitted').parentElement!.parentElement!
+    expect(within(awaitingTile).getByText('8')).toBeDefined() // draft + validated, both non-zero and distinct
   })
 
   it('(j) firm-mode entityId with no matching clients row falls through to EMPTY_BUCKET and renders the empty state, not a crash', async () => {
@@ -425,5 +448,98 @@ describe('DashboardActive trend re-anchor — adversarial (QA task-430)', () => 
     const trendTileB = screen.getByText('Readiness trend').parentElement!.parentElement!
     expect(within(trendTileB).getByText('95%')).toBeDefined()
     expect(within(trendTileB).queryByText('30%')).toBeNull()
+  })
+})
+
+describe('DashboardActive KPI tiles say what they count', () => {
+  // A KPI tile's root is the TileHead's grandparent; its delta is the only .mono inside,
+  // because KPI heads carry no meta.
+  function kpiTile(label: string): HTMLElement {
+    return screen.getByText(label).parentElement!.parentElement!
+  }
+  function kpiDelta(label: string): string {
+    return kpiTile(label).querySelector('span.mono')!.textContent!
+  }
+
+  it('the not-yet-submitted tile is draft + validated, with both addends non-zero and distinct', async () => {
+    mockRollupFetch(rollup(0, { draft: 5, validated: 3, submitted: 2 }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Not yet submitted')
+    expect(within(kpiTile('Not yet submitted')).getByText('8')).toBeDefined()
+  })
+
+  it('the not-yet-submitted delta names the awaiting-approval subset', async () => {
+    mockRollupFetch(rollup(0, { draft: 5, validated: 3 }, {}, 3))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Not yet submitted')
+    expect(kpiDelta('Not yet submitted')).toBe('3 awaiting approval')
+
+    cleanup()
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Not yet submitted')
+    expect(kpiDelta('Not yet submitted')).toBe('none waiting')
+  })
+
+  it('the two value-derived deltas keep both legs and the two constant deltas are untouched', async () => {
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Exceptions')
+    expect(kpiDelta('Exceptions')).toBe('all clear')
+    expect(kpiDelta('Not yet submitted')).toBe('none waiting')
+    expect(kpiDelta('Invoices')).toMatch(/^\d+ transmitted$/)
+    expect(kpiDelta('VAT tracked')).toBe('output VAT')
+
+    cleanup()
+    mockRollupFetch(rollup(2, { draft: 4, validated: 1, submitted: 6, accepted: 2 }, {}, 3))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Exceptions')
+    expect(kpiDelta('Exceptions')).toBe('to resolve')
+    expect(kpiDelta('Not yet submitted')).toBe('3 awaiting approval')
+    expect(kpiDelta('Invoices')).toMatch(/^\d+ transmitted$/)
+    expect(kpiDelta('VAT tracked')).toBe('output VAT')
+  })
+
+  it('the KPI row still renders exactly four tiles', async () => {
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(document.querySelector('.pf-dash-row-a .pf-grid-2')!.children).toHaveLength(4)
+  })
+
+  // The tile sums Object.values(bucket.counts); donutSegments sums CANONICAL_STATES.
+  // Nothing else ties those two -- this is the tripwire for the next count key added.
+  it('the donut total, the ring centre and the sum of the seven legend counts all agree', async () => {
+    // Every state distinct and non-zero, so no coincidental collision can hide a
+    // mis-summed key. 1+2+3+4+5+6+7 = 28.
+    const counts: Counts = { draft: 1, validated: 2, queued: 3, submitted: 4, accepted: 5, rejected: 6, failed: 7 }
+    mockRollupFetch(rollup(0, counts))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const donut = (await screen.findByText('Invoice status')).parentElement!.parentElement!
+    const head = Number(screen.getByText('Invoice status').nextElementSibling!.textContent!.replace(' TOTAL', ''))
+    const centre = Number(within(donut).getByText('DOCS').previousElementSibling!.textContent)
+    const legend = ['Draft', 'Validated', 'Queued', 'Submitted', 'Accepted', 'Rejected', 'Failed'].reduce(
+      (sum, label) => sum + Number(within(donut).getByText(label).parentElement!.lastElementChild!.textContent),
+      0,
+    )
+
+    expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(28)
+    expect(head).toBe(28)
+    expect(centre).toBe(28)
+    expect(legend).toBe(28)
   })
 })

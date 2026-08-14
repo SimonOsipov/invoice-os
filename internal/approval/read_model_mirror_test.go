@@ -1,7 +1,8 @@
 package approval
 
-// FK-11 style (frontend/app/src/lib/invoices.test.ts:4486-4491): expected strings are
-// hand-transcribed from roles.ts, never read back from the Go port under test.
+// FK-11 style (test "FK-11: FAILURE_KINDS matches the Go vocabulary" in
+// frontend/app/src/lib/invoices.test.ts): expected strings are hand-transcribed
+// from roles.ts, never read back from the Go port under test.
 
 import (
 	"fmt"

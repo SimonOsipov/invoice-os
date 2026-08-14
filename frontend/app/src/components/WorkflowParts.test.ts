@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { nodeSub, nodeTitle, roleOptions, simSub, simTitle, SLA_OPTIONS, slaOptions, toOptions } from './WorkflowParts'
+// Namespace import as well as the named one above: an ABSENCE assertion cannot name the
+// symbol it is about, or removing the symbol turns the spec into a compile error.
+import * as Parts from './WorkflowParts'
 import { toMember, type Member, type MembershipWire } from '../lib/members'
 import { resolve, type Role } from '../lib/roles'
 import type { ApprovalNode, AutoApproveNode, NotifyNode, RoleKey, Sla } from '../lib/workflows'
@@ -253,5 +256,47 @@ describe('APPR-09-05 AC-7 — slaOptions and a stored deadline outside the four 
     slaOptions('36')
     slaOptions('99')
     expect(SLA_OPTIONS.map((o) => o.value)).toEqual(['0', '24', '48', '72'])
+  })
+})
+
+// ============================================================================
+// APPR-10-02 (task-514) — the condition domains reduce to amount
+// ============================================================================
+
+describe('APPR-10-02 AC-2 — FIELD_OPTIONS offers the amount domain alone', () => {
+  it('lists exactly one field, valued and labelled', () => {
+    expect(Parts.FIELD_OPTIONS).toEqual([{ value: 'amount', label: 'Invoice amount' }])
+  })
+})
+
+describe('APPR-10-02 AC-3 — the two retired domains leave the module', () => {
+  it('no longer exports DOC_OPTIONS, CUST_OPTIONS or isDocType', () => {
+    // Positive control: a namespace object that resolved to nothing would satisfy every
+    // absence below on its own.
+    expect(Object.hasOwn(Parts, 'FIELD_OPTIONS'), 'the module namespace is empty, so the absences below prove nothing').toBe(true)
+    expect(Object.hasOwn(Parts, 'DOC_OPTIONS'), 'DOC_OPTIONS is still exported').toBe(false)
+    expect(Object.hasOwn(Parts, 'CUST_OPTIONS'), 'CUST_OPTIONS is still exported').toBe(false)
+    expect(Object.hasOwn(Parts, 'isDocType'), 'isDocType is still exported').toBe(false)
+  })
+})
+
+// Over-removal guard: the amount domain's own two lists sit beside the deleted ones and
+// must survive the sweep intact.
+describe('APPR-10-02 — the amount domain’s option sets are untouched', () => {
+  it('OP_OPTIONS keeps its four operators, in order', () => {
+    expect(Parts.OP_OPTIONS).toEqual([
+      { value: '>', label: 'greater than' },
+      { value: '>=', label: 'at least' },
+      { value: '<', label: 'less than' },
+      { value: '<=', label: 'at most' },
+    ])
+  })
+
+  it('AMOUNT_PRESETS keeps its three thresholds, in order', () => {
+    expect(Parts.AMOUNT_PRESETS).toEqual([
+      { label: '₦100M', value: 100_000_000 },
+      { label: '₦500M', value: 500_000_000 },
+      { label: '₦1B', value: 1_000_000_000 },
+    ])
   })
 })

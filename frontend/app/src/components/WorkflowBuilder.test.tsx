@@ -1352,3 +1352,80 @@ describe('APPR-10-01 QA: a policy carrying a retired scope (the hazard D-B accep
     expect(sel.value, 'the control silently rewrote the policy’s stored scope').not.toBe('Capex & fixed assets')
   })
 })
+
+// ----------------------------------------------------------------------------
+// APPR-10-02 (task-514) — the condition domain reduces to amount
+// ----------------------------------------------------------------------------
+// `evalCondition` will read `ctx.amount` alone, which strands the simulator's other two
+// inputs: they would still take a value and still change no rendered outcome.
+
+const SCENARIO_AMOUNT = 'Scenario invoice amount in naira'
+
+/** The simulator card, scoped off its own header so the query cannot stray into the inspector. */
+function simulatorPanel(): HTMLElement {
+  return screen.getByText('Test a scenario').parentElement as HTMLElement
+}
+
+function conditionPolicy(): Policy {
+  return {
+    id: 'p1',
+    name: 'Test policy',
+    scope: 'All invoices',
+    status: 'draft',
+    version: 1,
+    activeVersion: null,
+    nodes: [{ id: 'c1', type: 'condition', field: 'amount', op: '>', value: 250_000_000, then: [], else: [] }],
+  }
+}
+
+/** Selects the one condition on the canvas and hands back the inspector's field select. */
+function selectCondition(): HTMLSelectElement {
+  // Queried BEFORE the click: selecting mounts the inspector's RULE card, which renders the
+  // same sentence a second time.
+  fireEvent.click(screen.getByText('Amount greater than ₦250,000,000'))
+  const el = control(screen.getByLabelText('If this field'))
+  expect(el.tagName, 'the field handle is not a <select>, so its option list cannot be read').toBe('SELECT')
+  return el as HTMLSelectElement
+}
+
+describe('APPR-10-02 AC-5: the simulator drops the two inputs nothing reads', () => {
+  it('renders neither a Doc type control nor a new-customer switch', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    // The simulator is on screen at all — without this the two absences below are vacuous.
+    expect(screen.getByLabelText(SCENARIO_AMOUNT), 'the simulator never mounted').toBeTruthy()
+    expect(screen.queryByLabelText('Doc type'), 'the scenario doc-type select still renders').toBeNull()
+    expect(screen.queryByLabelText('Scenario is a new customer'), 'the scenario new-customer switch still renders').toBeNull()
+  })
+
+  it('offers exactly one input — the scenario amount', () => {
+    // The positive half of AC-5. Nothing in the repo pinned what the simulator renders, so an
+    // absence check alone would still pass over a panel that had grown a fourth control.
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const controls = Array.from(simulatorPanel().querySelectorAll('input, select, textarea, button'))
+    expect(controls.length, 'the panel query matched nothing, so the count below proves nothing').toBeGreaterThan(0)
+    expect(controls.map((c) => c.getAttribute('aria-label')), 'the simulator carries an input beyond the amount').toEqual([SCENARIO_AMOUNT])
+  })
+})
+
+describe('APPR-10-02 AC-4: the condition inspector offers the amount field alone', () => {
+  it('the field select has exactly one option', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
+
+    const opts = Array.from(selectCondition().options)
+    expect(opts.length, 'the field select rendered no options at all').toBeGreaterThan(0)
+    expect(opts.map((o) => [o.value, o.textContent]), 'the retired domains are still selectable').toEqual([['amount', 'Invoice amount']])
+  })
+
+  // KEEP-GREEN over-removal guard, not a RED: a fresh condition already defaults to
+  // `field: 'amount'`, so neither retired render arm mounts today either. It fails if the
+  // sweep takes the operator select — the one control that must survive beside the amount.
+  it('renders no Equals control, and exactly one Is control', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
+    selectCondition()
+
+    expect(screen.queryByLabelText('Equals'), 'the doc-type render arm mounted').toBeNull()
+    expect(screen.getAllByLabelText('Is'), 'the operator select is the only Is the condition panel may carry').toHaveLength(1)
+  })
+})

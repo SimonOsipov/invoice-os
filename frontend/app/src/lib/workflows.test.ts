@@ -742,8 +742,10 @@ describe('evalCondition (§6.1)', () => {
     expect(evalCondition({ ...isNew, value: false }, ctx({ newCustomer: true }))).toBe(false)
   })
 
-  it('the shipped default scenario is ₦750,000,000 · B2B · returning customer', () => {
-    expect(SIM_DEFAULT).toEqual({ amount: 750_000_000, docType: 'B2B', newCustomer: false })
+  // APPR-10-02 (task-514) T2-6. `toEqual` fails on a surplus key, so this is also the pin
+  // that the two retired scenario dimensions left SIM_DEFAULT rather than merely going unread.
+  it('the shipped default scenario is ₦750,000,000 and nothing else', () => {
+    expect(SIM_DEFAULT).toEqual({ amount: 750_000_000 })
   })
 })
 

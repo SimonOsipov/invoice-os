@@ -14,6 +14,8 @@ import type { Role } from '../lib/roles'
 import { SIM_DEFAULT, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { WorkflowBuilder } from './WorkflowBuilder'
+// Rendered bare by the R15 oracle only — every other spec reaches them through the builder.
+import { WfSelect, WfToggle } from './WorkflowParts'
 
 function policyWith(role: string): Policy {
   return {
@@ -628,32 +630,92 @@ function delegateNote(): string {
   return note!.textContent ?? ''
 }
 
-describe('APPR-09-05 AC-9: the delegation controls say the choice is not stored', () => {
-  it('the note is visible with the toggle OFF, and the toggle stays interactive', () => {
+/**
+ * The delegation reason node, by TESTID and never by literal: the sentence is the executor's
+ * to write, and a spec that imported it would follow a typo into the product. Every assertion
+ * below reads its properties.
+ */
+function delegationReason(): HTMLElement {
+  return screen.getByTestId('delegation-blocked-reason')
+}
+
+/** Its visible text, trimmed the way RTL trims before matching a text query. */
+function reasonText(el: HTMLElement): string {
+  return (el.textContent ?? '').trim()
+}
+
+/** The two controls one cause shuts. Thunks: the guard drop remounts this subtree. */
+function delegationControls(): [string, HTMLElement][] {
+  return [
+    ['the Allow delegation switch', screen.getByRole('switch', { name: 'Allow delegation' })],
+    ['the Delegate to select', control(screen.getByLabelText('Delegate to'))],
+  ]
+}
+
+describe('APPR-10-04 AC-2/AC-4: delegation ships shut, and says so where text can reach', () => {
+  // RE-AUTHORED from APPR-09-05's 'the delegation controls say the choice is not stored'. That
+  // spec asserted `toggle.disabled === false` on purpose, with the message 'APPR-10 owns
+  // disabling this control, not APPR-09' — the written hand-off. Inverted here, not deleted.
+  it('the toggle reports disabled on ITSELF, not through a fieldset ancestor', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
 
-    // getByText never matches a title/aria attribute, so finding it IS the visible-node assertion.
-    const note = screen.getByText(DELEGATION_NOT_STORED)
-    expect(hintColor(note), 'a layer-3 reason renders grey, not amber').toBe('var(--fg-3)')
-
     const toggle = screen.getByRole('switch', { name: 'Allow delegation' }) as HTMLButtonElement
-    expect(toggle.disabled, 'APPR-10 owns disabling this control, not APPR-09').toBe(false)
+    expect(toggle.disabled, 'the switch still takes a delegation the server drops on write').toBe(true)
+    // No write is in flight, so the inspector's own `<fieldset disabled>` is open and the only
+    // thing that can have shut this control is its own prop. AC-2 names that distinction.
+    expect(toggle.closest('fieldset[disabled]'), 'the switch is inert only by ancestry, which AC-2 rules out').toBeNull()
+    expect(inert(toggle), "the file's own inertness helper disagrees with the IDL property").toBe(true)
   })
 
-  it('the note renders once, not twice, when delegation is on', () => {
+  it('the reason is a real text node, not a title or an aria attribute', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const reason = delegationReason()
+    const text = reasonText(reason)
+    expect(text, 'the reason node is empty, so nothing on screen states the disable').not.toBe('')
+    // getByText never matches a title/aria attribute, and RTL matches only a node's DIRECT text
+    // children — so resolving the same string this way IS the visible-node proof.
+    expect(screen.getByText(text), 'the reason reaches the accessibility tree but not the screen').toBe(reason)
+    expect(hintColor(reason), 'a layer-3 reason renders grey, not amber').toBe('var(--fg-3)')
+  })
+
+  // KEEP-GREEN, and kept in its OWN `it` on purpose: this is APPR-10-03's shipped AC-8, and
+  // folding it into the RED spec below would make it unreachable until this subtask lands.
+  // Asserted on its properties, not its literal: APPR-00 Q1 widened the eligible set to
+  // {admin, reviewer}, and the sentence naming that set is the executor's to write.
+  it('the picker keeps its own eligibility note, naming both approver roles', () => {
     const on: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true }] }
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={on} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
 
-    expect(screen.getAllByText(DELEGATION_NOT_STORED), 'the note sits both inside and outside the delegate guard').toHaveLength(1)
-    // The picker's own eligibility note is a different sentence and must survive. Asserted on
-    // its properties, not its literal: APPR-00 Q1 widened the eligible set to {admin, reviewer},
-    // and the sentence naming that set is the executor's to write.
     const note = delegateNote()
     expect(/Admin/.test(note), `the eligibility note does not name the Admin role: ${note}`).toBe(true)
     expect(/Reviewer/.test(note), `the eligibility note does not name the Reviewer role: ${note}`).toBe(true)
     expect(/not available yet/i.test(note), `the eligibility note does not say delegation is not available yet: ${note}`).toBe(true)
+  })
+
+  it('the reason renders once, not twice, when delegation is on — and stays worded apart from both neighbours', () => {
+    const on: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: true }] }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={on} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const reason = delegationReason()
+    const text = reasonText(reason)
+    expect(screen.getAllByText(text), 'the reason sits both inside and outside the delegate block').toHaveLength(1)
+
+    // The LIVE three-way distinctness. The APPR-10-03 block below pins the same property against
+    // the RETIRED literal, which cannot see a collision between the NEW sentence and its two
+    // neighbours. AC-8's own trap: two identical strings send the count above to 2.
+    const picker = control(screen.getByLabelText('Delegate to')) as HTMLSelectElement
+    const label = Array.from(picker.options).find((o) => o.value === '')?.textContent ?? ''
+    expect(label, 'the picker lost its sentinel option, so the comparison below is vacuous').not.toBe('')
+    expect(text, 'the reason and the fallback option label collapsed into one sentence').not.toBe(label)
+    // R9 keeps DELEGATE_NOTE the picker wrapper's LAST child, so `delegateNote()` still reads it
+    // and not the new reason. This is the assertion that catches the swap if it does not.
+    const note = delegateNote()
+    expect(text, 'the reason and the eligibility note collapsed into one sentence').not.toBe(note)
   })
 })
 
@@ -710,6 +772,169 @@ describe('QA APPR-10-03: the picker offers the roster its own predicate admits',
       .map((o) => o.textContent)
     expect(named, 'the picker offers no named delegate at all, so the order below is vacuous').toHaveLength(2)
     expect(named).toEqual(['Musa Danjuma', 'Chinedu Okafor'])
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APPR-10-04 — delegation ships disabled, with all four layers
+// ----------------------------------------------------------------------------
+// RED, written before the implementation. The recipe's nearest precedent is on this very
+// surface: Publish at WorkflowBuilder.tsx:417-440 — real `disabled`, inline paint, `title`,
+// `aria-describedby`, and a visible sibling carrying the sentence.
+
+describe('APPR-10-04 AC-3: the delegate picker renders even with delegation off', () => {
+  it('the picker is on screen with node.delegate false, and reports disabled on the control itself', () => {
+    // `lib/policies.ts:131` forces `delegate: false` on every wire read, so OFF is the only
+    // state this screen can reach. Behind `{node.delegate && (…)}` a shut toggle REMOVES the
+    // picker rather than labelling it (P27) — the guard is what this pins.
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const toggle = screen.getByRole('switch', { name: 'Allow delegation' })
+    expect(toggle.getAttribute('aria-checked'), 'the fixture is not the delegation-off state this pins').toBe('false')
+
+    const picker = control(screen.getByLabelText('Delegate to')) as HTMLSelectElement
+    expect(picker.tagName, 'the delegate handle is not a <select>, so `.disabled` below reads nothing').toBe('SELECT')
+    expect(picker.disabled, 'the picker still takes a delegate the server drops on write').toBe(true)
+    expect(picker.closest('fieldset[disabled]'), 'the picker is inert only by ancestry, which AC-2 rules out').toBeNull()
+    expect(inert(picker), "the file's own inertness helper disagrees with the IDL property").toBe(true)
+  })
+})
+
+describe('APPR-10-04 AC-4: one reason node, two aria-describedby pointers', () => {
+  // R10 — a deliberate deviation from INVED-02, where every disabled control gets its OWN id
+  // (InvoiceDetail.tsx:150-159). There the causes differ per control; here one cause shuts both,
+  // and a second copy of the sentence would break the one-node counts above.
+  it('both controls point at the reason node id and mirror its text in title', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const reason = delegationReason()
+    const text = reasonText(reason)
+    expect(reason.id, 'the reason node has no id, so aria-describedby cannot reach it').not.toBe('')
+
+    const targets = delegationControls()
+    expect(targets.length, 'nothing was checked').toBeGreaterThan(0)
+    for (const [what, el] of targets) {
+      expect(el.getAttribute('aria-describedby'), `${what} does not point at the reason node`).toBe(reason.id)
+      expect((el.getAttribute('title') ?? '').trim(), `${what}'s tooltip does not mirror the reason`).toBe(text)
+    }
+
+    // A LIVE id collision, not a hypothetical one: the edit below makes the tree dirty, so the
+    // publish reason renders alongside this one (InvoiceDetail.test.tsx:2065-2068's shape).
+    fireEvent.change(screen.getByLabelText('Policy name'), { target: { value: 'Renamed policy' } })
+    const publishReason = screen.getByTestId('publish-blocked-reason')
+    expect(publishReason.id, 'the publish reason lost its id, so the check below is vacuous').toBe('publish-blocked-reason-text')
+    expect(delegationReason().id, 'the delegation reason reuses PUBLISH_BLOCKED_REASON_ID').not.toBe(publishReason.id)
+  })
+})
+
+describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
+  // P5 — no `:disabled` rule exists anywhere in this repo, so the inline paint is mandatory
+  // rather than stylistic. The PROPERTY NAME differs per control and one shared assertion would
+  // pin the wrong name on one of them: app-layer.css:224-232 forbids the `background` shorthand
+  // on `.pf-select`, whose resting style sets `backgroundColor` (WorkflowParts.tsx:222), while
+  // `.pf-toggle` sets the shorthand (:273). Measured in jsdom: a select's `style.background`
+  // reads '' and a toggle's `style.backgroundColor` reads ''.
+  it('the select paints backgroundColor, the toggle paints background, and both mute the rest', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const toggle = screen.getByRole('switch', { name: 'Allow delegation' })
+    const picker = control(screen.getByLabelText('Delegate to'))
+    expect(picker.style.backgroundColor, 'the shut picker is still painted as a live control').toBe('var(--bg-3)')
+    expect(toggle.style.background, 'the shut switch is still painted as a live control').toBe('var(--bg-3)')
+
+    for (const [what, el] of delegationControls()) {
+      expect(el.style.color, `${what} keeps its live foreground`).toBe('var(--fg-4)')
+      expect(el.style.cursor, `${what} still invites a click`).toBe('not-allowed')
+      // NO `filter: 'none'` (R13). The unguarded `filter: brightness(1.22)` at
+      // app-layer.css:213 targets `.v2-btn-primary` alone; `.pf-toggle` and `.pf-select` carry
+      // no `:hover` rule at all, so neutralising a filter here would state a hazard that does
+      // not exist. Pinned rather than left silent — InvoiceDetail.test.tsx:2071-2084's shape.
+      expect(el.style.filter, `${what} neutralises a filter no rule applies to it`).toBe('')
+    }
+  })
+})
+
+describe('APPR-10-04 AC-4: the shut switch refuses the keyboard, and its reason stays reachable', () => {
+  // Layer 3 is the whole justification for rendering disabled rather than hidden: a disabled
+  // control is out of the tab order, so the sentence must stay reachable even though the control
+  // is not. KILLS `aria-hidden="true"` on the reason node (InvoiceDetail.test.tsx:2320-2337).
+  // No `aria-disabled`: native `disabled` on a <button> already covers focus, the keyboard and
+  // the a11y tree, and this repo uses `aria-disabled` nowhere.
+  it('focus is refused, Enter and Space never flip it, and the reason is not hidden', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const toggle = screen.getByRole('switch', { name: 'Allow delegation' })
+    const before = toggle.getAttribute('aria-checked')
+    toggle.focus()
+    expect(document.activeElement, 'a disabled switch is out of the tab order').not.toBe(toggle)
+    for (const key of ['Enter', ' ']) {
+      fireEvent.keyDown(toggle, { key })
+      fireEvent.keyUp(toggle, { key })
+    }
+    expect(toggle.getAttribute('aria-checked'), 'the keyboard armed a switch the pointer cannot').toBe(before)
+
+    // The focus half applies to the picker too; a <select> has no Enter/Space semantics to pin.
+    const picker = control(screen.getByLabelText('Delegate to'))
+    picker.focus()
+    expect(document.activeElement, 'a disabled select is out of the tab order').not.toBe(picker)
+
+    const reason = delegationReason()
+    expect(reason.getAttribute('aria-hidden'), 'the only layer a screen reader can still reach is hidden from it').toBeNull()
+    expect(reason.hasAttribute('hidden'), 'the reason node is hidden outright').toBe(false)
+    expect(screen.getByText(reasonText(reason))).toBe(reason)
+  })
+})
+
+describe('APPR-10-04 QA (R14): the approval panel enumerates its controls', () => {
+  // The condition panel got this pin in APPR-10-02 (`the condition panel gained or lost a
+  // control`); the approval panel never had one. Dropping the delegate guard adds a control to
+  // this card PERMANENTLY, which is exactly the change an enumeration exists to hold.
+  it('renders Remove, the role select, Manage roles, the deadline, the switch and the picker — and nothing else', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const controls = Array.from(inspectorPanel().querySelectorAll('input, select, textarea, button'))
+    expect(controls.length, 'the panel query matched nothing, so the list below proves nothing').toBeGreaterThan(0)
+    expect(controls.map((c) => [c.tagName, controlName(c)]), 'the approval panel gained or lost a control').toEqual([
+      ['BUTTON', 'Remove'],
+      ['SELECT', 'Who must approve'],
+      ['BUTTON', 'Manage roles'],
+      ['SELECT', 'Deadline'],
+      ['BUTTON', 'Allow delegation'],
+      ['SELECT', 'Delegate to'],
+    ])
+  })
+})
+
+describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
+  // THE MUTATION ORACLE. An unconditional paint spread inside either shared primitive satisfies
+  // every assertion above and silently repaints all ten `WfSelect` call sites — two of them on
+  // the Members screen this story never opens (MemberParts.tsx:427, MembersView.tsx:127). Only
+  // this spec sees it. Rendered bare rather than through the builder: after this subtask the app
+  // has no ENABLED `WfToggle` left, so the primitive is the only place the resting state exists.
+  it('an enabled WfSelect and an enabled WfToggle keep their resting style', () => {
+    render(
+      <>
+        <WfSelect label="Probe select" value="a" options={[{ value: 'a', label: 'A' }]} onChange={() => {}} />
+        <WfToggle on={false} onToggle={() => {}} label="Probe toggle" />
+      </>,
+    )
+
+    const sel = control(screen.getByLabelText('Probe select')) as HTMLSelectElement
+    const tog = screen.getByRole('switch', { name: 'Probe toggle' }) as HTMLButtonElement
+    expect([sel.disabled, tog.disabled], 'the probes rendered disabled, so the paint below proves nothing').toEqual([false, false])
+
+    expect(sel.style.backgroundColor, 'an enabled WfSelect lost its resting background').toBe('var(--bg-1)')
+    expect(sel.style.color, 'an enabled WfSelect lost its resting foreground').toBe('var(--fg-1)')
+    expect(tog.style.background, 'an enabled WfToggle lost its resting background').toBe('var(--line-3)')
+    expect(tog.style.color, 'an enabled WfToggle grew a foreground it never had').toBe('')
+    for (const [what, el] of [['WfSelect', sel], ['WfToggle', tog]] as [string, HTMLElement][]) {
+      expect(el.style.cursor, `an enabled ${what} paints the not-allowed cursor`).toBe('pointer')
+    }
   })
 })
 
@@ -1290,17 +1515,27 @@ describe('APPR-09-05 QA: the Saved flash never outlives the tree it describes', 
   })
 })
 
-describe('APPR-09-05 QA AC-9: the not-stored note is one node, in every toggle state', () => {
-  it('flipping the toggle twice never duplicates or drops the note', () => {
+describe('APPR-10-04 QA AC-2: the shut toggle takes no click, and the reason stays one node', () => {
+  // RE-AUTHORED from APPR-09-05's 'flipping the toggle twice never duplicates or drops the
+  // note', which clicked the switch three times and counted the sentence after each flip. Once
+  // the switch is disabled React fires no onClick for it, so `aria-checked` never moves and that
+  // spec's own vacuity guard failed BEFORE its count ran — unfixable-green. Retired here rather
+  // than deleted, the way 'two writes, one after the other' was: the property it existed for —
+  // the reason is exactly ONE node, whatever the toggle state — is kept, on the post-change
+  // behaviour. The delegation-ON half of it now lives in the AC-4 block above.
+  it('clicking the shut toggle does not flip aria-checked, and the reason still renders once', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
-    const toggle = screen.getByRole('switch', { name: 'Allow delegation' })
 
-    for (const expected of ['on', 'off', 'on']) {
-      fireEvent.click(toggle)
-      expect(toggle.getAttribute('aria-checked'), 'the click did not flip the toggle, so the count below is vacuous').toBe(expected === 'on' ? 'true' : 'false')
-      expect(screen.getAllByText(DELEGATION_NOT_STORED), `the note is not exactly one node with delegation ${expected}`).toHaveLength(1)
-    }
+    const toggle = screen.getByRole('switch', { name: 'Allow delegation' }) as HTMLButtonElement
+    expect(toggle.disabled, 'the switch is live, so refusing a click is not the property this pins').toBe(true)
+    const before = toggle.getAttribute('aria-checked')
+    expect(before, 'the fixture does not ship delegation OFF').toBe('false')
+
+    fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-checked'), 'a disabled switch took a click and wrote to the working tree').toBe(before)
+    expect(screen.getAllByText(reasonText(delegationReason())), 'the reason is not exactly one node').toHaveLength(1)
   })
 })
 

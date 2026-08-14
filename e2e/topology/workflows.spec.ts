@@ -95,6 +95,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import { deleteApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
+import { assertFillsColumn, WIDE_WIDTHS } from './layout'
 import { FIRM_PERSONA } from './targets'
 
 // Per-run-unique, and shaped so the sweep below can recognise it without the id.
@@ -152,7 +153,7 @@ function dispatchDrag(target: Locator, kind: DragKind): Promise<boolean> {
   )
 }
 
-test('firm Workflows, live: a policy built through the canvas survives a reload, stays keyed per TENANT, and the canvas refuses an illegal drop', async ({ page }) => {
+test('firm Workflows, live: a policy built through the canvas survives a reload, stays keyed per TENANT, and the canvas refuses an illegal drop', async ({ page }, testInfo) => {
   // One sign-in, one reload, five gateway writes and three list refetches.
   test.setTimeout(120_000)
   const errors = collectErrors(page)
@@ -248,6 +249,45 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await dispatchDrag(rootSlot, 'drop')
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'the dispatched drop placed a step').toBeVisible()
   await expect(page.getByText('Drop step here'), 'onSlotDrop ends the drag').toHaveCount(0)
+
+  // --- 11b. LAYOUT: the delegation reason shares the gutters of the control it explains -------
+  // APPR-10-04 AC-9. jsdom applies no stylesheet and runs no layout, so the unit suite can only
+  // hold what the component ASKS for; the rendered check is owed here. Two sentences and a
+  // picker land in a FIXED 320px column (WorkflowBuilder.tsx:490,
+  // `gridTemplateColumns: 'minmax(360px, 1fr) 320px'`), which is where a reason node that
+  // over-flows or gets inset would show.
+  //
+  // RELATIONSHIP, never a raw width — layout.ts's own header: a width assertion passes on the
+  // very bug it should catch. The reason node must share the inspector BODY's content gutters
+  // with the `Deadline` select above it, at every width, so the two sweeps are compared to each
+  // other rather than to a number.
+  //
+  // PLACEMENT is load-bearing. The drop above auto-selects the placed step (`place()` calls
+  // `setSelId`, WorkflowBuilder.tsx:299), so the inspector is already open — and `save()` clears
+  // the selection ([selection-clears-on-save], WorkflowBuilder.tsx:210), so this cannot move
+  // below step 12.
+  const inspectorBody = page.getByTestId('step-inspector-body')
+  const reasonFit = await assertFillsColumn(page, page.getByTestId('delegation-blocked-reason'), inspectorBody, 'the delegation reason')
+  const deadlineFit = await assertFillsColumn(
+    page,
+    page.getByLabel('Deadline').locator('xpath=ancestor::label[1]'),
+    inspectorBody,
+    'the Deadline select',
+  )
+  expect(reasonFit.length, 'the reason sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
+  expect(deadlineFit.length, 'the control sweep measured nothing, so the comparison below is vacuous').toBe(WIDE_WIDTHS.length)
+  for (const [i, fit] of reasonFit.entries()) {
+    const ctrl = deadlineFit[i]
+    expect(fit.width, 'the two sweeps measured different viewports').toBe(ctrl.width)
+    // 1px, not 0: sub-pixel rounding only. A reason node inset inside the control it explains —
+    // the defect this exists for — strands whole digits, nowhere near this bound.
+    expect(Math.abs(fit.left - ctrl.left), `the reason node's LEFT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
+    expect(Math.abs(fit.right - ctrl.right), `the reason node's RIGHT gutter disagrees with the Deadline select at ${fit.width}px`).toBeLessThanOrEqual(1)
+  }
+  await testInfo.attach('delegation-reason-column-fit.json', {
+    body: JSON.stringify({ reason: reasonFit, deadline: deadlineFit }, null, 2),
+    contentType: 'application/json',
+  })
 
   // --- 12. save the placed step -------------------------------------------------------------
   await expect(page.getByTestId('publish-blocked-reason'), 'placing a step makes the tree dirty again').toBeVisible()

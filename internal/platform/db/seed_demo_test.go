@@ -2436,7 +2436,7 @@ func TestSeedReanchorsInHouseInvoicesAheadOfOlderResidue(t *testing.T) {
 // TestSeedNewInvoiceOutranksSeededFirmPortfolio: C12 row 7 (AC-6). A row created strictly
 // after the seed runs (default created_at = now()) must sort ahead of the whole curated
 // set -- the three e2e page-1 assumptions (persona-inhouse.spec.ts:274-279,
-// perf.spec.ts:135, persona-surfaces.spec.ts:438-440) depend on this holding at gateway
+// perf.spec.ts:135, persona-surfaces.spec.ts:447-449) depend on this holding at gateway
 // boot, before any spec runs.
 func TestSeedNewInvoiceOutranksSeededFirmPortfolio(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)

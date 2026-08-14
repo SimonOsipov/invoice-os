@@ -170,8 +170,8 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   // The live-read oracle for the Invoices KPI. Read AFTER sign-in with no writes in
   // between, so the browser's own rollup fetch and this one see the same DB state; the
   // suite is serial, so nothing else can write to tenant B in the window. scopedBucket()
-  // returns rollup.totals unchanged for in-house (lib/dashboard.ts:213-214), and the tile
-  // value is the sum over all seven status counts (DashboardActive.tsx:101).
+  // returns rollup.totals unchanged for in-house (lib/dashboard.ts:234-247, branch :235),
+  // and the tile value is the sum over all seven status counts (DashboardActive.tsx:101).
   const live = await rollup(token)
   const invoiceTotal = Object.values(live.totals.counts).reduce((a, b) => a + b, 0)
   expect(invoiceTotal, 'the fixtures above must leave this tenant with invoices to count').toBeGreaterThan(0)
@@ -295,7 +295,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
 // ---------------------------------------------------------------------------------------
 // Test 2 -- Approvals as an in-house-exclusive surface (Core AC 3)
 // ---------------------------------------------------------------------------------------
-test('Approvals: the in-house-only badge equals the live validated count, and the surface opens', async ({ page }) => {
+test('Approvals: the in-house-only badge equals the live awaiting-approval count, and the surface opens', async ({ page }) => {
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.B)
@@ -313,22 +313,31 @@ test('Approvals: the in-house-only badge equals the live validated count, and th
 
   // --- Clause 1: LOAD-BEARING. The badge is asserted EQUAL to a live API read. ------------
   // Same endpoint, same field, same tenant on both sides: the Sidebar calls
-  // getRollup -> GET /api/dashboard/v1/rollup (lib/dashboard.ts:81-82), scopedBucket()
-  // returns rollup.totals for in-house (:213-214), and the badge is
-  // bucket.counts.validated (Sidebar.tsx:91); rollup(token) below hits the identical route
-  // and reads the identical field. The browser's in-house session mints a token for the
-  // same subject/tenant as PERSONAS.B (frontend/app/src/auth.ts).
+  // getRollup -> GET /api/dashboard/v1/rollup (lib/dashboard.ts:102-104), scopedBucket()
+  // returns rollup.totals for in-house (:234-247, in-house branch at :235), and the badge
+  // is bucket.awaiting_approval (Sidebar.tsx:92); rollup(token) below hits the identical
+  // route and reads the identical field. The browser's in-house session mints a token for
+  // the same subject/tenant as PERSONAS.B (frontend/app/src/auth.ts).
   const live = await rollup(token)
-  const expectedValidated = live.totals.counts.validated
-  // The badge is ABSENT, not "0", when the count is zero (Sidebar.tsx:91) -- so this guard
+  const expectedAwaiting = live.totals.awaiting_approval
+  // The badge is ABSENT, not "0", when the count is zero (Sidebar.tsx:92) -- so this guard
   // is what keeps the assertion below from being vacuous rather than mere defensiveness.
-  expect(expectedValidated, 'the fixtures must leave >=1 validated invoice, else the badge never renders').toBeGreaterThan(0)
+  // awaiting_approval only counts validated invoices an ACTIVE approval policy blocks, so
+  // this is the guard that goes red on an environment whose seeded policy or whose runs
+  // were wiped. Its non-zero leg is proved by
+  // TestSeed_AwaitingApprovalIsNonZeroAndBelowValidated.
+  expect(expectedAwaiting, 'the seeded active policy must leave >=1 invoice awaiting approval, else the badge never renders').toBeGreaterThan(0)
+  // The second guard is the one a single live read cannot supply. An unarmed validated
+  // invoice satisfies awaiting_approval's NOT EXISTS clause vacuously (dashboard/store.go),
+  // so the two fields differ only by the seeder's one APPROVED run -- and while they differ,
+  // a badge still wired to counts.validated cannot satisfy the assertion below.
+  expect(expectedAwaiting, 'awaiting_approval must differ from counts.validated, else this oracle cannot tell the two fields apart').not.toBe(live.totals.counts.validated)
   // The badge span is the only className="mono" inside a nav button (Sidebar.tsx:240-244);
   // the glyph beside it is an inline <svg> carrying no text, so this cannot pick up the
   // label. Scoped to the aside; in-house renders no company switcher, so every in-scope
   // button is a nav button.
   const approvalsBadge = navButton(page, 'Approvals').locator('.mono')
-  await expect(approvalsBadge).toHaveText(String(expectedValidated))
+  await expect(approvalsBadge).toHaveText(String(expectedAwaiting))
 
   // --- The click did something: the active-nav state moves to Approvals. ------------------
   // App.tsx:266's nav('approvals') sets view='invoices' + filter='Pending', and

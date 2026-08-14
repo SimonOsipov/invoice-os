@@ -396,7 +396,7 @@ async function expectRoleCard(page: Page, role: SeedRoleCard): Promise<void> {
  * `who.warn` renders as an inline `color: var(--status-red-text)` (else `var(--fg-2)`) —
  * RolesView.tsx:227-231. Checked on the literal CSS-variable reference the DOM carries, not
  * the browser's *resolved* color: this file's own font-weight check on the active nav item
- * (below persona-surfaces.spec.ts:338-340) already flagged a resolved design-system color as
+ * (below persona-surfaces.spec.ts:347-349) already flagged a resolved design-system color as
  * "a moving target" across engines, which `element.style.color` never is — it echoes back
  * exactly what React wrote, the same property the unit suite checks directly
  * (InvoicesList.test.tsx's `tin.style.color`).

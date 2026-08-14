@@ -13,6 +13,9 @@
 // Error('not implemented')` before ever calling the injected authedFetch (or, for the
 // pure helpers, before returning anything) — that IS the correct RED reason (assertion /
 // not-implemented), not an import/compile/setup error.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 
@@ -658,5 +661,40 @@ describe('readinessBars — QA adversarial', () => {
     expect(bars[1].pctLabel).toBe('90%')
     expect(bars[2].pct).toBeNull()
     expect(bars[2].pctLabel).toBe('—')
+  })
+})
+
+// LIB-DOC (Mode A RED). The two overlays overlap and the Reports card deliberately reads
+// neither of them -- the only thing stopping the next reader merging the three back together
+// is that all three are written down in one place. A source scan is the only oracle for a
+// doc comment.
+//
+// Walks up from the declaration rather than matching a fixed line range, so edits above it
+// don't silently move the scan off the block.
+function rollupBucketDoc(): string[] {
+  const lines = readFileSync(fileURLToPath(new URL('./dashboard.ts', import.meta.url)), 'utf8').split('\n')
+  const anchor = lines.findIndex((l) => l.startsWith('export interface RollupBucket'))
+  if (anchor < 0) return []
+  const block: string[] = []
+  for (let i = anchor - 1; i >= 0 && lines[i].trimStart().startsWith('//'); i--) block.unshift(lines[i])
+  return block
+}
+
+describe('LIB-DOC: the RollupBucket doc names both overlays and the Reports carve-out', () => {
+  // Control. Green today: if the scan below ever fails because it read the wrong region
+  // (or nothing at all), this fails first and says so.
+  it('the scan finds the doc block it claims to read', () => {
+    const block = rollupBucketDoc()
+
+    expect(block.length, 'a lost anchor or a one-line read cannot prove anything about the doc').toBeGreaterThanOrEqual(4)
+    expect(block.join('\n'), 'control needle, present today').toContain('needs_attention')
+    expect(block.join('\n'), 'control needle, present today').toContain('awaiting_approval')
+  })
+
+  it('the block names blocked_by_rules and the ReportsView carve-out', () => {
+    const doc = rollupBucketDoc().join('\n')
+
+    expect(doc, "the carve-out's source count must be named beside the overlays it is not").toContain('blocked_by_rules')
+    expect(doc, 'the consumer that deliberately reads it must be named').toContain('ReportsView')
   })
 })

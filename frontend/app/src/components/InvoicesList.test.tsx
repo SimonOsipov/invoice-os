@@ -814,3 +814,31 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
     expect((screen.getByLabelText('Select invoice INV-CLEAR') as HTMLInputElement).checked).toBe(true)
   })
 })
+
+// Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label
+// alone ("Needs attention") does not say so.
+const TOGGLE_EXPLAINER = 'Includes invoices an approver sent back.'
+
+describe('InvoicesList: the needs-attention toggle says what it now includes', () => {
+  it('the line is absent while the toggle is off, present while it is on, and gone again when it is off', async () => {
+    // Three responses: mount, the ON refetch, the OFF refetch (needsAttention is in `deps`).
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'o2', invoice_number: 'INV-OFF-2' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the unfiltered register must not carry the line').toBeNull()
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+    // Exact-text match: the copy is its own line, not a clause inside a longer paragraph.
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the ON filter must name what it sweeps in').not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-OFF-2')
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'toggling back off must remove it').toBeNull()
+  })
+})

@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { AGGREGATE_MAX_PAGES, AGGREGATE_PAGE_SIZE } from '../lib/invoices'
 import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
-import type { Rollup } from '../lib/dashboard'
+import type { Counts, Metrics, Rollup, RollupClient } from '../lib/dashboard'
 import type { PlatformCtx } from '../types'
 import { EXPORTS_BLOCKED_REASON, EXPORTS_BLOCKED_REASON_ID, ReportsView } from './ReportsView'
 
@@ -27,8 +27,9 @@ interface MockResponse {
 // second, independent async ladder ([dashboard-scope-per-client]) -- its own effect can run
 // (and its fetch land) interleaved with fetchAllInvoices' own page 1/2/... calls, so a plain
 // FIFO response queue would attach the wrong body to the wrong request. Routed by pathname
-// instead: the rollup call always gets ZERO_ROLLUP, and only invoices calls draw from the
-// queue -- keeping the queue's order exactly page 1, page 2, ... regardless of hook timing.
+// instead: the rollup call always gets mockFetch's `rollup` argument (ZERO_ROLLUP unless a
+// test supplies one), and only invoices calls draw from the queue -- keeping the queue's
+// order exactly page 1, page 2, ... regardless of hook timing.
 const ZERO_ROLLUP: Rollup = {
   totals: {
     counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
@@ -45,9 +46,9 @@ function isRollupUrl(url: string): boolean {
   return new URL(url).pathname.endsWith('/rollup')
 }
 
-function mockFetch(invoiceResponses: MockResponse[]) {
+function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLUP) {
   const queue = [...invoiceResponses]
-  const rollupResponse: MockResponse = { ok: true, status: 200, json: () => Promise.resolve(ZERO_ROLLUP) }
+  const rollupResponse: MockResponse = { ok: true, status: 200, json: () => Promise.resolve(rollup) }
   const fetchMock = vi.fn((url: string) => {
     if (isRollupUrl(url)) return Promise.resolve(rollupResponse)
     const next = queue.shift()
@@ -391,5 +392,80 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
 
   it('the pinned reason copy contains no promissory language (AC #6)', () => {
     expect(EXPORTS_BLOCKED_REASON).not.toMatch(/coming soon|will be|shortly|roadmap/i)
+  })
+})
+
+// Mode A RED specs. Every render above routes the rollup through ZERO_ROLLUP, which reads 0
+// under BOTH the old `needs_attention` source and the new `metrics.blocked_by_rules` one --
+// so nothing in this file could tell them apart before these three.
+const SUMMARY_COUNTS: Counts = { draft: 3, validated: 4, queued: 1, submitted: 1, accepted: 2, rejected: 1, failed: 1 } // 13
+
+// reportsCtx() selects 'ent-1' in firm mode, so scopedBucket resolves to this `clients` row,
+// not to `totals`. Both carry the same numbers anyway, so the fixture survives a mode change.
+function summaryRollup(needsAttention: number, metrics: Metrics): Rollup {
+  const bucket = { counts: SUMMARY_COUNTS, needs_attention: needsAttention, awaiting_approval: 0, metrics, top_violations: [] }
+  const client: RollupClient = { entity_id: 'ent-1', entity_name: 'Acme Co', ...bucket }
+  return { totals: bucket, clients: [client], top_violations: [] }
+}
+
+// One Validation-summary tile: the `.money` value sharing a parent with its `div.label`.
+// (Shallower than kpiValue above -- the KPI tiles wrap their label in a flex row, these don't.)
+function summaryTile(container: HTMLElement, label: string): string | undefined {
+  const labelEl = Array.from(container.querySelectorAll('div.label')).find((d) => d.textContent === label)
+  return labelEl?.parentElement?.querySelector('.money')?.textContent ?? undefined
+}
+
+// The `% PASS` chip in the card header, beside the "Validation summary" title.
+function passPct(container: HTMLElement): string | undefined {
+  const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Validation summary')
+  return title?.parentElement?.querySelector('span.mono')?.textContent ?? undefined
+}
+
+interface SummaryNumbers {
+  passed: string | undefined
+  failing: string | undefined
+  pct: string | undefined
+}
+
+async function renderSummary(rollup: Rollup): Promise<SummaryNumbers> {
+  mockFetch([listResponse([row({ id: 'inv-s', buyer_tin: tinFor(1), buyer_name: 'Summary Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], rollup)
+  const { container } = render(<ReportsView ctx={reportsCtx()} />)
+  // Waits on the card's own ready branch, not just the KPI grid -- the rollup is a second,
+  // independent async ladder and settles on its own schedule.
+  await screen.findByText('Passed')
+  return { passed: summaryTile(container, 'Passed'), failing: summaryTile(container, 'Failing'), pct: passPct(container) }
+}
+
+describe('ReportsView: the Validation summary reads blocked_by_rules, not needs_attention (AC-6, D-33/D-37)', () => {
+  it('a bucket whose overlay and violation count differ renders the violation count', async () => {
+    // The two sources are deliberately different non-zero numbers: 2 (blocked_by_rules) vs 7
+    // (the widened overlay). Old source renders 7 / 6 / 46% PASS, new renders 2 / 11 / 85%.
+    const summary = await renderSummary(summaryRollup(7, { blocked_by_rules: { num: 2, den: 13 } }))
+
+    expect(summary.failing, 'Failing must be the violation-derived count, not the overlay').toBe('2')
+    expect(summary.passed, 'Passed is bucketTotal - repFail (D-37: rejections and transmission failures land here)').toBe('11')
+    expect(summary.pct, '11 of 13').toBe('85% PASS')
+  })
+
+  it('a widened needs_attention does not move any of the three numbers', async () => {
+    const metrics: Metrics = { blocked_by_rules: { num: 2, den: 13 } }
+    const narrow = await renderSummary(summaryRollup(3, metrics))
+    cleanup()
+    vi.unstubAllGlobals()
+    const widened = await renderSummary(summaryRollup(9, metrics))
+
+    expect(widened, 'the overlay is the only thing that changed between these two renders').toEqual(narrow)
+    // Non-vacuity: an equality over three undefineds would otherwise pass on a card that
+    // never rendered.
+    expect(narrow).toEqual({ passed: '11', failing: '2', pct: '85% PASS' })
+  })
+
+  it('an absent blocked_by_rules metric reads zero failing, not the overlay and not a crash', async () => {
+    // EMPTY_BUCKET's shape. metricCount returns null for an absent key, so this pins the ?? 0.
+    const summary = await renderSummary(summaryRollup(7, {}))
+
+    expect(summary.failing).toBe('0')
+    expect(summary.passed).toBe('13')
+    expect(summary.pct).toBe('100% PASS')
   })
 })

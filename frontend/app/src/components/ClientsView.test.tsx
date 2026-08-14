@@ -502,3 +502,42 @@ describe('ClientsView: archive/restore action, per row (BUG-01-12)', () => {
     expect(rowCols).toEqual(headCols)
   })
 })
+
+// AC-4, the rendered half. ClientsView.test.ts pins healthPillStyle's copy directly; this
+// pins that HealthCell still routes the joined rollup count through it, so the widened
+// overlay reaches the pill as a bigger number and nothing else.
+function clientRow(entityId: string, needsAttention: number) {
+  return {
+    entity_id: entityId,
+    entity_name: entityId,
+    counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
+    needs_attention: needsAttention,
+    awaiting_approval: 0,
+    metrics: {},
+    top_violations: [],
+  }
+}
+
+function mockFetchWithRollup(rollup: Rollup) {
+  const fetchMock = vi.fn((url: string) => {
+    if (isRollupUrl(url)) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(rollup) })
+    return Promise.resolve(entitiesResponse(rowsForStatus(new URL(url).searchParams.get('status'))))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('ClientsView: the health pill is unchanged by the needs-attention widening', () => {
+  it('a joined count renders as the plural pill, and a row with no rollup entry reads NO INVOICES YET', async () => {
+    // a1 = Okafor & Partners (2 needing attention), a2 = Beta Traders (clear), r1 = Honeywell
+    // Group (absent from `clients` -- INNER JOIN, zero invoices).
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [clientRow('a1', 2), clientRow('a2', 0)] })
+
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    await within(rowFor('Okafor & Partners')).findByText('2 NEED ATTENTION')
+    expect(within(rowFor('Beta Traders')).getByText('ALL CLEAR')).toBeDefined()
+    expect(within(rowFor('Honeywell Group')).getByText('NO INVOICES YET')).toBeDefined()
+  })
+})

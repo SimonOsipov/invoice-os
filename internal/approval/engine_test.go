@@ -1,7 +1,7 @@
 package approval
 
-// evalCondition's oracle: frontend/app/src/lib/workflows.ts:461-476 (amount arm at
-// :462-471), boundary values transcribed from workflows.test.ts:674-687. Pure test —
+// evalCondition's oracle: evalCondition in frontend/app/src/lib/workflows.ts (its amount
+// arm), boundary values from workflows.test.ts's evalCondition block. Pure test —
 // never calls dbTestPools, so it cannot skip.
 
 import (
@@ -43,7 +43,7 @@ func TestEvalCondition_AmountMatchesSPA(t *testing.T) {
 		wantGT, wantGTE, wantLT, wantLTE bool
 	}{
 		{
-			"exact boundary, ₦500m seed threshold (workflows.test.ts:675-679)",
+			"exact boundary, ₦500m seed threshold (workflows.test.ts: boundary included)",
 			ptr("500000000.00"), dec("500000000.00"), false, true, false, true,
 		},
 		{
@@ -55,11 +55,11 @@ func TestEvalCondition_AmountMatchesSPA(t *testing.T) {
 			ptr("500000000.00"), dec("500000000.01"), true, true, false, false,
 		},
 		{
-			"SPA's own above/below fixture (workflows.test.ts:683-686)",
+			"SPA's own above/below fixture (workflows.test.ts: strictly above and below)",
 			ptr("250000000.00"), dec("250000001.00"), true, true, false, false,
 		},
 		{
-			"exact boundary, ₦1bn seed threshold (workflows.ts:147,180,193)",
+			"exact boundary, ₦1bn seed threshold (f1n4/h1n4/h2n3 in the policies.fixture.ts seed)",
 			ptr("1000000000.00"), dec("1000000000.00"), false, true, false, true,
 		},
 		{
@@ -157,7 +157,7 @@ func TestEvalCondition_AmountMatchesSPA(t *testing.T) {
 	}
 }
 
-// TestEvalCondition_UnknownOperatorIsFalse: workflows.ts:470 falls through to `<=` for
+// TestEvalCondition_UnknownOperatorIsFalse: workflows.ts's evalCondition falls through to `<=` for
 // an unrecognised operator, but that's the amount arm's internal ladder — there is no
 // field column server-side, and cond_op's CHECK admits only the four amount operators
 // (migrations/20260809210326_approval_policies.sql:96), so a foreign operator can never
@@ -204,8 +204,8 @@ func TestEvalCondition_HugeExponentTotalDoesNotHang(t *testing.T) {
 	}
 }
 
-// materialise's oracle: frontend/app/src/lib/workflows.ts:491-505 (simulate), boundary
-// values transcribed from workflows.test.ts:711-773. Pure test — never calls
+// materialise's oracle: simulate in frontend/app/src/lib/workflows.ts, boundary values
+// from workflows.test.ts's simulate block. Pure test — never calls
 // dbTestPools, so it cannot skip.
 
 // --- Step tree fixtures -------------------------------------------------------------
@@ -230,9 +230,10 @@ func stepCond(op, amount string, then, els []Step) Step {
 	return Step{Kind: "condition", CondOp: ptr(op), CondAmount: ptr(amount), Then: then, Else: els}
 }
 
-// polF1..polH2 transcribe the SPA seed's five policies (workflows.ts:137-196) into the
-// nested Step shape. Each returns a fresh tree per call, mirroring
-// workflows.test.ts:47's clone-per-call. The never-taken lanes are left nil rather than
+// polF1..polH2 transcribe the SPA seed's five policies (SEED_FIRM_POLICIES and
+// SEED_INHOUSE_POLICIES in policies.fixture.ts) into the nested Step shape. Each returns a fresh
+// tree per call, mirroring workflows.test.ts's clone-per-call polF1 helper. The
+// never-taken lanes are left nil rather than
 // []Step{}, since a hand-built literal may hold either (policy.go:19-30's Then/Else are
 // only guaranteed non-nil once nestSteps has run) — that is the "at least one fixture
 // with nil lanes" case the plan calls for.
@@ -263,7 +264,7 @@ func polF3() []Step {
 }
 
 // polH1's h1n4 is the only seeded condition with a non-empty else — the only lane in
-// the whole seed that can reach an autoapprove (workflows.ts:180).
+// the whole seed that can reach an autoapprove (h1n4 in the policies.fixture.ts seed).
 func polH1() []Step {
 	return []Step{
 		stepApproval("line_mgr", 48),
@@ -319,13 +320,13 @@ func TestMaterialise_LinearPassMatchesSimulate(t *testing.T) {
 		want     []runStep
 		wantAuto bool
 	}{
-		{"polF1 @1,000 (workflows.test.ts:727-730)", polF1(), dec("1000.00"),
+		{"polF1 @1,000 (workflows.test.ts: empty else branch)", polF1(), dec("1000.00"),
 			ordered(wantApproval("fin_mgr", 48), wantApproval("compliance", 24)), false},
 		{"polF1 @250,000,000.00 exact boundary, > is false", polF1(), dec("250000000.00"),
 			ordered(wantApproval("fin_mgr", 48), wantApproval("compliance", 24)), false},
-		{"polF1 @750,000,000 (workflows.test.ts:713-717)", polF1(), dec("750000000.00"),
+		{"polF1 @750,000,000 (workflows.test.ts: default scenario)", polF1(), dec("750000000.00"),
 			ordered(wantApproval("fin_mgr", 48), wantApproval("fin_dir", 48), wantApproval("compliance", 24)), false},
-		{"polF1 @2,000,000,000 (workflows.test.ts:722-724)", polF1(), dec("2000000000.00"),
+		{"polF1 @2,000,000,000 (workflows.test.ts: then branch taken)", polF1(), dec("2000000000.00"),
 			ordered(wantApproval("fin_mgr", 48), wantApproval("fin_dir", 48), wantApproval("cfo", 72),
 				wantNotify("Audit Committee", "Email"), wantApproval("compliance", 24)), false},
 		{"polF2 @500,000,000.00 exact boundary", polF2(), dec("500000000.00"),
@@ -338,10 +339,10 @@ func TestMaterialise_LinearPassMatchesSimulate(t *testing.T) {
 			ordered(wantApproval("fin_dir", 48), wantApproval("cfo", 72), wantApproval("compliance", 24)), false},
 		{"polH1 @100,000,000, else lane's autoapprove", polH1(), dec("100000000.00"),
 			ordered(wantApproval("line_mgr", 48), wantAutoapprove(), wantNotify("Tax Team", "In-app")), true},
-		{"polH1 @750,000,000 (workflows.test.ts:737-745)", polH1(), dec("750000000.00"),
+		{"polH1 @750,000,000 (workflows.test.ts: autoapprove reached)", polH1(), dec("750000000.00"),
 			ordered(wantApproval("line_mgr", 48), wantApproval("fin_dir", 48), wantAutoapprove(),
 				wantNotify("Tax Team", "In-app")), true},
-		{"polH1 @1,500,000,000 (workflows.test.ts:756-760)", polH1(), dec("1500000000.00"),
+		{"polH1 @1,500,000,000 (workflows.test.ts: CFO branch instead)", polH1(), dec("1500000000.00"),
 			ordered(wantApproval("line_mgr", 48), wantApproval("fin_dir", 48), wantApproval("cfo", 72),
 				wantNotify("Tax Team", "In-app")), false},
 		{"polH2 @999,999,999.99", polH2(), dec("999999999.99"),
@@ -409,7 +410,7 @@ func TestMaterialise_EmptyChosenLaneEmitsNothing(t *testing.T) {
 }
 
 // TestMaterialise_EmptyTreeEmitsNothing pins AC-3's other edge and the plan's slice
-// contract. Oracle: workflows.test.ts:771-773.
+// contract. Oracle: workflows.test.ts, an empty policy simulates to nothing at all.
 func TestMaterialise_EmptyTreeEmitsNothing(t *testing.T) {
 	cases := []struct {
 		name string
@@ -451,7 +452,7 @@ func TestMaterialise_OrdIsDenseAndZeroBased(t *testing.T) {
 }
 
 // TestMaterialise_AutoIsStickyAndDoesNotTruncate pins AC-4's non-truncating half.
-// Oracle: workflows.test.ts:747-753.
+// Oracle: workflows.test.ts, auto does NOT truncate the walk.
 func TestMaterialise_AutoIsStickyAndDoesNotTruncate(t *testing.T) {
 	steps, auto := materialise(polH1(), dec("750000000.00"))
 	if !auto {
@@ -472,7 +473,8 @@ func TestMaterialise_AutoIsStickyAndDoesNotTruncate(t *testing.T) {
 // (> ₦1bn) is true, so the then lane (cfo) is taken and the autoapprove sitting in the
 // untaken else lane must not set auto. An implementation that scans the whole TREE for
 // an autoapprove instead of the emitted list would flip this — a run that should still
-// need a cfo sign-off would close itself. Oracle: workflows.test.ts:756-760.
+// need a cfo sign-off would close itself. Oracle: workflows.test.ts, above ₦1,000,000,000
+// polH1 takes the CFO branch.
 func TestMaterialise_AutoIsFalseWhenTheAutoapproveIsInTheUntakenLane(t *testing.T) {
 	steps, auto := materialise(polH1(), dec("1500000000.00"))
 	if auto {

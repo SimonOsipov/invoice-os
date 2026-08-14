@@ -307,14 +307,24 @@ export function canSaveRole(name: string): boolean {
 }
 
 /**
- * The inline delete-confirm sentence, naming the role and its usage. The blocking clause is
- * dropped entirely on an unused role: nothing points at it, so nothing can block.
+ * The inline delete-confirm sentence for a LANDED policies fetch, naming the role and its
+ * usage; `deleteRoleConfirmUnknownUsage` below is the same question when it has not landed.
+ * The blocking clause is dropped entirely on an unused role: nothing points at it, so nothing
+ * can block.
  */
 export function deleteRoleConfirm(title: string, roleSteps: RoleSteps): string {
   const usage = roleUsage(roleSteps)
   // NOT IN BRIEF: the unused half. The used half is the brief's sentence.
   if (roleSteps.total === 0) return `Delete ${title}? It is ${usage}.`
   return `Delete ${title}? ${usage}. Those steps will block until you point them somewhere else.`
+}
+
+/**
+ * The same question with the usage clause WITHHELD — for a policies fetch that has not landed,
+ * where `steps` would read as "used nowhere". Claims no usage; the delete stays enabled.
+ */
+export function deleteRoleConfirmUnknownUsage(title: string): string {
+  return `Delete ${title}? Its policy usage could not be loaded, so any steps that name it will block until you point them somewhere else.`
 }
 
 // NOT IN BRIEF: §2 asks the header for "a one-line subtitle" and supplies neither line.

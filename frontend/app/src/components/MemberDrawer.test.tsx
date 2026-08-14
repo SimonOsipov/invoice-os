@@ -37,6 +37,10 @@ function drawerCtx(over: Record<string, unknown> = {}): PlatformCtx {
     roles: [],
     rolesState: 'ready',
     policies: [],
+    policiesState: 'ready',
+    policiesError: null,
+    refetchPolicies: vi.fn(),
+    publishPolicy: vi.fn(),
     mode: 'firm',
     staffRole: vi.fn().mockResolvedValue(undefined),
     renameRole: vi.fn(),
@@ -132,7 +136,8 @@ describe('APPR-04-06 AC4: drawer copy this subtask does not own stays byte-uncha
       name: 'Test policy',
       scope: 'All invoices',
       status: 'draft',
-      updated: 'now',
+      version: 1,
+      activeVersion: null,
       nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
     }
     render(
@@ -217,7 +222,8 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
       name: 'Test policy',
       scope: 'All invoices',
       status: 'draft',
-      updated: 'now',
+      version: 1,
+      activeVersion: null,
       nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
     }
     render(
@@ -299,5 +305,67 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
 
     const pill = screen.getByTestId('drawer-wfrole-cfo')
     expect(pill.getAttribute('aria-pressed'), 'the real held role must render once the retry lands, not stay stuck on the error swap').toBe('true')
+  })
+})
+
+// ============================================================================
+// APPR-09-06 (task-510) — AC-2, pinned rather than changed
+// ============================================================================
+// ALREADY GREEN on write, deliberately. AC-2 asks for "the same loading affordance" over an
+// unlanded policies fetch, but its premise is false: `stepsForMember` answers `null` at zero BY
+// CONTRACT (lib/roles.ts:170-173 — "THE GATE IS THE COUNT: holding a role a policy never names
+// answers `null`, not a section reading 'Named in 0 approval steps' above an empty list"), and
+// MemberDrawer.tsx:306 renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
+// false claim. An affordance here would contradict a shipped design note, so this pins the
+// contract instead: the gate stays the null, never a count re-derived off `ctx.policies`.
+
+describe('APPR-09-06 AC-2: an unlanded policies fetch renders no steps line at all', () => {
+  it('the drawer renders no steps line, not a zero-step line, while policies are unlanded', () => {
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [role({ key: 'cfo', members: ['u2'] })], policies: [], policiesState: 'loading' })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    // Population floor: the panel that WOULD carry the steps line did render. The landed
+    // counterpart — the same drawer printing its real count — is the spec at line 159 above.
+    expect(screen.getByTestId('drawer-wfrole-helper').textContent).toBe(drawerRoleHelper('preparer'))
+    expect(screen.queryByTestId('member-steps-named'), 'an unlanded policies fetch rendered a step count').toBeNull()
+    expect(screen.queryByText(stepsNamedLine(0))).toBeNull()
+  })
+
+  // QA (Stage 4). The DELIBERATE DIVERGENCE from RolesView and RoleModal, pinned so it reads
+  // as a decision rather than an oversight. Those two withhold their sentence whenever the
+  // status is unlanded, INCLUDING a refetch that still holds the last landed rows — reachable
+  // via createPolicy/deletePolicy, which dispatch 'start' while the mirror keeps its rows
+  // (App.tsx:299-301,:1037,:1046). This drawer does not, and does not need to: its gate is
+  // `stepsForMember`'s null-at-zero, so it can only ever be one round trip STALE, never
+  // negatively wrong. Withholding a true count to avoid a claim it never makes would blank a
+  // shipped section for nothing.
+  it('a refetch that still holds its rows keeps printing the count — the gate is the null, not the status', () => {
+    const policy: Policy = {
+      id: 'p1',
+      name: 'Test policy',
+      scope: 'All invoices',
+      status: 'draft',
+      version: 1,
+      activeVersion: null,
+      nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
+    }
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [role({ key: 'cfo', members: ['u2'] })], policies: [policy], policiesState: 'loading' })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(1))
   })
 })

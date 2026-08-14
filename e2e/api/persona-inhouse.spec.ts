@@ -44,14 +44,14 @@
 //
 // ASSERTION DISCIPLINE. All three suites share one deployment with no reset between them
 // (docs/e2e-convention.md "One browser, serial"), and this tenant's counts grow as the run
-// proceeds (topology/persona-surfaces.spec.ts:296-304 leaves >=2 validated invoices behind,
+// proceeds (topology/persona-surfaces.spec.ts:303-309 leaves >=2 validated invoices behind,
 // and a retried test re-runs against what its first attempt already wrote).
 // So every assertion here is containment by an id/invoice_number THIS FILE created, a
 // `>=`, a single row's own fields, or — for the rollup — a before/after DELTA measured
 // inside one test. Never `toHaveLength`, never `pagination.total === n`, never
 // `counts.<state> === n`.
 //
-// HONEST SCOPING. topology/persona-surfaces.spec.ts:296-304 already drives this tenant to
+// HONEST SCOPING. topology/persona-surfaces.spec.ts:303-309 already drives this tenant to
 // `validated` in the BROWSER layer; IH-3 is the first to do it in the API layer, and the
 // first `getInvoiceHistory` call with this tenant's token anywhere. `listEntities` and
 // `listInvoices` had never been called with this tenant's token at all.
@@ -237,7 +237,7 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
     // so the validate gate's promotion path and the invoice_status_history write +
     // RLS-scoped read (internal/invoice/store.go:404-427) had only ever been proven for the
     // seeded firm. `getInvoiceHistory` had never been called with this tenant's token at
-    // all. Honest scoping: topology/persona-surfaces.spec.ts:296-304 already drives this
+    // all. Honest scoping: topology/persona-surfaces.spec.ts:303-309 already drives this
     // tenant to `validated` in the BROWSER layer — this is the first in the API layer, not
     // the first in the repo.
     const validated = await createValidatedInvoice(token, entityOne.id, `INV-P01-06-HIST-${freshTin()}`)
@@ -269,7 +269,7 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
     // entity-scoped". The entity-scoped variant is deliberately NOT added: client.ts's
     // ListInvoicesQuery does not expose entity_id (client.ts:326-331), that param is the
     // firm screen's path, and it is already asserted at
-    // topology/persona-surfaces.spec.ts:450-456.
+    // topology/persona-surfaces.spec.ts:450-461.
     const { invoices, pagination } = await listInvoices(token)
 
     // Page 1 is sufficient HERE (unlike listEntities in IH-2, which pages): this list is
@@ -298,12 +298,12 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
   test('IH-5: the rollup validated count rises by exactly the number of validated fixtures created', async () => {
     // The DELTA is the whole point of this cell. [PERSONA-01-03] asserts the rendered
     // Approvals badge EQUALS a live rollup() read (topology/persona-surfaces.spec.ts:
-    // 316-317) — same route, same field on both sides — so if counts.validated were wrong,
+    // 321-331) — same route, same field on both sides — so if counts.validated were wrong,
     // both sides would be wrong TOGETHER and that test would still pass. Pinning the number
     // to fixture reality is the half the browser layer structurally cannot supply.
     //
     // An ABSOLUTE assertion here would rot: this tenant's validated count is already
-    // non-zero at seed and grows as the run proceeds (persona-surfaces.spec.ts:296-304),
+    // non-zero at seed and grows as the run proceeds (persona-surfaces.spec.ts:303-309),
     // and a retry re-runs this test against its own first attempt's writes. The delta
     // survives all of that because the api suite runs serial (workers:1) and
     // dev-env.yml runs it BEFORE the topology suite, so nothing mutates this tenant between

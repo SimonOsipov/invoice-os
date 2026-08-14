@@ -234,10 +234,12 @@ consults them: `TransmitClearTx` reads `approval_policy_versions` for `is_active
 gate tests.
 
 The SPA's empty state is the product wording for that, and it is talking about the
-*approval* gate rather than about who may transmit:
+*approval* gate rather than about who may transmit. It renders as a shared `EmptyState`
+card, so the sentence is two nodes — a title and a message — rather than the one line it
+reads as:
 
-> No approval policies yet — every invoice transmits as soon as it validates. Create
-> one to require sign-off first.
+> **No approval policies yet**
+> Every invoice transmits as soon as it validates. Create one to require sign-off first.
 >
 > — `frontend/app/src/components/WorkflowsView.tsx`
 
@@ -585,18 +587,18 @@ Five further scope options exist in the product's scope dropdown:
 backing invoice classification, so a policy carrying one would route nothing while
 appearing to route something.
 
-> **Not yet removed from the editor — and nothing rejects them there.** The scope dropdown
-> still offers all six options: `WF_SCOPE_OPTIONS`
-> (`frontend/app/src/lib/workflows.ts:107-114`) still declares them and
-> `WorkflowBuilder.tsx:56` still maps the whole list into the rendered select. Three of
-> them also still appear as scopes on mock policy data.
+> **Not yet removed from the editor.** The scope dropdown still offers all six options:
+> `WF_SCOPE_OPTIONS` (`frontend/app/src/lib/workflows.ts`) declares them and
+> `WorkflowBuilder.tsx` maps the whole list into the rendered `Applies` select.
 >
-> Selecting one and saving is **not** refused, because **nothing is sent**. The builder is
-> not wired to this API at all — the SPA makes no call to `/v1/approval-policies` anywhere,
-> and its `publishPolicy` is a local object transform. The screen accepts an unstorable
-> scope and displays it as published. The server's refusal is real but only reachable by
-> calling the API directly; the editor will not start meeting it until **APPR-09** wires
-> the builder to the server.
+> **The editor now reaches this API** (APPR-09): the SPA's `/v1/approval-policies` wrappers
+> (`frontend/app/src/lib/policies.ts`) have live callers in `App.tsx`, and a draft edit goes
+> to `PUT /v1/approval-policies/{id}/draft`. Selecting one of the five unsupported scopes is
+> therefore **refused by the rule above** — `400 invalid request` — where the screen
+> previously accepted an unstorable scope and displayed it as published. The builder now
+> renders that refusal verbatim in its own write-error slot (`policy-save-error` /
+> `policy-publish-error`, `WorkflowBuilder.tsx`), and the in-flight lock clears in a `finally`
+> so the form re-opens over it rather than stranding the user in a dead one.
 >
 > Deleting them from the palette is **APPR-10's unbuilt work**, under the rule that **a
 > control which fails invisibly is removed, while a control that announces its own
@@ -722,9 +724,10 @@ NULL` is both the existence predicate and the idempotency mechanism.
 
 ## 10. Handed forward
 
-Two gaps that are real, verified, and deliberately left for the stories that follow. A
-third — that the arming engine must read the active tree from the database rather than
-from the API — has since been **satisfied**, and is recorded below as shipped.
+One gap that is real, verified, and deliberately left for the stories that follow. Two
+others have since been **satisfied** and are recorded below as shipped: the arming engine
+reads the active tree from the database rather than from the API, and the policy list no
+longer claims an update time it has no column for.
 
 ### The in-force step tree is not obtainable from the API
 
@@ -757,16 +760,20 @@ Two consequences, both correctness-relevant:
 The natural fix is a dedicated read of the active version's tree. It is not in scope here
 and has no owner yet.
 
-### No `updated` timestamp exists
+### No `updated` timestamp exists — and the list no longer claims one (shipped)
 
-The policy list renders `Updated {policy.updated}` for each row
-(`frontend/app/src/components/WorkflowsView.tsx:109`), but there is no such value on the
-server. `approval_policies` has exactly six columns — `id`, `tenant_id`, `name`, `scope`,
+`approval_policies` has exactly six columns — `id`, `tenant_id`, `name`, `scope`,
 `created_at`, `deleted_at` — with **no** `updated_at`, and nothing on the wire carries an
-update time. The field is satisfied from placeholder data.
+update time.
 
-Anything that surfaces a real modification time needs a new column and a new wire field
-first. This is handed to APPR-09, which points the builder at the server.
+The policy list used to render `Updated {policy.updated}` from placeholder data. APPR-09
+removed it: each row now states its **version standing** instead — `policyStanding`
+(`frontend/app/src/lib/policies.ts`), read from `version`/`activeVersion`, e.g. `v3 in
+force` or `v3 in force · v4 draft`. `Policy.updated` is gone from the SPA's type, so
+nothing can render an update time by accident.
+
+Anything that surfaces a real modification time still needs a new column and a new wire
+field first. Nothing asks for one today.
 
 ---
 

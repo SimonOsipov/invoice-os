@@ -139,11 +139,17 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     tenantName: 'Honeywell Group',
     // ALL EIGHT of the in-house sidebar's surfaces, every one DRIVEN (rendered content
     // asserted, not a mount) by persona-surfaces.spec.ts -- seven by PERSONA-01-03's sweep,
-    // and NAV_WORKFLOWS by the depth [PERSONA-01-04] added inside that same sweep's
-    // Workflows block. That cell points HERE and not at topology/workflows.spec.ts, which
-    // never signs in as in-house: filing it there would claim coverage that file does not
-    // provide, which is the exact bookkeeping this registry exists to prevent
-    // ([coverage-honesty]). Listed in sidebar-roster order.
+    // and NAV_WORKFLOWS by the Workflows block inside that same sweep. That cell points HERE
+    // and not at topology/workflows.spec.ts, which never signs in as in-house: filing it
+    // there would claim coverage that file does not provide, which is the exact bookkeeping
+    // this registry exists to prevent ([coverage-honesty]). Listed in sidebar-roster order.
+    //
+    // NAV_WORKFLOWS' cell was justified by the depth [PERSONA-01-04] added -- a count, status
+    // pills and `scope · summary` lines. APPR-09-08 deleted all of it: it was transcribed from
+    // a frontend fixture, and nothing seeds approval_policies. The grade stays `drives` on
+    // what replaced it -- the h1, the tenant-driven subtitle, and a settle on either terminal
+    // arm of the policies list. That last one is why this is still not a mount: the first two
+    // render above the ladder and pass on a fetch that never landed, and the settle does not.
     coverage: [
       { navConst: 'NAV_DASHBOARD', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_INVOICES', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },

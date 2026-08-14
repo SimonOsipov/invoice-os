@@ -27,7 +27,6 @@ import { test, expect, type Page } from '@playwright/test'
 import { createEntity, createInvoice, login, rollup, validateInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, sidebarRoster, signInAs } from '../personaSession'
-import { MOCK_FIRM_POLICIES, MOCK_INHOUSE_POLICIES } from './policyFixtures'
 import { FIRM_PERSONA, INHOUSE_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
@@ -210,20 +209,21 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(violations.locator('tbody tr').first().locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
 
   // --- Workflows ------------------------------------------------------------------------
-  // Pins MOCK FIXTURE BEHAVIOUR (SEED_INHOUSE_POLICIES, lib/workflows.ts:167-186), not a
-  // backend contract -- there is no approvals endpoint; ctx.savePolicy lives in App.tsx
-  // useState. [workflows-included]'s recorded trade-off: sweeping it is still worth doing,
-  // because a persona-conditional render breaking is exactly what this story guards.
-  // Swept here; its COVERAGE CELL was filed by [PERSONA-01-04] -- see immediately below.
+  // LIVE, and deliberately thin. APPR-09 wired this list to internal/approval, so everything
+  // this block used to assert below the subtitle -- the count, the status pills, the
+  // `scope · summary` lines, the `Updated` stamps and the two policy NAMES -- was transcribed
+  // from topology/policyFixtures.ts, a frontend constant. Nothing seeds approval_policies, so
+  // those strings describe rows that do not exist. They went with the import (APPR-09-08).
   //
-  // PERSONA-01-04 (task-273) added the DEPTH below the existing name assertions -- the
-  // count, the status pills, the `scope · summary` lines, and the ABSENCE of every firm
-  // policy name (SEED_FIRM_POLICIES, lib/workflows.ts:135-165). Same mock-only caveat, and
-  // it is worth restating because those strings LOOK like data: they pin frontend constants
-  // (see topology/policyFixtures.ts's header), never a server, and must be re-derived from
-  // live reads the day an approvals endpoint lands. That subtask also filed the in-house
-  // NAV_WORKFLOWS coverage cell against THIS file, because this is where the in-house list
-  // is actually driven; the FIRM half is topology/workflows.spec.ts.
+  // The firm/in-house DISJOINTNESS proof went with them rather than being re-derived: this
+  // list is a tenant-scoped SERVER read now, so a firm policy cannot appear in it by
+  // construction and the assertion would be tautological. RLS proves it where it is a real
+  // claim -- at the wire, in api/contract-approvals.spec.ts's cross-tenant test.
+  //
+  // What survives is seed-independent by construction, and is what the in-house
+  // NAV_WORKFLOWS coverage cell (personas.ts) now rests on. The FIRM half of this screen,
+  // including the whole write path, is topology/workflows.spec.ts, which never signs in as
+  // in-house.
   await goTo(page, 'Workflows')
   await expect(page.getByRole('heading', { level: 1, name: 'Approval policies', exact: true })).toBeVisible()
   // active.short === the tenant name here: shortName()'s LEGAL_SUFFIX (/\s+(ltd\.?|limited|
@@ -231,35 +231,16 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(
     page.getByText(`Who must sign off before ${INHOUSE_PERSONA.tenantName} transmits an invoice.`, { exact: true }),
   ).toBeVisible()
-  await expect(page.getByText('Company approval policy', { exact: true })).toBeVisible()
-  await expect(page.getByText('Capital expenditure', { exact: true })).toBeVisible()
-
-  // The [PERSONA-01-04] depth, ADDITIVE to the two name assertions above. Scoped to
-  // WorkflowsView's root (data-screen-label="Workflow builder", WorkflowsView.tsx:22 -- the
-  // only occurrence in frontend/app/src), because .pf-row is also RulesView's row class.
-  //
-  // The literal '2 POLICIES' is legal here only because it counts a fixed FRONTEND MOCK set
-  // that no test run can grow -- this file's COUNT ASSERTIONS note (:19-23) bans literals
-  // against LIVE tenant-wide lists, and none of these three assertions reads one.
-  const wfScreen = page.locator('[data-screen-label="Workflow builder"]')
-  const wfRows = wfScreen.locator('.pf-row')
-  await expect(wfScreen.getByText(`${MOCK_INHOUSE_POLICIES.length} POLICIES`, { exact: true })).toBeVisible()
-  await expect(wfRows).toHaveCount(MOCK_INHOUSE_POLICIES.length)
-  for (const [i, p] of MOCK_INHOUSE_POLICIES.entries()) {
-    // nth(i) pins ORDER; p.name is deliberately not restated -- the two assertions above are
-    // the sweep's own content proof and stay the owner of it.
-    const row = wfRows.nth(i)
-    await expect(row).toContainText(p.pill)
-    await expect(row).toContainText(p.summaryLine)
-    await expect(row).toContainText(`Updated ${p.updated}`)
-  }
-  // Disjointness, in-house half -- the mirror of topology/workflows.spec.ts's check, asserted
-  // here because this is where the in-house list is already on screen. Two disjoint sets is
-  // what "the store is keyed firm/inhouse" (lib/workflows.ts:204) means observationally, and
-  // the seeds getting crossed between the two modes is the failure it catches.
-  for (const p of MOCK_FIRM_POLICIES) {
-    await expect(wfScreen.getByText(p.name, { exact: true })).toHaveCount(0)
-  }
+  // The heading and the subtitle both render ABOVE the ladder (WorkflowsView.tsx), so both
+  // pass while the policies fetch is still in flight or has errored. This is the only
+  // surviving assertion that requires THIS tenant's fetch to have LANDED, which is the
+  // difference between `drives` and a bare mount. Either terminal arm satisfies it -- an
+  // empty workspace is a legal state here -- so it stays seed-independent. Same locator
+  // topology/workflows.spec.ts settles on.
+  await expect(
+    page.locator('[data-testid="policies-list"], [data-testid="policies-empty"]'),
+    'the in-house policies fetch must land, not merely the screen mount',
+  ).toBeVisible()
 
   // --- Rules ----------------------------------------------------------------------------
   // Pins MOCK FIXTURE BEHAVIOUR (GOLDEN_RULES / GOLDEN_SET, lib/rules.ts), not a backend

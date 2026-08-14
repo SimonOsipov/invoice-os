@@ -12,6 +12,8 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Member } from '../lib/members'
+import type { Role } from '../lib/roles'
+import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { MembersTable } from './MembersTable'
 
@@ -139,5 +141,60 @@ describe('APPR-04-06 QA: every unlanded rolesState reads the same as loading, no
 
     const cell = roleCellOf(screen.getByTestId('member-row'))
     expect(cell.textContent).toBe('')
+  })
+})
+
+// ============================================================================
+// APPR-09-06 (task-510) — AC-2, pinned rather than changed
+// ============================================================================
+// The subtask's Steps named this file as a `ctx.policies` reader needing a status gate. Stage 1
+// shrank that scope, and Stage 4 re-verified it at source: `stepsForMember` answers `null` at
+// zero BY CONTRACT (lib/roles.ts:170-178), `blocked` collapses that to 0, and the strip is
+// `{blocked > 0 && …}` (MembersTable.tsx:292). An unlanded policies fetch therefore renders
+// NOTHING — a fail-safe omission, never the false claim RolesView and RoleModal carried.
+// Nothing pinned that here, so a later edit to `stepsForMember` could un-fail-safe it with this
+// file's suite still green. This is that pin.
+
+describe('APPR-09-06 AC-2: an unlanded policies fetch renders no blocked-steps strip', () => {
+  const CFO: Role = { key: 'cfo', title: 'CFO', desc: '', members: ['u9'] }
+  const NAMING_CFO: Policy = {
+    id: 'p1',
+    name: 'Test policy',
+    scope: 'All invoices',
+    status: 'draft',
+    version: 1,
+    activeVersion: null,
+    nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
+  }
+
+  function renderTable(policies: Policy[]) {
+    const m = member({ id: 'u9', name: 'Cy Person', initials: 'CP', status: 'suspended' })
+    render(
+      <MembersTable
+        ctx={ctxWith({ members: [m], rolesState: 'ready' })}
+        rows={[m]}
+        policies={policies}
+        roles={[CFO]}
+        onOpen={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+  }
+
+  it('the strip renders once the fetch lands — the population floor under the absence below', () => {
+    renderTable([NAMING_CFO])
+
+    expect(screen.getByTestId('member-steps-warning').textContent, 'the landed strip never rendered').toContain(
+      'Named in 1 approval step',
+    )
+  })
+
+  it('a never-landed policies fetch renders no strip at all, not a zero-step one', () => {
+    renderTable([])
+
+    expect(screen.getByTestId('member-row'), 'the row did not render, so the absence below is vacuous').toBeTruthy()
+    expect(screen.queryByTestId('member-steps-warning'), 'an unlanded policies fetch claimed a blocked-step count').toBeNull()
+    expect(screen.queryByText(/Named in 0 approval steps/)).toBeNull()
   })
 })

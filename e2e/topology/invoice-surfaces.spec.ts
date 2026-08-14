@@ -1957,10 +1957,10 @@ test('buyer-tin: register and detail agree on missing, malformed, and well-forme
 // cross-tenant parity are invisible from a browser and live in e2e/api/contract-ubl.spec.ts,
 // which is what keeps this layer thin.
 //
-// This import sits at the FOOT of the file, not the head: five files cite this spec by line
-// (personaSession.ts:77, persona-surfaces.spec.ts:109, workflows.spec.ts:39,
-// portfolio.spec.ts:71, rule_set_v3_test.go:386) and one inserted line at the top would
-// shift every one of them. ESM hoists import declarations, so the position is style only.
+// This import sits at the FOOT of the file, not the head: four files cite this spec by line
+// (personaSession.ts:77, persona-surfaces.spec.ts:109, portfolio.spec.ts:71,
+// rule_set_v3_test.go:386) and one inserted line at the top would shift every one of them.
+// ESM hoists import declarations, so the position is style only.
 import { readFileSync } from 'node:fs'
 
 test("invoice detail: View UBL/XML renders the server's own document, and Download saves exactly those bytes", async ({

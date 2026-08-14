@@ -303,16 +303,18 @@ export type PlatformCtx = {
   openRuleKey: string | null
 
   // --- Workflows screen -----------------------------------------------------
-  // Approval policies for the CURRENT WORKSPACE, already resolved out of the
-  // per-mode store in App.tsx. Per mode, not per client: the prototype keys this set
-  // on firm/in-house and switching company in firm mode does not change it, which is
-  // also why the nav item sits in the firm-wide sidebar group (lib/workflows.ts).
+  // The tenant's approval policies, fetched in App.tsx — the `members` triple below,
+  // same shape and reason. Per TENANT: switching company does not change them, which is
+  // why the nav item sits in the firm-wide sidebar group (Sidebar.tsx).
   //
-  // Only the store and "which policy is open" live here. Everything transient inside
-  // the builder — node selection, the drag/drop hint, the scenario inputs, the saved
-  // flash — is local to WorkflowsView, following the ClientsView precedent: it is
-  // derived from that one view and nothing else reads it.
+  // Only the list and "which policy is open" live here. Builder-transient state — node
+  // selection, the drag/drop hint, the scenario inputs, the saved flash, the in-flight write
+  // lock — is local to WorkflowBuilder, and the list's two write-error slots to WorkflowsView:
+  // the ClientsView precedent, each derived from one view and read nowhere else.
   policies: Policy[]
+  policiesState: AsyncStatus
+  policiesError: ApiError | null
+  refetchPolicies: () => void
   /** Id of the policy open in the builder; null shows the policy list. */
   editingPolicyId: string | null
 
@@ -337,8 +339,9 @@ export type PlatformCtx = {
   // --- Settings › Roles tab -------------------------------------------------
   // The tenant's approval seats, fetched ONCE in App.tsx and shared by the Roles tab and
   // the Workflows builder — the `members` triple above, same shape and reason. Per
-  // TENANT, not per workspace mode: `policies` above keeps its own per-mode store, so the
-  // two are asymmetric on purpose.
+  // TENANT, like `policies` above: one persona is one tenant, and a policy's steps point
+  // at these seats, so the two must resolve for the same tenant or a step renders as a
+  // deleted role.
   roles: Role[]
   rolesState: AsyncStatus
   rolesError: ApiError | null
@@ -473,14 +476,19 @@ export type PlatformCtx = {
   addSuggestedRule: (s: Suggestion) => void
   toggleCustomRule: (key: string) => void
   removeCustomRule: (key: string) => void
-  // Workflows screen. `savePolicy` is the ONE write funnel: the builder composes the
-  // next Policy with the pure reducers in lib/workflows.ts and hands the whole object
-  // back, so App.tsx never needs to know the node tree's shape.
+  // Workflows screen. `savePolicy` is the ONE write funnel for a policy's contents: the
+  // builder composes the next Policy with the pure reducers in lib/workflows.ts and hands
+  // the whole object back, so App.tsx never needs to know the node tree's shape. It
+  // resolves the SERVER's row, which re-mints every step id and may bump the version.
+  //
+  // Publishing is its own verb because saving no longer publishes: the server seals a
+  // version, and sealing on every Save would silently override the policy in force.
   openPolicy: (id: string) => void
   closePolicy: () => void
-  createPolicy: () => void
-  deletePolicy: (id: string) => void
-  savePolicy: (next: Policy) => void
+  createPolicy: () => Promise<void>
+  deletePolicy: (id: string) => Promise<void>
+  savePolicy: (next: Policy) => Promise<Policy>
+  publishPolicy: (id: string) => Promise<Policy>
   // Settings › Members. The ONE membership write the server backs. It resolves once the
   // server's own row has replaced the old one, and REJECTS with the gateway's ApiError
   // unreshaped — the caller renders that message at the control, so nothing here may

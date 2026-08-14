@@ -1,8 +1,8 @@
 // MOCK FIXTURE EXPECTATIONS — NOT A BACKEND CONTRACT.
 //
-// Every value below is transcribed from frontend/app/src/lib/workflows.ts's
-// SEED_FIRM_POLICIES (:135-165) / SEED_INHOUSE_POLICIES (:167-194) and the derived
-// labels policySummary() (:422-428) and POLICY_TONE (WorkflowParts.tsx:171-174).
+// Every value below is transcribed from frontend/app/src/lib/policies.fixture.ts's
+// SEED_FIRM_POLICIES / SEED_INHOUSE_POLICIES and the derived labels policySummary()
+// and POLICY_TONE (WorkflowParts.tsx:171-174).
 // lib/workflows.ts:9 states it outright: "Everything here is mock data + pure
 // functions. There is no approvals endpoint (the backend has no approval concept at
 // all)". The policy store is App.tsx:206 useState — it resets on page reload and no

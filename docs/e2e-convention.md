@@ -93,13 +93,24 @@ runs in `node`, so the repo has no DOM component-test layer, and a browser check
 only place a control, a route guard, or a scroll-spy can be exercised at all.
 
 **Mock-backed assertions pin fixtures, not contracts — and the spec must say so in-file.**
-A spec asserting an ops-console counter or an approval-policy list asserts that a seeded
-fixture and a pure function over it still agree; it will need revisiting when a real
-endpoint lands (`frontend/app/src/lib/workflows.ts:9` — "There is no approvals endpoint").
-Writing such an assertion as though it proved a contract is the failure this rule prevents;
-refusing to write it at all leaves a shipped screen untested. So: write it, and label it.
+A spec asserting an ops-console counter asserts that a seeded fixture and a pure function
+over it still agree; it will need revisiting when a real endpoint lands. Writing such an
+assertion as though it proved a contract is the failure this rule prevents; refusing to
+write it at all leaves a shipped screen untested. So: write it, and label it.
 
-Mock-only `app` surfaces follow the same rule. **Workflows, Reports and Settings** carry
+The approval-policy list was the other example until APPR-09, and is no longer one: the
+endpoints are real (`docs/approvals.md`), `App.tsx` fetches them, and both specs over that
+surface have been re-derived against live data (APPR-09-07/08). `e2e/topology/workflows.spec.ts`
+holds the firm half — it creates its own policy through the UI, imports no fixture, and never
+publishes (`[topology-never-publishes]`: a publish seals a version permanently and takes the
+tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` builds and
+deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
+now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
+nothing seeds `approval_policies`, so `persona-surfaces.spec.ts` has no pre-existing row to
+name; `workflows.spec.ts` and `roles.spec.ts` name only rows they create. `policyFixtures.ts`
+is imported by nothing and stays on disk for APPR-10 to delete.
+
+Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The
 company switcher and onboarding dashboard are not nav surfaces and hold no
 coverage cell — note that the switcher *is* **operated** by `workflows.spec.ts` and

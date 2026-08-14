@@ -4910,7 +4910,7 @@ func TestSeedAllFiveHolderStatesAreReachable(t *testing.T) {
 	}
 }
 
-// firmPolicyRoleKeys are the approval-node role keys frontend/app/src/lib/workflows.ts's
+// firmPolicyRoleKeys are the approval-node role keys frontend/app/src/lib/policies.fixture.ts's
 // SEED_FIRM_POLICIES names (polF1-polF3) -- verified against the source, no key drift.
 var firmPolicyRoleKeys = []string{"fin_mgr", "fin_dir", "cfo", "compliance"}
 

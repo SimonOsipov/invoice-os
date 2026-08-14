@@ -415,7 +415,7 @@ describe('notify targets (T1.29–T1.31, §11.4)', () => {
   })
 
   it('keeps a legacy stored target selectable, appended last (T1.30)', () => {
-    // polH1's seeded notify target (workflows.ts:179) is not a department or a committee.
+    // polH1's seeded notify target (h1n7 in the policies.fixture.ts seed) is not a department or a committee.
     expect(inhouseNotifyTargets('Tax Team')).toEqual([...NOTIFY_BASE, 'Tax Team'])
   })
 

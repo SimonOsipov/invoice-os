@@ -1243,8 +1243,8 @@ describe('APPR-09-05: the builder carries exactly two write controls', () => {
 // ----------------------------------------------------------------------------
 // APPR-10-01 — the Applies control offers only the scope the server stores
 // ----------------------------------------------------------------------------
-// RED before the change: the select still renders six options and the sentence does not
-// exist. A LITERAL, per the same rule as the copy consts above.
+// A LITERAL, per the same rule as the copy consts above: a test that imports the string
+// it checks would follow a typo into the product.
 
 const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
 
@@ -1284,5 +1284,71 @@ describe('APPR-10-01 AC-11: the scope select stays enabled at rest', () => {
     const sel = scopeSelect()
     expect(sel.disabled, 'D-A: the scope select is explained, not disabled').toBe(false)
     expect(inert(sel), 'D-A: a disabled fieldset ancestor disables it just as well').toBe(false)
+  })
+})
+
+// --- APPR-10-01 QA: adversarial cover over the four ACs above -----------------
+
+describe('APPR-10-01 QA AC-2: the one option is labelled, and it is the one on screen', () => {
+  it('carries a visible label and is the control’s current value', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    const opts = Array.from(scopeSelect().options)
+    // SCOPE_OPTIONS maps value AND label; a valued option with a blank label passes an
+    // option-value assertion while the dropdown renders empty.
+    expect(opts, 'no options rendered, so the label assertion below is vacuous').toHaveLength(1)
+    expect(opts[0].textContent, 'a valued option with no label renders a blank dropdown').toBe('All invoices')
+    expect(scopeSelect().value, 'the control does not show the scope it was handed').toBe('All invoices')
+  })
+})
+
+describe('APPR-10-01 QA AC-3/AC-11: the note is copy, not the disabled recipe (D-A)', () => {
+  it('no tooltip, no aria-describedby, no dead paint, no fieldset', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    const sel = scopeSelect()
+    const note = screen.getByText(SCOPE_NOT_ROUTED)
+    expect(sel.title, 'a tooltip is layer 2 of the disabled recipe, and this control is live').toBeFalsy()
+    expect(sel.getAttribute('aria-describedby'), 'D-A: the note explains the product, it does not describe a blocked control').toBeNull()
+    expect(note.getAttribute('title'), 'the sentence must be the visible node, never a tooltip carrying it').toBeNull()
+    expect(sel.style.cursor, 'not-allowed is disabled paint on a control D-A keeps live').not.toBe('not-allowed')
+    // Outside the in-flight wrapper, so the explanation does not grey out mid-write.
+    expect(note.closest('fieldset'), 'a fieldset ancestor also reds the 3-fieldset count at :974').toBeNull()
+  })
+
+  it('the note is not an Applies-labelled second match', () => {
+    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
+
+    // A second match makes getByLabelText('Applies') throw at :752, :841 and :990.
+    expect(screen.getAllByLabelText('Applies'), 'the new node introduced a second Applies handle').toHaveLength(1)
+  })
+})
+
+describe('APPR-10-01 QA AC-3: the explanation outlives a write', () => {
+  it('stays on screen, and stays live, inside a save round trip', () => {
+    const self = policyWith('fin_mgr')
+    const sav = deferred<Policy>()
+    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
+
+    expect(screen.getAllByText(SCOPE_NOT_ROUTED), 'the sentence is missing before the write, so the check below is vacuous').toHaveLength(1)
+    fireEvent.click(saveButton())
+
+    // The select goes inert here (:771); the sentence explains the PRODUCT, not the write.
+    expect(screen.getAllByText(SCOPE_NOT_ROUTED), 'the explanation vanished mid-write').toHaveLength(1)
+    expect(inert(screen.getByText(SCOPE_NOT_ROUTED)), 'the explanation greys out with the control it explains').toBe(false)
+  })
+})
+
+describe('APPR-10-01 QA: a policy carrying a retired scope (the hazard D-B accepted)', () => {
+  // D-B declined a defensive `scopeOptions(current)` prepend because the column's birth
+  // CHECK makes this unreachable in production. Characterisation, not endorsement: if the
+  // prepend is ever added, this fails and forces the decision to be retaken.
+  it('renders the select blank rather than inventing an option for it', () => {
+    const stale: Policy = { ...policyWith('fin_mgr'), scope: 'Capex & fixed assets' }
+    render(<WorkflowBuilder ctx={builderCtx()} policy={stale} />)
+
+    const sel = scopeSelect()
+    expect(Array.from(sel.options).map((o) => o.value), 'the retired scope was prepended back into the list').toEqual(['All invoices'])
+    expect(sel.value, 'the control silently rewrote the policy’s stored scope').not.toBe('Capex & fixed assets')
   })
 })

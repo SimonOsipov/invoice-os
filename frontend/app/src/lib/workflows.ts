@@ -6,7 +6,7 @@
 // (~L998-1280), the `defaultPolicies()` seed and the `wf*` builder methods
 // (~L2285-2412). The prototype's `renderVals()` glue for this screen was lost to a
 // 256KiB read truncation, so the derived bindings were reconstructed from the markup's
-// binding names — see the port spec. Anything reconstructed is marked below.
+// binding names — see the port spec.
 //
 // The prototype MUTATES its policy tree in place (`wfMutate` + `Array.splice`). Every
 // reducer here is immutable instead — React state, and the mutating originals would

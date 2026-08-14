@@ -451,16 +451,19 @@ describe('DashboardActive trend re-anchor — adversarial (QA task-430)', () => 
   })
 })
 
-describe('DashboardActive KPI tiles say what they count', () => {
-  // A KPI tile's root is the TileHead's grandparent; its delta is the only .mono inside,
-  // because KPI heads carry no meta.
-  function kpiTile(label: string): HTMLElement {
-    return screen.getByText(label).parentElement!.parentElement!
-  }
-  function kpiDelta(label: string): string {
-    return kpiTile(label).querySelector('span.mono')!.textContent!
-  }
+// A KPI tile's root is the TileHead's grandparent; its delta is the only .mono inside,
+// because KPI heads carry no meta.
+function kpiTile(label: string): HTMLElement {
+  return screen.getByText(label).parentElement!.parentElement!
+}
+function kpiDeltaEl(label: string): HTMLElement {
+  return kpiTile(label).querySelector('span.mono') as HTMLElement
+}
+function kpiDelta(label: string): string {
+  return kpiDeltaEl(label).textContent!
+}
 
+describe('DashboardActive KPI tiles say what they count', () => {
   it('the not-yet-submitted tile is draft + validated, with both addends non-zero and distinct', async () => {
     mockRollupFetch(rollup(0, { draft: 5, validated: 3, submitted: 2 }))
 
@@ -541,5 +544,159 @@ describe('DashboardActive KPI tiles say what they count', () => {
     expect(head).toBe(28)
     expect(centre).toBe(28)
     expect(legend).toBe(28)
+  })
+})
+
+// QA Mode B adversarial coverage. A mutation pass over the re-labelled tiles left three
+// holes the tests above do not reach: bucket.awaiting_approval could be read off
+// data.totals with every assertion still green (the same firm-mode scope trap the
+// adversarial metrics block already calls out), and both colour branches AC-2/AC-4
+// pin as unchanged had no oracle at all.
+describe('DashboardActive KPI tiles — adversarial (QA)', () => {
+  // Inside the donut tile, span.money is [ring centre, ...legend counts]; span.mono is
+  // [head meta, DOCS, ...legend pcts]. Reading them structurally rather than by a fixed
+  // label list means an eighth CANONICAL state is summed too, not silently skipped.
+  function donutTile(): HTMLElement {
+    return screen.getByText('Invoice status').parentElement!.parentElement!
+  }
+  function donutNumbers(): { head: string; centre: number; legend: number[]; pcts: string[] } {
+    const tile = donutTile()
+    const money = Array.from(tile.querySelectorAll('span.money')).map((e) => Number(e.textContent))
+    const mono = Array.from(tile.querySelectorAll('span.mono')).map((e) => e.textContent!)
+    return { head: mono[0], centre: money[0], legend: money.slice(1), pcts: mono.slice(2) }
+  }
+
+  it('an all-zero rollup reads every zero leg, and the donut shows 0 rather than dividing by it', async () => {
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Exceptions')
+    expect(within(kpiTile('Exceptions')).getByText('0')).toBeDefined()
+    expect(kpiDelta('Exceptions')).toBe('all clear')
+    expect(within(kpiTile('Not yet submitted')).getByText('0')).toBeDefined()
+    expect(kpiDelta('Not yet submitted')).toBe('none waiting')
+    expect(screen.getByText('ALL CLEAR')).toBeDefined()
+
+    // donutSegments' `|| 1` denominator must not let the head and the percentages
+    // disagree: every share is a true 0%, and no cell renders NaN.
+    const { head, centre, legend, pcts } = donutNumbers()
+    expect(head).toBe('0 TOTAL')
+    expect(centre).toBe(0)
+    expect(legend).toEqual([0, 0, 0, 0, 0, 0, 0])
+    expect(pcts).toEqual(['0%', '0%', '0%', '0%', '0%', '0%', '0%'])
+    expect(donutTile().textContent).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('firm mode scopes the awaiting-approval delta and the exceptions tile to the client row, never the tenant totals', async () => {
+    const data: Rollup = {
+      totals: {
+        counts: { ...ZERO_COUNTS, draft: 40, validated: 20 },
+        needs_attention: 42,
+        awaiting_approval: 99,
+        metrics: {},
+        top_violations: [],
+      },
+      clients: [
+        {
+          entity_id: 'ent-9',
+          entity_name: 'Scoped Ltd',
+          counts: { ...ZERO_COUNTS, draft: 2, validated: 1 },
+          needs_attention: 4,
+          awaiting_approval: 1,
+          metrics: {},
+          top_violations: [],
+        },
+      ],
+      top_violations: [],
+    }
+    mockRollupFetch(data)
+
+    render(<DashboardActive ctx={firmCtx('ent-9', 'Scoped Ltd')} />)
+
+    await screen.findByText('Not yet submitted')
+    expect(within(kpiTile('Not yet submitted')).getByText('3')).toBeDefined()
+    expect(kpiDelta('Not yet submitted')).toBe('1 awaiting approval')
+    expect(within(kpiTile('Exceptions')).getByText('4')).toBeDefined()
+    expect(screen.queryByText('99 awaiting approval')).toBeNull()
+    expect(screen.queryByText('60')).toBeNull()
+    expect(screen.queryByText('42')).toBeNull()
+  })
+
+  it('awaiting_approval equal to the tile value reads the whole population as waiting', async () => {
+    // The ceiling case, and the only one: the rollup counts awaiting_approval with
+    // FILTER (WHERE i.status = 'validated' AND ...) over the same group as `validated`
+    // (internal/dashboard/store.go), so it is bounded by validated, itself bounded by
+    // draft + validated. A delta larger than its own tile's value cannot reach the wire.
+    mockRollupFetch(rollup(0, { validated: 4 }, {}, 4))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Not yet submitted')
+    expect(within(kpiTile('Not yet submitted')).getByText('4')).toBeDefined()
+    expect(kpiDelta('Not yet submitted')).toBe('4 awaiting approval')
+  })
+
+  it('a non-zero tile with nothing awaiting still names the subset rather than falling back to the zero leg', async () => {
+    mockRollupFetch(rollup(0, { draft: 5 }, {}, 0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Not yet submitted')
+    expect(kpiDelta('Not yet submitted')).toBe('0 awaiting approval')
+  })
+
+  it('the two re-labelled tiles and the pill keep their original colour branches', async () => {
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Exceptions')
+    expect(kpiDeltaEl('Exceptions').style.color).toBe('var(--status-green-text)')
+    expect(kpiDeltaEl('Not yet submitted').style.color).toBe('var(--fg-3)')
+    const clearPill = screen.getByText('ALL CLEAR')
+    expect(clearPill.style.color).toBe('var(--status-green-text)')
+    expect(clearPill.getAttribute('style')).toContain('background: var(--status-green-bg)')
+    expect(clearPill.getAttribute('style')).toContain('border: 1px solid var(--status-green-border)')
+
+    cleanup()
+    mockRollupFetch(rollup(2, { draft: 4, validated: 1 }, {}, 1))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Exceptions')
+    expect(kpiDeltaEl('Exceptions').style.color).toBe('var(--status-red-text)')
+    expect(kpiDeltaEl('Not yet submitted').style.color).toBe('var(--status-amber-text)')
+    const alertPill = screen.getByText('REJECTED / FAILED / BLOCKED / SENT BACK')
+    expect(alertPill.style.color).toBe('var(--status-red-text)')
+    expect(alertPill.getAttribute('style')).toContain('background: var(--status-red-bg)')
+    expect(alertPill.getAttribute('style')).toContain('border: 1px solid var(--status-red-border)')
+  })
+
+  it('the retired tile labels and deltas render nowhere', async () => {
+    mockRollupFetch(rollup(2, { draft: 4, validated: 1 }, {}, 1))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Exceptions')
+    expect(screen.queryByText('Failing invoices')).toBeNull()
+    expect(screen.queryByText('Awaiting submission')).toBeNull()
+    expect(screen.queryByText('needs fixing')).toBeNull()
+    expect(screen.queryByText('not yet sent')).toBeNull()
+  })
+
+  it('the donut tripwire sums every rendered legend row, so an added canonical state is counted too', async () => {
+    const spread: Counts = { draft: 1, validated: 2, queued: 3, submitted: 4, accepted: 5, rejected: 6, failed: 7 }
+    mockRollupFetch(rollup(0, spread))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Invoice status')
+    const { head, centre, legend } = donutNumbers()
+    // One row per canonical state, so an empty legend can never sum to a vacuous pass.
+    expect(legend).toHaveLength(7)
+    expect(head).toBe('28 TOTAL')
+    expect(centre).toBe(28)
+    expect(legend.reduce((a, b) => a + b, 0)).toBe(28)
   })
 })

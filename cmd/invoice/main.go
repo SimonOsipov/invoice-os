@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
@@ -163,10 +164,16 @@ func main() {
 	// standing. Here rather than in the gateway, which is a different process.
 	// Non-fatal, matching demodocs above -- a crash-loop costs an environment, a
 	// missing demo policy costs one assertion.
-	if res, err := demopolicy.Seed(context.Background(), pool, app.Logger); err != nil {
+	// Bounded because this runs BEFORE app.Run: the sweep takes FOR UPDATE row
+	// locks, and an unbounded wait would keep /healthz from ever answering, which
+	// hangs the deploy gate rather than failing it. On expiry the tenant rolls
+	// back whole and the next boot arms the backlog, same as the sweep cap.
+	seedCtx, cancelSeed := context.WithTimeout(context.Background(), 2*time.Minute)
+	if res, err := demopolicy.Seed(seedCtx, pool, app.Logger); err != nil {
 		app.Logger.Error("invoice: demo approval policy", "error", err,
 			"outcome", res.Note, "backlog_found", res.BacklogFound, "runs_armed", res.RunsArmed)
 	}
+	cancelSeed()
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, app.Logger))

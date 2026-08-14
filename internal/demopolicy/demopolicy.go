@@ -68,14 +68,12 @@ const (
 	seedActor = "system"
 )
 
-// The two role failures are errors rather than skips because the alternative is
-// silent: an unstaffed seat yields a policy, published and armed, every step of
-// which blocks, with nothing red anywhere.
-var (
+// Reported rather than tolerated because the alternative is silent: an unstaffed
+// seat yields a policy, published and armed, every step of which blocks, with
+// nothing red anywhere.
+const (
 	noteRoleMissing   = "workflow role " + roleKey + " not found"
 	noteRoleUnstaffed = "workflow role " + roleKey + " has no active holder"
-	errRoleMissing    = errors.New("demopolicy: " + noteRoleMissing)
-	errRoleUnstaffed  = errors.New("demopolicy: " + noteRoleUnstaffed)
 )
 
 // Result is what one Seed call did. BacklogFound and RunsArmed are separate
@@ -152,10 +150,27 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, tenantID string) (Resul
 			   FROM approval_policy_versions v
 			   JOIN approval_policies p ON p.id = v.policy_id
 			  WHERE v.is_active`, policyName).Scan(&res.VersionID, &seeded)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			if err := requireStaffedSeat(ctx, tx, &res); err != nil {
-				return err
+		creating := errors.Is(err, pgx.ErrNoRows)
+		if err != nil && !creating {
+			res.Note = "active-version probe failed"
+			return err
+		}
+
+		// Resolved on EVERY boot, not only the one that writes the policy: a seat
+		// staffed at publish and suspended later leaves a policy every step of
+		// which blocks. Fatal only while creating — refusing the sweep over
+		// staffing that changed afterwards would leave awaiting_approval reading
+		// counts.validated, which is the failure this package exists to prevent,
+		// and the sealed version's role key cannot be edited anyway.
+		problem, err := seatProblem(ctx, tx)
+		if err != nil {
+			res.Note = "role resolution failed"
+			return err
+		}
+		if creating {
+			if problem != "" {
+				res.Note = problem
+				return errors.New("demopolicy: " + problem)
 			}
 			versionID, err := publishSeedPolicy(ctx, tx, tenantID)
 			if err != nil {
@@ -163,9 +178,6 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, tenantID string) (Resul
 				return err
 			}
 			res.VersionID, res.VersionCreated, seeded = versionID, true, true
-		case err != nil:
-			res.Note = "active-version probe failed"
-			return err
 		}
 
 		// UNCONDITIONAL, outside the branch above: this half IS the convergence.
@@ -186,19 +198,18 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, tenantID string) (Resul
 		default:
 			res.Note = "policy already active; backlog re-armed"
 		}
+		if problem != "" {
+			res.Note = problem + "; " + res.Note
+		}
 		return nil
 	})
 	return res, err
 }
 
-// requireStaffedSeat runs only on the boot that writes the policy. Once the
-// version is sealed its role key is immutable, so refusing the sweep over
-// staffing that changed later would leave awaiting_approval reading
-// counts.validated — the exact failure this package exists to prevent.
-//
-// The memberships join is the whole point: a member-row count passes a seat whose
-// only holder is suspended.
-func requireStaffedSeat(ctx context.Context, tx pgx.Tx, res *Result) error {
+// seatProblem reports why the approval step's seat cannot be satisfied, or "" when
+// it can. The memberships join is the whole point: a member-row count passes a
+// seat whose only holder is suspended.
+func seatProblem(ctx context.Context, tx pgx.Tx) (string, error) {
 	var roles, active int
 	if err := tx.QueryRow(ctx,
 		`SELECT count(DISTINCT r.id),
@@ -209,20 +220,17 @@ func requireStaffedSeat(ctx context.Context, tx pgx.Tx, res *Result) error {
 		   LEFT JOIN memberships ms
 		          ON ms.tenant_id = m.tenant_id AND ms.user_id = m.user_id
 		  WHERE r.key = $1 AND r.deleted_at IS NULL`, roleKey).Scan(&roles, &active); err != nil {
-		res.Note = "role resolution failed"
-		return err
+		return "", err
 	}
-	// Two distinct failures, and the log must say which: an absent seat is a
+	// Two distinct causes, and the log must say which: an absent seat is a
 	// seed-data gap, a staffed-then-suspended one is an operator action.
-	if roles == 0 {
-		res.Note = noteRoleMissing
-		return errRoleMissing
+	switch {
+	case roles == 0:
+		return noteRoleMissing, nil
+	case active == 0:
+		return noteRoleUnstaffed, nil
 	}
-	if active == 0 {
-		res.Note = noteRoleUnstaffed
-		return errRoleUnstaffed
-	}
-	return nil
+	return "", nil
 }
 
 // publishSeedPolicy writes the policy, its version, the three steps and the seal.

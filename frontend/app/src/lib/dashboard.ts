@@ -58,7 +58,8 @@ export interface Metric {
 export type Metrics = Record<string, Metric>
 
 // dashboard.go Bucket — the 7-state counts plus TWO overlapping overlays, neither ever a
-// donut input: needs_attention (rejected ∪ failed ∪ drafts-with-an-error-severity-violation)
+// donut input: needs_attention (rejected ∪ failed ∪ drafts-with-an-error-severity-violation
+// ∪ drafts an approver sent back)
 // and awaiting_approval (validated invoices an active approval policy blocks). They
 // partition by invoice status, so neither is derivable from the other — do not merge them.
 // Sibling of RollupClient below — kept in sync by hand, not by `extends`.

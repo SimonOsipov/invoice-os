@@ -233,6 +233,9 @@ test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS 
 
   const attnRow = page.locator('.pf-list-row').filter({ hasText: attnEntity.name })
   const emptyRow = page.locator('.pf-list-row').filter({ hasText: emptyEntity.name })
+  // Exact because this fixture creates no approval_runs, and needs_attention's approval arm is
+  // draft-with-a-latest-rejected-run only (TestStoreRollup_ApprovalRejectedArmIsDraftOnly,
+  // TestStoreRollup_NeedsAttentionIncludesApprovalRejected for the run-less control).
   await expect(attnRow).toContainText('1 NEEDS ATTENTION')
   await expect(emptyRow).toContainText('NO INVOICES YET')
 

@@ -33,8 +33,12 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // AC-1/DASH-03), then sums Clients element-wise into Totals in Go (no second
 // aggregate query). needs_attention cuts across draft/rejected/failed
 // (AC-3): rejected always counts, failed counts unless resolved outside
-// (kept_as_is_at set), a draft counts only when its violations contain an
-// error-severity entry. awaiting_approval is the SECOND overlay and a sibling
+// (kept_as_is_at set), a draft counts when its violations contain an
+// error-severity entry OR its most recent approval run closed 'rejected'. That
+// disjunction is a hand-maintained twin of the f.NeedsAttention list fragment
+// (internal/invoice/store.go): only the i. alias and the correlation column
+// differ, and TestStoreList_NeedsAttentionMatchesDashboardRollup compares the
+// two by behaviour. awaiting_approval is the SECOND overlay and a sibling
 // of needs_attention, never an eighth state: validated invoices an active
 // policy blocks, the predicate copied from the awaiting_approval list filter
 // (internal/invoice/store.go) so the badge and the filtered list cannot
@@ -75,8 +79,9 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			    ) cf ON true
 			)
 			-- needs_attention below keeps its exact literal disjunction (i.-qualified,
-			-- no IN(...)): TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare pins this
-			-- text byte-for-byte, which is why the CTE is aliased i.
+			-- no IN(...)), and its fourth arm reads the LATEST run only, through a
+			-- derived table: TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare pins
+			-- both, which is why the CTE is aliased i.
 			SELECT i.entity_id, i.entity_name,
 			       count(*) FILTER (WHERE i.status = 'draft')     AS draft,
 			       count(*) FILTER (WHERE i.status = 'validated') AS validated,
@@ -89,6 +94,11 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			           WHERE i.status = 'rejected'
 			              OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)
 			              OR (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)
+			              OR (i.status = 'draft' AND EXISTS (
+			                      SELECT 1 FROM (SELECT r.state FROM approval_runs r
+			                                      WHERE r.invoice_id = i.id
+			                                      ORDER BY r.opened_at DESC LIMIT 1) lr
+			                       WHERE lr.state = 'rejected'))
 			       ) AS needs_attention,
 			       -- Copied from the awaiting_approval list filter (internal/invoice/store.go),
 			       -- alias added. i.id is qualified: approval_runs has its own id, and a bare

@@ -38,7 +38,8 @@ const (
 
 // Bucket is one rollup scope: the state counts plus two overlays. Neither
 // overlay is an eighth state. NeedsAttention cuts across draft/rejected/failed
-// (rejected ∪ failed ∪ (draft AND an error-severity violation), AC-3);
+// (rejected ∪ failed ∪ (draft AND an error-severity violation) ∪ (draft AND a
+// most-recent approval run that closed 'rejected'), AC-3);
 // AwaitingApproval is a subset of Counts.Validated (validated invoices an
 // active approval policy blocks), so the two never overlap and folding either
 // into Counts would double-count the same invoice in the donut.

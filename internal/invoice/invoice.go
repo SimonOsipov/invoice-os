@@ -260,7 +260,7 @@ type EditInput struct {
 // still the where-less, tenant-wide query it was before any of them existed.
 // NeedsFix is a NEW, separate predicate from NeedsAttention
 // ([needs-fix-is-a-new-predicate]) -- it must never be folded into the
-// needs_attention SQL fragment, which is byte-pinned to the dashboard rollup
+// needs_attention SQL fragment, which is kept in lockstep with the dashboard rollup
 // (TestStoreList_NeedsAttentionMatchesDashboardRollup,
 // [needs-attention-drift-guard]).
 //

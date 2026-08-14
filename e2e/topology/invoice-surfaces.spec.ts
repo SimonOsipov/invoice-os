@@ -670,6 +670,9 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // pre-fix pill is asserted to an exact value, not just captured for a later diff.
   await page.getByRole('button', { name: /Clients/ }).click()
   const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
+  // Exact because this flow creates no approval_runs, and needs_attention's approval arm is
+  // draft-with-a-latest-rejected-run only (TestStoreRollup_ApprovalRejectedArmIsDraftOnly,
+  // TestStoreRollup_NeedsAttentionIncludesApprovalRejected for the run-less control).
   await expect(clientRow, 'fresh entity row must render on Clients before the fix').toContainText('1 NEEDS ATTENTION')
 
   // 4. Open the violating invoice's live detail. Invoices is a CLIENT-scoped surface now
@@ -731,6 +734,9 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // not a stale snapshot) -- `toContainText` retries while the fresh ClientsView mount's
   // rollup refetch settles.
   await page.getByRole('button', { name: /Clients/ }).click()
+  // Zero survives approvals: this flow creates no approval_runs, and a validated invoice is
+  // awaiting_approval's population, never needs_attention's
+  // (TestStoreRollup_ApprovalRejectedArmIsDraftOnly).
   await expect(clientRow, 'fresh entity health pill must flip to ALL CLEAR once its only violation is fixed').toContainText('ALL CLEAR')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

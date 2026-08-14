@@ -414,6 +414,25 @@ describe('entityHealth — QA adversarial', () => {
 
     expect(entityHealth([clientBig], 'BIG')).toEqual({ kind: 'needs-attention', count: 137 })
   })
+
+  // The deliberate asymmetry: the Reports card was cut off this overlay, its two health
+  // consumers (ClientsView's pill, Sidebar's switcher sub-label) were NOT. Both route
+  // through here, so a merge-back that re-points them at the violation count fails here
+  // first. Same metrics either side; only the overlay moves.
+  it('QA-EH3: the widened overlay moves the health count, and blocked_by_rules never enters it', () => {
+    const withOverlay = (needsAttention: number): RollupClient => ({
+      entity_id: 'Z',
+      entity_name: 'Zeta',
+      counts: counts(),
+      needs_attention: needsAttention,
+      awaiting_approval: 0,
+      metrics: { blocked_by_rules: { num: 1, den: 20 } },
+      top_violations: [],
+    })
+
+    expect(entityHealth([withOverlay(3)], 'Z')).toEqual({ kind: 'needs-attention', count: 3 })
+    expect(entityHealth([withOverlay(9)], 'Z'), 'unlike the Validation summary, this DOES follow the widening').toEqual({ kind: 'needs-attention', count: 9 })
+  })
 })
 
 describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero', () => {

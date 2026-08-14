@@ -540,4 +540,23 @@ describe('ClientsView: the health pill is unchanged by the needs-attention widen
     expect(within(rowFor('Beta Traders')).getByText('ALL CLEAR')).toBeDefined()
     expect(within(rowFor('Honeywell Group')).getByText('NO INVOICES YET')).toBeDefined()
   })
+
+  // QA adversarial, the asymmetry the Reports carve-out creates. Same violation count on
+  // both renders; only the overlay widens, and this pill is meant to follow it.
+  it('a widened overlay moves the pill, and the violation count beside it never does', async () => {
+    const withViolations = (needsAttention: number) => ({ ...clientRow('a1', needsAttention), metrics: { blocked_by_rules: { num: 1, den: 20 } } })
+
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [withViolations(3)] })
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+    await within(rowFor('Okafor & Partners')).findByText('3 NEED ATTENTION')
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [withViolations(9)] })
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+    await within(rowFor('Okafor & Partners')).findByText('9 NEED ATTENTION')
+  })
 })

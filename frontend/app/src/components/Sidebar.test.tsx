@@ -234,4 +234,27 @@ describe('Sidebar nav badges, firm mode', () => {
 
     expect(screen.queryByText('Approvals')).toBeNull()
   })
+
+  // QA adversarial, the asymmetry with the Reports card: that one was cut off this overlay,
+  // this sub-label was deliberately left on it. Same violation count on both renders.
+  it('the sub-label follows a widened needs_attention, unlike the Validation summary', async () => {
+    const withViolations = (needsAttention: number): Rollup => {
+      const r = rollup({ validated: 7, awaitingApproval: 5, needsAttention: 12, entity: { validated: 11, awaitingApproval: 6, needsAttention } })
+      r.clients[0].metrics = { blocked_by_rules: { num: 1, den: 11 } }
+      return r
+    }
+
+    mockRollupFetch(withViolations(3))
+    render(<Sidebar ctx={firmCtx()} />)
+    await within(navButton('Invoices')).findByText('3')
+    expect(switcherSubLabel()).toBe('3 needing attention')
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    mockRollupFetch(withViolations(9))
+    render(<Sidebar ctx={firmCtx()} />)
+    await within(navButton('Invoices')).findByText('9')
+    expect(switcherSubLabel(), 'only the overlay moved between these two renders').toBe('9 needing attention')
+  })
 })

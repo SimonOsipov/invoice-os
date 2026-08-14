@@ -427,9 +427,12 @@ interface SummaryNumbers {
   pct: string | undefined
 }
 
-async function renderSummary(rollup: Rollup): Promise<SummaryNumbers> {
-  mockFetch([listResponse([row({ id: 'inv-s', buyer_tin: tinFor(1), buyer_name: 'Summary Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], rollup)
-  const { container } = render(<ReportsView ctx={reportsCtx()} />)
+async function renderSummary(rollup: Rollup, ctx: PlatformCtx = reportsCtx()): Promise<SummaryNumbers> {
+  // The row carries the ctx's own entity so gateByActiveEntity keeps it: an empty gated set
+  // routes the whole page to its empty state and the card never renders at all.
+  const entityId = ctx.active.entityId ?? 'ent-1'
+  mockFetch([listResponse([row({ id: 'inv-s', entity_id: entityId, buyer_tin: tinFor(1), buyer_name: 'Summary Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], rollup)
+  const { container } = render(<ReportsView ctx={ctx} />)
   // Waits on the card's own ready branch, not just the KPI grid -- the rollup is a second,
   // independent async ladder and settles on its own schedule.
   await screen.findByText('Passed')
@@ -467,5 +470,100 @@ describe('ReportsView: the Validation summary reads blocked_by_rules, not needs_
     expect(summary.failing).toBe('0')
     expect(summary.passed).toBe('13')
     expect(summary.pct).toBe('100% PASS')
+  })
+})
+
+// QA adversarial. In-house scoping resolves to `totals`; firm mode to the selected row.
+function inhouseReportsCtx(): PlatformCtx {
+  return { mode: 'inhouse', active: { name: 'Honeywell Group', short: 'HG', entityId: null }, authedFetch: createAuthedFetch(() => 'tok', vi.fn()), openCreate: () => {} } as unknown as PlatformCtx
+}
+
+// The rollup half fails while the invoices half succeeds -- the two are independent
+// ladders, so `bucket` stays null with the rest of the page fully rendered.
+function mockFetchRollupError(invoiceResponses: MockResponse[]) {
+  const queue = [...invoiceResponses]
+  const fetchMock = vi.fn((url: string) => {
+    if (isRollupUrl(url)) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'rollup unavailable' }) })
+    const next = queue.shift()
+    if (!next) throw new Error(`ReportsView test: unexpected extra invoices fetch ${url}`)
+    return Promise.resolve(next)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('ReportsView: the Validation summary — QA adversarial', () => {
+  // D-37, deliberate and pinned so a future reader sees the arithmetic is a decision, not a
+  // slip: repPassed is bucketTotal - repFail, so anything outside blocked_by_rules lands in
+  // the green tile. A rejected invoice and an unresolved transmission failure are exactly
+  // that. Changing this card to a three-tile split is what breaks this test.
+  it('D-37: a rejected invoice and an unresolved transmission failure both read as Passed, at 100% PASS', async () => {
+    // 3 accepted + 1 rejected + 1 failed = 5, none of them a rule violation.
+    const counts: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 3, rejected: 1, failed: 1 }
+    const bucket = { counts, needs_attention: 2, awaiting_approval: 0, metrics: { blocked_by_rules: { num: 0, den: 5 } }, top_violations: [] }
+    const summary = await renderSummary({ totals: bucket, clients: [{ entity_id: 'ent-1', entity_name: 'Acme Co', ...bucket }], top_violations: [] })
+
+    expect(summary.failing, 'neither invoice is a validation failure').toBe('0')
+    expect(summary.passed, 'both land in the green tile — the accepted D-37 cost').toBe('5')
+    expect(summary.pct, 'a client carrying an unresolved failure still reads a clean sheet').toBe('100% PASS')
+  })
+
+  it('a metrics map carrying other keys but no blocked_by_rules still reads zero failing', async () => {
+    // Distinct from the `{}` case above: a populated map proves the lookup misses on the
+    // KEY, not on an empty object.
+    const summary = await renderSummary(summaryRollup(7, { never_validated: { num: 5, den: 13 }, failed_in_transmission: { num: 4, den: 13 } }))
+
+    expect(summary.failing).toBe('0')
+    expect(summary.passed).toBe('13')
+  })
+
+  it('a blocked_by_rules larger than the bucket total drives Passed and % PASS negative', async () => {
+    // Defensive: nothing clamps the subtraction. Server-impossible today (the count is a
+    // FILTER over the same rows), so this records the shape rather than demanding a clamp —
+    // if a clamp is ever added, these three numbers are what change.
+    const summary = await renderSummary(summaryRollup(0, { blocked_by_rules: { num: 20, den: 13 } }))
+
+    expect(summary.failing).toBe('20')
+    expect(summary.passed).toBe('-7')
+    expect(summary.pct).toBe('-54% PASS')
+  })
+
+  it('an unresolved rollup renders no numbers at all, not a derived zero', async () => {
+    mockFetchRollupError([listResponse([row({ id: 'inv-e', buyer_tin: tinFor(2), buyer_name: 'Ladder Buyer', total: '500.00' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    // Non-vacuity: the invoices ladder settles independently, so the page IS rendered.
+    await screen.findByText('Validation summary')
+    expect(kpiValue(container, 'Invoices in period')).toBe('1')
+
+    await screen.findByRole('button', { name: /retry/i })
+    expect(summaryTile(container, 'Passed'), 'a null bucket must not render 0 Passed').toBeUndefined()
+    expect(summaryTile(container, 'Failing')).toBeUndefined()
+    expect(passPct(container), 'the % PASS chip is gated on rollState === ready').toBeUndefined()
+  })
+
+  it('the card follows scopedBucket: in-house reads totals, firm mode reads the selected row', async () => {
+    // Six mutually distinct numbers so neither assertion can pass on the other's bucket.
+    const totals = { counts: SUMMARY_COUNTS, needs_attention: 9, awaiting_approval: 0, metrics: { blocked_by_rules: { num: 6, den: 13 } }, top_violations: [] }
+    const entityCounts: Counts = { draft: 1, validated: 1, queued: 0, submitted: 0, accepted: 3, rejected: 0, failed: 0 } // 5
+    const client: RollupClient = { entity_id: 'ent-1', entity_name: 'Acme Co', counts: entityCounts, needs_attention: 4, awaiting_approval: 0, metrics: { blocked_by_rules: { num: 1, den: 5 } }, top_violations: [] }
+    const roll: Rollup = { totals, clients: [client], top_violations: [] }
+
+    const firm = await renderSummary(roll)
+    expect(firm, "firm mode must read the selected client's own row").toEqual({ passed: '4', failing: '1', pct: '80% PASS' })
+
+    cleanup()
+    vi.unstubAllGlobals()
+    const inhouse = await renderSummary(roll, inhouseReportsCtx())
+    expect(inhouse, 'in-house has no clients row — its one client IS the tenant').toEqual({ passed: '7', failing: '6', pct: '54% PASS' })
+  })
+
+  it('a firm-mode entity absent from clients reads the empty bucket, never the firm-wide totals', async () => {
+    // INNER JOIN: an entity with zero invoices has no `clients` row. Widening to totals here
+    // is the [dashboard-scope-per-client] bug — it would show 6 Failing under this name.
+    const totals = { counts: SUMMARY_COUNTS, needs_attention: 9, awaiting_approval: 0, metrics: { blocked_by_rules: { num: 6, den: 13 } }, top_violations: [] }
+    const summary = await renderSummary({ totals, clients: [], top_violations: [] }, reportsCtx('ent-absent'))
+
+    expect(summary).toEqual({ passed: '0', failing: '0', pct: '0% PASS' })
   })
 })

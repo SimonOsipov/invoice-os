@@ -761,6 +761,124 @@ describe('evalCondition (§6.1)', () => {
   })
 })
 
+// ----------------------------------------------------------------------------
+// APPR-10-05 (task-517) T5-1/T5-2/T5-3/T5-3b — the TS→Go mirror
+// ----------------------------------------------------------------------------
+// RED BY STRUCTURE, NOT BY BEHAVIOUR. Every arithmetic outcome below is already pinned TS-only
+// at :712-761 (APPR-10-02 QA), so writing these as plain assertions would be green on arrival.
+// The novelty is GO_EVAL_CONDITION: a local literal oracle re-typed by hand from
+// internal/approval/engine.go:93-101, with the zero-folding of :81-91 applied to the nil rows.
+// Deleting the table is what turns this block red — the FK-11 shape (lib/invoices.test.ts:4486-4491),
+// where the Go fact is the local array and the TS symbol is the thing under test. Never import or
+// read the Go source: "a test that asserts against the constant it is checking asserts nothing"
+// (internal/approval/policy_test.go:35-36).
+//
+// THE FIFTH ARM IS DELIBERATELY UNASSERTED. On an unknown or absent operator TS falls through to
+// `<=` (lib/workflows.ts:338); Go returns false (internal/approval/engine.go:103-106, which
+// documents the deviation). A row for one would encode that divergence as agreement, so every row
+// carries an op from {>, >=, <, <=} and the last spec here holds that exclusion falsifiable.
+//
+// Values stay inside binary fractions a double represents exactly. Go's decimal scale and the
+// scientific-notation rows at internal/approval/engine_test.go:96-124 have no TS counterpart.
+describe('evalCondition mirrors Go’s amount arm (§6.1, APPR-10-05)', () => {
+  type GoRow = {
+    group: 'boundary' | 'folds-to-zero' | 'zero'
+    op: ConditionNode['op']
+    /** Go `condAmount *string` — `null` is its nil, `NaN` a string `decimal.NewFromString` refuses. */
+    cond: number | null
+    /** Go `total *decimal.Decimal` — `null` is its nil. */
+    total: number | null
+    want: boolean
+  }
+
+  // Transcribed from internal/approval/engine.go:93-101 (the four `case` arms) and :81-91 (both
+  // sides fold to decimal.Zero when absent or unparseable). Hand-typed, never read from either side.
+  const GO_EVAL_CONDITION: readonly GoRow[] = [
+    // `a.GreaterThan(v)` — engine.go:94-95
+    { group: 'boundary', op: '>', cond: 500_000_000, total: 499_999_999, want: false },
+    { group: 'boundary', op: '>', cond: 500_000_000, total: 500_000_000, want: false },
+    { group: 'boundary', op: '>', cond: 500_000_000, total: 500_000_001, want: true },
+    // `a.GreaterThanOrEqual(v)` — engine.go:96-97
+    { group: 'boundary', op: '>=', cond: 500_000_000, total: 499_999_999, want: false },
+    { group: 'boundary', op: '>=', cond: 500_000_000, total: 500_000_000, want: true },
+    { group: 'boundary', op: '>=', cond: 500_000_000, total: 500_000_001, want: true },
+    // `a.LessThan(v)` — engine.go:98-99
+    { group: 'boundary', op: '<', cond: 500_000_000, total: 499_999_999, want: true },
+    { group: 'boundary', op: '<', cond: 500_000_000, total: 500_000_000, want: false },
+    { group: 'boundary', op: '<', cond: 500_000_000, total: 500_000_001, want: false },
+    // `a.LessThanOrEqual(v)` — engine.go:100-101
+    { group: 'boundary', op: '<=', cond: 500_000_000, total: 499_999_999, want: true },
+    { group: 'boundary', op: '<=', cond: 500_000_000, total: 500_000_000, want: true },
+    { group: 'boundary', op: '<=', cond: 500_000_000, total: 500_000_001, want: false },
+    // Kobo, in quarter-naira steps: exact in a double AND exact in Go's decimal.
+    { group: 'boundary', op: '>', cond: 1_000_000.25, total: 1_000_000.25, want: false },
+    { group: 'boundary', op: '>', cond: 1_000_000.25, total: 1_000_000.5, want: true },
+    { group: 'boundary', op: '<=', cond: 1_000_000.25, total: 1_000_000.25, want: true },
+    { group: 'boundary', op: '<=', cond: 1_000_000.25, total: 1_000_000.5, want: false },
+
+    // A nil / unparseable cond_amount reads 0 on both sides — engine.go:81-86 vs `Number(n.value) || 0`.
+    { group: 'folds-to-zero', op: '>', cond: null, total: 1, want: true },
+    { group: 'folds-to-zero', op: '>', cond: Number.NaN, total: 1, want: true },
+    { group: 'folds-to-zero', op: '<=', cond: null, total: 1, want: false },
+    { group: 'folds-to-zero', op: '<=', cond: Number.NaN, total: 1, want: false },
+    // A nil invoices.total reads 0 on both sides — engine.go:88-91 vs `Number(ctx.amount) || 0`.
+    { group: 'folds-to-zero', op: '>', cond: 1, total: null, want: false },
+    { group: 'folds-to-zero', op: '>', cond: 1, total: Number.NaN, want: false },
+    { group: 'folds-to-zero', op: '<=', cond: 1, total: null, want: true },
+    { group: 'folds-to-zero', op: '<=', cond: 1, total: Number.NaN, want: true },
+    // Both absent: 0 against 0, which is where the two folds meet.
+    { group: 'folds-to-zero', op: '>', cond: null, total: null, want: false },
+    { group: 'folds-to-zero', op: '>=', cond: null, total: null, want: true },
+    { group: 'folds-to-zero', op: '<', cond: null, total: null, want: false },
+    { group: 'folds-to-zero', op: '<=', cond: null, total: null, want: true },
+
+    // A REAL zero, which Go parses as decimal.Zero and TS must not rewrite through `|| 0`.
+    { group: 'zero', op: '>', cond: 0, total: 0, want: false },
+    { group: 'zero', op: '>=', cond: 0, total: 0, want: true },
+    { group: 'zero', op: '<', cond: 0, total: 0, want: false },
+    { group: 'zero', op: '<=', cond: 0, total: 0, want: true },
+    { group: 'zero', op: '>', cond: 0, total: 1, want: true },
+    { group: 'zero', op: '<', cond: 0, total: 1, want: false },
+  ]
+
+  /** The rows of one group, refusing to run on an empty selection. */
+  const rows = (group: GoRow['group']): GoRow[] => {
+    const sel = GO_EVAL_CONDITION.filter((r) => r.group === group)
+    expect(sel.length, `no ${group} row survived the filter, so the loop below asserts nothing`).toBeGreaterThan(0)
+    return sel
+  }
+
+  const run = (r: GoRow): boolean =>
+    evalCondition(
+      { id: 'c', type: 'condition', field: 'amount', op: r.op, value: r.cond as number, then: [], else: [] },
+      { amount: r.total as number },
+    )
+
+  const label = (r: GoRow) => `amount ${String(r.total)} ${r.op} threshold ${String(r.cond)}`
+
+  it('T5-1: the four operators answer as the Go table does, at, above and below the threshold', () => {
+    const boundary = rows('boundary')
+    expect(new Set(boundary.map((r) => r.op)), 'the boundary rows do not cover all four Go case arms').toEqual(new Set(WF_OPS))
+    for (const r of boundary) expect(run(r), label(r)).toBe(r.want)
+  })
+
+  it('T5-2: an absent or unparseable side folds to 0, the way Go’s decimal.Zero defaults do', () => {
+    for (const r of rows('folds-to-zero')) expect(run(r), label(r)).toBe(r.want)
+  })
+
+  it('T5-3: a real 0 threshold and a real 0 amount survive the fold on both sides', () => {
+    for (const r of rows('zero')) expect(run(r), label(r)).toBe(r.want)
+  })
+
+  // The exclusion, held falsifiable rather than left to the comment above: TS falls through to
+  // `<=` at lib/workflows.ts:338, Go returns false at internal/approval/engine.go:103-106.
+  it('T5-3b: the oracle asserts nothing about an unknown or absent operator', () => {
+    expect(GO_EVAL_CONDITION.length, 'the oracle table is empty, so the exclusion below guards nothing').toBeGreaterThan(0)
+    const ops = [...new Set(GO_EVAL_CONDITION.map((r) => r.op))].sort()
+    expect(ops, 'a row reaches outside the four arms the two sides agree on').toEqual([...WF_OPS].sort())
+  })
+})
+
 describe('simulate (§6.2)', () => {
   it('walks polF1 under the default scenario: the >250M branch is taken, the >1B one is not', () => {
     const { steps, auto } = simulate(polF1(), SIM_DEFAULT)

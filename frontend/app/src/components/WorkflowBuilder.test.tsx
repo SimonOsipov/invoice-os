@@ -5,7 +5,7 @@
 // genuinely deleted -- roleOf's fallback (lib/roles.ts:63) can't tell "not fetched yet"
 // from "fetched and gone". The guard belongs HERE, not in WorkflowsView (which forwards
 // ctx whole and reads no role data) -- see the story's [D-BUILDER-GUARD].
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -1966,5 +1966,227 @@ describe('APPR-10-02 QA: the one-key scenario is copied, never mutated in place'
 
     expect((screen.getByLabelText(SCENARIO_AMOUNT) as HTMLInputElement).value, 'the scenario amount never took the keystroke').toBe('900,000,000')
     expect(SIM_DEFAULT, 'the simulator wrote through to the module constant').toEqual({ amount: 750_000_000 })
+  })
+})
+
+// ----------------------------------------------------------------------------
+// APPR-10-05 (task-517) — notify names what it does not deliver
+// ----------------------------------------------------------------------------
+// THE SUBJECT IS DELIVERY, NEVER STORAGE (R18). The authored target and channel ARE persisted —
+// columns (migrations/20260809210326_approval_policies.sql:98-99), Go Step/stepInput/stepRow
+// (internal/approval/policy.go:26-27, :88-89, :120-121), TS write (lib/policies.ts:148) and read
+// (:133), materialised onto the run step as `skipped` (internal/approval/engine.go:175-182).
+// Nothing dispatches them: the repo carries no mail, SMS or push transport. So copy reading
+// "not saved" or "does nothing" would be a NEW false statement, which is what these specs forbid.
+//
+// Both sentences are located by TESTID and never by literal — the idiom `delegation-blocked-reason`
+// already sets (:638): the wording is the executor's to write, and a spec that imported it would
+// follow a typo into the product.
+//
+// G2: the inspector and the simulator co-render in one sticky column (WorkflowBuilder.tsx:519, :533),
+// and `nodeTitle`/`simTitle` both return `Notify ${target}` (WorkflowParts.tsx:79, :97). Every query
+// below is panel-scoped for that reason — a bare `screen.getByText` throws on this fixture.
+
+const NOTIFY_CLAIM_ID = 'notify-not-delivered'
+const SIM_NOTIFY_CLAIM_ID = 'sim-notify-not-delivered'
+
+/** Names the act being denied — a message going out, not a value going down. */
+const DELIVERY_ACT = /\b(sent|send|sends|sending|deliver|delivers|delivered|delivery|notif\w+|message|alert|email|reminder)\b/i
+/** Denies it. */
+const DENIAL = /\b(no|not|nothing|never|nobody|isn['’]?t|aren['’]?t|doesn['’]?t|don['’]?t|won['’]?t|cannot|can['’]?t|yet)\b/i
+/** Affirms the authored value is kept — R18's positive half. */
+const STORAGE_AFFIRMED = /\b(saved?|stored?|records?|recorded|kept|keeps|persist\w*|retained)\b/i
+/** The claims R18 rules out: every one of these is false of a notify step. */
+const STORAGE_DENIED = /\b(not saved|isn['’]?t saved|never saved|not stored|isn['’]?t stored|not recorded|not kept|does nothing|no effect|is ignored|is discarded|is dropped)\b/i
+
+/** A root-level notify, so `simulate` always walks it (lib/workflows.ts:363-366). */
+function notifyPolicy(): Policy {
+  return {
+    ...policyWith('fin_mgr'),
+    nodes: [
+      { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+      { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' },
+    ],
+  }
+}
+
+/** `nodeTitle`'s notify arm — the canvas card AND the simulator row both render this string. */
+const NOTIFY_CARD = 'Notify Tax Team'
+
+/** The canvas fieldset, anchored on the trigger card the canvas always renders. */
+function canvasPanel(): HTMLElement {
+  const fs = screen.getByText('Invoice submitted').closest('fieldset')
+  expect(fs, 'the canvas sits in no fieldset, so this scope is not the canvas').toBeTruthy()
+  return fs as HTMLElement
+}
+
+/** Selects the notify step FROM THE CANVAS — `screen.getByText(NOTIFY_CARD)` matches the simulator row too. */
+function selectNotify(): void {
+  fireEvent.click(within(canvasPanel()).getByText(NOTIFY_CARD))
+}
+
+/** The sentence under test, or null while it has not been written. */
+function claimIn(panel: HTMLElement, testid: string): HTMLElement | null {
+  return within(panel).queryByTestId(testid)
+}
+
+function claimText(el: HTMLElement): string {
+  return (el.textContent ?? '').trim()
+}
+
+describe('APPR-10-05 AC-1: the notify panel states that no message goes out', () => {
+  it('T5-4: the claim is a visible grey text node in the inspector, rendered once, carrying no control', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+    selectNotify()
+
+    const panel = inspectorPanel()
+    // The notify arm really mounted, or every assertion below is about the wrong card.
+    expect(control(within(panel).getByLabelText('Channel')).tagName, 'the inspector is not showing the notify step').toBe('SELECT')
+
+    const claim = claimIn(panel, NOTIFY_CLAIM_ID)
+    expect(claim, `the notify panel renders no [data-testid="${NOTIFY_CLAIM_ID}"] — nothing on screen says a message is never sent`).toBeTruthy()
+    expect(within(panel).getByTestId('step-inspector-body').contains(claim!), 'the claim sits outside the panel body it belongs to').toBe(true)
+
+    const text = claimText(claim!)
+    expect(text, 'the claim node is empty, so nothing on screen states the gap').not.toBe('')
+    // `getByText` never matches a title or an aria attribute, and RTL matches a node's DIRECT text
+    // children — resolving the same string this way IS the visible-node proof.
+    const found = within(panel).getByText(text)
+    expect(found === claim || claim!.contains(found), 'the claim reaches the accessibility tree but not the screen').toBe(true)
+    expect(within(panel).getAllByText(text), 'the claim renders more than once in the panel').toHaveLength(1)
+    expect(hintColor(claim!), 'a read-only hint renders grey, not amber').toBe('var(--fg-3)')
+    // G8/R20 — a control here reds the panel enumeration below and competes for the tab order.
+    expect(claim!.querySelector('input, select, textarea, button'), 'the claim carries a control').toBeNull()
+    expect(['DIV', 'P'], `the claim is a <${claim!.tagName.toLowerCase()}>`).toContain(claim!.tagName)
+  })
+
+  it('T5-4b: the claim denies DELIVERY and affirms the value is kept — never the reverse (R18)', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+    selectNotify()
+
+    const claim = claimIn(inspectorPanel(), NOTIFY_CLAIM_ID)
+    expect(claim, `the notify panel renders no [data-testid="${NOTIFY_CLAIM_ID}"]`).toBeTruthy()
+    const text = claimText(claim!)
+
+    expect(DELIVERY_ACT.test(text), `the claim never names the act it denies: ${text}`).toBe(true)
+    expect(DENIAL.test(text), `the claim denies nothing: ${text}`).toBe(true)
+    expect(STORAGE_AFFIRMED.test(text), `the claim never says the target and channel are kept: ${text}`).toBe(true)
+    expect(STORAGE_DENIED.test(text), `the claim says the value is not kept, which is false — it is persisted, sealed and materialised: ${text}`).toBe(false)
+    // :1084-1087 reserves this clause to DELEGATE_NOTE and forbids it to the delegation reason by
+    // name. A fourth borrower makes that exclusion arbitrary.
+    expect(/not available yet/i.test(text), `the claim borrows DELEGATE_NOTE's own clause: ${text}`).toBe(false)
+  })
+})
+
+describe('APPR-10-05 AC-2: the simulator claims it only where a notify step ran', () => {
+  it('T5-5: the claim renders for a path holding a notify step, and not for one without', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+
+    const present = claimIn(simulatorPanel(), SIM_NOTIFY_CLAIM_ID)
+    expect(present, `the simulated path holds a notify step and the panel renders no [data-testid="${SIM_NOTIFY_CLAIM_ID}"]`).toBeTruthy()
+    expect(claimText(present!), 'the simulator claim node is empty').not.toBe('')
+
+    cleanup()
+
+    // `policyWith` holds ONE approval and no notify (:20-30). D-F: a claim here would be a new
+    // false statement about a step this path never took.
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    expect(within(simulatorPanel()).getByLabelText(SCENARIO_AMOUNT), 'the simulator never mounted, so the absence below is vacuous').toBeTruthy()
+    expect(claimIn(simulatorPanel(), SIM_NOTIFY_CLAIM_ID), 'a policy with no notify step carries a claim about one').toBeNull()
+  })
+
+  it('T5-5b: the claim is not a control, and does not read as a fourth verdict line', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+
+    const panel = simulatorPanel()
+    const claim = claimIn(panel, SIM_NOTIFY_CLAIM_ID)
+    expect(claim, `the simulator renders no [data-testid="${SIM_NOTIFY_CLAIM_ID}"], so the enumeration below is not about it`).toBeTruthy()
+
+    // R20 — :1906-1913 pins this set on a policy with NO notify, so only this one can see a claim
+    // that shipped as a <button>.
+    const controls = Array.from(panel.querySelectorAll('input, select, textarea, button'))
+    expect(controls.length, 'the panel query matched nothing, so the list below proves nothing').toBeGreaterThan(0)
+    expect(controls.map((c) => c.getAttribute('aria-label')), 'the claim rendered as a control').toEqual([SCENARIO_AMOUNT])
+
+    // R21 — the hint register, never a fourth 10px uppercase mono line under the verdict.
+    expect(claim!.className.includes('mono'), 'the claim reads as part of the verdict line').toBe(false)
+    expect(hintColor(claim!), 'the claim does not carry the read-only hint colour').toBe('var(--fg-3)')
+  })
+
+  it('T5-8: the claim sits beside the notify row’s own IN-APP sub-line, never in place of it', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+
+    const panel = simulatorPanel()
+    // `simSub`'s notify arm, upper-cased (WorkflowParts.tsx:104). Pinned pure at
+    // WorkflowParts.test.ts:159-164 — this is the RENDERED half no pure-function test can reach.
+    expect(within(panel).getAllByText('IN-APP'), 'the notify row lost its own channel sub-line').toHaveLength(1)
+    expect(within(panel).getAllByText(NOTIFY_CARD), 'the notify row lost its own title').toHaveLength(1)
+
+    const claim = claimIn(panel, SIM_NOTIFY_CLAIM_ID)
+    expect(claim, 'the claim does not exist, so it cannot be shown to sit beside the row').toBeTruthy()
+    const sub = within(panel).getByText('IN-APP')
+    expect(claim!.contains(sub), 'the claim swallowed the row’s sub-line').toBe(false)
+    expect(sub.contains(claim!), 'the row’s sub-line swallowed the claim').toBe(false)
+  })
+})
+
+describe('APPR-10-05 AC-1: the fourth inspector sentence stays worded apart', () => {
+  // R19: the delegation trio renders only under an APPROVAL node and this one only under a NOTIFY
+  // node, so the three-way pins at :699-721, :726-750 and :1060-1096 can never see it and are left
+  // alone. Its real collision is the simulator claim, which DOES co-render (G2). The three
+  // neighbours are read LIVE off the approval panel here — a re-declared literal that had drifted
+  // would make every comparison below vacuous.
+  it('T5-9: the notify claim is distinct — identity and containment — from the simulator claim and the three delegation registers', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+
+    fireEvent.click(within(canvasPanel()).getByText('Engagement Manager must approve'))
+    const picker = control(screen.getByLabelText('Delegate to')) as HTMLSelectElement
+    const NEIGHBOURS: [string, string][] = [
+      ['the sentinel option label', Array.from(picker.options).find((o) => o.value === '')?.textContent ?? ''],
+      ['the eligibility note', delegateNote()],
+      ['the delegation reason', reasonText(delegationReason())],
+    ]
+    for (const [what, s] of NEIGHBOURS) expect(s, `${what} read empty`).not.toBe('')
+
+    selectNotify()
+    const inspector = claimIn(inspectorPanel(), NOTIFY_CLAIM_ID)
+    const simulator = claimIn(simulatorPanel(), SIM_NOTIFY_CLAIM_ID)
+    expect(inspector, `the inspector renders no [data-testid="${NOTIFY_CLAIM_ID}"]`).toBeTruthy()
+    expect(simulator, `the simulator renders no [data-testid="${SIM_NOTIFY_CLAIM_ID}"]`).toBeTruthy()
+
+    const a = claimText(inspector!)
+    const b = claimText(simulator!)
+    expect(a, 'the inspector claim is empty').not.toBe('')
+    expect(b, 'the simulator claim is empty').not.toBe('')
+    // They are on screen together and address different readers — this control vs this simulated path.
+    expect(a, 'the two claims collapsed into one sentence').not.toBe(b)
+    expect(a.includes(b), 'the inspector claim swallowed the simulator claim verbatim').toBe(false)
+    expect(b.includes(a), 'the simulator claim swallowed the inspector claim verbatim').toBe(false)
+
+    for (const [what, s] of NEIGHBOURS) {
+      for (const [whose, claim] of [['the inspector claim', a], ['the simulator claim', b]] as [string, string][]) {
+        expect(claim, `${whose} collapsed into ${what}`).not.toBe(s)
+        expect(claim.includes(s), `${whose} swallowed ${what} verbatim`).toBe(false)
+        expect(s.includes(claim), `${what} swallowed ${whose} verbatim`).toBe(false)
+      }
+    }
+  })
+})
+
+describe('APPR-10-05: the notify panel’s control set', () => {
+  // The only inspector arm with no enumeration — the condition panel has one (:1944-1955) and the
+  // approval panel has one (:901-910). It is what makes G8 falsifiable here: a claim rendered as a
+  // <button> reds this rather than shipping.
+  it('renders the Remove button, the Notify select and the Channel select — and nothing else', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+    selectNotify()
+
+    const controls = Array.from(inspectorPanel().querySelectorAll('input, select, textarea, button'))
+    expect(controls.length, 'the panel query matched nothing, so the list below proves nothing').toBeGreaterThan(0)
+    expect(controls.map((c) => [c.tagName, controlName(c)]), 'the notify panel gained or lost a control').toEqual([
+      ['BUTTON', 'Remove'],
+      ['SELECT', 'Notify'],
+      ['SELECT', 'Channel'],
+    ])
   })
 })

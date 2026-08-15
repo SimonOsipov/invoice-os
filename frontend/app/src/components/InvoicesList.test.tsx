@@ -11,7 +11,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
+import { skipReasonLabel, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 import { InvoicesList } from './InvoicesList'
 
@@ -814,6 +814,72 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
     expect(summary.textContent).toContain('1 selected on this page')
     expect(awaiting.checked, 'select-all must not sweep in an awaiting-approval row').toBe(false)
     expect((screen.getByLabelText('Select invoice INV-CLEAR') as HTMLInputElement).checked).toBe(true)
+  })
+})
+
+// RED specs (APPR-12-06, task-531, Stage 2.5/Mode A) — a blocked checkbox today is
+// disabled and silent. GAP-2's four-layer contract (mirroring ApprovalsView's shipped
+// G-04-C): the real disabled attribute, a VISIBLE sibling node carrying the sentence, a
+// PER-ROW aria-describedby id (`submit-blocked-reason-${r.id}`), and title. The reason
+// text itself is skipReasonLabel's own copy (GAP-3), never an SPA-authored literal.
+describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all four layers (APPR-12-06, AC #1/#2/#5)", () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  it('A06-5: the real disabled attribute, a visible sibling carrying the reason byte-identically, and a per-row aria-describedby id', async () => {
+    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const checkbox = screen.getByTestId('invoice-select') as HTMLInputElement
+    const reason = skipReasonLabel('not_validated')
+
+    // Layer 1: the real disabled attribute -- a keyboard user cannot reach it.
+    expect(checkbox.disabled).toBe(true)
+    checkbox.focus()
+    expect(document.activeElement, 'a disabled control must be genuinely out of the tab order').not.toBe(checkbox)
+
+    // Layer 4: title.
+    expect(checkbox.getAttribute('title')).toBe(reason)
+
+    // Layer 3: a VISIBLE sibling node carrying the server's sentence byte-identically --
+    // the layer a screenshot, a keyboard user and a text assertion can all reach.
+    expect(screen.getByText(reason), "the SPA must render skipReasonLabel's own sentence, not a substitute").toBeTruthy()
+
+    // aria-describedby points at that node, by a PER-ROW unique id.
+    const describedbyId = checkbox.getAttribute('aria-describedby')
+    expect(describedbyId).toBe('submit-blocked-reason-inv-blocked')
+    expect(
+      document.getElementById(describedbyId as string)?.textContent,
+      'aria-describedby must point at the SAME text as the visible sentence',
+    ).toBe(reason)
+  })
+
+  it('A06-5b: two blocked rows on the same page get distinct per-row reason ids, each pointing at its own text', async () => {
+    const notValidated = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'draft' })
+    const awaitingApproval = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated', approval: openRun })
+    mockFetchSequence([listResponse([notValidated, awaitingApproval], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-B')
+
+    const checkboxes = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
+    expect(checkboxes).toHaveLength(2)
+    const ids = checkboxes.map((c) => c.getAttribute('aria-describedby'))
+    expect(ids[0]).not.toBeNull()
+    expect(ids[1]).not.toBeNull()
+    expect(ids[0], 'two blocked rows must not share one id').not.toBe(ids[1])
+
+    expect(document.getElementById(ids[0] as string)?.textContent).toBe(skipReasonLabel('not_validated'))
+    expect(document.getElementById(ids[1] as string)?.textContent).toBe(skipReasonLabel('awaiting_approval'))
   })
 })
 

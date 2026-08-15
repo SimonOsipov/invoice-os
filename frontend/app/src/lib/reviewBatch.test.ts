@@ -1189,7 +1189,7 @@ describe('reviewPills (AC-2, D3) — takes the four totals only, no rows paramet
     expect(pills).toEqual([
       { id: 'all', label: 'All', count: 500, active: true },
       { id: 'needs-fix', label: 'Needs a fix', count: 20, active: false },
-      { id: 'ready', label: 'Ready to submit', count: 474, active: false },
+      { id: 'ready', label: 'Validated', count: 474, active: false },
       { id: 'queued', label: 'Queued', count: 6, active: false },
     ])
   })
@@ -1199,9 +1199,23 @@ describe('reviewPills (AC-2, D3) — takes the four totals only, no rows paramet
 
     const labels = reviewPills(totals, 'all').map((p) => p.label)
 
-    expect(labels).toEqual(['All', 'Needs a fix', 'Ready to submit', 'Queued'])
+    expect(labels).toEqual(['All', 'Needs a fix', 'Validated', 'Queued'])
     expect(labels).not.toContain('Ready to approve')
     expect(labels).not.toContain('Approved')
+  })
+})
+
+// RED spec (APPR-12-06, task-531, A06-7) — a validated invoice held by an open approval
+// run is not "ready to submit" (INVOICES-06's own missing-reason gap): the ready pill's
+// label over-claimed. Asserted through reviewPills (REVIEW_PILL_LABELS itself is
+// module-private) — fails today against the still-pinned 'Ready to submit' string.
+describe('reviewPills: the ready pill no longer over-claims (APPR-12-06, AC #3)', () => {
+  it("A06-7: REVIEW_PILL_LABELS.ready is 'Validated', not 'Ready to submit' — a validated row held by an approval run is not ready to submit", () => {
+    const totals = { allTotal: 10, cleanTotal: 4, failingTotal: 3, queuedTotal: 3 }
+
+    const readyPill = reviewPills(totals, 'all').find((p) => p.id === 'ready')
+
+    expect(readyPill?.label).toBe('Validated')
   })
 })
 

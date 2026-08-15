@@ -66,6 +66,7 @@ import {
   revalidateInvoice,
   selectableIds,
   selectAllState,
+  selectBlockedReason,
   shouldFetchInvoices,
   shouldPollInvoice,
   shouldPollList,
@@ -2846,6 +2847,66 @@ describe('isRowSelectable over the whole status x run_state surface (APPR-08-09,
     expect(selectableIds(closed)).toEqual(['a', 'b'])
     expect(pruneSelection(afterOpen, closed)).toEqual(['b'])
     expect(pruneSelection(['a', 'b'], closed)).toEqual(['a', 'b'])
+  })
+})
+
+// RED specs (APPR-12-06, task-531, Stage 2.5/Mode A) — selectBlockedReason is the pure
+// helper the register/review checkboxes read to name WHY a row can't be selected for
+// submit. Built on skipReasonLabel(batchSubmitReason*) (GAP-3), never a fresh literal, so
+// the pre-click reason stays byte-identical to the post-click skip panel. Every spec below
+// fails on the stub's thrown `not implemented`, the correct RED reason.
+describe('selectBlockedReason (APPR-12-06)', () => {
+  it('A06-1: a selectable row (validated, no open run) has a null reason', () => {
+    expect(selectBlockedReason({ ...draftInvoice, status: 'validated', approval: null })).toBeNull()
+  })
+
+  it("A06-2: an open-run row names the approval cause, byte-identical to skipReasonLabel('awaiting_approval')", () => {
+    const row = { ...draftInvoice, status: 'validated' as InvoiceStatus, approval: OPEN_RUN }
+    expect(selectBlockedReason(row)).toBe(skipReasonLabel('awaiting_approval'))
+  })
+
+  it("A06-3: a non-validated row with no open run names the status cause, byte-identical to skipReasonLabel('not_validated')", () => {
+    const row = { ...draftInvoice, status: 'draft' as InvoiceStatus, approval: null }
+    expect(selectBlockedReason(row)).toBe(skipReasonLabel('not_validated'))
+  })
+
+  it('A06-4: totality — every non-selectable row across the whole status x run_state matrix gets a non-null reason (and the matrix itself is non-empty)', () => {
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+    const runStates = [null, 'open', 'approved', 'rejected', 'cancelled'] as const
+    const matrix = statuses.flatMap((status) =>
+      runStates.map((run_state) => ({
+        status,
+        approval: run_state === null ? null : { ...OPEN_RUN, run_state },
+      })),
+    )
+    expect(matrix.length).toBeGreaterThan(0)
+
+    let nonSelectableChecked = 0
+    for (const { status, approval } of matrix) {
+      const candidate = { ...draftInvoice, status, approval }
+      if (!isRowSelectable(candidate)) {
+        nonSelectableChecked++
+        expect(selectBlockedReason(candidate), `status=${status} run_state=${approval?.run_state ?? 'null'}`).not.toBeNull()
+      }
+    }
+    // Guards the loop above against a vacuous pass: the matrix must actually contain at
+    // least one non-selectable row, or the inner assertion above never ran.
+    expect(nonSelectableChecked).toBeGreaterThan(0)
+  })
+})
+
+describe('selectBlockedReason does not read can_approve (APPR-12-06, AC #7)', () => {
+  it('A06-12: a validated row with no open run stays SELECTABLE with a NULL reason even when blocked from approving (can_approve:false + a non-null approve_blocked_reason) — guards against harmonising the submit and approve gates', () => {
+    const candidate: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'validated',
+      approval: null,
+      can_approve: false,
+      approve_blocked_reason: 'Waiting on the Finance Lead seat',
+    }
+
+    expect(isRowSelectable(candidate), 'the submit gate must stay independent of the approve gate').toBe(true)
+    expect(selectBlockedReason(candidate)).toBeNull()
   })
 })
 

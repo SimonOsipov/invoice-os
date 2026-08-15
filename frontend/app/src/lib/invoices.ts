@@ -1195,6 +1195,14 @@ export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>)
   return row.status === 'validated' && row.approval?.run_state !== 'open'
 }
 
+// STUB (APPR-12-06, Mode A/test-first) — the paired GREEN subtask builds this on
+// skipReasonLabel(batchSubmitReason*) (GAP-3), never a fresh literal, and never reads
+// `can_approve` (AC #7: this is the SUBMIT gate's cause, not the approve gate's). Throws
+// so A06-1..A06-4/A06-12 fail on assertion/not-implemented, not import resolution.
+export function selectBlockedReason(_row: Pick<InvoiceRecord, 'status' | 'approval'>): string | null {
+  throw new Error('not implemented')
+}
+
 export function selectableIds(rows: InvoiceRecord[]): string[] {
   return rows.filter((row) => isRowSelectable(row)).map((row) => row.id)
 }

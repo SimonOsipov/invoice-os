@@ -544,6 +544,195 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
   })
 })
 
+// --- APPR-12-01 (task-525): awaitingApproval reaches the wire client --------
+//
+// `awaitingApproval` isn't declared on ListInvoicesOptions yet -- the `as
+// ListInvoicesOptions` casts below let A01-1/2/4 compile against today's (unwidened)
+// type so they red on the assertion, not on `tsc --noEmit`. Executor: remove the casts
+// once the field is real; leaving them in place after that would hide a future typo in
+// the field name from the type checker.
+describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
+  it('A01-1: {awaitingApproval: true} emits awaiting_approval=true on the URL', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { awaitingApproval: true } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url).searchParams.get('awaiting_approval')).toBe('true')
+  })
+
+  it('A01-2: {awaitingApproval: false} emits nothing -- not even the literal "awaiting_approval=false" -- paired against a true leg so the absence is not a vacuous pass', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    // Positive leg first, combined with a filter that already works today: proves this
+    // test's harness DOES observe the param when it reaches the wire, so the false leg's
+    // absence below can't pass merely because nothing here is ever emitted.
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { awaitingApproval: true, entityId: 'e1' } as ListInvoicesOptions)
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('entity_id=e1')
+    expect(trueUrl).toContain('awaiting_approval=true')
+
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { awaitingApproval: false, entityId: 'e1' } as ListInvoicesOptions)
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).toContain('entity_id=e1')
+    expect(falseUrl).not.toContain('awaiting_approval')
+    expect(falseUrl).not.toContain('awaiting_approval=false')
+  })
+
+  it('A01-3 (green-before guard): listInvoices(af, base, {}) still emits no ? at all', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {})
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('?')
+  })
+
+  it('A01-4: {awaitingApproval:true, entityId, limit:25, offset:0} composes all four -- offset:0 included (the LIST-4 falsy trap)', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 25, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {
+      awaitingApproval: true,
+      entityId: 'e1',
+      limit: 25,
+      offset: 0,
+    } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url).searchParams
+    expect(params.get('awaiting_approval')).toBe('true')
+    expect(params.get('entity_id')).toBe('e1')
+    expect(params.get('limit')).toBe('25')
+    expect(params.get('offset')).toBe('0')
+  })
+})
+
+// A01-5 (task-525, architect validation addendum Gap 2): the only oracle for a doc
+// comment is the source text itself -- TS interfaces are erased at runtime. Walks up/
+// out from live anchors (mirrors dashboard.test.ts's rollupBucketDoc) rather than fixed
+// line numbers, so edits elsewhere in the file can't silently move the scan off target.
+const NUMBER_WORDS: Record<string, number> = { nine: 9, ten: 10, eleven: 11, twelve: 12 }
+
+function numberWordsIn(text: string): number[] {
+  const matches = text.toLowerCase().match(/\b(nine|ten|eleven|twelve)\b/g) ?? []
+  return matches.map((w) => NUMBER_WORDS[w])
+}
+
+function readInvoicesSource(): string {
+  return readFileSync(fileURLToPath(new URL('./invoices.ts', import.meta.url)), 'utf8')
+}
+
+// Live field count of ListInvoicesOptions: walks from the interface declaration to its
+// closing brace, counting non-comment field-declaration lines.
+function listInvoicesOptionsFieldCount(): number {
+  const lines = readInvoicesSource().split('\n')
+  const start = lines.findIndex((l) => l.startsWith('export interface ListInvoicesOptions {'))
+  if (start < 0) return -1
+  let count = 0
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.trimStart().startsWith('}')) break
+    if (line.trimStart().startsWith('//')) continue
+    if (/^\s+\w+\??:/.test(line)) count++
+  }
+  return count
+}
+
+// The doc paragraph directly above the interface (:310-311 today) -- walks up from the
+// declaration while lines stay comments, same technique as dashboard.test.ts's
+// rollupBucketDoc.
+function listInvoicesOptionsDoc(): string {
+  const lines = readInvoicesSource().split('\n')
+  const anchor = lines.findIndex((l) => l.startsWith('export interface ListInvoicesOptions {'))
+  if (anchor < 0) return ''
+  const block: string[] = []
+  for (let i = anchor - 1; i >= 0 && lines[i].trimStart().startsWith('//'); i--) block.unshift(lines[i])
+  return block.join('\n')
+}
+
+// The file-header bullet for listInvoices (:21-28 today) -- a separate comment block
+// from the paragraph above the interface. Starts at the bullet's own line, stops at the
+// next `// - ` bullet or the first non-comment line.
+function listInvoicesHeaderBulletDoc(): string {
+  const lines = readInvoicesSource().split('\n')
+  const start = lines.findIndex((l) => l.includes('- listInvoices:'))
+  if (start < 0) return ''
+  const block: string[] = [lines[start]]
+  for (let i = start + 1; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart()
+    if (!trimmed.startsWith('//')) break
+    if (/^\/\/\s*-\s/.test(trimmed)) break
+    block.push(lines[i])
+  }
+  return block.join('\n')
+}
+
+describe('A01-5 control: the anchors locate the interface and both comment blocks', () => {
+  // Non-vacuity control (mirrors dashboard.test.ts's LIB-DOC control). Green today: if
+  // the real assertion below ever passes because a scan read the wrong region -- or
+  // nothing -- this control fails first and says so.
+  it('finds the interface, the header bullet, and the doc paragraph, each with a number-word present', () => {
+    expect(listInvoicesOptionsFieldCount(), 'lost anchor on the interface declaration').toBeGreaterThan(0)
+
+    const headerDoc = listInvoicesHeaderBulletDoc()
+    expect(headerDoc, 'lost anchor on the listInvoices header bullet').toContain('listInvoices')
+    expect(numberWordsIn(headerDoc).length, 'control needle: a number-word must be present today').toBeGreaterThanOrEqual(1)
+
+    const paraDoc = listInvoicesOptionsDoc()
+    expect(paraDoc, 'lost anchor on the doc paragraph above the interface').toContain('filters')
+    expect(
+      numberWordsIn(paraDoc).length,
+      'control needle: BOTH "nine filters" and "All nine" occurrences must be present today',
+    ).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('A01-5: both comment blocks name the live ListInvoicesOptions field count, not a stale one', () => {
+  it('the header bullet (:21) and every number-word in the doc paragraph (:310-311) equal the live field count', () => {
+    const liveCount = listInvoicesOptionsFieldCount()
+
+    const headerWords = numberWordsIn(listInvoicesHeaderBulletDoc())
+    expect(headerWords.length, 'the header bullet must still name a number-word').toBeGreaterThanOrEqual(1)
+    for (const n of headerWords) {
+      expect(n, 'the file-header bullet (:21) must name the live field count').toBe(liveCount)
+    }
+
+    const paraWords = numberWordsIn(listInvoicesOptionsDoc())
+    // Two occurrences today: "nine filters" (:310) and "All nine" (:311) -- both must be
+    // caught, not just the first one a naive find-and-replace would touch (architect
+    // validation addendum, Gap 1).
+    expect(paraWords.length, 'both "nine filters" and "All nine" occurrences must be present').toBeGreaterThanOrEqual(2)
+    for (const n of paraWords) {
+      expect(n, 'the doc paragraph above the interface (:310-311) must name the live field count').toBe(liveCount)
+    }
+  })
+})
+
 // --- APPR-08-08 (task-499): the per-row `approval` envelope -----------------
 //
 // ROW-1..5 drive `normaliseInvoiceRow` directly; ROW-6 goes through `listInvoices`,

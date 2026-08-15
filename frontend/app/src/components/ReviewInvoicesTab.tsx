@@ -145,13 +145,13 @@ export function ReviewInvoicesTab({
   // Fired after a successful bulk submit so the SHELL re-runs its four count queries.
   // Without it the row badges correctly read QUEUED while all four pills, the green
   // tile, the `Invoices (N)` tab label and the footer stay at their pre-submit numbers —
-  // and clicking `Ready to submit` then fires a query whose result contradicts the badge
+  // and clicking `Validated` then fires a query whose result contradicts the badge
   // above it. The shell keeps its previous data across that refresh (`lastShell`), so
   // this tab is NOT unmounted by it.
   onSubmitted: () => void
   // The four pill counts, fetched by the SHELL in one Promise.all. Passing them down
   // makes AC-2 structurally true (each count IS its own filtered response's
-  // pagination.total) and guarantees the `Ready to submit` pill can never disagree with
+  // pagination.total) and guarantees the `Validated` pill can never disagree with
   // the header's green tile 40px above it — same number, not two queries.
   totals: { allTotal: number; cleanTotal: number; failingTotal: number; queuedTotal: number }
 }) {
@@ -313,7 +313,7 @@ export function ReviewInvoicesTab({
     setSubmitError(null)
     // Resolved from THIS page's rows before the refetch below nulls `page.data`: looked
     // up live, every result row would flicker to a raw uuid, and a submitted invoice may
-    // leave the page entirely under the `Ready to submit` pill.
+    // leave the page entirely under the `Validated` pill.
     const numbersById = new Map(rows.map((row) => [row.id, row.invoice_number]))
     try {
       // A FRESH key per attempt, minted HERE and held nowhere. Arm → cancel → change the

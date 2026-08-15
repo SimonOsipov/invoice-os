@@ -879,7 +879,9 @@ export interface ReviewPillView {
 const REVIEW_PILL_LABELS: Record<ReviewPill, string> = {
   all: 'All',
   'needs-fix': 'Needs a fix',
-  ready: 'Ready to submit',
+  // A validated row can still be held by an open approval run (APPR-12-06) -- 'Validated'
+  // makes no submit-readiness claim the row might not back up.
+  ready: 'Validated',
   queued: 'Queued',
 }
 

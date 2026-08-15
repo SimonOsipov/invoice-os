@@ -227,12 +227,15 @@ describe('Sidebar nav badges, firm mode', () => {
     expect(switcherSubLabel()).toBe('3 needing attention')
   })
 
-  it('carries no Approvals item at all', async () => {
+  // APPR-12-05 (task-530): firm gains Approvals in the CLIENT group. This asserts BOTH
+  // that the item now renders AND that its badge follows the SELECTED entity (6), not the
+  // firm-wide totals (5) -- the same scoping FIRM_ROLLUP already proves for Invoices above.
+  it('the Approvals badge follows the selected entity, not the firm total', async () => {
     mockRollupFetch(FIRM_ROLLUP)
     render(<Sidebar ctx={firmCtx()} />)
     await within(navButton('Invoices')).findByText('3')
 
-    expect(screen.queryByText('Approvals')).toBeNull()
+    expect(badgeOf('Approvals')?.textContent).toBe('6')
   })
 
   // QA adversarial, the asymmetry with the Reports card: that one was cut off this overlay,

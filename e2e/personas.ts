@@ -105,12 +105,16 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     specToken: 'FIRM_PERSONA',
     tenantName: 'Okafor & Partners',
     // Every surface here is DRIVEN as the firm persona except NAV_RULES, which is only
-    // proven to EXIST for it (see its own note below). Approvals stays absent at every
-    // grade -- it is not a firm-mode surface at all. Each cell is added in the SAME commit
-    // as the spec that covers it, never ahead of one.
+    // proven to EXIST for it (see its own note below). Each cell is added in the SAME
+    // commit as the spec that covers it, never ahead of one.
     coverage: [
       { navConst: 'NAV_DASHBOARD', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_INVOICES', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
+      // APPR-12-05 (task-530): the firm CLIENT group gains Approvals directly after
+      // Invoices. Pointed at persona-surfaces.spec.ts's roster test, not
+      // invoice-surfaces.spec.ts (which does not cover it until task-532) -- the
+      // same-commit rule above without a forward reference (Decision V4).
+      { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_VALIDATION', grade: 'drives', coveredBy: 'e2e/topology/validation.spec.ts' },
       { navConst: 'NAV_CLIENTS', grade: 'drives', coveredBy: 'e2e/topology/portfolio.spec.ts' },
       // PERSONA-01-04: the firm policy LIST plus the per-workspace proof (delete a policy,

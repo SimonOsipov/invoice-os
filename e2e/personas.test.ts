@@ -71,12 +71,16 @@ const EXPECTED_DRIVES_MIN = new Set<string>([
   'inhouse:NAV_REPORTS',
   'inhouse:NAV_SETTINGS',
   'firm:NAV_WORKFLOWS', // Core AC 4
+  'firm:NAV_APPROVALS', // APPR-12-05 (task-530): firm CLIENT group gains Approvals
 ])
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const LANDING_AUTH = join(REPO_ROOT, 'frontend/landing/src/auth.ts')
 const SIDEBAR = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.tsx')
+const SIDEBAR_TEST = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.test.tsx')
 const GLYPHS = join(REPO_ROOT, 'frontend/app/src/glyphs.tsx')
+const APP_TSX = join(REPO_ROOT, 'frontend/app/src/App.tsx')
+const TYPES_TS = join(REPO_ROOT, 'frontend/app/src/types.ts')
 const PERSONAS_SRC = join(REPO_ROOT, 'e2e/personas.ts')
 const PERSONAS_TEST_SRC = join(REPO_ROOT, 'e2e/personas.test.ts')
 const APP_SESSION_SRC = join(REPO_ROOT, 'frontend/app/src/lib/session.ts')
@@ -368,7 +372,11 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const labels = extractGlyphLabels(glyphsSrc)
     const distinct = [...new Set([...firm, ...inhouse])]
 
-    expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(9)
+    // APPR-12-05 (task-530): firm gains a 10th item (NAV_APPROVALS). distinct/labels stay
+    // at 10 -- NAV_APPROVALS is ALREADY in the union via the in-house branch, and
+    // glyphs.tsx exports exactly ten NAV_* consts (no eleventh added by this subtask).
+    // Raising either to 11 would make this row permanently red (architect sweep V1).
+    expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(10)
     expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(8)
     expect(distinct.length, 'distinct navConsts (vacuity guard)').toBeGreaterThanOrEqual(10)
     expect(labels.size, 'NAV_* -> label pairs from glyphs.tsx (vacuity guard)').toBeGreaterThanOrEqual(10)
@@ -650,9 +658,10 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     ])
 
     // Vacuity first, so a broken extraction diagnoses itself before the coverage diff does.
-    expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(9)
+    // APPR-12-05 (task-530): firm 10 + in-house 8 = 18 distinct rendered pairs.
+    expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(10)
     expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(8)
-    expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(17)
+    expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(18)
 
     // Flattened over ALL FOUR personas (not just the two app ones): a stray cell filed
     // against `developer`/`support` -- which render no sidebar at all -- must surface as an
@@ -696,7 +705,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('row 17 (G6b) -- the named drives minimum holds', () => {
-    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(9)
+    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(10)
 
     const actualDrives = new Set<string>()
     for (const id of PERSONA_IDS) {
@@ -719,5 +728,128 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const fieldNames = extractCellFieldNames(src)
     expect(fieldNames.length, 'Cell interface fields (vacuity guard)').toBe(3)
     expect(new Set(fieldNames)).toEqual(new Set(['navConst', 'grade', 'coveredBy']))
+  })
+
+  // --- APPR-12-05 (Backlog task-530, Mode A) -- the nav flip's catalogue guards ----------
+  //
+  // Floors already raised in rows 6/15/17 above cover the general vacuity counts. These
+  // rows (A05-1 through A05-9, the story's own spec ids) check the SPECIFIC firm:
+  // NAV_APPROVALS transition. Authored against the CURRENT Sidebar.tsx/App.tsx/types.ts --
+  // this commit does not touch them -- so A05-1/A05-2/A05-7/A05-8 fail on their target
+  // assertion today; the executor's source edits turn them green. A05-3/A05-9 are
+  // green-before guards that must stay green throughout. A05-4 pins the e2e/personas.ts
+  // registry cell this same commit adds, so it is green from this commit on. A05-5/A05-6
+  // (the exact firm/in-house roster) are NOT new tests here -- they are the existing
+  // `sidebarRoster()` `.toEqual(FIRM_ROSTER)` / `.toEqual(INHOUSE_ROSTER)` assertions in
+  // e2e/topology/persona-surfaces.spec.ts's "sidebar roster" test, which now run against
+  // the raised FIRM_ROSTER constant; that spec is Playwright-only and cannot run locally.
+
+  it('A05-1 -- Sidebar.tsx still parses and the firm branch resolves the new NAV_APPROVALS token', () => {
+    const sidebarSrc = readFileSync(SIDEBAR, 'utf8')
+    // extractSidebarNavConsts throws if the G3 anchors ('const navGroups' / 'let activeNav')
+    // moved -- a parse failure and a missing-token failure are different defects, and this
+    // row only asserts the latter once the former has provably not happened.
+    const { firm, inhouse } = extractSidebarNavConsts(sidebarSrc)
+    expect(firm.length, 'firm nav items parsed (vacuity guard)').toBeGreaterThan(0)
+    expect(firm, 'the firm CLIENT group must resolve NAV_APPROVALS').toContain('NAV_APPROVALS')
+    expect(inhouse, 'in-house already resolves NAV_APPROVALS (unchanged by this story)').toContain('NAV_APPROVALS')
+  })
+
+  it('A05-2 -- firm:NAV_APPROVALS is bidirectionally covered: rendered and celled agree', () => {
+    const sidebarSrc = readFileSync(SIDEBAR, 'utf8')
+    const { firm } = extractSidebarNavConsts(sidebarSrc)
+    const rendered = firm.includes('NAV_APPROVALS')
+    const celled = (PERSONAS.firm.coverage ?? []).some((c) => c.navConst === 'NAV_APPROVALS')
+
+    // Both directions checked separately, mirroring G6a's own uncovered/extra split (row
+    // 15) -- a failure here names WHICH side is missing rather than a bare mismatch.
+    expect(celled, 'e2e/personas.ts must already claim firm:NAV_APPROVALS coverage (this commit adds the cell)').toBe(true)
+    expect(rendered, 'Sidebar.tsx must render NAV_APPROVALS in the firm branch').toBe(true)
+  })
+
+  it('A05-3 -- nav-only did not grow: the new firm cell is graded drives, not nav-only (green-before guard)', () => {
+    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(1)
+    expect(EXPECTED_NAV_ONLY.has('firm:NAV_APPROVALS'), 'firm:NAV_APPROVALS must never enter the nav-only set').toBe(false)
+
+    const cell = (PERSONAS.firm.coverage ?? []).find((c) => c.navConst === 'NAV_APPROVALS')
+    expect(cell?.grade, 'the new firm cell must be graded drives, not nav-only (Decision V4)').toBe('drives')
+  })
+
+  it('A05-4 -- the firm NAV_APPROVALS coverage cell is named exactly (Decision V4)', () => {
+    const cell = (PERSONAS.firm.coverage ?? []).find((c) => c.navConst === 'NAV_APPROVALS')
+    expect(cell, 'e2e/personas.ts firm coverage must carry a NAV_APPROVALS cell').toBeDefined()
+    // Pointed at persona-surfaces.spec.ts, NOT invoice-surfaces.spec.ts (which does not
+    // cover it until task-532) -- the same-commit rule at personas.ts:108 without a
+    // forward reference (architect sweep V4).
+    expect(cell?.grade).toBe('drives')
+    expect(cell?.coveredBy).toBe('e2e/topology/persona-surfaces.spec.ts')
+  })
+
+  it('A05-7 -- the NavId alias type is gone from types.ts and its App.tsx import', () => {
+    const typesSrc = readFileSync(TYPES_TS, 'utf8')
+    const appSrc = readFileSync(APP_TSX, 'utf8')
+    expect(typesSrc.length, 'types.ts has no content to scan').toBeGreaterThan(0)
+    expect(appSrc.length, 'App.tsx has no content to scan').toBeGreaterThan(0)
+
+    expect(/\bNavId\b/.test(typesSrc), 'types.ts still references NavId').toBe(false)
+    expect(/\bNavId\b/.test(appSrc), 'App.tsx still references NavId').toBe(false)
+  })
+
+  it('A05-8 -- ctx.filter and setFilter are gone from the App/Sidebar/types surface', () => {
+    // Scoped to \bsetFilter\b and ctx\.filter\b ONLY (architect sweep V7) -- a bare
+    // `filter` scan drowns in `.filter(` array calls and CSS `filter:` values (30+
+    // legitimate hits under frontend/app/src).
+    const SET_FILTER = /\bsetFilter\b/
+    const CTX_FILTER = /ctx\.filter\b/
+    const files: readonly [string, string][] = [
+      ['frontend/app/src/types.ts', TYPES_TS],
+      ['frontend/app/src/App.tsx', APP_TSX],
+      ['frontend/app/src/components/Sidebar.tsx', SIDEBAR],
+      ['frontend/app/src/components/Sidebar.test.tsx', SIDEBAR_TEST],
+    ]
+
+    const hits: string[] = []
+    for (const [label, path] of files) {
+      const src = readFileSync(path, 'utf8')
+      if (SET_FILTER.test(src)) hits.push(`${label}: setFilter`)
+      if (CTX_FILTER.test(src)) hits.push(`${label}: ctx.filter`)
+    }
+    expect(hits, `dead filter members still present: ${hits.join(', ')}`).toEqual([])
+  })
+
+  it('A05-8-neg -- the setFilter/ctx.filter scan does not false-positive on .filter( calls or CSS filter: values (non-vacuity control)', () => {
+    const FIXTURE = `
+      const list = items.filter((x) => x.active)
+      const style = { filter: 'none' }
+      const clients = ctx.entities.filter((c) => c.entityId != null)
+    `
+    expect(/\bsetFilter\b/.test(FIXTURE), 'must not fire on .filter( calls').toBe(false)
+    expect(/ctx\.filter\b/.test(FIXTURE), 'must not fire on unrelated ctx.<x>.filter( chains').toBe(false)
+
+    // Paired positive: the same two patterns DO fire on the real dead members, so the
+    // scan is not vacuously always-false.
+    const POSITIVE = `const [filter, setFilter] = useState('all')\nctx.filter === 'Pending'`
+    expect(/\bsetFilter\b/.test(POSITIVE)).toBe(true)
+    expect(/ctx\.filter\b/.test(POSITIVE)).toBe(true)
+  })
+
+  it('A05-9 -- Sidebar.tsx keeps the `let activeNav` slice anchor G3 depends on (green-before guard)', () => {
+    // After Sidebar.tsx:125's override is deleted, `let activeNav` is never reassigned --
+    // but it must KEEP its `let` binding and exact text, because G3 (row 6 above) slices
+    // Sidebar.tsx from indexOf('const navGroups') to indexOf('let activeNav'). A
+    // `prefer-const` tidy-up would silently break that anchor, and this repo ships no
+    // ESLint config to catch it (architect sweep V8/notes).
+    const sidebarSrc = readFileSync(SIDEBAR, 'utf8')
+    expect(/\blet\s+activeNav\b/.test(sidebarSrc), 'Sidebar.tsx must declare `let activeNav` -- G3 slices on this exact anchor').toBe(true)
+    expect(/\bconst\s+activeNav\b/.test(sidebarSrc), 'a `prefer-const` tidy-up must not rename this to `const activeNav`').toBe(false)
+  })
+
+  it('A05-9-neg -- the activeNav anchor check tells `let` apart from `const` (non-vacuity control)', () => {
+    const LET_FIXTURE = "let activeNav: string = view === 'create' ? 'invoices' : view"
+    const CONST_FIXTURE = "const activeNav: string = view === 'create' ? 'invoices' : view"
+    expect(/\blet\s+activeNav\b/.test(LET_FIXTURE)).toBe(true)
+    expect(/\bconst\s+activeNav\b/.test(LET_FIXTURE)).toBe(false)
+    expect(/\blet\s+activeNav\b/.test(CONST_FIXTURE)).toBe(false)
+    expect(/\bconst\s+activeNav\b/.test(CONST_FIXTURE)).toBe(true)
   })
 })

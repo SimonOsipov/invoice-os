@@ -72,6 +72,7 @@ export type ApproveResult = { id: string; ok: true } | { id: string; ok: false; 
 export interface ApprovalResultRow {
   invoiceNumber: string
   ok: boolean
+  label: string
   message: string | null
 }
 
@@ -196,6 +197,9 @@ export function approvalOutcome(results: ApproveResult[], numbersById: Map<strin
   return results.map((r) => ({
     invoiceNumber: numbersById.get(r.id) ?? r.id,
     ok: r.ok,
+    // The row label, not the reason -- `message` (below) still carries the server's
+    // own text for the failure case, byte-identical.
+    label: r.ok ? 'Approved' : 'Not approved',
     message: r.ok ? null : r.message,
   }))
 }

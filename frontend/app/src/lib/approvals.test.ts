@@ -436,9 +436,14 @@ describe('approvalOutcome (no A02 spec -- QA-added)', () => {
 
     expect(rows.length).toBeGreaterThan(0)
     expect(rows).toEqual([
-      { invoiceNumber: 'INV-001', ok: true, message: null },
-      { invoiceNumber: 'INV-002', ok: false, message: 'this approval run is already closed' },
-      { invoiceNumber: 'INV-003', ok: true, message: null },
+      { invoiceNumber: 'INV-001', ok: true, label: 'Approved', message: null },
+      {
+        invoiceNumber: 'INV-002',
+        ok: false,
+        label: 'Not approved',
+        message: 'this approval run is already closed',
+      },
+      { invoiceNumber: 'INV-003', ok: true, label: 'Approved', message: null },
     ])
   })
 
@@ -447,7 +452,22 @@ describe('approvalOutcome (no A02 spec -- QA-added)', () => {
 
     const rows = approvalOutcome(results, new Map())
 
-    expect(rows).toEqual([{ invoiceNumber: 'inv-unknown', ok: true, message: null }])
+    expect(rows).toEqual([{ invoiceNumber: 'inv-unknown', ok: true, label: 'Approved', message: null }])
+  })
+
+  it('the label differs between the ok and non-ok cases, and is never empty', () => {
+    const results: ApproveResult[] = [
+      { id: 'a', ok: true },
+      { id: 'b', ok: false, message: 'this approval run is already closed' },
+    ]
+
+    const rows = approvalOutcome(results, new Map())
+
+    for (const row of rows) {
+      expect(typeof row.label).toBe('string')
+      expect(row.label.length).toBeGreaterThan(0)
+    }
+    expect(rows[0].label).not.toEqual(rows[1].label)
   })
 
   it('is derived from the results array, never from numbersById\'s own size', () => {

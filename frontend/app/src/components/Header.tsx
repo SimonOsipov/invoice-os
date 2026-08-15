@@ -22,6 +22,7 @@ const CRUMB_MAP: Record<View, string> = {
   customers: 'Customers',
   reports: 'Reports',
   settings: 'Settings',
+  approvals: 'Approvals',
 }
 
 // Segment colours mirror ops-console TopBar.tsx: the active segment is filled with

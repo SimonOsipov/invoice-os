@@ -82,6 +82,7 @@ import { WorkflowsView } from './components/WorkflowsView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
+import { ApprovalsView } from './components/ApprovalsView'
 import type {
   Client,
   ConnectorId,
@@ -1254,6 +1255,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
           {view === 'customers' && <CustomersView ctx={ctx} />}
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}
+          {view === 'approvals' && <ApprovalsView ctx={ctx} />}
         </div>
       </main>
     </div>

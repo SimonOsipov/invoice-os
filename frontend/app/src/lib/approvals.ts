@@ -42,6 +42,11 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 export interface ApprovalRowView {
   approvable: boolean
   pendingOrd: number | null
+  // Human-facing step label (G4, APPR-12-03): pending_ord is 0-based on the wire
+  // (gate_test.go:1086 pins Ord 0 as a legitimate pending step) and null on a row with
+  // no run at all (store.go:691-694's vacuous NOT EXISTS) -- +1 and an em dash live
+  // here, never in the component.
+  stepLabel: string
   roleLabel: string
   pendingHolderWarn: boolean
   dueAt: string | null
@@ -117,9 +122,11 @@ export function approvalRowView(
   row: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_reason' | 'approval'>,
 ): ApprovalRowView {
   const approval = row.approval
+  const pendingOrd = approval?.pending_ord ?? null
   return {
     approvable: isApprovableRow(row),
-    pendingOrd: approval?.pending_ord ?? null,
+    pendingOrd,
+    stepLabel: pendingOrd == null ? '—' : `Step ${pendingOrd + 1}`,
     roleLabel: approval?.pending_role_title ?? '—',
     pendingHolderWarn: approval?.pending_holder_warn === true,
     dueAt: approval?.due_at ?? null,
@@ -205,10 +212,32 @@ export function approvalOutcome(results: ApproveResult[], numbersById: Map<strin
 }
 
 // Static chrome only -- count-dependent copy lives on ApprovalsBarView instead.
+//
+// eyebrow/h1/subtitle through overdue (G2, APPR-12-03): the queue's own chrome --
+// Loading/EmptyState/ErrorState all take caller-supplied strings
+// (packages/api-client/src/components/{Loading,EmptyState,ErrorState}.tsx), so these
+// would otherwise land inline in ApprovalsView.tsx. No "New invoice" CTA here --
+// creating an invoice is the wrong action on an approval queue.
 export const APPROVALS_COPY = {
   clear: 'Clear',
   cancel: 'Cancel',
   sending: 'Approving…',
   resultInvoice: 'Invoice #',
   resultOutcome: 'Result',
+  eyebrow: 'AWAITING YOUR APPROVAL',
+  h1: 'Approvals',
+  subtitle: 'invoices waiting on your sign-off.',
+  loading: 'Loading approvals…',
+  colInvoice: 'Invoice #',
+  colBuyer: 'Buyer',
+  colAmount: 'Amount',
+  colStep: 'Step',
+  colRole: 'Role',
+  colDue: 'Due',
+  emptyTitle: 'Nothing awaiting approval',
+  emptyMessage: 'Invoices land here once they pass validation and a policy is armed.',
+  emptyPageTitle: 'No approvals on this page',
+  emptyPageMessage: 'Go back to see the rest of the queue.',
+  unstaffedSeat: 'Unstaffed seat',
+  overdue: 'Overdue',
 } as const

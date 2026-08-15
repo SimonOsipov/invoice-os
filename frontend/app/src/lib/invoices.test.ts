@@ -2865,33 +2865,64 @@ describe('selectBlockedReason (APPR-12-06)', () => {
     expect(selectBlockedReason(row)).toBe(skipReasonLabel('awaiting_approval'))
   })
 
-  it("A06-3: a non-validated row with no open run names the status cause, byte-identical to skipReasonLabel('not_validated')", () => {
+  it("A06-3: a draft row -- the only pre-submission status that isn't validated -- names the status cause, byte-identical to skipReasonLabel('not_validated')", () => {
     const row = { ...draftInvoice, status: 'draft' as InvoiceStatus, approval: null }
     expect(selectBlockedReason(row)).toBe(skipReasonLabel('not_validated'))
   })
 
-  it('A06-4: totality — every non-selectable row across the whole status x run_state matrix gets a non-null reason (and the matrix itself is non-empty)', () => {
-    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
-    const runStates = [null, 'open', 'approved', 'rejected', 'cancelled'] as const
-    const matrix = statuses.flatMap((status) =>
-      runStates.map((run_state) => ({
-        status,
-        approval: run_state === null ? null : { ...OPEN_RUN, run_state },
-      })),
-    )
-    expect(matrix.length).toBeGreaterThan(0)
+  // A06-4 asserted TOTALITY only (`not.toBeNull()`), which is why it stayed green while
+  // ten deployed rows read "Not validated — validate it first" beside an ACCEPTED pill.
+  // It now asserts TRUTHFULNESS: the EXACT expected string, or null, for all 35 cells.
+  it('A06-4: truthfulness — every cell of the status x run_state matrix returns the exact reason it can honestly name, or null', () => {
+    const AWAITING = skipReasonLabel('awaiting_approval')
+    const NOT_VALIDATED = skipReasonLabel('not_validated')
+    const runStates = ['none', 'open', 'approved', 'rejected', 'cancelled'] as const
+    type RunKey = (typeof runStates)[number]
 
-    let nonSelectableChecked = 0
-    for (const { status, approval } of matrix) {
-      const candidate = { ...draftInvoice, status, approval }
-      if (!isRowSelectable(candidate)) {
-        nonSelectableChecked++
-        expect(selectBlockedReason(candidate), `status=${status} run_state=${approval?.run_state ?? 'null'}`).not.toBeNull()
+    // Written out cell by cell ON PURPOSE. An expectation derived from a predicate would
+    // just re-run the implementation and pass on whatever it does. Only the two
+    // pre-submission statuses may carry a sentence; the five later ones say nothing,
+    // because the status pill beside them is already the answer.
+    const EXPECTED: Record<InvoiceStatus, Record<RunKey, string | null>> = {
+      draft: { none: NOT_VALIDATED, open: AWAITING, approved: NOT_VALIDATED, rejected: NOT_VALIDATED, cancelled: NOT_VALIDATED },
+      validated: { none: null, open: AWAITING, approved: null, rejected: null, cancelled: null },
+      queued: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      submitted: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      accepted: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      rejected: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      failed: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+    }
+
+    const statuses = Object.keys(EXPECTED) as InvoiceStatus[]
+    let cells = 0
+    for (const status of statuses) {
+      for (const run of runStates) {
+        cells++
+        const candidate = { ...draftInvoice, status, approval: run === 'none' ? null : { ...OPEN_RUN, run_state: run } }
+        expect(selectBlockedReason(candidate), `status=${status} run_state=${run}`).toBe(EXPECTED[status][run])
       }
     }
-    // Guards the loop above against a vacuous pass: the matrix must actually contain at
-    // least one non-selectable row, or the inner assertion above never ran.
-    expect(nonSelectableChecked).toBeGreaterThan(0)
+
+    // The table must cover the whole union, not a subset someone trimmed: 7 statuses x 5
+    // run states. A shrunken EXPECTED would otherwise pass by simply asserting less.
+    expect(statuses).toHaveLength(7)
+    expect(cells).toBe(35)
+  })
+
+  // The defect stated as its own spec, so the guard survives a future rewrite of A06-4's
+  // table: no post-submission row may be told to validate itself.
+  it('A06-4b: no post-submission status ever returns the not-validated sentence, at any run_state', () => {
+    const postSubmission: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of postSubmission) {
+      for (const approval of [null, OPEN_RUN, APPROVED_RUN]) {
+        const candidate = { ...draftInvoice, status, approval }
+        expect(
+          selectBlockedReason(candidate),
+          `status=${status} run_state=${approval?.run_state ?? 'null'} -- a row already past submission cannot be "validated first"`,
+        ).toBeNull()
+      }
+    }
   })
 })
 

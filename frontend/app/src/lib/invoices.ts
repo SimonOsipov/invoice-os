@@ -1195,12 +1195,22 @@ export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>)
   return row.status === 'validated' && row.approval?.run_state !== 'open'
 }
 
-// Total over isRowSelectable's own matrix: an open run names the approval cause, any
-// other non-selectable status names the status cause. Built on skipReasonLabel
-// (GAP-3), never a fresh literal, so this stays byte-identical to the post-click skip
-// panel. Never reads `can_approve` (AC #7) -- this is the SUBMIT gate's reason.
+// Total over the causes it can HONESTLY name, not over every non-selectable row. Only
+// draft/validated are pre-submission (legalTransitions, store.go), so only there does a
+// submit block have a cause worth naming: an open run names the approval cause, a draft
+// names the not-validated one. Every later status returns null and the row renders no
+// reason -- its STATUS PILL is already the explanation, and "validate it first" beside an
+// accepted invoice is simply false. No new SPA string for the silent statuses
+// ([gates-on-the-wire]); the two it does return come from skipReasonLabel (GAP-3), never a
+// fresh literal, so they stay byte-identical to the post-click skip panel. Never reads
+// `can_approve` (AC #7) -- this is the SUBMIT gate's reason. Pinned by A06-4's per-cell
+// truthfulness table over the whole status x run_state matrix.
 export function selectBlockedReason(row: Pick<InvoiceRecord, 'status' | 'approval'>): string | null {
   if (isRowSelectable(row)) return null
+  // Before the approval check, not after: a post-submission row carrying a lingering open
+  // run would otherwise read "waiting on approval" beside an ACCEPTED pill -- the same lie
+  // in a different sentence.
+  if (row.status !== 'draft' && row.status !== 'validated') return null
   if (row.approval?.run_state === 'open') return skipReasonLabel('awaiting_approval')
   return skipReasonLabel('not_validated')
 }

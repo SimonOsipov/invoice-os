@@ -917,6 +917,37 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
     expect(checkbox.getAttribute('aria-describedby')).toBeNull()
     expect(screen.queryByTestId('invoice-blocked-reason'), 'a selectable row must render no reason node at all').toBeNull()
   })
+
+  // Fix cycle 2 (QA-P1). QA-2 above proves the SELECTABLE row renders nothing; nothing
+  // proved it for the OTHER silent case. Ten deployed rows read "Not validated — validate
+  // it first" beside an ACCEPTED/FAILED/REJECTED pill, because every non-selectable row
+  // got a sentence whether or not one was true. A post-submission row is still
+  // un-tickable, but the pill is the reason -- so the node must be absent, not reworded.
+  it('A06-5c: a post-submission row keeps its disabled checkbox but renders NO reason node, no title and no aria-describedby', async () => {
+    const rows = [
+      row({ id: 'inv-acc', invoice_number: 'INV-ACC', status: 'accepted' }),
+      row({ id: 'inv-fail', invoice_number: 'INV-FAIL', status: 'failed' }),
+      row({ id: 'inv-rej', invoice_number: 'INV-REJ', status: 'rejected' }),
+    ]
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 3 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REJ')
+
+    for (const label of ['Select invoice INV-ACC', 'Select invoice INV-FAIL', 'Select invoice INV-REJ']) {
+      const checkbox = screen.getByLabelText(label) as HTMLInputElement
+      expect(checkbox.disabled, `${label}: a filed invoice is not submittable`).toBe(true)
+      expect(checkbox.getAttribute('title'), `${label}: no title`).toBeNull()
+      expect(checkbox.getAttribute('aria-describedby'), `${label}: nothing to describe it by`).toBeNull()
+    }
+
+    expect(screen.queryAllByTestId('invoice-blocked-reason'), 'no post-submission row may carry a reason node').toHaveLength(0)
+    expect(
+      screen.queryByText(skipReasonLabel('not_validated')),
+      'telling the operator to validate an already-filed invoice is false',
+    ).toBeNull()
+    expect(screen.queryByText(skipReasonLabel('awaiting_approval'))).toBeNull()
+  })
 })
 
 // Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label

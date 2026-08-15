@@ -37,9 +37,9 @@ const LEGAL_GRADES: Grade[] = ['drives', 'nav-only']
 //
 // Literal, HAND-WRITTEN sets living in THIS test file, never in e2e/personas.ts -- a
 // downgrade or a promotion becomes a visible diff to the guard's OWN expectations rather
-// than a quiet data change ([coverage-honesty]). Derived from the tree (personas.ts:126-129
-// for nav-only; :112-119 + :146-153 for drives) and confirmed against it, not copied out of
-// the implementation plan.
+// than a quiet data change ([coverage-honesty]). Derived from the tree (each persona's
+// `coverage` array in personas.ts) and confirmed against it, not copied out of the
+// implementation plan.
 
 // The complete nav-only set. Each entry carries its own one-line reason.
 // firm:NAV_CUSTOMERS left this set in BUG-01-08 -- driven by invoice-surfaces.spec.ts now.
@@ -302,6 +302,23 @@ function extractCellFieldNames(src: string): string[] {
   }
   const body = src.slice(startIdx, endIdx)
   return [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1])
+}
+
+// `export type PlatformCtx = { ... }`: the same declaration-to-column-0-`}` slice as
+// extractCellFieldNames above, over types.ts. A05-8 needs the BODY rather than the whole
+// file because three of the dead `filter` sites spell neither `ctx.filter` nor
+// `setFilter` literally -- the member declaration itself is the only text they share.
+function extractPlatformCtxMemberNames(typesSrc: string): string[] {
+  const startIdx = typesSrc.indexOf('export type PlatformCtx = {')
+  if (startIdx === -1) {
+    throw new Error('A05-8: `export type PlatformCtx = {` anchor not found in types.ts -- the anchors moved, update e2e/personas.test.ts')
+  }
+  const endIdx = typesSrc.indexOf('\n}', startIdx)
+  if (endIdx === -1) {
+    throw new Error('A05-8: closing column-0 `}` not found after PlatformCtx -- the anchors moved, update e2e/personas.test.ts')
+  }
+  const body = typesSrc.slice(startIdx, endIdx)
+  return [...body.matchAll(/^\s*(\w+)\??:/gm)].map((m) => m[1])
 }
 
 describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-270)', () => {
@@ -796,9 +813,22 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('A05-8 -- ctx.filter and setFilter are gone from the App/Sidebar/types surface', () => {
-    // Scoped to \bsetFilter\b and ctx\.filter\b ONLY (architect sweep V7) -- a bare
-    // `filter` scan drowns in `.filter(` array calls and CSS `filter:` values (30+
-    // legitimate hits under frontend/app/src).
+    // TWO halves, because neither alone sees all eleven deleted sites.
+    //
+    // Half 1, ANCHORED: the PlatformCtx body itself. `types.ts`'s `filter: string`,
+    // `Sidebar.tsx`'s `const { ..., filter } = ctx` destructure and `Sidebar.test.tsx`'s
+    // `filter: ''` fixture field spell neither `ctx.filter` nor `setFilter` literally, so
+    // half 2 cannot see them -- but delete the MEMBER and the first two stop compiling.
+    // Anchored to the type body, so it can never match a `.filter(` call or a CSS
+    // `filter:` value elsewhere in the file (architect sweep V7).
+    const ctxMembers = extractPlatformCtxMemberNames(readFileSync(TYPES_TS, 'utf8'))
+    expect(ctxMembers.length, 'PlatformCtx members parsed (vacuity guard)').toBeGreaterThan(20)
+    expect(ctxMembers, 'PlatformCtx must carry no `filter` member').not.toContain('filter')
+    expect(ctxMembers, 'PlatformCtx must carry no `setFilter` member').not.toContain('setFilter')
+
+    // Half 2, LITERAL: scoped to \bsetFilter\b and ctx\.filter\b ONLY -- a bare `filter`
+    // scan drowns in `.filter(` array calls and CSS `filter:` values (30+ legitimate hits
+    // under frontend/app/src).
     const SET_FILTER = /\bsetFilter\b/
     const CTX_FILTER = /ctx\.filter\b/
     const files: readonly [string, string][] = [
@@ -831,6 +861,13 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const POSITIVE = `const [filter, setFilter] = useState('all')\nctx.filter === 'Pending'`
     expect(/\bsetFilter\b/.test(POSITIVE)).toBe(true)
     expect(/ctx\.filter\b/.test(POSITIVE)).toBe(true)
+
+    // The anchored half's own control: it must SEE a reinstated member, and must not be
+    // fooled by a `.filter(` call or a CSS `filter:` inside the same body.
+    const DIRTY = "export type PlatformCtx = {\n  view: View\n  filter: string\n  setFilter: (f: string) => void\n}\n"
+    expect(extractPlatformCtxMemberNames(DIRTY)).toEqual(['view', 'filter', 'setFilter'])
+    const CLEAN = "export type PlatformCtx = {\n  view: View\n  rows: Row[] // rows.filter((r) => r.ok)\n  style: { filter: 'none' }\n}\n"
+    expect(extractPlatformCtxMemberNames(CLEAN)).toEqual(['view', 'rows', 'style'])
   })
 
   it('A05-9 -- Sidebar.tsx keeps the `let activeNav` slice anchor G3 depends on (green-before guard)', () => {

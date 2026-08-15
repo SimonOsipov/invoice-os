@@ -297,7 +297,7 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
 
   test('IH-5: the rollup validated count rises by exactly the number of validated fixtures created', async () => {
     // The DELTA is the whole point of this cell, and no browser-layer test corroborates
-    // it: [PERSONA-01-03]'s badge oracle ('Approvals: the in-house-only badge equals the
+    // it: [PERSONA-01-03]'s badge oracle ('Approvals: the in-house badge equals the
     // live awaiting-approval count') reads awaiting_approval, a different field. Pinning
     // counts.validated to fixture reality is therefore this cell's alone.
     //

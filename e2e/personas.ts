@@ -42,7 +42,7 @@ export interface SurfaceDef {
 }
 
 // The COMPLETE catalogue of app-SPA nav surfaces: every constant reachable from
-// Sidebar.tsx's navGroups (:111-123, 9 firm-mode items + 8 in-house), paired with the label
+// Sidebar.tsx's navGroups (10 firm-mode items + 8 in-house), paired with the label
 // glyphs.tsx renders for it (:63-110). Complete from this subtask onward, which is what lets
 // personas.test.ts's G3 assert equality against the live Sidebar rather than containment.
 //
@@ -124,8 +124,8 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       { navConst: 'NAV_CUSTOMERS', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       // nav-only, and honestly so: persona-surfaces.spec.ts's roster test asserts the firm
       // sidebar's nav labels as an EXACT ordered list, so it pins that this surface is
-      // present (and that Approvals is absent) for this persona -- but it never opens it as
-      // the firm. Its firm-mode CONTENT is unproven, which is exactly what `nav-only` states.
+      // present for this persona -- but it never opens it as the firm. Its firm-mode
+      // CONTENT is unproven, which is exactly what `nav-only` states.
       // Three surfaces have left this group as specs arrived to drive them: NAV_WORKFLOWS,
       // then NAV_CUSTOMERS, then NAV_SETTINGS.
       { navConst: 'NAV_RULES', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },

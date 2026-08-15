@@ -214,10 +214,6 @@ export type FieldMapRow = { erp: string; ubl: string }
 // still renders its default mapping — only edited ones are held.
 export type ConnectorMappings = Partial<Record<ConnectorId, FieldMapRow[]>>
 
-// Sidebar nav ids — a superset of `View`: 'approvals' is a synthetic in-house-mode nav
-// item that `nav()` translates into `{ view: 'invoices', filter: 'Pending' }`.
-export type NavId = View | 'approvals'
-
 // The signed-in caller shown in the sidebar footer. `tenantName`/`verified` come from
 // the GET /v1/me round trip (M2-13): when verified, the tenant name was proven against
 // the live backend; otherwise it falls back to the persona's static workspace label.
@@ -271,7 +267,6 @@ export type PlatformCtx = {
   armedField: string | null
   dragField: string | null
   selectedId: string | null
-  filter: string
   // The header search box's committed term (BUG-01-05) -- set on submit, read by
   // InvoicesList as the `q` server-side filter. `''` means unfiltered.
   invoiceQuery: string
@@ -408,8 +403,7 @@ export type PlatformCtx = {
   // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
 
-  nav: (id: NavId) => void
-  setFilter: (f: string) => void
+  nav: (id: View) => void
   setInvoiceQuery: (q: string) => void
   toggleSwitcher: () => void
   // [entity-picker] keystone: takes a real entity id, never an array index — the active

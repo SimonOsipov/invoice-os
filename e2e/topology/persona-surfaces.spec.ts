@@ -123,8 +123,8 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
   await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
-// The two rosters, derived from Sidebar.tsx:111-123 (navGroups) x glyphs.tsx:62-110 (each
-// NavDef's label). Firm mode splits into a CLIENT group of 6 and a FIRM-WIDE group of 3;
+// The two rosters, derived from Sidebar.tsx's navGroups x glyphs.tsx (each NavDef's
+// label). Firm mode splits into a CLIENT group of 7 and a FIRM-WIDE group of 3;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
 const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Validation', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Settings']
@@ -295,9 +295,11 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
 })
 
 // ---------------------------------------------------------------------------------------
-// Test 2 -- Approvals as an in-house-exclusive surface (Core AC 3)
+// Test 2 -- the in-house Approvals badge and surface (Core AC 3)
 // ---------------------------------------------------------------------------------------
-test('Approvals: the in-house-only badge equals the live awaiting-approval count, and the surface opens', async ({ page }) => {
+// Approvals stopped being in-house-exclusive at APPR-12-05: the firm carries it too, in
+// the CLIENT group. Test 6 below is this test's firm sibling.
+test('Approvals: the in-house badge equals the live awaiting-approval count, and the surface opens', async ({ page }) => {
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.B)
@@ -342,14 +344,13 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   await expect(approvalsBadge).toHaveText(String(expectedAwaiting))
 
   // --- The click did something: the active-nav state moves to Approvals. ------------------
-  // App.tsx:266's nav('approvals') sets view='invoices' + filter='Pending', and
-  // Sidebar.tsx:124-125 turns that pair into activeNav='approvals'. That highlight is the
-  // ONLY thing in the rendered tree that distinguishes Approvals from Invoices (see the
-  // comment on clause 2 below), and it carries no class, aria-current or data attribute --
-  // Sidebar.tsx:231 expresses it purely as inline style. font-weight is the discriminator
-  // used here rather than the accent bar's colour, which resolves to a design-system token
-  // whose serialized value is a moving target. Asserted as a TRANSITION (before -> after)
-  // and PAIRED against Invoices, so "everything is bold" cannot pass it.
+  // Since APPR-12-05 nav('approvals') sets view='approvals' outright and Sidebar's
+  // activeNav is just `view`. The highlight carries no class, aria-current or data
+  // attribute -- Sidebar.tsx expresses it purely as inline style. font-weight is the
+  // discriminator used here rather than the accent bar's colour, which resolves to a
+  // design-system token whose serialized value is a moving target. Asserted as a
+  // TRANSITION (before -> after) and PAIRED against Invoices, so "everything is bold"
+  // cannot pass it.
   const approvalsNav = navButton(page, 'Approvals')
   const invoicesNav = navButton(page, 'Invoices')
   await expect(approvalsNav, 'Approvals is not the active nav item before the click').toHaveCSS('font-weight', '500')
@@ -357,23 +358,18 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   await expect(approvalsNav, 'Approvals became the active nav item').toHaveCSS('font-weight', '600')
   await expect(invoicesNav, 'and Invoices did not').toHaveCSS('font-weight', '500')
 
-  // WEAK CORROBORATOR — not a full-strength assertion, and deliberately so.
-  // Approvals is not a separate screen: App.tsx:266's nav('approvals') sets
-  // view='invoices' + filter='Pending', and ctx.filter's ONLY consumer is
-  // Sidebar.tsx:125's active-nav highlight — InvoicesList.tsx never reads it, so
-  // this opens the UNFILTERED Invoices list (finding F-A, recorded in
-  // [PERSONA-01-07], not fixed here per [approvals-filter-not-fixed]). These rows
-  // would be visible whether or not the badge is correct, so this catches only a
-  // GROSS failure: Approvals opening the wrong screen, or this tenant's rows
-  // missing entirely. Clause 1 above carries the weight. Do NOT "strengthen" this
-  // into an assertion that the list is narrowed to validated rows — that is a
-  // product change wearing a test's clothes ([coverage-honesty]).
-  await expect(page.getByTestId('invoices-list')).toBeVisible()
-  for (const number of validatedNumbers) {
-    const row = invoiceRowByNumber(page, number)
-    await expect(row).toBeVisible()
-    await expect(row.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  }
+  // --- Clause 2: the click opened the APPROVALS SCREEN, not the Invoices list. ------------
+  // This assertion was impossible before APPR-12 and the old [coverage-honesty] comment
+  // said so: nav('approvals') used to set view='invoices' + filter='Pending', ctx.filter's
+  // ONLY consumer was Sidebar.tsx's active-nav highlight, and InvoicesList.tsx never read
+  // it — so Approvals rendered the UNFILTERED Invoices list and the two screens were
+  // indistinguishable in the DOM (finding F-A, [PERSONA-01-07]). APPR-12-03 gave Approvals
+  // its own view and its own listAwaitingApproval fetch, and APPR-12-05 deleted the alias,
+  // so the narrowing is now the PRODUCT's and asserting it is no longer a product change
+  // wearing a test's clothes. F-A is closed; [approvals-filter-not-fixed] is retired.
+  // Clause 1 above still carries the count; this pins WHICH screen opened.
+  await expect(page.getByTestId('approvals-list')).toBeVisible()
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -381,16 +377,18 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
 // ---------------------------------------------------------------------------------------
 // Test 3 -- the sidebar roster, per persona (Core AC 7, clause 1)
 // ---------------------------------------------------------------------------------------
-// EXACT ORDERED equality, never toContain: presence and absence are pinned in one shot.
-// The firm has Clients and Customers and NO Approvals; in-house has Approvals and neither
-// Clients nor Customers. A nav item silently vanishing for one persona -- or appearing for
-// the wrong one -- is precisely this story's defect class, and nothing else in the suite
-// would catch it. This is also the honest home of the four firm `nav-only` coverage cells
-// (e2e/personas.ts): it proves those surfaces EXIST for the firm without claiming to have
-// opened them.
+// EXACT ORDERED equality, never toContain: presence, absence AND slot are pinned in one
+// shot. The firm has Clients and Customers; in-house has neither. Both carry Approvals
+// since APPR-12-05, but in DIFFERENT slots -- firm directly after Invoices, in-house after
+// Rules -- which only an ordered assertion can hold (see Sidebar.tsx's placement-rule
+// comment on why the two deliberately diverge). A nav item silently vanishing for one
+// persona, appearing for the wrong one, or sliding to the other's slot is precisely this
+// story's defect class, and nothing else in the suite would catch it. This is also the
+// honest home of the firm `nav-only` coverage cell (e2e/personas.ts): it proves that
+// surface EXISTS for the firm without claiming to have opened it.
 //
 // No fixtures: the roster renders regardless of data. approvalsItem is unconditionally in
-// navGroups (Sidebar.tsx:121); only its BADGE is conditional.
+// both branches of navGroups; only its BADGE is conditional.
 //
 // Left on the config's 60s default even though it is the only 60s test doing TWO full
 // sign-ins: it creates no fixtures, makes no writes, and runs third, by which point Test 1
@@ -479,8 +477,8 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
 // ---------------------------------------------------------------------------------------
 // Sidebar.tsx wraps each nav glyph in an UNSIZED span, so a glyph's own width leaks into
 // where its label starts. Scope choice: FIRM_ROSTER, which spans BOTH firm nav groups
-// (CLIENT: Overview/Invoices/Validation/Rules/Customers/Reports, FIRM-WIDE: Workflows/
-// Clients/Settings, Sidebar.tsx:113-114) -- required, not incidental: NAV_CLIENTS (the
+// (CLIENT: Overview/Invoices/Approvals/Validation/Rules/Customers/Reports, FIRM-WIDE:
+// Workflows/Clients/Settings) -- required, not incidental: NAV_CLIENTS (the
 // 14px forked glyph) lives in FIRM-WIDE and NAV_VALIDATION (the 16px shieldGlyph) lives in
 // CLIENT, so scoping to a single group would miss one of the two reported defects.
 //
@@ -520,6 +518,42 @@ test('nav-alignment: every sidebar nav item renders its label and icon column at
   for (const width of restIconWidth) {
     expect(width, `icon-column width must match every other nav item's (${JSON.stringify(iconWidth)})`).toBe(firstIconWidth)
   }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ---------------------------------------------------------------------------------------
+// Test 6 -- Approvals opens for the FIRM persona too (APPR-12-05, task-530)
+// ---------------------------------------------------------------------------------------
+// What e2e/personas.ts's firm NAV_APPROVALS `drives` cell is paid for. Test 3 proves the
+// item is PRESENT in the firm roster; this proves clicking it opens the Approvals screen
+// rather than the Invoices list, which is the whole point of deleting the alias.
+//
+// The queue is empty BY CONSTRUCTION, not by assumption about the environment: this test
+// creates its own firm entity, selects it, and that entity is seconds old and owns no
+// invoices, so nothing can be awaiting approval under it. (internal/demopolicy arms the
+// in-house tenant only, so the firm queue is empty on the deployed environment anyway --
+// but an assertion resting on THAT would go red the day a firm policy is seeded.) The
+// empty rung is still the Approvals screen: its own eyebrow, its own h1, its own empty
+// testid, and no invoices-list anywhere.
+test('firm Approvals: the nav item opens the Approvals screen, not the Invoices list', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `PERSONA-01 firm approvals ${Date.now()}`, tin: freshTin() })
+
+  await signInAs(page, 'firm')
+  await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  // Mandatory, same reason as Test 4: Approvals is CLIENT-scoped, and the default
+  // selection is clients[0] by name ASC, never this test's own entity.
+  await selectEntity(page, entity.name)
+
+  await goTo(page, 'Approvals')
+  await expect(page.getByRole('heading', { level: 1, name: 'Approvals', exact: true })).toBeVisible()
+  await expect(page.getByText('AWAITING YOUR APPROVAL', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('approvals-empty')).toBeVisible()
+  // The alias is gone: opening Approvals must not render the Invoices list.
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

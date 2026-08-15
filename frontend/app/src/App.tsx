@@ -93,7 +93,6 @@ import type {
   FieldMapRow,
   Mapping,
   Mode,
-  NavId,
   PlatformCtx,
   SettingsTab,
   SignedInUser,
@@ -262,7 +261,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
   // this state with an inline object literal — go through a constructor.
   const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
-  const [filter, setFilter] = useState('all')
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery] = useState('')
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -439,10 +437,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     // render would otherwise re-run this effect on every render forever.
   }, [view, createStep, reviewBatchIds.join(',')])
 
-  function nav(id: NavId) {
-    if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
-    if (id === 'invoices') { setView('invoices'); setFilter('all'); setSwitcherOpen(false); return }
-    setView(id as View)
+  function nav(id: View) {
+    setView(id)
     setSwitcherOpen(false)
   }
 
@@ -454,7 +450,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setActiveEntityId(id)
     setView('dashboard')
     setDetailSel(clearSelection())
-    setFilter('all')
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setCreateStep('form')
@@ -1137,7 +1132,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     armedField,
     dragField,
     selectedId: detailSel.selectedId,
-    filter,
     invoiceQuery,
     switcherOpen,
     sandbox,
@@ -1172,7 +1166,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     reviewBatchIds,
     importedInvoiceId: detailSel.importedInvoiceId,
     nav,
-    setFilter,
     setInvoiceQuery,
     toggleSwitcher,
     switchClient,

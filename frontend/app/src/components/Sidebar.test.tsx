@@ -55,8 +55,8 @@ function rollup(f: BucketFixture & { entity?: BucketFixture }): Rollup {
   }
 }
 
-// mode 'inhouse' resolves scopedBucket straight to rollup.totals, and is the only mode
-// whose nav carries the Approvals item at all.
+// mode 'inhouse' resolves scopedBucket straight to rollup.totals. Both modes carry the
+// Approvals item since APPR-12-05; firm resolves the SELECTED entity's row instead.
 function sidebarCtx(over: Record<string, unknown> = {}): PlatformCtx {
   const ctx = {
     mode: 'inhouse',
@@ -65,7 +65,6 @@ function sidebarCtx(over: Record<string, unknown> = {}): PlatformCtx {
     entities: [],
     user: { name: 'Ada Nwosu', initials: 'AN', verified: false, tenantName: null },
     view: 'dashboard',
-    filter: '',
     switcherOpen: false,
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     toggleSwitcher: vi.fn(),

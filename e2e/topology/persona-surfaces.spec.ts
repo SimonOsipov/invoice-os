@@ -6,7 +6,9 @@
 // (auth.spec.ts's identity-switch regression and import-wizard.spec.ts's
 // [inhouse-can-start]), neither of which navigates past the surface it lands on -- so an
 // in-house-only surface could break in production without a single test going red. That is
-// this story's defect class, and these four tests are the guard against it.
+// this story's defect class, and the tests below are the guard against it -- the first four
+// are PERSONA-01-03's own; Test 5 (task-327) and Test 6 (APPR-12-05, task-530) arrived later
+// and carry their own headers explaining why they live in this file.
 //
 // Fixtures are created through e2e/api/client.ts BEFORE the browser is driven, never
 // through the UI: [write-path-deferred] fences the in-house WRITE path (import filing /

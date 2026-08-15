@@ -237,6 +237,20 @@ describe('Sidebar nav badges, firm mode', () => {
     expect(badgeOf('Approvals')?.textContent).toBe('6')
   })
 
+  // QA adversarial: the selected entity's row, not the firm total, decides absence too.
+  // Mirrors the in-house 'awaiting_approval of 0 renders no Approvals badge' case above,
+  // but for scopedBucket's firm branch -- a badge that fell back to the firm total on a
+  // falsy (zero) entity value would render '5' here instead of staying absent.
+  it('the Approvals badge is absent when the selected entity has zero, even while the firm total is non-zero', async () => {
+    mockRollupFetch(rollup({ validated: 7, awaitingApproval: 5, needsAttention: 9, entity: { validated: 11, awaitingApproval: 0, needsAttention: 3 } }))
+    render(<Sidebar ctx={firmCtx()} />)
+    await within(navButton('Invoices')).findByText('3')
+
+    expect(badgeOf('Approvals')).toBeNull()
+    expect(within(navButton('Approvals')).queryByText('0')).toBeNull()
+    expect(within(navButton('Approvals')).queryByText('5')).toBeNull()
+  })
+
   // QA adversarial, the asymmetry with the Reports card: that one was cut off this overlay,
   // this sub-label was deliberately left on it. Same violation count on both renders.
   it('the sub-label follows a widened needs_attention, unlike the Validation summary', async () => {

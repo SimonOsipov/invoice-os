@@ -630,6 +630,10 @@ Per-client policy scoping is a schema and builder change beyond the current epic
 deliberately deferred rather than half-built, and should be revisited if a pilot practice
 asks for it.
 
+The Approvals queue (APPR-12) now sits in the firm nav as well as the in-house one, and
+this keying is why one firm queue spans every client company — the queue is not told about
+the limitation on screen (epic Q5), so this section is its only statement.
+
 ---
 
 ## 8. Capability matrix

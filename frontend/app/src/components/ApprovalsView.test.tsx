@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -783,6 +783,155 @@ describe('A04-14: a FAILED id is not still selected once the refetch lands (G-04
     const row = screen.getAllByTestId('approval-row').find((r) => within(r).queryByText('INV-A')) as HTMLElement
     const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
     expect(checkbox.checked, 'a FAILED id must not still be selected once the refetch lands, even though it is still present and approvable').toBe(false)
+  })
+})
+
+// --- QA adversarial (Stage 4, Mode B) -- added on top of A04-1..A04-14 above, which are
+// left untouched. Each test below closed a mutation that survived every A04 spec as
+// shipped: A04-2's own POST-id assertion is protected by bar.eligible/pruneApprovalSelection
+// at CONFIRM time regardless of what toggleAll puts into `selected`, so it never actually
+// exercises AC-1's "select-all... gate on isApprovableRow" as a SELECTION-STATE property;
+// and A04-3's two separate `fireEvent.click` calls each get their own synchronous React
+// flush in this harness (confirmed via instrumentation: `confirmBtn.disabled` is already
+// `true`, and a jsdom click dispatch on a disabled control never invokes its listener,
+// before the second `fireEvent.click` call executes), so removing `approveInFlight`
+// entirely left A04-3 green -- it was never reaching the ref at all. ---
+
+describe('QA adversarial: select-all on a mixed page must not mark a non-approvable row as selected (AC-1)', () => {
+  it("a blocked row's own checkbox stays unchecked after select-all, even though its id never reaches the wire either way", async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A', can_approve: true })
+    const blocked = approvalRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      can_approve: false,
+      approve_blocked_reason: 'Only a validated invoice can be approved or rejected.',
+      approval: null,
+    })
+    mockBulkFetch([listResponse([a, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+
+    const blockedRow = screen.getByText('INV-BLOCKED').closest('[data-testid="approval-row"]') as HTMLElement
+    const blockedCheckbox = within(blockedRow).getByTestId('approval-select-row') as HTMLInputElement
+    expect(blockedCheckbox.checked, 'select-all must never mark a non-approvable row as selected, not just keep its id off the wire').toBe(false)
+
+    const okRow = screen.getByText('INV-A').closest('[data-testid="approval-row"]') as HTMLElement
+    const okCheckbox = within(okRow).getByTestId('approval-select-row') as HTMLInputElement
+    expect(okCheckbox.checked, 'the approvable row must still be selected').toBe(true)
+  })
+})
+
+describe('QA adversarial: the TRUE same-tick double click (both clicks inside ONE outer act())', () => {
+  it('two clicks batched into the SAME React commit still fan out exactly once', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const { approvalCalls } = mockBulkFetch([
+      listResponse([a, b], { limit: 50, offset: 0, total: 2 }),
+      listResponse([a, b], { limit: 50, offset: 0, total: 2 }),
+    ])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    const confirmBtn = screen.getByTestId('approvals-bulk-confirm')
+
+    // A04-3's two SEPARATE fireEvent.click calls each get their own synchronous flush, so
+    // `disabled` alone already wins there. Nesting both dispatches inside ONE outer act()
+    // suppresses the intermediate flush (RTL's own per-fireEvent act() nests and collapses
+    // into the outer one), so both onClick handlers run against the SAME pre-render
+    // `phase` closure before either commits -- the actual race approveInFlight exists to
+    // survive, confirmed by reproducing it against a ref-removed mutation (4 calls, not 2)
+    // before writing this assertion.
+    act(() => {
+      fireEvent.click(confirmBtn)
+      fireEvent.click(confirmBtn)
+    })
+
+    await screen.findByTestId('approvals-results')
+    expect(approvalCalls(), 'two clicks landing in the SAME commit must still fan out exactly once, not twice').toHaveLength(2)
+  })
+})
+
+describe('QA adversarial: progress reads "0 of N" before any item has settled', () => {
+  it('the initial progress frame, set synchronously by confirmApprove itself, names the total before onProgress ever fires', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (/\/approvals$/.test(url)) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      return Promise.resolve(listResponse([a, b], { limit: 50, offset: 0, total: 2 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    // The first request is now pending and onProgress has fired zero times -- this is the
+    // 0-of-N frame A04-13 starts one settle past.
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    const progress = screen.getByTestId('approvals-progress')
+    expect(progress.textContent).toContain('0')
+    expect(progress.textContent).toContain('2')
+
+    resolvers[0](approveOkResponse())
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    resolvers[1](approveOkResponse())
+    await screen.findByTestId('approvals-results')
+  })
+})
+
+describe('QA adversarial: a fan-out where EVERY item fails still renders one result row per invoice', () => {
+  it('the panel is not suppressed or collapsed to a single message when nothing succeeded', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const failMsg = 'this approval run is already closed'
+    const { approvalCalls } = mockBulkFetch(
+      [listResponse([a, b], { limit: 50, offset: 0, total: 2 }), listResponse([a, b], { limit: 50, offset: 0, total: 2 })],
+      () => ({ ok: false, status: 409, json: () => Promise.resolve({ error: failMsg }) }),
+    )
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(2))
+    const panel = await screen.findByTestId('approvals-results')
+    const resultRows = within(panel).getAllByTestId('approval-result-row')
+
+    expect(resultRows, 'an all-failed fan-out must still render one row per invoice, not a collapsed summary').toHaveLength(2)
+    expect(within(panel).getByText('INV-A')).toBeTruthy()
+    expect(within(panel).getByText('INV-B')).toBeTruthy()
+    expect(within(panel).getAllByText(failMsg)).toHaveLength(2)
+  })
+})
+
+describe("QA adversarial: a blocked row's reason survives characters that would need escaping if rendered as markup", () => {
+  it('renders the sentence as literal text via textContent, not interpreted HTML', async () => {
+    const reason = 'Blocked: role is "Compliance & Risk" <owner> — see policy.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const reasonNode = screen.getByTestId('approval-blocked-reason')
+    expect(reasonNode.textContent, 'the server sentence must render byte-identically, including quotes/angle-brackets/em-dash').toBe(reason)
+    // React text children are never parsed as markup, but this pins that no consumer
+    // downgrades to dangerouslySetInnerHTML later: an <owner> substring must not become a
+    // real (empty) child element.
+    expect(reasonNode.querySelector('owner'), 'the "<owner>" substring must render as literal text, never as a child element').toBeNull()
   })
 })
 

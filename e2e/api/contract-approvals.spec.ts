@@ -474,7 +474,8 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(Array.isArray(body.approval_policies), 'approval_policies should be an array').toBe(true)
 
     const policies = body.approval_policies as Array<Record<string, unknown>>
-    // Justified by the probe just created, not by seed content — nothing seeds this table.
+    // Justified by the probe just created, not by seed content — internal/demopolicy seeds
+    // one policy onto the IN-HOUSE tenant and none onto this FIRM one.
     // Also what stops the per-element loop below passing vacuously.
     expect(policies.length, 'the probe this test created is in the list').toBeGreaterThan(0)
     for (const policy of policies) {
@@ -814,8 +815,9 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
   //     meB.user.role === 'admin'), so requireActiveAdmin cannot be what stops her — the
   //     403 sentence this file pins elsewhere is a different refusal;
   //   - the message is pinned, which separates an RLS 404 from a route-level one;
-  //   - B creates her own policy first, or the absence check would pass vacuously against an
-  //     empty list — nothing seeds this table.
+  //   - B creates her own policy first, so the absence check never runs against a list this
+  //     test does not own. B IS the in-house tenant internal/demopolicy seeds, but the
+  //     sweep below deletes by id, so neither half can reach the seeded row.
   test('AC-7: tenant B can neither read nor delete tenant A policy — 404 not 403, and A row untouched', async () => {
     const probeA = await createPolicyProbe()
     const tokenB = await login(PERSONAS.B)

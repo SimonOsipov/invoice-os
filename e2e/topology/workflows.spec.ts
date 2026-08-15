@@ -19,9 +19,10 @@
 // containment or a live-read comparison rather than a literal count. The approval-policy
 // tables are also named there among the ones EXCLUDED from the per-deploy reset, so a
 // seeded row would be a permanently mutable shared fixture across three suites with no
-// reset between them (internal/platform/db/reset.go:238-248: "nothing seeds or
-// reconstructs them"). A seeded row would also prove nothing about the write path, which
-// is the half of this screen that is new.
+// reset between them (internal/platform/db/reset.go:238-250). The one exception,
+// internal/demopolicy's policy, is on the IN-HOUSE tenant and sealed; this file drives the
+// FIRM one. A seeded row would also prove nothing about the write path, which is the half
+// of this screen that is new.
 //
 // [topology-never-publishes] — create, save, delete; NEVER publish. Publishing on a
 // deployment this suite shares seals a version permanently, takes the tenant's ONE active

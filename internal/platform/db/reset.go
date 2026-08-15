@@ -243,9 +243,11 @@ func ResetEnabled(environment, flag string) bool {
 //	approval_policy_versions, created and mutated only by a tenant admin's
 //	approval_policy_steps     own CRUD + seal action (APPR-01/02) -- same
 //	                          class as workflow_roles/workflow_role_members
-//	                          above: nothing seeds or reconstructs them, so
-//	                          truncating would leave a tenant with no
-//	                          approval policy and nothing to restore it.
+//	                          above. internal/demopolicy reconstructs the
+//	                          IN-HOUSE demo tenant's policy on every invoice
+//	                          boot; nothing reconstructs the other three, so
+//	                          truncating would leave them with no approval
+//	                          policy and nothing to restore it.
 //	                          approval_policy_steps also carries its own
 //	                          BEFORE TRUNCATE trigger
 //	                          (approval_policy_steps_no_truncate, migrations/

@@ -397,6 +397,27 @@ describe('approvalRowView (A02-15, A02-16, A02-18)', () => {
   })
 })
 
+// G4 (task-528, APPR-12-03, Mode A). approvalRowView has no `stepLabel` field yet --
+// `view.stepLabel` below type-checks as `undefined` via the widened intersection (never a
+// tsc error) and fails on the VALUE, the correct red reason. pending_ord is 0-BASED on
+// the wire (gate_test.go:1086 pins Ord 0 as a legitimate pending step, not "no step"), and
+// null on a row with no run at all (store.go:691-694's vacuous NOT EXISTS).
+describe('approvalRowView: step label is 1-based and null-safe (G4, new for APPR-12-03)', () => {
+  it('pending_ord 0 renders "Step 1", not "Step 0"', () => {
+    const view = approvalRowView({ ...baseRow, approval: { ...OPEN_APPROVAL, pending_ord: 0 } }) as ReturnType<typeof approvalRowView> & { stepLabel?: string }
+
+    expect(view.pendingOrd, 'the raw wire ordinal must still pass through unchanged').toBe(0)
+    expect(view.stepLabel, "a 0-based wire ordinal must render 1-based for humans -- 'Step 0' is wrong on its face").toBe('Step 1')
+  })
+
+  it('pending_ord null (no run at all) renders an em dash', () => {
+    const view = approvalRowView({ ...baseRow, approval: null }) as ReturnType<typeof approvalRowView> & { stepLabel?: string }
+
+    expect(view.pendingOrd).toBeNull()
+    expect(view.stepLabel, 'no run at all must render the em dash, never "Step null" or a blank').toBe('—')
+  })
+})
+
 describe('pruneApprovalSelection (A02-17)', () => {
   it('A02-17: drops exactly the stale ids -- gone-from-rows and no-longer-approvable alike, keeps the rest, in order', () => {
     const rows = [approvableRow('a'), notApprovableRow('b'), approvableRow('c')]

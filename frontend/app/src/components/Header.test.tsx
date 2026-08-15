@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -265,5 +268,58 @@ describe('Header search field: paste vs maxLength vs the byte clamp (QA adversar
     fireEvent.submit(input.closest('form')!)
 
     expect(setInvoiceQuery).toHaveBeenCalledWith(exact200)
+  })
+})
+
+// A03-1 (task-528, APPR-12-03, Mode A). Header.tsx:55's `CRUMB_MAP[view] || 'Overview'`
+// degrades SILENTLY at runtime -- a missing key just falls back, it never throws or
+// type-errors at the call site. CRUMB_MAP itself is not exported (Header.tsx has exactly
+// two `export`s, neither of them CRUMB_MAP), so this is a source-scan, not a live import
+// -- and it reads via `process.cwd()`, not `fileURLToPath(import.meta.url)`: this file is
+// `@vitest-environment jsdom`, and jsdom rewrites `import.meta.url` off the `file:`
+// scheme (InvoicesList.test.tsx:8-9, CustomersView.test.tsx:136-139 precedent), so
+// `fileURLToPath` would throw there -- `process.cwd()` is what every jsdom source-scan in
+// this repo actually uses, and `pnpm --filter` pins it at the package root.
+function readSrc(relPath: string): string {
+  return readFileSync(path.join(process.cwd(), relPath), 'utf8')
+}
+
+// Extracts the CRUMB_MAP object literal's own keys from Header.tsx's source text.
+function crumbMapKeys(headerSrc: string): string[] {
+  const match = headerSrc.match(/const CRUMB_MAP: Record<View, string> = \{([\s\S]*?)\n\}/)
+  expect(match, 'CRUMB_MAP object literal not found -- the scan anchor itself is broken').not.toBeNull()
+  return [...match![1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1])
+}
+
+// Extracts the `View` union's own string members from types.ts's source text.
+function viewMembers(typesSrc: string): string[] {
+  const match = typesSrc.match(/export type View = ([^\n]+)/)
+  expect(match, 'View union not found -- the scan anchor itself is broken').not.toBeNull()
+  return [...match![1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+}
+
+describe('A03-1: CRUMB_MAP cannot silently degrade at runtime for a new View member', () => {
+  it('non-vacuity control: the scan can tell a present key from an absent one', () => {
+    const keys = crumbMapKeys(readSrc('src/components/Header.tsx'))
+
+    expect(keys.length, 'the scan must find a non-empty key set').toBeGreaterThan(0)
+    expect(keys, 'known-true anchor: dashboard is mapped today').toContain('dashboard')
+    expect(keys, 'known-false anchor: a fabricated key must never appear').not.toContain('definitely-not-a-real-view-xyz')
+  })
+
+  it("CRUMB_MAP declares an 'approvals' entry", () => {
+    const keys = crumbMapKeys(readSrc('src/components/Header.tsx'))
+
+    expect(keys, "CRUMB_MAP has no 'approvals' key -- Header.tsx:55's `|| 'Overview'` fallback would mask this silently at runtime").toContain('approvals')
+  })
+
+  it('CRUMB_MAP is a TOTAL map: every current View member has a crumb', () => {
+    const keys = crumbMapKeys(readSrc('src/components/Header.tsx'))
+    const views = viewMembers(readSrc('src/types.ts'))
+
+    expect(views.length, 'the View union scan must find members').toBeGreaterThan(0)
+    for (const v of views) {
+      expect(keys, `CRUMB_MAP has no entry for View member '${v}'`).toContain(v)
+    }
   })
 })

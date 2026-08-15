@@ -351,7 +351,10 @@ export interface InvoiceListItem extends Invoice {
   approve_blocked_reason: string | null
 }
 
-// Mirrors approval.RowFacts (internal/approval/gate.go) field for field.
+// Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.
+// RowFacts also carries PendingRoleKey, tagged json:"-" because it is the list gate's
+// input and not wire copy (APPR-12-09), so it has no member here
+// (TestListItem_ApprovalObjectHasExactlySixKeys).
 export interface InvoiceApproval {
   run_state: string
   pending_ord: number | null

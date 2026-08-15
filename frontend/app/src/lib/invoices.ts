@@ -233,8 +233,10 @@ export interface InvoiceRecord {
   approve_blocked_reason: string | null
 }
 
-// One list row's approval standing, mirroring approval.RowFacts (gate.go) field for
-// field. `due_at` is the wire's RFC3339 string, not a Date.
+// One list row's approval standing, mirroring approval.RowFacts (gate.go) key for key --
+// its six WIRE keys. RowFacts also carries PendingRoleKey, tagged json:"-" because it is
+// the list gate's input and not wire copy (APPR-12-09), so it has no member here.
+// `due_at` is the wire's RFC3339 string, not a Date.
 export interface InvoiceApproval {
   run_state: string
   pending_ord: number | null

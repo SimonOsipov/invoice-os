@@ -360,7 +360,10 @@ func TestListItem_ApproveFlagsCarryNoOmitempty(t *testing.T) {
 // are PRESENCE-only, so a PendingRoleKey that shipped without its tag would put
 // `pending_role_key` on the public wire with no Go test failing.
 //
-// GREEN before and after. It is the tag's only oracle.
+// GREEN before and after. It is the tag's DIRECT oracle: TestListHandler_ApprovalFacts-
+// IgnoreTheEnforcementFlag also reds on an untagged field, but only because its decoded
+// expectation (wantArmedRowFactsOnTheWire) was split out for this change -- a reshaped
+// expectation there would silently take that second oracle away again.
 func TestListItem_ApprovalObjectHasExactlySixKeys(t *testing.T) {
 	facts := armedRowFacts()
 	wrapped, err := json.Marshal(listItem{Invoice: populatedInvoice(t, uuid.NewString()), Approval: &facts})

@@ -269,7 +269,7 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
     // entity-scoped". The entity-scoped variant is deliberately NOT added: client.ts's
     // ListInvoicesQuery does not expose entity_id (client.ts:326-331), that param is the
     // firm screen's path, and it is already asserted at
-    // topology/persona-surfaces.spec.ts:450-461.
+    // topology/persona-surfaces.spec.ts:459-470.
     const { invoices, pagination } = await listInvoices(token)
 
     // Page 1 is sufficient HERE (unlike listEntities in IH-2, which pages): this list is
@@ -296,11 +296,10 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
   })
 
   test('IH-5: the rollup validated count rises by exactly the number of validated fixtures created', async () => {
-    // The DELTA is the whole point of this cell. [PERSONA-01-03] asserts the rendered
-    // Approvals badge EQUALS a live rollup() read (topology/persona-surfaces.spec.ts:
-    // 321-331) — same route, same field on both sides — so if counts.validated were wrong,
-    // both sides would be wrong TOGETHER and that test would still pass. Pinning the number
-    // to fixture reality is the half the browser layer structurally cannot supply.
+    // The DELTA is the whole point of this cell, and no browser-layer test corroborates
+    // it: [PERSONA-01-03]'s badge oracle ('Approvals: the in-house-only badge equals the
+    // live awaiting-approval count') reads awaiting_approval, a different field. Pinning
+    // counts.validated to fixture reality is therefore this cell's alone.
     //
     // An ABSOLUTE assertion here would rot: this tenant's validated count is already
     // non-zero at seed and grows as the run proceeds (persona-surfaces.spec.ts:303-309),

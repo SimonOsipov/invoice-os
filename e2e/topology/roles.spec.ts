@@ -50,8 +50,9 @@
 //
 // APPROVAL POLICIES ARE SERVER ROWS TOO, since APPR-09. Test 3 used to repoint a step inside
 // a SEEDED policy and to need no cleanup for it, on the reasoning that policies were frontend
-// `useState` that every `signInAs` reseeded. Both halves of that are false now: nothing seeds
-// approval_policies at all, and a repoint that is SAVED is a row that outlives the run. So
+// `useState` that every `signInAs` reseeded. Both halves of that are false now: the only
+// seeded policy is internal/demopolicy's, on the IN-HOUSE tenant alone and SEALED (the FIRM
+// tenant carries none), and a repoint that is SAVED is a row that outlives the run. So
 // Test 3 creates its own policy, saves once, and deletes it through the UI — and the
 // `test.afterAll` below sweeps both halves of its mutation, the role by title prefix and the
 // policy by id first, name second. Modelled on contract-approvals.spec.ts's sweep and on
@@ -90,10 +91,12 @@ import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 // unchanged.
 //
 // A card's USAGE line carries no literal here, and cannot: `roleUsage` is a function of the
-// tenant-wide POLICY list, which neither Test 1 nor Test 2 owns. Nothing seeds
-// approval_policies, so every seeded seat reads `not used in any policy` on a clean
-// deployment — and one stray policy left by a dead run flips that for whichever seats it
-// names. The shape is asserted instead; see USAGE_SHAPE below. Exact usage strings survive in
+// tenant-wide POLICY list, which neither Test 1 nor Test 2 owns. internal/demopolicy seeds
+// ONE policy onto the IN-HOUSE tenant and none onto the FIRM one, and its approval step names
+// `fin_dir` — so that one seat reads `1 approval step · 1 policy` on a clean deployment while
+// every other seat reads `not used in any policy`, and one stray policy left by a dead run
+// flips that for whichever seats it names. The shape is asserted instead; see USAGE_SHAPE
+// below, whose second alternative admits the seeded branch. Exact usage strings survive in
 // exactly one place, Test 3, over the policy Test 3 itself creates.
 interface SeedRoleCard {
   /** role.key — names the drawer's pill toggle, `${idPrefix}-wfrole-${key}` (MemberParts.tsx). */
@@ -396,7 +399,7 @@ async function expectRoleCard(page: Page, role: SeedRoleCard): Promise<void> {
  * `who.warn` renders as an inline `color: var(--status-red-text)` (else `var(--fg-2)`) —
  * RolesView.tsx:227-231. Checked on the literal CSS-variable reference the DOM carries, not
  * the browser's *resolved* color: this file's own font-weight check on the active nav item
- * (below persona-surfaces.spec.ts:338-340) already flagged a resolved design-system color as
+ * (below persona-surfaces.spec.ts:347-349) already flagged a resolved design-system color as
  * "a moving target" across engines, which `element.style.color` never is — it echoes back
  * exactly what React wrote, the same property the unit suite checks directly
  * (InvoicesList.test.tsx's `tin.style.color`).
@@ -682,9 +685,10 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   // --- the suspended holder's row and drawer --------------------------------------------------
   // …0012's status is a SERVER value, and it is what reverses the danger-zone control below.
   // The row's blocking strip and the drawer's amber note used to be asserted here as well;
-  // both are derived from the STEPS his seat is named in, and with nothing seeding
-  // approval_policies neither element renders at all. MembersTable.test.tsx and
-  // MemberDrawer.test.tsx own those two claims, against a fixture that can supply the steps.
+  // both are derived from the STEPS his seat is named in. internal/demopolicy's one seeded
+  // in-house policy names `fin_dir` and …0012 holds `cfo` alone, so neither element renders
+  // here either. MembersTable.test.tsx and MemberDrawer.test.tsx own those two claims,
+  // against a fixture that can supply the steps.
   const suspended = INHOUSE_SUSPENDED_MEMBER
   await memberRow(page, suspended).getByText(suspended, { exact: true }).click()
   const drawer = page.getByTestId('member-drawer')
@@ -757,7 +761,11 @@ const UNSAVED_POLICY_NAME = 'Untitled policy'
 // em-dash case is the firm's …0007 (Test 1), who is read-only.
 //
 // THE POLICY IS BUILT HERE, not seeded. This test used to open `Company approval policy` and
-// repoint its first root step; nothing seeds approval_policies, so that row does not exist.
+// repoint its first root step. internal/demopolicy now seeds a policy of exactly that name
+// onto this IN-HOUSE tenant (never the FIRM one), but its version is SEALED, so the repoint
+// is still impossible — and the sweep above must never match its name: DeletePolicy
+// deactivates the governed version in the same transaction, which would drop
+// awaiting_approval to 0 mid-run with nothing red.
 // It also never clicked Save draft, which mattered more than the missing row: `applyEdit` is
 // local to the builder (WorkflowBuilder.tsx) while `roleUsage` reads `ctx.policies`, which
 // only `savePolicy` patches (App.tsx). So the repoint has to be SAVED or the usage line, the

@@ -184,6 +184,10 @@ func TestMetrics_ResolvedOutsideFailedInvoiceIsReady(t *testing.T) {
 // (the pinned column) over every status, crossed with {clean, error
 // violation}, plus one resolved-failed row (the only status the kept_as_is
 // triple can attach to -- T3-2/invoices_kept_as_is_status).
+//
+// The identity holds only where no invoice reaches needs_attention through the
+// approval arm, which the two CTE flags know nothing about; this fixture seeds
+// zero approval_runs (TestStoreRollup_ApprovalRejectedArmIsDraftOnly).
 func TestMetrics_BlockedPlusFailedEqualsNeedsAttention(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "MET-06 tenant")
@@ -508,11 +512,13 @@ func TestMetrics_DenAlwaysEqualsInvoiceCount(t *testing.T) {
 
 // --- MET-17: readiness derived from the pinned column -----------------------
 
-// MET-17: on a fixture with no pathological (overlapping-flag) rows,
-// readiness.num == total - needs_attention - never_validated, where
-// needs_attention is read from the PINNED column
+// MET-17: on a fixture with no pathological (overlapping-flag) rows and no
+// approval_runs, readiness.num == total - needs_attention - never_validated,
+// where needs_attention is read from the PINNED column
 // (TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare) -- the only
-// structural tie between the new CTE flags and that literal column.
+// structural tie between the new CTE flags and that literal column. An
+// approval-rejected draft counts as both ready and needs-attention, so the
+// arithmetic is fixture-scoped, not an invariant of the two columns.
 func TestMetrics_ReadinessEqualsTotalMinusNeedsAttentionMinusNeverValidated(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "MET-17 tenant")

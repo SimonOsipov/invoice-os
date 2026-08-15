@@ -9,7 +9,7 @@
 // disconnected/background one, so client cancellation propagates), that
 // errors.Is (not ==) is what maps a wrapped db.ErrNoTenant to 401, a
 // large/realistic body round-trips exactly with the documented wire field
-// names, that Bucket's anonymous embedding promotes counts/needs_attention to
+// names, that Bucket's anonymous embedding promotes counts and both overlays to
 // the Client row's top level (not nested under "bucket"/"Bucket"), and that
 // omitempty is absent from Counts (all 7 zero keys always present). Reuses
 // doRollup/rollupBody from handlers_test.go (same package).
@@ -273,9 +273,9 @@ func TestRollupHandler_BucketFieldsPromotedToClientTopLevel(t *testing.T) {
 	}
 	row := decoded.Clients[0]
 
-	for _, key := range []string{"entity_id", "entity_name", "counts", "needs_attention"} {
+	for _, key := range []string{"entity_id", "entity_name", "counts", "needs_attention", "awaiting_approval"} {
 		if _, ok := row[key]; !ok {
-			t.Errorf("client row missing top-level key %q (raw keys: %v) -- Bucket embedding must promote counts/needs_attention, not nest them", key, keysOf(row))
+			t.Errorf("client row missing top-level key %q (raw keys: %v) -- Bucket embedding must promote every Bucket key, not nest them", key, keysOf(row))
 		}
 	}
 	for _, forbidden := range []string{"bucket", "Bucket"} {

@@ -3,7 +3,7 @@
 // This is the app's FIRST outside-click handler and its FIRST Escape handler. Before it,
 // `frontend/app/src` contained exactly one `document.addEventListener` — `visibilitychange`
 // in lib/useLiveRefresh.ts:23 — and no keydown listener at all. The Sidebar company
-// switcher (Sidebar.tsx:143-190) looks like a precedent and is not: `switcherOpen` is ctx
+// switcher (Sidebar.tsx:139-186) looks like a precedent and is not: `switcherOpen` is ctx
 // state, toggled by the trigger and cleared imperatively by nav() / switchClient()
 // (App.tsx:287-299). It does not dismiss on an outside click, and MEMB-01-04 AC#7 requires
 // both an outside click and Escape, which that shape cannot give.

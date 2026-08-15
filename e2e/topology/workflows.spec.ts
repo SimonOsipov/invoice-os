@@ -10,16 +10,19 @@
 //
 // The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, and is now a
 // heading, a tenant-driven subtitle and a terminal-arm settle — seed-independent, because
-// nothing seeds approval_policies. Nothing in this file signs in as in-house.
+// either terminal arm satisfies it. internal/demopolicy seeds ONE policy onto the IN-HOUSE
+// tenant; the FIRM tenant this file drives still carries none. Nothing in this file signs
+// in as in-house.
 //
 // THIS SPEC CREATES ITS OWN POLICY, THROUGH THE UI. docs/e2e-convention.md:63-74 decides
 // that: every spec creates per-run-unique data, acts on rows it created, and asserts
 // containment or a live-read comparison rather than a literal count. The approval-policy
 // tables are also named there among the ones EXCLUDED from the per-deploy reset, so a
 // seeded row would be a permanently mutable shared fixture across three suites with no
-// reset between them (internal/platform/db/reset.go:238-248: "nothing seeds or
-// reconstructs them"). A seeded row would also prove nothing about the write path, which
-// is the half of this screen that is new.
+// reset between them (internal/platform/db/reset.go:238-250). The one exception,
+// internal/demopolicy's policy, is on the IN-HOUSE tenant and sealed; this file drives the
+// FIRM one. A seeded row would also prove nothing about the write path, which is the half
+// of this screen that is new.
 //
 // [topology-never-publishes] — create, save, delete; NEVER publish. Publishing on a
 // deployment this suite shares seals a version permanently, takes the tenant's ONE active
@@ -169,7 +172,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   // --- 1. sign in, and guard the MODE before touching the nav ------------------------------
   // Without it a slow or failed persona hand-off surfaces as an opaque timeout further down
   // rather than as "the wrong workspace rendered". Stated as MODE and not tenant on purpose:
-  // Sidebar.tsx:41 hardcodes the org label in firm mode, so this string proves the FIRM branch
+  // Sidebar.tsx:42 hardcodes the org label in firm mode, so this string proves the FIRM branch
   // drew, not that /v1/me returned this tenant. The live-tenant proof is signInAs's own /v1/me
   // discriminator, which already ran.
   await signInAs(page, 'firm')
@@ -343,7 +346,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(row, 'the unsaved condition left with the builder').toContainText('1 approval')
 
   const switcher = page.getByTestId('company-switcher')
-  // The switcher button holds exactly two text spans (Sidebar.tsx:151-154): the client's short
+  // The switcher button holds exactly two text spans (Sidebar.tsx:147-150): the client's short
   // name (unclassed) and the TIN line (.mono). `span > span` excludes the initials and chevron
   // spans, whose parent is the button itself.
   const switcherName = switcher.locator('span > span:not(.mono)')

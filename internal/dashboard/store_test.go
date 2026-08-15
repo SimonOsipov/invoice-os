@@ -40,8 +40,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -199,6 +202,130 @@ func seedResolvedFailed(t *testing.T, super *pgxpool.Pool, tenantID, entityID, n
 	return id
 }
 
+// --- approval fixtures -----------------------------------------------------
+
+// seedApprovalPolicy inserts one approval_policies row plus one
+// approval_policy_versions row for tenantID. When active, `sealed` is written
+// first: approval_policy_versions_active_is_sealed forbids an active-but-unsealed
+// row, and approval_policy_versions_one_active caps the tenant at one active
+// version, so a tenant may take active=true only once.
+func seedApprovalPolicy(t *testing.T, super *pgxpool.Pool, tenantID string, active bool) (policyID, versionID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		tenantID, "dashboard fixture policy "+uuid.NewString(),
+	).Scan(&policyID); err != nil {
+		t.Fatalf("seed approval_policies: %v", err)
+	}
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed)
+		 VALUES ($1, $2, 1, $3) RETURNING id`,
+		tenantID, policyID, active,
+	).Scan(&versionID); err != nil {
+		t.Fatalf("seed approval_policy_versions: %v", err)
+	}
+	if active {
+		if _, err := super.Exec(ctx,
+			`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, versionID,
+		); err != nil {
+			t.Fatalf("activate approval_policy_versions: %v", err)
+		}
+	}
+	t.Cleanup(func() { dropApprovalRows(super, tenantID) })
+	return policyID, versionID
+}
+
+// activateApprovalVersion flips a sealed version's is_active on. Sealing first is
+// the same ordering constraint seedApprovalPolicy documents.
+func activateApprovalVersion(t *testing.T, super *pgxpool.Pool, versionID string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET sealed = true WHERE id = $1`, versionID,
+	); err != nil {
+		t.Fatalf("seal approval_policy_versions: %v", err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, versionID,
+	); err != nil {
+		t.Fatalf("activate approval_policy_versions: %v", err)
+	}
+}
+
+// seedApprovalRun inserts one approval_runs row at `state` against invoiceID.
+// Its own cleanup must outrank the invoice's: approval_runs -> invoices is ON
+// DELETE RESTRICT, so a surviving run silently blocks seedInvoice's delete.
+func seedApprovalRun(t *testing.T, super *pgxpool.Pool, tenantID, invoiceID, versionID, state string) string {
+	t.Helper()
+	var id string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, state, content_fingerprint)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		tenantID, invoiceID, versionID, state, "dashboard-fixture-"+uuid.NewString(),
+	).Scan(&id); err != nil {
+		t.Fatalf("seed approval_runs (state=%q): %v", state, err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM approval_runs WHERE id = $1`, id)
+	})
+	return id
+}
+
+// seedApprovalRunAt seeds a run and then force-writes its opened_at. opened_at
+// defaults to now(), so insert order and recency coincide and a fixture meant to
+// separate them silently cannot.
+func seedApprovalRunAt(t *testing.T, super *pgxpool.Pool, tenantID, invoiceID, versionID, state string, openedAt time.Time) string {
+	t.Helper()
+	id := seedApprovalRun(t, super, tenantID, invoiceID, versionID, state)
+	tag, err := super.Exec(context.Background(),
+		`UPDATE approval_runs SET opened_at = $1 WHERE id = $2`, openedAt, id)
+	if err != nil {
+		t.Fatalf("set approval_runs.opened_at: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("set approval_runs.opened_at affected %d rows, want 1", tag.RowsAffected())
+	}
+	return id
+}
+
+// dropApprovalRows clears a tenant's approval tables bottom-up with triggers and
+// FK checks off -- approval_policy_versions_seal_guard refuses to DELETE a sealed
+// row, and that refusal also blocks seedTenant's cascading tenant delete. Mirrors
+// internal/approval's teardownSealedApprovalFixture.
+func dropApprovalRows(super *pgxpool.Pool, tenantID string) {
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		return
+	}
+	for _, table := range []string{
+		"approval_decisions", "approval_run_steps", "approval_runs",
+		"approval_policy_steps", "approval_policy_versions", "approval_policies",
+	} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, tenantID); err != nil {
+			return
+		}
+	}
+	_ = tx.Commit(ctx)
+}
+
+// countApprovalRuns reads a tenant's run count as the superuser -- used to prove a
+// fixture really has ZERO runs rather than assuming it.
+func countApprovalRuns(t *testing.T, super *pgxpool.Pool, tenantID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM approval_runs WHERE tenant_id = $1`, tenantID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count approval_runs: %v", err)
+	}
+	return n
+}
+
 // --- DASH-01..13, DASH-15 --------------------------------------------------
 
 // DASH-01: tenant A with one entity and one invoice in each of the 7
@@ -326,6 +453,14 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 	seedInvoiceAtStatus(t, super, tenantID, e3, "DASH-04-3a", "failed")
 	seedInvoiceAtStatus(t, super, tenantID, e3, "DASH-04-3b", "failed")
 
+	// One validated invoice per entity under an active policy, and an approved run
+	// on e3's -- so awaiting_approval (2) differs from counts.validated (3) and the
+	// oracle cannot be satisfied by wiring the new field to the validated count.
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+	seedInvoiceAtStatus(t, super, tenantID, e2, "DASH-04-2c", "validated")
+	e3Validated := seedInvoiceAtStatus(t, super, tenantID, e3, "DASH-04-3c", "validated")
+	seedApprovalRun(t, super, tenantID, e3Validated, versionID, "approved")
+
 	store := NewStore(app)
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
@@ -339,6 +474,7 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 
 	var wantCounts Counts
 	var wantNeeds int
+	var wantAwaiting int
 	for _, c := range got.Clients {
 		wantCounts.Draft += c.Counts.Draft
 		wantCounts.Validated += c.Counts.Validated
@@ -348,6 +484,7 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 		wantCounts.Rejected += c.Counts.Rejected
 		wantCounts.Failed += c.Counts.Failed
 		wantNeeds += c.NeedsAttention
+		wantAwaiting += c.AwaitingApproval
 	}
 	if got.Totals.Counts != wantCounts {
 		t.Errorf("Totals.Counts = %+v, want %+v (element-wise sum of Clients)", got.Totals.Counts, wantCounts)
@@ -355,13 +492,19 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 	if got.Totals.NeedsAttention != wantNeeds {
 		t.Errorf("Totals.NeedsAttention = %d, want %d (sum of Clients' needs_attention)", got.Totals.NeedsAttention, wantNeeds)
 	}
+	if got.Totals.AwaitingApproval != wantAwaiting {
+		t.Errorf("Totals.AwaitingApproval = %d, want %d (sum of Clients' awaiting_approval)", got.Totals.AwaitingApproval, wantAwaiting)
+	}
 
-	wantExact := Counts{Draft: 1, Validated: 1, Rejected: 1, Accepted: 1, Failed: 2}
+	wantExact := Counts{Draft: 1, Validated: 3, Rejected: 1, Accepted: 1, Failed: 2}
 	if got.Totals.Counts != wantExact {
-		t.Errorf("Totals.Counts = %+v, want %+v (known seeded totals: 1 draft, 1 validated, 1 rejected, 1 accepted, 2 failed)", got.Totals.Counts, wantExact)
+		t.Errorf("Totals.Counts = %+v, want %+v (known seeded totals: 1 draft, 3 validated, 1 rejected, 1 accepted, 2 failed)", got.Totals.Counts, wantExact)
 	}
 	if got.Totals.NeedsAttention != 3 { // 1 rejected + 2 failed; draft/validated/accepted never count
 		t.Errorf("Totals.NeedsAttention = %d, want 3 (1 rejected + 2 failed)", got.Totals.NeedsAttention)
+	}
+	if got.Totals.AwaitingApproval != 2 { // 3 validated under an active policy, minus e3's approved run
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (3 validated under an active policy, minus the one with an approved run)", got.Totals.AwaitingApproval)
 	}
 }
 
@@ -787,6 +930,23 @@ func TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare(t *testing.T) {
 			"`status IN ('rejected', 'failed') AND kept_as_is_at IS NULL` form is a silent regression "+
 			"risk if invoices_kept_as_is_status is ever relaxed to allow rejected+mark; keep the tuple split:\n%s", block)
 	}
+
+	// The approval-rejected arm (AC-1): a correlated EXISTS over the MOST RECENT run,
+	// with `=`, never `IN (`. Whitespace is normalized so the anchors survive
+	// re-indentation, not so they survive a rewrite.
+	norm := normalizeSQL(block)
+	for _, want := range []string{
+		"i.status = 'draft' AND EXISTS (",
+		"SELECT r.state FROM approval_runs r",
+		"r.invoice_id = i.id",
+		"ORDER BY r.opened_at DESC LIMIT 1",
+		"state = 'rejected'",
+	} {
+		if !strings.Contains(norm, want) {
+			t.Errorf("needs_attention FILTER clause is missing %q -- the approval-rejected arm reads the "+
+				"latest run through a derived table, not `EXISTS (any rejected run)`:\n%s", want, norm)
+		}
+	}
 }
 
 // T3-11: a resolved failed row in one client entity must not affect a
@@ -825,5 +985,912 @@ func TestStoreRollup_ResolvedFailedIsolatedPerClient(t *testing.T) {
 	}
 	if got.Totals.NeedsAttention != 1 {
 		t.Errorf("Totals.NeedsAttention = %d, want 1", got.Totals.NeedsAttention)
+	}
+}
+
+// --- awaiting_approval -----------------------------------------------------
+
+// The count is validated-only and an overlay on Counts, never an eighth state:
+// under an active policy every unapproved validated invoice is blocked from
+// transmit, and nothing else is.
+func TestStoreRollup_AwaitingApprovalCountsValidatedUnderAnActivePolicy(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-A tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-A entity")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-2", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-3", "draft")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (both validated invoices)", got.Totals.AwaitingApproval)
+	}
+	if row := got.Clients[0]; row.AwaitingApproval != 2 {
+		t.Errorf("Clients[0].AwaitingApproval = %d, want 2", row.AwaitingApproval)
+	}
+	if got.Totals.Counts.Validated != 2 {
+		t.Errorf("Totals.Counts.Validated = %d, want 2 (the overlay must not disturb the state counts)", got.Totals.Counts.Validated)
+	}
+	if got.Totals.Counts.Draft != 1 {
+		t.Errorf("Totals.Counts.Draft = %d, want 1", got.Totals.Counts.Draft)
+	}
+	if got.Totals.NeedsAttention != 0 {
+		t.Errorf("Totals.NeedsAttention = %d, want 0 (a clean draft and two validated rows flag nothing)", got.Totals.NeedsAttention)
+	}
+}
+
+// The count keys on approval_policy_versions.is_active, not on a policy row
+// existing. The second leg activates the same version and re-reads: without it
+// the zero-assertion alone would be satisfied by the field never being populated.
+func TestStoreRollup_AwaitingApprovalIsZeroWithNoActivePolicy(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-B tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-B entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, false)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-B-1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-B-2", "validated")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 0 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 0 (the policy version is not active)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.Counts.Validated != 2 {
+		t.Fatalf("Totals.Counts.Validated = %d, want 2 -- the fixture is wrong, so the zero above proves nothing", got.Totals.Counts.Validated)
+	}
+
+	activateApprovalVersion(t, super, versionID)
+
+	got, err = store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup after activation: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("after activating the same version, Totals.AwaitingApproval = %d, want 2", got.Totals.AwaitingApproval)
+	}
+}
+
+// An approved run satisfies TransmitClear, so its invoice leaves the count while
+// its unapproved sibling stays.
+func TestStoreRollup_AwaitingApprovalExcludesAnApprovedRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-C tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-C entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-C-1", "validated")
+	approved := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-C-2", "validated")
+	seedApprovalRun(t, super, tenantID, approved, versionID, "approved")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 1 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 1 (the approved run's invoice is transmit-clear)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.Counts.Validated != 2 {
+		t.Errorf("Totals.Counts.Validated = %d, want 2 (an approved run does not change the state count)", got.Totals.Counts.Validated)
+	}
+}
+
+// Blocked means an active policy AND no approved run -- exactly !TransmitClear.
+// A rejected run is not an approved one, so its invoice still counts.
+func TestStoreRollup_AwaitingApprovalCountsAValidatedInvoiceWhoseOnlyRunWasRejected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-D tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-D entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	rejected := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-D-1", "validated")
+	seedApprovalRun(t, super, tenantID, rejected, versionID, "rejected")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 1 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 1 (a rejected run is not an approved one)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.NeedsAttention != 0 {
+		t.Errorf("Totals.NeedsAttention = %d, want 0 (needs_attention never reaches a validated row)", got.Totals.NeedsAttention)
+	}
+}
+
+// The vacuity property subtask 06's convergence contract rests on: the predicate's
+// second conjunct is NOT EXISTS (an approved run), which an invoice with zero runs
+// satisfies vacuously. An unarmed tenant therefore reads awaiting_approval ==
+// counts.validated, and that has to be an asserted fact, not a reading of the SQL.
+func TestStoreRollup_AwaitingApprovalCountsAnUnarmedValidatedInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-E tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-E entity")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-E-1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-E-2", "validated")
+
+	if n := countApprovalRuns(t, super, tenantID); n != 0 {
+		t.Fatalf("fixture has %d approval_runs, want 0 -- this test is only about the zero-run case", n)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (zero runs satisfies NOT EXISTS (approved run) vacuously)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.AwaitingApproval != got.Totals.Counts.Validated {
+		t.Errorf("Totals.AwaitingApproval = %d, Totals.Counts.Validated = %d -- with nothing armed they must coincide",
+			got.Totals.AwaitingApproval, got.Totals.Counts.Validated)
+	}
+}
+
+// bucketIntFieldFloor is a FLOOR, never an equality: 7 Counts + NeedsAttention +
+// AwaitingApproval. An equality would turn this vacuity guard into a change
+// detector that reds on a correct new field.
+const bucketIntFieldFloor = 9
+
+// bucketIntFields flattens a Bucket's int fields, recursing one level into nested
+// structs (Counts). Maps and slices are skipped -- they are not element-wise
+// summable scalars.
+func bucketIntFields(b Bucket) map[string]int {
+	out := map[string]int{}
+	v := reflect.ValueOf(b)
+	tp := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		f, name := v.Field(i), tp.Field(i).Name
+		switch f.Kind() {
+		case reflect.Int:
+			out[name] = int(f.Int())
+		case reflect.Struct:
+			ft := f.Type()
+			for j := 0; j < f.NumField(); j++ {
+				if f.Field(j).Kind() == reflect.Int {
+					out[name+"."+ft.Field(j).Name] = int(f.Field(j).Int())
+				}
+			}
+		}
+	}
+	return out
+}
+
+// The generic sibling of TestStoreRollup_TotalsEqualSumOfClients: that one is a
+// hand-written per-field loop, so a new Bucket scalar gets no assertion from it.
+// This walks Bucket by reflection instead, and so covers the field after this one.
+func TestStoreRollup_EveryNumericBucketFieldIsTheSumOfClients(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-F tenant")
+	e1 := seedEntity(t, super, tenantID, "APPR-11-F entity 1")
+	e2 := seedEntity(t, super, tenantID, "APPR-11-F entity 2")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, e1, "APPR-11-F-1a", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, e1, "APPR-11-F-1b", "rejected")
+	seedInvoiceAtStatus(t, super, tenantID, e2, "APPR-11-F-2a", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, e2, "APPR-11-F-2b", "failed")
+	approved := seedInvoiceAtStatus(t, super, tenantID, e2, "APPR-11-F-2c", "validated")
+	seedApprovalRun(t, super, tenantID, approved, versionID, "approved")
+	seedInvoiceWithViolations(t, super, tenantID, e1, "APPR-11-F-1c", "draft",
+		`[{"rule_key":"supplier-tin-required","severity":"error","message":"x"}]`)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- every per-field assertion below is vacuous on an empty slice", len(got.Clients))
+	}
+
+	totals := bucketIntFields(got.Totals)
+	if len(totals) < bucketIntFieldFloor {
+		names := make([]string, 0, len(totals))
+		for name := range totals {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		t.Fatalf("walked %d int fields on Bucket %v, want at least %d -- a Bucket scalar is missing, so this sum property covers nothing",
+			len(totals), names, bucketIntFieldFloor)
+	}
+
+	sums := map[string]int{}
+	for _, cl := range got.Clients {
+		for name, n := range bucketIntFields(cl.Bucket) {
+			sums[name] += n
+		}
+	}
+	if len(sums) != len(totals) {
+		t.Fatalf("walked %d int fields on Clients' buckets but %d on Totals -- the two walks disagree", len(sums), len(totals))
+	}
+	for name, want := range sums {
+		if totals[name] != want {
+			t.Errorf("Totals.%s = %d, want %d (element-wise sum of Clients)", name, totals[name], want)
+		}
+	}
+	// Without this the newest field's sum is 0 == 0 on both sides and proves nothing:
+	// the fixture arms two entities precisely so the sum has something to carry.
+	if sums["AwaitingApproval"] == 0 {
+		t.Errorf("the fixture summed AwaitingApproval to 0 across every client, so the sum property above is vacuous for it")
+	}
+	if sums["NeedsAttention"] == 0 {
+		t.Errorf("the fixture summed NeedsAttention to 0 across every client, so the sum property above is vacuous for it")
+	}
+}
+
+// --- needs_attention's fourth arm: the approval-rejected draft --------------
+
+// A draft whose most recent run closed 'rejected' joins the overlay. It carries no
+// error-severity violation, so nothing else in the predicate can reach it.
+func TestStoreRollup_NeedsAttentionIncludesApprovalRejected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-include tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-02-include entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	sentBack := seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-include-1", "draft", `[]`)
+	seedApprovalRun(t, super, tenantID, sentBack, versionID, "rejected")
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-include-2", "draft", `[]`)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	row := got.Clients[0]
+	if row.NeedsAttention != 1 {
+		t.Errorf("NeedsAttention = %d, want 1 (the approval-rejected draft counts; the clean draft beside it does not)", row.NeedsAttention)
+	}
+	if row.Counts.Draft != 2 {
+		t.Errorf("Counts.Draft = %d, want 2 (the overlay must not disturb the state counts)", row.Counts.Draft)
+	}
+	if got.Totals.NeedsAttention != 1 {
+		t.Errorf("Totals.NeedsAttention = %d, want 1", got.Totals.NeedsAttention)
+	}
+}
+
+// There is no 'superseded' run state (approval_runs.state is open/approved/rejected/
+// cancelled) -- superseded means a NEWER run row exists, and the newest is the only
+// one the arm reads. The two invoices sit on separate entities so the per-entity
+// counts prove WHICH one flagged, not just how many did.
+func TestStoreRollup_SupersededRejectionDoesNotFlag(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-superseded tenant")
+	supersededEntity := seedEntity(t, super, tenantID, "APPR-11-02-superseded entity")
+	newestEntity := seedEntity(t, super, tenantID, "APPR-11-02-newest entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+	t1 := t0.Add(time.Hour)
+
+	superseded := seedInvoiceWithViolations(t, super, tenantID, supersededEntity, "APPR-11-02-sup-1", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, superseded, versionID, "rejected", t0)
+	seedApprovalRunAt(t, super, tenantID, superseded, versionID, "open", t1)
+
+	newest := seedInvoiceWithViolations(t, super, tenantID, newestEntity, "APPR-11-02-new-1", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, newest, versionID, "cancelled", t0)
+	seedApprovalRunAt(t, super, tenantID, newest, versionID, "rejected", t1)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- the per-entity assertions below are vacuous otherwise", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[supersededEntity]; row.NeedsAttention != 0 {
+		t.Errorf("superseded entity NeedsAttention = %d, want 0 (a newer open run replaced the rejection)", row.NeedsAttention)
+	}
+	if row := byEntity[newestEntity]; row.NeedsAttention != 1 {
+		t.Errorf("newest-rejection entity NeedsAttention = %d, want 1 (the rejection is the newest run)", row.NeedsAttention)
+	}
+	if got.Totals.NeedsAttention != 1 {
+		t.Errorf("Totals.NeedsAttention = %d, want 1", got.Totals.NeedsAttention)
+	}
+}
+
+// The ordering key is opened_at, not created_at and not insert order: the rejection is
+// inserted SECOND but opened FIRST, so it is not the most recent run. The control
+// entity carries a plain rejection, so a zero on the ordering entity cannot pass by
+// the arm never firing at all.
+func TestStoreRollup_ApprovalRejectedArmIsMostRecentByOpenedAt(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-ordering tenant")
+	orderingEntity := seedEntity(t, super, tenantID, "APPR-11-02-ordering entity")
+	controlEntity := seedEntity(t, super, tenantID, "APPR-11-02-ordering control entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+	t1 := t0.Add(time.Hour)
+
+	ordering := seedInvoiceWithViolations(t, super, tenantID, orderingEntity, "APPR-11-02-ord-1", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, ordering, versionID, "open", t1)
+	seedApprovalRunAt(t, super, tenantID, ordering, versionID, "rejected", t0)
+
+	control := seedInvoiceWithViolations(t, super, tenantID, controlEntity, "APPR-11-02-ord-control", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, control, versionID, "rejected", t0)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- the per-entity assertions below are vacuous otherwise", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[controlEntity]; row.NeedsAttention != 1 {
+		t.Errorf("control entity NeedsAttention = %d, want 1 -- without it the zero below proves nothing", row.NeedsAttention)
+	}
+	if row := byEntity[orderingEntity]; row.NeedsAttention != 0 {
+		t.Errorf("ordering entity NeedsAttention = %d, want 0 (the rejection was inserted last but opened first, so the open run is the most recent)", row.NeedsAttention)
+	}
+}
+
+// The arm is draft-only. A validated invoice whose newest run is rejected is
+// awaiting_approval's population, never needs_attention's -- the two overlays
+// partition by status. The draft control makes the zero non-vacuous.
+func TestStoreRollup_ApprovalRejectedArmIsDraftOnly(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-draftonly tenant")
+	validatedEntity := seedEntity(t, super, tenantID, "APPR-11-02-draftonly validated entity")
+	draftEntity := seedEntity(t, super, tenantID, "APPR-11-02-draftonly draft entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+
+	validated := seedInvoiceWithViolations(t, super, tenantID, validatedEntity, "APPR-11-02-do-validated", "validated", `[]`)
+	seedApprovalRunAt(t, super, tenantID, validated, versionID, "rejected", t0)
+
+	draft := seedInvoiceWithViolations(t, super, tenantID, draftEntity, "APPR-11-02-do-draft", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, draft, versionID, "rejected", t0)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- the per-entity assertions below are vacuous otherwise", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[draftEntity]; row.NeedsAttention != 1 {
+		t.Errorf("draft entity NeedsAttention = %d, want 1 -- without it the zero below proves nothing", row.NeedsAttention)
+	}
+	if row := byEntity[validatedEntity]; row.NeedsAttention != 0 {
+		t.Errorf("validated entity NeedsAttention = %d, want 0 (a validated invoice with a rejected run belongs to awaiting_approval)", row.NeedsAttention)
+	}
+	if row := byEntity[validatedEntity]; row.AwaitingApproval != 1 {
+		t.Errorf("validated entity AwaitingApproval = %d, want 1 (where that invoice does belong)", row.AwaitingApproval)
+	}
+}
+
+// The new subquery is scoped by RLS, not by a manual WHERE tenant_id: tenant A's
+// rejected run must not reach tenant B's clean draft. An uncorrelated or
+// tenant-blind EXISTS would flag B.
+func TestRLS_RollupApprovalRejectedIsTenantScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "APPR-11-02-RLS tenant A")
+	tenantB := seedTenant(t, super, "APPR-11-02-RLS tenant B")
+	entityA := seedEntity(t, super, tenantA, "APPR-11-02-RLS A entity")
+	entityB := seedEntity(t, super, tenantB, "APPR-11-02-RLS B entity")
+	_, versionA := seedApprovalPolicy(t, super, tenantA, true)
+
+	sentBackA := seedInvoiceWithViolations(t, super, tenantA, entityA, "APPR-11-02-RLS-A-1", "draft", `[]`)
+	seedApprovalRun(t, super, tenantA, sentBackA, versionA, "rejected")
+	seedInvoiceWithViolations(t, super, tenantB, entityB, "APPR-11-02-RLS-B-1", "draft", `[]`)
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+
+	gotA, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup (as A): %v", err)
+	}
+	if gotA.Totals.NeedsAttention != 1 {
+		t.Errorf("A's Totals.NeedsAttention = %d, want 1 -- without it B's zero proves nothing", gotA.Totals.NeedsAttention)
+	}
+
+	gotB, err := store.Rollup(cB)
+	if err != nil {
+		t.Fatalf("Rollup (as B): %v", err)
+	}
+	if gotB.Totals.Counts.Draft != 1 {
+		t.Fatalf("B's Totals.Counts.Draft = %d, want 1 -- B's fixture did not land", gotB.Totals.Counts.Draft)
+	}
+	if gotB.Totals.NeedsAttention != 0 {
+		t.Errorf("B's Totals.NeedsAttention = %d, want 0 (A's rejected run must not reach B's clean draft)", gotB.Totals.NeedsAttention)
+	}
+}
+
+// --- QA adversarial coverage (Mode B) --------------------------------------
+
+// TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare anchors on the FIRST
+// ") AS needs_attention", so a second one added below it leaves that guard
+// pinning an arm nobody meant it to pin.
+func TestStoreRollup_NeedsAttentionSQLMarkerIsUnique(t *testing.T) {
+	src, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read store.go: %v", err)
+	}
+	if n := bytes.Count(src, []byte(") AS needs_attention")); n != 1 {
+		t.Errorf("store.go holds %d occurrences of `) AS needs_attention`, want exactly 1", n)
+	}
+}
+
+// normalizeSQL collapses whitespace runs so two copies of one fragment compare
+// on their clauses rather than their indentation.
+func normalizeSQL(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// sliceBetween returns the text between open and the first close after it. ok is
+// false when either marker is missing -- an absent marker must fail the caller,
+// never yield "" and compare equal to another "".
+func sliceBetween(src, open, closing string) (string, bool) {
+	i := strings.Index(src, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := src[i+len(open):]
+	j := strings.Index(rest, closing)
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// The rollup arm and the list filter are two hand-maintained copies of one
+// predicate; docs/approvals.md's "the badge and the filtered list can never
+// disagree" is only true while they stay textually identical modulo the alias.
+// Nothing else compares them at the source level.
+func TestStoreRollup_AwaitingApprovalSQLMatchesTheInvoiceListFilter(t *testing.T) {
+	dashSrc, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read store.go: %v", err)
+	}
+	invSrc, err := os.ReadFile("../invoice/store.go")
+	if err != nil {
+		t.Fatalf("read ../invoice/store.go: %v", err)
+	}
+
+	end := bytes.Index(dashSrc, []byte(") AS awaiting_approval"))
+	if end < 0 {
+		t.Fatal(`store.go: no ") AS awaiting_approval" marker -- has the arm been renamed?`)
+	}
+	start := bytes.LastIndex(dashSrc[:end], []byte("count(*) FILTER ("))
+	if start < 0 {
+		t.Fatal(`store.go: no "count(*) FILTER (" before ") AS awaiting_approval"`)
+	}
+	dashArm := normalizeSQL(string(dashSrc[start+len("count(*) FILTER (") : end]))
+	dashArm = strings.TrimPrefix(dashArm, "WHERE ")
+	// The alias is the ONLY licensed difference (AC-4): the rollup reads the
+	// flagged CTE as i, the list filter reads invoices unaliased.
+	dashArm = strings.ReplaceAll(dashArm, "i.status", "status")
+	dashArm = strings.ReplaceAll(dashArm, "i.id", "invoices.id")
+
+	listArm, ok := sliceBetween(string(invSrc), "(status = 'validated'", "'approved'))")
+	if !ok {
+		t.Fatal("../invoice/store.go: no awaiting_approval filter fragment found")
+	}
+	listArm = normalizeSQL("status = 'validated'" + listArm + "'approved')")
+
+	for _, clause := range []string{
+		"status = 'validated'",
+		"EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)",
+		"NOT EXISTS (SELECT 1 FROM approval_runs r",
+	} {
+		if !strings.Contains(dashArm, clause) {
+			t.Fatalf("the rollup arm lost the %q clause, so this comparison proves nothing:\n%s", clause, dashArm)
+		}
+		if !strings.Contains(listArm, clause) {
+			t.Fatalf("the list filter lost the %q clause, so this comparison proves nothing:\n%s", clause, listArm)
+		}
+	}
+	if dashArm != listArm {
+		t.Errorf("the two copies of the awaiting_approval predicate have drifted.\nrollup (alias normalized): %s\nlist filter:               %s", dashArm, listArm)
+	}
+}
+
+// EXISTS (an approved run), not the latest run's state: an invoice approved once
+// stays out of the count whatever closed after it, and one that never reached
+// approved stays in. Mirrors internal/invoice's
+// TestStoreList_AwaitingApprovalApprovedRunSurvivesALaterRun on the rollup side.
+func TestStoreRollup_AwaitingApprovalReadsRunHistoryNotTheLatestRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-QA-history tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-QA-history entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	seq := func(number string, states ...string) string {
+		id := seedInvoiceAtStatus(t, super, tenantID, entityID, number, "validated")
+		for _, state := range states {
+			seedApprovalRun(t, super, tenantID, id, versionID, state)
+		}
+		return id
+	}
+	approvedThenCancelled := seq("APPR-11-QA-h-ac", "approved", "cancelled")
+	cancelledThenApproved := seq("APPR-11-QA-h-ca", "cancelled", "approved")
+	approvedThenRejected := seq("APPR-11-QA-h-ar", "approved", "rejected")
+	seq("APPR-11-QA-h-rc", "rejected", "cancelled") // never approved -- counts
+	seq("APPR-11-QA-h-c", "cancelled")              // never approved -- counts
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.Counts.Validated != 5 {
+		t.Fatalf("Totals.Counts.Validated = %d, want 5 -- the fixture is wrong, so the count below proves nothing", got.Totals.Counts.Validated)
+	}
+	if got.Totals.AwaitingApproval != 2 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 2 (only the two invoices with no approved run anywhere in their history; %s, %s and %s each hold one)",
+			got.Totals.AwaitingApproval, approvedThenCancelled, cancelledThenApproved, approvedThenRejected)
+	}
+}
+
+// An active policy alone counts nothing: the predicate's first conjunct is a
+// status test, so a tenant with no validated invoice reads zero however armed.
+func TestStoreRollup_AwaitingApprovalIsZeroWithAnActivePolicyAndNoValidatedInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-QA-novalidated tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-QA-novalidated entity")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-1", "draft")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-2", "accepted")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-3", "queued")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1 -- the fixture is wrong, so the zero below proves nothing", len(got.Clients))
+	}
+	if got.Totals.AwaitingApproval != 0 {
+		t.Errorf("Totals.AwaitingApproval = %d, want 0 (nothing is validated)", got.Totals.AwaitingApproval)
+	}
+	if got.Totals.Counts.Draft+got.Totals.Counts.Accepted+got.Totals.Counts.Queued != 3 {
+		t.Errorf("the three seeded non-validated invoices did not land: %+v", got.Totals.Counts)
+	}
+}
+
+// The two overlays partition by status -- needs_attention never reaches a
+// validated row, awaiting_approval reaches nothing else -- so neither may be
+// derived from the other. Asserted in both directions, per entity and in Totals.
+func TestStoreRollup_AwaitingApprovalAndNeedsAttentionAreIndependentOverlays(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-QA-overlay tenant")
+	awaitingOnly := seedEntity(t, super, tenantID, "APPR-11-QA-overlay awaiting")
+	attentionOnly := seedEntity(t, super, tenantID, "APPR-11-QA-overlay attention")
+	seedApprovalPolicy(t, super, tenantID, true)
+
+	seedInvoiceAtStatus(t, super, tenantID, awaitingOnly, "APPR-11-QA-ov-a1", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, awaitingOnly, "APPR-11-QA-ov-a2", "validated")
+	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n1", "rejected")
+	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n2", "failed")
+	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n3", "failed")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- every per-entity assertion below is vacuous otherwise", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[awaitingOnly]; row.AwaitingApproval != 2 || row.NeedsAttention != 0 {
+		t.Errorf("awaiting-only entity: AwaitingApproval = %d (want 2), NeedsAttention = %d (want 0)", row.AwaitingApproval, row.NeedsAttention)
+	}
+	if row := byEntity[attentionOnly]; row.NeedsAttention != 3 || row.AwaitingApproval != 0 {
+		t.Errorf("attention-only entity: NeedsAttention = %d (want 3), AwaitingApproval = %d (want 0)", row.NeedsAttention, row.AwaitingApproval)
+	}
+	if got.Totals.AwaitingApproval != 2 || got.Totals.NeedsAttention != 3 {
+		t.Errorf("Totals.AwaitingApproval = %d (want 2), Totals.NeedsAttention = %d (want 3) -- the two overlays must not track each other",
+			got.Totals.AwaitingApproval, got.Totals.NeedsAttention)
+	}
+}
+
+// --- QA adversarial coverage (Mode B): the approval-rejected arm ------------
+
+// Only 'rejected' flags. approval_runs.state is open/approved/rejected/cancelled,
+// and the arm reads the newest run's state with `=`, so the other three must leave
+// the draft alone -- including 'cancelled', which no other test puts newest.
+// One entity per state, so a zero names WHICH state failed rather than a total.
+func TestStoreRollup_OnlyARejectedNewestRunFlagsTheDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-QA-states tenant")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+	t1 := t0.Add(time.Hour)
+
+	cases := []struct {
+		newest string
+		want   int
+	}{
+		{"open", 0},
+		{"approved", 0},
+		{"cancelled", 0},
+		{"rejected", 1},
+	}
+	entities := map[string]string{}
+	for _, tc := range cases {
+		e := seedEntity(t, super, tenantID, "APPR-11-02-QA-states "+tc.newest)
+		entities[tc.newest] = e
+		inv := seedInvoiceWithViolations(t, super, tenantID, e, "APPR-11-02-QA-st-"+tc.newest, "draft", `[]`)
+		// A rejection underneath every case, so each row differs ONLY in its newest state.
+		seedApprovalRunAt(t, super, tenantID, inv, versionID, "rejected", t0)
+		seedApprovalRunAt(t, super, tenantID, inv, versionID, tc.newest, t1)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != len(cases) {
+		t.Fatalf("Clients = %d rows, want %d -- the per-entity assertions below are vacuous otherwise", len(got.Clients), len(cases))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	for _, tc := range cases {
+		if row := byEntity[entities[tc.newest]]; row.NeedsAttention != tc.want {
+			t.Errorf("newest run %q: NeedsAttention = %d, want %d", tc.newest, row.NeedsAttention, tc.want)
+		}
+	}
+}
+
+// EXISTS, not a join: two rejected runs on one draft still count it once. A join
+// would report 2 and inflate the badge against a real approval history.
+func TestStoreRollup_TwoRejectedRunsCountTheDraftOnce(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-QA-twice tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-02-QA-twice entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+
+	inv := seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-twice-1", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, inv, versionID, "rejected", t0)
+	seedApprovalRunAt(t, super, tenantID, inv, versionID, "rejected", t0.Add(time.Hour))
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	if row := got.Clients[0]; row.NeedsAttention != 1 {
+		t.Errorf("NeedsAttention = %d, want 1 -- two rejected runs on one draft are one invoice", row.NeedsAttention)
+	}
+	if got.Totals.Counts.Draft != 1 {
+		t.Fatalf("Counts.Draft = %d, want 1 -- the fixture did not land", got.Totals.Counts.Draft)
+	}
+}
+
+// The arm reads status at query time, not at rejection time: a rejected draft that
+// was promoted to validated leaves the overlay, and coming back to draft rejoins it.
+// The run row never moves.
+func TestStoreRollup_ApprovalRejectedArmFollowsTheCurrentStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-QA-roundtrip tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-02-QA-roundtrip entity")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	inv := seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-rt-1", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, inv, versionID, "rejected", time.Now().Add(-time.Hour))
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	setStatus := func(status string) {
+		t.Helper()
+		if _, err := super.Exec(ctx, `UPDATE invoices SET status = $1 WHERE id = $2`, status, inv); err != nil {
+			t.Fatalf("set invoice status %q: %v", status, err)
+		}
+	}
+	attention := func(step string) int {
+		t.Helper()
+		got, err := store.Rollup(c)
+		if err != nil {
+			t.Fatalf("Rollup (%s): %v", step, err)
+		}
+		return got.Totals.NeedsAttention
+	}
+
+	if n := attention("as draft"); n != 1 {
+		t.Fatalf("NeedsAttention as draft = %d, want 1 -- the rest of this test proves nothing otherwise", n)
+	}
+	setStatus("validated")
+	if n := attention("after promotion"); n != 0 {
+		t.Errorf("NeedsAttention as validated = %d, want 0 (the run did not move; the status did)", n)
+	}
+	setStatus("draft")
+	if n := attention("back to draft"); n != 1 {
+		t.Errorf("NeedsAttention back at draft = %d, want 1 (the same run flags it again)", n)
+	}
+}
+
+// The three original arms are untouched by the widening, on a tenant proven to hold
+// ZERO approval_runs -- so a fourth arm that fired on run-less rows would show up here.
+func TestStoreRollup_OriginalArmsHoldWithNoApprovalRowsAtAll(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-QA-noruns tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-02-QA-noruns entity")
+
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-nr-rejected", "rejected", `[]`)
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-nr-failed", "failed", `[]`)
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-nr-errordraft", "draft",
+		`[{"rule_key":"x","severity":"error","message":"x"}]`)
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-nr-cleandraft", "draft", `[]`)
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-QA-nr-validated", "validated", `[]`)
+
+	if n := countApprovalRuns(t, super, tenantID); n != 0 {
+		t.Fatalf("fixture holds %d approval_runs, want 0 -- this test's premise is gone", n)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if got.Totals.NeedsAttention != 3 {
+		t.Errorf("Totals.NeedsAttention = %d, want 3 (rejected + unresolved failed + error draft; the clean draft and the validated row must not count)",
+			got.Totals.NeedsAttention)
+	}
+}
+
+// The overlays both read approval_runs now, so their independence needs restating
+// where it is newly at risk: an approval-rejected DRAFT under an active policy is
+// needs_attention's alone, and a validated invoice with an open run is
+// awaiting_approval's alone. Asserted in both directions, per entity.
+func TestStoreRollup_ApprovalRejectedDraftIsNotAwaitingApproval(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "APPR-11-02-QA-indep tenant")
+	sentBackEntity := seedEntity(t, super, tenantID, "APPR-11-02-QA-indep sent-back")
+	awaitingEntity := seedEntity(t, super, tenantID, "APPR-11-02-QA-indep awaiting")
+	_, versionID := seedApprovalPolicy(t, super, tenantID, true)
+
+	t0 := time.Now().Add(-time.Hour)
+
+	sentBack := seedInvoiceWithViolations(t, super, tenantID, sentBackEntity, "APPR-11-02-QA-ind-draft", "draft", `[]`)
+	seedApprovalRunAt(t, super, tenantID, sentBack, versionID, "rejected", t0)
+
+	awaiting := seedInvoiceWithViolations(t, super, tenantID, awaitingEntity, "APPR-11-02-QA-ind-validated", "validated", `[]`)
+	seedApprovalRunAt(t, super, tenantID, awaiting, versionID, "open", t0)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2 -- the per-entity assertions below are vacuous otherwise", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[sentBackEntity]; row.NeedsAttention != 1 || row.AwaitingApproval != 0 {
+		t.Errorf("sent-back entity: NeedsAttention = %d (want 1), AwaitingApproval = %d (want 0)", row.NeedsAttention, row.AwaitingApproval)
+	}
+	if row := byEntity[awaitingEntity]; row.AwaitingApproval != 1 || row.NeedsAttention != 0 {
+		t.Errorf("awaiting entity: AwaitingApproval = %d (want 1), NeedsAttention = %d (want 0)", row.AwaitingApproval, row.NeedsAttention)
+	}
+	if got.Totals.NeedsAttention != 1 || got.Totals.AwaitingApproval != 1 {
+		t.Errorf("Totals.NeedsAttention = %d (want 1), Totals.AwaitingApproval = %d (want 1)", got.Totals.NeedsAttention, got.Totals.AwaitingApproval)
 	}
 }

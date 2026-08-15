@@ -32,7 +32,7 @@ import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-clie
 import { EXPORTS_LIST } from '../data'
 import { fmt, fmtShort } from '../lib/format'
 import { aggregateCustomers } from '../lib/customers'
-import { dashboardViewState, getRollup, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
+import { dashboardViewState, getRollup, metricCount, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
 import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, type AllInvoices } from '../lib/invoices'
 import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
@@ -121,8 +121,11 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   // that window (see the rollState ladder further down).
   const bucket = roll.data ? scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, roll.data) : null
   const bucketTotal = bucket ? Object.values(bucket.counts).reduce((a, b) => a + b, 0) : 0
-  const repPassed = bucket ? bucketTotal - bucket.needs_attention : 0
-  const repFail = bucket ? bucket.needs_attention : 0
+  // Violation-derived, NOT the needs_attention overlay: a transmission failure and an
+  // approver's "no" are not validation failures. Pinned by "a widened needs_attention does
+  // not move any of the three numbers" (ReportsView.test.tsx).
+  const repFail = bucket ? (metricCount(bucket.metrics, 'blocked_by_rules') ?? 0) : 0
+  const repPassed = bucket ? bucketTotal - repFail : 0
   const repPassPct = bucketTotal ? Math.round((repPassed / bucketTotal) * 100) : 0
   // top_violations has no per-entity breakdown on the wire (dashboard.go's Rollup) —
   // stays tenant-wide regardless of the selected client, same as DashboardActive's own

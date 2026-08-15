@@ -19,7 +19,7 @@
 // internal/dashboard/store.go's TopViolations query has no LIMIT, so a containment
 // assertion can't be pushed out by other specs' concurrent fixture data.
 //
-// Six tests (DASH-40..45), one test.describe, no helper framework beyond
+// Seven tests (DASH-40..46), one test.describe, no helper framework beyond
 // assertErrorEnvelope(), imported from ./contract-helpers, shared across the
 // api/ contract specs (contract-portfolio.spec.ts, contract-validation.spec.ts,
 // auth-contract.spec.ts).
@@ -92,6 +92,39 @@ test.describe('dashboard rollup contract (API E2E, over the deployed gateway)', 
     )
     for (const [key, value] of Object.entries(counts)) {
       expect(typeof value, `totals.counts.${key} should be a number`).toBe('number')
+    }
+  })
+
+  test('DASH-46: totals.awaiting_approval is a number and counts is still exactly seven keys', async () => {
+    const data = await rollup(tokenA)
+
+    // A shared deployed DB, so the VALUE is never asserted -- only that the key is
+    // on the wire, is a number, and never went negative. DASH-41's seven-key set is
+    // re-read here because awaiting_approval is a Bucket SIBLING of needs_attention:
+    // folding it into counts would make it an eighth state and double-count the same
+    // invoice in the donut.
+    expect(typeof data.totals.awaiting_approval, 'totals.awaiting_approval should be a number').toBe('number')
+    expect(data.totals.awaiting_approval).toBeGreaterThanOrEqual(0)
+
+    const counts = data.totals.counts as unknown as Record<string, unknown>
+    expect(Object.keys(counts).sort()).toEqual(
+      ['accepted', 'draft', 'failed', 'queued', 'rejected', 'submitted', 'validated'].sort(),
+    )
+
+    // Bucket is embedded anonymously in Client, so the key promotes onto every row.
+    // entityFewer guarantees clients is non-empty -- without it the loop below would
+    // pass vacuously on a tenant with no invoices.
+    expect(data.clients.length, 'clients should carry at least the beforeAll fixture entity').toBeGreaterThan(0)
+    for (const client of data.clients) {
+      expect(
+        typeof client.awaiting_approval,
+        `clients[${client.entity_id}].awaiting_approval should be a number`,
+      ).toBe('number')
+      expect(client.awaiting_approval).toBeGreaterThanOrEqual(0)
+      const clientCounts = client.counts as unknown as Record<string, unknown>
+      expect(Object.keys(clientCounts).sort()).toEqual(
+        ['accepted', 'draft', 'failed', 'queued', 'rejected', 'submitted', 'validated'].sort(),
+      )
     }
   })
 

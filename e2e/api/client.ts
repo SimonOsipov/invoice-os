@@ -543,7 +543,7 @@ export function transitionInvoice(token: string, id: string, target: Invoice['st
 // ---- Dashboard rollup wire types, mirrored from internal/dashboard/
 // dashboard.go's Counts/Bucket/Client/RuleCount/Rollup -- covers the fields
 // the API specs use. Client embeds Bucket ANONYMOUSLY so encoding/json
-// promotes counts/needs_attention to the row's top level -- DashboardClient
+// promotes counts/needs_attention/awaiting_approval to the row's top level -- DashboardClient
 // extends DashboardBucket rather than nesting a "bucket" key.
 // `metrics` and per-client `top_violations` are deliberately unmirrored
 // (no-e2e-change): rollup() only returns this type, never builds a request
@@ -562,6 +562,7 @@ export interface Counts {
 export interface DashboardBucket {
   counts: Counts
   needs_attention: number
+  awaiting_approval: number
 }
 
 export interface DashboardClient extends DashboardBucket {

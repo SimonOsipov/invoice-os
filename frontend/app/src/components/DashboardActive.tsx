@@ -96,15 +96,15 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
 // KPI tile values come off the live counts; only the sparkline SHAPE is mocked, so a
 // tile never contradicts the donut beside it.
-function kpiValues(counts: Counts, needsAttention: number, vatLabel: string) {
+function kpiValues(counts: Counts, needsAttention: number, vatLabel: string, awaitingApproval: number) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   const transmitted = counts.submitted + counts.accepted
   const awaiting = counts.draft + counts.validated
   return [
     { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
     { label: 'VAT tracked', value: vatLabel, delta: 'output VAT', deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
-    { label: 'Failing invoices', value: String(needsAttention), delta: needsAttention ? 'needs fixing' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)', stroke: 'var(--status-red-text)' },
-    { label: 'Awaiting submission', value: String(awaiting), delta: awaiting ? 'not yet sent' : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)', stroke: 'var(--status-amber-text)' },
+    { label: 'Exceptions', value: String(needsAttention), delta: needsAttention ? 'to resolve' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)', stroke: 'var(--status-red-text)' },
+    { label: 'Not yet submitted', value: String(awaiting), delta: awaiting ? `${awaitingApproval} awaiting approval` : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)', stroke: 'var(--status-amber-text)' },
   ]
 }
 
@@ -159,7 +159,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   // Trend endpoint anchors to the SAME ring.score read above -- AC-1 (headline ==
   // ring score) holds structurally, not by convention: both come from one metricRatio call.
   const mock = buildMockPanels(seed, ring.score)
-  const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'))
+  const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'), bucket.awaiting_approval)
 
   return (
     <>
@@ -257,11 +257,11 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                     color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
                   }}
                 >
-                  {needsAttention > 0 ? 'REJECTED / FAILED / BLOCKED' : 'ALL CLEAR'}
+                  {needsAttention > 0 ? 'REJECTED / FAILED / BLOCKED / SENT BACK' : 'ALL CLEAR'}
                 </span>
               </div>
               <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '14px 0 0' }}>
-                Invoices rejected, failed, or blocked by an error-severity validation issue.
+                Invoices rejected, failed, blocked by an error-severity validation issue, or sent back by an approver.
               </p>
             </div>
             <button

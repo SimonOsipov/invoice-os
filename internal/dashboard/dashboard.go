@@ -36,22 +36,27 @@ const (
 	MetricVATTracked           = "vat_tracked"
 )
 
-// Bucket is one rollup scope: the state counts plus the needs-attention
-// overlay. NeedsAttention is NOT an eighth state — it cuts across
-// draft/rejected/failed (rejected ∪ failed ∪ (draft AND an error-severity
-// violation), AC-3). TopViolations has no `omitempty`: an empty scope still
-// marshals "top_violations":[], never null.
+// Bucket is one rollup scope: the state counts plus two overlays. Neither
+// overlay is an eighth state. NeedsAttention cuts across draft/rejected/failed
+// (rejected ∪ failed ∪ (draft AND an error-severity violation) ∪ (draft AND a
+// most-recent approval run that closed 'rejected'), AC-3);
+// AwaitingApproval is a subset of Counts.Validated (validated invoices an
+// active approval policy blocks), so the two never overlap and folding either
+// into Counts would double-count the same invoice in the donut.
+// TopViolations has no `omitempty`: an empty scope still marshals
+// "top_violations":[], never null.
 type Bucket struct {
-	Counts         Counts            `json:"counts"`
-	NeedsAttention int               `json:"needs_attention"`
-	Metrics        map[string]Metric `json:"metrics"`
-	TopViolations  []RuleCount       `json:"top_violations"`
+	Counts           Counts            `json:"counts"`
+	NeedsAttention   int               `json:"needs_attention"`
+	AwaitingApproval int               `json:"awaiting_approval"`
+	Metrics          map[string]Metric `json:"metrics"`
+	TopViolations    []RuleCount       `json:"top_violations"`
 }
 
-// Client is one per-entity row. Bucket is embedded ANONYMOUSLY so
-// encoding/json promotes counts + needs_attention to the row's top level
-// (AC-5: entity_id/entity_name alongside the promoted counts/needs_attention
-// keys, not nested under a "bucket" key).
+// Client is one per-entity row. Bucket is embedded ANONYMOUSLY so encoding/json
+// promotes EVERY Bucket key — counts, both overlays, metrics, top_violations —
+// to the row's top level alongside entity_id/entity_name, never nested under a
+// "bucket" key (TestRollupJSON_AwaitingApprovalPromotesOntoEveryClientRow).
 type Client struct {
 	EntityID   string `json:"entity_id"`
 	EntityName string `json:"entity_name"`

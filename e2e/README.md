@@ -16,7 +16,7 @@ deployed URL.
 why — organize by capability, keep the browser layer thin, functional only, one browser
 serial, the two persona coverage grades — lives in **`docs/e2e-convention.md`**, which is
 canonical. Read that one before adding a spec; read this one before running the suites.
-When the two disagree, the convention doc wins and this file is what needs fixing.
+When the two disagree, the convention doc wins and this file is the one to correct.
 
 ## Target URLs
 

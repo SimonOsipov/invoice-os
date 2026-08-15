@@ -10,11 +10,14 @@
 //	Core AC #2/#3 TestStoreList_NeedsAttentionMatchesDashboardRollup (drift guard)
 //	AC #4         TestRLS_ListNeedsAttention_TenantIsolated
 //
-// The verbatim predicate under test (copied from internal/dashboard/store.go
-// Rollup's own count(*) FILTER clause, alias dropped):
+// The predicate under test, a hand-maintained twin of internal/dashboard/store.go
+// Rollup's own count(*) FILTER clause (store.go's f.NeedsAttention doc comment
+// names the two licensed differences):
 //
-//	status IN ('rejected', 'failed')
+//	status = 'rejected'
+//	  OR (status = 'failed' AND kept_as_is_at IS NULL)
 //	  OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb)
+//	  OR (status = 'draft' AND the newest approval_runs row closed 'rejected')
 //
 // Run: `make test-rls`, or directly, e.g.:
 //
@@ -28,24 +31,37 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// matchesNeedsAttentionPredicate reports whether inv satisfies the verbatim
-// dashboard predicate, evaluated in Go against the ALREADY-SCANNED row (not a
+// setRunOpenedAt force-writes a run's opened_at. It defaults to now(), so insert
+// order and recency coincide and a fixture meant to separate them silently cannot.
+func setRunOpenedAt(t *testing.T, super *pgxpool.Pool, runID string, openedAt time.Time) {
+	t.Helper()
+	mustExec(t, super, `UPDATE approval_runs SET opened_at = $1 WHERE id = $2`, openedAt, runID)
+}
+
+// matchesNeedsAttentionPredicate reports whether inv satisfies the dashboard
+// predicate, evaluated in Go against the ALREADY-SCANNED row (not a
 // second SQL query) -- rejected always matches, failed matches unless
 // resolved (kept_as_is_at set); a draft matches iff its
 // violations contain a severity:"error" entry (hasBlockingViolation,
 // store.go -- the SAME predicate ApplyValidation's promotion gate uses,
-// [error semantics]); every other status (validated/queued/submitted/
-// accepted) never matches.
-func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice) bool {
+// [error semantics]) OR its most recent approval run closed 'rejected'; every
+// other status (validated/queued/submitted/accepted) never matches.
+//
+// Invoice carries no run state, so latestRunState supplies each id's newest
+// approval_runs.state; an id absent from it has no run.
+func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice, latestRunState map[string]string) bool {
 	t.Helper()
 	switch inv.Status {
 	case StatusRejected:
@@ -53,6 +69,9 @@ func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice) bool {
 	case StatusFailed:
 		return inv.KeptAsIsAt == nil
 	case StatusDraft:
+		if latestRunState[inv.ID] == "rejected" {
+			return true
+		}
 		var vs []Violation
 		if err := json.Unmarshal(inv.Violations, &vs); err != nil {
 			t.Fatalf("unmarshal violations for invoice %s: %v", inv.ID, err)
@@ -65,11 +84,13 @@ func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice) bool {
 
 // TestStoreList_NeedsAttentionMatchesDashboardRollup (Core AC #2/#3, the
 // drift-guard teeth): seeds ONE tenant + entity with a deliberate mix
-// exercising every branch of the verbatim predicate --
+// exercising every branch of the predicate --
 //
-//	TRUE : rejected, failed, draft-with-severity:"error"
+//	TRUE : rejected, failed, draft-with-severity:"error", draft whose newest
+//	       approval run closed 'rejected'
 //	FALSE: clean draft (violations '[]'), validated, accepted, a resolved
-//	       failed invoice (kept_as_is_at set -- T3-5), and the
+//	       failed invoice (kept_as_is_at set -- T3-5), a draft whose rejection
+//	       was superseded by a newer run, and the
 //	       DRIFT-CRITICAL case -- a draft whose ONLY violation is
 //	       severity:"warning" (must NOT count, exactly as the dashboard
 //	       excludes it, DASH-06's own invariant).
@@ -83,12 +104,9 @@ func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice) bool {
 //	    if the counts happened to match without the membership actually
 //	    agreeing, so this is checked independently)
 //
-// RED today: Store.List does not apply the predicate to either the COUNT or
-// the page query, so List(NeedsAttention:true) returns the FULL unfiltered
-// tenant list -- total is 7 (all seeded rows), not 3, and every excluded id
-// (clean draft/validated/accepted/warning-only draft) is present on the page,
-// failing (a) and (c). The dashboard side (Rollup) is unaffected -- it is the
-// oracle this test compares List against, not the thing under test.
+// The fixture seeds approval_runs precisely so the guard can see an approval-arm
+// divergence: with none, a dashboard-only widening leaves both sides equal and
+// this test stays green while the two predicates have drifted.
 func TestStoreList_NeedsAttentionMatchesDashboardRollup(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -115,12 +133,40 @@ func TestStoreList_NeedsAttentionMatchesDashboardRollup(t *testing.T) {
 	// predicate stops counting a failed row once it carries the mark.
 	resolvedFailedID := seedResolvedFailed(t, super, tenantID, entityID, "M4-09-02-resolved-failed", uuid.NewString(), "resolved outside")
 
+	// The approval arm. Without approval_runs in this fixture the guard cannot see a
+	// dashboard-only widening at all -- both rows below carry violations '[]', so the
+	// latest run state is the only thing that can flag them. The version stays
+	// inactive: needs_attention reads runs, never policy activity.
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "M4-09-02 drift-guard policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	t0 := time.Now().Add(-2 * time.Hour)
+	t1 := t0.Add(time.Hour)
+
+	approvalRejectedID := seedInvoiceWithViolations(t, super, tenantID, entityID, "M4-09-02-approval-rejected", string(StatusDraft), `[]`)
+	sentBackRun := seedApprovalRunFor(t, super, tenantID, approvalRejectedID, versionID)
+	closeApprovalRunFor(t, super, sentBackRun, "rejected", "approver")
+	setRunOpenedAt(t, super, sentBackRun, t1)
+
+	// Superseded: the rejection is no longer the newest run, so it must NOT count.
+	supersededID := seedInvoiceWithViolations(t, super, tenantID, entityID, "M4-09-02-superseded", string(StatusDraft), `[]`)
+	oldRun := seedApprovalRunFor(t, super, tenantID, supersededID, versionID)
+	closeApprovalRunFor(t, super, oldRun, "rejected", "approver")
+	setRunOpenedAt(t, super, oldRun, t0)
+	reopenedRun := seedApprovalRunFor(t, super, tenantID, supersededID, versionID)
+	setRunOpenedAt(t, super, reopenedRun, t1)
+
+	latestRunState := map[string]string{
+		approvalRejectedID: "rejected",
+		supersededID:       "open",
+	}
+
 	excludedIDs := map[string]string{
 		cleanDraftID:     "clean draft",
 		validatedID:      "validated",
 		acceptedID:       "accepted",
 		warningDraftID:   "warning-only draft",
 		resolvedFailedID: "resolved failed",
+		supersededID:     "superseded rejection",
 	}
 
 	invStore := NewStore(app)
@@ -142,15 +188,15 @@ func TestStoreList_NeedsAttentionMatchesDashboardRollup(t *testing.T) {
 		t.Errorf("List(NeedsAttention: true).total = %d, dashboard Rollup().Totals.NeedsAttention = %d, want equal (drift guard, Core AC #2)",
 			total, roll.Totals.NeedsAttention)
 	}
-	if total != 3 {
-		t.Errorf("List(NeedsAttention: true).total = %d, want 3 (rejected + failed + error-draft; the 5 excluded rows must not count)", total)
+	if total != 4 {
+		t.Errorf("List(NeedsAttention: true).total = %d, want 4 (rejected + failed + error-draft + approval-rejected draft; the 6 excluded rows must not count)", total)
 	}
 
 	// (b) no false positive -- every returned row satisfies the predicate.
 	seen := map[string]bool{}
 	for _, inv := range items {
 		seen[inv.ID] = true
-		if !matchesNeedsAttentionPredicate(t, inv) {
+		if !matchesNeedsAttentionPredicate(t, inv, latestRunState) {
 			t.Errorf("List(NeedsAttention: true) returned invoice %s (status=%s, violations=%s), which does NOT satisfy the predicate",
 				inv.ID, inv.Status, inv.Violations)
 		}
@@ -163,7 +209,13 @@ func TestStoreList_NeedsAttentionMatchesDashboardRollup(t *testing.T) {
 			t.Errorf("List(NeedsAttention: true) incorrectly returned the %s invoice %s", label, id)
 		}
 	}
-	for id, label := range map[string]string{rejectedID: "rejected", failedID: "failed", errorDraftID: "error-draft"} {
+	includedIDs := map[string]string{
+		rejectedID:         "rejected",
+		failedID:           "failed",
+		errorDraftID:       "error-draft",
+		approvalRejectedID: "approval-rejected draft",
+	}
+	for id, label := range includedIDs {
 		if !seen[id] {
 			t.Errorf("List(NeedsAttention: true) is missing the %s invoice %s", label, id)
 		}
@@ -388,6 +440,113 @@ func TestStoreList_NeedsAttentionSQLRejectedArmIsBare(t *testing.T) {
 		t.Errorf("NeedsAttention condition contains an IN(...) -- the naive "+
 			"`status IN ('rejected', 'failed') AND kept_as_is_at IS NULL` form is a silent regression "+
 			"risk if invoices_kept_as_is_status is ever relaxed to allow rejected+mark; keep the tuple split:\n%s", block)
+	}
+
+	// The approval-rejected arm (AC-1): a correlated EXISTS over the MOST RECENT run,
+	// with `=`, never `IN (`, and correlated on invoices.id -- approval_runs has its
+	// own id, and a bare id binds there and silently never matches. Whitespace is
+	// normalized so the anchors survive re-indentation, not so they survive a rewrite.
+	norm := strings.Join(strings.Fields(block), " ")
+	for _, want := range []string{
+		"status = 'draft' AND EXISTS (",
+		"SELECT r.state FROM approval_runs r",
+		"r.invoice_id = invoices.id",
+		"ORDER BY r.opened_at DESC LIMIT 1",
+		"state = 'rejected'",
+	} {
+		if !strings.Contains(norm, want) {
+			t.Errorf("NeedsAttention condition is missing %q -- the approval-rejected arm reads the "+
+				"latest run through a derived table, not `EXISTS (any rejected run)`:\n%s", want, norm)
+		}
+	}
+}
+
+// The list side of the fourth arm, asserted on membership rather than on a count:
+// the sent-back draft is on the page and the superseded one is not.
+func TestStoreList_NeedsAttentionApprovalRejectedRowIsReturned(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "APPR-11-02 list-arm tenant")
+	entityID := seedEntity(t, super, tenantID, "APPR-11-02 list-arm entity")
+	policyID := seedApprovalPolicyFor(t, super, tenantID, "APPR-11-02 list-arm policy")
+	versionID := seedApprovalPolicyVersionFor(t, super, tenantID, policyID)
+	c := tenantCtx(tenantID)
+
+	t0 := time.Now().Add(-2 * time.Hour)
+	t1 := t0.Add(time.Hour)
+
+	sentBackID := seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-list-sentback", string(StatusDraft), `[]`)
+	sentBackRun := seedApprovalRunFor(t, super, tenantID, sentBackID, versionID)
+	closeApprovalRunFor(t, super, sentBackRun, "rejected", "approver")
+	setRunOpenedAt(t, super, sentBackRun, t1)
+
+	supersededID := seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-list-superseded", string(StatusDraft), `[]`)
+	oldRun := seedApprovalRunFor(t, super, tenantID, supersededID, versionID)
+	closeApprovalRunFor(t, super, oldRun, "rejected", "approver")
+	setRunOpenedAt(t, super, oldRun, t0)
+	reopenedRun := seedApprovalRunFor(t, super, tenantID, supersededID, versionID)
+	setRunOpenedAt(t, super, reopenedRun, t1)
+
+	items, total, err := store.List(c, ListFilter{NeedsAttention: true, Limit: 100})
+	if err != nil {
+		t.Fatalf("List(NeedsAttention: true): %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1 (the sent-back draft only)", total)
+	}
+	if got := idSet(items); !reflect.DeepEqual(got, map[string]bool{sentBackID: true}) {
+		t.Errorf("ids = %v, want exactly [%s] -- the superseded draft %s must not appear",
+			sortedIDs(got), sentBackID, supersededID)
+	}
+}
+
+// The behavioural lockstep guard for the SECOND predicate pair, mirroring
+// TestStoreList_NeedsAttentionMatchesDashboardRollup: the awaiting_approval list
+// filter and the rollup arm are two hand-maintained copies of one predicate, and
+// nothing else compares them by behaviour.
+func TestStoreList_AwaitingApprovalMatchesDashboardRollup(t *testing.T) {
+	super, app := dbTestPools(t)
+	invStore := NewStore(app)
+	dashStore := dashboard.NewStore(app)
+
+	tenantID, entityID, versionID := seedOneStepActivePolicyTenant(t, super, "APPR-11-02 awaiting-lockstep")
+	c := tenantCtx(tenantID)
+
+	noRunID := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-norun", StatusValidated)
+
+	openID := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-open", StatusValidated)
+	seedApprovalRunFor(t, super, tenantID, openID, versionID)
+
+	approvedID := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-approved", StatusValidated)
+	closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, tenantID, approvedID, versionID), "approved", "approver")
+
+	rejectedRunID := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-rejected-run", StatusValidated)
+	closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, tenantID, rejectedRunID, versionID), "rejected", "approver")
+
+	cancelledRunID := seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-cancelled-run", StatusValidated)
+	closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, tenantID, cancelledRunID, versionID), "cancelled", "system")
+
+	// Non-validated controls: neither is awaiting approval whatever its runs.
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-draft", StatusDraft)
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-02-await-failed", StatusFailed)
+
+	items, total := listAwaiting(t, invStore, c, ListFilter{})
+
+	roll, err := dashStore.Rollup(c)
+	if err != nil {
+		t.Fatalf("dashboard Rollup: %v", err)
+	}
+	if total != roll.Totals.AwaitingApproval {
+		t.Errorf("List(AwaitingApproval: true).total = %d, dashboard Rollup().Totals.AwaitingApproval = %d, want equal",
+			total, roll.Totals.AwaitingApproval)
+	}
+	if total != 4 {
+		t.Errorf("List(AwaitingApproval: true).total = %d, want 4 (no-run, open, rejected-run, cancelled-run; the approved one and the two non-validated rows must not count)", total)
+	}
+	want := map[string]bool{noRunID: true, openID: true, rejectedRunID: true, cancelledRunID: true}
+	if got := idSet(items); !reflect.DeepEqual(got, want) {
+		t.Errorf("ids = %v, want exactly %v -- the approved-run invoice %s is transmit-clear", sortedIDs(got), sortedIDs(want), approvedID)
 	}
 }
 

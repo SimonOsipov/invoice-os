@@ -31,6 +31,19 @@ describe('healthPillStyle', () => {
   it('the no-invoices pill reads NO INVOICES YET', () => {
     expect(healthPillStyle({ kind: 'no-invoices' }).label).toBe('NO INVOICES YET')
   })
+
+  // AC-4: audited and deliberately left alone by the needs-attention widening -- this pill
+  // stays cause-neutral, so a wider overlay only changes the number it counts. Pinned so a
+  // later edit to the copy is a decision. The casing suite above never pinned the plural or
+  // ALL CLEAR verbatim; these two do.
+  it('the plural and singular count branches keep their exact copy', () => {
+    expect(healthPillStyle({ kind: 'needs-attention', count: 2 }).label).toBe('2 NEED ATTENTION')
+    expect(healthPillStyle({ kind: 'needs-attention', count: 1 }).label).toBe('1 NEEDS ATTENTION')
+  })
+
+  it('the clear pill reads ALL CLEAR', () => {
+    expect(healthPillStyle({ kind: 'clear' }).label).toBe('ALL CLEAR')
+  })
 })
 
 describe('Sidebar.tsx scope fence', () => {

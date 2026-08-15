@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
+import type { Rollup } from '../lib/dashboard'
 import type { Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 import { ClientsView } from './ClientsView'
@@ -22,8 +23,19 @@ function isRollupUrl(url: string): boolean {
   return new URL(url).pathname.endsWith('/rollup')
 }
 
-const ZERO_ROLLUP = {
-  totals: { counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }, needs_attention: 0 },
+// Annotated `: Rollup` like ReportsView.test.tsx's sibling fixture, which is what makes an
+// omitted RollupBucket field a typecheck error rather than a silent gap. The annotation is
+// INERT here today: the sibling ClientsView.test.ts shadows this file out of tsc's program
+// (TypeScript keeps only the highest-priority extension per basename, .ts over .tsx), so
+// nothing typechecks it. Keep the fixture exhaustive by hand until that name collision goes.
+const ZERO_ROLLUP: Rollup = {
+  totals: {
+    counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
+    needs_attention: 0,
+    awaiting_approval: 0,
+    metrics: {},
+    top_violations: [],
+  },
   clients: [],
   top_violations: [],
 }
@@ -488,5 +500,63 @@ describe('ClientsView: archive/restore action, per row (BUG-01-12)', () => {
     expect(headCols, 'header must carry the fifth (Action) track').toHaveLength(5)
     expect(rowCols, 'row must carry the fifth (Action) track').toHaveLength(5)
     expect(rowCols).toEqual(headCols)
+  })
+})
+
+// AC-4, the rendered half. ClientsView.test.ts pins healthPillStyle's copy directly; this
+// pins that HealthCell still routes the joined rollup count through it, so the widened
+// overlay reaches the pill as a bigger number and nothing else.
+function clientRow(entityId: string, needsAttention: number) {
+  return {
+    entity_id: entityId,
+    entity_name: entityId,
+    counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
+    needs_attention: needsAttention,
+    awaiting_approval: 0,
+    metrics: {},
+    top_violations: [],
+  }
+}
+
+function mockFetchWithRollup(rollup: Rollup) {
+  const fetchMock = vi.fn((url: string) => {
+    if (isRollupUrl(url)) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(rollup) })
+    return Promise.resolve(entitiesResponse(rowsForStatus(new URL(url).searchParams.get('status'))))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('ClientsView: the health pill is unchanged by the needs-attention widening', () => {
+  it('a joined count renders as the plural pill, and a row with no rollup entry reads NO INVOICES YET', async () => {
+    // a1 = Okafor & Partners (2 needing attention), a2 = Beta Traders (clear), r1 = Honeywell
+    // Group (absent from `clients` -- INNER JOIN, zero invoices).
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [clientRow('a1', 2), clientRow('a2', 0)] })
+
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    await within(rowFor('Okafor & Partners')).findByText('2 NEED ATTENTION')
+    expect(within(rowFor('Beta Traders')).getByText('ALL CLEAR')).toBeDefined()
+    expect(within(rowFor('Honeywell Group')).getByText('NO INVOICES YET')).toBeDefined()
+  })
+
+  // QA adversarial, the asymmetry the Reports carve-out creates. Same violation count on
+  // both renders; only the overlay widens, and this pill is meant to follow it.
+  it('a widened overlay moves the pill, and the violation count beside it never does', async () => {
+    const withViolations = (needsAttention: number) => ({ ...clientRow('a1', needsAttention), metrics: { blocked_by_rules: { num: 1, den: 20 } } })
+
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [withViolations(3)] })
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+    await within(rowFor('Okafor & Partners')).findByText('3 NEED ATTENTION')
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [withViolations(9)] })
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+    await within(rowFor('Okafor & Partners')).findByText('9 NEED ATTENTION')
   })
 })

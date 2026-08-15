@@ -33,11 +33,23 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // AC-1/DASH-03), then sums Clients element-wise into Totals in Go (no second
 // aggregate query). needs_attention cuts across draft/rejected/failed
 // (AC-3): rejected always counts, failed counts unless resolved outside
-// (kept_as_is_at set), a draft counts only when its violations contain an
-// error-severity entry. TopViolations is grouped per entity_id AND rule_key
-// and attached to each Client; the root/Totals list is the Go-side sum
-// across entities, re-sorted invoices DESC then rule_key ASC (map iteration
-// order isn't deterministic, so the sort can't be skipped).
+// (kept_as_is_at set), a draft counts when its violations contain an
+// error-severity entry OR its most recent approval run closed 'rejected'. That
+// disjunction is a hand-maintained twin of the f.NeedsAttention list fragment
+// (internal/invoice/store.go): only the i. alias and the correlation column
+// differ, and TestStoreList_NeedsAttentionMatchesDashboardRollup compares the
+// two by behaviour. awaiting_approval is the SECOND overlay and a sibling
+// of needs_attention, never an eighth state: validated invoices an active
+// policy blocks, the predicate copied from the awaiting_approval list filter
+// (internal/invoice/store.go) so the badge and the filtered list cannot
+// disagree about the word. Its NOT EXISTS (approved run) conjunct is satisfied
+// VACUOUSLY by an invoice with zero runs, so a tenant with an active policy but
+// nothing armed reads awaiting_approval == counts.validated
+// (TestStoreRollup_AwaitingApprovalCountsAnUnarmedValidatedInvoice).
+// TopViolations is grouped per entity_id AND rule_key and attached to each
+// Client; the root/Totals list is the Go-side sum across entities, re-sorted
+// invoices DESC then rule_key ASC (map iteration order isn't deterministic, so
+// the sort can't be skipped).
 func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	clients := []Client{}
 	ruleSums := map[string]int{}
@@ -45,7 +57,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`WITH flagged AS (
-			    SELECT i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
+			    SELECT i.id, i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
 			           (i.status = 'draft' AND i.rule_set_version_id IS NULL)                       AS is_never_validated,
 			           (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)    AS is_blocked_by_rules,
 			           (i.status = 'rejected' OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)) AS is_failed_in_transmission,
@@ -67,8 +79,9 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			    ) cf ON true
 			)
 			-- needs_attention below keeps its exact literal disjunction (i.-qualified,
-			-- no IN(...)): TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare pins this
-			-- text byte-for-byte, which is why the CTE is aliased i.
+			-- no IN(...)), and its fourth arm reads the LATEST run only, through a
+			-- derived table: TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare pins
+			-- both, which is why the CTE is aliased i.
 			SELECT i.entity_id, i.entity_name,
 			       count(*) FILTER (WHERE i.status = 'draft')     AS draft,
 			       count(*) FILTER (WHERE i.status = 'validated') AS validated,
@@ -81,7 +94,21 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			           WHERE i.status = 'rejected'
 			              OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)
 			              OR (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)
+			              OR (i.status = 'draft' AND EXISTS (
+			                      SELECT 1 FROM (SELECT r.state FROM approval_runs r
+			                                      WHERE r.invoice_id = i.id
+			                                      ORDER BY r.opened_at DESC LIMIT 1) lr
+			                       WHERE lr.state = 'rejected'))
 			       ) AS needs_attention,
+			       -- Copied from the awaiting_approval list filter (internal/invoice/store.go),
+			       -- alias added. i.id is qualified: approval_runs has its own id, and a bare
+			       -- id binds there and silently never matches.
+			       count(*) FILTER (
+			           WHERE i.status = 'validated'
+			             AND EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)
+			             AND NOT EXISTS (SELECT 1 FROM approval_runs r
+			                              WHERE r.invoice_id = i.id AND r.state = 'approved')
+			       ) AS awaiting_approval,
 			       count(*)                                            AS total,
 			       count(*) FILTER (WHERE i.is_never_validated)        AS never_validated,
 			       count(*) FILTER (WHERE i.is_blocked_by_rules)       AS blocked_by_rules,
@@ -110,7 +137,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 				&c.EntityID, &c.EntityName,
 				&c.Counts.Draft, &c.Counts.Validated, &c.Counts.Queued, &c.Counts.Submitted,
 				&c.Counts.Accepted, &c.Counts.Rejected, &c.Counts.Failed,
-				&c.NeedsAttention, &total,
+				&c.NeedsAttention, &c.AwaitingApproval, &total,
 				&neverValidated, &blockedByRules, &failedInTransmission,
 				&readinessNum, &barFieldNum, &barTaxNum, &barIdentNum, &vatKobo,
 			); err != nil {
@@ -189,6 +216,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 		totals.Counts.Rejected += c.Counts.Rejected
 		totals.Counts.Failed += c.Counts.Failed
 		totals.NeedsAttention += c.NeedsAttention
+		totals.AwaitingApproval += c.AwaitingApproval
 		addMetrics(totals.Metrics, c.Metrics)
 	}
 

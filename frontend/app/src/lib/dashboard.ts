@@ -1,9 +1,10 @@
 // App-side dashboard rollup data-access helpers (M4-10-01, task-189).
 //
 // Types mirror the wire shapes in internal/dashboard/dashboard.go: `Bucket` is embedded
-// anonymously in `Client`, so encoding/json promotes `counts`/`needs_attention` to the
-// row's top level — RollupClient below spells that promotion out explicitly rather than
-// modeling the Go embedding. `Rollup.clients`/`.top_violations` are never null on the
+// anonymously in `Client`, so encoding/json promotes EVERY Bucket key — `counts`, both
+// overlays, `metrics`, `top_violations` — to the row's top level. RollupClient below
+// spells that promotion out explicitly rather than modeling the Go embedding.
+// `Rollup.clients`/`.top_violations` are never null on the
 // wire (pre-declared []Client{}/[]RuleCount{}) but this module types them as plain arrays,
 // same as `InvoiceListResponse.invoices` in invoices.ts.
 //
@@ -56,25 +57,37 @@ export interface Metric {
 }
 export type Metrics = Record<string, Metric>
 
-// dashboard.go Bucket — the 7-state counts plus the overlapping needs_attention overlay
-// (rejected ∪ failed ∪ drafts-with-an-error-severity-violation). Never a donut input.
+// dashboard.go Bucket — the 7-state counts plus TWO overlapping overlays, neither ever a
+// donut input.
+//   needs_attention, four arms: rejected ∪ failed-and-not-kept-as-is ∪ drafts holding an
+//   error-severity violation ∪ drafts whose latest approval run closed 'rejected'.
+//   awaiting_approval, three clauses: status 'validated' AND an active approval policy
+//   version exists AND the invoice has no approved run. It is the invoice list's own
+//   awaiting_approval filter predicate (internal/invoice/store.go), copied so the badge and
+//   the filtered list cannot disagree about the word.
+// The two partition by invoice status, so neither is derivable from the other — do not
+// merge them. ReportsView's 'Validation summary' reads NEITHER: it is violation-derived
+// from metrics.blocked_by_rules, because a transmission failure and an approver's "no" are
+// not validation failures.
 // Sibling of RollupClient below — kept in sync by hand, not by `extends`.
 export interface RollupBucket {
   counts: Counts
   needs_attention: number
+  awaiting_approval: number
   metrics: Metrics
   top_violations: RuleCount[]
 }
 
 // dashboard.go Client — Bucket is embedded anonymously there, so counts/needs_attention/
-// metrics/top_violations promote to this row's top level on the wire; entity_id/
-// entity_name are the row's own fields. Only entities WITH at least one invoice appear
+// awaiting_approval/metrics/top_violations promote to this row's top level on the wire;
+// entity_id/entity_name are the row's own fields. Only entities WITH at least one invoice appear
 // here (INNER JOIN, store.go). Sibling of RollupBucket above — kept in sync by hand.
 export interface RollupClient {
   entity_id: string
   entity_name: string
   counts: Counts
   needs_attention: number
+  awaiting_approval: number
   metrics: Metrics
   top_violations: RuleCount[]
 }
@@ -216,7 +229,7 @@ export function entityHealth(clients: RollupClient[], entityId: string): EntityH
 // re-show every OTHER client's numbers under this one's name, exactly the bug
 // [dashboard-scope-per-client] replaces.
 const EMPTY_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }
-export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] }
+export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
 // Resolves which Bucket a CLIENT-scoped surface renders for the current selection
 // ([dashboard-scope-per-client]). In-house has ZERO business_entities rows
@@ -230,7 +243,13 @@ export function scopedBucket(isInhouse: boolean, entityId: string | null, rollup
   if (entityId == null) return EMPTY_BUCKET
   const client = rollup.clients.find((c) => c.entity_id === entityId)
   return client
-    ? { counts: client.counts, needs_attention: client.needs_attention, metrics: client.metrics, top_violations: client.top_violations }
+    ? {
+        counts: client.counts,
+        needs_attention: client.needs_attention,
+        awaiting_approval: client.awaiting_approval,
+        metrics: client.metrics,
+        top_violations: client.top_violations,
+      }
     : EMPTY_BUCKET
 }
 

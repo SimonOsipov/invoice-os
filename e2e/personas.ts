@@ -42,7 +42,7 @@ export interface SurfaceDef {
 }
 
 // The COMPLETE catalogue of app-SPA nav surfaces: every constant reachable from
-// Sidebar.tsx's navGroups (:115-127, 9 firm-mode items + 8 in-house), paired with the label
+// Sidebar.tsx's navGroups (:111-123, 9 firm-mode items + 8 in-house), paired with the label
 // glyphs.tsx renders for it (:63-110). Complete from this subtask onward, which is what lets
 // personas.test.ts's G3 assert equality against the live Sidebar rather than containment.
 //
@@ -146,7 +146,8 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     //
     // NAV_WORKFLOWS' cell was justified by the depth [PERSONA-01-04] added -- a count, status
     // pills and `scope · summary` lines. APPR-09-08 deleted all of it: it was transcribed from
-    // a frontend fixture, and nothing seeds approval_policies. The grade stays `drives` on
+    // a frontend fixture, and the one policy internal/demopolicy seeds onto this IN-HOUSE
+    // tenant matches none of those strings. The grade stays `drives` on
     // what replaced it -- the h1, the tenant-driven subtitle, and a settle on either terminal
     // arm of the policies list. That last one is why this is still not a mount: the first two
     // render above the ladder and pass on a fetch that never landed, and the settle does not.

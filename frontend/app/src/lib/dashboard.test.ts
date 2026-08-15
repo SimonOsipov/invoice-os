@@ -13,6 +13,9 @@
 // Error('not implemented')` before ever calling the injected authedFetch (or, for the
 // pure helpers, before returning anything) — that IS the correct RED reason (assertion /
 // not-implemented), not an import/compile/setup error.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 
@@ -70,9 +73,9 @@ function counts(overrides: Partial<Counts> = {}): Counts {
 }
 
 const rollupFixture: Rollup = {
-  totals: { counts: counts({ draft: 1 }), needs_attention: 1, metrics: {}, top_violations: [] },
+  totals: { counts: counts({ draft: 1 }), needs_attention: 1, awaiting_approval: 0, metrics: {}, top_violations: [] },
   clients: [
-    { entity_id: 'e1', entity_name: 'Okafor & Partners', counts: counts({ draft: 1 }), needs_attention: 1, metrics: {}, top_violations: [] },
+    { entity_id: 'e1', entity_name: 'Okafor & Partners', counts: counts({ draft: 1 }), needs_attention: 1, awaiting_approval: 0, metrics: {}, top_violations: [] },
   ],
   top_violations: [{ rule_key: 'supplier-tin-format', invoices: 1 }],
 }
@@ -221,14 +224,14 @@ describe('resolveCtaLabel', () => {
 
 describe('isEmptyRollup', () => {
   it('DASH-T17: all-zero totals.counts is empty', () => {
-    const r: Rollup = { totals: { counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
+    const r: Rollup = { totals: { counts: counts(), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
 
     expect(isEmptyRollup(r)).toBe(true)
   })
 
   it('DASH-T18: any non-zero total count is not empty', () => {
     const r: Rollup = {
-      totals: { counts: counts({ draft: 1 }), needs_attention: 0, metrics: {}, top_violations: [] },
+      totals: { counts: counts({ draft: 1 }), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [],
       top_violations: [],
     }
@@ -259,20 +262,20 @@ describe('dashboardViewState', () => {
 })
 
 describe('entityHealth', () => {
-  const clientA: RollupClient = { entity_id: 'A', entity_name: 'Acme', counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }
+  const clientA: RollupClient = { entity_id: 'A', entity_name: 'Acme', counts: counts(), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
   it('DASH-T21: an entity absent from clients reads no-invoices', () => {
     expect(entityHealth([clientA], 'Z')).toEqual({ kind: 'no-invoices' })
   })
 
   it('DASH-T22: an entity present with needs_attention:2 reads needs-attention with that count', () => {
-    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 2, metrics: {}, top_violations: [] }
+    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 2, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'needs-attention', count: 2 })
   })
 
   it('DASH-T23: an entity present with needs_attention:0 reads clear', () => {
-    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }
+    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'clear' })
   })
@@ -283,9 +286,9 @@ describe('entityHealth', () => {
 // architect's original DASH-T1-T23 table.
 describe('scopedBucket', () => {
   const rollup: Rollup = {
-    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3, metrics: {}, top_violations: [] },
+    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3, awaiting_approval: 0, metrics: {}, top_violations: [] },
     clients: [
-      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, metrics: {}, top_violations: [] },
+      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, awaiting_approval: 0, metrics: {}, top_violations: [] },
     ],
     top_violations: [],
   }
@@ -299,6 +302,7 @@ describe('scopedBucket', () => {
     expect(scopedBucket(false, 'e1', rollup)).toEqual({
       counts: counts({ validated: 4 }),
       needs_attention: 1,
+      awaiting_approval: 0,
       metrics: {},
       top_violations: [],
     })
@@ -310,6 +314,24 @@ describe('scopedBucket', () => {
 
   it('firm mode with an entityId absent from `clients` (zero invoices, INNER JOIN) resolves EMPTY_BUCKET, never totals', () => {
     expect(scopedBucket(false, 'e-no-invoices', rollup)).toEqual(EMPTY_BUCKET)
+  })
+
+  // Both legs in one test on purpose: the in-house leg returns rollup.totals by
+  // reference and carries any new field for free, so only the firm leg's
+  // field-by-field rebuild can silently drop one.
+  it('scopedBucket carries awaiting_approval on both legs', () => {
+    const r: Rollup = {
+      totals: { counts: counts({ validated: 9 }), needs_attention: 3, awaiting_approval: 7, metrics: {}, top_violations: [] },
+      clients: [
+        { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, awaiting_approval: 2, metrics: {}, top_violations: [] },
+      ],
+      top_violations: [],
+    }
+
+    expect(scopedBucket(true, null, r).awaiting_approval).toBe(7)
+    expect(scopedBucket(false, 'e1', r).awaiting_approval).toBe(2)
+    expect(scopedBucket(false, 'e-no-invoices', r).awaiting_approval).toBe(0)
+    expect(EMPTY_BUCKET.awaiting_approval).toBe(0)
   })
 })
 
@@ -388,9 +410,28 @@ describe('entityHealth — QA adversarial', () => {
   })
 
   it('QA-EH2: a present client with a large needs_attention count round-trips that exact count, uncapped/untruncated', () => {
-    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137, metrics: {}, top_violations: [] }
+    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137, awaiting_approval: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientBig], 'BIG')).toEqual({ kind: 'needs-attention', count: 137 })
+  })
+
+  // The deliberate asymmetry: the Reports card was cut off this overlay, its two health
+  // consumers (ClientsView's pill, Sidebar's switcher sub-label) were NOT. Both route
+  // through here, so a merge-back that re-points them at the violation count fails here
+  // first. Same metrics either side; only the overlay moves.
+  it('QA-EH3: the widened overlay moves the health count, and blocked_by_rules never enters it', () => {
+    const withOverlay = (needsAttention: number): RollupClient => ({
+      entity_id: 'Z',
+      entity_name: 'Zeta',
+      counts: counts(),
+      needs_attention: needsAttention,
+      awaiting_approval: 0,
+      metrics: { blocked_by_rules: { num: 1, den: 20 } },
+      top_violations: [],
+    })
+
+    expect(entityHealth([withOverlay(3)], 'Z')).toEqual({ kind: 'needs-attention', count: 3 })
+    expect(entityHealth([withOverlay(9)], 'Z'), 'unlike the Validation summary, this DOES follow the widening').toEqual({ kind: 'needs-attention', count: 9 })
   })
 })
 
@@ -408,7 +449,7 @@ describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero'
   for (const key of stateKeys) {
     it(`QA-IE-${key}: only "${key}" nonzero is not empty (guards a helper checking a subset of the 7 keys)`, () => {
       const r: Rollup = {
-        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0, metrics: {}, top_violations: [] },
+        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
         clients: [],
         top_violations: [],
       }
@@ -560,6 +601,7 @@ describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough
     totals: {
       counts: counts({ draft: 5 }),
       needs_attention: 3,
+      awaiting_approval: 0,
       metrics: totalsMetrics,
       top_violations: totalsViolations,
     },
@@ -569,6 +611,7 @@ describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough
         entity_name: 'Acme',
         counts: counts({ validated: 4 }),
         needs_attention: 1,
+        awaiting_approval: 0,
         metrics: clientMetrics,
         top_violations: clientViolations,
       },
@@ -637,5 +680,40 @@ describe('readinessBars — QA adversarial', () => {
     expect(bars[1].pctLabel).toBe('90%')
     expect(bars[2].pct).toBeNull()
     expect(bars[2].pctLabel).toBe('—')
+  })
+})
+
+// LIB-DOC (Mode A RED). The two overlays overlap and the Reports card deliberately reads
+// neither of them -- the only thing stopping the next reader merging the three back together
+// is that all three are written down in one place. A source scan is the only oracle for a
+// doc comment.
+//
+// Walks up from the declaration rather than matching a fixed line range, so edits above it
+// don't silently move the scan off the block.
+function rollupBucketDoc(): string[] {
+  const lines = readFileSync(fileURLToPath(new URL('./dashboard.ts', import.meta.url)), 'utf8').split('\n')
+  const anchor = lines.findIndex((l) => l.startsWith('export interface RollupBucket'))
+  if (anchor < 0) return []
+  const block: string[] = []
+  for (let i = anchor - 1; i >= 0 && lines[i].trimStart().startsWith('//'); i--) block.unshift(lines[i])
+  return block
+}
+
+describe('LIB-DOC: the RollupBucket doc names both overlays and the Reports carve-out', () => {
+  // Control. Green today: if the scan below ever fails because it read the wrong region
+  // (or nothing at all), this fails first and says so.
+  it('the scan finds the doc block it claims to read', () => {
+    const block = rollupBucketDoc()
+
+    expect(block.length, 'a lost anchor or a one-line read cannot prove anything about the doc').toBeGreaterThanOrEqual(4)
+    expect(block.join('\n'), 'control needle, present today').toContain('needs_attention')
+    expect(block.join('\n'), 'control needle, present today').toContain('awaiting_approval')
+  })
+
+  it('the block names blocked_by_rules and the ReportsView carve-out', () => {
+    const doc = rollupBucketDoc().join('\n')
+
+    expect(doc, "the carve-out's source count must be named beside the overlays it is not").toContain('blocked_by_rules')
+    expect(doc, 'the consumer that deliberately reads it must be named').toContain('ReportsView')
   })
 })

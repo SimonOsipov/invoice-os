@@ -814,3 +814,51 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
     expect((screen.getByLabelText('Select invoice INV-CLEAR') as HTMLInputElement).checked).toBe(true)
   })
 })
+
+// Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label
+// alone ("Needs attention") does not say so.
+const TOGGLE_EXPLAINER = 'Includes invoices an approver sent back.'
+
+describe('InvoicesList: the needs-attention toggle says what it now includes', () => {
+  it('the line is absent while the toggle is off, present while it is on, and gone again when it is off', async () => {
+    // Three responses: mount, the ON refetch, the OFF refetch (needsAttention is in `deps`).
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'o2', invoice_number: 'INV-OFF-2' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the unfiltered register must not carry the line').toBeNull()
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+    // Exact-text match: the copy is its own line, not a clause inside a longer paragraph.
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the ON filter must name what it sweeps in').not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-OFF-2')
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'toggling back off must remove it').toBeNull()
+  })
+
+  // QA adversarial. The zero-row branch is the case the explainer matters most in — the
+  // register looks identical to a genuinely invoice-less one. The generic "No invoices yet"
+  // beside it is a KNOWN GAP with no owner: that empty state never consults the toggle.
+  // Deliberately unasserted here so fixing the copy does not have to delete this test.
+  it('the line survives a filtered result set that comes back empty', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByTestId('invoices-empty')
+
+    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the explainer is not nested under the populated branch').not.toBeNull()
+    expect(screen.getByTestId('needs-attention-toggle'), 'and the toggle stays reachable to clear the filter').toBeDefined()
+  })
+})

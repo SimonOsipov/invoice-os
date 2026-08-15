@@ -366,6 +366,14 @@ jobs:
         # that keeps it off non-demo data wherever it runs. Needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/demodocs/...
+      - name: Demo approval-policy seeder suite (convergence + allowlist + staffed seat as invoice_app) + per-test visibility & skip gate
+        # Proves the boot-time seeder that arms the in-house demo tenant's validated
+        # backlog: it CONVERGES rather than inserting-if-absent (db.Reset truncates
+        # approval_runs but not the policy tables), the allowlist keeps it off the firm
+        # tenant, and its approval step names a seat with an ACTIVE holder. Needs
+        # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this
+        # job's env. -p 1: the suite mutates the shared demo tenant and restores it.
+        run: scripts/ci/rls-test-gate.sh -p 1 -count=1 ./internal/demopolicy/...
       - name: Approval workflow-roles + policy seal-lock immutability suite (RLS-scoped roles + staffing + audit, owner-proof triggers as invoice_migrator) + per-test visibility & skip gate
         # Proves the workflow_roles / workflow_role_members store resolves to exactly the
         # caller's tenant under RLS (per-tenant key uniqueness, cross-tenant refusal, whole-set

@@ -610,12 +610,17 @@ func escapeLike(s string) string {
 // ListHandler already rejects a malformed entity_id query param before
 // Store.List is ever called.
 //
-// f.NeedsAttention's WHERE fragment, when true, is copied VERBATIM from the
-// dashboard rollup's own count(*) FILTER predicate (internal/dashboard/
-// store.go Rollup, alias dropped -- List has no join) so the two surfaces can
-// never drift apart ([needs-attention-drift-guard],
-// TestStoreList_NeedsAttentionMatchesDashboardRollup). It carries no bind
-// params of its own. When every filter is false/absent (the zero ListFilter),
+// f.NeedsAttention's WHERE fragment, when true, is a hand-maintained twin of
+// the dashboard rollup's own count(*) FILTER predicate (internal/dashboard/
+// store.go Rollup) so the two surfaces can never drift apart
+// ([needs-attention-drift-guard]). Exactly two things differ, because List has
+// no join: the `i.` alias is dropped, and the approval arm correlates on
+// invoices.id where the rollup uses i.id. Nothing else may diverge.
+// TestStoreList_NeedsAttentionMatchesDashboardRollup compares the two by
+// behaviour on a fixture that seeds approval_runs; the arm shapes are pinned
+// per package by TestStoreList_NeedsAttentionSQLRejectedArmIsBare and the
+// dashboard's TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare. It carries no
+// bind params of its own. When every filter is false/absent (the zero ListFilter),
 // `where` is empty and both queries are byte-identical to before any filter
 // existed.
 //
@@ -664,7 +669,16 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			conditions = append(conditions, fmt.Sprintf("entity_id = $%d", len(args)))
 		}
 		if f.NeedsAttention {
-			conditions = append(conditions, `(status = 'rejected' OR (status = 'failed' AND kept_as_is_at IS NULL) OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
+			// invoices.id is qualified: approval_runs has its own id, so a bare id
+			// binds there and silently never matches.
+			conditions = append(conditions, `(status = 'rejected'
+			  OR (status = 'failed' AND kept_as_is_at IS NULL)
+			  OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb)
+			  OR (status = 'draft' AND EXISTS (
+			          SELECT 1 FROM (SELECT r.state FROM approval_runs r
+			                          WHERE r.invoice_id = invoices.id
+			                          ORDER BY r.opened_at DESC LIMIT 1) lr
+			           WHERE lr.state = 'rejected')))`)
 		}
 		if f.AwaitingApproval {
 			// A THIRD predicate: only validated rows match, a status neither the
@@ -693,8 +707,9 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			// violation) but has left the "needs a fix" working set by operator decision --
 			// this clause lands ONLY here, never on needs_attention's fragment above
 			// (which stays behaviourally in lockstep with the dashboard rollup, pinned by
-			// TestStoreList_NeedsAttentionMatchesDashboardRollup -- not byte-identical,
-			// since that query aliases the table `i.` and this one doesn't).
+			// TestStoreList_NeedsAttentionMatchesDashboardRollup -- not byte-identical:
+			// that query aliases the table `i.` and correlates its approval arm on
+			// i.id, where this one uses invoices.id).
 			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb AND kept_as_is_at IS NULL)`)
 		}
 		if f.KeptAsIs {

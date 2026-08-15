@@ -62,9 +62,9 @@ type listGateInputs struct {
 	holdsPendingRole map[string]bool
 }
 
-func gateStub(in listGateInputs) func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-	return func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return in.facts, nil
+func gateStub(in listGateInputs) func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+	return func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return in.facts, ListGateFacts{CallerRole: in.callerRole, HoldsPendingRole: in.holdsPendingRole}, nil
 	}
 }
 

@@ -174,6 +174,8 @@ const draftInvoice: InvoiceRecord = {
   failure_kind: null,
   approval: null,
   rule_set_version: null,
+  can_approve: false,
+  approve_blocked_reason: null,
 }
 
 // Approval fixtures (APPR-08-09). `run_state` is the only field the predicate reads;
@@ -873,13 +875,16 @@ describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pa
     }
   })
 
-  it('ROW-5: every non-approval key is left byte-identical -- the normaliser widens nothing else', () => {
+  it('ROW-5: every key the normaliser does not own is left byte-identical', () => {
     const wire = wireRow({ approval: { ...fullApproval, overdue: 1 } })
     const got = normaliseInvoiceRow(wire)
 
     expect(Object.keys(got).sort()).toEqual(Object.keys(wire).sort())
+    // The three the normaliser DOES own are skipped, not asserted byte-identical:
+    // A09-11 (APPR-12-09) owns the approve pair, ROW-1..4 own `approval`. Leaving them
+    // in this loop would make its claim silently false the moment either is touched.
     for (const key of Object.keys(wire)) {
-      if (key === 'approval') continue
+      if (key === 'approval' || key === 'can_approve' || key === 'approve_blocked_reason') continue
       expect(got[key as keyof InvoiceRecord], key).toEqual(wire[key as keyof InvoiceRecord])
     }
   })
@@ -3284,7 +3289,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 27 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 29 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -3327,6 +3332,11 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // list already held 26 (rule_set_version was added without updating it); the
       // count is 27 now and the title says so.
       'approval',
+      // APPR-12-09 (task-526): +2 -- the approve pair is a listItem sibling too, and the
+      // ONE action pair both wires carry. The reject pair stays detail-only (U5a), so it
+      // must NOT appear here.
+      'can_approve',
+      'approve_blocked_reason',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]

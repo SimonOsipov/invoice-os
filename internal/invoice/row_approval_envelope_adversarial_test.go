@@ -81,8 +81,8 @@ func TestListHandler_EachRowCarriesItsOwnFacts(t *testing.T) {
 			{ID: ids[2], Status: StatusValidated},
 		}, 3, nil
 	}
-	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, error) {
-		return want, nil
+	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return want, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -114,8 +114,8 @@ func TestListHandler_FactsLandOnTheirOwnRowOnly(t *testing.T) {
 			{ID: ids[2], Status: StatusAccepted},
 		}, 3, nil
 	}
-	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{ids[1]: armedRowFacts()}, nil
+	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{ids[1]: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -149,11 +149,11 @@ func TestListHandler_FactsForAnAbsentIdAreIgnored(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: onPage, Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		ord := 7
 		return map[string]approval.RowFacts{
 			ghost: {RunState: "open", PendingOrd: &ord, PendingRoleTitle: &ghostTitle},
-		}, nil
+		}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -192,10 +192,10 @@ func TestListHandler_RowFactsOneCallOnALargePage(t *testing.T) {
 	}
 	calls := 0
 	var seen []string
-	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, gotIDs []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		calls++
 		seen = append([]string(nil), gotIDs...)
-		return map[string]approval.RowFacts{}, nil
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "?limit=200")
@@ -223,8 +223,8 @@ func TestListHandler_RowFactsErrorIsLogged(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: uuid.NewString(), Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return nil, context.DeadlineExceeded
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return nil, ListGateFacts{}, context.DeadlineExceeded
 	}
 
 	var buf bytes.Buffer
@@ -266,8 +266,8 @@ func TestListHandler_NonNullApprovalAlwaysCarriesRunState(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: invID, Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{invID: {}}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{invID: {}}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")

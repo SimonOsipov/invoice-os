@@ -116,15 +116,23 @@ type listResponse struct {
 	Pagination listPagination `json:"pagination"`
 }
 
-// listItem is one GET /v1/invoices row: Invoice embedded, plus one additive
-// sibling. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
+// listItem is one GET /v1/invoices row: Invoice embedded, plus three additive
+// siblings. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
 // and RuleSetVersion is json:"-" for exactly that reason.
 //
-// No omitempty: a nil Approval emits explicit null, the honest answer for an
-// invoice with no approval run (TestListItem_InvoiceKeysUnmovedAndUnrenamed).
+// No omitempty on any of the three: a nil Approval emits explicit null, the
+// honest answer for an invoice with no approval run, and an omitted permission
+// flag would read undefined in the SPA and fail OPEN
+// (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
+// TestListItem_ApproveFlagsCarryNoOmitempty).
+//
+// CanApprove/ApproveBlockedReason are approvalGate's answer per row (APPR-12-09,
+// U5). The REJECT pair stays detail-only (U5a) -- the queue has no reject action.
 type listItem struct {
 	Invoice
-	Approval *approval.RowFacts `json:"approval"`
+	Approval             *approval.RowFacts `json:"approval"`
+	CanApprove           bool               `json:"can_approve"`
+	ApproveBlockedReason *string            `json:"approve_blocked_reason"`
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -550,13 +558,16 @@ const maxImportBatchIDs = 25
 // from Invoices/Reports/Customers whenever they weren't inside the newest 50
 // tenant-wide (the CI-caught regression this param fixes).
 //
-// INVCR-01-06 ([D4], Core AC 7) adds the review screen's five, taking this to
-// nine params, ALL ANDed: import_batch_id (uuid.Parse, same shape as
-// entity_id), status (validated by the existing Status.valid(), reusing
-// TransitionHandler's byte-identical "unknown status" 400 rather than writing
-// a second copy of the 7-value list), needs_fix (strconv.ParseBool, same shape
-// as needs_attention), and the two free-text params rule_key and q, capped at
-// maxFilterTextLen.
+// ELEVEN params AND together today, and the SPA's ListInvoicesOptions mirrors
+// all eleven (lib/invoices.ts): limit, offset, needs_attention, entity_id,
+// import_batch_id, status, needs_fix, rule_key, q, kept_as_is, awaiting_approval.
+//
+// INVCR-01-06 ([D4], Core AC 7) added the review screen's five of them:
+// import_batch_id (uuid.Parse, same shape as entity_id), status (validated by
+// the existing Status.valid(), reusing TransitionHandler's byte-identical
+// "unknown status" 400 rather than writing a second copy of the 7-value list),
+// needs_fix (strconv.ParseBool, same shape as needs_attention), and the two
+// free-text params rule_key and q, capped at maxFilterTextLen.
 //
 // Two contract rules hold across all five. First, EMPTY IS ABSENT, not a 400
 // (`if raw != ""`), matching all four params that shipped before them -- so
@@ -585,16 +596,21 @@ const maxImportBatchIDs = 25
 // byte-identical semantics to today.
 //
 // rowFacts (APPR-08-08) reads the page's approval standing in ONE call, keyed
-// on the store-returned inv.ID, and is skipped entirely on an empty page. Its
-// error is a 500, deliberately the OPPOSITE of GetHandler's approvalFacts arm,
-// which logs and stays 200: that value feeds a GATE whose zero means
-// "deny", a real and safe answer, whereas these are DISPLAYED facts whose only
-// available default is approval:null -- a positive claim ("this invoice has no
-// approval run"), so serving it on a read fault is a silent lie on a compliance
-// surface. Do not harmonise the two. TestListHandler_RowFactsErrorIs500.
+// on the store-returned inv.ID, and is skipped entirely on an empty page. It now
+// also returns the page's gate inputs (ListGateFacts, store.go), which feed
+// approvalGate per row (APPR-12-09).
+//
+// Its error stays a 500, deliberately the OPPOSITE of GetHandler's approvalFacts
+// arm, which logs and stays 200. That arm can degrade because a zero gate value
+// means "deny" -- a real and safe answer. Here the same call ALSO carries the
+// DISPLAYED approval facts, whose only available default is approval:null: a
+// positive claim ("this invoice has no approval run"), and serving it on a read
+// fault is a silent lie on a compliance surface. The 500 refuses both halves at
+// once, so no row is ever served with a fabricated standing OR a guessed gate.
+// Do not harmonise the two. TestListHandler_RowFactsErrorIs500.
 func ListHandler(
 	list func(ctx context.Context, f ListFilter) ([]Invoice, int, error),
-	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error),
+	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error),
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -762,8 +778,9 @@ func ListHandler(
 			ids = append(ids, inv.ID)
 		}
 		facts := map[string]approval.RowFacts{}
+		var gate ListGateFacts
 		if len(ids) > 0 {
-			facts, err = rowFacts(r.Context(), ids)
+			facts, gate, err = rowFacts(r.Context(), ids)
 			if err != nil {
 				log.ErrorContext(r.Context(), "invoice: list row facts", slog.Any("err", err))
 				writeError(w, http.StatusInternalServerError, "internal server error")
@@ -776,9 +793,18 @@ func ListHandler(
 		rows := make([]listItem, 0, len(items))
 		for _, inv := range items {
 			row := listItem{Invoice: inv}
-			if f, ok := facts[inv.ID]; ok {
+			f, armed := facts[inv.ID]
+			if armed {
 				row.Approval = &f
 			}
+			// The SAME approvalGate GetHandler calls, so the two wires cannot
+			// disagree (TestListAndDetail_ApproveGateCannotDisagree). A pure
+			// call and two map lookups: no query enters this loop.
+			row.CanApprove, row.ApproveBlockedReason = approvalGate(inv.Status, gate.CallerRole, ApprovalFacts{
+				RunState:        f.RunState,
+				PendingStepOrd:  f.PendingOrd,
+				CallerHoldsRole: gate.HoldsPendingRole[inv.ID],
+			})
 			rows = append(rows, row)
 		}
 

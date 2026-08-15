@@ -223,6 +223,14 @@ export interface InvoiceRecord {
   // omits it -- reviewBatch.ts), not followed. On a list row it is REQUIRED and
   // nullable: normaliseInvoiceRow makes that true for every row.
   approval: InvoiceApproval | null
+  // can_approve/approve_blocked_reason (APPR-12-09, U5) -- the ONE action pair the LIST
+  // wire carries, so the queue can gate its Approve control per row without a fetch each.
+  // Go emits both on listItem AND on getResponse from the SAME approvalGate call
+  // (handlers.go), so InvoiceDetailRecord inherits these two rather than redeclaring
+  // them. REQUIRED, never `?`: an optional key lets a consumer read undefined and fail
+  // OPEN. The REJECT pair stays detail-only (U5a) -- the queue has no reject action.
+  can_approve: boolean
+  approve_blocked_reason: string | null
 }
 
 // One list row's approval standing, mirroring approval.RowFacts (gate.go) field for
@@ -261,10 +269,14 @@ export interface InvoiceApproval {
 // lets a consumer read `undefined` and treat "the server did not say" as an open
 // question, the fail-open shape [gates-on-the-wire] exists to remove. The same holds for
 // every action key added since, `can_approve`/`can_reject` and their reasons included
-// (APPR-08-06): all four are REQUIRED, never `?`. The ACTION FLAGS sit on
-// InvoiceDetailRecord ONLY, never InvoiceRecord -- TestListHandler_NoActionFlagKeys
-// keeps them off the list wire. `approval` runs the other way -- a list-only key
-// (APPR-08-08), Omitted here so it cannot be read off a detail record at all.
+// (APPR-08-06): all four are REQUIRED, never `?`.
+//
+// Most action flags are detail-only, and TestListHandler_NoActionFlagKeys keeps them off
+// the list wire. `can_approve`/`approve_blocked_reason` are the exception (APPR-12-09,
+// U5): both wires carry them, from one approvalGate call, so they are declared on
+// InvoiceRecord and INHERITED here -- never redeclared, or the two could drift.
+// `approval` runs the other way -- a list-only key (APPR-08-08), Omitted here so it
+// cannot be read off a detail record at all.
 export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   rule_set_version: number | null
   qr_png_base64: string | null
@@ -279,12 +291,10 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   // fail-closed convention as the four flags above.
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
-  // can_approve/can_reject and their reasons (APPR-08-06) -- same convention again.
-  // Approve and reject availability are IDENTICAL (one backend gate feeds both), so
-  // the two booleans always agree and the two reasons are the same string; they ship
-  // as two pairs because the screen renders two buttons, each needing its own slot.
-  can_approve: boolean
-  approve_blocked_reason: string | null
+  // can_reject/reject_blocked_reason (APPR-08-06) -- same convention again. Approve and
+  // reject availability are IDENTICAL (one backend gate feeds both), so these always
+  // agree with the inherited can_approve pair; they ship separately because the screen
+  // renders two buttons, each needing its own slot.
   can_reject: boolean
   reject_blocked_reason: string | null
 }
@@ -514,14 +524,16 @@ export async function listInvoices(
   return { ...res, invoices: res.invoices.map(normaliseInvoiceRow) }
 }
 
-// normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval`, the
-// same convention getInvoice applies to the action flags below: booleans via `=== true`
-// (never `?? false`), nullable fields via `?? null`, a missing or non-object `approval`
-// to `null` (never `undefined`). Exported so the specs can drive it directly.
+// normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval` and the
+// approve pair, the same convention getInvoice applies to the action flags below:
+// booleans via `=== true` (never `?? false`), nullable fields via `?? null`, a missing or
+// non-object `approval` to `null` (never `undefined`). Exported so the specs can drive it
+// directly.
 //
-// `run_state` is passed through UNTOUCHED, like `pending_role_title`: both are backend
-// copy, and a `?? ''` here would be the SPA-authored fallback [gates-on-the-wire]
-// forbids. Every other key rides the spread byte-identical (ROW-5).
+// `run_state` is passed through UNTOUCHED, like `pending_role_title` and
+// `approve_blocked_reason`: all three are backend copy, and a `?? ''` here would be the
+// SPA-authored fallback [gates-on-the-wire] forbids. Every key other than these three
+// rides the spread byte-identical (ROW-5).
 export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
   const wire = raw.approval
   // An array is `typeof 'object'` too, and a consumer reading `.run_state` off one gets
@@ -537,7 +549,12 @@ export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
           overdue: wire.overdue === true,
         }
       : null
-  return { ...raw, approval }
+  return {
+    ...raw,
+    approval,
+    can_approve: raw.can_approve === true,
+    approve_blocked_reason: raw.approve_blocked_reason ?? null,
+  }
 }
 
 // The register's own page size (mirrors REVIEW_PAGE_SIZE, reviewBatch.ts:702). Stays

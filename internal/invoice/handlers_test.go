@@ -231,8 +231,8 @@ func clearApprovalStub(ctx context.Context, id string) (ApprovalFacts, error) {
 // exactly as doInvoiceGet hardwires adminRoleStub/clearApprovalStub, so all 47
 // callers stay byte-identical. An empty map means "no invoice on this page has
 // an approval run", which is what every pre-APPR-08-08 spec assumes.
-func emptyRowFactsStub(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-	return map[string]approval.RowFacts{}, nil
+func emptyRowFactsStub(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+	return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 }
 
 // fixedApprovalStub is fixedRoleStub's idiom for the approval seam.

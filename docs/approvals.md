@@ -862,7 +862,11 @@ off — still submits the same invoice. Pinned by
 - **Arming.** Publishing a policy and validating an invoice open approval runs whether the
   flag is on or off. Runs, their steps and their decisions exist either way; the flag only
   decides whether an open one stops a transmit.
-- `can_approve` / `can_reject`.
+- `can_approve` / `can_reject`. Both ship on the detail wire
+  (`GET /v1/invoices/{id}`); `can_approve` and `approve_blocked_reason` ALSO ship per row
+  on `GET /v1/invoices` (APPR-12-09), from the same `approvalGate` call, so the two wires
+  cannot disagree. `can_reject` stays detail-only — the approvals queue has no reject
+  action.
 - The per-row `approval` facts on `GET /v1/invoices`. **With one consequence**: the SPA
   reads `run_state` off these facts in `isRowSelectable`
   (`frontend/app/src/lib/invoices.ts`) and refuses the checkbox, so an open run blocks

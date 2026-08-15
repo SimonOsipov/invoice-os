@@ -50,7 +50,7 @@ import (
 func doInvoiceListWithFacts(
 	t *testing.T,
 	list func(ctx context.Context, f ListFilter) ([]Invoice, int, error),
-	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error),
+	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error),
 	id *auth.Identity,
 	query string,
 ) *httptest.ResponseRecorder {
@@ -178,8 +178,8 @@ func TestListHandler_RowCarriesApprovalOrNull(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: armed, Status: StatusValidated}, {ID: bare, Status: StatusDraft}}, 2, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{armed: armedRowFacts()}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{armed: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -226,8 +226,8 @@ func TestListHandler_ApprovalKeyPresentOnEveryRow(t *testing.T) {
 			{ID: uuid.NewString(), Status: StatusAccepted},
 		}, 3, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -404,8 +404,8 @@ func TestListHandler_EnvelopeStillExactlyTwoKeys(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: invID, Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{invID: armedRowFacts()}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{invID: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -449,8 +449,8 @@ func TestListHandler_RowFactsErrorIs500(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: invID, Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return nil, context.DeadlineExceeded
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return nil, ListGateFacts{}, context.DeadlineExceeded
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -484,9 +484,9 @@ func TestListHandler_RowFactsNotCalledOnAnEmptyPage(t *testing.T) {
 		return []Invoice{}, 0, nil
 	}
 	called := false
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		called = true
-		return map[string]approval.RowFacts{}, nil
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -519,10 +519,10 @@ func TestListHandler_RowFactsCalledOncePerRequest(t *testing.T) {
 	}
 	calls := 0
 	var seen []string
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		calls++
 		seen = append([]string(nil), ids...)
-		return map[string]approval.RowFacts{}, nil
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -555,9 +555,9 @@ func TestListHandler_ApprovalKeyedOnTheStoreReturnedRowID(t *testing.T) {
 		return []Invoice{{ID: canonical, Status: StatusValidated}}, 1, nil
 	}
 	var seen []string
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		seen = append([]string(nil), ids...)
-		return map[string]approval.RowFacts{canonical: armedRowFacts()}, nil
+		return map[string]approval.RowFacts{canonical: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	// ?q= carries the SAME invoice's id in Postgres's non-canonical spelling: the only

@@ -211,10 +211,16 @@ export function approvalOutcome(results: ApproveResult[], numbersById: Map<strin
   }))
 }
 
-// Progress during the fan-out (D-b4, G-04-A, task-529 Mode A stub) -- onProgress
-// (approveInvoices, above) has a caller to drive this once APPR-12-04 wires it up.
+// Progress during the fan-out (D-b4, G-04-A), driven by approveInvoices' onProgress.
+// APPROVALS_COPY.sending shows ACTIVITY; N sequential requests also owe a count. Names
+// what was SENT, never how it went -- the outcomes are the results panel's job.
 export function approvalProgressLabel(done: number, total: number): string {
-  throw new Error(`not implemented (${done}/${total})`)
+  return `${done} of ${total} sent…`
+}
+
+// A template, so a plain APPROVALS_COPY key cannot hold it (G-04-F).
+export function approvalSelectRowLabel(invoiceNumber: string): string {
+  return `Select invoice ${invoiceNumber}`
 }
 
 // Static chrome only -- count-dependent copy lives on ApprovalsBarView instead.
@@ -227,6 +233,10 @@ export function approvalProgressLabel(done: number, total: number): string {
 export const APPROVALS_COPY = {
   clear: 'Clear',
   cancel: 'Cancel',
+  // The subtitle's own fallback: it renders as copy, so it lives here rather than as an
+  // inline `??` operand in the component (LIB-SCAN-A, A04-11).
+  tenantFallback: 'Your workspace',
+  selectAllLabel: 'Select every invoice on this page you can approve',
   sending: 'Approving…',
   resultInvoice: 'Invoice #',
   resultOutcome: 'Result',

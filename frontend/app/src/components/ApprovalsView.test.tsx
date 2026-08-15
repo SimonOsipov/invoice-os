@@ -385,10 +385,14 @@ describe('adversarial: a row with no run at all (approval: null)', () => {
 
     const row = screen.getByText('INV-NORUN').closest('[data-testid="approval-row"]')
     expect(row, 'the row wrapper must still render').not.toBeNull()
+    // Re-indexed by one for APPR-12-04's leading 24px checkbox track (G-04-I): cells[0]
+    // is now the select checkbox, so step/role/due sit at 4/5/6. Left at 3/4/5 the step
+    // assertion reads the AMOUNT and fails, while role/due would pass by coincidence
+    // (both em dashes on this row).
     const cells = row!.children
-    expect(cells[3]?.textContent, 'step column must fall back to the em dash, never "Step null"').toBe('—')
-    expect(cells[4]?.textContent, 'role column must fall back to the em dash').toBe('—')
-    expect(cells[5]?.textContent, 'due column must fall back to the em dash').toBe('—')
+    expect(cells[4]?.textContent, 'step column must fall back to the em dash, never "Step null"').toBe('—')
+    expect(cells[5]?.textContent, 'role column must fall back to the em dash').toBe('—')
+    expect(cells[6]?.textContent, 'due column must fall back to the em dash').toBe('—')
     expect(row!.querySelector('[data-testid="approval-unstaffed-warning"]'), 'no warning without a pending holder to warn about').toBeNull()
     expect(row!.querySelector('[data-testid="approval-overdue"]'), 'no overdue marker without a run to be overdue on').toBeNull()
   })
@@ -772,7 +776,11 @@ describe('A04-14: a FAILED id is not still selected once the refetch lands (G-04
     await waitFor(() => expect(approvalCalls()).toHaveLength(2))
     await screen.findByTestId('approvals-results')
 
-    const row = screen.getByText('INV-A').closest('[data-testid="approval-row"]') as HTMLElement
+    // Scoped to the queue rows, not `screen`: A04-5 requires the results panel to carry
+    // each invoice number as its own exact-text node, and this refetch deliberately keeps
+    // INV-A on the page -- so an unscoped getByText matches BOTH and throws. Query
+    // disambiguation only; the assertion below is unchanged.
+    const row = screen.getAllByTestId('approval-row').find((r) => within(r).queryByText('INV-A')) as HTMLElement
     const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
     expect(checkbox.checked, 'a FAILED id must not still be selected once the refetch lands, even though it is still present and approvable').toBe(false)
   })

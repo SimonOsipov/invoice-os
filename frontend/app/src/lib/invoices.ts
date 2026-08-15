@@ -18,7 +18,7 @@
 // seam from M3-07-02, src/lib/authedFetch.ts), mirroring listEntities/updateEntity in
 // portfolio.ts. Gateway path prefix confirmed `${base}/api/invoice/v1/…`
 // (importApi.ts:248,263):
-// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?<any of the nine
+// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?<any of the eleven
 //                       filters>]`, resolving the ENVELOPE whole -- `{invoices,
 //                       pagination}`, not the bare array it used to unwrap (INVCR-01-08,
 //                       task-284 AC-1: `pagination.total` is what every review filter-pill
@@ -307,8 +307,8 @@ export interface StatusChange {
   changed_at: string
 }
 
-// listInvoices's nine filters (ListFilter, invoice.go:200-217; ListHandler,
-// handlers.go:349-451). All nine AND together server-side, and EVERY one is optional:
+// listInvoices's eleven filters (ListFilter, invoice.go:200-217; ListHandler,
+// handlers.go:349-451). All eleven AND together server-side, and EVERY one is optional:
 // an absent option emits NO query param, so `listInvoices(af, base, {})` is byte-identical
 // to the pre-INVCR-01 tenant-wide call.
 //
@@ -349,6 +349,10 @@ export interface ListInvoicesOptions {
   // pills (System Design §7's own table) -- see reviewBatch.ts's ReviewPill union,
   // which is unchanged by this field.
   keptAsIs?: boolean
+  // awaitingApproval (APPR-12-01) -- the Approvals screen's own filter, mirroring
+  // needsFix/keptAsIs's boolean shape. Server param shipped in APPR-08-07
+  // (ListFilter.AwaitingApproval); this is the first caller to send it.
+  awaitingApproval?: boolean
 }
 
 // The server's `q` cap is 200 UTF-8 BYTES, not JS string length (handlers.go
@@ -502,6 +506,7 @@ export async function listInvoices(
   if (opts.ruleKey) params.set('rule_key', opts.ruleKey)
   if (opts.q) params.set('q', opts.q)
   if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
+  if (opts.awaitingApproval === true) params.set('awaiting_approval', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
   const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
   // EVERY row, never just the first (ROW-6). The envelope itself rides through whole --

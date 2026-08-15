@@ -545,12 +545,6 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
 })
 
 // --- APPR-12-01 (task-525): awaitingApproval reaches the wire client --------
-//
-// `awaitingApproval` isn't declared on ListInvoicesOptions yet -- the `as
-// ListInvoicesOptions` casts below let A01-1/2/4 compile against today's (unwidened)
-// type so they red on the assertion, not on `tsc --noEmit`. Executor: remove the casts
-// once the field is real; leaving them in place after that would hide a future typo in
-// the field name from the type checker.
 describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
   it('A01-1: {awaitingApproval: true} emits awaiting_approval=true on the URL', async () => {
     const fetchMock = mockFetchOnce({
@@ -560,7 +554,7 @@ describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
     })
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
-    await listInvoices(af, base, { awaitingApproval: true } as ListInvoicesOptions)
+    await listInvoices(af, base, { awaitingApproval: true })
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(new URL(url).searchParams.get('awaiting_approval')).toBe('true')
@@ -577,7 +571,7 @@ describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
       status: 200,
       json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
     })
-    await listInvoices(af, base, { awaitingApproval: true, entityId: 'e1' } as ListInvoicesOptions)
+    await listInvoices(af, base, { awaitingApproval: true, entityId: 'e1' })
     const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
     expect(trueUrl).toContain('entity_id=e1')
     expect(trueUrl).toContain('awaiting_approval=true')
@@ -587,7 +581,7 @@ describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
       status: 200,
       json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
     })
-    await listInvoices(af, base, { awaitingApproval: false, entityId: 'e1' } as ListInvoicesOptions)
+    await listInvoices(af, base, { awaitingApproval: false, entityId: 'e1' })
     const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
     expect(falseUrl).toContain('entity_id=e1')
     expect(falseUrl).not.toContain('awaiting_approval')
@@ -621,7 +615,7 @@ describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
       entityId: 'e1',
       limit: 25,
       offset: 0,
-    } as ListInvoicesOptions)
+    })
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     const params = new URL(url).searchParams
@@ -4522,6 +4516,7 @@ describe('fetchAllInvoices forwards every filter, not just entityId (QA adversar
       q: 'acme',
       importBatchIds: ['batch-1', 'batch-2'],
       keptAsIs: true,
+      awaitingApproval: true,
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -4535,6 +4530,7 @@ describe('fetchAllInvoices forwards every filter, not just entityId (QA adversar
       expect(params.get('q')).toBe('acme')
       expect(params.getAll('import_batch_id')).toEqual(['batch-1', 'batch-2'])
       expect(params.get('kept_as_is')).toBe('true')
+      expect(params.get('awaiting_approval')).toBe('true')
     }
   })
 })

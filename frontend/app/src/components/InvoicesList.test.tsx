@@ -881,6 +881,42 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
     expect(document.getElementById(ids[0] as string)?.textContent).toBe(skipReasonLabel('not_validated'))
     expect(document.getElementById(ids[1] as string)?.textContent).toBe(skipReasonLabel('awaiting_approval'))
   })
+
+  // QA Mode B adversarial (task-531): A06-5 never asserted GAP-2's layer 2 (the
+  // disabled-only style swap that outranks the unguarded :hover) -- stripping it
+  // entirely left all 33 specs in this file green.
+  it('QA-1: layer 2 -- the disabled-only cursor/opacity swap lands on a blocked checkbox and NOT on a selectable one', async () => {
+    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
+    mockFetchSequence([listResponse([blocked, selectable], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const [blockedBox, selectableBox] = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
+
+    expect(blockedBox.style.cursor, 'a blocked checkbox must not keep the enabled hover cursor').toBe('not-allowed')
+    expect(blockedBox.style.opacity, 'a blocked checkbox must visibly dim').toBe('0.5')
+
+    expect(selectableBox.style.cursor, 'a selectable checkbox must not inherit the disabled cursor override').not.toBe('not-allowed')
+    expect(selectableBox.style.opacity, 'a selectable checkbox must not be dimmed').not.toBe('0.5')
+  })
+
+  // QA Mode B adversarial (task-531): every existing spec here starts from a BLOCKED
+  // row -- none proves the inverse, that a selectable row renders nothing at all.
+  it('QA-2: a selectable row carries no reason -- no title, no aria-describedby, no visible reason node', async () => {
+    const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
+    mockFetchSequence([listResponse([selectable], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const checkbox = screen.getByTestId('invoice-select') as HTMLInputElement
+    expect(checkbox.disabled).toBe(false)
+    expect(checkbox.getAttribute('title')).toBeNull()
+    expect(checkbox.getAttribute('aria-describedby')).toBeNull()
+    expect(screen.queryByTestId('invoice-blocked-reason'), 'a selectable row must render no reason node at all').toBeNull()
+  })
 })
 
 // Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label

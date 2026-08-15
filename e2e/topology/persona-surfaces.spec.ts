@@ -103,13 +103,15 @@ function sidebar(page: Page) {
   return page.locator('aside.pf-sidebar')
 }
 
-// navButton(): a sidebar nav item by its rendered label. Scoped to the aside so it can
-// never pick up a same-named control elsewhere on the screen (the header's lowercase "New
-// invoice" CTA, a view's own buttons). Playwright matches `name` as a case-insensitive
-// SUBSTRING by default, which is what makes this work on a badged item too: the Approvals
-// button's accessible name is "Approvals <count>" once its badge renders.
+// navButton(): a sidebar nav item by its rendered label. Scoped to nav.pf-nav-list, not just
+// the aside, because the firm company switcher is also a <button> in the aside whose
+// accessible name embeds the selected entity's name (Sidebar.tsx:149-161) -- a substring
+// match against a fixture named e.g. "... approvals ..." resolves to both. Playwright
+// matches `name` as a case-insensitive SUBSTRING by default, which is what makes this work
+// on a badged item too: the Approvals button's accessible name is "Approvals <count>" once
+// its badge renders.
 function navButton(page: Page, label: string) {
-  return sidebar(page).getByRole('button', { name: label })
+  return sidebar(page).locator('nav.pf-nav-list').getByRole('button', { name: label })
 }
 
 async function goTo(page: Page, label: string): Promise<void> {

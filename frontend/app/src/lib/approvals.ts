@@ -211,6 +211,12 @@ export function approvalOutcome(results: ApproveResult[], numbersById: Map<strin
   }))
 }
 
+// Progress during the fan-out (D-b4, G-04-A, task-529 Mode A stub) -- onProgress
+// (approveInvoices, above) has a caller to drive this once APPR-12-04 wires it up.
+export function approvalProgressLabel(done: number, total: number): string {
+  throw new Error(`not implemented (${done}/${total})`)
+}
+
 // Static chrome only -- count-dependent copy lives on ApprovalsBarView instead.
 //
 // eyebrow/h1/subtitle through overdue (G2, APPR-12-03): the queue's own chrome --

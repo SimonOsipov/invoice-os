@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -100,6 +100,48 @@ function approvalsCtx(over: { mode?: 'firm' | 'inhouse'; entityId?: string | nul
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
   }
   return ctx as unknown as PlatformCtx
+}
+
+// A generic POST /approvals response -- the run/decision shape approvals.test.ts's own
+// okResponse() uses, byte-identical.
+function approveOkResponse(): MockResponse {
+  return { ok: true, status: 200, json: () => Promise.resolve({ run_id: 'r1', state: 'open', steps: [], decisions: [] }) }
+}
+
+// Differentiates GET list calls from POST .../approvals calls -- the two request shapes
+// this screen makes once bulk-approve exists. `listSteps` is consumed in call order, one
+// entry per GET (an index past the array's end repeats the LAST entry, so an unplanned
+// extra GET does not throw); an entry of 'PENDING' holds that GET unresolved until the
+// test calls `resolveList` for that call's index. `approvalImpl` decides each POST's
+// outcome per invoice id, defaulting to a uniform 200.
+function mockBulkFetch(
+  listSteps: (MockResponse | 'PENDING')[],
+  approvalImpl: (id: string) => MockResponse | Promise<MockResponse> = () => approveOkResponse(),
+) {
+  let listCallIndex = 0
+  const listResolvers = new Map<number, (r: MockResponse) => void>()
+  const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+    if (/\/approvals$/.test(url)) {
+      const m = /\/invoices\/([^/]+)\/approvals$/.exec(url)
+      return Promise.resolve(approvalImpl(m ? m[1] : ''))
+    }
+    const idx = listCallIndex++
+    const step = listSteps[Math.min(idx, listSteps.length - 1)]
+    if (step === 'PENDING') {
+      return new Promise<MockResponse>((resolve) => listResolvers.set(idx, resolve))
+    }
+    return Promise.resolve(step)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return {
+    fetchMock,
+    resolveList: (idx: number, r: MockResponse) => {
+      const resolve = listResolvers.get(idx)
+      if (!resolve) throw new Error(`no pending list call at index ${idx}`)
+      resolve(r)
+    },
+    approvalCalls: () => (fetchMock.mock.calls as [string, RequestInit][]).filter(([u]) => /\/approvals$/.test(u)),
+  }
 }
 
 beforeEach(() => {
@@ -349,5 +391,460 @@ describe('adversarial: a row with no run at all (approval: null)', () => {
     expect(cells[5]?.textContent, 'due column must fall back to the em dash').toBe('—')
     expect(row!.querySelector('[data-testid="approval-unstaffed-warning"]'), 'no warning without a pending holder to warn about').toBeNull()
     expect(row!.querySelector('[data-testid="approval-overdue"]'), 'no overdue marker without a run to be overdue on').toBeNull()
+  })
+})
+
+// --- task-529 (APPR-12-04, Mode A) -- RED specs for bulk approve: arm/confirm/cancel,
+// the double-click guard, per-item results, the refetch-survival + badge-source rules,
+// the vacuous-every guard, the four-layer disabled reason, and the prune effect settling.
+// None of this DOM exists yet (ApprovalsView.tsx has no checkbox, no bar, no results
+// panel), so every spec below fails on a missing element / testing-library "unable to
+// find" error -- the correct red reason for Mode A, never an import/compile error.
+// Selectors below (data-testid="approval-select-all" etc.) are this spec's own contract:
+// Mode B's executor implements against them. --- G-04-B/G-04-H are source scans placed at
+// the end of this file, mirroring A03-9's by-path idiom above (readSrc, process.cwd()).
+
+describe('A04-1: arming sends nothing', () => {
+  it('selecting rows and clicking the arm button issues no POST -- only confirm can', async () => {
+    const rows = [approvalRow({ id: 'inv-a', invoice_number: 'INV-A' }), approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })]
+    const { fetchMock, approvalCalls } = mockBulkFetch([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit')) // arm
+
+    expect(screen.getByTestId('approvals-bulk-confirm'), 'arming must show the confirm stage').toBeTruthy()
+    expect(approvalCalls(), 'arming alone must send zero approve requests').toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1) // only the initial GET
+  })
+})
+
+describe('A04-2: confirm sends the eligible set, and ONLY the eligible set', () => {
+  it('a mixed page sends POSTs for the approvable ids alone, never the blocked one', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A', can_approve: true })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B', can_approve: true })
+    const blocked = approvalRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      can_approve: false,
+      approve_blocked_reason: 'Only a validated invoice can be approved or rejected.',
+      approval: null,
+    })
+    const { approvalCalls } = mockBulkFetch([
+      listResponse([a, b, blocked], { limit: 50, offset: 0, total: 3 }),
+      listResponse([a, b, blocked], { limit: 50, offset: 0, total: 3 }), // the post-confirm refetch
+    ])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all')) // select-all only picks approvable rows
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(2))
+    const ids = approvalCalls()
+      .map(([url]) => /\/invoices\/([^/]+)\/approvals$/.exec(url))
+      .map((m) => (m ? m[1] : null))
+    expect(ids.sort()).toEqual(['inv-a', 'inv-b'])
+  })
+})
+
+describe('A04-3: a double-click on confirm sends exactly one fan-out (the ref wins the race disabled loses)', () => {
+  it('two synchronous clicks on confirm never produce two fan-outs', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const { approvalCalls } = mockBulkFetch([
+      listResponse([a, b], { limit: 50, offset: 0, total: 2 }),
+      listResponse([a, b], { limit: 50, offset: 0, total: 2 }),
+    ])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    const confirmBtn = screen.getByTestId('approvals-bulk-confirm')
+    fireEvent.click(confirmBtn) // confirm #1
+    fireEvent.click(confirmBtn) // confirm #2, SAME tick -- `disabled` has not re-rendered yet
+
+    await screen.findByTestId('approvals-results')
+    expect(approvalCalls(), 'a double-click must fan out over the 2 eligible ids exactly once, not twice').toHaveLength(2)
+  })
+})
+
+describe('A04-4: cancel semantics', () => {
+  it('A04-4a: cancel from armed returns to idle', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    mockBulkFetch([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    expect(screen.getByTestId('approvals-bulk-confirm')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('approvals-bulk-cancel'))
+
+    expect(screen.queryByTestId('approvals-bulk-confirm'), 'cancel from armed must return to idle').toBeNull()
+    expect(screen.getByTestId('approvals-bulk-submit'), 'idle shows the arm button again').toBeTruthy()
+  })
+
+  it('A04-4b: cancel while submitting does nothing -- the in-flight request is not cancellable', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (/\/approvals$/.test(url)) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      return Promise.resolve(listResponse([a], { limit: 50, offset: 0, total: 1 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm')) // now submitting, POST held pending
+
+    const cancelBtn = screen.getByTestId('approvals-bulk-cancel') as HTMLButtonElement
+    expect(cancelBtn.disabled, 'cancel must carry the real disabled attribute while submitting').toBe(true)
+
+    fireEvent.click(cancelBtn)
+
+    expect(screen.getByTestId('approvals-bulk-confirm'), 'a no-op cancel must not un-arm a request already in flight').toBeTruthy()
+
+    resolvers[0](approveOkResponse())
+    await screen.findByTestId('approvals-results')
+  })
+})
+
+describe('A04-5: per-item truth -- one result row per selected invoice, each showing its own outcome', () => {
+  it('a mixed pass/fail confirm renders one row per selected id with its own label and message', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const failMsg = 'this approval run is already closed'
+    const { approvalCalls } = mockBulkFetch(
+      [listResponse([a, b], { limit: 50, offset: 0, total: 2 }), listResponse([a, b], { limit: 50, offset: 0, total: 2 })],
+      (id) => (id === 'inv-b' ? { ok: false, status: 409, json: () => Promise.resolve({ error: failMsg }) } : approveOkResponse()),
+    )
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(2))
+    const panel = await screen.findByTestId('approvals-results')
+
+    expect(within(panel).getByText('INV-A')).toBeTruthy()
+    expect(within(panel).getByText('INV-B')).toBeTruthy()
+    expect(within(panel).getByText(failMsg), "the failed row's own message must ride through byte-identically").toBeTruthy()
+
+    const rowA = within(panel).getByText('INV-A').closest('[data-testid="approval-result-row"]')
+    const rowB = within(panel).getByText('INV-B').closest('[data-testid="approval-result-row"]')
+    expect(rowA, 'each result needs its own row wrapper').not.toBeNull()
+    expect(rowB).not.toBeNull()
+    expect(within(rowA as HTMLElement).queryByText(failMsg), "the OK row must not carry the failed row's message").toBeNull()
+  })
+})
+
+describe('A04-6: the results panel survives the refetch (G-04-D)', () => {
+  it('the panel stays mounted while list.run() is in flight (data:null), not nested under the ready rung', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const { fetchMock, approvalCalls, resolveList } = mockBulkFetch([listResponse([a], { limit: 50, offset: 0, total: 1 }), 'PENDING'])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(1))
+    const panel = await screen.findByTestId('approvals-results')
+
+    // The refetch is now in flight (list.run() dispatched 'start', data:null) -- the
+    // panel must still be in the DOM, proving it is a SIBLING of the `state === 'ready'`
+    // rung rather than nested inside it (G-04-D).
+    expect(screen.getByTestId('approvals-results'), 'the results panel must survive the refetch, not unmount with the stale ready subtree').toBe(panel)
+
+    resolveList(1, listResponse([], { limit: 50, offset: 0, total: 0 }))
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3))
+    expect(screen.getByTestId('approvals-results'), 'the panel must still be present once the refetch settles').toBeTruthy()
+  })
+})
+
+describe('A04-7: row badges after settle come from the refetch only', () => {
+  it("the refetch's own fields render, never anything derived from the approve response", async () => {
+    const before = approvalRow({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: false, due_at: null, overdue: false },
+    })
+    const after = approvalRow({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Finance Lead', pending_holder_warn: false, due_at: null, overdue: false },
+    })
+    const { approvalCalls } = mockBulkFetch([listResponse([before], { limit: 50, offset: 0, total: 1 }), listResponse([after], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('Step 1')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(1))
+    await screen.findByText('Finance Lead') // the refetch's own field
+
+    expect(screen.getByText('Step 2'), "stepLabel must come from the refetch's pending_ord (1 -> Step 2), not the stale pre-approve value").toBeTruthy()
+    expect(screen.queryByText('Step 1'), 'the pre-approve step must not linger').toBeNull()
+    expect(screen.queryByText('Reviewer'), 'the pre-approve role must not linger').toBeNull()
+  })
+})
+
+describe('A04-8: select-all never reports "all" on a page with zero approvable rows (vacuous-every guard, component wiring)', () => {
+  it('a page where every row is blocked renders select-all unchecked and non-indeterminate', async () => {
+    const blocked1 = approvalRow({
+      id: 'inv-1',
+      invoice_number: 'INV-1',
+      can_approve: false,
+      approve_blocked_reason: 'Only a validated invoice can be approved or rejected.',
+      approval: null,
+    })
+    const blocked2 = approvalRow({
+      id: 'inv-2',
+      invoice_number: 'INV-2',
+      can_approve: false,
+      approve_blocked_reason: 'Only a validated invoice can be approved or rejected.',
+      approval: null,
+    })
+    mockBulkFetch([listResponse([blocked1, blocked2], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-1')
+
+    const selectAll = screen.getByTestId('approval-select-all') as HTMLInputElement
+    expect(selectAll.checked, 'zero approvable rows must never read as "all" selected').toBe(false)
+    expect(selectAll.indeterminate, 'zero approvable rows is "none", not "some"').toBe(false)
+  })
+})
+
+describe("A04-9: a disabled row states the SERVER's own why, in all four layers (G-04-C)", () => {
+  it('the real disabled attribute, a visible sibling carrying the reason byte-identically, and a per-row aria-describedby id', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const row = screen.getByText('INV-BLOCKED').closest('[data-testid="approval-row"]') as HTMLElement
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+
+    // Layer 1: the real disabled attribute -- a keyboard user cannot reach it.
+    expect(checkbox.disabled).toBe(true)
+    checkbox.focus()
+    expect(document.activeElement, 'a disabled control must be genuinely out of the tab order').not.toBe(checkbox)
+
+    // Layer 3: a VISIBLE sibling node carrying the server's sentence byte-identically --
+    // the layer a screenshot, a keyboard user and a text assertion can all reach.
+    expect(screen.getByText(reason), "the SPA must render the server's own sentence, not a substitute").toBeTruthy()
+
+    // Layer 4: aria-describedby points at that node, by a PER-ROW unique id.
+    const describedbyId = checkbox.getAttribute('aria-describedby')
+    expect(describedbyId).not.toBeNull()
+    expect(describedbyId).toBe('approve-blocked-reason-inv-blocked')
+    const reasonEl = document.getElementById(describedbyId as string)
+    expect(reasonEl?.textContent, 'aria-describedby must point at the SAME text as the visible sentence').toBe(reason)
+  })
+
+  it('two blocked rows on the same page get distinct per-row reason ids, each pointing at its own text', async () => {
+    const reasonA = 'Only a validated invoice can be approved or rejected.'
+    const reasonB = "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A', can_approve: false, approve_blocked_reason: reasonA, approval: null })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B', can_approve: false, approve_blocked_reason: reasonB, approval: null })
+    mockBulkFetch([listResponse([a, b], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    const checkboxes = screen.getAllByTestId('approval-select-row') as HTMLInputElement[]
+    expect(checkboxes).toHaveLength(2)
+    const ids = checkboxes.map((c) => c.getAttribute('aria-describedby'))
+    expect(ids[0]).not.toBeNull()
+    expect(ids[1]).not.toBeNull()
+    expect(ids[0]).not.toBe(ids[1])
+
+    expect(document.getElementById(ids[0] as string)?.textContent).toBe(reasonA)
+    expect(document.getElementById(ids[1] as string)?.textContent).toBe(reasonB)
+  })
+})
+
+describe('A04-10: the prune effect settles (does not loop) when the row set actually changes', () => {
+  it('paging to a disjoint set of rows disarms without hard-throwing "Maximum update depth exceeded"', async () => {
+    const page1 = [approvalRow({ id: 'inv-1', invoice_number: 'INV-1' }), approvalRow({ id: 'inv-2', invoice_number: 'INV-2' })]
+    const page2 = [approvalRow({ id: 'inv-3', invoice_number: 'INV-3' })]
+    mockBulkFetch([listResponse(page1, { limit: 2, offset: 0, total: 3 }), listResponse(page2, { limit: 2, offset: 2, total: 3 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-1')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    expect(screen.getByTestId('approvals-bulk-confirm')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+
+    // If the updater failed to return the SAME `sel` instance on a no-op, or the prune
+    // effect otherwise re-fired every render, this await would surface React 19's
+    // "Maximum update depth exceeded" here instead of resolving.
+    await screen.findByText('INV-3')
+
+    expect(screen.queryByTestId('approvals-bulk-bar'), 'a page whose rows share nothing with the old selection must disarm').toBeNull()
+  })
+})
+
+describe('A04-13: the bar shows LIVE progress during the fan-out, driven by onProgress (G-04-A)', () => {
+  it('the progress indicator reflects each settled item before the fan-out finishes', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (/\/approvals$/.test(url)) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      return Promise.resolve(listResponse([a, b], { limit: 50, offset: 0, total: 2 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    // Concurrency exactly 1 -- the first request ('inv-a') is now pending and 'inv-b' has
+    // not been issued yet, so onProgress has fired zero times.
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+
+    resolvers[0](approveOkResponse()) // settles inv-a -> onProgress(result, 0) fires, done=1 of 2
+
+    await waitFor(() => {
+      const progress = screen.getByTestId('approvals-progress')
+      expect(progress.textContent).toContain('1')
+      expect(progress.textContent).toContain('2')
+    })
+
+    resolvers[1](approveOkResponse())
+    await screen.findByTestId('approvals-results')
+  })
+})
+
+describe('A04-14: a FAILED id is not still selected once the refetch lands (G-04-E)', () => {
+  it('selection is cleared explicitly in the handler, even for an id that survives (still approvable) in the refetch', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const failMsg = 'this approval run is already closed'
+    const { approvalCalls } = mockBulkFetch(
+      [
+        listResponse([a, b], { limit: 50, offset: 0, total: 2 }),
+        // inv-a FAILED and remains in the refetch, still approvable --
+        // pruneApprovalSelection alone would KEEP it selected since it is present and
+        // still can_approve:true; only an explicit clear-on-settle removes it (G-04-E).
+        listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      ],
+      (id) => (id === 'inv-a' ? { ok: false, status: 409, json: () => Promise.resolve({ error: failMsg }) } : approveOkResponse()),
+    )
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(2))
+    await screen.findByTestId('approvals-results')
+
+    const row = screen.getByText('INV-A').closest('[data-testid="approval-row"]') as HTMLElement
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    expect(checkbox.checked, 'a FAILED id must not still be selected once the refetch lands, even though it is still present and approvable').toBe(false)
+  })
+})
+
+// --- Source scans (by-path, mirroring A03-9 above / BULK-15's shipped idiom in
+// reviewBatch.test.ts) -- both hit a wall a render-driven spec cannot cross. ---
+
+describe('ApprovalsView.tsx source: the prune effect preserves selected\'s IDENTITY when nothing changed (A04-12, G-04-B)', () => {
+  // `rows` is ALREADY useMemo'd (ApprovalsView.tsx:68-71), so a render-driven spec cannot
+  // go RED against an identity-breaking updater (`return next` unconditionally): the memo
+  // alone already stops `rows` from changing identity on a no-op render, so the updater's
+  // own identity bail never gets exercised by rendering. By-path source scan instead,
+  // BULK-15's shipped idiom (reviewBatch.test.ts:1653-1676). Both halves are required:
+  // the ternary IS the identity contract, and useMemo is the separate half that keeps
+  // `rows` itself from re-triggering the effect on every render -- either alone is
+  // insufficient (InvoicesList.tsx:136-148 records needing both).
+  function scanPruneEffectShape(source: string): { hasTernary: boolean; hasMemo: boolean } {
+    return {
+      hasTernary: /next\.length === sel\.length\s*\?\s*sel\s*:\s*next/.test(source),
+      hasMemo: /const rows = useMemo\(/.test(source),
+    }
+  }
+
+  it('non-vacuity control: the scan tells the correct shape apart from a deliberately identity-breaking one', () => {
+    const good = `
+      useEffect(() => {
+        setSelected((sel) => {
+          const next = pruneApprovalSelection(sel, rows)
+          return next.length === sel.length ? sel : next
+        })
+      }, [rows])
+      const rows = useMemo(() => gateByActiveEntity(list.data), [list.data])
+    `
+    const bad = `
+      useEffect(() => {
+        setSelected((sel) => {
+          const next = pruneApprovalSelection(sel, rows)
+          return next
+        })
+      }, [rows])
+      const rows = gateByActiveEntity(list.data)
+    `
+    expect(scanPruneEffectShape(good)).toEqual({ hasTernary: true, hasMemo: true })
+    expect(scanPruneEffectShape(bad)).toEqual({ hasTernary: false, hasMemo: false })
+  })
+
+  it('A04-12: the prune effect does not exist in ApprovalsView.tsx yet', () => {
+    const source = readSrc('src/components/ApprovalsView.tsx')
+    const shape = scanPruneEffectShape(source)
+
+    expect(shape.hasTernary, 'the prune effect must return the SAME sel instance when nothing changed').toBe(true)
+    expect(shape.hasMemo, "rows must stay useMemo'd -- dropping it is what actually reintroduces the loop").toBe(true)
+  })
+})
+
+describe('ApprovalsView.tsx source: the confirm handler guards on base == null before any network call (G-04-H)', () => {
+  it('the guard sits before approveInvoices( is ever called', () => {
+    // base cannot go null while the confirm button is reachable through the DOM: base is
+    // recomputed fresh every render (gatewayBase() off import.meta.env, not state), and
+    // invoicesViewState forces state:'idle' whenever base is null -- so the instant base
+    // flips null on any re-render, the whole `state === 'ready'` subtree the confirm
+    // button lives in unmounts before a click could ever reach the handler. A04-12 hits
+    // the identical wall; source scan instead, mirroring InvoicesList.tsx:264's
+    // submitSelection guard.
+    const source = readSrc('src/components/ApprovalsView.tsx')
+
+    const approveCallIdx = source.indexOf('approveInvoices(')
+    expect(approveCallIdx, 'approveInvoices( must be called somewhere for this ordering check to be meaningful').toBeGreaterThan(-1)
+
+    const guardIdx = source.search(/if \(base == null\) return\b/)
+    expect(guardIdx, 'the confirm handler must guard on base == null before calling approveInvoices').toBeGreaterThan(-1)
+    expect(guardIdx).toBeLessThan(approveCallIdx)
   })
 })

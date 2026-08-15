@@ -7,12 +7,17 @@
 // @invoice-os/api-client + src/lib/authedFetch.ts exports, so a stubbed 200/401/403
 // produces a genuine ApiError -- proof at the integration level.
 
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from './authedFetch'
 import {
   APPROVALS_COPY,
   approvalOutcome,
+  approvalProgressLabel,
   approvalRowView,
   approvalSelectAllState,
   approvalsBarView,
@@ -589,5 +594,126 @@ describe('adversarial / edge coverage (QA Stage 4, Mode B)', () => {
     // The reason is passed through unconditionally, never blanked out because can_approve
     // happened to be true -- approvalRowView authors no "can_approve wins so hide it" logic.
     expect(approvalRowView(row).blockedReason).toBe('This invoice has no approval run to decide on.')
+  })
+})
+
+// --- task-529 (APPR-12-04, Mode A) -- RED specs for bulk approve's plan-validation gaps
+// that live in this file. approvalProgressLabel throws `not implemented` today (its own
+// stub comment), so both specs below fail on that throw -- the correct red reason. ---
+
+describe('approvalProgressLabel (G-04-A, new for APPR-12-04)', () => {
+  it('names both the done count and the total, and is never empty', () => {
+    const label = approvalProgressLabel(1, 3)
+
+    expect(typeof label).toBe('string')
+    expect(label.length).toBeGreaterThan(0)
+    expect(label).toContain('1')
+    expect(label).toContain('3')
+  })
+
+  it('the label changes as done advances toward total -- not a static string', () => {
+    expect(approvalProgressLabel(0, 5)).not.toBe(approvalProgressLabel(5, 5))
+  })
+})
+
+// --- A04-11: LIB-SCAN-A (G-04-F) -- the repo's FIRST inline-literal scanner.
+//
+// Every shipped [bulk-copy-lives-in-the-lib] guard (LIB-SCAN-1 reviewBatch.test.ts:1358,
+// TAB-7b, ROW-7b, BATCH-7b) scans for three FORBIDDEN WORDS, not inline literals, and the
+// canonical [bulk-copy-lives-in-the-lib] component keeps its own checkbox aria-label
+// inline (ReviewInvoicesTab.tsx:661) -- there is no precedent regex to copy, and an
+// unscoped scan false-positives on every data-testid/className/CSS value in the file.
+//
+// THE RULE: a literal counts as inline copy if it is (1) a JSX text node -- bare text
+// between tags, outside any {} expression, containing a real word (2+ letters); or (2) a
+// quoted string literal on a title=/aria-label=/placeholder= attribute; or (3) a quoted
+// string literal used as the fallback operand of a `??`/`||` expression sitting directly
+// in JSX child position -- it renders exactly like a text node once the primary is
+// absent. Category 3 is what catches ApprovalsView.tsx:81's own
+// `ctx.user.tenantName ?? 'Your workspace'` -- the orchestrator ruled that fallback MOVES
+// into APPROVALS_COPY rather than being allowlisted, so this scan must red on it today.
+// Middle dots and whitespace-only text nodes (the ` · ` separator between two copy
+// expressions) are not flagged: the word-character requirement is what tells them apart
+// from real copy.
+function stripJsxBraces(src: string): string {
+  let out = ''
+  let depth = 0
+  for (const ch of src) {
+    if (ch === '{') {
+      depth++
+      continue
+    }
+    if (ch === '}') {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+    out += depth === 0 ? ch : ' '
+  }
+  return out
+}
+
+function scanInlineLiterals(fullSource: string): string[] {
+  const start = fullSource.indexOf('return (')
+  const jsx = start >= 0 ? fullSource.slice(start) : fullSource
+  const violations: string[] = []
+
+  for (const m of jsx.matchAll(/\b(?:title|aria-label|placeholder)="([^"]*)"/g)) {
+    if (/[a-zA-Z]{2,}/.test(m[1])) violations.push(m[0])
+  }
+
+  // JSX comments ({/* ... */}) are excluded before the fallback scan, not just the text-
+  // node scan below -- a future comment mentioning `?? '...'` syntax must not false-positive.
+  const withoutJsxComments = jsx.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+  for (const m of withoutJsxComments.matchAll(/(?:\?\?|\|\|)\s*'([^']*)'/g)) {
+    if (/[a-zA-Z]{2,}/.test(m[1])) violations.push(m[0])
+  }
+
+  for (const m of stripJsxBraces(jsx).matchAll(/>([^<>{}]*)</g)) {
+    if (/[a-zA-Z]{2,}/.test(m[1])) violations.push(m[1].trim())
+  }
+
+  return violations
+}
+
+describe('ApprovalsView.tsx source: no inline copy -- everything routes through lib/approvals.ts (A04-11, LIB-SCAN-A)', () => {
+  it('non-vacuity control: the scan flags a synthetic violation of each of the three kinds, and flags nothing on a clean synthetic snippet', () => {
+    const dirty = `
+      function C() {
+        return (
+          <div>
+            <input aria-label="Pick all the rows" />
+            <span>Nothing selected yet</span>
+            <p>{ctx.user.tenantName ?? 'Your workspace'} · {APPROVALS_COPY.subtitle}</p>
+          </div>
+        )
+      }
+    `
+    const violations = scanInlineLiterals(dirty)
+    expect(violations.length, 'the synthetic dirty snippet must trip at least one violation of each kind').toBeGreaterThanOrEqual(3)
+    expect(violations.some((v) => v.includes('Pick all the rows'))).toBe(true)
+    expect(violations.some((v) => v.includes('Nothing selected yet'))).toBe(true)
+    expect(violations.some((v) => v.includes('Your workspace'))).toBe(true)
+
+    const clean = `
+      function C() {
+        return (
+          <div>
+            <input aria-label={APPROVALS_COPY.selectAllLabel} />
+            <span>{APPROVALS_COPY.emptyTitle}</span>
+            <p>{ctx.user.tenantName ?? undefined} · {APPROVALS_COPY.subtitle}</p>
+          </div>
+        )
+      }
+    `
+    expect(scanInlineLiterals(clean), 'a clean snippet routing everything through expressions must trip nothing').toEqual([])
+  })
+
+  it('A04-11: ApprovalsView.tsx carries no inline copy -- today it carries exactly the ?? \'Your workspace\' fallback', () => {
+    const srcPath = fileURLToPath(new URL('../components/ApprovalsView.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const violations = scanInlineLiterals(source)
+
+    expect(violations, 'ApprovalsView.tsx must author no inline copy; the ruled-on exception moves into APPROVALS_COPY, it is not allowlisted').toEqual([])
   })
 })

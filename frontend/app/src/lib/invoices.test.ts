@@ -948,6 +948,156 @@ describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pa
   })
 })
 
+// --- APPR-12-09 (task-526): can_approve / approve_blocked_reason on the LIST row ---
+//
+// A09-11 is the RUNTIME oracle for the two new normalisation lines; A09-12 is the tsc +
+// source oracle for the type having MOVED to InvoiceRecord rather than being copied.
+//
+// The hazard is stated verbatim at the APPROVE-1/2/3/5 block above: normaliseInvoiceRow
+// returns `{ ...raw, approval }` and `raw` is already typed InvoiceRecord, so OMITTING
+// either new line COMPILES and tsc reports nothing. There is no list-side equivalent of
+// APPROVE-1/2/3/5 today -- ROW-2 hardcodes pending_holder_warn/overdue and ROW-4 loops
+// three approval sub-keys, so neither reaches these two. This block is that equivalent,
+// and DELETING either normalisation line reds it.
+
+// approveFlagsOn reads the two keys off a row without depending on InvoiceRecord already
+// declaring them: A09-12 owns the type move, this block owns the runtime behaviour, and
+// keeping them separate means a tsc failure in one cannot mask the other.
+const approveFlagsOn = (row: InvoiceRecord) =>
+  row as unknown as { can_approve: unknown; approve_blocked_reason: unknown }
+
+// The OLDER-SERVER wire: both keys absent, not null. Written as a delete rather than an
+// omission so it stays honest once draftInvoice itself carries them.
+const rowWithoutApproveKeys = (): InvoiceRecord => {
+  const clone: Record<string, unknown> = { ...draftInvoice }
+  delete clone.can_approve
+  delete clone.approve_blocked_reason
+  return clone as unknown as InvoiceRecord
+}
+
+describe('normaliseInvoiceRow (APPR-12-09): the list row fails CLOSED on can_approve', () => {
+  it('A09-11a: can_approve is `=== true`, never truthy -- and a genuine true survives', () => {
+    // `1` survives `?? false` AND plain truthiness; the STRING "false" is truthy too.
+    // This flag gates the queue's Approve button, so anything not literally true denies.
+    for (const hostile of [undefined, null, 'true', 'false', 1, 0, {}, []]) {
+      const got = approveFlagsOn(normaliseInvoiceRow(wireRow({ can_approve: hostile })))
+      expect(got.can_approve, `can_approve=${JSON.stringify(hostile)}`).toBe(false)
+    }
+
+    // An ABSENT key must normalise to false and be PRESENT afterwards -- undefined is the
+    // fail-open shape [gates-on-the-wire] exists to remove.
+    const older = normaliseInvoiceRow(rowWithoutApproveKeys())
+    expect(approveFlagsOn(older).can_approve).toBe(false)
+    expect(approveFlagsOn(older).can_approve).not.toBeUndefined()
+    expect('can_approve' in older).toBe(true)
+
+    // The permissive control -- without it a hardcoded `false` passes everything above.
+    expect(approveFlagsOn(normaliseInvoiceRow(wireRow({ can_approve: true }))).can_approve).toBe(true)
+  })
+
+  it('A09-11b: approve_blocked_reason passes through byte-identically, null when absent', () => {
+    // approvalGate's rung 5 (internal/invoice/handlers.go), verbatim -- em dash U+2014.
+    // The SPA has no authority over this copy; a fallback authored here is the drift
+    // [gates-on-the-wire] forbids.
+    const reasonText =
+      "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+    const got = approveFlagsOn(
+      normaliseInvoiceRow(wireRow({ can_approve: false, approve_blocked_reason: reasonText })),
+    )
+    expect(got.approve_blocked_reason).toBe(reasonText)
+
+    for (const absent of [undefined, null]) {
+      const normalised = approveFlagsOn(normaliseInvoiceRow(wireRow({ approve_blocked_reason: absent })))
+      expect(normalised.approve_blocked_reason, `approve_blocked_reason=${JSON.stringify(absent)}`).toBeNull()
+      expect(normalised.approve_blocked_reason).not.toBeUndefined()
+    }
+
+    const older = normaliseInvoiceRow(rowWithoutApproveKeys())
+    expect(approveFlagsOn(older).approve_blocked_reason).toBeNull()
+    expect('approve_blocked_reason' in older).toBe(true)
+  })
+
+  it('A09-11c: each key reads its OWN wire key, never a neighbour', () => {
+    // A normalisation line copied from its neighbour and half-edited is the likeliest way
+    // these two go wrong, and tsc cannot see it (APPROVE-7's argument, list side).
+    const got = approveFlagsOn(
+      normaliseInvoiceRow(
+        wireRow({ can_approve: true, approve_blocked_reason: 'a stale reason the server still sent' }),
+      ),
+    )
+    expect(got.can_approve).toBe(true)
+    expect(got.approve_blocked_reason).toBe('a stale reason the server still sent')
+  })
+})
+
+// interfaceLines returns one interface's declaration lines from invoices.ts, comments and
+// blanks stripped. Anchored on the `export interface` line and the closing brace at column
+// zero, so edits elsewhere in the file cannot move the scan off target (A01-5's idiom).
+function interfaceLines(name: string): string[] {
+  const lines = readInvoicesSource().split('\n')
+  const start = lines.findIndex((l) => l.startsWith(`export interface ${name} `) || l.startsWith(`export interface ${name}{`))
+  if (start < 0) return []
+  const out: string[] = []
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].startsWith('}')) break
+    const trimmed = lines[i].trim()
+    if (!trimmed || trimmed.startsWith('//')) continue
+    out.push(trimmed)
+  }
+  return out
+}
+
+const fieldNamesOf = (name: string): string[] =>
+  interfaceLines(name).map((l) => l.split(':')[0].replace('?', '').trim())
+
+describe('APPR-12-09 A09-12: the approve pair MOVED to InvoiceRecord, it was not duplicated', () => {
+  it('control: both interfaces are located and still carry their own anchors', () => {
+    // Non-vacuity needle (A01-5's control idiom): if either scan below reads the wrong
+    // region -- or nothing -- this fails first and says so.
+    expect(fieldNamesOf('InvoiceRecord'), 'lost anchor on InvoiceRecord').toContain('approval')
+    expect(fieldNamesOf('InvoiceDetailRecord'), 'lost anchor on InvoiceDetailRecord').toContain('qr_png_base64')
+    // U5a: the REJECT pair stays detail-only, so it is also the control proving the
+    // "absent from InvoiceDetailRecord" assertions below are about the approve pair
+    // specifically and not about an empty scan.
+    expect(fieldNamesOf('InvoiceDetailRecord')).toContain('can_reject')
+    expect(fieldNamesOf('InvoiceDetailRecord')).toContain('reject_blocked_reason')
+  })
+
+  it('both keys are declared on InvoiceRecord, REQUIRED and nullable-typed', () => {
+    const lines = interfaceLines('InvoiceRecord')
+    // REQUIRED, never `?`: an optional key lets a consumer read undefined and treat "the
+    // server did not say" as an open question (invoices.ts's own rule for every action key).
+    expect(lines, 'can_approve must be declared on InvoiceRecord, without `?`').toContain('can_approve: boolean')
+    expect(lines, 'approve_blocked_reason must be declared on InvoiceRecord, without `?`').toContain(
+      'approve_blocked_reason: string | null',
+    )
+  })
+
+  it('InvoiceDetailRecord INHERITS them and no longer redeclares them', () => {
+    const detail = fieldNamesOf('InvoiceDetailRecord')
+    expect(detail, 'can_approve must be inherited via Omit<InvoiceRecord,\'approval\'>, not redeclared').not.toContain(
+      'can_approve',
+    )
+    expect(detail, 'approve_blocked_reason must be inherited, not redeclared').not.toContain('approve_blocked_reason')
+  })
+
+  it('tsc: the two keys are reachable off InvoiceRecord and off InvoiceDetailRecord alike', () => {
+    // Pick<> over a key the interface does not declare is a COMPILE error, so this row is
+    // the typecheck half of the move -- red under `pnpm typecheck` until the keys land.
+    const onBase: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_reason'> = {
+      can_approve: false,
+      approve_blocked_reason: null,
+    }
+    const onDetail: Pick<InvoiceDetailRecord, 'can_approve' | 'approve_blocked_reason'> = {
+      can_approve: true,
+      approve_blocked_reason: null,
+    }
+    expect(onBase.can_approve).toBe(false)
+    expect(onBase.approve_blocked_reason).toBeNull()
+    expect(onDetail.can_approve).toBe(true)
+  })
+})
+
 describe('violationSummary (AC-2, Stage 2.5)', () => {
   it('SUMMARY-1: unwraps .rules and preserves the server order verbatim, never re-sorted', async () => {
     mockFetchOnce({

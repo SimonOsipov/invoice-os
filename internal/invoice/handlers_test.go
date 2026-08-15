@@ -4263,18 +4263,33 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
-// TestListHandler_NoActionFlagKeys (T14): List must stay clean of every
-// action-flag key, mirroring TestListHandler_NoRuleSetVersionKey -- they live
-// only on GetHandler's getResponse wrapper, never on the domain Invoice nor on
-// List's own listItem wrapper (APPR-08-08), whose one sibling is `approval`.
-// The 13 literals below must NOT be widened to exclude `approval` -- that would
-// forbid the very key APPR-08-08 ships. ALREADY GREEN at RED (neither key
-// exists anywhere yet); kept as a permanent regression guard.
+// TestListHandler_NoActionFlagKeys (T14): List must stay clean of the action-flag keys
+// that are still detail-only, mirroring TestListHandler_NoRuleSetVersionKey -- they live
+// on GetHandler's getResponse wrapper, never on the domain Invoice nor on List's own
+// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve pair.
+//
+// APPR-12-09 (A09-7) moves TWO of the former 13 literals from the absent half to the
+// PRESENT half: `can_approve` and `approve_blocked_reason` now ship per row, from the same
+// approvalGate the detail wire calls. `can_reject`/`reject_blocked_reason` stay ABSENT
+// (U5a). The remaining 11 must NOT be widened to exclude `approval` -- that would forbid
+// the very key APPR-08-08 ships.
+//
+// The present half is this guard's CONTROL NEEDLE: an absence-only assertion passes for
+// free against an empty page, a 500 body, or a row set that lost the wrapper entirely.
+// The row floor is the other half of that -- the page carries TWO rows, so a handler that
+// answered about the first only cannot pass.
+//
+// doInvoiceList hardwires emptyRowFactsStub, so this page has NO facts and NO caller role:
+// the correct fail-closed answer for a zero ListGateFacts is rung 1, "not an approver".
+// That is asserted rather than bare key presence -- a key present with the wrong value is
+// the failure that matters on a permission-shaped flag.
 func TestListHandler_NoActionFlagKeys(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	invID := uuid.NewString()
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
-		return []Invoice{{ID: invID, Status: StatusDraft}}, 1, nil
+		return []Invoice{
+			{ID: uuid.NewString(), Status: StatusDraft},
+			{ID: uuid.NewString(), Status: StatusValidated},
+		}, 2, nil
 	}
 	rec, _ := doInvoiceList(t, list, &id, "")
 
@@ -4288,10 +4303,25 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		// The resolve-outside pair was never in this guard -- a pre-existing
 		// 2-key gap, closed here rather than widened to 6 by APPR-08-06.
 		`"can_resolve_outside":`, `"resolve_outside_blocked_reason":`,
-		// APPR-08-06 (task-504): the approve pair is detail-only too.
-		`"can_approve":`, `"approve_blocked_reason":`, `"can_reject":`, `"reject_blocked_reason":`} {
+		// APPR-12-09 (U5a): the REJECT pair stays detail-only. The approve pair moved to
+		// the present half below.
+		`"can_reject":`, `"reject_blocked_reason":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
+		}
+	}
+
+	rows := listRowsRaw(t, rec)
+	if len(rows) < 2 {
+		t.Fatalf("len(invoices) = %d, want >= 2 -- the absence half above passes vacuously on a page with no rows", len(rows))
+	}
+	for i, row := range rows {
+		gotCan, gotReason := approveFlagsOf(t, row, fmt.Sprintf("row %d", i))
+		if gotCan != "false" {
+			t.Errorf("row %d can_approve = %s, want false -- a page with no gate facts and no caller role must fail CLOSED", i, gotCan)
+		}
+		if want := jsonOf(t, reasonNotAnApprover); gotReason != want {
+			t.Errorf("row %d approve_blocked_reason = %s, want %s -- rung 1 is the zero ListGateFacts' answer", i, gotReason, want)
 		}
 	}
 }

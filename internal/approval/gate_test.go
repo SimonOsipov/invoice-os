@@ -51,6 +51,21 @@ func gateFacts(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID, subject st
 	return gf, err
 }
 
+// heldRoleKeys runs HeldRoleKeysTx inside a fresh tenant-scoped transaction -- gateFacts'
+// shape, since these seams take a tx, not a pool.
+func heldRoleKeys(t *testing.T, pool *pgxpool.Pool, tenantID string, keys []string, subject string) map[string]bool {
+	t.Helper()
+	var held map[string]bool
+	if err := db.WithinTenantTx(context.Background(), pool, tenantID, func(tx pgx.Tx) error {
+		var err error
+		held, err = HeldRoleKeysTx(context.Background(), tx, keys, subject)
+		return err
+	}); err != nil {
+		t.Fatalf("HeldRoleKeysTx: %v", err)
+	}
+	return held
+}
+
 func rowFacts(t *testing.T, pool *pgxpool.Pool, tenantID string, ids []string) map[string]RowFacts {
 	t.Helper()
 	var facts map[string]RowFacts
@@ -691,6 +706,101 @@ func TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding(t *testing.T) {
 	}
 }
 
+// --- APPR-12-09: HeldRoleKeysTx, the widened AXIS-2 read ----------------------------
+//
+// GateFactsTx's AXIS-2 EXISTS query moves here, widened from `wr.key = $1` to
+// `wr.key = ANY($1::text[])`, so ONE list request can resolve the whole page's pending
+// role keys at once. GateFactsTx is re-pointed at it and keeps every rung it had
+// (TestGateFactsTx_* above, and TestGateFactsTx_SoftDeletedRoleIsNotHeld in
+// gate_adversarial_test.go, are that re-pointing's green-before-and-after guard).
+//
+// Absence in the returned map and an explicit false are the SAME answer -- `held[key]`
+// reads false for both -- so nothing below pins which one the implementation picks.
+
+// TestHeldRoleKeysTx_OneStatementRegardlessOfKeyAndHolderCount (A09-9): eight role keys,
+// two active holders each, ONE statement. A per-key loop answers IDENTICALLY on this map
+// and costs eight round trips per list request, so the statement count is the only oracle
+// that separates the two -- the same argument
+// TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount makes for RowFactsTx.
+//
+// The map assertions are the control: a read that returned nothing at all would pay one
+// statement too.
+func TestHeldRoleKeysTx_OneStatementRegardlessOfKeyAndHolderCount(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-12-09 held-keys-statement-count")
+
+	subject := activeApprover(t, super, tenantID)
+	keys := make([]string, 0, 8)
+	for i := 0; i < 8; i++ {
+		key := fmt.Sprintf("held-count-role-%d", i)
+		keys = append(keys, key)
+		roleID := seedWorkflowRole(t, super, tenantID, key, key)
+		// Two OTHER active holders per role, so the batch spans 16 membership rows and a
+		// per-holder fan-out would show up in the count too.
+		for h := 0; h < 2; h++ {
+			staffWorkflowRole(t, super, tenantID, roleID, activeApprover(t, super, tenantID), h)
+		}
+		// The caller holds the first four only, so the answer is not uniform.
+		if i < 4 {
+			staffWorkflowRole(t, super, tenantID, roleID, subject, 2)
+		}
+	}
+
+	tracedApp, rec := tracedAppPool(t)
+	rec.reset()
+	held := heldRoleKeys(t, tracedApp, tenantID, keys, subject)
+
+	for i, key := range keys {
+		want := i < 4
+		if held[key] != want {
+			t.Errorf("held[%q] = %t, want %t -- the caller is staffed to the first four roles only", key, held[key], want)
+		}
+	}
+	// AXIS 2 is ONE statement over three tables -- workflow_roles in the FROM, the other
+	// two JOINed -- so each clause must appear exactly once, not once per key.
+	for _, clause := range []string{"FROM workflow_roles", "JOIN workflow_role_members", "JOIN memberships"} {
+		if got := len(rec.mentioning(clause)); got != 1 {
+			t.Errorf("statements mentioning %q = %d, want exactly 1 (eight keys across sixteen holders must not inflate this)", clause, got)
+		}
+	}
+}
+
+// TestHeldRoleKeysTx_MixedKeySetAnswersPerKey (A09-9b) is the failure mode the widening
+// INVENTS, and no shipped spec can reach it: with one key per call, "the caller holds this
+// key" and "the caller holds SOMETHING in the batch" are the same sentence. With a key
+// SET they are not, and an EXISTS-shaped answer mapped back over the REQUESTED keys rather
+// than the RETURNED rows marks every key in the batch held.
+//
+// Four keys, four different reasons, in one call:
+//
+//	live + staffed          -> true   (the control: an all-false read fails here)
+//	live + staffed to someone else -> false
+//	SOFT-DELETED + staffed  -> false  (wr.deleted_at IS NULL, carried through the widening)
+//	no such role at all     -> false  (absent, never an error)
+func TestHeldRoleKeysTx_MixedKeySetAnswersPerKey(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-12-09 held-keys-mixed-set")
+	subject := activeApprover(t, super, tenantID)
+
+	staffWorkflowRole(t, super, tenantID, seedWorkflowRole(t, super, tenantID, "mixed-held", "Mixed Held"), subject, 0)
+	staffWorkflowRole(t, super, tenantID, seedWorkflowRole(t, super, tenantID, "mixed-other", "Mixed Other"),
+		activeApprover(t, super, tenantID), 0)
+
+	doomed := seedWorkflowRole(t, super, tenantID, "mixed-deleted", "Mixed Deleted")
+	staffWorkflowRole(t, super, tenantID, doomed, subject, 0)
+	softDeleteWorkflowRole(t, super, doomed)
+
+	keys := []string{"mixed-held", "mixed-other", "mixed-deleted", "mixed-nonexistent"}
+	held := heldRoleKeys(t, app, tenantID, keys, subject)
+	for key, want := range map[string]bool{
+		"mixed-held": true, "mixed-other": false, "mixed-deleted": false, "mixed-nonexistent": false,
+	} {
+		if held[key] != want {
+			t.Errorf("held[%q] = %t, want %t", key, held[key], want)
+		}
+	}
+}
+
 // --- AC-5: RowFactsTx --------------------------------------------------------------
 
 func TestRowFactsTx_LatestRunPerInvoice(t *testing.T) {
@@ -1023,7 +1133,10 @@ func TestGateFile_NoTenantIdPredicate(t *testing.T) {
 	}
 	src := string(raw)
 	// Without this the scan would pass vacuously against an empty or renamed file.
-	for _, sym := range []string{"func TransmitClearTx", "func GateFactsTx", "func RowFactsTx"} {
+	// HeldRoleKeysTx (APPR-12-09, A09-10) is on the list because AXIS 2 MOVES into it:
+	// after the extraction it is the only copy of that query in this file, so a scan that
+	// no longer saw it would be scanning the wrong thing.
+	for _, sym := range []string{"func TransmitClearTx", "func GateFactsTx", "func RowFactsTx", "func HeldRoleKeysTx"} {
 		if !strings.Contains(src, sym) {
 			t.Fatalf("%s does not declare %q -- the scan below would prove nothing", path, sym)
 		}

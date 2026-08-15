@@ -326,3 +326,28 @@ describe('A03-9: App.tsx mounts ApprovalsView on view === "approvals"', () => {
     expect(appSrc.includes(`{view === 'approvals' && <ApprovalsView ctx={ctx} />}`), 'App.tsx has no approvals render branch -- the screen is unreachable even once nav lands').toBe(true)
   })
 })
+
+// QA adversarial (task-528 review, G4's own text): store.go:691-694's queue predicate is
+// `NOT EXISTS(approved run)`, vacuously true for an invoice validated before any policy
+// was published -- `approval` is null on that row, not merely `pending_ord`. G4's lib
+// specs (approvals.test.ts) pin approvalRowView's null handling directly; this proves the
+// FULL render path (component + lib together) survives the same row without crashing and
+// without inventing a step/role/due value for it.
+describe('adversarial: a row with no run at all (approval: null)', () => {
+  it('renders the em dash for step, role and due -- no warning, no overdue marker, no crash', async () => {
+    const noRun = approvalRow({ id: 'inv-norun', invoice_number: 'INV-NORUN', approval: null })
+    mockFetchSequence([listResponse([noRun], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-NORUN')
+
+    const row = screen.getByText('INV-NORUN').closest('[data-testid="approval-row"]')
+    expect(row, 'the row wrapper must still render').not.toBeNull()
+    const cells = row!.children
+    expect(cells[3]?.textContent, 'step column must fall back to the em dash, never "Step null"').toBe('—')
+    expect(cells[4]?.textContent, 'role column must fall back to the em dash').toBe('—')
+    expect(cells[5]?.textContent, 'due column must fall back to the em dash').toBe('—')
+    expect(row!.querySelector('[data-testid="approval-unstaffed-warning"]'), 'no warning without a pending holder to warn about').toBeNull()
+    expect(row!.querySelector('[data-testid="approval-overdue"]'), 'no overdue marker without a run to be overdue on').toBeNull()
+  })
+})

@@ -727,6 +727,70 @@ describe('A01-5: both comment blocks name the live ListInvoicesOptions field cou
   })
 })
 
+// --- APPR-12-01 (task-525) QA adversarial coverage --------------------------
+describe('APPR-12-01 adversarial (QA): awaitingApproval edge cases', () => {
+  it('QA-1: {awaitingApproval: undefined} explicitly passed emits nothing, same as absent', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { awaitingApproval: undefined })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('awaiting_approval')
+  })
+
+  it('QA-2: awaitingApproval + needsAttention + keptAsIs all emit independently -- none suppresses another', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { awaitingApproval: true, needsAttention: true, keptAsIs: true })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url).searchParams
+    expect(params.get('awaiting_approval')).toBe('true')
+    expect(params.get('needs_attention')).toBe('true')
+    expect(params.get('kept_as_is')).toBe('true')
+  })
+
+  it('QA-3: composes with status/needsFix and is unaffected by the options object\'s key declaration order', async () => {
+    const mockA = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    await listInvoices(af, base, { awaitingApproval: true, status: 'rejected', needsFix: true })
+    const [urlA] = mockA.mock.calls[0] as [string, RequestInit]
+
+    const mockB = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    // Same options, keys declared in the opposite order -- object key order must not
+    // change which params are emitted.
+    await listInvoices(af, base, { needsFix: true, status: 'rejected', awaitingApproval: true })
+    const [urlB] = mockB.mock.calls[0] as [string, RequestInit]
+
+    const paramsA = new URL(urlA).searchParams
+    const paramsB = new URL(urlB).searchParams
+    for (const key of ['awaiting_approval', 'status', 'needs_fix']) {
+      expect(paramsB.get(key), `${key} must match regardless of declaration order`).toBe(paramsA.get(key))
+    }
+    expect(paramsA.get('awaiting_approval')).toBe('true')
+    expect(paramsA.get('status')).toBe('rejected')
+    expect(paramsA.get('needs_fix')).toBe('true')
+  })
+})
+
 // --- APPR-08-08 (task-499): the per-row `approval` envelope -----------------
 //
 // ROW-1..5 drive `normaliseInvoiceRow` directly; ROW-6 goes through `listInvoices`,

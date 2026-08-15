@@ -11,7 +11,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from './authedFetch'
 import {
+  APPROVALS_COPY,
+  approvalOutcome,
   approvalRowView,
+  approvalSelectAllState,
   approvalsBarView,
   approveInvoices,
   isApprovableRow,
@@ -179,6 +182,16 @@ describe('isApprovableRow (A02-3, fail-closed against contradictory sibling fact
 
     // Positive control: nothing here is vacuously false.
     expect(isApprovableRow({ ...baseRow, can_approve: true })).toBe(true)
+  })
+
+  // QA (Stage 4, Mode B): the four cases above never distinguish `=== true` from a
+  // truthy check -- `undefined` is falsy either way. A wire value that is truthy but not
+  // strictly `true` closes that gap; normaliseInvoiceRow already coerces with
+  // `=== true` (invoices.ts:557) before this ever runs, but isApprovableRow is exported
+  // and callable directly, so its own strictness must not depend on that upstream step.
+  it('A02-3b: a truthy-but-not-true can_approve is still refused (strict equality, not coercion)', () => {
+    expect(isApprovableRow({ ...baseRow, can_approve: 1 as unknown as boolean })).toBe(false)
+    expect(isApprovableRow({ ...baseRow, can_approve: 'true' as unknown as boolean })).toBe(false)
   })
 })
 
@@ -398,5 +411,142 @@ describe('pruneApprovalSelection (A02-17)', () => {
     // helper owes no instance-identity guarantee, that lives in subtask 04's effect).
     const unchanged = pruneApprovalSelection(['a', 'c'], rows)
     expect(unchanged).toEqual(['a', 'c'])
+  })
+})
+
+// --- Adversarial / edge coverage added at QA (Stage 4, Mode B), on top of the
+// Stage-2.5 AC specs above (A02-1..A02-18, left untouched). approvalOutcome and
+// APPROVALS_COPY had no numbered spec in the architect's Test Specs table -- Mode A
+// declared their signatures for AC-1 but wrote no red for them. ---
+
+describe('approvalOutcome (no A02 spec -- QA-added)', () => {
+  it('builds one row per result, in result order, for a mixed pass/fail batch', () => {
+    const results: ApproveResult[] = [
+      { id: 'a', ok: true },
+      { id: 'b', ok: false, message: 'this approval run is already closed' },
+      { id: 'c', ok: true },
+    ]
+    const numbersById = new Map([
+      ['a', 'INV-001'],
+      ['b', 'INV-002'],
+      ['c', 'INV-003'],
+    ])
+
+    const rows = approvalOutcome(results, numbersById)
+
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows).toEqual([
+      { invoiceNumber: 'INV-001', ok: true, message: null },
+      { invoiceNumber: 'INV-002', ok: false, message: 'this approval run is already closed' },
+      { invoiceNumber: 'INV-003', ok: true, message: null },
+    ])
+  })
+
+  it('falls back to the raw id when numbersById has no entry for it', () => {
+    const results: ApproveResult[] = [{ id: 'inv-unknown', ok: true }]
+
+    const rows = approvalOutcome(results, new Map())
+
+    expect(rows).toEqual([{ invoiceNumber: 'inv-unknown', ok: true, message: null }])
+  })
+
+  it('is derived from the results array, never from numbersById\'s own size', () => {
+    // numbersById carries five entries (as if built off a larger `selected`); results
+    // carries only two. The output must track results, not the map.
+    const numbersById = new Map([
+      ['a', 'INV-001'],
+      ['b', 'INV-002'],
+      ['c', 'INV-003'],
+      ['d', 'INV-004'],
+      ['e', 'INV-005'],
+    ])
+    const results: ApproveResult[] = [
+      { id: 'a', ok: true },
+      { id: 'b', ok: true },
+    ]
+
+    const rows = approvalOutcome(results, numbersById)
+
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.invoiceNumber)).toEqual(['INV-001', 'INV-002'])
+  })
+})
+
+describe('APPROVALS_COPY (no A02 spec -- QA-added)', () => {
+  it('declares every key as a non-empty string', () => {
+    const keys = ['clear', 'cancel', 'sending', 'resultInvoice', 'resultOutcome'] as const
+    expect(keys.length).toBeGreaterThan(0)
+    for (const key of keys) {
+      expect(typeof APPROVALS_COPY[key]).toBe('string')
+      expect(APPROVALS_COPY[key].length).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('adversarial / edge coverage (QA Stage 4, Mode B)', () => {
+  it('a fan-out where the LAST item fails still returns every entry, in order', async () => {
+    const fetchMock = stubFetch((url) => (idFromUrl(url) === 'c' ? errorResponse(409, 'closed') : okResponse()))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const results = await approveInvoices(af, base, ['a', 'b', 'c'])
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(results).toHaveLength(3)
+    expect(results.map((r) => r.ok)).toEqual([true, true, false])
+    expect(results[2]).toEqual({ id: 'c', ok: false, message: 'closed' })
+  })
+
+  it('a fan-out where EVERY item fails still returns one entry per id, never throws', async () => {
+    const fetchMock = stubFetch(() => errorResponse(409, 'this approval run is already closed'))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const results = await approveInvoices(af, base, ['a', 'b', 'c'])
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(results).toHaveLength(3)
+    expect(results.every((r) => r.ok === false)).toBe(true)
+  })
+
+  it('duplicate ids in the input each issue their own request and their own result entry', async () => {
+    const fetchMock = stubFetch(() => okResponse())
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const results = await approveInvoices(af, base, ['a', 'a'])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(results).toHaveLength(2)
+    expect(results.map((r) => r.id)).toEqual(['a', 'a'])
+  })
+
+  it('approvalsBarView with nothing selected is not visible and cannot be confirmed, even while open', () => {
+    const rows = [approvableRow('a'), approvableRow('b')]
+
+    const view = approvalsBarView([], rows, 'armed', false)
+
+    expect(view.visible).toBe(false)
+    expect(view.canApprove).toBe(false)
+    expect(view.eligible).toEqual([])
+  })
+
+  it('approvalSelectAllState never reports "all" on a page with zero approvable rows (vacuous-every guard)', () => {
+    // The empty-rows case and the all-blocked case both hit the `approvable.length === 0`
+    // guard; an unguarded `.every()` over an empty array is vacuously true and would
+    // report 'all' here, which is the trap this test exists to catch.
+    expect(approvalSelectAllState([], [])).toBe('none')
+
+    const allBlocked = [notApprovableRow('a'), notApprovableRow('b')]
+    expect(approvalSelectAllState([], allBlocked)).toBe('none')
+    expect(approvalSelectAllState(['a', 'b'], allBlocked)).toBe('none')
+  })
+
+  it('a contradictory wire row (approve_blocked_reason set while can_approve is true) -- can_approve wins, the reason still rides through', () => {
+    const row = { ...baseRow, can_approve: true, approve_blocked_reason: 'This invoice has no approval run to decide on.' }
+
+    // Selectability reads can_approve alone (U5) -- the stale/contradictory reason does
+    // not override it.
+    expect(isApprovableRow(row)).toBe(true)
+    // The reason is passed through unconditionally, never blanked out because can_approve
+    // happened to be true -- approvalRowView authors no "can_approve wins so hide it" logic.
+    expect(approvalRowView(row).blockedReason).toBe('This invoice has no approval run to decide on.')
   })
 })

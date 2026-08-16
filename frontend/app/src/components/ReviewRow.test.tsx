@@ -424,6 +424,85 @@ describe('ReviewRow: the checkbox now states its own reason, retargeting [select
   })
 })
 
+// QA adversarial (Stage 4, Mode B, task-535): three cases the RED-phase specs
+// (A16-2a..g) didn't cover -- cross-row content pairing (not just distinct ids),
+// a live blocked-to-selectable transition, and that aria-describedby never dangles.
+describe('ReviewRow: adversarial coverage on the checkbox reason (APPR-16-02, QA Stage 4)', () => {
+  const openRun: InvoiceApproval = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  it("A16-2h: two blocked rows with DIFFERENT reasons pair each aria-describedby to its own text, not the sibling's", () => {
+    render(
+      <>
+        <Row r={row({ id: 'inv-draft', status: 'draft', approval: null })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={row({ id: 'inv-awaiting', status: 'validated', approval: openRun })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+      </>,
+    )
+    const [draftBox, awaitingBox] = screen.getAllByTestId('review-select') as HTMLInputElement[]
+    const draftId = draftBox.getAttribute('aria-describedby')
+    const awaitingId = awaitingBox.getAttribute('aria-describedby')
+    expect(draftId).not.toBeNull()
+    expect(awaitingId).not.toBeNull()
+
+    const draftReason = draftId != null ? document.getElementById(draftId)?.textContent : null
+    const awaitingReason = awaitingId != null ? document.getElementById(awaitingId)?.textContent : null
+
+    // A shared/swapped id would pass one of these two by accident (same text) or fail
+    // silently (wrong text, still non-null) -- pinning both directions closes that gap.
+    expect(draftReason).toBe(skipReasonLabel('not_validated'))
+    expect(awaitingReason).toBe(skipReasonLabel('awaiting_approval'))
+    expect(draftReason).not.toBe(awaitingReason)
+  })
+
+  it('A16-2i: a row transitioning from blocked to selectable removes the reason node and both attributes, not left stale', () => {
+    const shared = row({ id: 'inv-transition', status: 'draft', approval: null })
+    const { rerender } = render(
+      <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    const box = screen.getByTestId('review-select') as HTMLInputElement
+    const staleId = box.getAttribute('aria-describedby')
+    expect(staleId).not.toBeNull()
+
+    rerender(
+      <Row r={{ ...shared, status: 'validated' }} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+
+    expect(box.disabled).toBe(false)
+    expect(box.getAttribute('title')).toBeNull()
+    expect(box.getAttribute('aria-describedby')).toBeNull()
+    // Not just the attribute -- the node itself is gone, so the OLD id can't dangle
+    // even if something else still held a reference to it.
+    expect(staleId != null ? document.getElementById(staleId) : null).toBeNull()
+    expect(screen.queryByTestId('review-select-blocked-reason')).toBeNull()
+  })
+
+  it.each([
+    ['draft, no run', { status: 'draft' as const, approval: null }],
+    ['validated, open run', { status: 'validated' as const, approval: openRun }],
+    ['validated, no run (selectable)', { status: 'validated' as const, approval: null }],
+    ['accepted, open run (silent-disabled)', { status: 'accepted' as const, approval: openRun }],
+  ])('A16-2j: %s -- aria-describedby never dangles, in either direction', (_label, shape) => {
+    renderRow(shape)
+    const box = screen.getByTestId('review-select') as HTMLInputElement
+    const describedBy = box.getAttribute('aria-describedby')
+
+    if (describedBy == null) {
+      // No attribute -- there must be no orphan reason node sitting in the document either.
+      expect(screen.queryByTestId('review-select-blocked-reason')).toBeNull()
+    } else {
+      // An attribute -- its target must already be in the document in the SAME render,
+      // not attached on a later tick.
+      expect(document.getElementById(describedBy)).not.toBeNull()
+    }
+  })
+})
+
 // Minimal register ctx/fetch for the ReviewRow/InvoicesList parity check (A16-2f) --
 // mirrors InvoiceDetail.test.tsx's own local pair; InvoicesList is otherwise only
 // exercised by InvoicesList.test.tsx.

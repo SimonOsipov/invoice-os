@@ -13,6 +13,7 @@ import { Developers } from './components/Developers'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
+import { trackDemoOpen, type DemoCtaSource } from './analytics'
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
@@ -20,7 +21,12 @@ import { Footer } from './components/Footer'
 export default function App() {
   const [signInOpen, setSignInOpen] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
-  const onBookDemo = () => setDemoOpen(true)
+  // Source-bound per call site: the six components keep `onBookDemo: () => void`
+  // and stay untouched, so one file carries the attribution instead of seven.
+  const book = (source: DemoCtaSource) => () => {
+    trackDemoOpen(source)
+    setDemoOpen(true)
+  }
   const onSignIn = () => setSignInOpen(true)
   return (
     <div
@@ -37,18 +43,18 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={onBookDemo} />
-      <Hero onBookDemo={onBookDemo} onSignIn={onSignIn} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} />
+      <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
       <TrustStrip />
       <Problem />
       <Modules />
       <HowItWorks />
       <Compliance />
-      <Audience onBookDemo={onBookDemo} />
+      <Audience onBookDemo={book('audience')} />
       <Developers />
-      <Pricing onBookDemo={onBookDemo} />
-      <DemoCta onBookDemo={onBookDemo} />
-      <Footer onBookDemo={onBookDemo} />
+      <Pricing onBookDemo={book('pricing')} />
+      <DemoCta onBookDemo={book('demo_cta')} />
+      <Footer onBookDemo={book('footer')} />
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
     </div>

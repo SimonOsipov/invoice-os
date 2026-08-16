@@ -65,12 +65,37 @@ export type DemoCtaSource = 'nav' | 'hero' | 'audience' | 'pricing' | 'demo_cta'
 export const DEMO_CTA_SOURCES: readonly DemoCtaSource[] =
   ['nav', 'hero', 'audience', 'pricing', 'demo_cta', 'footer']
 
-// Stub — Stage 3 wires this through send()'s loaded-flag gate.
-export function trackDemoOpen(_source: DemoCtaSource): void {
-  throw new Error('not implemented: trackDemoOpen')
+const FORM_NAME = 'book_a_demo'
+
+// The one choke point for every sender: no tag, no send. `window` is read only
+// after the flag check, so a sender is inert under node and on every non-production
+// host. Pinned by "a sender before ensureTag touches no browser global".
+function send(name: string, params: Record<string, string | number>): void {
+  if (!loaded) return
+  ;(window as GtagWindow).gtag?.('event', name, params)
 }
 
-// Stub — Stage 3 wraps run() and fires the outcome senders through send().
-export async function trackedHubSpotSubmit(_run: () => Promise<void>): Promise<void> {
-  throw new Error('not implemented: trackedHubSpotSubmit')
+export function trackDemoOpen(source: DemoCtaSource): void {
+  send('demo_open', { cta_location: source })
+}
+
+function trackDemoSubmitOk(): void {
+  send('generate_lead', { form_name: FORM_NAME })
+}
+
+function trackDemoSubmitFailed(): void {
+  send('demo_submit_failed', { form_name: FORM_NAME })
+}
+
+// Wraps the one call that reaches HubSpot rather than DemoModal's shared success
+// transition, which the honeypot and closed-gate branches also reach. Both senders
+// stay module-private so no other call site can attach them elsewhere.
+export async function trackedHubSpotSubmit(run: () => Promise<void>): Promise<void> {
+  try {
+    await run()
+  } catch (err) {
+    trackDemoSubmitFailed()
+    throw err
+  }
+  trackDemoSubmitOk()
 }

@@ -3054,7 +3054,10 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(await screen.findByTestId('detail-approve'))
     const confirmBtn = screen.getByTestId('detail-approve-confirm')
     fireEvent.click(confirmBtn)
-    fireEvent.click(confirmBtn) // in-flight ref must win here, not the (not-yet-rerendered) disabled attribute
+    // Proves the guards *together* send once. It does not isolate the in-flight ref:
+    // fireEvent is act-wrapped, so the reducer identity check already blocks click two.
+    // The ref covers the same-tick case jsdom cannot stage -- removing it keeps this green.
+    fireEvent.click(confirmBtn)
 
     await screen.findByTestId('detail-approve')
     expect(decideCalls).toHaveLength(1)
@@ -3106,6 +3109,8 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'wrong buyer TIN' } })
     const confirmBtn = screen.getByTestId('detail-reject-confirm')
     fireEvent.click(confirmBtn)
+    // Same caveat as the approve row above: the `rejecting` disabled term, not the
+    // in-flight ref, is what stops click two here.
     fireEvent.click(confirmBtn)
 
     await screen.findByTestId('detail-reject')
@@ -3170,6 +3175,9 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     expect(outsideTrail).toHaveLength(0)
   })
 
+  // Latent guard: no one-line mutation of today's code can fail this row, because
+  // useAsync exposes no setter and handleApprove never binds decideInvoice's return.
+  // It bites the day someone adds one. Do not count it as proven coverage.
   it("AC-6: the POST's returned run is not installed", async () => {
     const openRun: ApprovalRun = { ...APPROVED_RUN, state: 'open', closed_at: null, closed_by: null }
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {

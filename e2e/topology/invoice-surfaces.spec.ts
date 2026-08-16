@@ -2240,3 +2240,98 @@ test("invoice detail: an incomplete invoice shows a disabled View UBL/XML carryi
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// APPR-13-06 (task-548): D-26 -- the firm tenant (signInFirm) seeds NO
+// approval_policies/approval_runs, so a freshly validated firm invoice is reliably
+// run-less without publishing anything. [topology-never-publishes] stays intact: no
+// armedInvoice()-style helper, no policy call anywhere below.
+test('detail surface: the no-run decision block and trail card, plus their layout at every wide width', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `APPR-13-06 no-run ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-APPR1306-${Date.now()}`
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  await validateInvoice(token, invoice.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  // AC-2: the real backend, over the real wire, on a real no-run invoice -- proving the
+  // exact sentence (handlers.go:386's approvalGate) reaches the browser as VISIBLE text,
+  // not only `title`. NOT a duplicate of InvoiceDetail.test.tsx:2798, which parametrizes
+  // all five gate sentences against a mock and never leaves it.
+  const detailApprove = page.getByTestId('detail-approve')
+  const detailReject = page.getByTestId('detail-reject')
+  await expect(detailApprove).toBeVisible()
+  await expect(detailApprove).toBeDisabled()
+  await expect(detailReject).toBeVisible()
+  await expect(detailReject).toBeDisabled()
+  const approveReason = page.getByTestId('approve-blocked-reason')
+  await expect(approveReason).toBeVisible()
+  await expect(approveReason).toHaveText('This invoice has no approval run to decide on.')
+
+  // AC-4: the trail card is honest about there being no run. approval-trail-step's count
+  // is deliberately NOT asserted -- empty/has-steps are mutually exclusive branches of one
+  // if/else if (ApprovalTrailCard.tsx:112-123), so one can't fail independently of the other.
+  await expect(page.getByTestId('approval-trail-empty')).toBeVisible()
+
+  // AC-1: containment -- decision block inside its action column, the file's own idiom
+  // verbatim (:1626-1632). NOT assertFillsColumn here: the decision block right-aligns
+  // and is legitimately narrower than its column, so a fill check would fail on correct
+  // code. detail-decision-actions has no testid'd wrapper of its own (InvoiceDetail.tsx:
+  // 633), so its parent is read via xpath, this file's own idiom for a testid-less
+  // ancestor (roles.spec.ts:339).
+  const decisionBlock = page.getByTestId('detail-decision-actions')
+  const actionColumn = decisionBlock.locator('xpath=..')
+  const viewUbl = page.getByTestId('view-ubl')
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const [blockBox, columnBox, ublBox] = await Promise.all([
+        decisionBlock.boundingBox(),
+        actionColumn.boundingBox(),
+        viewUbl.boundingBox(),
+      ])
+      expect(blockBox && columnBox && ublBox, `decision block, its column and View UBL must all render at ${width}px`).toBeTruthy()
+      const g = gaps(blockBox!, columnBox!)
+      expect(g.left, `decision block must not start left of its column at ${width}px`).toBeGreaterThanOrEqual(0)
+      expect(g.right, `decision block must not extend right of its column at ${width}px`).toBeGreaterThanOrEqual(0)
+
+      // Both are direct children of the same alignItems:'flex-end' column, each emitted
+      // as a fragment rather than a wrapper (InvoiceDetail.tsx:633/681-838) -- a wrapping
+      // div in place of either fragment would break this.
+      const blockRight = blockBox!.x + blockBox!.width
+      const ublRight = ublBox!.x + ublBox!.width
+      expect(Math.abs(blockRight - ublRight), `decision block's right edge must equal View UBL's at ${width}px`).toBeLessThanOrEqual(1)
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // AC-4: the trail card matches its rail sibling's (status-history's) width -- both are
+  // unstyled-width children of one flexDirection:'column' rail (InvoiceDetail.tsx:1083).
+  // 1px, not assertFillsColumn's 24px default: that slack is sized for a scrollbar/list-
+  // vs-bar gutter and would pass a card overflowing its own 16px padding.
+  const trail = page.getByTestId('approval-trail')
+  const statusHistory = page.getByTestId('status-history')
+  const trailFit = await assertFillsColumn(page, trail, statusHistory, 'approval-trail vs status-history', 1)
+  for (const entry of trailFit) {
+    // assertFillsColumn's own bound only catches the trail card being too NARROW
+    // (positive gaps); overflow yields NEGATIVE gaps that pass max(left,right)<=slack, so
+    // this second bound is what catches the trail card being too WIDE.
+    expect(entry.left, `trail card must not overflow status-history's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+    expect(entry.right, `trail card must not overflow status-history's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+  }
+
+  // D-27: getInvoiceApprovalRun (approvals.ts:327-338) catches the 404 and resolves null
+  // -- no console.error anywhere in that chain. The one thing this couldn't settle by
+  // reading: whether Chromium's own "Failed to load resource" line reaches Playwright's
+  // page.on('console') listener. It's a CDP Log-domain message, not a console-API call,
+  // so it's expected NOT to -- if that's wrong, this assertion goes red and says so.
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

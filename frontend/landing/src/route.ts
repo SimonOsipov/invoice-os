@@ -1,4 +1,6 @@
-// STUB — throws until the real matcher lands (task-555, red-first).
-export function isPrivacyPath(_pathname: string): boolean {
-  throw new Error('not implemented')
+// Pure/total: trim, lowercase, strip one trailing slash, exact-match only.
+export function isPrivacyPath(pathname: string): boolean {
+  const trimmed = pathname.trim().toLowerCase()
+  const normalized = trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
+  return normalized === '/privacy'
 }

@@ -1076,8 +1076,21 @@ describe('A16-4: unmount aborts the fan-out at a row boundary, and the pager fre
     // 'submitting'` can be freezing the pager in this window.
     expect(prevBtn().disabled, 'the pager must freeze for the whole in-flight window').toBe(true)
     expect(nextBtn().disabled).toBe(true)
+    // AC-7/D-25: a disabled control must state WHY, not go silently dead -- InvoicesList's
+    // sibling surface pins this (A16-4h); the approvals pager owed the same assertion.
+    expect(prevBtn().title, 'the frozen pager must carry a non-empty reason, not a bare disabled attribute').toBeTruthy()
+    expect(nextBtn().title).toBeTruthy()
 
-    resolvers[0](approveOkResponse())
+    resolvers[0](approveOkResponse()) // row a settles -- row b's POST issues next
+    await waitFor(() => expect(resolvers.length).toBe(2))
+
+    // The inter-row point: row a settled, row b now in flight. Only `phase ===
+    // 'submitting'` can still be freezing the pager here -- proves the freeze holds
+    // ACROSS the row boundary, not just for a single request.
+    expect(prevBtn().disabled, 'the pager must stay frozen between rows, not flicker enabled at the row boundary').toBe(true)
+    expect(nextBtn().disabled).toBe(true)
+
+    resolvers[1](approveOkResponse())
     await screen.findByTestId('approvals-results')
     await waitFor(() => expect(nextBtn().disabled, 'the pager must re-enable once settled').toBe(false))
     expect(prevBtn().disabled).toBe(false)

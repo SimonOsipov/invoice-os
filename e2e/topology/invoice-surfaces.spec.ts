@@ -789,8 +789,8 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   await row.getByTestId('invoice-select').check()
   await submitSelected(page)
 
-  // AC-3: exactly one POST is what waitForResponse above already pinned (a single click);
-  // the results panel names THIS invoice as queued.
+  // AC-3: exactly one POST is what waitForResponse above already pinned (the confirm
+  // click); the results panel names THIS invoice as queued.
   await expect(page.getByTestId('batch-submit-results')).toContainText(invoiceNumber)
   await expect(page.getByTestId('batch-submit-results')).toContainText('Queued')
 

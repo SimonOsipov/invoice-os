@@ -3163,8 +3163,10 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
     await screen.findByTestId('detail-approve')
 
-    const trail = screen.getByTestId('approval-trail')
-    const outsideTrail = screen.queryAllByText(/approved|success|sent/i).filter((el) => !trail.contains(el))
+    // Scoped to the whole card, not the `approval-trail` body: the state pill
+    // says "Approved" from the header, and that is the record, not a banner.
+    const card = screen.getByTestId('approval-trail-card')
+    const outsideTrail = screen.queryAllByText(/approved|success|sent/i).filter((el) => !card.contains(el))
     expect(outsideTrail).toHaveLength(0)
   })
 

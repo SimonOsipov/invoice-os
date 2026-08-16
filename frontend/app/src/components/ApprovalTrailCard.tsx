@@ -163,7 +163,9 @@ export function ApprovalTrailCard({ run }: { run: AsyncState<ApprovalRun | null>
   }
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+    // `approval-trail` is the body only; the state pill sits in the header, so
+    // "is this text the trail's own?" has to be asked of the card, not the body.
+    <div data-testid="approval-trail-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <span className="card-title">{APPROVAL_TRAIL_COPY.cardTitle}</span>
         {data && <StatePill state={data.state} />}

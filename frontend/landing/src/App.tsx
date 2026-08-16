@@ -90,7 +90,7 @@ export default function App() {
           <DemoCta onBookDemo={book('demo_cta')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} />
+      <Footer onBookDemo={book('footer')} hrefPrefix={privacy ? '/' : ''} />
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
     </div>

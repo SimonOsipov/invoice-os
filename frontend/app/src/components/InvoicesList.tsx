@@ -282,9 +282,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // independent constants that nothing ties together), and selection never spanning pages.
   async function submitSelection() {
     if (base == null) return
-    // Recomputed here, not read off the render-scoped `bar` above: this must see the
-    // eligible set AS OF THE CLICK, not the one captured by the closure the render that
-    // last drew the confirm button created (InvoicesList.test.tsx A16-3b/guard-order).
+    // Recomputed rather than reading `bar.eligible` above: mathematically identical in
+    // production (same closure-captured selected/rows/phase/loading, same pure call), but
+    // A16-3b/guard-order mock bulkBarView per-call to prove submitInvoices reads its
+    // output rather than raw `selected` (InvoicesList.test.tsx) -- QA-verified: swapping
+    // this for `bar.eligible` only breaks those two tests, nothing else.
     const ids = bulkBarView(selected, rows, phase, loading).eligible
     // Order matters (AC-15): base -> ids.length === 0 -> toPhase(confirm) -> submitInFlight.
     // Arming confirm BEFORE this bail would strand the bar in 'submitting' with nothing

@@ -8,6 +8,7 @@
 // lives in InvoicesList.pollShape.test.ts (node env) -- jsdom rewrites import.meta.url
 // off file: scheme, breaking readFileSync(fileURLToPath(...)) here.
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -1034,12 +1035,12 @@ describe('InvoicesList: the needs-attention toggle says what it now includes', (
   })
 })
 
-// RED specs (APPR-16-03, task-537, Stage 2.5/Mode A) -- batch-submit currently calls
-// submitSelection directly on click (InvoicesList.tsx:426/264), one click transmitting
-// every selected invoice with no brake. Every spec below fails today because there is no
-// `batch-submit-confirm`/`batch-submit-cancel` control and no arm/confirm phase at all --
-// the correct red reason (a missing element / an assertion on behavior that doesn't exist
-// yet), never an import or compile error.
+// RED specs (APPR-16-03, task-537, Stage 2.5/Mode A), authored before the fix in
+// afba8c8: batch-submit called submitSelection directly on click (pre-fix
+// InvoicesList.tsx:426/264), one click transmitting every selected invoice with no
+// brake -- every spec below failed at the time on a missing element / an assertion on
+// behavior that didn't exist yet, never an import or compile error. The fix (570d19b)
+// now makes them green; see the arm/confirm/cancel wiring below.
 function submitOkResponse(items: { invoice_id: string; enqueued: boolean; reason?: string }[] = []): MockResponse {
   return { ok: true, status: 200, json: () => Promise.resolve({ results: items }) }
 }
@@ -1323,5 +1324,162 @@ describe('InvoicesList: batch-submit arms before it confirms (APPR-16-03, task-5
     expect(screen.getByTestId('batch-submit'), 'idle, ready to re-arm').toBeTruthy()
     expect((screen.getByLabelText('Select invoice INV-A') as HTMLInputElement).checked, 'the selection survives a rejected confirm').toBe(true)
     expect(screen.getByText('Something went wrong'), 'ErrorState must render for the rejected confirm').toBeTruthy()
+  })
+
+  // QA adversarial coverage (task-537 Stage 4). A16-3c's two SEPARATE fireEvent.click
+  // calls each get their own synchronous React flush in this harness, so `disabled`
+  // alone already wins there and `submitInFlight` itself is never actually reached --
+  // confirmed by reproducing it against a ref-removed mutation (2 POSTs, not 1) before
+  // writing the assertions below. Same technique as ApprovalsView.test.tsx's "TRUE
+  // same-tick double click" precedent: nesting both dispatches inside ONE outer act()
+  // suppresses the intermediate flush, so both onClick handlers run against the SAME
+  // pre-render `phase` closure before either commits.
+  it('QA adversarial: two mouse clicks landing in the SAME React commit still fire exactly one POST', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    const confirmBtn = screen.getByTestId('batch-submit-confirm')
+
+    act(() => {
+      fireEvent.click(confirmBtn)
+      fireEvent.click(confirmBtn)
+    })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(fetchMock, 'two same-commit clicks must still fire exactly one POST, not two').toHaveBeenCalledTimes(3)
+  })
+
+  it('QA adversarial: keyboard activation (Enter) reaches confirm, and a second Enter press does not double-fire', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    const confirmBtn = screen.getByTestId('batch-submit-confirm')
+    confirmBtn.focus()
+
+    // A native <button> answers Enter/Space with a real click event -- the onClick
+    // handler this fires is the SAME one a mouse click reaches, so the guard protecting
+    // it must hold for this input path too. userEvent (not fireEvent.keyDown) is what
+    // actually simulates that browser default-action behavior in jsdom. NOTE: unlike the
+    // mouse test above, userEvent's key dispatch is genuinely async (real awaits between
+    // key events), so it cannot be forced into ONE React commit the way two synchronous
+    // fireEvent.click calls can -- confirmed empirically (an act()-wrapped
+    // user.keyboard('{Enter}{Enter}') still passes even with `submitInFlight`'s check
+    // deleted). What IS provably load-bearing here, and what this asserts, is that
+    // bulkPhaseReducer's OWN identity return (input-modality-agnostic -- it only reads
+    // `phase`) stops the second, naturally-flushed Enter press. The synchronous-ref proof
+    // for the true same-tick race lives in the mouse test above.
+    const user = userEvent.setup()
+    await user.keyboard('{Enter}')
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(fetchMock, 'a second Enter press after the first must not fire a second POST').toHaveBeenCalledTimes(3)
+  })
+
+  it('QA adversarial: the eligible set shrinking to zero between arm and confirm (a live poll tick) collapses the bar instead of stranding it', async () => {
+    // status:'queued' on a third, unselected row keeps shouldPollList active so
+    // useLiveRefresh actually installs an interval (AC-6's own real-2s-wait precedent
+    // above) -- a and b must be 'validated' to be selectable in the first place.
+    // NOTE: `bar` recomputes bulkBarView(selected, rows, ...) fresh every render off the
+    // CURRENT `rows`, so this end-to-end behavior turns out to be guaranteed by the
+    // `bar.visible &&` render gate alone -- confirmed by mutation: deleting either the
+    // `[rows]` effect's setPhase reset OR its setSelected prune independently leaves this
+    // green (the other one, or bulkBarView's own internal pruneSelection, still hides the
+    // bar), matching Stage 2.5's proof that the effect's phase reset is unobservable at
+    // this layer. What this test pins is the OUTCOME -- a real poll tick that empties
+    // eligibility must not strand the confirm control -- not that one specific line does it.
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    const c = row({ id: 'inv-c', invoice_number: 'INV-C', status: 'queued' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a, b, c], { limit: 50, offset: 0, total: 3 }),
+      // the poll tick: a and b both moved out from under the arm (someone else
+      // submitted them first) -- c stays queued so the tick had a reason to fire.
+      listResponse(
+        [row({ id: 'inv-a', invoice_number: 'INV-A', status: 'queued' }), row({ id: 'inv-b', invoice_number: 'INV-B', status: 'queued' }), c],
+        { limit: 50, offset: 0, total: 3 },
+      ),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    expect(screen.getByTestId('batch-submit-confirm'), 'armed over a and b').toBeTruthy()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 3500, interval: 100 })
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-summary')).toBeNull(), { timeout: 1000 })
+    expect(fetchMock, 'the shrink itself must never trigger a submit').toHaveBeenCalledTimes(2)
+  }, 8000)
+
+  it('QA adversarial: a rejected confirm, re-armed, still lets a second confirm actually send', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitErrorResponse(500, 'boom'),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+    expect(screen.getByText('Something went wrong'), 'the first confirm was rejected').toBeTruthy()
+
+    // Re-arm: `settled` firing from the finally has to leave a genuinely USABLE bar, not
+    // one that only LOOKS idle -- submitInFlight and phase both have to be back to a
+    // state a second confirm can actually pass through.
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
+    expect(screen.queryByTestId('batch-submit-confirm'), 'the retry succeeded').toBeNull()
+    expect(screen.queryByText('Something went wrong'), 'the stale error from the first attempt must be gone').toBeNull()
+  })
+
+  it('QA adversarial (epic Q12): the bar never claims a past-tense transmission outcome, idle or armed', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    const OUTCOME_WORDS = ['sent', 'transmitted', 'accepted', 'delivered', 'received']
+
+    function assertNoOutcomeClaim(label: string) {
+      const text = screen.getByTestId('batch-submit-summary').textContent ?? ''
+      for (const word of OUTCOME_WORDS) {
+        expect(new RegExp(`\\b${word}\\b`, 'i').test(text), `${label}: must never claim "${word}" already happened`).toBe(false)
+      }
+    }
+
+    assertNoOutcomeClaim('idle')
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    assertNoOutcomeClaim('armed')
   })
 })

@@ -152,7 +152,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
 
   async function confirmApprove() {
     // Reachable for the first time here: this is the only list.run() call site outside
-    // the ErrorState retry path (G-04-H, InvoicesList.tsx:264's precedent).
+    // the ErrorState retry path (G-04-H, InvoicesList.tsx:283's precedent).
     if (base == null) return
     // `bar.eligible` is pruneApprovalSelection's output -- the ONLY thing that goes on
     // the wire, never `selected`.

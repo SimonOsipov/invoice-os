@@ -993,7 +993,7 @@ describe('ApprovalsView.tsx source: the confirm handler guards on base == null b
     // invoicesViewState forces state:'idle' whenever base is null -- so the instant base
     // flips null on any re-render, the whole `state === 'ready'` subtree the confirm
     // button lives in unmounts before a click could ever reach the handler. A04-12 hits
-    // the identical wall; source scan instead, mirroring InvoicesList.tsx:264's
+    // the identical wall; source scan instead, mirroring InvoicesList.tsx:283's
     // submitSelection guard.
     const source = readSrc('src/components/ApprovalsView.tsx')
 

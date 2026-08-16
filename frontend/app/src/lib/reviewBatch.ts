@@ -243,6 +243,23 @@ export function channelTilesAll(
   }
 }
 
+// Tile caption for the LIVE clean channel (APPR-16-01) -- names the fact (passed every
+// rule), not an entitlement an open approval run can make false. Sibling fix to
+// REVIEW_PILL_LABELS.ready ('Validated', :884).
+export const TILE_CAPTION_VALID = 'Passed every rule.'
+
+// Footer counter line (APPR-16-01) -- same fix as TILE_CAPTION_VALID. Only the
+// cleanTotal clause's wording changed; the other four are byte-for-byte the prior literal.
+export function reviewFooterSummary(t: {
+  allTotal: number
+  cleanTotal: number
+  queuedTotal: number
+  failingTotal: number
+  keptTotal: number
+}): string {
+  return `${t.allTotal} invoices stored · ${t.cleanTotal} validated · ${t.queuedTotal} queued for transmission · ${t.failingTotal} awaiting a fix · ${t.keptTotal} kept as-is`
+}
+
 export interface UnreadableRow {
   row: number | null
   column: string

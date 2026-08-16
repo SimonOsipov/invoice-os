@@ -3,10 +3,10 @@
 // 'not implemented' on every render, so each test below fails on that throw. Assertions
 // are written against the shipped projection (lib/approvals.ts, APPR-13-02) and must all
 // go green once Stage 3 replaces the stub.
-import { render, screen, within, cleanup } from '@testing-library/react'
+import { fireEvent, render, screen, within, cleanup } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { AsyncState } from '@invoice-os/api-client'
+import { ApiError, type AsyncState } from '@invoice-os/api-client'
 
 import { APP_PERSONAS } from '../auth'
 import {
@@ -67,6 +67,14 @@ function runFixture(over: Partial<ApprovalRun> = {}): ApprovalRun {
 
 function readyRun(data: ApprovalRun): AsyncState<ApprovalRun | null> & { run: () => void } {
   return { status: 'ready', data, error: null, run: vi.fn() }
+}
+
+function idleRun(): AsyncState<ApprovalRun | null> & { run: () => void } {
+  return { status: 'idle', data: null, error: null, run: vi.fn() }
+}
+
+function errorRun(): AsyncState<ApprovalRun | null> & { run: () => void } {
+  return { status: 'error', data: null, error: new ApiError('http', 'boom', 500), run: vi.fn() }
 }
 
 describe('ApprovalTrailCard', () => {
@@ -179,5 +187,133 @@ describe('ApprovalTrailCard', () => {
     const connector = rows[0].querySelector('[style*="var(--line-2)"]')
     expect(connector).toBeTruthy()
     expect((connector as HTMLElement).style.position).not.toBe('absolute')
+  })
+
+  // QA adversarial coverage (task-553, Mode B) below this line.
+
+  it('an idle run (before immediate fires) shows loading, not the empty or ready state', () => {
+    render(<ApprovalTrailCard run={idleRun()} />)
+
+    expect(screen.getByText(APPROVAL_TRAIL_COPY.loading)).toBeTruthy()
+    expect(screen.queryByTestId('approval-trail-empty')).toBeNull()
+    expect(screen.queryByTestId('approval-trail-state')).toBeNull()
+    expect(screen.queryByTestId('approval-trail-step')).toBeNull()
+  })
+
+  it("the ErrorState retry button is wired to run.run, not a no-op", () => {
+    const run = errorRun()
+
+    render(<ApprovalTrailCard run={run} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(run.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('a notify step with no target or channel recorded prints neither "null" nor "undefined"', () => {
+    const steps = [stepFixture({ ord: 0, kind: 'notify', notify_target: null, notify_channel: null })]
+    const run = runFixture({ steps })
+
+    render(<ApprovalTrailCard run={readyRun(run)} />)
+
+    const note = screen.getByTestId('approval-trail-notify-note')
+    expect(note.textContent).not.toContain('null')
+    expect(note.textContent).not.toContain('undefined')
+    expect(note.textContent).toContain(APPROVAL_TRAIL_COPY.notifyNote)
+  })
+
+  it('a cancelled run that also carries decisions shows the voided banner AND the ledger, not one in place of the other', () => {
+    const decisions = [decisionFixture({ decision: 'rejected', reason: 'Filed before the edit that voided this run' })]
+    const run = runFixture({ state: 'cancelled', decisions })
+
+    render(<ApprovalTrailCard run={readyRun(run)} />)
+
+    expect(screen.getByTestId('approval-trail-voided')).toBeTruthy()
+    const rows = screen.getAllByTestId('approval-trail-decision')
+    expect(rows).toHaveLength(1)
+    expect(within(rows[0]).getByText('Filed before the edit that voided this run')).toBeTruthy()
+  })
+
+  it('an empty step list with a non-empty decision ledger renders the ledger honestly, not a fabricated ladder', () => {
+    const decisions = [decisionFixture({ decision: 'approved' })]
+    const run = runFixture({ steps: [], decisions })
+
+    render(<ApprovalTrailCard run={readyRun(run)} />)
+
+    expect(screen.queryAllByTestId('approval-trail-step')).toHaveLength(0)
+    expect(screen.getAllByTestId('approval-trail-decision')).toHaveLength(1)
+  })
+
+  it('a non-empty step list with an empty decision ledger renders the ladder honestly, not a fabricated decision', () => {
+    const steps = [stepFixture({ ord: 0 })]
+    const run = runFixture({ steps, decisions: [] })
+
+    render(<ApprovalTrailCard run={readyRun(run)} />)
+
+    expect(screen.getAllByTestId('approval-trail-step')).toHaveLength(1)
+    expect(screen.queryAllByTestId('approval-trail-decision')).toHaveLength(0)
+    expect(screen.getByText(APPROVAL_TRAIL_COPY.noDecisions)).toBeTruthy()
+  })
+
+  // D-35's own boundary: the card must not author copy of its own -- every static label
+  // has to trace to APPROVAL_TRAIL_COPY (or, for the projection layer's own labels
+  // already covered by APPR-13-02, one of its Record maps, which draw from the same
+  // const). Walks every leaf text node under the card and classifies it as known copy,
+  // known per-fixture DATA (role/holder/date/actor/reason/target/channel/ord text, all
+  // computed FROM the same fixture via the real projection functions, never hand-typed
+  // twice), or one of three punctuation glyphs the component itself splices in ('·', '—',
+  // '✓') -- none of which is prose a reader could mistake for product copy. Any leaf that
+  // matches none of those is a literal the component invented, and fails the test.
+  it('authors no copy of its own -- every rendered string traces to APPROVAL_TRAIL_COPY, fixture data, or a punctuation glyph', () => {
+    const steps = [
+      stepFixture({ ord: 0, kind: 'approval', workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } }),
+      stepFixture({ ord: 1, kind: 'notify', workflow_role_title: 'AP Team', notify_target: 'ap@acme.test', notify_channel: 'email' }),
+      stepFixture({ ord: 2, kind: 'autoapprove', workflow_role_title: 'Ops Bot' }),
+      stepFixture({
+        ord: 3,
+        kind: 'approval',
+        workflow_role_title: 'Compliance lead',
+        holder: { text: 'Nobody assigned', warn: true },
+        overdue: true,
+        due_at: '2026-07-01T00:00:00Z',
+      }),
+    ]
+    const decisions = [
+      decisionFixture({ decision: 'approved', actor: APP_PERSONAS.firm.subject, decided_at: '2026-08-02T09:00:00Z' }),
+      decisionFixture({ decision: 'rejected', actor: APP_PERSONAS.firm.subject, decided_at: '2026-08-03T10:00:00Z', reason: 'Escalate to finance' }),
+    ]
+    const run = runFixture({ steps, decisions })
+
+    render(<ApprovalTrailCard run={readyRun(run)} />)
+
+    const stepViews = approvalTrailSteps(run)
+    const decisionViews = approvalTrailDecisions(run)
+    const knownData = new Set<string>([
+      ...stepViews.flatMap((v) => [v.roleTitle, v.holderText, v.dueLabel, v.notifyTarget, v.notifyChannel].filter((s): s is string => s != null)),
+      ...stepViews.map((v) => String(v.ord1)),
+      ...decisionViews.flatMap((v) => [v.actorText, v.whenLabel, v.reason].filter((s): s is string => s != null)),
+    ])
+    const knownCopy = new Set<string>(Object.values(APPROVAL_TRAIL_COPY))
+    const knownGlyphs = new Set(['·', '—', '✓'])
+
+    const card = screen.getByTestId('approval-trail')
+    const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT)
+    const unexplained: string[] = []
+    let matched = 0
+    let node: Node | null
+    while ((node = walker.nextNode())) {
+      const text = (node.textContent ?? '').trim()
+      if (text === '') continue
+      if (knownCopy.has(text) || knownData.has(text) || knownGlyphs.has(text)) {
+        matched++
+        continue
+      }
+      unexplained.push(text)
+    }
+
+    // Needle: any string the component authors itself lands here, not silently in `matched`.
+    expect(unexplained).toEqual([])
+    // Floor: proves the walk covered real content -- a card that rendered nothing would
+    // vacuously pass the line above.
+    expect(matched).toBeGreaterThan(10)
   })
 })

@@ -1017,7 +1017,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 
             {/* Directly above `Status history`, because that is where the evidence sits.
                 NOT titled "Audit trail" (the design's name for the same card):
-                import-wizard.spec.ts:538 asserts that string has zero matches here. */}
+                import-wizard.spec.ts:557 asserts that string has zero matches here. */}
             <SourceDocumentCard meta={source} onOpen={openPreview} />
 
             {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge

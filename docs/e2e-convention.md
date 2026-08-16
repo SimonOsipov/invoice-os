@@ -118,6 +118,12 @@ card, but covers only the **unarmed** case — both disabled, the trail empty. T
 because `[topology-never-publishes]` bars a topology spec from publishing the policy an
 armed run requires.
 
+That trail card reads its run on mount, and that GET answers 404 when there is no run —
+which Chromium logs as a console error, tripping the `collectErrors` gate in every
+detail-page test. The gate carries the exception (`consoleGate.ts`, matched on the
+message's resource URL so no other 404 is masked), not the API: the uniform 404 is a
+deliberate no-oracle property, and a 200-with-null-run would leak cross-tenant existence.
+
 Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The
 company switcher and onboarding dashboard are not nav surfaces and hold no

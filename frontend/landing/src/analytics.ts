@@ -60,3 +60,17 @@ export function ensureTag(hostname: string, record: ConsentRecord | null): boole
 export function bootAnalytics(): boolean {
   return ensureTag(window.location.hostname, readConsent())
 }
+
+export type DemoCtaSource = 'nav' | 'hero' | 'audience' | 'pricing' | 'demo_cta' | 'footer'
+export const DEMO_CTA_SOURCES: readonly DemoCtaSource[] =
+  ['nav', 'hero', 'audience', 'pricing', 'demo_cta', 'footer']
+
+// Stub — Stage 3 wires this through send()'s loaded-flag gate.
+export function trackDemoOpen(_source: DemoCtaSource): void {
+  throw new Error('not implemented: trackDemoOpen')
+}
+
+// Stub — Stage 3 wraps run() and fires the outcome senders through send().
+export async function trackedHubSpotSubmit(_run: () => Promise<void>): Promise<void> {
+  throw new Error('not implemented: trackedHubSpotSubmit')
+}

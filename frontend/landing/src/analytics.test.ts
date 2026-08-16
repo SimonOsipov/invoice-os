@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { measurementId, shouldLoadTag, tagSrc } from './analytics'
+import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES } from './analytics'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -21,6 +21,9 @@ afterEach(() => {
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
+const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
+const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'DemoCta.tsx', 'Footer.tsx']
 
 const ID = 'G-E409H76XYY'
 
@@ -126,5 +129,69 @@ describe('main.tsx boot wiring', () => {
     expect(MAIN_SRC).toContain('createRoot(')
     expect(MAIN_SRC).toMatch(/import\s*\{[^}]*\bbootAnalytics\b[^}]*\}\s*from\s*['"]\.\/analytics['"]/)
     expect(MAIN_SRC.indexOf('bootAnalytics()')).toBeGreaterThan(MAIN_SRC.indexOf('.render('))
+  })
+})
+
+describe('App.tsx CTA bindings (AC-3)', () => {
+  it('all six App.tsx call sites are bound to distinct sources', () => {
+    // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
+    expect(APP_SRC.length).toBeGreaterThan(0)
+    expect(APP_SRC).toContain('onBookDemo')
+
+    const bound = Array.from(APP_SRC.matchAll(/book\('([a-z_]+)'\)/g)).map((m) => m[1])
+    expect(bound.length).toBe(DEMO_CTA_SOURCES.length)
+    expect(new Set(bound).size).toBe(bound.length)
+    expect(new Set(bound)).toEqual(new Set(DEMO_CTA_SOURCES))
+    expect(APP_SRC).not.toMatch(/onBookDemo=\{onBookDemo\}/)
+  })
+})
+
+describe('CTA components untouched (AC-3)', () => {
+  it.each(CTA_COMPONENTS)('%s still declares onBookDemo: () => void and imports no analytics', (file) => {
+    const src = readFileSync(join(HERE, 'components', file), 'utf8')
+    expect(src.length).toBeGreaterThan(0)
+    expect(src).toContain('onBookDemo')
+    expect(src).toMatch(/onBookDemo\s*:\s*\(\)\s*=>\s*void/)
+    expect(src).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
+  })
+})
+
+describe('honeypot cannot reach outcome senders (AC-5)', () => {
+  it('DemoModal imports trackedHubSpotSubmit and neither sender directly', () => {
+    expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
+    expect(DEMO_MODAL_SRC).toContain('submitDemoLead')
+
+    expect(DEMO_MODAL_SRC).toMatch(
+      /import\s*\{[^}]*\btrackedHubSpotSubmit\b[^}]*\}\s*from\s*['"]\.\.\/analytics['"]/,
+    )
+    expect(DEMO_MODAL_SRC).not.toMatch(/\bgenerate_lead\b/)
+    expect(DEMO_MODAL_SRC).not.toMatch(/\bdemo_submit_failed\b/)
+
+    const occurrences = DEMO_MODAL_SRC.match(/trackedHubSpotSubmit\(/g) ?? []
+    expect(occurrences.length).toBe(1)
+
+    const line = DEMO_MODAL_SRC.split('\n').find((l) => l.includes('trackedHubSpotSubmit('))
+    expect(line).toBeDefined()
+    expect(line).toContain('submitDemoLead')
+  })
+})
+
+describe('honeypot branch and runStub pinned (AC-6)', () => {
+  it('the honeypot branch and runStub are unchanged', () => {
+    expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
+    expect(DEMO_MODAL_SRC).toContain('if (trap) await runStub()')
+    const delayCalls = DEMO_MODAL_SRC.match(/setTimeout\(resolve, 1300\)/g) ?? []
+    expect(delayCalls.length).toBe(1)
+  })
+})
+
+describe('DemoModal SSR graph purity (AC-8, gap)', () => {
+  it('importing DemoModal in a node environment is inert', async () => {
+    // Precondition mirrors the module-scope purity guard above.
+    expect(globalThis.window).toBeUndefined()
+    expect(globalThis.document).toBeUndefined()
+    await expect(import('./components/DemoModal')).resolves.toBeDefined()
+    expect(globalThis.window).toBeUndefined()
+    expect(globalThis.document).toBeUndefined()
   })
 })

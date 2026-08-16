@@ -191,6 +191,110 @@ describe('ensureTag — adversarial and edge cases', () => {
   })
 })
 
+describe('trackDemoOpen', () => {
+  it('AC-3: demo_open carries the call site that opened the modal', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackDemoOpen('footer')
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const entry = layer[layer.length - 1]
+    expect(Array.from(entry as IArguments)).toEqual(['event', 'demo_open', { cta_location: 'footer' }])
+  })
+
+  it('AC-3: every declared source produces a distinct payload', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    for (const source of mod.DEMO_CTA_SOURCES) mod.trackDemoOpen(source)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    // Filtered by event name: ensureTag already left 'js' and 'config' entries in the layer.
+    const demoOpenEntries = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'demo_open')
+    expect(demoOpenEntries.length).toBe(mod.DEMO_CTA_SOURCES.length)
+    const locations = demoOpenEntries.map((e) => (e[2] as { cta_location: string }).cta_location)
+    expect(new Set(locations)).toEqual(new Set(mod.DEMO_CTA_SOURCES))
+    expect(new Set(locations).size).toBe(mod.DEMO_CTA_SOURCES.length)
+  })
+
+  it('AC-2: demo_open sends nothing when the tag was not injected', async () => {
+    // No stubbed env id — the gate never opens.
+    const mod = await import('./analytics')
+    expect(() => mod.trackDemoOpen('nav')).not.toThrow()
+    expect((window as TestWindow).dataLayer).toBeUndefined()
+    expect((window as TestWindow).gtag).toBeUndefined()
+  })
+})
+
+describe('trackedHubSpotSubmit', () => {
+  it('AC-4: a resolved HubSpot submit is recorded as a lead', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    await mod.trackedHubSpotSubmit(async () => {})
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const outcomes = layer
+      .map((e) => Array.from(e as IArguments))
+      .filter((e) => e[1] === 'generate_lead' || e[1] === 'demo_submit_failed')
+    expect(outcomes).toEqual([['event', 'generate_lead', { form_name: 'book_a_demo' }]])
+  })
+
+  it('AC-4: a rejected HubSpot submit is recorded as a failure and rethrown', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    const err = new Error('hubspot 500')
+    // toBe, not toThrow: the wrapper must rethrow the identical object, not a substitute.
+    await expect(mod.trackedHubSpotSubmit(() => Promise.reject(err))).rejects.toBe(err)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const outcomes = layer
+      .map((e) => Array.from(e as IArguments))
+      .filter((e) => e[1] === 'generate_lead' || e[1] === 'demo_submit_failed')
+    expect(outcomes).toEqual([['event', 'demo_submit_failed', { form_name: 'book_a_demo' }]])
+  })
+
+  it('AC-4: the two outcome events are mutually exclusive', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+    const named = (name: string) =>
+      ((window as TestWindow).dataLayer ?? []).map((e) => Array.from(e as IArguments)).filter((e) => e[1] === name)
+
+    await mod.trackedHubSpotSubmit(async () => {})
+    expect(named('generate_lead').length).toBe(1)
+    expect(named('demo_submit_failed').length).toBe(0)
+
+    await mod.trackedHubSpotSubmit(() => Promise.reject(new Error('x'))).catch(() => {})
+    expect(named('generate_lead').length).toBe(1)
+    expect(named('demo_submit_failed').length).toBe(1)
+  })
+})
+
+describe('senders — no-op before ensureTag', () => {
+  it('AC-6: a sender before ensureTag touches no browser global', async () => {
+    const spies = spyOnConsole()
+    // Fresh module, ensureTag never called on it — the same guarantee AC-2's closed-gate
+    // row proves for trackDemoOpen, extended to the two outcome senders.
+    const mod = await import('./analytics')
+
+    expect(() => mod.trackDemoOpen('nav')).not.toThrow()
+    await expect(mod.trackedHubSpotSubmit(async () => {})).resolves.toBeUndefined()
+    const err = new Error('x')
+    await expect(mod.trackedHubSpotSubmit(() => Promise.reject(err))).rejects.toBe(err)
+
+    expect((window as TestWindow).dataLayer).toBeUndefined()
+    expect((window as TestWindow).gtag).toBeUndefined()
+    expectNoConsoleCalls(spies)
+  })
+})
+
 describe('console silence', () => {
   it('the console spies detect a call (non-vacuity control)', () => {
     const spies = spyOnConsole()
@@ -224,6 +328,24 @@ describe('console silence', () => {
     mod = await import('./analytics')
     mod.ensureTag('www.ascomply.com', GRANTED)
     mod.ensureTag('www.ascomply.com', GRANTED)
+
+    expectNoConsoleCalls(spies)
+  })
+
+  it('AC-9: no outcome path writes to the console', async () => {
+    const spies = spyOnConsole()
+
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+    await mod.trackedHubSpotSubmit(async () => {}).catch(() => {})
+    await mod.trackedHubSpotSubmit(() => Promise.reject(new Error('x'))).catch(() => {})
+
+    // Closed-gate rejection: the failure sender no-ops, but the wrapper still rethrows quietly.
+    vi.unstubAllEnvs()
+    vi.resetModules()
+    const closedMod = await import('./analytics')
+    await closedMod.trackedHubSpotSubmit(() => Promise.reject(new Error('x'))).catch(() => {})
 
     expectNoConsoleCalls(spies)
   })

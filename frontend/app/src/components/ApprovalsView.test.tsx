@@ -11,6 +11,7 @@ import path from 'node:path'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { APPROVALS_COPY } from '../lib/approvals'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { fmt } from '../lib/format'
 import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
@@ -993,7 +994,7 @@ describe('ApprovalsView.tsx source: the confirm handler guards on base == null b
     // invoicesViewState forces state:'idle' whenever base is null -- so the instant base
     // flips null on any re-render, the whole `state === 'ready'` subtree the confirm
     // button lives in unmounts before a click could ever reach the handler. A04-12 hits
-    // the identical wall; source scan instead, mirroring InvoicesList.tsx:264's
+    // the identical wall; source scan instead, mirroring InvoicesList.tsx:283's
     // submitSelection guard.
     const source = readSrc('src/components/ApprovalsView.tsx')
 
@@ -1003,5 +1004,102 @@ describe('ApprovalsView.tsx source: the confirm handler guards on base == null b
     const guardIdx = source.search(/if \(base == null\) return\b/)
     expect(guardIdx, 'the confirm handler must guard on base == null before calling approveInvoices').toBeGreaterThan(-1)
     expect(guardIdx).toBeLessThan(approveCallIdx)
+  })
+})
+
+// --- APPR-16-04 (task-536, Mode A) -- RED specs for the unmount-abort wiring (AC-5) and
+// the in-flight pager freeze (AC-6/AC-7), on the approvals surface only. AC-8 (switcher/
+// nav stay live, D-31) is covered on the register surface, InvoicesList.test.tsx's
+// A16-4h -- both surfaces share the same Pager, so pinning it once there is sufficient.
+describe('A16-4: unmount aborts the fan-out at a row boundary, and the pager freezes for the whole in-flight window (APPR-16-04)', () => {
+  it('A16-4e: unmounting ApprovalsView mid-fan-out aborts at the next row boundary -- no further POST', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const c = approvalRow({ id: 'inv-c', invoice_number: 'INV-C' })
+    const resolvers = new Map<string, (r: MockResponse) => void>()
+    // row b is held in flight -- unmount lands while it is still unsettled.
+    const { fetchMock, approvalCalls } = mockBulkFetch(
+      [listResponse([a, b, c], { limit: 50, offset: 0, total: 3 })],
+      (id) => (id === 'inv-b' ? new Promise<MockResponse>((resolve) => resolvers.set(id, resolve)) : approveOkResponse()),
+    )
+
+    const { unmount } = render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(2)) // a settled, b's POST issued and pending
+    expect(resolvers.has('inv-b')).toBe(true)
+
+    unmount()
+    resolvers.get('inv-b')!(approveOkResponse())
+    // No DOM survives the unmount to assert against -- flush enough microtask hops for
+    // the loop to resume and (if unguarded) fire row c's request.
+    await act(async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    })
+
+    expect(
+      approvalCalls(),
+      "row b's own response must still be recorded (abort never cancels an in-flight request), but row c must never be requested after unmount",
+    ).toHaveLength(2)
+    expect(fetchMock.mock.calls.filter(([u]) => /\/invoices\/inv-c\/approvals$/.test(u as string))).toHaveLength(0)
+  })
+
+  it('A16-4f: the approvals pager is disabled for the whole in-flight window, and re-enabled once settled', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (/\/approvals$/.test(url)) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      // limit:1/offset:1/total:3 -- both Prev and Next start enabled absent `busy`, so
+      // the freeze under test is the OR clause, not an edge-of-set disable.
+      return Promise.resolve(listResponse([a, b], { limit: 1, offset: 1, total: 3 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    const pager = () => screen.getByTestId('approvals-pager')
+    const prevBtn = () => within(pager()).getByText('← Previous').closest('button') as HTMLButtonElement
+    const nextBtn = () => within(pager()).getByText('Next →').closest('button') as HTMLButtonElement
+    expect(prevBtn().disabled, 'both buttons must start enabled -- proves the freeze, not an edge-of-set disable, is under test').toBe(false)
+    expect(nextBtn().disabled).toBe(false)
+    // Not yet frozen -- title never fires on a disabled element in Chromium, so an absent
+    // visible node here would mean the reason is unreachable the moment it matters.
+    expect(within(pager()).queryByTestId('pager-blocked-reason'), 'no reason node before the freeze').toBeNull()
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm')) // now submitting, POST held pending
+
+    // `loading` is false here (list.data is still the settled page) -- only `phase ===
+    // 'submitting'` can be freezing the pager in this window.
+    expect(prevBtn().disabled, 'the pager must freeze for the whole in-flight window').toBe(true)
+    expect(nextBtn().disabled).toBe(true)
+    // AC-7/D-25: a disabled control must state WHY, not go silently dead -- InvoicesList's
+    // sibling surface pins this (A16-4h); the approvals pager owed the same assertion.
+    expect(prevBtn().title, 'the frozen pager must carry a non-empty reason, not a bare disabled attribute').toBeTruthy()
+    expect(nextBtn().title).toBeTruthy()
+    // The reason must reach the user as VISIBLE text, not just the inert title.
+    expect(within(pager()).getByTestId('pager-blocked-reason').textContent, 'the visible reason must be APPROVALS_COPY.pagerReason').toBe(APPROVALS_COPY.pagerReason)
+    expect(screen.getByText(APPROVALS_COPY.pagerReason), 'queryable by text, not just by attribute').toBeTruthy()
+
+    resolvers[0](approveOkResponse()) // row a settles -- row b's POST issues next
+    await waitFor(() => expect(resolvers.length).toBe(2))
+
+    // The inter-row point: row a settled, row b now in flight. Only `phase ===
+    // 'submitting'` can still be freezing the pager here -- proves the freeze holds
+    // ACROSS the row boundary, not just for a single request.
+    expect(prevBtn().disabled, 'the pager must stay frozen between rows, not flicker enabled at the row boundary').toBe(true)
+    expect(nextBtn().disabled).toBe(true)
+
+    resolvers[1](approveOkResponse())
+    await screen.findByTestId('approvals-results')
+    await waitFor(() => expect(nextBtn().disabled, 'the pager must re-enable once settled').toBe(false))
+    expect(prevBtn().disabled).toBe(false)
   })
 })

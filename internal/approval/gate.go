@@ -159,9 +159,8 @@ func GateFactsTx(ctx context.Context, tx pgx.Tx, invoiceID, subject string) (Gat
 // statement (TestHeldRoleKeysTx_OneStatementRegardlessOfKeyAndHolderCount).
 //
 // An unheld, soft-deleted or unknown key is simply absent from the map, which reads false
-// in Go: absence and an explicit false are the same answer. decideTx (decision.go) keeps
-// its own byte-identical copy of this query -- it is the WRITE path, separately
-// mutation-pinned, and deliberately not re-pointed here.
+// in Go: absence and an explicit false are the same answer. decideTx (decision.go) calls
+// this directly for the write path -- the one AXIS-2 predicate, not a second copy.
 func HeldRoleKeysTx(ctx context.Context, tx pgx.Tx, keys []string, subject string) (map[string]bool, error) {
 	held := make(map[string]bool, len(keys))
 

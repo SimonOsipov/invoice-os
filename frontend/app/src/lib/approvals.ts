@@ -179,9 +179,13 @@ export async function approveInvoices(
   base: string,
   ids: string[],
   onProgress?: (result: ApproveResult, index: number) => void,
+  // Checked at the row BOUNDARY only, never forwarded into authedFetch below -- an
+  // already-sent row always settles (A16-4b); the next row just never fires (APPR-16-04).
+  signal?: AbortSignal,
 ): Promise<ApproveResult[]> {
   const results: ApproveResult[] = []
   for (const [index, id] of ids.entries()) {
+    if (signal?.aborted) break
     let result: ApproveResult
     try {
       await authedFetch<unknown>(`${base}/api/invoice/v1/invoices/${id}/approvals`, {
@@ -238,6 +242,8 @@ export const APPROVALS_COPY = {
   tenantFallback: 'Your workspace',
   selectAllLabel: 'Select every invoice on this page you can approve',
   sending: 'Approving…',
+  // D-25: states why the pager freezes during a fan-out (APPR-16-04).
+  pagerReason: 'Paging is paused while approvals are sending.',
   resultInvoice: 'Invoice #',
   resultOutcome: 'Result',
   eyebrow: 'AWAITING YOUR APPROVAL',

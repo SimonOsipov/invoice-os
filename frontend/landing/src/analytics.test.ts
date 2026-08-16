@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES } from './analytics'
+import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES, scrollDepthPercent } from './analytics'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -93,6 +93,46 @@ describe('tagSrc', () => {
   })
 })
 
+describe('scrollDepthPercent (AC-7)', () => {
+  it('depth is the rounded fraction of scrollable height', () => {
+    expect(scrollDepthPercent(1000, 800, 4800)).toBe(25)
+    expect(scrollDepthPercent(2000, 800, 4800)).toBe(50)
+    expect(scrollDepthPercent(4000, 800, 4800)).toBe(100)
+  })
+
+  it('the bottom of the page reads as 100 despite sub-pixel scroll', () => {
+    // Kills a Math.floor mutant: floor(99.99) = 99, round(99.99) = 100.
+    expect(scrollDepthPercent(3999.6, 800, 4800)).toBe(100)
+  })
+
+  it('a page that fits the viewport reads as fully seen', () => {
+    expect(scrollDepthPercent(0, 900, 900)).toBe(100)
+    expect(scrollDepthPercent(0, 900, 400)).toBe(100)
+  })
+
+  it('depth is clamped to 0..100 under rubber-band scrolling', () => {
+    expect(scrollDepthPercent(-120, 800, 4800)).toBe(0)
+    expect(scrollDepthPercent(9999, 800, 4800)).toBe(100)
+  })
+
+  it('AC-9: a non-finite measurement fails dark, never wrong', () => {
+    expect(scrollDepthPercent(NaN, 800, 4800)).toBe(0)
+    expect(scrollDepthPercent(1000, NaN, 4800)).toBe(0)
+    expect(scrollDepthPercent(1000, 800, NaN)).toBe(0)
+    expect(scrollDepthPercent(Infinity, 800, 4800)).toBe(0)
+    expect(scrollDepthPercent(1000, Infinity, 4800)).toBe(0)
+    expect(scrollDepthPercent(1000, 800, Infinity)).toBe(0)
+  })
+
+  it('AC-9: a non-finite viewport does not masquerade as a fully-seen page', () => {
+    // Guard-order pin: checking `scrollable <= 0` before the finite check
+    // would return 100 here instead of 0.
+    expect(scrollDepthPercent(0, Infinity, 900)).toBe(0)
+    expect(scrollDepthPercent(0, NaN, 900)).toBe(0)
+    expect(scrollDepthPercent(0, 900, Infinity)).toBe(0)
+  })
+})
+
 describe('module-scope purity', () => {
   it('AC-2: importing the module in a node environment is inert', async () => {
     // Precondition, not a redundant check: proves the node environment carries
@@ -143,6 +183,38 @@ describe('App.tsx CTA bindings (AC-3)', () => {
     expect(new Set(bound).size).toBe(bound.length)
     expect(new Set(bound)).toEqual(new Set(DEMO_CTA_SOURCES))
     expect(APP_SRC).not.toMatch(/onBookDemo=\{onBookDemo\}/)
+  })
+})
+
+describe('App.tsx scroll-depth listener (AC-7)', () => {
+  it('registers one passive throttled scroll listener and removes it', () => {
+    // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
+    expect(APP_SRC.length).toBeGreaterThan(0)
+    expect(APP_SRC).toContain('onBookDemo')
+
+    expect(Array.from(APP_SRC.matchAll(/addEventListener\('scroll'/g)).length).toBe(1)
+    expect(APP_SRC).toMatch(/addEventListener\('scroll',\s*\w+,\s*\{\s*passive:\s*true\s*\}\)/)
+    expect(Array.from(APP_SRC.matchAll(/removeEventListener\('scroll'/g)).length).toBe(1)
+    expect(Array.from(APP_SRC.matchAll(/requestAnimationFrame\(/g)).length).toBe(1)
+    expect(Array.from(APP_SRC.matchAll(/cancelAnimationFrame\(/g)).length).toBe(1)
+
+    // Nav.tsx keeps its own single pair — proves App.tsx's listener isn't folded
+    // into Nav.tsx's effect (AC-6, decision A-6).
+    const NAV_SRC = readFileSync(join(HERE, 'components', 'Nav.tsx'), 'utf8')
+    expect(Array.from(NAV_SRC.matchAll(/addEventListener\('scroll'/g)).length).toBe(1)
+    expect(Array.from(NAV_SRC.matchAll(/removeEventListener\('scroll'/g)).length).toBe(1)
+  })
+
+  it('composes trackScrollDepth(scrollDepthPercent(...)) rather than an empty measure()', () => {
+    expect(APP_SRC.length).toBeGreaterThan(0)
+    expect(APP_SRC).toContain('onBookDemo')
+
+    const analyticsImports = Array.from(APP_SRC.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\/analytics['"]/g))
+    expect(analyticsImports.length, 'expected exactly one import statement from ./analytics').toBe(1)
+    const names = analyticsImports[0][1].split(',').map((s) => s.trim())
+    expect(names).toEqual(expect.arrayContaining(['scrollDepthPercent', 'trackScrollDepth']))
+
+    expect(APP_SRC).toMatch(/trackScrollDepth\(\s*scrollDepthPercent\(/)
   })
 })
 

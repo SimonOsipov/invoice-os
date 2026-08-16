@@ -99,3 +99,13 @@ export async function trackedHubSpotSubmit(run: () => Promise<void>): Promise<vo
   }
   trackDemoSubmitOk()
 }
+
+// Stubs for LAND-03-04's Test-Spec stage (task-545) — real arithmetic and dedupe
+// land in the implementation stage. Exported so the test imports resolve.
+export function scrollDepthPercent(_scrollY: number, _viewportH: number, _documentH: number): number {
+  throw new Error('not implemented')
+}
+
+export function trackScrollDepth(_percent: number): void {
+  throw new Error('not implemented')
+}

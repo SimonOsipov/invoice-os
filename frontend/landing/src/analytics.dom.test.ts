@@ -391,6 +391,66 @@ describe('trackedHubSpotSubmit', () => {
   })
 })
 
+describe('trackScrollDepth (AC-7)', () => {
+  it('each milestone fires at most once per page load', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackScrollDepth(30)
+    mod.trackScrollDepth(30)
+    mod.trackScrollDepth(26)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const scrollEvents = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'scroll_depth')
+    expect(scrollEvents).toEqual([['event', 'scroll_depth', { percent_scrolled: 25 }]])
+  })
+
+  it('a jump past several thresholds fires each of them, ascending', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackScrollDepth(80)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const scrollEvents = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'scroll_depth')
+    expect(scrollEvents).toEqual([
+      ['event', 'scroll_depth', { percent_scrolled: 25 }],
+      ['event', 'scroll_depth', { percent_scrolled: 50 }],
+      ['event', 'scroll_depth', { percent_scrolled: 75 }],
+    ])
+  })
+
+  it('reaching the bottom fires the fourth threshold and no more', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    // percent === 100 exactly hits the last milestone's boundary — the case
+    // that kills a `>` mutant on the `percent < m` comparison.
+    mod.trackScrollDepth(100)
+    mod.trackScrollDepth(100)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const scrollEvents = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'scroll_depth')
+    expect(scrollEvents).toEqual([
+      ['event', 'scroll_depth', { percent_scrolled: 25 }],
+      ['event', 'scroll_depth', { percent_scrolled: 50 }],
+      ['event', 'scroll_depth', { percent_scrolled: 75 }],
+      ['event', 'scroll_depth', { percent_scrolled: 100 }],
+    ])
+  })
+
+  it('AC-2: scroll depth sends nothing when the tag was not injected', async () => {
+    // No stubbed env id — the gate never opens.
+    const mod = await import('./analytics')
+    expect(() => mod.trackScrollDepth(100)).not.toThrow()
+    expect((window as TestWindow).dataLayer).toBeUndefined()
+    expect((window as TestWindow).gtag).toBeUndefined()
+  })
+})
+
 describe('send — the loaded guard, isolated from the gtag optional-chain (gap coverage)', () => {
   it('a sender no-ops even when window.gtag is already defined but this module never loaded the tag', async () => {
     const mod = await import('./analytics')

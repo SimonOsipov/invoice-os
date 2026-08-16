@@ -1,5 +1,5 @@
-// RED specs (task-555, LAND-04-01, Test-first) — pin isPrivacyPath's total/pure
-// contract before it exists. Mirrors components/activeSection.test.ts's plain
+// RED-then-GREEN specs (task-555, LAND-04-01, Test-first) — pin isPrivacyPath's total/pure
+// contract. Mirrors components/activeSection.test.ts's plain
 // describe/it shape: pure function, no DOM, no renderToStaticMarkup.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'

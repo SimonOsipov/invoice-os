@@ -68,13 +68,15 @@ export function Privacy() {
             <li style={ITEM}>how far down a page you scrolled</li>
             <li style={ITEM}>when you opened the demo form</li>
             <li style={ITEM}>whether that form then succeeded or failed</li>
+            <li style={ITEM}>your device, browser and operating system, your screen size and your language</li>
+            <li style={ITEM}>a randomly generated identifier that lets Google recognise the same browser on a later visit</li>
           </ul>
 
           <h2 style={H2}>What Google never receives</h2>
           <p style={P}>
             We never send Google your name, your email address, your company, or any answer you typed or chose in the
-            demo form. The only details attached to the events above are which button you used, which form it was, and
-            how far down you scrolled.
+            demo form. The only details we attach ourselves are which button you used, which form it was, and how far
+            down you scrolled — the rest of the list above is collected by Google's own code.
           </p>
 
           <h2 style={H2}>Cookies on your device</h2>
@@ -112,7 +114,7 @@ export function Privacy() {
           <h2 style={H2}>Google Fonts</h2>
           <p style={P}>
             Google also serves the fonts this site is typeset in. Loading a font tells Google your IP address and which
-            page asked for it.
+            site asked for it.
           </p>
           <p style={P}>
             This happens on every page of this site, every time, whatever you decide about analytics. It is not behind
@@ -127,8 +129,8 @@ export function Privacy() {
           </p>
           <p style={P}>
             HubSpot receives exactly this: your first and last name — split from the single full name you typed — your
-            work email, your company, and, if you chose them, your role, your taxpayer size and your monthly invoice
-            volume. Anything left empty is not sent at all, neither as a blank value nor as an empty field.
+            work email, your company, and, unless you cleared them, your role, your taxpayer size and your monthly
+            invoice volume. Anything left empty is not sent at all, neither as a blank value nor as an empty field.
           </p>
           <p style={P}>
             The three optional questions come with an answer already selected when the form opens, so unless you change
@@ -171,7 +173,8 @@ export function Privacy() {
             </li>
             <li style={ITEM}>
               <strong>Block googletagmanager.com with a content blocker.</strong> If that host never loads, the
-              analytics code never arrives and nothing is sent. This is the most complete of the three: it stops the
+              analytics code never arrives and nothing is sent. This is the most complete of the three browser
+              controls: it stops the
               measurement before it starts. It does not stop the fonts, which come from a different Google host, and it
               does not stop the demo form.
             </li>

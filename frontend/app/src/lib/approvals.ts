@@ -318,33 +318,46 @@ export function isNoApprovalRun(e: unknown): boolean {
   return e instanceof ApiError && e.kind === 'http' && e.status === 404
 }
 
-// Stage 3 stub: resolves the run, null on 404. Catch sits OUTSIDE authedFetch so the
-// 401->sign-out seam still fires on a 401.
+// Resolves the run, null on 404. Catch sits OUTSIDE authedFetch so the 401->sign-out
+// seam still fires on a 401 -- every non-404 error rethrows unwrapped.
 export async function getInvoiceApprovalRun(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
 ): Promise<ApprovalRun | null> {
-  throw new Error('not implemented')
+  try {
+    return await authedFetch<ApprovalRun>(`${base}/api/invoice/v1/invoices/${id}/approval`)
+  } catch (e) {
+    if (isNoApprovalRun(e)) return null
+    throw e
+  }
 }
 
-// Stage 3 stub: POST the decision. Body omits `reason` on 'approved'.
+// POSTs the decision. Body omits `reason` on 'approved'; 'rejected' sends it verbatim
+// and untrimmed -- the server does the trimming.
 export async function decideInvoice(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
-  _decision: 'approved' | 'rejected',
-  _reason?: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  decision: 'approved' | 'rejected',
+  reason?: string,
 ): Promise<ApprovalRun> {
-  throw new Error('not implemented')
+  const body = decision === 'rejected' ? { decision, reason } : { decision }
+  return authedFetch<ApprovalRun>(`${base}/api/invoice/v1/invoices/${id}/approvals`, {
+    method: 'POST',
+    body,
+  })
 }
 
-// Stage 3 stub: the reject-reason trim guard.
-export function canRejectReason(_reason: string): boolean {
-  throw new Error('not implemented')
+// Mirrors invoices.ts's canResolveOutside -- the reject-reason trim guard.
+export function canRejectReason(reason: string): boolean {
+  return reason.trim() !== ''
 }
 
-// Stage 3 stub: 0/1/2-sentence de-dup for the approve/reject blocked reasons.
-export function decisionBlockedReasons(_approve: string | null, _reject: string | null): string[] {
-  throw new Error('not implemented')
+// 0/1/2-sentence de-dup for the approve/reject blocked reasons: null drops out,
+// byte-identical strings collapse to one.
+export function decisionBlockedReasons(approve: string | null, reject: string | null): string[] {
+  if (approve == null) return reject == null ? [] : [reject]
+  if (reject == null || reject === approve) return [approve]
+  return [approve, reject]
 }

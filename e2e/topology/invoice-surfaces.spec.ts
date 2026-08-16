@@ -26,7 +26,7 @@ import { test, expect, type Page, type Request } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
-import { isApprovalRun404 } from './consoleGate'
+import { approvalRun404Dropper } from './consoleGate'
 import { assertFillsColumn, gaps, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
@@ -36,9 +36,10 @@ import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 // copy, not a new seam).
 function collectErrors(page: Page): string[] {
   const errors: string[] = []
+  const dropApprovalRun404 = approvalRun404Dropper(page)
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return
-    if (isApprovalRun404(msg.text(), msg.location().url)) return
+    if (dropApprovalRun404(msg.text(), msg.location().url)) return
     errors.push(msg.text())
   })
   page.on('pageerror', (err) => {

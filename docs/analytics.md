@@ -73,9 +73,10 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    **invisible in every standard report** — the call-site attribution this story exists to deliver
    would silently not appear.
 5. **Confirm in GA4 DebugView after deploy** that a real visit to `https://www.ascomply.com`
-   reports `page_view` with a traffic source, that a real submission reports `generate_lead`, and
-   that **all six** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`, `demo_cta`,
-   `footer`.
+   reports `page_view` with a traffic source, that a real submission reports `generate_lead`, that
+   **all six** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`, `demo_cta`,
+   `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
+   `percent_scrolled` 25, 50, 75 and 100 — four events, no repeats on scrolling back up.
    Not optional polish. A mutation making `App.tsx`'s `book()` ignore its argument and hardcode one
    source **survives every test in the repo**: `analytics.test.ts` matches the six literal call
    sites against `App.tsx` as *text*, `analytics.dom.test.ts` calls `trackDemoOpen` directly rather

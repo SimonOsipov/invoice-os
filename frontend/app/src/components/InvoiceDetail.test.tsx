@@ -2813,22 +2813,42 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(screen.getAllByRole('button').length).toBe(buttonsBefore)
   })
 
-  // QA-added (task-554 row 17): the D-36 sibling-diff obligation -- View UBL's own
-  // wrapper-vs-fragment guard (T4, InvoiceDetail.test.tsx:2070-2082) does not reach these
-  // two testids, so nothing else in the suite would catch a wrapper <div> fused around
-  // Approve/Reject. Same technique, same parent-identity oracle.
-  it('17: detail-approve and detail-reject are direct children of the action column, like view-ubl -- fragment, never a wrapper div', async () => {
+  // QA-added (task-554 row 17), corrected during Stage 3 (task-554): the row as originally
+  // written asserted `detail-approve`/`detail-reject`'s `parentElement` equals `view-ubl`'s
+  // AND `invoice-actions`'s -- i.e. bare siblings with no wrapper. That is not AC-1's
+  // invariant: two buttons side by side need a row wrapper (`detail-decision-actions`,
+  // this repo's own precedent for a row inside this column being `invoice-actions`'s own
+  // inner `<div style={{display:'flex'}}>`), and the plan's markup sketch names that
+  // wrapper explicitly. AC-1's "sibling BLOCK... NOT inside that div" constrains which
+  // CONTAINER, not whether one exists. Reworked to assert the real invariant, strengthened
+  // rather than weakened: (a) neither button is inside `invoice-actions`, the guarantee
+  // that survives a `can_edit:false` refetch and is the whole point of AC-1; (b) the shared
+  // wrapper is a direct child of the same parent holding `view-ubl` and `invoice-actions`,
+  // so all three are siblings in the action column; (c) the wrapper renders under the same
+  // `!editing` gate as `view-ubl`, not `can_edit` -- proven by a second render where
+  // `can_edit:false` removes `invoice-actions` but not the wrapper.
+  it('17: detail-decision-actions is a sibling of view-ubl and invoice-actions in the action column, gated on !editing like view-ubl -- never on can_edit', async () => {
     mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const bar = await screen.findByTestId('invoice-actions')
     const viewUbl = screen.getByTestId('view-ubl')
+    const decisionActions = screen.getByTestId('detail-decision-actions')
     const approveBtn = screen.getByTestId('detail-approve')
     const rejectBtn = screen.getByTestId('detail-reject')
 
-    expect(approveBtn.parentElement).toBe(bar.parentElement)
-    expect(rejectBtn.parentElement).toBe(bar.parentElement)
-    expect(approveBtn.parentElement).toBe(viewUbl.parentElement)
+    expect(bar.contains(approveBtn)).toBe(false)
+    expect(bar.contains(rejectBtn)).toBe(false)
+    expect(decisionActions.parentElement).toBe(viewUbl.parentElement)
+    expect(decisionActions.parentElement).toBe(bar.parentElement)
+    cleanup()
+
+    // can_edit:false removes invoice-actions (its own can_edit && !editing gate) but must
+    // not remove detail-decision-actions, which is gated on !editing alone, like view-ubl.
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: true, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect(await screen.findByTestId('detail-decision-actions')).toBeTruthy()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
   })
 
   // QA-added (task-554 row 19): closes the Approve/Reject asymmetry left by row 11, which

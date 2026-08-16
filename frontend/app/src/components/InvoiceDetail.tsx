@@ -15,7 +15,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
-import { getInvoiceApprovalRun, type ApprovalRun } from '../lib/approvals'
+import { DETAIL_DECISION_COPY, decisionBlockedReasons, getInvoiceApprovalRun, type ApprovalRun } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
@@ -159,6 +159,10 @@ const VIEW_UBL_REASON_ID = 'view-ubl-blocked-reason-text'
 
 // Same rationale again; a fourth distinct id, for the resolve-outside button.
 const RESOLVE_OUTSIDE_REASON_ID = 'resolve-outside-blocked-reason-text'
+
+// Same rationale again; a fifth and sixth distinct id, for the Approve/Reject pair.
+const APPROVE_REASON_ID = 'approve-blocked-reason-text'
+const REJECT_REASON_ID = 'reject-blocked-reason-text'
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
@@ -358,6 +362,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
     const revalidateDisabled = !inv.can_revalidate || revalidating
     const resolveOutsideDisabled = !inv.can_resolve_outside || resolving || !canResolveOutside(resolveReason)
+    // 0, 1 or 2 sentences, byte-identical reasons collapsed to one (task-554, D-19).
+    const decisionReasons = decisionBlockedReasons(inv.approve_blocked_reason, inv.reject_blocked_reason)
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
     // (established by the `if (base == null)` branch above) does not survive into a
@@ -578,6 +584,69 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                 </>
               )}
+              {/* The decision pair, gated on `!editing` alone like View UBL above -- NOT
+                  `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
+                  where `can_edit` is false (queued, submitted, failed, ...), and a decision
+                  is taken on the STORED record for the same reason UBL is hidden while
+                  editing. A row wrapper (`detail-decision-actions`), not bare siblings --
+                  two buttons side by side need a flex row, same pattern as
+                  `invoice-actions`'s own inner row below -- but the wrapper itself sits
+                  outside `invoice-actions`, never inside it, so it survives that div's
+                  disappearance. Same four disabled layers as View UBL/Re-validate/Submit
+                  above; Approve additionally needs `filter: 'none'` (`.v2-btn-primary`),
+                  Reject (ghost) does not. */}
+              {!editing && (
+                <>
+                  <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      data-testid="detail-approve"
+                      disabled={!inv.can_approve}
+                      title={decisionReasons[0] ?? undefined}
+                      aria-describedby={decisionReasons[0] != null ? APPROVE_REASON_ID : undefined}
+                      className="v2-btn v2-btn-primary pf-btn"
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        fontSize: 13,
+                        ...(!inv.can_approve
+                          ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                          : null),
+                      }}
+                    >
+                      {DETAIL_DECISION_COPY.approve}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="detail-reject"
+                      disabled={!inv.can_reject}
+                      title={(decisionReasons.length > 1 ? decisionReasons[1] : decisionReasons[0]) ?? undefined}
+                      aria-describedby={
+                        decisionReasons.length > 1 ? REJECT_REASON_ID : decisionReasons[0] != null ? APPROVE_REASON_ID : undefined
+                      }
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        fontSize: 13,
+                        ...(!inv.can_reject ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                      }}
+                    >
+                      {DETAIL_DECISION_COPY.reject}
+                    </button>
+                  </div>
+                  {decisionReasons[0] != null && (
+                    <div id={APPROVE_REASON_ID} data-testid="approve-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {decisionReasons[0]}
+                    </div>
+                  )}
+                  {decisionReasons.length > 1 && (
+                    <div id={REJECT_REASON_ID} data-testid="reject-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {decisionReasons[1]}
+                    </div>
+                  )}
+                </>
+              )}
               {inv.can_edit && !editing && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -601,10 +670,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         (2) the inline background/color/cursor swap below, which both mutes the
                             button and, being inline, outranks that unguarded :hover rule so a
                             disabled button stops reacting to the pointer. Treatment copied from
-                            CreateUpload.tsx:154-156/:217-219, the repo's shipped PERSISTENT
-                            disabled gating; deliberately NOT InvoicesList.tsx:347's `opacity`,
-                            which is a sub-second in-flight state and provably does not suppress
-                            the hover swap (Surface Conflicts -- one precedent picked, not blended);
+                            CreateUpload.tsx:277-284 (layers (1)+(2) only there -- no reason text,
+                            no aria), the repo's shipped PERSISTENT disabled gating; deliberately
+                            NOT InvoicesList.tsx:347's `opacity`, which is a sub-second in-flight
+                            state and provably does not suppress the hover swap (Surface Conflicts
+                            -- one precedent picked, not blended);
                         (3) the visible sibling text below, carrying the backend's reason
                             verbatim -- the only layer a keyboard/screen-reader user and a
                             Playwright text assertion can both reach, since a disabled button is

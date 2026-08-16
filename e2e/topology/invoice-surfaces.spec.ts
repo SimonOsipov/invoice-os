@@ -1152,12 +1152,15 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   // and the Phase 3.5 deploy-gate checklist, not by a browser assertion here.
   await expect(page.getByTestId('failure-detail')).toContainText('was not recorded')
   // `can_edit` is false for a failed invoice ([gates-on-the-wire], store.go's
-  // canEdit/canTransition), so the whole actions bar (Edit, Re-validate, and Submit
-  // together) renders nothing -- `edit-invoice` would be vacuous here (Edit is never
+  // canEdit/canTransition), so the `can_edit`-gated actions bar (Edit, Re-validate, and
+  // Submit together) renders nothing -- `edit-invoice` would be vacuous here (Edit is never
   // clicked), so `invoice-actions`/`edit-toggle` are the real guard ([actions-visibility]).
   // No button matches /submit/i either: the detail page's own Submit is gated by that same
   // `can_edit` check, and the register's Submit button is unmounted while on the detail
-  // view -- App.tsx's view switch is exclusive, never both mounted at once.
+  // view -- App.tsx's view switch is exclusive, never both mounted at once. The Approve/
+  // Reject pair (task-554, APPR-13-04) is gated on `!editing` alone, not `can_edit`, so it
+  // still renders here -- outside this bar, per-status disabled state covered by the SPA
+  // unit suite, not asserted here.
   await expect(page.getByTestId('revalidate')).toHaveCount(0)
   await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
   await expect(page.getByTestId('edit-toggle')).toHaveCount(0)

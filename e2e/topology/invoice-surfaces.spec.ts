@@ -1637,9 +1637,11 @@ test('register-confirm-stage: arm, a selection change disarms, re-arm sends exac
     contentType: 'application/json',
   })
 
-  // Non-vacuity control: LIVE_POLL_MS is 2000ms. Both rows are still `validated`, so
-  // shouldPollList keeps polling off and nothing but a user action can disarm this bar --
-  // proved by waiting past the interval before checking, not assumed.
+  // Timing control, not a poll guard: shouldPollList (lib/invoices.ts:1259-1261) needs a
+  // row in queued/submitted (both stay validated here) and useLiveRefresh never installs
+  // a timer while inactive, so no interval exists to guard against either way. This only
+  // rules out a confound for the uncheck-disarms assertion below -- that the bar might
+  // disarm on its own over elapsed time, for a reason unrelated to the checkbox.
   await page.waitForTimeout(2500)
   await expect(confirmBtn, 'the armed bar must not self-disarm while every row stays validated').toBeVisible()
 

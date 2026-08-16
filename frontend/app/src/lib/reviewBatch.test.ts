@@ -1210,7 +1210,8 @@ describe('reviewPills (AC-2, D3) — takes the four totals only, no rows paramet
 // RED spec (APPR-12-06, task-531, A06-7) — a validated invoice held by an open approval
 // run is not "ready to submit" (INVOICES-06's own missing-reason gap): the ready pill's
 // label over-claimed. Asserted through reviewPills (REVIEW_PILL_LABELS itself is
-// module-private) — fails today against the still-pinned 'Ready to submit' string.
+// module-private) — green today: the pill already reads 'Validated' (REVIEW_PILL_LABELS,
+// reviewBatch.ts:896-901).
 describe('reviewPills: the ready pill no longer over-claims (APPR-12-06, AC #3)', () => {
   it("A06-7: REVIEW_PILL_LABELS.ready is 'Validated', not 'Ready to submit' — a validated row held by an approval run is not ready to submit", () => {
     const totals = { allTotal: 10, cleanTotal: 4, failingTotal: 3, queuedTotal: 3 }

@@ -1,10 +1,10 @@
-// QA Stage 4 (task-328, BUG-01-02) — structural coverage for the Pager relocation. No
-// .test.tsx anywhere renders ReviewInvoicesTab or Pager, and no e2e spec targets
-// 'review-pager' or clicks Prev/Next (grep confirmed) — a copy-paste slip during the move
-// (swapped canPrev/canNext, a dropped busy gate, a lost testid) would compile clean and
-// ship silently wrong. Source-scan only, matching reviewBatch.test.ts's TAB-7b/BULK-15
-// by-path idiom: environment:'node' (vitest.config.ts) has no jsdom, so there is no render
-// oracle here regardless.
+// QA Stage 4 (task-328, BUG-01-02) — structural coverage for the Pager relocation.
+// ReviewInvoicesTab.test.tsx (added for D-28) now renders ReviewInvoicesTab and its Pager;
+// no e2e spec targets 'review-pager' or clicks its Prev/Next (grep confirmed) — a
+// copy-paste slip during the move (swapped canPrev/canNext, a dropped busy gate, a lost
+// testid) would still compile clean and ship silently wrong here. Source-scan only,
+// matching reviewBatch.test.ts's TAB-7b/BULK-15 by-path idiom: environment:'node'
+// (vitest.config.ts) has no jsdom, so there is no render oracle in THIS file regardless.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -62,24 +62,28 @@ describe('Pager: testId prop defaults to review-pager and drives data-testid (AC
   })
 })
 
-// APPR-16-04 (task-536, D-28 carve-out): ReviewInvoicesTab's pager is deliberately left
-// un-frozen -- it has no component test file, so widening its `busy` here would trace to
-// no acceptance criterion. Not itself a red-today check (this call site is untouched by
-// this subtask either way); it guards against a LATER subtask quietly widening it.
-describe("Pager: ReviewInvoicesTab.tsx's call site stays out of the in-flight freeze (D-28 carve-out)", () => {
-  it('busy is still busy={loading} alone -- no phase/submitting term, no reason prop', () => {
+// D-28 closed: ReviewInvoicesTab's pager now freezes during a bulk submit, the same as
+// InvoicesList's and ApprovalsView's own call sites (ReviewInvoicesTab.test.tsx covers
+// the runtime behaviour; this pins the exact call-site wiring, matching this file's own
+// AC-3 idiom above).
+describe("Pager: ReviewInvoicesTab.tsx's call site freezes during a bulk submit, same as its siblings (D-28 closed)", () => {
+  it("busy folds in phase === 'submitting', and reason is BULK_COPY.pagerReason while submitting", () => {
     const callSite = /<Pager[\s\S]*?\/>/.exec(tabSrc)?.[0]
     expect(callSite, 'exactly one <Pager ... /> call site').toBeTruthy()
-    expect(callSite, "D-28: ReviewInvoicesTab's pager must stay busy={loading} alone, never widened").toMatch(/busy=\{loading\}/)
-    expect(callSite, 'no reason prop belongs on the one call site D-28 carves out').not.toMatch(/reason=/)
+    expect(callSite, "the freeze must fold into busy, matching InvoicesList's/ApprovalsView's own call sites").toMatch(
+      /busy=\{loading \|\| phase === 'submitting'\}/,
+    )
+    expect(callSite, 'the reason must be BULK_COPY.pagerReason while submitting, undefined otherwise').toMatch(
+      /reason=\{phase === 'submitting' \? BULK_COPY\.pagerReason : undefined\}/,
+    )
   })
 })
 
 // A defect fix, not a widening (task-539): title never fires on a disabled element in
 // Chromium (e2e/topology/roles.spec.ts's own expectDisabledWithReason helper requires
 // both channels), so the frozen pager owed a VISIBLE reason, not just an attribute.
-// Combined with the D-28 pin above (ReviewInvoicesTab passes no `reason=`), the `reason !=
-// null` gate below proves that call site renders no reason node at all.
+// D-28 closed: ReviewInvoicesTab's call site now passes `reason=` too (pin above), so the
+// `reason != null` gate below is what renders ITS visible reason node as well.
 describe('Pager: the frozen reason is visible text, not title alone (D-25 fix)', () => {
   it('the reason node is gated on reason != null, sharing one id with both buttons via aria-describedby', () => {
     expect(pagerSrc, 'the visible reason must be conditioned on reason != null').toMatch(/reason != null && \(/)

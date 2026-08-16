@@ -26,7 +26,7 @@ import { test, expect, type Page, type Request } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
-import { assertFillsColumn } from './layout'
+import { assertFillsColumn, gaps, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // collectErrors()/signInFirm(): the same console/pageerror + firm-persona
@@ -1542,6 +1542,123 @@ test('register-selection: select-all is page-scoped and paging clears it', async
   await page2Resp
 
   await expect(page.getByTestId('batch-submit-summary'), 'paging must clear the selection').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// APPR-16-08 (task-540): the confirm stage AC-3 gave InvoicesList's batch-submit button
+// (Core AC-8/AC-1/AC-2 of APPR-16). Two invoices, not one: `bar.visible = n > 0`
+// (reviewBatch.ts) unmounts batch-submit-summary entirely at n=0, so a single-row
+// toggle-off couldn't show the idle rung this test needs to see.
+//
+// Non-vacuity (Stage-1 correction C-3, load-bearing): InvoicesList.tsx:195-204 resets
+// `phase` to 'idle' on every `rows` identity change, and the 2s live-refresh poll
+// produces a fresh `rows` every tick WHILE any row is in-flight (shouldPollList). Both
+// fixture invoices stay `validated` throughout arm/re-arm, so polling never turns on --
+// this is what makes the disarm below attributable to the selection change and not a
+// poll tick. The wait-then-assert below proves that directly rather than assuming it.
+test('register-confirm-stage: arm, a selection change disarms, re-arm sends exactly one POST', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `APPR-16-08 confirm ${Date.now()}`, tin: freshTin() })
+
+  const num1 = `INV-APPR1608-A-${Date.now()}`
+  const num2 = `INV-APPR1608-B-${Date.now()}`
+  const [inv1, inv2] = await Promise.all([
+    createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(num1) }),
+    createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(num2) }),
+  ])
+  await Promise.all([validateInvoice(token, inv1.id), validateInvoice(token, inv2.id)])
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const row1 = invoiceRowByNumber(page, num1)
+  const row2 = invoiceRowByNumber(page, num2)
+  await row1.getByTestId('invoice-select').check()
+  await row2.getByTestId('invoice-select').check()
+
+  // AC-2: request interception registered BEFORE the arm click -- arming alone must
+  // issue no POST to the submissions endpoint. Recorded for the whole test, not just this
+  // window, so the later re-arm+confirm can assert exactly one.
+  const submissionPosts: Request[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions')) {
+      submissionPosts.push(req)
+    }
+  })
+
+  await page.getByTestId('batch-submit').click()
+  const confirmBtn = page.getByTestId('batch-submit-confirm')
+  const cancelBtn = page.getByTestId('batch-submit-cancel')
+  await expect(confirmBtn).toBeVisible()
+  await expect(cancelBtn).toBeVisible()
+  await expect(page.getByTestId('batch-submit')).toHaveCount(0)
+  expect(submissionPosts, 'arming alone must issue no POST').toHaveLength(0)
+
+  // AC-3: the bar's two-stage layout, on the deployed build, at every WIDE_WIDTHS entry.
+  const bar = page.getByTestId('batch-submit-summary')
+  const container = page.getByTestId('invoices-list')
+
+  // #1 + #3 are the same geometric fact read two ways: assertFillsColumn's symmetric-gap
+  // check demands near-zero gap on BOTH edges, so one pass proves the bar both fills its
+  // column AND shares the table's left edge, at every width.
+  const barFit = await assertFillsColumn(page, bar, container, 'batch-submit-summary vs invoices-list')
+  await testInfo.attach('batch-submit-bar-column-fit.json', {
+    body: JSON.stringify({ entity: entity.name, fit: barFit }, null, 2),
+    contentType: 'application/json',
+  })
+
+  // #2: containment, not fill -- the confirm block sits somewhere inside the bar, not
+  // necessarily flush to its edges, so this reuses gaps() directly rather than
+  // assertFillsColumn's tight-slack fill check. n=2 selected at this point, so
+  // confirmPrompt is deterministic (reviewBatch.ts's bulkBarView).
+  const confirmPrompt = page.getByText('Send 2 invoices for transmission?', { exact: true })
+  const entryViewport = page.viewportSize()
+  const confirmFit: { width: number; left: number; right: number }[] = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const [barBox, confirmBox] = await Promise.all([bar.boundingBox(), confirmPrompt.boundingBox()])
+      expect(barBox && confirmBox, `bar and confirm prompt must both render at ${width}px`).toBeTruthy()
+      const g = gaps(confirmBox!, barBox!)
+      expect(g.left, `confirm block must not start left of the bar at ${width}px`).toBeGreaterThanOrEqual(0)
+      expect(g.right, `confirm block must not extend right of the bar at ${width}px`).toBeGreaterThanOrEqual(0)
+      confirmFit.push({ width, left: g.left, right: g.right })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+  await testInfo.attach('batch-submit-confirm-containment.json', {
+    body: JSON.stringify({ fit: confirmFit }, null, 2),
+    contentType: 'application/json',
+  })
+
+  // Non-vacuity control: LIVE_POLL_MS is 2000ms. Both rows are still `validated`, so
+  // shouldPollList keeps polling off and nothing but a user action can disarm this bar --
+  // proved by waiting past the interval before checking, not assumed.
+  await page.waitForTimeout(2500)
+  await expect(confirmBtn, 'the armed bar must not self-disarm while every row stays validated').toBeVisible()
+
+  // AC-1: change the selection -- disarm() fires from the checkbox's own onChange
+  // (InvoicesList.tsx:579-584), same rule as ApprovalsView.tsx:142-152.
+  await row2.getByTestId('invoice-select').uncheck()
+  await expect(confirmBtn, 'a selection change must invalidate the arm').toHaveCount(0)
+  await expect(cancelBtn).toHaveCount(0)
+  await expect(page.getByTestId('batch-submit'), 'the bar returns to idle, not to armed').toBeVisible()
+  expect(submissionPosts, 'the selection change must still have issued no POST').toHaveLength(0)
+
+  // Re-arm with the one row left selected, then confirm -- submitSelected() is the file's
+  // own arm+confirm+await-POST helper (Stage-1 correction C-2: still correct against
+  // today's InvoicesList.tsx; APPR-16-04 touched only Pager props).
+  await submitSelected(page)
+
+  await expect(page.getByTestId('batch-submit-results')).toContainText(num1)
+  await expect(page.getByTestId('batch-submit-results')).toContainText('Queued')
+  expect(submissionPosts, 'exactly one POST for the whole journey -- the disarmed selection change sent nothing').toHaveLength(1)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -51,6 +51,7 @@ import {
   deleteApprovalPolicy,
   getInvoiceApproval,
   decideInvoiceApproval,
+  getInvoiceHistory,
   PERSONAS,
   type Entity,
 } from './client'
@@ -1290,6 +1291,109 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }
+    })
+
+    // APPR-13-07: the reject sibling of the approve journey above, driven on one
+    // response through the typed client -- distinct from the split reject/GET pair
+    // already covered separately at :1061-1075 and :1163-1183.
+    test('journey: validate -> reject -> demoted to draft', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const decided = await decideInvoiceApproval(token, invoiceId, { decision: 'rejected', reason: 'missing purchase order' })
+        expect(decided.state, 'reject closes the run').toBe('rejected')
+
+        const detail = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        expect(detail.status, 'GET on the demoted invoice should return 200').toBe(200)
+        const detailBody = detail.body as Record<string, unknown>
+        expect(detailBody.status, 'reject demotes the invoice to draft').toBe('draft')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('the rejection adds a status-history row', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const before = await getInvoiceHistory(token, invoiceId)
+
+        await decideInvoiceApproval(token, invoiceId, { decision: 'rejected', reason: 'missing purchase order' })
+
+        const after = await getInvoiceHistory(token, invoiceId)
+        expect(after.length, 'the demotion writes exactly one more history row').toBe(before.length + 1)
+        expect(after[after.length - 1].to_status, 'the newest row lands on draft (changed_at ASC)').toBe('draft')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('the ledger carries the reject reason verbatim', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const reason = 'buyer TIN does not match the register'
+        await decideInvoiceApproval(token, invoiceId, { decision: 'rejected', reason })
+
+        const run = await getInvoiceApproval(token, invoiceId)
+        expect(run.decisions, 'a single-step run closes on exactly one decision').toHaveLength(1)
+        expect(run.decisions[0].decision, 'the recorded decision is the reject').toBe('rejected')
+        expect(run.decisions[0].reason, 'the reason survives to the ledger byte-identical').toBe(reason)
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test("a rejected run's steps stay readable after the close", async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        await decideInvoiceApproval(token, invoiceId, { decision: 'rejected', reason: 'missing purchase order' })
+
+        const run = await getInvoiceApproval(token, invoiceId)
+        expect(run.steps, 'the one-step run is still readable after the close').toHaveLength(1)
+        expect(run.steps[0].state, 'the decided step reads rejected, not stuck pending').toBe('rejected')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('400: a blank reject reason names the field and leaves the run open', async () => {
+      // :1091-1103 already pins the status; assertErrorEnvelope never inspects the
+      // message, so this adds the exact sentence and confirms the run is still open --
+      // not the 400 itself.
+      const { invoiceId, policyId } = await armedInvoice('cfo')
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'rejected', reason: '   ' },
+        })
+        assertErrorEnvelope(res, 400, 'blank reject reason')
+        const body = res.body as Record<string, unknown>
+        expect(body.error, 'the field name is in the message, verbatim').toBe('reason is required')
+
+        const run = await getInvoiceApproval(token, invoiceId)
+        expect(run.state, 'a refused decision leaves the run open').toBe('open')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('404: a validated invoice with no armed run answers 404, not an empty run', async () => {
+      // Distinct from :1227-1234 (a nonexistent invoice id on POST): this is a real,
+      // validated invoice with no policy active, reaching ErrRunNotFound through a real
+      // row lookup on the GET endpoint -- the contract the SPA's empty state depends on
+      // (isNoApprovalRun, APPR-13-01). No policy is created, so no finally is needed.
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-APPR-NORUN-${freshTin()}`),
+      })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'setup: with no active policy, validate does not arm a run').toBe('validated')
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/approval`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      assertErrorEnvelope(res, 404, 'validated invoice with no armed run')
     })
 
     // --- APPR-08-10: the flag-OFF observable surface -------------------------

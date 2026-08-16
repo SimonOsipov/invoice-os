@@ -58,4 +58,43 @@ describe('isPrivacyPath', () => {
     expect(ROUTE_SRC).not.toContain('location')
     expect(ROUTE_SRC).not.toContain('import.meta.env')
   })
+
+  it('does not use locale-sensitive lowercasing', () => {
+    // toLocaleLowerCase('tr') maps 'I' -> dotless 'ı', which would break the
+    // /PRIVACY row above under a Turkish runtime locale.
+    expect(ROUTE_SRC).not.toContain('toLocaleLowerCase')
+  })
+
+  it('whitespace-only input is not a match', () => {
+    expect(isPrivacyPath('   ')).toBe(false)
+  })
+
+  it('trim runs before the trailing-slash strip', () => {
+    // A strip-then-trim implementation would see the trailing space, skip the
+    // slash strip, and wrongly stay false here.
+    expect(isPrivacyPath('/privacy/ ')).toBe(true)
+  })
+
+  it('a very long pathname does not throw and is not a match', () => {
+    const long = '/privacy' + 'x'.repeat(10000)
+    expect(() => isPrivacyPath(long)).not.toThrow()
+    expect(isPrivacyPath(long)).toBe(false)
+  })
+
+  it('a null byte in the pathname does not throw and is not a match', () => {
+    expect(() => isPrivacyPath('/privacy\u0000')).not.toThrow()
+    expect(isPrivacyPath('/privacy\u0000')).toBe(false)
+  })
+
+  it('a fullwidth unicode lookalike is not folded into a match', () => {
+    expect(isPrivacyPath('/ｐrivacy')).toBe(false)
+  })
+
+  it('a double leading slash is not a match', () => {
+    expect(isPrivacyPath('//privacy')).toBe(false)
+  })
+
+  it('a missing leading slash is not a match', () => {
+    expect(isPrivacyPath('privacy')).toBe(false)
+  })
 })

@@ -14,9 +14,10 @@ import { resolveTarget } from '../targets'
 //
 // Why a browser test rather than a unit test: docs/e2e-convention.md's "Target surface"
 // grants `landing` render checks PLUS client-side behaviour that has no other harness.
-// frontend/landing's vitest project runs in `node` with no jsdom, so the repo has no DOM
-// component-test layer: a submit event, a focus trap, an async timing property and a
-// rendered text measurement can only be observed in a browser. Functional only — nothing
+// frontend/landing's vitest project defaults to `node`; a file may opt into jsdom per-file,
+// but this package carries no React testing library and jsdom has no layout engine — so a
+// submit event on a rendered modal, a focus trap, an async timing property and a rendered
+// text measurement can only be observed in a browser. Functional only — nothing
 // here takes a screenshot, and every assertion is a fact about behaviour or geometry.
 //
 // TWO INDEPENDENT HUBSPOT GUARDS, and the distinction is load-bearing:

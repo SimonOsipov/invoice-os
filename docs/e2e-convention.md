@@ -88,9 +88,10 @@ but **what backs the assertion**:
 
 The `app` SPA remains the only place a browser test can prove the **stack** integrates end
 to end. The consoles and the landing page carry functional coverage of their own
-client-side behaviour because they have no other harness: every frontend vitest project
-runs in `node`, so the repo has no DOM component-test layer, and a browser check is the
-only place a control, a route guard, or a scroll-spy can be exercised at all.
+client-side behaviour because a browser is the only place it can be observed: every
+frontend vitest project defaults to `node`, and the files that opt into jsdom per-file
+(`// @vitest-environment jsdom`) get a DOM with no layout engine — so a control's
+geometry, a route guard and a scroll-spy are still browser-only.
 
 **Mock-backed assertions pin fixtures, not contracts — and the spec must say so in-file.**
 A spec asserting an ops-console counter asserts that a seeded fixture and a pure function

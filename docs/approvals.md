@@ -308,6 +308,10 @@ Any caller holding a tenant claim may read a run — no role gate (`RunHandler`,
 | `401` | `unauthorized` | no verified identity / no tenant claim |
 | `404` | `no approval run for this invoice` | unknown, cross-tenant, malformed-uuid and no-run-row invoice ids all answer alike, deliberately (the `GetPolicy` no-oracle rule, `read_model.go:77-79`) |
 
+The SPA maps this `404` to a no-run **empty state**, not an error: `getInvoiceApprovalRun`
+(`lib/approvals.ts`) catches it and resolves `null`, which `useAsync`'s default emptiness
+check turns into the trail card's empty state rather than its error branch.
+
 ### 2.2 `POST /v1/invoices/{id}/approvals` — approve or reject
 
 Advances or closes the current pending `approval` step: two-axis authorization, the
@@ -768,7 +772,8 @@ and has no owner yet.
 A notify step persists its target and its channel, and the arming engine materialises it as a
 `skipped` run step. **No message is dispatched, on any channel.** APPR-10 put that on the screen:
 one sentence in the step inspector, one in the simulator's result, each rendered beside the
-controls it qualifies.
+controls it qualifies. A third now renders on the invoice detail page's approval trail card,
+beside any notify step in a run (`APPROVAL_TRAIL_COPY.notifyNote`, `approval-trail-notify-note`).
 
 Both sentences rest on a repo-wide **absence**, and an absence is not something a test can pin.
 Verified at the time of writing: no mail, SMS or push dependency in any `package.json`; the AWS
@@ -871,6 +876,9 @@ off — still submits the same invoice. Pinned by
   on `GET /v1/invoices` (APPR-12-09), from the same `approvalGate` call, so the two wires
   cannot disagree. `can_reject` stays detail-only — the approvals queue has no reject
   action.
+- The invoice detail page's approve/reject controls and its approval trail card. Both
+  render from the facts above (`can_approve`/`can_reject`, and the run read in §2.1) and
+  behave identically whether the flag is on or off.
 - The per-row `approval` facts on `GET /v1/invoices`. **With one consequence**: the SPA
   reads `run_state` off these facts in `isRowSelectable`
   (`frontend/app/src/lib/invoices.ts`) and refuses the checkbox, so an open run blocks

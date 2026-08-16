@@ -22,4 +22,12 @@ describe('App.tsx route wiring', () => {
     expect(APP_SRC).toMatch(/<Privacy\b/)
     expect(APP_SRC).toMatch(/hrefPrefix=\{privacy/)
   })
+
+  it('AC-10 (task-558): hrefPrefix is wired onto <Footer> specifically, not just present anywhere (Nav already has one)', () => {
+    // Scoping to the <Footer> tag itself is what stops the generic hrefPrefix={privacy
+    // check above from passing vacuously off Nav's own prop on this same assertion.
+    const footerTag = APP_SRC.match(/<Footer\b[^>]*>/)
+    expect(footerTag, 'expected to find a <Footer> element').not.toBeNull()
+    expect(footerTag![0]).toMatch(/hrefPrefix=\{privacy/)
+  })
 })

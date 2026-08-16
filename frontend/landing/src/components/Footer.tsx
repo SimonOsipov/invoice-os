@@ -27,7 +27,8 @@ const COLS = [
   },
 ]
 
-export function Footer({ onBookDemo }: { onBookDemo: () => void }) {
+// hrefPrefix stub for LAND-04-04 (task-558) RED tests — ignored for now, wired in the GREEN commit.
+export function Footer({ onBookDemo, hrefPrefix: _hrefPrefix = '' }: { onBookDemo: () => void; hrefPrefix?: string }) {
   return (
     <footer style={{ background: 'var(--bg-2)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '56px 32px 40px' }}>

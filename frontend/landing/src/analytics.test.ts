@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES, scrollDepthPercent } from './analytics'
+import { measurementId, shouldLoadTag, tagSrc, DEMO_CTA_SOURCES, isScrollable, scrollDepthPercent } from './analytics'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -155,6 +155,34 @@ describe('scrollDepthPercent (AC-7)', () => {
   })
 })
 
+describe('isScrollable (AC-7)', () => {
+  it('a page longer than the viewport is scrollable', () => {
+    expect(isScrollable(800, 4800)).toBe(true)
+    expect(isScrollable(900, 901)).toBe(true)
+  })
+
+  it('a document exactly the viewport height is not scrollable', () => {
+    // The `>` vs `>=` boundary: scrollDepthPercent answers 100 here, which is honest
+    // about what was seen and wrong about what was scrolled.
+    expect(isScrollable(900, 900)).toBe(false)
+    expect(isScrollable(0, 0)).toBe(false)
+  })
+
+  it('a document shorter than the viewport is not scrollable', () => {
+    expect(isScrollable(900, 400)).toBe(false)
+    expect(isScrollable(800, -50)).toBe(false)
+  })
+
+  it('a non-finite measurement is not scrollable', () => {
+    // -Infinity viewport and Infinity document both make the subtraction alone say
+    // "scrollable"; they die only to the finite checks.
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(isScrollable(bad, 4800), `viewport ${bad}`).toBe(false)
+      expect(isScrollable(800, bad), `document ${bad}`).toBe(false)
+    }
+  })
+})
+
 describe('module-scope purity', () => {
   it('AC-2: importing the module in a node environment is inert', async () => {
     // Precondition, not a redundant check: proves the node environment carries
@@ -237,6 +265,25 @@ describe('App.tsx scroll-depth listener (AC-7)', () => {
     expect(names).toEqual(expect.arrayContaining(['scrollDepthPercent', 'trackScrollDepth']))
 
     expect(APP_SRC).toMatch(/trackScrollDepth\(\s*scrollDepthPercent\(/)
+  })
+
+  it('guards the mount-time measurement with isScrollable and returns early', () => {
+    // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
+    expect(APP_SRC.length).toBeGreaterThan(0)
+    expect(APP_SRC).toContain('onBookDemo')
+
+    const analyticsImports = Array.from(APP_SRC.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\/analytics['"]/g))
+    expect(analyticsImports.length, 'expected exactly one import statement from ./analytics').toBe(1)
+    expect(analyticsImports[0][1].split(',').map((s) => s.trim())).toContain('isScrollable')
+
+    const guard = APP_SRC.search(/if\s*\(\s*!isScrollable\([^)]*\)\s*\)\s*return\b/)
+    expect(guard, 'expected an early-return !isScrollable guard').toBeGreaterThan(-1)
+    expect(guard, 'the guard must precede the report, not follow it').toBeLessThan(
+      APP_SRC.indexOf('trackScrollDepth('),
+    )
+
+    // One height read feeds both the guard and the report: two reads can disagree.
+    expect(Array.from(APP_SRC.matchAll(/document\.documentElement\.scrollHeight/g)).length).toBe(1)
   })
 
   it('measures document.documentElement.scrollHeight, not body.scrollHeight', () => {

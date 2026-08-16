@@ -13,7 +13,7 @@ import { Developers } from './components/Developers'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
-import { scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
+import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
@@ -37,9 +37,11 @@ export default function App() {
       frame = 0
       // documentElement, not body: body.scrollHeight excludes body margins. The height is
       // never cached — the Who-it's-for toggle swaps mocks of different heights.
-      trackScrollDepth(
-        scrollDepthPercent(window.scrollY, window.innerHeight, document.documentElement.scrollHeight),
-      )
+      const documentH = document.documentElement.scrollHeight
+      // A page that fits the viewport is 100% seen but nothing was scrolled; reporting it
+      // at mount would burn all four milestones. Pinned by "guards the mount-time measurement".
+      if (!isScrollable(window.innerHeight, documentH)) return
+      trackScrollDepth(scrollDepthPercent(window.scrollY, window.innerHeight, documentH))
     }
     const schedule = () => {
       if (frame) return

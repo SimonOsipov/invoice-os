@@ -117,6 +117,11 @@ export function scrollDepthPercent(scrollY: number, viewportH: number, documentH
   return Math.min(100, Math.max(0, Math.round((scrollY / scrollable) * 100)))
 }
 
+/** GA4's convention: a page with nothing to scroll reports no scroll event. */
+export function isScrollable(viewportH: number, documentH: number): boolean {
+  return Number.isFinite(viewportH) && Number.isFinite(documentH) && documentH - viewportH > 0
+}
+
 /** Fires every uncrossed milestone at or below `percent`, ascending, once each per page load. */
 export function trackScrollDepth(percent: number): void {
   for (const m of SCROLL_MILESTONES) {

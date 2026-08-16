@@ -100,12 +100,28 @@ export async function trackedHubSpotSubmit(run: () => Promise<void>): Promise<vo
   trackDemoSubmitOk()
 }
 
-// Stubs for LAND-03-04's Test-Spec stage (task-545) — real arithmetic and dedupe
-// land in the implementation stage. Exported so the test imports resolve.
-export function scrollDepthPercent(_scrollY: number, _viewportH: number, _documentH: number): number {
-  throw new Error('not implemented')
+export const SCROLL_MILESTONES = [25, 50, 75, 100] as const
+
+// Module scope, not the effect closure or a ref: StrictMode remounts App and a
+// per-mount set would re-fire every crossed milestone on the second mount's
+// initial measurement. Pinned by "each milestone fires at most once per page load".
+const firedMilestones = new Set<number>()
+
+/** Pure and total. The finite check runs FIRST: after the `scrollable <= 0` branch a
+ *  broken viewport read would return 100, a fully-seen page that was never seen.
+ *  Pinned by "a non-finite viewport does not masquerade as a fully-seen page". */
+export function scrollDepthPercent(scrollY: number, viewportH: number, documentH: number): number {
+  if (!Number.isFinite(scrollY) || !Number.isFinite(viewportH) || !Number.isFinite(documentH)) return 0
+  const scrollable = documentH - viewportH
+  if (scrollable <= 0) return 100
+  return Math.min(100, Math.max(0, Math.round((scrollY / scrollable) * 100)))
 }
 
-export function trackScrollDepth(_percent: number): void {
-  throw new Error('not implemented')
+/** Fires every uncrossed milestone at or below `percent`, ascending, once each per page load. */
+export function trackScrollDepth(percent: number): void {
+  for (const m of SCROLL_MILESTONES) {
+    if (percent < m || firedMilestones.has(m)) continue
+    firedMilestones.add(m)
+    send('scroll_depth', { percent_scrolled: m })
+  }
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
@@ -13,7 +13,7 @@ import { Developers } from './components/Developers'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
-import { trackDemoOpen, type DemoCtaSource } from './analytics'
+import { scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
@@ -28,6 +28,31 @@ export default function App() {
     setDemoOpen(true)
   }
   const onSignIn = () => setSignInOpen(true)
+
+  // Page-level depth, deliberately outside Nav.tsx's scroll effect: that one owns the
+  // nav indicator, and folding analytics in makes every nav change an analytics change.
+  useEffect(() => {
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      // documentElement, not body: body.scrollHeight excludes body margins. The height is
+      // never cached — the Who-it's-for toggle swaps mocks of different heights.
+      trackScrollDepth(
+        scrollDepthPercent(window.scrollY, window.innerHeight, document.documentElement.scrollHeight),
+      )
+    }
+    const schedule = () => {
+      if (frame) return
+      frame = requestAnimationFrame(measure)
+    }
+    measure()
+    window.addEventListener('scroll', schedule, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', schedule)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [])
+
   return (
     <div
       className="asc-app"

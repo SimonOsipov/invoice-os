@@ -296,7 +296,7 @@ type ListFilter struct {
 	// ("N kept as-is"), same zero-value-applies-no-filter convention as every
 	// other bool above. Deliberately NOT one of the four toolbar pills
 	// (System Design §7's "Toolbar filters are server-side" table names only
-	// All/Needs a fix/Ready to submit/Queued) -- this exists solely so the
+	// All/Needs a fix/Validated/Queued) -- this exists solely so the
 	// footer count is a real server total, never a client-side arithmetic
 	// derivation of the other four ([filters-are-server-side]).
 	KeptAsIs bool

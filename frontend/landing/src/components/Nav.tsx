@@ -24,7 +24,15 @@ const NAV_LINKS: { label: string; href: string; shed?: string }[] = [
 
 const NAV_HREFS = NAV_LINKS.map((l) => l.href)
 
-export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo: () => void }) {
+// hrefPrefix: task-557 stub — accepted, not yet applied to any href (RED until wired).
+export function Nav({
+  onSignIn,
+  onBookDemo,
+}: {
+  onSignIn: () => void
+  onBookDemo: () => void
+  hrefPrefix?: string
+}) {
   const [activeHref, setActiveHref] = useState<string | null>(null)
 
   useEffect(() => {

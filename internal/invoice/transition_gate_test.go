@@ -566,6 +566,12 @@ func TestTransition_TerminalRefusalEdgesLeaveNoOpenRun(t *testing.T) {
 			runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 			closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
+			// Control: the fixture must really have closed an approved run before
+			// the walk below can prove it survives untouched.
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'approved'`, fx.invID); n != 1 {
+				t.Fatalf("approved approval_runs before walk = %d, want 1 -- fixture did not arm", n)
+			}
+
 			for _, target := range tc.path {
 				if _, err := store.Transition(fx.ctx, fx.invID, target); err != nil {
 					t.Fatalf("Transition(-> %s): %v (want nil)", target, err)
@@ -625,6 +631,15 @@ func TestTransition_BackToDraftPathsCancelEveryLiveRun(t *testing.T) {
 			approvedID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 			closeApprovalRunFor(t, super, approvedID, "approved", "fixture")
 			openID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
+
+			// Control: the fixture must really have armed one open AND one approved
+			// run before the demotion below can prove both were cancelled.
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'approved'`, fx.invID); n != 1 {
+				t.Fatalf("%s: approved approval_runs before demotion = %d, want 1 -- fixture did not arm", tc.name, n)
+			}
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, fx.invID); n != 1 {
+				t.Fatalf("%s: open approval_runs before demotion = %d, want 1 -- fixture did not arm", tc.name, n)
+			}
 
 			if err := tc.act(fx); err != nil {
 				t.Fatalf("%s: %v (want nil)", tc.name, err)

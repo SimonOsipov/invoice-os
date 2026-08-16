@@ -47,6 +47,7 @@ import {
   isRowSelectable,
   keepInvoiceAsIs,
   revalidateInvoice,
+  selectBlockedReason,
   type EditFieldKey,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
@@ -126,6 +127,13 @@ export function Row({
   // renders no second line at all rather than an em dash or "source not recorded".
   const sourceLabel = showsSourceFile(batches) ? sourceFileLabel(r.import_batch_id, batches) : null
 
+  // selectBlockedReason (shared with InvoicesList's own select checkbox) is the sole
+  // source of this reason -- ReviewRow authors no reason literal (Core AC-2 overrule).
+  const blockedReason = selectBlockedReason(r)
+  // Per-row, not REVALIDATE_REASON_ID (Decision D-20) -- this checkbox has no
+  // single-row-expanded guarantee.
+  const reasonId = `review-select-blocked-reason-${r.id}`
+
   // Click-only row, matching the shipped InvoicesList.tsx precedent this table's OLD
   // (task-286) row already followed. Keyboard activation (role/tabIndex/onKeyDown) for
   // BOTH row surfaces is task-302 — no AC of this subtask covers it, and adding it only
@@ -146,6 +154,11 @@ export function Row({
           aria-label={`Select invoice ${r.invoice_number}`}
           checked={checked}
           disabled={!isRowSelectable(r)}
+          title={blockedReason ?? undefined}
+          aria-describedby={blockedReason != null ? reasonId : undefined}
+          // Disabled-only: matches InvoicesList.tsx's own guard against killing an
+          // enabled control's hover affordance.
+          style={blockedReason == null ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
           // BOTH handlers stop propagation — the row's own onClick toggles expansion and
           // must never fire from a checkbox interaction.
           onClick={(e) => e.stopPropagation()}
@@ -213,6 +226,13 @@ export function Row({
         <span aria-hidden style={{ display: 'inline-flex', color: 'var(--fg-4)', pointerEvents: 'none', transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}>
           {chevDownGlyph}
         </span>
+        {/* Layer 3 of disabled-with-reason (InvoicesList.tsx:535-542's precedent): an
+            implicit second grid row, so the seven cells above keep their positions. */}
+        {blockedReason != null && (
+          <span id={reasonId} data-testid="review-select-blocked-reason" style={{ gridColumn: '2 / -1', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+            {blockedReason}
+          </span>
+        )}
       </div>
       {expanded && <ExpandedFixPanel invoiceId={r.id} ctx={ctx} base={base} onChanged={onChanged} />}
     </>

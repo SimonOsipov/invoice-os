@@ -9,9 +9,14 @@ import '@invoice-os/design-tokens/styles.css'
 import './styles/landing.css'
 
 import App from './App'
+import { bootAnalytics } from './analytics'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
   </StrictMode>,
 )
+
+// Outside React and after render: StrictMode's double-invoked effects cannot reach it,
+// and nothing sits in front of first paint.
+bootAnalytics()

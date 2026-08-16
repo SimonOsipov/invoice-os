@@ -6,9 +6,9 @@ import { resolveTarget } from '../targets'
 //
 // These are behaviour tests, not render checks, and they live in the smoke suite
 // on purpose. docs/e2e-convention.md gives `landing` "smoke only" because there is
-// no backend to exercise — but the repo has no DOM component-test harness either
-// (every frontend vitest project runs in `node`), so a browser check is the only
-// place a scroll-spy can be exercised at all. That is the same rationale carried by
+// no backend to exercise — but jsdom has no layout engine and this package carries no
+// React testing library, so a browser check is the only place a scroll-spy can be
+// exercised at all. That is the same rationale carried by
 // the ops-console org-switcher test in smoke.spec.ts. "Keep the browser layer thin"
 // and "functional only — no visual regression" still apply: nothing here takes a
 // screenshot, and every assertion is a fact about behaviour.

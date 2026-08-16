@@ -7,9 +7,8 @@
 // escapes to &#x27; but the typographic curly quote does not, so every needle
 // below is apostrophe-, ampersand- and quote-free.
 //
-// Privacy.tsx is currently a stub (placeholder constants, `<div />` body), so
-// most rows below are expected to fail on their target assertion, not on
-// import/collection — that is the point of this commit.
+// Adversarial coverage for the claims this file does not pin lives in
+// Privacy.claims.test.tsx.
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -29,8 +28,7 @@ const OPS_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'ops-console', 'src')
 const SUPPORT_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'support-console', 'src')
 
 // Finds the first tag matching `re`. Uses vitest's own `expect` rather than a
-// thrown error so a miss is a failing assertion, not a collection error —
-// what makes the currently-stubbed rows below a valid RED.
+// thrown error so a miss is a failing assertion, not a collection error.
 function extractTag(html: string, re: RegExp): string {
   const match = html.match(re)
   expect(match, `expected to find a tag matching ${re}`).not.toBeNull()

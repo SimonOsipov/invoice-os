@@ -17,12 +17,16 @@ import { ApiError, type ApiFetchOptions } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
 import {
+  APPROVAL_TRAIL_COPY,
   APPROVALS_COPY,
   approvalOutcome,
   approvalProgressLabel,
   approvalRowView,
+  approvalRunStateView,
   approvalSelectAllState,
   approvalsBarView,
+  approvalTrailDecisions,
+  approvalTrailSteps,
   approveInvoices,
   canRejectReason,
   decideInvoice,
@@ -31,8 +35,14 @@ import {
   isApprovableRow,
   listAwaitingApproval,
   pruneApprovalSelection,
+  type ApprovalRun,
+  type ApprovalRunDecision,
+  type ApprovalRunStep,
   type ApproveResult,
 } from './approvals'
+import { APP_PERSONAS } from '../auth'
+import { actorLabel } from './actor'
+import { fmtDate, fmtDateTime } from './format'
 import type { InvoiceApproval, InvoiceRecord, ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -1178,5 +1188,197 @@ describe('decisionBlockedReasons: adversarial dedup edges (QA-added)', () => {
 
     expect(decisionBlockedReasons(first, null)).toEqual([first])
     expect(decisionBlockedReasons(null, second)).toEqual([second])
+  })
+})
+
+// --- APPR-13-02 (task-552, Mode A) -- RED specs for the trail projection:
+// approvalRunStateView/approvalTrailSteps/approvalTrailDecisions (AC-1..AC-7). The two
+// view interfaces are real and complete; the three functions throw
+// `new Error('not implemented')`. APPROVAL_TRAIL_COPY/DETAIL_DECISION_COPY are real,
+// complete copy consts from day one (a stub const would make the copy-comparison
+// assertions below meaningless).
+
+function baseStep(overrides: Partial<ApprovalRunStep> = {}): ApprovalRunStep {
+  return {
+    ord: 0,
+    kind: 'approval',
+    state: 'pending',
+    workflow_role_key: 'finance',
+    workflow_role_title: 'Finance',
+    holder: null,
+    sla_hours: null,
+    due_at: null,
+    overdue: false,
+    satisfied_at: null,
+    satisfied_by: null,
+    notify_target: null,
+    notify_channel: null,
+    ...overrides,
+  }
+}
+
+function baseDecision(overrides: Partial<ApprovalRunDecision> = {}): ApprovalRunDecision {
+  return {
+    run_step_id: 'step-1',
+    ord: 0,
+    decision: 'approved',
+    actor: APP_PERSONAS.firm.subject,
+    decided_at: '2026-08-10T12:00:00Z',
+    reason: null,
+    ...overrides,
+  }
+}
+
+function trailRun(steps: ApprovalRunStep[], decisions: ApprovalRunDecision[] = []): ApprovalRun {
+  return {
+    run_id: 'run-1',
+    state: 'open',
+    opened_at: '2026-08-01T00:00:00Z',
+    closed_at: null,
+    closed_by: null,
+    steps,
+    decisions,
+  }
+}
+
+describe('approvalTrailSteps: ord ordering and 1-based ord1 (AC-1)', () => {
+  it('steps keep wire order and are 1-based', () => {
+    const run = trailRun([baseStep({ ord: 0 }), baseStep({ ord: 1 }), baseStep({ ord: 2 })])
+
+    const views = approvalTrailSteps(run)
+
+    expect(views.map((v) => v.ord1)).toEqual([1, 2, 3])
+  })
+})
+
+describe('approvalTrailSteps: notify-note presence (AC-2)', () => {
+  it('a notify step carries the no-delivery note, and its raw target/channel survive untouched on the source step', () => {
+    const step = baseStep({ kind: 'notify', notify_target: 'finance@x', notify_channel: 'email' })
+    const run = trailRun([step])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.notifyNote).toBe(APPROVAL_TRAIL_COPY.notifyNote)
+    // TrailStepView carries no notifyTarget/notifyChannel fields (Stage 1 interface has
+    // none) -- this instead proves the projection doesn't mutate/strip them off the
+    // source wire step object.
+    expect(step.notify_target).toBe('finance@x')
+    expect(step.notify_channel).toBe('email')
+  })
+
+  it('a non-notify step carries no note', () => {
+    const run = trailRun([
+      baseStep({ ord: 0, kind: 'approval' }),
+      baseStep({ ord: 1, kind: 'condition' }),
+      baseStep({ ord: 2, kind: 'autoapprove' }),
+    ])
+
+    const views = approvalTrailSteps(run)
+
+    expect(views.map((v) => v.notifyNote)).toEqual([null, null, null])
+  })
+})
+
+describe('approvalTrailSteps: kind labels, known and unknown (AC-3)', () => {
+  it('an autoapprove step says nobody was asked', () => {
+    const run = trailRun([baseStep({ kind: 'autoapprove', state: 'satisfied' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.kindLabel).toBe(APPROVAL_TRAIL_COPY.kindAutoapprove)
+  })
+
+  it('an unknown kind renders itself', () => {
+    const run = trailRun([baseStep({ kind: 'quorum' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.kindLabel).toBe('quorum')
+  })
+})
+
+describe('approvalTrailSteps: due-date precedence, overdue wins (AC-4)', () => {
+  it('overdue beats a due date', () => {
+    const dueAt = '2026-01-01T00:00:00Z'
+    const run = trailRun([baseStep({ overdue: true, due_at: dueAt })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.dueLabel).toBe(APPROVAL_TRAIL_COPY.overdue)
+    expect(view.dueLabel).not.toBe(fmtDate(dueAt))
+  })
+
+  it('a settled step with a stale due_at is not overdue -- the server already gates overdue on state==="pending" (read_model.go:161)', () => {
+    const dueAt = '2020-01-01T00:00:00Z'
+    const run = trailRun([baseStep({ state: 'satisfied', overdue: false, due_at: dueAt })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.overdue).toBe(false)
+    expect(view.dueLabel).toBe(fmtDate(dueAt))
+  })
+})
+
+describe('approvalRunStateView: the four run states, plus an unknown fallback (AC-5)', () => {
+  it('the four run states map to label and tone', () => {
+    expect(approvalRunStateView('open')).toEqual({ label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' })
+    expect(approvalRunStateView('approved')).toEqual({ label: APPROVAL_TRAIL_COPY.stateApproved, tone: 'green' })
+    expect(approvalRunStateView('rejected')).toEqual({ label: APPROVAL_TRAIL_COPY.stateRejected, tone: 'red' })
+    expect(approvalRunStateView('cancelled')).toEqual({ label: APPROVAL_TRAIL_COPY.stateCancelled, tone: 'muted' })
+  })
+
+  it('an unknown run state is muted and self-labelled', () => {
+    expect(approvalRunStateView('frozen')).toEqual({ label: 'frozen', tone: 'muted' })
+  })
+})
+
+describe('approvalTrailSteps: holder passthrough, never re-derived through roles.ts (AC-7, D-34)', () => {
+  it('holder text and warn pass through untouched', () => {
+    const run = trailRun([baseStep({ holder: { text: 'Ada Obi +2', warn: true } })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.holderText).toBe('Ada Obi +2')
+    expect(view.holderWarn).toBe(true)
+  })
+
+  it('a null holder yields null, not a fabricated name', () => {
+    const run = trailRun([baseStep({ holder: null, workflow_role_title: null })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.holderText).toBeNull()
+    expect(view.roleTitle).toBe('—')
+  })
+})
+
+describe('approvalTrailDecisions: actor, time and reason projection', () => {
+  it('decisions project actor, time and reason', () => {
+    const decidedAt = '2026-08-10T12:34:56Z'
+    const decision = baseDecision({ actor: APP_PERSONAS.firm.subject, decided_at: decidedAt, reason: 'Looks right' })
+    const run = trailRun([], [decision])
+
+    const [view] = approvalTrailDecisions(run)
+
+    const expectedActor = actorLabel(APP_PERSONAS.firm.subject)
+    expect(view.actorText).toBe(expectedActor.text)
+    expect(view.actorMono).toBe(expectedActor.mono)
+    expect(view.whenLabel).toBe(fmtDateTime(decidedAt))
+    expect(view.reason).toBe('Looks right')
+  })
+})
+
+// GREEN by design: the needle, floor and no-import facts this row checks are all
+// already true today (Mode A adds the real, exported function signatures now -- only
+// their bodies defer to Stage 3 -- and the two copy consts are real from day one), so
+// there is no throwing stub on this row's path to turn it red. Reusing the existing
+// LIB_APPROVALS_PATH/readFileSync pair (:850-852) per Stage 1.
+describe('lib/approvals.ts source: no import from roles.ts (AC-7, D-34)', () => {
+  it('the projection does not import roles.ts', () => {
+    const libSource = readFileSync(LIB_APPROVALS_PATH, 'utf8')
+
+    expect(libSource, 'lost anchor on lib/approvals.ts').toContain('export function approvalTrailSteps')
+    expect(libSource.length).toBeGreaterThan(15000)
+    expect(libSource).not.toContain("from './roles'")
   })
 })

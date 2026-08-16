@@ -362,3 +362,94 @@ export function decisionBlockedReasons(approve: string | null, reject: string | 
   if (reject == null || reject === approve) return [approve]
   return [approve, reject]
 }
+
+// ---- Trail projection (APPR-13-02, task-552): the pure core the invoice-detail trail
+// card renders. holderText is a straight passthrough of step.holder?.text -- never
+// re-derived through ./roles's resolve()/inspectorResolve() (D-34), which need a
+// Role[]/Member[] this projection never receives.
+
+export interface TrailStepView {
+  ord1: number
+  kind: string
+  kindLabel: string
+  stateLabel: string
+  roleTitle: string
+  holderText: string | null
+  holderWarn: boolean
+  dueLabel: string | null
+  overdue: boolean
+  notifyNote: string | null
+}
+
+export interface TrailDecisionView {
+  ord1: number
+  outcomeLabel: string
+  actorText: string
+  actorMono: boolean
+  whenLabel: string
+  reason: string | null
+}
+
+export function approvalRunStateView(_state: string): { label: string; tone: 'amber' | 'green' | 'red' | 'muted' } {
+  throw new Error('not implemented')
+}
+
+export function approvalTrailSteps(_run: ApprovalRun): TrailStepView[] {
+  throw new Error('not implemented')
+}
+
+export function approvalTrailDecisions(_run: ApprovalRun): TrailDecisionView[] {
+  throw new Error('not implemented')
+}
+
+export const APPROVAL_TRAIL_COPY = {
+  cardTitle: 'Approvals',
+  loading: 'Loading the approval trail…',
+  emptyTitle: 'No approval run',
+  emptyMessage:
+    'Nothing on this invoice is waiting on a sign-off. Either this workspace has no active approval policy, or this invoice has not been validated yet.',
+  stepsHeading: 'Steps',
+  decisionsHeading: 'Decisions',
+  noDecisions: 'No decision has been recorded on this run.',
+  voided: 'This approval was voided by an edit — the invoice must be approved again from step one.',
+  notifyNote: 'No message is delivered — notifications are recorded but not yet sent.',
+  autoApproved: 'Settled automatically — nobody was asked.',
+  // Same string as APPROVALS_COPY.unstaffedSeat (:266) -- deliberate duplication, not
+  // aliased: per-screen copy consts already repeat labels (e.g. `cancel`), so one edit
+  // here never silently changes the queue screen's wording too.
+  unstaffedSeat: 'Unstaffed seat',
+  // Same string as APPROVALS_COPY.overdue (:267) -- deliberate duplication, see
+  // unstaffedSeat above.
+  overdue: 'Overdue',
+  stateOpen: 'In progress',
+  stateApproved: 'Approved',
+  stateRejected: 'Rejected',
+  stateCancelled: 'Voided',
+  // kindApproval/kindAutoapprove diverge from WorkflowInspector.tsx's private TITLES map
+  // ('Approval'/'Auto-approved' here vs 'Approval step'/'Auto-approve' there) --
+  // deliberate: that map is the policy-authoring domain, this is the run-trail domain.
+  kindApproval: 'Approval',
+  kindCondition: 'Condition',
+  kindNotify: 'Notification',
+  kindAutoapprove: 'Auto-approved',
+  stepWaiting: 'Waiting',
+  stepSigned: 'Signed',
+  stepSkipped: 'Skipped',
+  stepRejected: 'Rejected',
+} as const
+
+// approveDetail names the ACTION, never claims the OUTCOME -- the same rule
+// approvalsBarView.confirmDetail follows (:166-168).
+export const DETAIL_DECISION_COPY = {
+  approve: 'Approve',
+  approvePrompt: 'Approve this invoice?',
+  approveDetail: 'Another approver may have already acted on it.',
+  approveConfirm: 'Yes, approve now',
+  approveSending: 'Approving…',
+  cancel: 'Cancel',
+  reject: 'Reject',
+  rejectPrompt: 'Why is this invoice being rejected?',
+  rejectPlaceholder: 'Reason for rejection (required)',
+  rejectConfirm: 'Reject invoice',
+  rejectSending: 'Rejecting…',
+} as const

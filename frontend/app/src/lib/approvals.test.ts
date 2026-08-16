@@ -1252,16 +1252,18 @@ describe('approvalTrailSteps: ord ordering and 1-based ord1 (AC-1)', () => {
 })
 
 describe('approvalTrailSteps: notify-note presence (AC-2)', () => {
-  it('a notify step carries the no-delivery note, and its raw target/channel survive untouched on the source step', () => {
+  it('a notify step carries the no-delivery note, target/channel survive untouched', () => {
     const step = baseStep({ kind: 'notify', notify_target: 'finance@x', notify_channel: 'email' })
     const run = trailRun([step])
 
     const [view] = approvalTrailSteps(run)
 
     expect(view.notifyNote).toBe(APPROVAL_TRAIL_COPY.notifyNote)
-    // TrailStepView carries no notifyTarget/notifyChannel fields (Stage 1 interface has
-    // none) -- this instead proves the projection doesn't mutate/strip them off the
-    // source wire step object.
+    // TrailStepView carries notifyTarget/notifyChannel (Stage 3 addition, story AC-4 --
+    // the card renders "<target> · <channel>") as a straight passthrough (D-34): the
+    // view fields must equal the fixture's values, not just leave the source untouched.
+    expect(view.notifyTarget).toBe('finance@x')
+    expect(view.notifyChannel).toBe('email')
     expect(step.notify_target).toBe('finance@x')
     expect(step.notify_channel).toBe('email')
   })

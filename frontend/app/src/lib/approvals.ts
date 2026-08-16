@@ -34,6 +34,8 @@
 
 import { ApiError } from '@invoice-os/api-client'
 
+import { actorLabel } from './actor'
+import { fmtDate, fmtDateTime } from './format'
 import { listInvoices, type InvoiceListResponse, type InvoiceRecord, type ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -379,6 +381,11 @@ export interface TrailStepView {
   dueLabel: string | null
   overdue: boolean
   notifyNote: string | null
+  // AC-4 (card renders "<target> · <channel>" on the notify row): straight passthrough
+  // of notify_target/notify_channel, null for every non-notify kind exactly as
+  // notifyNote is -- avoids a second read of the raw step for the same data (D-34).
+  notifyTarget: string | null
+  notifyChannel: string | null
 }
 
 export interface TrailDecisionView {
@@ -390,16 +397,75 @@ export interface TrailDecisionView {
   reason: string | null
 }
 
-export function approvalRunStateView(_state: string): { label: string; tone: 'amber' | 'green' | 'red' | 'muted' } {
-  throw new Error('not implemented')
+export function approvalRunStateView(state: string): { label: string; tone: 'amber' | 'green' | 'red' | 'muted' } {
+  const known: Record<string, { label: string; tone: 'amber' | 'green' | 'red' | 'muted' }> = {
+    open: { label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' },
+    approved: { label: APPROVAL_TRAIL_COPY.stateApproved, tone: 'green' },
+    rejected: { label: APPROVAL_TRAIL_COPY.stateRejected, tone: 'red' },
+    cancelled: { label: APPROVAL_TRAIL_COPY.stateCancelled, tone: 'muted' },
+  }
+  // Unknown state falls back to its own raw value, never a guessed label (AC-3).
+  return known[state] ?? { label: state, tone: 'muted' }
 }
 
-export function approvalTrailSteps(_run: ApprovalRun): TrailStepView[] {
-  throw new Error('not implemented')
+export function approvalTrailSteps(run: ApprovalRun): TrailStepView[] {
+  const kindLabels: Record<string, string> = {
+    approval: APPROVAL_TRAIL_COPY.kindApproval,
+    condition: APPROVAL_TRAIL_COPY.kindCondition,
+    notify: APPROVAL_TRAIL_COPY.kindNotify,
+    autoapprove: APPROVAL_TRAIL_COPY.kindAutoapprove,
+  }
+  const stateLabels: Record<string, string> = {
+    pending: APPROVAL_TRAIL_COPY.stepWaiting,
+    satisfied: APPROVAL_TRAIL_COPY.stepSigned,
+    skipped: APPROVAL_TRAIL_COPY.stepSkipped,
+    rejected: APPROVAL_TRAIL_COPY.stepRejected,
+  }
+  return run.steps.map((step) => {
+    const isNotify = step.kind === 'notify'
+    // overdue is the server's own answer (read_model.go:161), passed through -- never
+    // re-derived from due_at here. Overdue wins over a formatted due date, which wins
+    // over null.
+    let dueLabel: string | null = null
+    if (step.overdue) {
+      dueLabel = APPROVAL_TRAIL_COPY.overdue
+    } else if (step.due_at != null) {
+      dueLabel = fmtDate(step.due_at)
+    }
+    return {
+      ord1: step.ord + 1,
+      kind: step.kind,
+      // Unknown kind/state falls back to its own raw value, never a guessed label (AC-3).
+      kindLabel: kindLabels[step.kind] ?? step.kind,
+      stateLabel: stateLabels[step.state] ?? step.state,
+      roleTitle: step.workflow_role_title ?? '—',
+      holderText: step.holder?.text ?? null,
+      holderWarn: step.holder?.warn ?? false,
+      dueLabel,
+      overdue: step.overdue,
+      notifyNote: isNotify ? APPROVAL_TRAIL_COPY.notifyNote : null,
+      notifyTarget: isNotify ? (step.notify_target ?? null) : null,
+      notifyChannel: isNotify ? (step.notify_channel ?? null) : null,
+    }
+  })
 }
 
-export function approvalTrailDecisions(_run: ApprovalRun): TrailDecisionView[] {
-  throw new Error('not implemented')
+export function approvalTrailDecisions(run: ApprovalRun): TrailDecisionView[] {
+  const outcomeLabels: Record<string, string> = {
+    approved: APPROVAL_TRAIL_COPY.stateApproved,
+    rejected: APPROVAL_TRAIL_COPY.stateRejected,
+  }
+  return run.decisions.map((decision) => {
+    const actor = actorLabel(decision.actor)
+    return {
+      ord1: decision.ord + 1,
+      outcomeLabel: outcomeLabels[decision.decision] ?? decision.decision,
+      actorText: actor.text,
+      actorMono: actor.mono,
+      whenLabel: fmtDateTime(decision.decided_at),
+      reason: decision.reason,
+    }
+  })
 }
 
 export const APPROVAL_TRAIL_COPY = {

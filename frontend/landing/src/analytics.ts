@@ -100,7 +100,7 @@ export async function trackedHubSpotSubmit(run: () => Promise<void>): Promise<vo
   trackDemoSubmitOk()
 }
 
-export const SCROLL_MILESTONES = [25, 50, 75, 100] as const
+const SCROLL_MILESTONES = [25, 50, 75, 100] as const
 
 // Module scope, not the effect closure or a ref: StrictMode remounts App and a
 // per-mount set would re-fire every crossed milestone on the second mount's

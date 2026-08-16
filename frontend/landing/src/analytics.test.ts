@@ -131,6 +131,28 @@ describe('scrollDepthPercent (AC-7)', () => {
     expect(scrollDepthPercent(0, NaN, 900)).toBe(0)
     expect(scrollDepthPercent(0, 900, Infinity)).toBe(0)
   })
+
+  it('rounds to nearest, not up — kills a Math.ceil mutant', () => {
+    // 412/4000*100 = 10.3: round -> 10, ceil -> 11, floor -> 10 (already
+    // covered by the sub-pixel row above). Only round differs here.
+    expect(scrollDepthPercent(412, 800, 4800)).toBe(10)
+  })
+
+  it('a negative document height is treated as non-scrollable', () => {
+    expect(scrollDepthPercent(100, 800, -50)).toBe(100)
+  })
+
+  it('a viewport taller than the document reads as fully seen even with nonzero scroll', () => {
+    expect(scrollDepthPercent(500, 900, 400)).toBe(100)
+  })
+
+  it('all three measurements at zero is a non-scrollable page, not division by zero', () => {
+    expect(scrollDepthPercent(0, 0, 0)).toBe(100)
+  })
+
+  it('an astronomically large scroll position still clamps to 100', () => {
+    expect(scrollDepthPercent(Number.MAX_SAFE_INTEGER, 800, 4800)).toBe(100)
+  })
 })
 
 describe('module-scope purity', () => {
@@ -215,6 +237,19 @@ describe('App.tsx scroll-depth listener (AC-7)', () => {
     expect(names).toEqual(expect.arrayContaining(['scrollDepthPercent', 'trackScrollDepth']))
 
     expect(APP_SRC).toMatch(/trackScrollDepth\(\s*scrollDepthPercent\(/)
+  })
+
+  it('measures document.documentElement.scrollHeight, not body.scrollHeight', () => {
+    // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
+    expect(APP_SRC.length).toBeGreaterThan(0)
+    expect(APP_SRC).toContain('onBookDemo')
+
+    // body.scrollHeight excludes body margins and under-reports (design doc,
+    // "Height source"). landing-nav.spec.ts:274 uses body.scrollHeight for an
+    // unrelated job — a scroll target the browser clamps anyway — so this row
+    // pins the two are not accidentally harmonised.
+    expect(APP_SRC).toContain('document.documentElement.scrollHeight')
+    expect(APP_SRC).not.toContain('document.body.scrollHeight')
   })
 })
 

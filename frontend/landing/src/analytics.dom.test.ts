@@ -449,6 +449,60 @@ describe('trackScrollDepth (AC-7)', () => {
     expect((window as TestWindow).dataLayer).toBeUndefined()
     expect((window as TestWindow).gtag).toBeUndefined()
   })
+
+  it('a non-integer percent still crosses whichever milestones it reaches', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackScrollDepth(33.7)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const scrollEvents = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'scroll_depth')
+    expect(scrollEvents).toEqual([['event', 'scroll_depth', { percent_scrolled: 25 }]])
+  })
+
+  it('a negative percent crosses no milestone', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackScrollDepth(-10)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const scrollEvents = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'scroll_depth')
+    expect(scrollEvents).toEqual([])
+  })
+
+  it('a percent past 100 fires all four milestones once each, not a fifth', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackScrollDepth(150)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const scrollEvents = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'scroll_depth')
+    expect(scrollEvents).toEqual([
+      ['event', 'scroll_depth', { percent_scrolled: 25 }],
+      ['event', 'scroll_depth', { percent_scrolled: 50 }],
+      ['event', 'scroll_depth', { percent_scrolled: 75 }],
+      ['event', 'scroll_depth', { percent_scrolled: 100 }],
+    ])
+  })
+
+  it('the scroll_depth entry is an arguments object, not an array', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    mod.trackScrollDepth(25)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const entry = layer[layer.length - 1]
+    expect(Object.prototype.toString.call(entry)).toBe('[object Arguments]')
+    expect(Array.isArray(entry)).toBe(false)
+  })
 })
 
 describe('send — the loaded guard, isolated from the gtag optional-chain (gap coverage)', () => {

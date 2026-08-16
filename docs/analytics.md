@@ -101,6 +101,41 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    there is no request either way. Every existing unit test survives the allowlist mutation — their
    pinned hostnames all differ from a live PR host. Budget two extra full 11-service rebuilds.
 
+## Verifying the classifier
+
+One test in `e2e/smoke/landing-demo.spec.ts` takes no `page` fixture, so Playwright launches no
+browser and it completes in 2-4ms. That makes it the one part of this story's deployed proof
+anyone can re-run locally in seconds, without a Railway environment:
+
+```
+cd e2e && LANDING_URL=https://www.ascomply.com \
+  OPS_CONSOLE_URL=https://ops.example \
+  APP_URL=https://app.example \
+  SUPPORT_CONSOLE_URL=https://support.example \
+  npx playwright test -g "the analytics-host classifier accepts GA hosts and nothing else"
+```
+
+All four variables are required, not just `LANDING_URL`: Playwright imports every `*.spec.ts` in
+`testDir` before applying `-g`, and `smoke/apps.ts:41,52` resolves `OPS_CONSOLE_URL`,
+`SUPPORT_CONSOLE_URL` and `APP_URL` at module scope. With only `LANDING_URL` set, the run throws
+`OPS_CONSOLE_URL is not set` before collecting a single test. The three placeholder hosts are
+never contacted; only `LANDING_URL` is parsed, and only for its hostname.
+
+Verified 2026-08-16 against three mutations of `isGoogleAnalyticsHost`, restoring the source after
+each:
+
+| Mutation | Assertion that fails |
+|---|---|
+| `return true` unconditionally | `https://fonts.googleapis.com/css2?family=Inter should NOT be recognised` |
+| `return false` unconditionally | `https://www.googletagmanager.com/gtag/js?id=G-E409H76XYY should be recognised` |
+| `endsWith('.google-analytics.com')` → `endsWith('google-analytics.com')` | `https://fake-google-analytics.com/g/collect should NOT be recognised` |
+
+Every other GA assertion in that spec file consumes this predicate. A predicate matching nothing
+would leave the request sink permanently empty and every assertion permanently green while
+observing nothing; one matching too much would turn them permanently red, because
+`frontend/landing/index.html:12-15` requests `fonts.googleapis.com` and `fonts.gstatic.com` on
+every run.
+
 ## See also
 
 - `frontend/landing/src/analytics.ts` — the gate, the tag injection and all four senders.

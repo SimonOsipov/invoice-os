@@ -1,5 +1,6 @@
 // Approvals screen pure core + fan-out client (APPR-12-02, task-527), covered by
-// approvals.test.ts (A02-1..A02-18).
+// approvals.test.ts (A02-1..A02-18). Also carries the invoice-detail run read model +
+// decide client (APPR-13-01, task-550) -- see its own comment block near the bottom.
 //
 // listAwaitingApproval wraps invoices.ts's listInvoices, forcing awaiting_approval=true
 // (ListFilter.AwaitingApproval, internal/invoice/handlers.go:349-451, shipped APPR-08-07)

@@ -1074,3 +1074,109 @@ describe('decisionBlockedReasons (AC-2: dedup rule)', () => {
     expect(decisionBlockedReasons(null, null)).toEqual([])
   })
 })
+
+// --- APPR-13-01 (task-550) adversarial / edge coverage added at QA (Stage 4, Mode B),
+// on top of the Stage-2.5 AC specs above (the 12 wire-mirror/run/decide/reason rows,
+// left untouched). ---
+
+describe('wire mirror: WIRE_STRUCTS table non-vacuity guard (QA-added)', () => {
+  it('the struct table is non-empty -- an accidentally-cleared table would let the floor and equality loops above pass on zero iterations', () => {
+    expect(WIRE_STRUCTS.length).toBeGreaterThan(0)
+    expect(WIRE_STRUCTS.map((w) => w.ts)).toEqual([
+      'ApprovalResolved',
+      'ApprovalRunStep',
+      'ApprovalRunDecision',
+      'ApprovalRun',
+    ])
+  })
+})
+
+describe('getInvoiceApprovalRun: adversarial error shapes (QA-added)', () => {
+  it('a 404 whose body is not valid JSON still resolves null -- isNoApprovalRun reads only the status', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await expect(getInvoiceApprovalRun(af, base, 'inv-1')).resolves.toBeNull()
+  })
+
+  it('an ApiError with status === null (network/malformed kind) rethrows, never resolves null', async () => {
+    const networkError = new ApiError('network', 'fetch failed', null)
+    const af = (() => Promise.reject(networkError)) as unknown as AuthedFetch
+
+    await expect(getInvoiceApprovalRun(af, base, 'inv-1')).rejects.toBe(networkError)
+  })
+
+  it('a non-ApiError throw (a raw TypeError from the network layer) rethrows unwrapped, not swallowed', async () => {
+    const rawError = new TypeError('Failed to fetch')
+    const af = (() => Promise.reject(rawError)) as unknown as AuthedFetch
+
+    await expect(getInvoiceApprovalRun(af, base, 'inv-1')).rejects.toBe(rawError)
+  })
+})
+
+describe('decideInvoice: adversarial reason payloads (QA-added)', () => {
+  it('a reason with a newline, a quote, and a multi-byte character survives byte-identical', async () => {
+    const fetchMock = stubFetch(() => okResponse())
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const reason = 'Not our supplier.\nSee "invoice #42" — 日本語 ok?'
+
+    await decideInvoice(af, base, 'inv-1', 'rejected', reason)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ decision: 'rejected', reason })
+  })
+
+  // The trim guard is canRejectReason's job (row 10), not decideInvoice's -- the caller
+  // decides whether to send at all. This pins what actually goes over the wire once sent.
+  it('approve genuinely OMITS the reason key from the body object -- not `reason: undefined` -- checked before any JSON serialization', async () => {
+    let capturedBody: unknown
+    const af = (async (_url: string, opts?: ApiFetchOptions) => {
+      capturedBody = opts?.body
+      return { run_id: 'r1', state: 'open', steps: [], decisions: [] }
+    }) as unknown as AuthedFetch
+
+    await decideInvoice(af, base, 'inv-1', 'approved')
+
+    expect(capturedBody).toBeDefined()
+    expect(
+      Object.prototype.hasOwnProperty.call(capturedBody as object, 'reason'),
+      'the body object must carry no reason key at all on approve, not an own key holding undefined',
+    ).toBe(false)
+    expect(Object.keys(capturedBody as object)).toEqual(['decision'])
+  })
+})
+
+describe('canRejectReason: adversarial whitespace (QA-added)', () => {
+  it('a non-breaking space, a tab-only string, and a newline-only string are all rejected', () => {
+    expect(canRejectReason(' ')).toBe(false)
+    expect(canRejectReason('\t')).toBe(false)
+    expect(canRejectReason('\n')).toBe(false)
+  })
+})
+
+describe('decisionBlockedReasons: adversarial dedup edges (QA-added)', () => {
+  it('two sentences differing only by trailing whitespace do NOT collapse -- strict equality, not a normalized compare', () => {
+    const withTrailingSpace = APPROVAL_GATE_SENTENCES[1] + ' '
+    const result = decisionBlockedReasons(APPROVAL_GATE_SENTENCES[1], withTrailingSpace)
+
+    expect(result.length, 'the pinned shipped answer is 2 -- reject === approve is strict string equality').toBe(2)
+    expect(result).toEqual([APPROVAL_GATE_SENTENCES[1], withTrailingSpace])
+  })
+
+  it('one null, one present, in each order, using the real approvalGate sentences', () => {
+    expect(APPROVAL_GATE_SENTENCES.length).toBe(5)
+    const [first, second] = APPROVAL_GATE_SENTENCES
+
+    expect(decisionBlockedReasons(first, null)).toEqual([first])
+    expect(decisionBlockedReasons(null, second)).toEqual([second])
+  })
+})

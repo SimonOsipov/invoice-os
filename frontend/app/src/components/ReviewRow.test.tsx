@@ -4,9 +4,17 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import type { InvoiceApproval, InvoiceDetailRecord, InvoiceRecord } from '../lib/invoices'
+import {
+  selectBlockedReason,
+  skipReasonLabel,
+  type InvoiceApproval,
+  type InvoiceDetailRecord,
+  type InvoiceListResponse,
+  type InvoiceRecord,
+} from '../lib/invoices'
 import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
+import { InvoicesList } from './InvoicesList'
 import { Row } from './ReviewRow'
 
 interface MockResponse {
@@ -119,6 +127,7 @@ function renderRow(over: Partial<InvoiceRecord> = {}) {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 // QA gap-fill (task-413, BUG-05-04): the buyer-tin testid/colour on this surface was
@@ -254,13 +263,15 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
     expect(selectBox().disabled, 'validated + approved run stays selectable').toBe(false)
   })
 
-  it('RR-appr-2: parity -- the awaiting-approval checkbox is the SAME disabled control a draft row already renders, with no added copy', () => {
+  it('RR-appr-2: parity -- the awaiting-approval checkbox is the SAME disabled control a draft row already renders, apart from the reason each one now states for itself', () => {
     renderRow({ status: 'draft', approval: null })
     const draftBox = selectBox()
+    // `title` dropped from the shared shape: overruled by APPR-16 Core AC-2 (user,
+    // 2026-08-16) -- draft and awaiting-approval now state two DIFFERENT reasons, so a
+    // title still belongs in the parity claim but not with one shared value.
     const draftShape = {
       present: Boolean(draftBox),
       disabled: draftBox.disabled,
-      title: draftBox.getAttribute('title'),
       label: draftBox.getAttribute('aria-label'),
     }
     cleanup()
@@ -271,22 +282,128 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
     expect({
       present: Boolean(awaitingBox),
       disabled: awaitingBox.disabled,
-      title: awaitingBox.getAttribute('title'),
       label: awaitingBox.getAttribute('aria-label'),
-    }, 'awaiting-approval renders exactly the draft row shape').toEqual(draftShape)
-    // Stated absolutely too, so the pair cannot pass by both sprouting a tooltip.
-    expect(awaitingBox.getAttribute('title'), '[selectable-parity-not-new-copy]').toBeNull()
+    }, 'awaiting-approval renders exactly the draft row shape, apart from its own reason').toEqual(draftShape)
+    expect(awaitingBox.getAttribute('title')).toBe(selectBlockedReason({ status: 'validated', approval: openRun }))
   })
 })
 
-// GREEN-BEFORE guard (APPR-12-06, task-531, A06-6) — the orchestrator's scope ruling on
-// GAP-1 keeps the missing-reason work OFF ReviewRow entirely: [selectable-parity-not-new-
-// copy] stands, and this checkbox's row sits in a shape RR-appr-2 already asserts parity
-// for. Extends RR-appr-2 (which pins `title` alone) to also pin `aria-describedby`, so a
-// future edit that harmonises ReviewRow with InvoicesList's new reason node reds HERE
-// first, not silently.
-describe('ReviewRow: the checkbox carries no reason at all (APPR-12-06, A06-6, [selectable-parity-not-new-copy])', () => {
-  it('A06-6: an awaiting-approval row still renders no title and no aria-describedby on the checkbox', () => {
+// RED (APPR-16-02, task-535, Mode A). The selection checkbox gains the same four-layer
+// disabled-with-reason recipe the Re-validate button and InvoicesList's own checkbox
+// already carry: real `disabled`, an inline mute, a visible reason node, and
+// `title`/`aria-describedby` pointing at it with a PER-ROW id. `document.getElementById`
+// off the checkbox's own `aria-describedby` is used throughout instead of a guessed
+// testid -- it proves the id actually resolves to a rendered node, not just that some
+// attribute string exists.
+describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Core AC-2 overrule)', () => {
+  const openRun: InvoiceApproval = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  function selectBox(): HTMLInputElement {
+    return screen.getByTestId('review-select') as HTMLInputElement
+  }
+
+  function reasonNodeFor(box: HTMLInputElement): HTMLElement | null {
+    const id = box.getAttribute('aria-describedby')
+    return id != null ? document.getElementById(id) : null
+  }
+
+  it('A16-2a: validated + open run renders the reason in all four layers', () => {
+    const shape = { status: 'validated' as const, approval: openRun }
+    const reason = selectBlockedReason(shape)
+    renderRow(shape)
+    const box = selectBox()
+
+    expect(box.disabled).toBe(true)
+    expect(box.getAttribute('title')).toBe(reason)
+    const node = reasonNodeFor(box)
+    expect(node).not.toBeNull()
+    expect(node?.textContent).toBe(reason)
+  })
+
+  it('A16-2b: draft + no run renders the not-validated reason, not the approval one', () => {
+    renderRow({ status: 'draft', approval: null })
+    const node = reasonNodeFor(selectBox())
+
+    expect(node?.textContent).toBe(skipReasonLabel('not_validated'))
+    expect(node?.textContent).not.toBe(skipReasonLabel('awaiting_approval'))
+  })
+
+  it('A16-2c: a selectable row renders no reason node at all', () => {
+    renderRow({ status: 'validated', approval: null })
+    const box = selectBox()
+
+    expect(box.disabled).toBe(false)
+    expect(box.getAttribute('title')).toBeNull()
+    expect(box.getAttribute('aria-describedby')).toBeNull()
+    expect(screen.queryByText(skipReasonLabel('not_validated'))).toBeNull()
+    expect(screen.queryByText(skipReasonLabel('awaiting_approval'))).toBeNull()
+  })
+
+  it('A16-2d: a post-submission row is disabled and silent -- the status pill is the explanation', () => {
+    // selectBlockedReason returns null outside draft/validated (invoices.ts:1213):
+    // an accepted row with a lingering open run must render disabled, but no reason.
+    renderRow({ status: 'accepted', approval: openRun })
+    const box = selectBox()
+
+    expect(box.disabled).toBe(true)
+    expect(box.getAttribute('title')).toBeNull()
+    expect(box.getAttribute('aria-describedby')).toBeNull()
+  })
+
+  it('A16-2e: two blocked rows produce two distinct aria-describedby ids', () => {
+    render(
+      <>
+        <Row r={row({ id: 'inv-a', status: 'draft', approval: null })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={row({ id: 'inv-b', status: 'validated', approval: openRun })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+      </>,
+    )
+    const boxes = screen.getAllByTestId('review-select') as HTMLInputElement[]
+    const ids = boxes.map((b) => b.getAttribute('aria-describedby'))
+
+    expect(ids.every((id) => id != null)).toBe(true)
+    expect(new Set(ids).size).toBe(2)
+    // REVALIDATE_REASON_ID (ReviewRow.tsx:81) is a module const -- reusing it on a
+    // per-row control would mint duplicate DOM ids (Decision D-20).
+    expect(ids).not.toContain('review-row-revalidate-blocked-reason-text')
+  })
+
+  it('A16-2f: parity -- ReviewRow and InvoicesList render a byte-identical string for the same row', async () => {
+    const shared = row({ id: 'inv-parity', status: 'validated', approval: openRun })
+    const expected = selectBlockedReason(shared)
+
+    render(
+      <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    const reviewReason = reasonNodeFor(selectBox())?.textContent ?? null
+    cleanup()
+
+    // InvoicesList reads its own gateway base from the env (InvoiceDetail.test.tsx's
+    // beforeEach precedent) -- Row instead takes `base` as a prop, so no other test
+    // here has needed this until now.
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
+    mockRegisterFetch([shared])
+    render(<InvoicesList ctx={registerCtx()} />)
+    await screen.findByText(shared.invoice_number)
+    const listReason = screen.getByTestId('invoice-blocked-reason').textContent
+
+    expect(reviewReason).toBe(expected)
+    expect(listReason).toBe(expected)
+  })
+})
+
+// Overruled by APPR-16 Core AC-2 (user, 2026-08-16). Replaces the A06-6 tripwire
+// (APPR-12-06, task-531, [selectable-parity-not-new-copy]), which pinned the OPPOSITE
+// of this AC: that narrowing kept the reason off ReviewRow for parity with a surface
+// that also said nothing. That parity is no longer the goal.
+describe('ReviewRow: the checkbox now states its own reason, retargeting [selectable-parity-not-new-copy] (APPR-16-02)', () => {
+  it('A16-2g: the retargeted tripwire -- an awaiting-approval row renders title and aria-describedby, not silence', () => {
     const openRun: InvoiceApproval = {
       run_state: 'open',
       pending_ord: 1,
@@ -295,10 +412,35 @@ describe('ReviewRow: the checkbox carries no reason at all (APPR-12-06, A06-6, [
       due_at: null,
       overdue: false,
     }
-    renderRow({ status: 'validated', approval: openRun })
+    const shape = { status: 'validated' as const, approval: openRun }
+    const reason = selectBlockedReason(shape)
+    renderRow(shape)
     const box = screen.getByTestId('review-select') as HTMLInputElement
+    const describedBy = box.getAttribute('aria-describedby')
 
-    expect(box.getAttribute('title'), '[selectable-parity-not-new-copy] must still hold').toBeNull()
-    expect(box.getAttribute('aria-describedby'), 'this subtask must not add aria-describedby to ReviewRow either').toBeNull()
+    expect(box.getAttribute('title'), 'A06-6 pinned this null; APPR-16 Core AC-2 overrules it').toBe(reason)
+    expect(describedBy).not.toBeNull()
+    expect(describedBy != null ? document.getElementById(describedBy)?.textContent : null).toBe(reason)
   })
 })
+
+// Minimal register ctx/fetch for the ReviewRow/InvoicesList parity check (A16-2f) --
+// mirrors InvoiceDetail.test.tsx's own local pair; InvoicesList is otherwise only
+// exercised by InvoicesList.test.tsx.
+function registerCtx(): PlatformCtx {
+  const ctx = {
+    mode: 'firm',
+    active: { entityId: 'ent-1' },
+    user: { tenantName: 'Acme Co' },
+    authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    openCreate: () => {},
+    openImportedInvoice: () => {},
+    invoiceQuery: '',
+  }
+  return ctx as unknown as PlatformCtx
+}
+
+function mockRegisterFetch(invoices: InvoiceRecord[]) {
+  const body: InvoiceListResponse = { invoices, pagination: { limit: 50, offset: 0, total: invoices.length } }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) }))
+}

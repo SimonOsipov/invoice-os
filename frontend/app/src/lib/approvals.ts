@@ -1,6 +1,7 @@
 // Approvals screen pure core + fan-out client (APPR-12-02, task-527), covered by
 // approvals.test.ts (A02-1..A02-18). Also carries the invoice-detail run read model +
-// decide client (APPR-13-01, task-550) -- see its own comment block near the bottom.
+// decide client (APPR-13-01, task-550) and the trail projection + copy consts
+// (APPR-13-02, task-552) -- each carries its own comment block further down.
 //
 // listAwaitingApproval wraps invoices.ts's listInvoices, forcing awaiting_approval=true
 // (ListFilter.AwaitingApproval, internal/invoice/handlers.go:349-451, shipped APPR-08-07)
@@ -480,11 +481,11 @@ export const APPROVAL_TRAIL_COPY = {
   voided: 'This approval was voided by an edit — the invoice must be approved again from step one.',
   notifyNote: 'No message is delivered — notifications are recorded but not yet sent.',
   autoApproved: 'Settled automatically — nobody was asked.',
-  // Same string as APPROVALS_COPY.unstaffedSeat (:266) -- deliberate duplication, not
+  // Same string as APPROVALS_COPY.unstaffedSeat (:269) -- deliberate duplication, not
   // aliased: per-screen copy consts already repeat labels (e.g. `cancel`), so one edit
   // here never silently changes the queue screen's wording too.
   unstaffedSeat: 'Unstaffed seat',
-  // Same string as APPROVALS_COPY.overdue (:267) -- deliberate duplication, see
+  // Same string as APPROVALS_COPY.overdue (:270) -- deliberate duplication, see
   // unstaffedSeat above.
   overdue: 'Overdue',
   stateOpen: 'In progress',
@@ -505,7 +506,7 @@ export const APPROVAL_TRAIL_COPY = {
 } as const
 
 // approveDetail names the ACTION, never claims the OUTCOME -- the same rule
-// approvalsBarView.confirmDetail follows (:166-168).
+// approvalsBarView.confirmDetail follows (:172-174).
 export const DETAIL_DECISION_COPY = {
   approve: 'Approve',
   approvePrompt: 'Approve this invoice?',

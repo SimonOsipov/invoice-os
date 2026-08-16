@@ -1384,3 +1384,113 @@ describe('lib/approvals.ts source: no import from roles.ts (AC-7, D-34)', () => 
     expect(libSource).not.toContain("from './roles'")
   })
 })
+
+describe('approvalTrailSteps: adversarial edges (QA Stage 4, Mode B)', () => {
+  it('an empty steps array projects to an empty array, does not throw', () => {
+    const run = trailRun([])
+
+    expect(approvalTrailSteps(run)).toEqual([])
+  })
+
+  it('produces exactly one view per wire step -- guards AC rows 1-7/10-11 against a silently-empty projection', () => {
+    const run = trailRun([baseStep({ ord: 0 }), baseStep({ ord: 1 }), baseStep({ ord: 2 })])
+
+    expect(approvalTrailSteps(run).length).toBe(run.steps.length)
+    expect(approvalTrailSteps(run).length).toBeGreaterThan(0)
+  })
+
+  it('wire order is preserved verbatim even when ord is non-contiguous and out of ascending order -- the projection never re-sorts (the server already sorts)', () => {
+    const run = trailRun([baseStep({ ord: 5 }), baseStep({ ord: 1 }), baseStep({ ord: 9 })])
+
+    const views = approvalTrailSteps(run)
+
+    // Array order, not ord-ascending order: 5,1,9 stay in that sequence (ord1 6,2,10).
+    expect(views.map((v) => v.ord1)).toEqual([6, 2, 10])
+  })
+
+  it('a notify step with null target/channel still carries the note, and the fields stay null -- not the string "null"', () => {
+    const run = trailRun([baseStep({ kind: 'notify', notify_target: null, notify_channel: null })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.notifyNote).toBe(APPROVAL_TRAIL_COPY.notifyNote)
+    expect(view.notifyTarget).toBeNull()
+    expect(view.notifyChannel).toBeNull()
+  })
+
+  it('an empty-string holder text is not the same as an absent one', () => {
+    const run = trailRun([baseStep({ holder: { text: '', warn: true } })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.holderText).toBe('')
+    expect(view.holderText).not.toBeNull()
+    expect(view.holderWarn).toBe(true)
+  })
+
+  it('a malformed due_at falls through to fmtDate\'s own em-dash guard, not a thrown error or a fabricated label', () => {
+    const run = trailRun([baseStep({ state: 'pending', overdue: false, due_at: 'not-a-real-date' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.dueLabel).toBe(fmtDate('not-a-real-date'))
+    expect(view.dueLabel).toBe('—')
+  })
+
+  it('a pending step with a future due_at and overdue:false shows the formatted date, not the overdue label', () => {
+    const dueAt = '2099-01-01T00:00:00Z'
+    const run = trailRun([baseStep({ state: 'pending', overdue: false, due_at: dueAt })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.overdue).toBe(false)
+    expect(view.dueLabel).toBe(fmtDate(dueAt))
+    expect(view.dueLabel).not.toBe(APPROVAL_TRAIL_COPY.overdue)
+  })
+})
+
+describe('approvalTrailDecisions: adversarial edges (QA Stage 4, Mode B)', () => {
+  it('an empty decisions array projects to an empty array, does not throw', () => {
+    const run = trailRun([], [])
+
+    expect(approvalTrailDecisions(run)).toEqual([])
+  })
+
+  it('produces exactly one view per wire decision', () => {
+    const run = trailRun([], [baseDecision({ ord: 0 }), baseDecision({ ord: 1 })])
+
+    expect(approvalTrailDecisions(run).length).toBe(run.decisions.length)
+    expect(approvalTrailDecisions(run).length).toBeGreaterThan(0)
+  })
+
+  it('an unknown actor subject falls through actorLabel to the raw subject, mono', () => {
+    const decision = baseDecision({ actor: 'ext-9999-not-a-persona' })
+    const run = trailRun([], [decision])
+
+    const [view] = approvalTrailDecisions(run)
+
+    expect(view.actorText).toBe('ext-9999-not-a-persona')
+    expect(view.actorMono).toBe(true)
+  })
+
+  it('a null reason and an empty-string reason project distinctly, neither one collapsing into the other', () => {
+    const run = trailRun([], [baseDecision({ ord: 0, reason: null }), baseDecision({ ord: 1, reason: '' })])
+
+    const [nullView, emptyView] = approvalTrailDecisions(run)
+
+    expect(nullView.reason).toBeNull()
+    expect(emptyView.reason).toBe('')
+    expect(emptyView.reason).not.toBeNull()
+  })
+})
+
+describe('approvalRunStateView: adversarial edges (QA Stage 4, Mode B)', () => {
+  it('an empty string is its own unknown-state label, not conflated with an absent state', () => {
+    expect(approvalRunStateView('')).toEqual({ label: '', tone: 'muted' })
+  })
+
+  it('a case-differing state is exact-match only, never case-insensitive', () => {
+    expect(approvalRunStateView('Open')).toEqual({ label: 'Open', tone: 'muted' })
+    expect(approvalRunStateView('Open')).not.toEqual({ label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' })
+  })
+})

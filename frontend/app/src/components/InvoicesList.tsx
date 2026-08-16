@@ -280,6 +280,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // exactly. Two facts hold it up, and either one breaking needs a real clamp here: the
   // two 200s staying equal (the server's limit ceiling and batch-submit's id cap are
   // independent constants that nothing ties together), and selection never spanning pages.
+  // No AbortSignal here (D-05): one request, not a loop -- there is no row boundary to
+  // check a signal at.
   async function submitSelection() {
     if (base == null) return
     // Recomputed rather than reading `bar.eligible` above: mathematically identical in
@@ -440,13 +442,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ marginTop: 16 }}>
             <Pager
               pagination={list.data.pagination}
-              busy={loading}
+              busy={loading || phase === 'submitting'}
               onGo={(o) => {
                 setOffset(o)
                 setSelected([])
                 disarm() // defensive: the bar can't be visible under an empty page, but keep phase honest
               }}
               testId="invoices-pager"
+              reason={phase === 'submitting' ? BULK_COPY.pagerReason : undefined}
             />
           </div>
         </div>
@@ -631,13 +634,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ marginTop: 16 }}>
             <Pager
               pagination={list.data.pagination}
-              busy={loading}
+              busy={loading || phase === 'submitting'}
               onGo={(o) => {
                 setOffset(o)
                 setSelected([])
                 disarm()
               }}
               testId="invoices-pager"
+              reason={phase === 'submitting' ? BULK_COPY.pagerReason : undefined}
             />
           </div>
         </>

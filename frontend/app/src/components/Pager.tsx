@@ -7,11 +7,15 @@ export function Pager({
   busy,
   onGo,
   testId = 'review-pager',
+  reason,
 }: {
   pagination: { limit: number; offset: number; total: number }
   busy: boolean
   onGo: (offset: number) => void
   testId?: string
+  // States WHY the pager is disabled (D-25) -- a caller passes this only while its own
+  // in-flight freeze is active, never for a plain boundary/loading disable.
+  reason?: string
 }) {
   const nav = pagerNav(pagination)
   const labels = pagerLabels(pagination)
@@ -33,10 +37,10 @@ export function Pager({
       <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>{labels.showing}</span>
       <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>{labels.page}</span>
       <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-        <button onClick={() => onGo(nav.prevOffset)} disabled={!canPrev} className="v2-btn v2-btn-ghost pf-btn" style={btn(canPrev)}>
+        <button onClick={() => onGo(nav.prevOffset)} disabled={!canPrev} title={reason} className="v2-btn v2-btn-ghost pf-btn" style={btn(canPrev)}>
           ← Previous
         </button>
-        <button onClick={() => onGo(nav.nextOffset)} disabled={!canNext} className="v2-btn v2-btn-ghost pf-btn" style={btn(canNext)}>
+        <button onClick={() => onGo(nav.nextOffset)} disabled={!canNext} title={reason} className="v2-btn v2-btn-ghost pf-btn" style={btn(canNext)}>
           Next →
         </button>
       </div>

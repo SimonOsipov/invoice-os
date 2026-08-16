@@ -1097,6 +1097,8 @@ export const BULK_COPY = {
   sending: 'Sending…',
   resultInvoice: 'Invoice #',
   resultOutcome: 'Result',
+  // D-25: states why the pager freezes during a bulk submit (APPR-16-04).
+  pagerReason: 'Paging is paused while your submission is sending.',
 } as const
 
 // NO `status` field, by design (AC-5): batch_submit.go's duplicate-request branch

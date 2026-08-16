@@ -75,6 +75,9 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
   // The half `disabled` cannot cover: React batches, so two clicks in one tick both reach
   // the handler with the pre-render `phase` still armed (ReviewInvoicesTab.tsx:310-312).
   const approveInFlight = useRef(false)
+  // The in-flight fan-out's own controller (APPR-16-04) -- aborted on unmount below, so a
+  // navigate-away stops the loop at the next row boundary instead of letting it keep going.
+  const approveAbort = useRef<AbortController | null>(null)
   // In-house has no business_entities row ([entity-picker] trap 1) -- entity_id omitted
   // entirely, same convention as InvoicesList.tsx:83.
   const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
@@ -128,6 +131,15 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
     setPhase((p) => (p === 'submitting' ? p : 'idle'))
   }, [rows])
 
+  // Stops an abandoned fan-out at the next row boundary (APPR-16-04) -- the entity
+  // switcher and global nav stay live throughout (D-31), so this is the only thing that
+  // reacts to a navigate-away mid-run.
+  // Implicit-return cleanup, no explicit `return` statement: LIB-SCAN-A (A04-11) locates
+  // this component's JSX by its own first match on that keyword-plus-paren pattern.
+  useEffect(() => () => {
+    approveAbort.current?.abort()
+  }, [])
+
   const allState = approvalSelectAllState(selected, rows)
   const bar = approvalsBarView(selected, rows, phase, loading)
 
@@ -166,8 +178,16 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
     // up live, every result row would flicker to a raw uuid.
     const numbersById = new Map(rows.map((row) => [row.id, row.invoice_number]))
     setProgress({ done: 0, total: ids.length })
+    const controller = new AbortController()
+    approveAbort.current = controller
     try {
-      const res = await approveInvoices(ctx.authedFetch, base, ids, (_result, index) => setProgress({ done: index + 1, total: ids.length }))
+      const res = await approveInvoices(
+        ctx.authedFetch,
+        base,
+        ids,
+        (_result, index) => setProgress({ done: index + 1, total: ids.length }),
+        controller.signal,
+      )
       setResults(approvalOutcome(res, numbersById))
     } finally {
       // Cleared deliberately, not inherited from useAsync nulling list.data (G-04-E):
@@ -177,6 +197,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
       // Functional: this runs after an await, so the closure's `phase` is stale.
       setPhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
       approveInFlight.current = false
+      approveAbort.current = null
       // The affirmation. Badges are NEVER derived from the decision responses above.
       list.run()
     }
@@ -261,8 +282,9 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                 </>
               ) : (
                 <>
-                  {/* Visibly disabled while submitting: approveInvoices takes no
-                      AbortSignal, so there is nothing left to cancel. */}
+                  {/* Visibly disabled while submitting: the click itself can't stop the
+                      fan-out -- only an unmount does, via approveInvoices' AbortSignal
+                      (APPR-16-04). */}
                   <button
                     data-testid="approvals-bulk-cancel"
                     onClick={disarm}
@@ -326,7 +348,13 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
         <div data-testid="approvals-empty-page">
           <EmptyState title={APPROVALS_COPY.emptyPageTitle} message={APPROVALS_COPY.emptyPageMessage} />
           <div style={{ marginTop: 16 }}>
-            <Pager pagination={list.data.pagination} busy={loading} onGo={setOffset} testId="approvals-pager" />
+            <Pager
+              pagination={list.data.pagination}
+              busy={loading || phase === 'submitting'}
+              onGo={setOffset}
+              testId="approvals-pager"
+              reason={phase === 'submitting' ? APPROVALS_COPY.pagerReason : undefined}
+            />
           </div>
         </div>
       )}
@@ -418,7 +446,13 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
 
           <div style={{ marginTop: 16 }}>
-            <Pager pagination={list.data.pagination} busy={loading} onGo={setOffset} testId="approvals-pager" />
+            <Pager
+              pagination={list.data.pagination}
+              busy={loading || phase === 'submitting'}
+              onGo={setOffset}
+              testId="approvals-pager"
+              reason={phase === 'submitting' ? APPROVALS_COPY.pagerReason : undefined}
+            />
           </div>
         </>
       )}

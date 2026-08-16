@@ -334,6 +334,12 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
     const buttons = Array.from(card.querySelectorAll('button'))
     expect(buttons.map((b) => b.dataset.testid)).toEqual(['resolve-outside'])
     expect(buttons.some((b) => /submit|retry|re-?drive|resubmit|validate/i.test(b.textContent ?? ''))).toBe(false)
+    // task-554/APPR-13-04 (AC-1, AC-2): the decision pair renders on every status,
+    // including this failed/terminal one, but lives in the action column, not this card.
+    expect(screen.getByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
+    expect(card.contains(screen.getByTestId('detail-approve'))).toBe(false)
+    expect(card.contains(screen.getByTestId('detail-reject'))).toBe(false)
   })
 })
 
@@ -1037,8 +1043,12 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(screen.queryByTestId('edit-toggle')).toBeNull()
     expect(screen.queryByTestId('revalidate')).toBeNull()
     expect(screen.queryByTestId('detail-submit')).toBeNull()
-    // The read-only viewer is the one control that stays -- see this test's comment.
+    // view-ubl and the decision pair are the controls that stay -- see this test's comment.
     expect(screen.getByTestId('view-ubl')).toBeTruthy()
+    // task-554/APPR-13-04 (AC-1): gated on `!editing` only, like view-ubl -- a can_edit:false
+    // refetch must not drag the decision pair out with the lifecycle controls it deletes.
+    expect(screen.getByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
   })
 
   // Layer 3 (the visible reason text) is the whole justification for rendering disabled
@@ -2584,12 +2594,16 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     fireEvent.click(screen.getByTestId('detail-submit-confirm'))
     await screen.findByTestId('detail-submit-skipped')
     expect(screen.getByTestId('invoice-actions'), 'anchor: the bar is up before editing').toBeTruthy()
+    // task-554/APPR-13-04 (AC-1) anchors: the decision pair is gated on `!editing` too,
+    // and must be up before editing starts for its absence below to be a real assertion.
+    expect(screen.getByTestId('detail-approve'), 'anchor: approve is up before editing').toBeTruthy()
+    expect(screen.getByTestId('detail-reject'), 'anchor: reject is up before editing').toBeTruthy()
 
     fireEvent.click(screen.getByTestId('edit-toggle'))
 
     expect(screen.getByTestId('detail-submit-skipped'), 'the column is still mounted').toBeTruthy()
     expect(screen.queryAllByTestId('invoice-actions')).toHaveLength(0)
-    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit', 'detail-approve', 'detail-reject']) {
       expect(screen.queryAllByTestId(id), `${id} goes with the bar`).toHaveLength(0)
     }
   })
@@ -2603,5 +2617,237 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     const declared = [...(block as RegExpMatchArray)[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
     expect(declared.length, 'floor: the union really was parsed').toBeGreaterThan(1)
     expect([...ALL_STATUSES].sort()).toEqual([...declared].sort())
+  })
+})
+
+// RED specs (task-554, APPR-13-04, Mode A). Neither `detail-approve` nor `detail-reject`
+// exists yet, so every row below fails on a missing element, never an import/type error.
+// Arm/confirm and the reject-reason input row are APPR-13-05 -- this subtask (and these
+// specs) cover only the resting/idle pair and its four-layer disabled recipe.
+describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
+  const ID = 'inv-decision-1'
+  const editable = { status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: false, can_submit: true }
+  const S = 'Only a validated invoice can be approved or rejected.'
+  // internal/invoice/handlers.go:378-394's five approvalGate rungs, verbatim -- mirrors
+  // approvals.test.ts:1064-1070's APPROVAL_GATE_SENTENCES, duplicated here since that
+  // const is module-private to that file.
+  const APPROVAL_GATE_SENTENCES = [
+    'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.',
+    'Only a validated invoice can be approved or rejected.',
+    'This invoice has no approval run to decide on.',
+    "This invoice's approval run is already closed.",
+    "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role.",
+  ]
+
+  it('1: both controls render on a queued, can_edit:false invoice, while invoice-actions stays gone (AC-1)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+  })
+
+  it('2: the pair sits outside invoice-actions and after view-ubl in document order (AC-1, AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const bar = await screen.findByTestId('invoice-actions')
+    const viewUbl = screen.getByTestId('view-ubl')
+    const approveBtn = screen.getByTestId('detail-approve')
+    expect(within(bar).queryByTestId('detail-approve')).toBeNull()
+    expect(within(bar).queryByTestId('detail-reject')).toBeNull()
+    expect(viewUbl.compareDocumentPosition(approveBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('3: the pair hides while editing (AC-1)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+
+    expect(screen.queryAllByTestId('detail-approve')).toHaveLength(0)
+    expect(screen.queryAllByTestId('detail-reject')).toHaveLength(0)
+  })
+
+  it('4: permutation 1 -- both allowed, no reason: enabled, unmuted, no reason node (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: true, reject_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(false)
+    expect(rejectBtn.disabled).toBe(false)
+    expect(approveBtn.style.background).toBe('')
+    expect(rejectBtn.style.background).toBe('')
+    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+  })
+
+  it('5: permutation 2 -- both blocked, same reason: disabled, muted, one visible node (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(true)
+    expect(rejectBtn.disabled).toBe(true)
+    expect(approveBtn.style.background).not.toBe('')
+    expect(rejectBtn.style.background).not.toBe('')
+    const nodes = screen.getAllByText(S)
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].textContent).toBe(S)
+  })
+
+  it('6: permutation 3 -- both blocked, no reason: disabled, muted, no reason node, nothing invented (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(true)
+    expect(rejectBtn.disabled).toBe(true)
+    expect(approveBtn.style.background).not.toBe('')
+    expect(rejectBtn.style.background).not.toBe('')
+    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.hasAttribute('title')).toBe(false)
+    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
+    expect(rejectBtn.hasAttribute('title')).toBe(false)
+    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('7: permutation 4 -- a contradictory wire (can_approve:true with a reason set) still enables Approve, and the reason still renders (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(false)
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+  })
+
+  it.each(APPROVAL_GATE_SENTENCES)('8: the visible reason is byte-identical to the wire -- %s (AC-2)', async (sentence) => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: sentence, can_reject: false, reject_blocked_reason: sentence }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('approve-blocked-reason')
+    expect(reasonEl.textContent).toBe(sentence)
+  })
+
+  it('9: the disabled Approve neutralises filter, guarding .v2-btn-primary:hover from brightening it (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+
+    expect(btn.style.filter).toBe('none')
+  })
+
+  it('10: an enabled Approve carries no muted inline style, preserving :hover (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+
+    expect(btn.disabled).toBe(false)
+    expect(btn.style.background).toBe('')
+    expect(btn.style.color).toBe('')
+    expect(btn.style.cursor).toBe('')
+  })
+
+  it('11: the disabled Approve refuses focus, and its reason stays reachable (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-approve')
+
+    btn.focus()
+    expect(document.activeElement).not.toBe(btn)
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+  })
+
+  it('12: aria-describedby on both controls resolves to a real element in the document (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = await screen.findByTestId('detail-approve')
+    const rejectBtn = screen.getByTestId('detail-reject')
+
+    const approveDescribedBy = approveBtn.getAttribute('aria-describedby')
+    const rejectDescribedBy = rejectBtn.getAttribute('aria-describedby')
+    expect(approveDescribedBy).toBeTruthy()
+    expect(rejectDescribedBy).toBeTruthy()
+    expect(document.getElementById(approveDescribedBy as string)).toBeTruthy()
+    expect(document.getElementById(rejectDescribedBy as string)).toBeTruthy()
+  })
+
+  it('13: a sentence shared by both controls prints exactly once in the document (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-approve')
+
+    expect(screen.getAllByText(S)).toHaveLength(1)
+  })
+
+  it('14: clicking a disabled Approve sends no request and adds no new control to the page (AC-2)', async () => {
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-approve')
+    const callsBefore = fetchMock.mock.calls.length
+    const buttonsBefore = screen.getAllByRole('button').length
+
+    fireEvent.click(btn)
+
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+    expect(screen.getAllByRole('button').length).toBe(buttonsBefore)
+  })
+
+  // QA-added (task-554 row 17): the D-36 sibling-diff obligation -- View UBL's own
+  // wrapper-vs-fragment guard (T4, InvoiceDetail.test.tsx:2070-2082) does not reach these
+  // two testids, so nothing else in the suite would catch a wrapper <div> fused around
+  // Approve/Reject. Same technique, same parent-identity oracle.
+  it('17: detail-approve and detail-reject are direct children of the action column, like view-ubl -- fragment, never a wrapper div', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const bar = await screen.findByTestId('invoice-actions')
+    const viewUbl = screen.getByTestId('view-ubl')
+    const approveBtn = screen.getByTestId('detail-approve')
+    const rejectBtn = screen.getByTestId('detail-reject')
+
+    expect(approveBtn.parentElement).toBe(bar.parentElement)
+    expect(rejectBtn.parentElement).toBe(bar.parentElement)
+    expect(approveBtn.parentElement).toBe(viewUbl.parentElement)
+  })
+
+  // QA-added (task-554 row 19): closes the Approve/Reject asymmetry left by row 11, which
+  // only proves reachability for Approve. AC-2 layer 3's whole justification is that a
+  // disabled button is out of the tab order, so Reject's own reason must clear the same
+  // bar, not just Approve's.
+  it('19: the disabled Reject refuses focus while its reason stays reachable in the accessible tree', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const rejectBtn = await screen.findByTestId('detail-reject')
+
+    rejectBtn.focus()
+    expect(document.activeElement).not.toBe(rejectBtn)
+    const describedBy = rejectBtn.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const reasonEl = document.getElementById(describedBy as string)
+    expect(reasonEl).toBeTruthy()
+    expect(reasonEl?.textContent).toBe(S)
+    expect(screen.getByText(S)).toBeTruthy()
   })
 })

@@ -15,7 +15,14 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
-import { DETAIL_DECISION_COPY, decisionBlockedReasons, getInvoiceApprovalRun, type ApprovalRun } from '../lib/approvals'
+import {
+  canRejectReason,
+  decideInvoice,
+  DETAIL_DECISION_COPY,
+  decisionBlockedReasons,
+  getInvoiceApprovalRun,
+  type ApprovalRun,
+} from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
@@ -289,6 +296,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [submitSkipped, setSubmitSkipped] = useState<string | null>(null)
   const submitInFlight = useRef(false)
 
+  // Single-invoice approve machine (task-547), same reducer/ref shape as Submit above.
+  const [approvePhase, setApprovePhase] = useState<BulkPhase>('idle')
+  const approveInFlight = useRef(false)
+
+  // Inline reject row (task-547) -- resolve-outside's state shape, plus its own in-flight
+  // ref (submitInFlight's stronger precedent, not resolve-outside's state-only guard).
+  const [rejectOpen, setRejectOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
+  const [rejecting, setRejecting] = useState(false)
+  const rejectInFlight = useRef(false)
+  const [decisionError, setDecisionError] = useState<string | null>(null)
+
   // Resolve-outside control (failed invoices only, Core AC #1/#4/#5/#6). Both handlers DO
   // gen-bump / setLive(null) before detail.run() (handleRevalidate's precedent) -- `live`
   // can still hold a stale snapshot from watching queued -> failed earlier in this session.
@@ -393,6 +412,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       setLive(null)
       detail.run()
       history.run()
+      approval.run() // Q13's visible face (D-22) -- an edit can demote to draft and close the live run
     }
 
     // INVED-01-07: the button this drives is now DISABLED whenever `!inv.can_revalidate`,
@@ -416,10 +436,73 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         setLive(null) // see handleSaved above -- clear the overlay before the real refresh
         detail.run()
         history.run()
+        approval.run() // see handleSaved above -- a re-validate opens a NEW run
       } catch (err) {
         setRevalidateError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         setRevalidating(false)
+      }
+    }
+
+    // Same reducer as Submit's own machine below -- identity IS "do nothing", so an
+    // unarmed confirm or a second confirm mid-flight fires no request.
+    const toApprovePhase = (action: Parameters<typeof bulkPhaseReducer>[1]): boolean => {
+      const next = bulkPhaseReducer(approvePhase, action)
+      if (next === approvePhase) return false
+      setApprovePhase(next)
+      return true
+    }
+
+    // Indistinguishable in shape from handleSubmit below (D-47's identifier correction):
+    // guard -> arm/confirm gate -> in-flight ref -> POST with the returned run DISCARDED
+    // (non-optimistic, AC-6) -> refetch trio -> catch surfaces the server's own sentence.
+    const handleApprove = async () => {
+      setDecisionError(null)
+      if (!inv.can_approve) return
+      if (!toApprovePhase({ type: 'confirm' })) return // no arm => no request
+      if (approveInFlight.current) return
+      approveInFlight.current = true
+      try {
+        await decideInvoice(ctx.authedFetch, base, invoiceId, 'approved')
+        gen.current++
+        setLive(null)
+        detail.run()
+        history.run()
+        approval.run()
+      } catch (err) {
+        setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        // Functional setter -- see handleSubmit's own finally comment below; same stale-
+        // closure rationale applies here.
+        setApprovePhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
+        approveInFlight.current = false
+      }
+    }
+
+    // Same shape as handleApprove above, guarded by the trim rule instead of the reducer
+    // (reject has no arm stage -- the inline row IS the arm) and reset via `rejecting`
+    // (a plain boolean, not a phase reducer) rather than a functional setter.
+    const handleReject = async () => {
+      setDecisionError(null)
+      if (!inv.can_reject) return
+      if (!canRejectReason(rejectReason)) return
+      if (rejectInFlight.current) return
+      rejectInFlight.current = true
+      setRejecting(true)
+      try {
+        await decideInvoice(ctx.authedFetch, base, invoiceId, 'rejected', rejectReason)
+        setRejectOpen(false)
+        setRejectReason('')
+        gen.current++
+        setLive(null)
+        detail.run()
+        history.run()
+        approval.run()
+      } catch (err) {
+        setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        setRejecting(false)
+        rejectInFlight.current = false
       }
     }
 
@@ -598,28 +681,69 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               {!editing && (
                 <>
                   <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      type="button"
-                      data-testid="detail-approve"
-                      disabled={!inv.can_approve}
-                      title={decisionReasons[0] ?? undefined}
-                      aria-describedby={decisionReasons[0] != null ? APPROVE_REASON_ID : undefined}
-                      className="v2-btn v2-btn-primary pf-btn"
-                      style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
-                        ...(!inv.can_approve
-                          ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
-                          : null),
-                      }}
-                    >
-                      {DETAIL_DECISION_COPY.approve}
-                    </button>
+                    {/* Arm -> confirm, same inline machine as Submit below ([no-modal]) --
+                        swaps in place to detail-approve-cancel/-confirm while armed. Reject
+                        stays independently clickable throughout (disabled only while its own
+                        row is open, below), so the two decisions are never mutually exclusive. */}
+                    {approvePhase === 'idle' ? (
+                      <button
+                        type="button"
+                        data-testid="detail-approve"
+                        onClick={() => toApprovePhase({ type: 'arm' })}
+                        disabled={!inv.can_approve}
+                        title={decisionReasons[0] ?? undefined}
+                        aria-describedby={decisionReasons[0] != null ? APPROVE_REASON_ID : undefined}
+                        className="v2-btn v2-btn-primary pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          ...(!inv.can_approve
+                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                            : null),
+                        }}
+                      >
+                        {DETAIL_DECISION_COPY.approve}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          data-testid="detail-approve-cancel"
+                          onClick={() => toApprovePhase({ type: 'cancel' })}
+                          disabled={approvePhase === 'submitting'}
+                          className="v2-btn v2-btn-ghost pf-btn"
+                          style={{
+                            height: 32,
+                            padding: '0 14px',
+                            fontSize: 13,
+                            ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                          }}
+                        >
+                          {DETAIL_DECISION_COPY.cancel}
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="detail-approve-confirm"
+                          onClick={() => void handleApprove()}
+                          disabled={approvePhase === 'submitting'}
+                          className="v2-btn v2-btn-primary pf-btn"
+                          style={{
+                            height: 32,
+                            padding: '0 14px',
+                            fontSize: 13,
+                            ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                          }}
+                        >
+                          {approvePhase === 'submitting' ? DETAIL_DECISION_COPY.approveSending : DETAIL_DECISION_COPY.approveConfirm}
+                        </button>
+                      </>
+                    )}
                     <button
                       type="button"
                       data-testid="detail-reject"
-                      disabled={!inv.can_reject}
+                      onClick={() => setRejectOpen(true)}
+                      disabled={!inv.can_reject || rejectOpen}
                       title={(decisionReasons.length > 1 ? decisionReasons[1] : decisionReasons[0]) ?? undefined}
                       aria-describedby={
                         decisionReasons.length > 1 ? REJECT_REASON_ID : decisionReasons[0] != null ? APPROVE_REASON_ID : undefined
@@ -629,7 +753,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         height: 32,
                         padding: '0 14px',
                         fontSize: 13,
-                        ...(!inv.can_reject ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        ...(!inv.can_reject || rejectOpen ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                       }}
                     >
                       {DETAIL_DECISION_COPY.reject}
@@ -643,6 +767,72 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   {decisionReasons.length > 1 && (
                     <div id={REJECT_REASON_ID} data-testid="reject-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {decisionReasons[1]}
+                    </div>
+                  )}
+                  {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
+                      and styling as detail-submit-confirm-prompt below. */}
+                  {approvePhase !== 'idle' && (
+                    <div data-testid="detail-approve-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      <div>{DETAIL_DECISION_COPY.approvePrompt}</div>
+                      <div>{DETAIL_DECISION_COPY.approveDetail}</div>
+                    </div>
+                  )}
+                  {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
+                      detail-decision-actions, resolve-outside's row shape verbatim
+                      (:944-991 below): flexWrap:'wrap' is mandatory, not cosmetic -- the
+                      input plus both button labels don't fit on one line at 320px. */}
+                  {rejectOpen && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        data-testid="detail-reject-reason"
+                        aria-label="Reason for rejection"
+                        placeholder={DETAIL_DECISION_COPY.rejectPlaceholder}
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        disabled={rejecting}
+                        className="pf-input"
+                        style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="detail-reject-cancel"
+                        onClick={() => {
+                          setRejectOpen(false)
+                          setRejectReason('')
+                        }}
+                        disabled={rejecting}
+                        className="v2-btn v2-btn-ghost pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(rejecting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        }}
+                      >
+                        {DETAIL_DECISION_COPY.cancel}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="detail-reject-confirm"
+                        onClick={() => void handleReject()}
+                        disabled={rejecting || !canRejectReason(rejectReason)}
+                        className="v2-btn v2-btn-primary pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(rejecting || !canRejectReason(rejectReason)
+                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                            : null),
+                        }}
+                      >
+                        {rejecting ? DETAIL_DECISION_COPY.rejectSending : DETAIL_DECISION_COPY.rejectConfirm}
+                      </button>
                     </div>
                   )}
                 </>
@@ -809,6 +999,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               {submitError != null && (
                 <div data-testid="detail-submit-error" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
                   {submitError}
+                </div>
+              )}
+              {/* Copies detail-submit-error's shape exactly, sourced from the decide
+                  handlers' catch. A late child of this column, outside the can_edit gate
+                  above -- a decision that lands can flip can_edit on refetch, and this
+                  banner must survive that. Carries ApiError.message verbatim (D-24: never
+                  the ErrorState retry surface). */}
+              {decisionError != null && (
+                <div data-testid="detail-decision-error" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
+                  {decisionError}
                 </div>
               )}
             </div>

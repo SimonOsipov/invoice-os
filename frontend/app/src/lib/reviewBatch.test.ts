@@ -69,6 +69,7 @@ import {
   railPills,
   REVIEW_HASH_MAX_IDS,
   reviewFilterReducer,
+  reviewFooterSummary,
   reviewHash,
   reviewHeader,
   reviewHeaderAll,
@@ -85,6 +86,7 @@ import {
   routeAfterImport,
   showsSourceFile,
   sourceFileLabel,
+  TILE_CAPTION_VALID,
   unreadableCsv,
   unreadableCsvAll,
   unreadableRows,
@@ -1216,6 +1218,64 @@ describe('reviewPills: the ready pill no longer over-claims (APPR-12-06, AC #3)'
     const readyPill = reviewPills(totals, 'all').find((p) => p.id === 'ready')
 
     expect(readyPill?.label).toBe('Validated')
+  })
+})
+
+// RED specs (APPR-16-01, task-534, AC-1) — A06-7 above fixed the ready PILL; two sibling
+// strings on the same screen (ReviewBatch.tsx:286 tile caption, :414 footer clause) still
+// claim entitlement the pill no longer claims. TILE_CAPTION_VALID/reviewFooterSummary
+// don't exist as exports yet, so the named imports above resolve to `undefined` here
+// (verified: an ESM named import of a missing export does not throw under this project's
+// esbuild-transformed vitest run — it is simply `undefined`) — every assertion below fails
+// on that value, not on an import/collection error.
+describe('ReviewBatch captions name validation, not entitlement (APPR-16-01, AC-1)', () => {
+  it('A16-1: the tile caption names validation, not entitlement', () => {
+    expect(typeof TILE_CAPTION_VALID, 'TILE_CAPTION_VALID must be an exported string').toBe('string')
+    expect((TILE_CAPTION_VALID as unknown as string).toLowerCase()).not.toContain('ready to submit')
+    expect((TILE_CAPTION_VALID as unknown as string).toLowerCase()).toContain('passed every rule')
+  })
+
+  it('A16-1b: the footer counter line names the validated count without entitling it', () => {
+    expect(typeof reviewFooterSummary, 'reviewFooterSummary must be an exported function').toBe('function')
+    const totals = { allTotal: 500, cleanTotal: 474, queuedTotal: 6, failingTotal: 20, keptTotal: 3 }
+    const line = (reviewFooterSummary as unknown as (t: typeof totals) => string)(totals)
+
+    expect(line.toLowerCase()).not.toContain('ready to submit')
+    // AC-6: the other four clauses stay byte for byte -- only cleanTotal's wording changes.
+    expect(line).toContain('500 invoices stored')
+    expect(line).toContain('6 queued for transmission')
+    expect(line).toContain('20 awaiting a fix')
+    expect(line).toContain('3 kept as-is')
+  })
+
+  it("A16-1c: ReviewBatch.tsx source contains no 'ready to submit', in any case", () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    expect(source.toLowerCase()).not.toContain('ready to submit')
+  })
+
+  it('A16-1c control: the scan read the real file and a known needle is present', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    // NOT 'cleanTotal' -- it occurs 9x inside lib/reviewBatch.ts too and cannot tell this
+    // scan apart from an accidental read of the wrong file (LIB-SCAN-1's own URL).
+    expect(source.length).toBeGreaterThan(0)
+    expect(source, 'lost anchor on ReviewBatch.tsx').toContain('export function ReviewBatch(')
+  })
+
+  it('A16-1d: the pill and the captions no longer contradict each other', () => {
+    const totals = { allTotal: 10, cleanTotal: 4, failingTotal: 3, queuedTotal: 3 }
+    const readyPill = reviewPills(totals, 'all').find((p) => p.id === 'ready')
+    expect(readyPill?.label.toLowerCase()).not.toContain('ready to submit')
+
+    expect(typeof TILE_CAPTION_VALID, 'TILE_CAPTION_VALID must be an exported string').toBe('string')
+    expect((TILE_CAPTION_VALID as unknown as string).toLowerCase()).not.toContain('ready to submit')
+
+    expect(typeof reviewFooterSummary, 'reviewFooterSummary must be an exported function').toBe('function')
+    const line = (reviewFooterSummary as unknown as (t: typeof totals & { keptTotal: number }) => string)({ ...totals, keptTotal: 0 })
+    expect(line.toLowerCase()).not.toContain('ready to submit')
   })
 })
 

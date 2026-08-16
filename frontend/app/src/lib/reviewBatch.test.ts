@@ -69,6 +69,7 @@ import {
   railPills,
   REVIEW_HASH_MAX_IDS,
   reviewFilterReducer,
+  reviewFooterSummary,
   reviewHash,
   reviewHeader,
   reviewHeaderAll,
@@ -85,6 +86,7 @@ import {
   routeAfterImport,
   showsSourceFile,
   sourceFileLabel,
+  TILE_CAPTION_VALID,
   unreadableCsv,
   unreadableCsvAll,
   unreadableRows,
@@ -1208,7 +1210,8 @@ describe('reviewPills (AC-2, D3) — takes the four totals only, no rows paramet
 // RED spec (APPR-12-06, task-531, A06-7) — a validated invoice held by an open approval
 // run is not "ready to submit" (INVOICES-06's own missing-reason gap): the ready pill's
 // label over-claimed. Asserted through reviewPills (REVIEW_PILL_LABELS itself is
-// module-private) — fails today against the still-pinned 'Ready to submit' string.
+// module-private) — green today: the pill already reads 'Validated' (REVIEW_PILL_LABELS,
+// reviewBatch.ts:896-901).
 describe('reviewPills: the ready pill no longer over-claims (APPR-12-06, AC #3)', () => {
   it("A06-7: REVIEW_PILL_LABELS.ready is 'Validated', not 'Ready to submit' — a validated row held by an approval run is not ready to submit", () => {
     const totals = { allTotal: 10, cleanTotal: 4, failingTotal: 3, queuedTotal: 3 }
@@ -1216,6 +1219,95 @@ describe('reviewPills: the ready pill no longer over-claims (APPR-12-06, AC #3)'
     const readyPill = reviewPills(totals, 'all').find((p) => p.id === 'ready')
 
     expect(readyPill?.label).toBe('Validated')
+  })
+})
+
+// RED specs (APPR-16-01, task-534, AC-1) — A06-7 above fixed the ready PILL; two sibling
+// strings on the same screen (ReviewBatch.tsx:286 tile caption, :414 footer clause) still
+// claim entitlement the pill no longer claims. TILE_CAPTION_VALID/reviewFooterSummary
+// don't exist as exports yet, so the named imports above resolve to `undefined` here
+// (verified: an ESM named import of a missing export does not throw under this project's
+// esbuild-transformed vitest run — it is simply `undefined`) — every assertion below fails
+// on that value, not on an import/collection error.
+describe('ReviewBatch captions name validation, not entitlement (APPR-16-01, AC-1)', () => {
+  it('A16-1: the tile caption names validation, not entitlement', () => {
+    expect(typeof TILE_CAPTION_VALID, 'TILE_CAPTION_VALID must be an exported string').toBe('string')
+    expect((TILE_CAPTION_VALID as unknown as string).toLowerCase()).not.toContain('ready to submit')
+    expect((TILE_CAPTION_VALID as unknown as string).toLowerCase()).toContain('passed every rule')
+  })
+
+  it('A16-1b: the footer counter line names the validated count without entitling it', () => {
+    expect(typeof reviewFooterSummary, 'reviewFooterSummary must be an exported function').toBe('function')
+    const totals = { allTotal: 500, cleanTotal: 474, queuedTotal: 6, failingTotal: 20, keptTotal: 3 }
+    const line = (reviewFooterSummary as unknown as (t: typeof totals) => string)(totals)
+
+    expect(line.toLowerCase()).not.toContain('ready to submit')
+    // AC-6: the other four clauses stay byte for byte -- only cleanTotal's wording changes.
+    expect(line).toContain('500 invoices stored')
+    expect(line).toContain('6 queued for transmission')
+    expect(line).toContain('20 awaiting a fix')
+    expect(line).toContain('3 kept as-is')
+  })
+
+  it('A16-1f: reviewFooterSummary stays grammatical at all-zero totals', () => {
+    const zero = { allTotal: 0, cleanTotal: 0, queuedTotal: 0, failingTotal: 0, keptTotal: 0 }
+    const line = (reviewFooterSummary as unknown as (t: typeof zero) => string)(zero)
+
+    expect(line).toBe('0 invoices stored · 0 validated · 0 queued for transmission · 0 awaiting a fix · 0 kept as-is')
+  })
+
+  it('A16-1g: reviewFooterSummary keeps the five-clause · separator at large totals', () => {
+    const big = { allTotal: 1_234_567, cleanTotal: 999_999, queuedTotal: 42, failingTotal: 100_000, keptTotal: 7 }
+    const line = (reviewFooterSummary as unknown as (t: typeof big) => string)(big)
+
+    expect(line).toBe('1234567 invoices stored · 999999 validated · 42 queued for transmission · 100000 awaiting a fix · 7 kept as-is')
+    expect(line.split(' · ')).toHaveLength(5)
+  })
+
+  it("A16-1c: ReviewBatch.tsx source contains no 'ready to submit', in any case", () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    expect(source.toLowerCase()).not.toContain('ready to submit')
+  })
+
+  it('A16-1c control: the scan read the real file and a known needle is present', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    // NOT 'cleanTotal' -- it occurs 9x inside lib/reviewBatch.ts too and cannot tell this
+    // scan apart from an accidental read of the wrong file (LIB-SCAN-1's own URL).
+    expect(source.length).toBeGreaterThan(0)
+    expect(source, 'lost anchor on ReviewBatch.tsx').toContain('export function ReviewBatch(')
+  })
+
+  // AC-1's "not authored inline" is a DIFFERENT claim than "no forbidden substring":
+  // a hand-typed inline literal with the SAME wording as the export passes A16-1c/1d
+  // and every runtime render check, because the rendered text is identical either way.
+  // Only a source-level check on the call site itself can tell "imported" from
+  // "retyped by hand".
+  it('A16-1e: both call sites are wired to the exports, not retyped inline', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    expect(source).toContain('caption={TILE_CAPTION_VALID}')
+    expect(source).not.toMatch(/caption=["']Passed every rule\.?["']/)
+
+    expect(source).toContain('{reviewFooterSummary(')
+    expect(source).not.toContain('invoices stored')
+  })
+
+  it('A16-1d: the pill and the captions no longer contradict each other', () => {
+    const totals = { allTotal: 10, cleanTotal: 4, failingTotal: 3, queuedTotal: 3 }
+    const readyPill = reviewPills(totals, 'all').find((p) => p.id === 'ready')
+    expect(readyPill?.label.toLowerCase()).not.toContain('ready to submit')
+
+    expect(typeof TILE_CAPTION_VALID, 'TILE_CAPTION_VALID must be an exported string').toBe('string')
+    expect((TILE_CAPTION_VALID as unknown as string).toLowerCase()).not.toContain('ready to submit')
+
+    expect(typeof reviewFooterSummary, 'reviewFooterSummary must be an exported function').toBe('function')
+    const line = (reviewFooterSummary as unknown as (t: typeof totals & { keptTotal: number }) => string)({ ...totals, keptTotal: 0 })
+    expect(line.toLowerCase()).not.toContain('ready to submit')
   })
 })
 

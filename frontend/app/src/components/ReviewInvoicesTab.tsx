@@ -717,7 +717,8 @@ export function ReviewInvoicesTab({
               client constant here would hide a clamp instead of showing it. */}
           <Pager
             pagination={shown.pagination}
-            busy={loading}
+            busy={loading || phase === 'submitting'}
+            reason={phase === 'submitting' ? BULK_COPY.pagerReason : undefined}
             onGo={(offset) => dispatch({ type: 'page', offset })}
           />
 

@@ -46,10 +46,12 @@ import {
   alreadyImportedRowsAll,
   channelTilesAll,
   filesStrip,
+  reviewFooterSummary,
   reviewHeaderAll,
   reviewQueryAll,
   reviewShellStateAll,
   reviewTabs,
+  TILE_CAPTION_VALID,
   unreadableRowsAll,
   type FileStripRow,
   type ReviewTab,
@@ -283,7 +285,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <Tile
                 value={`${tiles.live.cleanTotal} valid`}
-                caption="Passed every rule. Ready to submit."
+                caption={TILE_CAPTION_VALID}
                 bg="var(--status-green-bg)"
                 border="var(--status-green-border)"
                 text="var(--status-green-text)"
@@ -411,7 +413,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             for a fully-sent batch on a revisit, the exact false zero this story's counter
             discipline exists to prevent. QUEUED is D2's own real name for the state. */}
         <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>
-          {allTotal} invoices stored · {cleanTotal} ready to submit · {queuedTotal} queued for transmission · {failingTotal} awaiting a fix · {keptTotal} kept as-is
+          {reviewFooterSummary({ allTotal, cleanTotal, queuedTotal, failingTotal, keptTotal })}
         </span>
         {/* NAVIGATION ONLY. The invoices were persisted at import time (§10.10), so a
             "Finish writes the batch" step would be a lie about when the data landed. */}

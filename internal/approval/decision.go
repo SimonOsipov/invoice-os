@@ -173,27 +173,14 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 
 	// AXIS 2: the inverse of reconciliation's approval_blocked_unstaffed NOT EXISTS
 	// body (internal/reconciliation/reconciliation.go:179-204), narrowed to the
-	// caller -- no tenant_id predicate, RLS is the only filter (store.go:27-30).
-	//
-	// m.status/m.role duplicate AXIS 1's already-run requireApprover check on the SAME
-	// row (memberships_tenant_user_uq UNIQUE(tenant_id,user_id)) -- defense-in-depth only.
+	// caller -- resolved through HeldRoleKeysTx (gate.go), the one AXIS-2 predicate.
 	var holds bool
 	if roleKey != nil {
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (
-			   SELECT 1
-			     FROM workflow_roles wr
-			     JOIN workflow_role_members wrm ON wrm.workflow_role_id = wr.id
-			     JOIN memberships m ON m.user_id = wrm.user_id
-			    WHERE wr.key = $1
-			      AND wr.deleted_at IS NULL
-			      AND wrm.user_id = $2
-			      AND m.status = 'active'
-			      AND m.role IN ('admin', 'reviewer')
-			 )`, *roleKey, caller.Subject,
-		).Scan(&holds); err != nil {
+		held, err := HeldRoleKeysTx(ctx, tx, []string{*roleKey}, caller.Subject)
+		if err != nil {
 			return Run{}, err
 		}
+		holds = held[*roleKey]
 	}
 	if !holds {
 		return Run{}, ErrNotRoleHolder

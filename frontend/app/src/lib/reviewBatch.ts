@@ -243,6 +243,23 @@ export function channelTilesAll(
   }
 }
 
+// Tile caption for the LIVE clean channel (APPR-16-01) -- names the fact (passed every
+// rule), not an entitlement an open approval run can make false. Sibling fix to
+// REVIEW_PILL_LABELS.ready ('Validated', :884).
+export const TILE_CAPTION_VALID = 'Passed every rule.'
+
+// Footer counter line (APPR-16-01) -- same fix as TILE_CAPTION_VALID. Only the
+// cleanTotal clause's wording changed; the other four are byte-for-byte the prior literal.
+export function reviewFooterSummary(t: {
+  allTotal: number
+  cleanTotal: number
+  queuedTotal: number
+  failingTotal: number
+  keptTotal: number
+}): string {
+  return `${t.allTotal} invoices stored · ${t.cleanTotal} validated · ${t.queuedTotal} queued for transmission · ${t.failingTotal} awaiting a fix · ${t.keptTotal} kept as-is`
+}
+
 export interface UnreadableRow {
   row: number | null
   column: string
@@ -1080,6 +1097,8 @@ export const BULK_COPY = {
   sending: 'Sending…',
   resultInvoice: 'Invoice #',
   resultOutcome: 'Result',
+  // D-25: states why the pager freezes during a bulk submit (APPR-16-04).
+  pagerReason: 'Paging is paused while your submission is sending.',
 } as const
 
 // NO `status` field, by design (AC-5): batch_submit.go's duplicate-request branch

@@ -7,13 +7,52 @@
 // really carry the current offset) was unverified. The poll-tick call-shape source-scan
 // lives in InvoicesList.pollShape.test.ts (node env) -- jsdom rewrites import.meta.url
 // off file: scheme, breaking readFileSync(fileURLToPath(...)) here.
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
 import { skipReasonLabel, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
+import { BULK_COPY, bulkBarView } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoicesList } from './InvoicesList'
+
+// Only the two APPR-16-03 specs that set this (A16-3b, the guard-order test below) make
+// bulkBarView(...).eligible diverge from the real, pruneSelection-derived value; every
+// other test in this file gets the REAL bulkBarView untouched (getEligibleOverride()
+// returns null, a pure passthrough). This is deliberately NOT a timing race: an empirical
+// probe against ApprovalsView (the already-shipped sibling sharing this exact [rows]-
+// effect shape) showed React flushes the effect that prunes `selected`/resets `phase`
+// atomically with the render that first makes a `rows` change observable -- a
+// 15-macrotask-tick sweep after a manually-resolved refetch found the FIRST tick at which
+// new content painted already reflected the fully-settled (pruned+disarmed) state, with
+// no observable gap in between. `selected` and `pruneSelection(selected, rows)` can
+// therefore never be caught diverging naturally in jsdom; this override makes the
+// divergence deterministic instead ([A16-3b-non-vacuous]).
+const { getEligibleOverride, setEligibleOverride } = vi.hoisted(() => {
+  let override: string[] | null = null
+  return {
+    getEligibleOverride: () => override,
+    setEligibleOverride: (next: string[] | null) => {
+      override = next
+    },
+  }
+})
+
+vi.mock('../lib/reviewBatch', async (orig) => {
+  const actual = await orig<typeof import('../lib/reviewBatch')>()
+  return {
+    ...actual,
+    bulkBarView: (...args: Parameters<typeof actual.bulkBarView>) => {
+      const real = actual.bulkBarView(...args)
+      const override = getEligibleOverride()
+      return override === null ? real : { ...real, eligible: override }
+    },
+  }
+})
 
 interface MockResponse {
   ok: boolean
@@ -99,6 +138,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  setEligibleOverride(null)
 })
 
 describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
@@ -995,5 +1035,556 @@ describe('InvoicesList: the needs-attention toggle says what it now includes', (
 
     expect(screen.queryByText(TOGGLE_EXPLAINER), 'the explainer is not nested under the populated branch').not.toBeNull()
     expect(screen.getByTestId('needs-attention-toggle'), 'and the toggle stays reachable to clear the filter').toBeDefined()
+  })
+})
+
+// RED specs (APPR-16-03, task-537, Stage 2.5/Mode A), authored before the fix in
+// afba8c8: batch-submit called submitSelection directly on click (pre-fix
+// InvoicesList.tsx:426/264), one click transmitting every selected invoice with no
+// brake -- every spec below failed at the time on a missing element / an assertion on
+// behavior that didn't exist yet, never an import or compile error. The fix (570d19b)
+// now makes them green; see the arm/confirm/cancel wiring below.
+function submitOkResponse(items: { invoice_id: string; enqueued: boolean; reason?: string }[] = []): MockResponse {
+  return { ok: true, status: 200, json: () => Promise.resolve({ results: items }) }
+}
+
+function submitErrorResponse(status: number, message: string): MockResponse {
+  return { ok: false, status, json: () => Promise.resolve({ error: message }) }
+}
+
+function postedIds(fetchMock: ReturnType<typeof vi.fn>, callIndex: number): string[] {
+  const [, init] = fetchMock.mock.calls[callIndex] as [string, RequestInit]
+  const body = JSON.parse(init.body as string) as { invoice_ids: string[] }
+  return body.invoice_ids
+}
+
+describe('InvoicesList: batch-submit arms before it confirms (APPR-16-03, task-537)', () => {
+  it('A16-3a: arming sends nothing -- zero POSTs, and the confirm control appears', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    const fetchMock = mockFetchSequence([listResponse([a, b], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit')) // arm
+
+    expect(screen.getByTestId('batch-submit-confirm'), 'arming must reveal the confirm stage').toBeTruthy()
+    expect(fetchMock, 'arming alone must issue no request').toHaveBeenCalledTimes(1) // only the initial GET
+  })
+
+  it('A16-3b: the confirm-time payload is bulkBarView(...).eligible, never the raw selected array [A16-3b-non-vacuous]', async () => {
+    // See the module-level comment on getEligibleOverride/setEligibleOverride above for
+    // why this uses a deterministic override rather than racing the poll tick: the two
+    // arrays are provably equal by the time anything is observable in jsdom, so a
+    // "select 2, confirm, assert both ids" test would pass IDENTICALLY whether
+    // submitSelection reads bar.eligible or raw `selected` (Stage 2's own vacuity
+    // warning). This override makes `selected` (still ['inv-a','inv-b']) and
+    // bar.eligible (forced to just ['inv-a']) diverge, so only a submitSelection that
+    // actually reads bar.eligible can produce the assertion below.
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a, b], { limit: 50, offset: 0, total: 2 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a, b], { limit: 50, offset: 0, total: 2 }), // the post-success refetch
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    expect(screen.getByTestId('batch-submit-confirm')).toBeTruthy()
+
+    setEligibleOverride(['inv-a'])
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    const ids = postedIds(fetchMock, 1)
+    expect(ids, 'must send bar.eligible, not raw selected -- exactly one id').toHaveLength(1)
+    expect(ids).toEqual(['inv-a'])
+    expect(ids, 'specifically must NOT carry the now-ineligible id').not.toContain('inv-b')
+  })
+
+  it('guard order (AC-15): an empty eligible set at confirm time enters no submitting state and issues no request', async () => {
+    // Wrong order (toPhase({type:'confirm'}) before the empty-eligible bail) strands the
+    // bar in 'submitting' forever, since `settled` only fires from a `finally` that a
+    // pre-try `return` never reaches (ReviewInvoicesTab.tsx:304-310 names this bug).
+    // Uses the same override technique as A16-3b -- an empty eligible set with a
+    // non-empty `selected` cannot be reached via the UI alone (bar.visible gates the
+    // whole bar on eligible.length > 0, so a genuinely empty eligible set hides the
+    // confirm control entirely; this override keeps the control visible/clickable while
+    // forcing its OWN 'eligible' to empty, isolating the guard-order check).
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    expect(screen.getByTestId('batch-submit-confirm')).toBeTruthy()
+
+    setEligibleOverride([])
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    expect(fetchMock, 'an empty eligible set must not POST').toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(BULK_COPY.sending), 'must never enter the submitting/sending state').toBeNull()
+  })
+
+  it('A16-3c: a double-click on confirm produces exactly one request', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }), // the post-success refetch
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    const confirmBtn = screen.getByTestId('batch-submit-confirm')
+    fireEvent.click(confirmBtn) // confirm #1
+    fireEvent.click(confirmBtn) // confirm #2, SAME tick -- `disabled` has not re-rendered yet (ApprovalsView.test.tsx A04-3 precedent: jsdom's fireEvent still dispatches to a disabled button, so the ref/phase guard is what actually has to stop this, not the attribute)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(fetchMock, 'a double-click must send exactly one POST, not two').toHaveBeenCalledTimes(3) // 1 GET + 1 POST + 1 refetch
+  })
+
+  it('A16-3d: any selection change while armed returns the bar to idle', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    mockFetchSequence([listResponse([a, b], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    expect(screen.getByTestId('batch-submit-confirm')).toBeTruthy()
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-B')) // selection changes while armed
+
+    expect(screen.queryByTestId('batch-submit-confirm'), 'any selection change while armed must return to idle').toBeNull()
+    expect(screen.getByTestId('batch-submit'), 'idle shows the arm control again').toBeTruthy()
+  })
+
+  it('A16-3e: cancel returns to idle and sends nothing; cancel while submitting is a no-op', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-cancel'))
+
+    expect(screen.queryByTestId('batch-submit-confirm'), 'cancel from armed must return to idle').toBeNull()
+    expect(screen.getByTestId('batch-submit'), 'idle shows the arm control again').toBeTruthy()
+    expect(fetchMock, 'cancel must send nothing').toHaveBeenCalledTimes(1)
+  })
+
+  it('A16-3e (cancel while submitting): the in-flight request is not cancellable', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/submissions')) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      return Promise.resolve(listResponse([a], { limit: 50, offset: 0, total: 1 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm')) // now submitting, POST held pending
+
+    const cancelBtn = screen.getByTestId('batch-submit-cancel') as HTMLButtonElement
+    expect(cancelBtn.disabled, 'cancel must carry the real disabled attribute while submitting').toBe(true)
+
+    fireEvent.click(cancelBtn)
+    expect(screen.getByTestId('batch-submit-confirm'), 'a no-op cancel must not un-arm a request already in flight').toBeTruthy()
+
+    resolvers[0](submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]))
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+  })
+
+  it('A16-3f: a confirm dispatched without ever arming fires nothing (identity return from bulkPhaseReducer)', async () => {
+    // The UI has no affordance to invoke "confirm" while idle -- batch-submit-confirm
+    // does not exist until armed (AC #1's own idle/armed gate), so an unarmed confirm
+    // cannot be driven through a click the way A16-3c's double-click can. This makes AC
+    // #2's guarantee observable via its DOM consequence instead: the confirm control is
+    // simply absent before arming, so there is no affordance through which an unarmed
+    // confirm could ever fire a request. bulkPhaseReducer's own identity-return for
+    // 'confirm' from 'idle' is exhaustively unit-tested in reviewBatch.test.ts and is not
+    // re-authored here (D-21, reuse-don't-re-author).
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    expect(screen.queryByTestId('batch-submit-confirm'), 'no confirm affordance exists before arming').toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('A16-3g: every visible bar string comes from bulkBarView/BULK_COPY, never an inline literal', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    mockFetchSequence([listResponse([a, b], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+
+    const idle = bulkBarView(['inv-a', 'inv-b'], [a, b], 'idle', false)
+    expect(screen.getByTestId('batch-submit-summary').textContent).toContain(idle.countLabel)
+    expect(screen.getByText(idle.submitLabel)).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('batch-submit'))
+
+    const armed = bulkBarView(['inv-a', 'inv-b'], [a, b], 'armed', false)
+    expect(screen.getByText(armed.confirmPrompt)).toBeTruthy()
+    expect(screen.getByText(armed.confirmDetail)).toBeTruthy()
+    expect(screen.getByText(armed.confirmLabel)).toBeTruthy()
+    expect(screen.getByText(BULK_COPY.cancel)).toBeTruthy()
+  })
+
+  it('A16-3h / D-22 [no-modal]: the confirm block is a DOM descendant of the bar, never a portal or modal', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+
+    const armed = bulkBarView(['inv-a'], [a], 'armed', false)
+    const summary = screen.getByTestId('batch-submit-summary')
+    const confirmPrompt = screen.getByText(armed.confirmPrompt)
+    expect(summary.contains(confirmPrompt), 'the confirm block must be a descendant of the bar, not portaled elsewhere').toBe(true)
+  })
+
+  it('testid-placement: the wrapper splits into an action row and a confirm block, not a bolted-on third child', async () => {
+    // Stage 2's own snippet (task-537) checks actionRow.contains(batch-submit) and
+    // summary.contains(confirmPrompt) as if both held at once -- but the plan's OWN
+    // testid assignment ("Keep data-testid='batch-submit' on the arm button (idle
+    // state)") makes batch-submit an IDLE-ONLY control, mirroring
+    // approvals-bulk-submit/approvals-bulk-confirm's swap in ApprovalsView.tsx:239-284,
+    // so the two can never coexist. Split across the two states instead, reusing the
+    // SAME `actionRow` DOM node reference across the re-render (React reconciles the
+    // wrapper div in place, it does not remount) -- this still fails under a bolted-on
+    // third child exactly as intended: that shape's `actionRow` IS `summary` itself (no
+    // real inner row), so `actionRow.contains(confirmPrompt)` would wrongly read true.
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+
+    const summary = screen.getByTestId('batch-submit-summary')
+    const actionRow = summary.firstElementChild as HTMLElement
+    expect(actionRow.contains(screen.getByTestId('batch-submit')), 'the arm control lives in the action row').toBe(true)
+
+    fireEvent.click(screen.getByTestId('batch-submit'))
+
+    const armed = bulkBarView(['inv-a'], [a], 'armed', false)
+    const confirmPrompt = screen.getByText(armed.confirmPrompt)
+    expect(actionRow.contains(confirmPrompt), 'the confirm prompt must NOT be nested inside the action row').toBe(false)
+    expect(summary.contains(confirmPrompt), 'the confirm prompt must still be a descendant of the outer wrapper').toBe(true)
+  })
+
+  it('A16-3l: a rejected confirm returns the bar to idle with the selection intact and shows an error', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/submissions')) return Promise.resolve(submitErrorResponse(500, 'boom'))
+      return Promise.resolve(listResponse([a], { limit: 50, offset: 0, total: 1 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    // `settled` fires from the finally, never the end of the try (AC-6) -- proven by the
+    // bar actually recovering here, not sticking in 'submitting' forever the way a
+    // pre-finally return would.
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+    expect(screen.getByTestId('batch-submit'), 'idle, ready to re-arm').toBeTruthy()
+    expect((screen.getByLabelText('Select invoice INV-A') as HTMLInputElement).checked, 'the selection survives a rejected confirm').toBe(true)
+    expect(screen.getByText('Something went wrong'), 'ErrorState must render for the rejected confirm').toBeTruthy()
+  })
+
+  // QA adversarial coverage (task-537 Stage 4). A16-3c's two SEPARATE fireEvent.click
+  // calls each get their own synchronous React flush in this harness, so `disabled`
+  // alone already wins there and `submitInFlight` itself is never actually reached --
+  // confirmed by reproducing it against a ref-removed mutation (2 POSTs, not 1) before
+  // writing the assertions below. Same technique as ApprovalsView.test.tsx's "TRUE
+  // same-tick double click" precedent: nesting both dispatches inside ONE outer act()
+  // suppresses the intermediate flush, so both onClick handlers run against the SAME
+  // pre-render `phase` closure before either commits.
+  it('QA adversarial: two mouse clicks landing in the SAME React commit still fire exactly one POST', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    const confirmBtn = screen.getByTestId('batch-submit-confirm')
+
+    act(() => {
+      fireEvent.click(confirmBtn)
+      fireEvent.click(confirmBtn)
+    })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(fetchMock, 'two same-commit clicks must still fire exactly one POST, not two').toHaveBeenCalledTimes(3)
+  })
+
+  it('QA adversarial: keyboard activation (Enter) reaches confirm, and a second Enter press does not double-fire', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    const confirmBtn = screen.getByTestId('batch-submit-confirm')
+    confirmBtn.focus()
+
+    // A native <button> answers Enter/Space with a real click event -- the onClick
+    // handler this fires is the SAME one a mouse click reaches, so the guard protecting
+    // it must hold for this input path too. userEvent (not fireEvent.keyDown) is what
+    // actually simulates that browser default-action behavior in jsdom. NOTE: unlike the
+    // mouse test above, userEvent's key dispatch is genuinely async (real awaits between
+    // key events), so it cannot be forced into ONE React commit the way two synchronous
+    // fireEvent.click calls can -- confirmed empirically (an act()-wrapped
+    // user.keyboard('{Enter}{Enter}') still passes even with `submitInFlight`'s check
+    // deleted). What IS provably load-bearing here, and what this asserts, is that
+    // bulkPhaseReducer's OWN identity return (input-modality-agnostic -- it only reads
+    // `phase`) stops the second, naturally-flushed Enter press. The synchronous-ref proof
+    // for the true same-tick race lives in the mouse test above.
+    const user = userEvent.setup()
+    await user.keyboard('{Enter}')
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(fetchMock, 'a second Enter press after the first must not fire a second POST').toHaveBeenCalledTimes(3)
+  })
+
+  it('QA adversarial: the eligible set shrinking to zero between arm and confirm (a live poll tick) collapses the bar instead of stranding it', async () => {
+    // status:'queued' on a third, unselected row keeps shouldPollList active so
+    // useLiveRefresh actually installs an interval (AC-6's own real-2s-wait precedent
+    // above) -- a and b must be 'validated' to be selectable in the first place.
+    // NOTE: `bar` recomputes bulkBarView(selected, rows, ...) fresh every render off the
+    // CURRENT `rows`, so this end-to-end behavior turns out to be guaranteed by the
+    // `bar.visible &&` render gate alone -- confirmed by mutation: deleting either the
+    // `[rows]` effect's setPhase reset OR its setSelected prune independently leaves this
+    // green (the other one, or bulkBarView's own internal pruneSelection, still hides the
+    // bar), matching Stage 2.5's proof that the effect's phase reset is unobservable at
+    // this layer. What this test pins is the OUTCOME -- a real poll tick that empties
+    // eligibility must not strand the confirm control -- not that one specific line does it.
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    const c = row({ id: 'inv-c', invoice_number: 'INV-C', status: 'queued' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a, b, c], { limit: 50, offset: 0, total: 3 }),
+      // the poll tick: a and b both moved out from under the arm (someone else
+      // submitted them first) -- c stays queued so the tick had a reason to fire.
+      listResponse(
+        [row({ id: 'inv-a', invoice_number: 'INV-A', status: 'queued' }), row({ id: 'inv-b', invoice_number: 'INV-B', status: 'queued' }), c],
+        { limit: 50, offset: 0, total: 3 },
+      ),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    expect(screen.getByTestId('batch-submit-confirm'), 'armed over a and b').toBeTruthy()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 3500, interval: 100 })
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-summary')).toBeNull(), { timeout: 1000 })
+    expect(fetchMock, 'the shrink itself must never trigger a submit').toHaveBeenCalledTimes(2)
+  }, 8000)
+
+  it('QA adversarial: a rejected confirm, re-armed, still lets a second confirm actually send', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitErrorResponse(500, 'boom'),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+    expect(screen.getByText('Something went wrong'), 'the first confirm was rejected').toBeTruthy()
+
+    // Re-arm: `settled` firing from the finally has to leave a genuinely USABLE bar, not
+    // one that only LOOKS idle -- submitInFlight and phase both have to be back to a
+    // state a second confirm can actually pass through.
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
+    expect(screen.queryByTestId('batch-submit-confirm'), 'the retry succeeded').toBeNull()
+    expect(screen.queryByText('Something went wrong'), 'the stale error from the first attempt must be gone').toBeNull()
+  })
+
+  it('QA adversarial (epic Q12): the bar never claims a past-tense transmission outcome, idle or armed', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    const OUTCOME_WORDS = ['sent', 'transmitted', 'accepted', 'delivered', 'received']
+
+    function assertNoOutcomeClaim(label: string) {
+      const text = screen.getByTestId('batch-submit-summary').textContent ?? ''
+      for (const word of OUTCOME_WORDS) {
+        expect(new RegExp(`\\b${word}\\b`, 'i').test(text), `${label}: must never claim "${word}" already happened`).toBe(false)
+      }
+    }
+
+    assertNoOutcomeClaim('idle')
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    assertNoOutcomeClaim('armed')
+  })
+})
+
+// --- APPR-16-04 (task-536, Mode A) -- RED specs for the register's own in-flight pager
+// freeze (AC-6/AC-7) and AC-8's regression guard. A16-4e/f (unmount-abort, the approvals
+// pager) live in ApprovalsView.test.tsx -- this component has no fan-out to abort
+// (submitSelection is one request, AC #9), so only the freeze applies here.
+describe('A16-4: the register pager freezes for the whole in-flight window and states why (APPR-16-04)', () => {
+  it('A16-4g: the register pager is disabled for the whole in-flight window, and re-enabled even when the request rejects', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/submissions')) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      // limit:1/offset:1/total:3 -- both Prev and Next start enabled absent `busy`, so
+      // the freeze under test is the OR clause, not an edge-of-set disable.
+      return Promise.resolve(listResponse([a, b], { limit: 1, offset: 1, total: 3 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    const pager = () => screen.getByTestId('invoices-pager')
+    const prevBtn = () => within(pager()).getByText('← Previous').closest('button') as HTMLButtonElement
+    const nextBtn = () => within(pager()).getByText('Next →').closest('button') as HTMLButtonElement
+    expect(prevBtn().disabled, 'both buttons must start enabled -- an edge-of-set disable would make this test vacuous').toBe(false)
+    expect(nextBtn().disabled).toBe(false)
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm')) // now submitting, POST held pending
+
+    // `loading` is false here (list.data is still the settled page) -- only `phase ===
+    // 'submitting'` can be freezing the pager in this window.
+    expect(prevBtn().disabled, 'the pager must freeze for the whole in-flight window').toBe(true)
+    expect(nextBtn().disabled).toBe(true)
+
+    resolvers[0](submitErrorResponse(500, 'boom')) // the rejection path
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+    expect(nextBtn().disabled, 'the pager must re-enable in the finally, even on the rejection path').toBe(false)
+    expect(prevBtn().disabled).toBe(false)
+  })
+
+  it('A16-4h: the frozen pager states its reason (D-25); InvoicesList.tsx carries no nav-locking machinery (D-31)', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/submissions')) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      return Promise.resolve(listResponse([a], { limit: 1, offset: 1, total: 3 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    // Not yet frozen -- title never fires on a disabled element in Chromium, so an absent
+    // visible node here would mean the reason is unreachable the moment it matters.
+    expect(within(screen.getByTestId('invoices-pager')).queryByTestId('pager-blocked-reason'), 'no reason node before the freeze').toBeNull()
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm')) // now submitting, POST held pending
+
+    const pager = screen.getByTestId('invoices-pager')
+    const buttons = within(pager).getAllByRole('button') as HTMLButtonElement[]
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const btn of buttons) {
+      expect(btn.disabled, 'the pager -- the one control the freeze disables -- must be disabled while submitting').toBe(true)
+      expect(btn.title, 'a disabled control must state WHY (D-25/Q6-Q10), never a bare disabled attribute').toBeTruthy()
+    }
+    // The reason must reach the user as VISIBLE text, not just the inert title.
+    expect(within(pager).getByTestId('pager-blocked-reason').textContent, 'the visible reason must be BULK_COPY.pagerReason').toBe(BULK_COPY.pagerReason)
+    expect(screen.getByText(BULK_COPY.pagerReason), 'queryable by text, not just by attribute').toBeTruthy()
+
+    // D-31 regression guard: only the pager freezes. Not itself expected to flip red-to-
+    // green from this subtask's own work (neither line exists today, for or against) --
+    // it exists so a LATER subtask cannot quietly reintroduce the declined nav lock.
+    const source = readFileSync(path.join(process.cwd(), 'src/components/InvoicesList.tsx'), 'utf8')
+    expect(source, 'no PlatformCtx.navLocked reference belongs in InvoicesList.tsx').not.toMatch(/navLocked/)
+    expect(source, "InvoicesList.tsx must never call ctx.nav -- navigation stays Sidebar/App.tsx's job").not.toMatch(/ctx\.nav\(/)
+    expect(source, 'InvoicesList.tsx must never call ctx.switchClient -- the entity switcher stays live').not.toMatch(/ctx\.switchClient\(/)
+
+    resolvers[0](submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]))
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+  })
+})
+
+describe('A16-4i: submitSelection carries no AbortSignal, and says why (D-05, APPR-16-04)', () => {
+  it('submitSelection() takes zero params, and a comment ahead of it names the one-request reason', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/components/InvoicesList.tsx'), 'utf8')
+
+    const declIdx = source.indexOf('async function submitSelection(')
+    expect(declIdx, 'submitSelection must still exist').toBeGreaterThan(-1)
+    expect(
+      source.slice(declIdx, declIdx + 40),
+      'submitSelection is one request, not a loop -- there are no rows to check a signal between',
+    ).toMatch(/^async function submitSelection\(\)/)
+
+    const preamble = source.slice(Math.max(0, declIdx - 700), declIdx)
+    expect(preamble, 'a comment must say WHY submitSelection takes no AbortSignal -- omission alone is not documentation').toMatch(/\bsignal\b/i)
+    expect(preamble, 'the stated reason must be single request vs. a loop, not a vague deferral').toMatch(/\b(one|single)\s+request\b/i)
   })
 })

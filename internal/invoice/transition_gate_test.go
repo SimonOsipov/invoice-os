@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- harness ---------------------------------------------------------------
@@ -484,4 +485,175 @@ func waitBlockedOn(t *testing.T, super *pgxpool.Pool, blockerPID int) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("no backend blocked on the holder (pid %d) within 5s — Store.Transition decided without ever taking the row lock, so this spec would be a false green", blockerPID)
+}
+
+// --- APPR-16-05: no live run outlives the promotion it belonged to ---------
+//
+// CancelLiveRunTx claims "a stale run can never outlive the promotion it
+// belonged to" (engine.go:255-256). These specs prove both halves: forward
+// edges out of validated never touch a live run, and every path back to
+// draft cancels it.
+
+// TestTransition_ApprovedRunSurvivesForwardWalkToAccepted: an approved run
+// clears every forward edge out of validated (TransmitClear, gate.go:43) and
+// is never cancelled along the way -- only the target==StatusDraft branch
+// (store.go:1712) calls CancelLiveRunTx.
+func TestTransition_ApprovedRunSurvivesForwardWalkToAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	fx := seedGatedTenant(t, super, "APPR-16-05-FORWARD", StatusValidated)
+	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
+
+	// Control: the fixture must really have armed an open run before anything
+	// below can be trusted.
+	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, fx.invID); n != 1 {
+		t.Fatalf("open approval_runs after arming = %d, want 1 -- fixture did not arm", n)
+	}
+	closeApprovalRunFor(t, super, runID, "approved", "fixture")
+
+	store := NewStore(app, WithApprovalsEnforced(true))
+
+	assertRunSurvives := func(t *testing.T, step string) {
+		t.Helper()
+		if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, fx.invID); n != 0 {
+			t.Errorf("%s: open approval_runs = %d, want 0", step, n)
+		}
+		if s := runStateOf(t, super, runID); s != "approved" {
+			t.Errorf("%s: run %s state = %q, want unchanged %q", step, runID, s, "approved")
+		}
+	}
+
+	if _, err := store.Transition(fx.ctx, fx.invID, StatusQueued); err != nil {
+		t.Fatalf("Transition(validated -> queued) with an approved run: %v (want nil)", err)
+	}
+	assertRunSurvives(t, "validated->queued")
+
+	if _, err := store.Transition(fx.ctx, fx.invID, StatusSubmitted); err != nil {
+		t.Fatalf("Transition(queued -> submitted): %v (want nil)", err)
+	}
+	assertRunSurvives(t, "queued->submitted")
+
+	if _, err := store.Transition(fx.ctx, fx.invID, StatusAccepted); err != nil {
+		t.Fatalf("Transition(submitted -> accepted): %v (want nil)", err)
+	}
+	assertRunSurvives(t, "submitted->accepted")
+
+	if s := statusOf(t, super, fx.invID); s != StatusAccepted {
+		t.Errorf("final invoice status = %q, want %q", s, StatusAccepted)
+	}
+}
+
+// TestTransition_TerminalRefusalEdgesLeaveNoOpenRun: the four terminal-refusal
+// edges out of queued/submitted also never touch an approved run -- none of
+// them target StatusDraft.
+func TestTransition_TerminalRefusalEdgesLeaveNoOpenRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app, WithApprovalsEnforced(true))
+
+	cases := []struct {
+		name string
+		path []Status // walked in order, starting from validated
+	}{
+		{"queued->rejected", []Status{StatusQueued, StatusRejected}},
+		{"queued->failed", []Status{StatusQueued, StatusFailed}},
+		{"submitted->rejected", []Status{StatusQueued, StatusSubmitted, StatusRejected}},
+		{"submitted->failed", []Status{StatusQueued, StatusSubmitted, StatusFailed}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := seedGatedTenant(t, super, "APPR-16-05-TERM-"+tc.name, StatusValidated)
+			runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
+			closeApprovalRunFor(t, super, runID, "approved", "fixture")
+
+			// Control: the fixture must really have closed an approved run before
+			// the walk below can prove it survives untouched.
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'approved'`, fx.invID); n != 1 {
+				t.Fatalf("approved approval_runs before walk = %d, want 1 -- fixture did not arm", n)
+			}
+
+			for _, target := range tc.path {
+				if _, err := store.Transition(fx.ctx, fx.invID, target); err != nil {
+					t.Fatalf("Transition(-> %s): %v (want nil)", target, err)
+				}
+				if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, fx.invID); n != 0 {
+					t.Errorf("after -> %s: open approval_runs = %d, want 0", target, n)
+				}
+			}
+
+			want := tc.path[len(tc.path)-1]
+			if s := statusOf(t, super, fx.invID); s != want {
+				t.Errorf("final invoice status = %q, want %q", s, want)
+			}
+			if s := runStateOf(t, super, runID); s != "approved" {
+				t.Errorf("run %s state after reaching a terminal refusal = %q, want unchanged %q", runID, s, "approved")
+			}
+		})
+	}
+}
+
+// TestTransition_BackToDraftPathsCancelEveryLiveRun: every path back to draft
+// -- Transition, Edit's auto-demote, and DemoteRevalidatedTx -- cancels EVERY
+// live run, not just an open one (CancelLiveRunTx's WHERE clause,
+// engine.go:270, is IN ('open','approved')).
+func TestTransition_BackToDraftPathsCancelEveryLiveRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	ruleSetVersionID := seedRuleSetVersionID(t, super)
+
+	cases := []struct {
+		name        string
+		startStatus Status
+		act         func(fx gateFixture) error
+	}{
+		{"validated->draft", StatusValidated, func(fx gateFixture) error {
+			_, err := NewStore(app).Transition(fx.ctx, fx.invID, StatusDraft)
+			return err
+		}},
+		{"rejected->draft", StatusRejected, func(fx gateFixture) error {
+			_, err := NewStore(app).Transition(fx.ctx, fx.invID, StatusDraft)
+			return err
+		}},
+		{"edit demotion", StatusValidated, func(fx gateFixture) error {
+			_, err := NewStore(app).Edit(fx.ctx, fx.invID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}})
+			return err
+		}},
+		{"revalidate demotion", StatusValidated, func(fx gateFixture) error {
+			return db.WithinTenantTx(context.Background(), app, fx.tenantID, func(tx pgx.Tx) error {
+				_, err := NewStore(app).DemoteRevalidatedTx(context.Background(), tx, fx.invID, fx.tenantID, []Violation{}, ruleSetVersionID)
+				return err
+			})
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := seedGatedTenant(t, super, "APPR-16-05-DRAFT-"+tc.name, tc.startStatus)
+			approvedID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
+			closeApprovalRunFor(t, super, approvedID, "approved", "fixture")
+			openID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
+
+			// Control: the fixture must really have armed one open AND one approved
+			// run before the demotion below can prove both were cancelled.
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'approved'`, fx.invID); n != 1 {
+				t.Fatalf("%s: approved approval_runs before demotion = %d, want 1 -- fixture did not arm", tc.name, n)
+			}
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, fx.invID); n != 1 {
+				t.Fatalf("%s: open approval_runs before demotion = %d, want 1 -- fixture did not arm", tc.name, n)
+			}
+
+			if err := tc.act(fx); err != nil {
+				t.Fatalf("%s: %v (want nil)", tc.name, err)
+			}
+
+			if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1 AND state IN ('open','approved')`, fx.invID); n != 0 {
+				t.Errorf("%s: live (open/approved) approval_runs = %d, want 0", tc.name, n)
+			}
+			if s := runStateOf(t, super, approvedID); s != "cancelled" {
+				t.Errorf("%s: approved run %s state = %q, want %q", tc.name, approvedID, s, "cancelled")
+			}
+			if s := runStateOf(t, super, openID); s != "cancelled" {
+				t.Errorf("%s: open run %s state = %q, want %q", tc.name, openID, s, "cancelled")
+			}
+		})
+	}
 }

@@ -347,6 +347,47 @@ func TestApprove_ApproverWithoutWorkflowRoleRefused(t *testing.T) {
 	assertNothingWritten(t, super, f)
 }
 
+// TestApprove_NullRoleKeyGuardIsTracedThroughStoreDecide (AC-9, task-538): closes a gap
+// TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding (gate_test.go:665) cannot --
+// that test's own approve() call runs on the untraced app pool, like every approve() call
+// site in this package, so nothing observes decideTx's SQL. A decideTx that dropped its
+// `if roleKey != nil` guard and called HeldRoleKeysTx unconditionally with an empty key
+// slice would not panic and would still leave holds false, passing every refusal test.
+// This traces store.Decide itself against a NULL-role-key step.
+func TestApprove_NullRoleKeyGuardIsTracedThroughStoreDecide(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APPR-16-06 null-role-key-guard")
+	entityID := seedBusinessEntity(t, super, tenantID, "Null Role Key Guard Corp")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Null role key guard policy")
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionID, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: nil, SLAHours: ptr(48),
+	})
+	activateApprovalPolicyVersion(t, super, versionID)
+
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "null-role-key-guard-invoice")
+	setInvoiceStatus(t, super, invoiceID, "validated")
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-null-role-key-guard", "fixture-arm"); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	subject := uuid.NewString()
+	seedMembership(t, super, tenantID, subject, "admin", "active")
+
+	traced, rec := tracedAppPool(t)
+	rec.reset()
+	c := auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+	_, err := NewStore(traced, stubFingerprinter, nil).Decide(c, invoiceID, "approved", nil)
+
+	if !errors.Is(err, ErrNotRoleHolder) {
+		t.Errorf("Decide = %v, want ErrNotRoleHolder -- a NULL role key is held by nobody", err)
+	}
+	if got := rec.mentioning("FROM workflow_roles"); len(got) != 0 {
+		t.Errorf("statements mentioning %q = %d, want 0 -- decideTx's roleKey != nil guard must skip AXIS 2 entirely on a NULL key: %v", "FROM workflow_roles", len(got), got)
+	}
+}
+
 func TestApprove_SuspendedHolderRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	f := newApproveFixture(t, super, app, "APPR-07 suspended-holder-refused", "suspended-holder-role")

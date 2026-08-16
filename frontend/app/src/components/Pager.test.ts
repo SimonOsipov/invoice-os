@@ -74,3 +74,22 @@ describe("Pager: ReviewInvoicesTab.tsx's call site stays out of the in-flight fr
     expect(callSite, 'no reason prop belongs on the one call site D-28 carves out').not.toMatch(/reason=/)
   })
 })
+
+// A defect fix, not a widening (task-539): title never fires on a disabled element in
+// Chromium (e2e/topology/roles.spec.ts's own expectDisabledWithReason helper requires
+// both channels), so the frozen pager owed a VISIBLE reason, not just an attribute.
+// Combined with the D-28 pin above (ReviewInvoicesTab passes no `reason=`), the `reason !=
+// null` gate below proves that call site renders no reason node at all.
+describe('Pager: the frozen reason is visible text, not title alone (D-25 fix)', () => {
+  it('the reason node is gated on reason != null, sharing one id with both buttons via aria-describedby', () => {
+    expect(pagerSrc, 'the visible reason must be conditioned on reason != null').toMatch(/reason != null && \(/)
+    expect(pagerSrc, 'the reason span must carry a stable data-testid').toMatch(/data-testid="pager-blocked-reason"/)
+    const describedBySites = pagerSrc.match(/aria-describedby=\{reason != null \? reasonId : undefined\}/g) ?? []
+    expect(describedBySites, 'both Previous and Next must wire aria-describedby to the same reasonId').toHaveLength(2)
+  })
+
+  it('title is kept as a secondary channel on both buttons, not replaced', () => {
+    const titleSites = pagerSrc.match(/title=\{reason\}/g) ?? []
+    expect(titleSites, 'both buttons must still carry title={reason}').toHaveLength(2)
+  })
+})

@@ -11,6 +11,7 @@ import path from 'node:path'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { APPROVALS_COPY } from '../lib/approvals'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { fmt } from '../lib/format'
 import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
@@ -1067,6 +1068,9 @@ describe('A16-4: unmount aborts the fan-out at a row boundary, and the pager fre
     const nextBtn = () => within(pager()).getByText('Next →').closest('button') as HTMLButtonElement
     expect(prevBtn().disabled, 'both buttons must start enabled -- proves the freeze, not an edge-of-set disable, is under test').toBe(false)
     expect(nextBtn().disabled).toBe(false)
+    // Not yet frozen -- title never fires on a disabled element in Chromium, so an absent
+    // visible node here would mean the reason is unreachable the moment it matters.
+    expect(within(pager()).queryByTestId('pager-blocked-reason'), 'no reason node before the freeze').toBeNull()
 
     fireEvent.click(screen.getByTestId('approval-select-all'))
     fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
@@ -1080,6 +1084,9 @@ describe('A16-4: unmount aborts the fan-out at a row boundary, and the pager fre
     // sibling surface pins this (A16-4h); the approvals pager owed the same assertion.
     expect(prevBtn().title, 'the frozen pager must carry a non-empty reason, not a bare disabled attribute').toBeTruthy()
     expect(nextBtn().title).toBeTruthy()
+    // The reason must reach the user as VISIBLE text, not just the inert title.
+    expect(within(pager()).getByTestId('pager-blocked-reason').textContent, 'the visible reason must be APPROVALS_COPY.pagerReason').toBe(APPROVALS_COPY.pagerReason)
+    expect(screen.getByText(APPROVALS_COPY.pagerReason), 'queryable by text, not just by attribute').toBeTruthy()
 
     resolvers[0](approveOkResponse()) // row a settles -- row b's POST issues next
     await waitFor(() => expect(resolvers.length).toBe(2))

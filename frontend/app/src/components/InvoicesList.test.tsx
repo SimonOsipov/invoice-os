@@ -1540,6 +1540,10 @@ describe('A16-4: the register pager freezes for the whole in-flight window and s
     render(<InvoicesList ctx={listCtx()} />)
     await screen.findByText('INV-A')
 
+    // Not yet frozen -- title never fires on a disabled element in Chromium, so an absent
+    // visible node here would mean the reason is unreachable the moment it matters.
+    expect(within(screen.getByTestId('invoices-pager')).queryByTestId('pager-blocked-reason'), 'no reason node before the freeze').toBeNull()
+
     fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
     fireEvent.click(screen.getByTestId('batch-submit'))
     fireEvent.click(screen.getByTestId('batch-submit-confirm')) // now submitting, POST held pending
@@ -1551,6 +1555,9 @@ describe('A16-4: the register pager freezes for the whole in-flight window and s
       expect(btn.disabled, 'the pager -- the one control the freeze disables -- must be disabled while submitting').toBe(true)
       expect(btn.title, 'a disabled control must state WHY (D-25/Q6-Q10), never a bare disabled attribute').toBeTruthy()
     }
+    // The reason must reach the user as VISIBLE text, not just the inert title.
+    expect(within(pager).getByTestId('pager-blocked-reason').textContent, 'the visible reason must be BULK_COPY.pagerReason').toBe(BULK_COPY.pagerReason)
+    expect(screen.getByText(BULK_COPY.pagerReason), 'queryable by text, not just by attribute').toBeTruthy()
 
     // D-31 regression guard: only the pager freezes. Not itself expected to flip red-to-
     // green from this subtask's own work (neither line exists today, for or against) --

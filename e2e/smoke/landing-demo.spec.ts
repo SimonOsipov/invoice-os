@@ -32,6 +32,11 @@ import { resolveTarget } from '../targets'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
+// The GA4 tag's gate is an exact-hostname allowlist (frontend/landing/src/hubspot.ts), so
+// which arm the assertions expect is decided once, here, from the target under test.
+const LANDING_HOST = new URL(LANDING_URL).hostname.toLowerCase()
+const EXPECT_TAG = LANDING_HOST === 'www.ascomply.com'
+
 // Mirrors TAXPAYER_SIZE_OPTIONS / DEFAULT_TAXPAYER_SIZE in
 // frontend/landing/src/components/demoForm.ts. Deliberately RETYPED rather than imported:
 // e2e/ must pin what the deployed build actually serves. Importing the constant would make
@@ -122,6 +127,8 @@ type LandingSinks = {
   hubspotRequests: string[]
   /** Non-vacuity guard: proves the request listener was live at all. */
   allRequests: string[]
+  /** THE oracle for "the GA4 tag loaded". Filled by the SAME listener as allRequests. */
+  gaRequests: string[]
   /** Safety-net route bookkeeping. Diagnostics only — NEVER assert on this (see header). */
   abortedByGuard: string[]
 }
@@ -143,19 +150,52 @@ function isHubSpotHost(rawUrl: string): boolean {
   )
 }
 
+/**
+ * Hostname-parsed, never a substring match. `fonts.googleapis.com` and `fonts.gstatic.com`
+ * are requested on EVERY run (index.html's preconnects), so an over-broad predicate makes
+ * the biconditional below permanently red.
+ */
+function isGoogleAnalyticsHost(rawUrl: string): boolean {
+  let host: string
+  try {
+    host = new URL(rawUrl).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  return (
+    host === 'googletagmanager.com' ||
+    host.endsWith('.googletagmanager.com') ||
+    host === 'google-analytics.com' ||
+    host.endsWith('.google-analytics.com') ||
+    host === 'analytics.google.com' ||
+    host.endsWith('.analytics.google.com') ||
+    host === 'g.doubleclick.net' ||
+    host.endsWith('.g.doubleclick.net')
+  )
+}
+
 /** Attach every sink BEFORE navigating; returns the sinks the assertions read. */
 function attachSinks(page: Page): LandingSinks {
-  const sinks: LandingSinks = { consoleErrors: [], hubspotRequests: [], allRequests: [], abortedByGuard: [] }
+  const sinks: LandingSinks = {
+    consoleErrors: [],
+    hubspotRequests: [],
+    allRequests: [],
+    gaRequests: [],
+    abortedByGuard: [],
+  }
   page.on('console', (msg) => {
     if (msg.type() === 'error') sinks.consoleErrors.push(msg.text())
   })
   page.on('pageerror', (err) => {
     sinks.consoleErrors.push(`pageerror: ${err.message}`)
   })
+  // ONE listener feeds all three sinks, so allRequests' non-vacuity floor covers the GA
+  // sink too — a second listener could be dead while the first was live.
   page.on('request', (req) => {
     const url = req.url()
     sinks.allRequests.push(url)
     if (isHubSpotHost(url)) sinks.hubspotRequests.push(url)
+    if (isGoogleAnalyticsHost(url)) sinks.gaRequests.push(url)
   })
   return sinks
 }
@@ -176,10 +216,26 @@ async function guardHubSpot(page: Page, sinks: LandingSinks): Promise<void> {
   )
 }
 
+/**
+ * The GA safety net. FULFILS rather than aborts: an aborted `<script src>` makes the
+ * browser log a failed resource load, which this file's zero-console-error assertion would
+ * then fail. An empty 200 records the request, loads a no-op, and sends Google nothing.
+ */
+async function guardGoogleAnalytics(page: Page, sinks: LandingSinks): Promise<void> {
+  await page.route(
+    (url) => isGoogleAnalyticsHost(url.toString()),
+    async (route) => {
+      sinks.abortedByGuard.push(route.request().url())
+      await route.fulfill({ status: 200, body: '', contentType: 'application/javascript' })
+    },
+  )
+}
+
 /** goto + settle. Fonts are settled ONCE here, before any interaction or measurement. */
 async function openLanding(page: Page): Promise<LandingSinks> {
   const sinks = attachSinks(page)
   await guardHubSpot(page, sinks)
+  await guardGoogleAnalytics(page, sinks)
 
   const response = await page.goto(LANDING_URL)
   expect(response, `no response from ${LANDING_URL}`).toBeTruthy()
@@ -241,6 +297,14 @@ function expectClosedGateStayedSilent(sinks: LandingSinks): void {
     `the closed gate sent something to HubSpot:\n${sinks.hubspotRequests.join('\n')}`,
   ).toEqual([])
   expect(sinks.consoleErrors, `console errors on the landing page:\n${sinks.consoleErrors.join('\n')}`).toEqual([])
+  // A biconditional, not "zero GA requests": the tag SHOULD load when the target is the
+  // real production host. Red either way round — a gate weakened to admit a preview host,
+  // or a production build that stopped loading the tag at all.
+  expect(
+    sinks.gaRequests.length > 0,
+    `landing host ${LANDING_HOST}: expected gtag.js ${EXPECT_TAG ? 'to be requested' : 'never to be requested'}; ` +
+      `recorded ${sinks.gaRequests.length}:\n${sinks.gaRequests.join('\n')}`,
+  ).toBe(EXPECT_TAG)
 }
 
 /** A stable key for document.activeElement — id, else name, else aria-label, else tag[type]. */
@@ -402,6 +466,35 @@ async function measureStable(page: Page, width: number): Promise<SizeValueMeasur
   expect(second, `the taxpayer-size value box was still reflowing at ${width}px`).toEqual(first)
   return second
 }
+
+// E0 — the classifier every GA assertion in this file consumes, exercised directly. No
+// `page` parameter, so Playwright opens no browser. A predicate that matched nothing would
+// leave gaRequests permanently empty and pass every biconditional while observing nothing.
+test('landing analytics: the analytics-host classifier accepts GA hosts and nothing else', () => {
+  for (const url of [
+    'https://www.googletagmanager.com/gtag/js?id=G-E409H76XYY',
+    'https://region1.google-analytics.com/g/collect?v=2',
+    'https://analytics.google.com/g/collect',
+    'https://stats.g.doubleclick.net/g/collect',
+  ]) {
+    expect(isGoogleAnalyticsHost(url), `${url} should be recognised as an analytics host`).toBe(true)
+  }
+
+  for (const url of [
+    // The two highest-value rejections: this page requests both on every single run.
+    'https://fonts.googleapis.com/css2?family=Inter',
+    'https://fonts.gstatic.com/s/inter/v13/x.woff2',
+    'https://www.googletagmanager.com.attacker.example/gtag/js',
+    'https://fake-google-analytics.com/g/collect',
+    'https://evil.example/?x=googletagmanager.com',
+    'https://js.hsforms.net/forms/embed/v2/148915098.js',
+    `${LANDING_URL}/assets/index.js`,
+    'not-a-url',
+    '',
+  ]) {
+    expect(isGoogleAnalyticsHost(url), `${url} should NOT be recognised as an analytics host`).toBe(false)
+  }
+})
 
 // E1 — the whole happy path with the gate closed: the visitor sees success, and NOTHING
 // leaves the browser. This is the story's Core AC 2 stated as an assertion.
@@ -684,6 +777,26 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
     // shrinkable — the box then holds a 166px run in a 111px content box and overflows.
     expect(m.scrollWidth, `the value box overflows horizontally ${at}`).toBeLessThanOrEqual(m.clientWidth)
   }
+
+  expectClosedGateStayedSilent(sinks)
+})
+
+// E7 — the deployed scroll-depth path. Reads the whole page, opens no modal, and asserts
+// the same gate biconditional: the only run in this file that drives App.tsx's scroll
+// listener on the build that shipped.
+test('landing analytics: reading the whole page requests gtag.js only on the live host', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  for (const fraction of [0.25, 0.5, 0.75, 1]) {
+    await page.evaluate((f) => {
+      window.scrollTo(0, (document.documentElement.scrollHeight - window.innerHeight) * f)
+    }, fraction)
+    await settleLayout(page)
+  }
+
+  // Non-vacuity: a page that never moved would exercise no milestone at all.
+  expect(await page.evaluate(() => window.scrollY), 'the landing page did not scroll').toBeGreaterThan(0)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 
   expectClosedGateStayedSilent(sinks)
 })

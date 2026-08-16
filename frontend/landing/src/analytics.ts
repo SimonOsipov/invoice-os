@@ -102,9 +102,9 @@ export async function trackedHubSpotSubmit(run: () => Promise<void>): Promise<vo
 
 const SCROLL_MILESTONES = [25, 50, 75, 100] as const
 
-// Module scope, not the effect closure or a ref: StrictMode remounts App and a
-// per-mount set would re-fire every crossed milestone on the second mount's
-// initial measurement. Pinned by "each milestone fires at most once per page load".
+// Module scope, not the effect closure or a ref: a ref survives StrictMode's double
+// effect but not a remount of App; module scope survives both. Pinned by
+// "each milestone fires at most once per page load".
 const firedMilestones = new Set<number>()
 
 /** Pure and total. The finite check runs FIRST: after the `scrollable <= 0` branch a

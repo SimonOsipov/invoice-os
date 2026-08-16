@@ -1097,7 +1097,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
         })
       // 1 initial mount fetch + 1 poll tick fetch.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -1901,7 +1901,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
         })
       // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -1935,7 +1935,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
         })
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
 

@@ -15,6 +15,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
+import { getInvoiceApprovalRun, type ApprovalRun } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
@@ -59,6 +60,7 @@ import {
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
+import { ApprovalTrailCard } from './ApprovalTrailCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
 import { ViolationsTable } from './ViolationsTable'
@@ -177,6 +179,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // `document: null` for a manually created invoice.
   const source = useAsync<SourceDocumentResponse>(
     () => (base ? getSourceDocument(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
+  )
+  // Not extended to the live-refresh tick below (D-23): shouldPollInvoice only ticks
+  // queued/submitted, by which point every approval run has closed.
+  const approval = useAsync<ApprovalRun | null>(
+    () => (base ? getInvoiceApprovalRun(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -997,6 +1005,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 )}
               </div>
             </div>
+
+            <ApprovalTrailCard run={approval} />
 
             {!rejectionLeadsRail && rejectionCard}
 

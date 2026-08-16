@@ -126,6 +126,9 @@ interface DetailFetchOptions {
   revalidateResponse?: MockResponse
   resolveResponse?: MockResponse
   unresolveResponse?: MockResponse
+  // GET .../approval (APPR-13-03). Defaults to 404 inside the dispatcher below so no
+  // pre-existing test's behaviour changes.
+  approvalResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -207,6 +210,14 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     }
     if (url.endsWith('/source-document')) {
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(detail) })
+    }
+    // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
+    // like /ubl and /source-document above. `.endsWith('/approval')` is false for
+    // '/approvals' (the POST decide route), so that arm is unaffected.
+    if (method === 'GET' && url.endsWith('/approval')) {
+      return Promise.resolve<MockResponse>(
+        opts.approvalResponse ?? { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) },
+      )
     }
     // getInvoice GET: the first call is always `detail`; later calls consume
     // detailSequence in order, repeating the last entry once exhausted.
@@ -455,6 +466,100 @@ describe('InvoiceDetail terminal rail order', () => {
     const history = screen.getByTestId('status-history')
     expect(card.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(card.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+// RED specs (task-553, APPR-13-03, Mode A): ApprovalTrailCard is not yet mounted in
+// InvoiceDetail.tsx -- that is Stage 3's work. Every row below fails on the card's
+// absence, an honest red for a not-yet-mounted component, never on a broken fixture.
+describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => {
+  it('a 404 renders the no-run empty state', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }), [], {
+      approvalResponse: { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.getByTestId('approval-trail-empty')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('a 500 renders ErrorState, not the empty state', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }), [], {
+      approvalResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(screen.queryByTestId('approval-trail-empty')).toBeNull()
+  })
+
+  it('a rejection reason never reaches the violations table', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3, violations: [] }), [], {
+      approvalResponse: {
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            run_id: 'run-1',
+            state: 'rejected',
+            opened_at: '2026-08-01T00:00:00Z',
+            closed_at: '2026-08-02T00:00:00Z',
+            closed_by: APP_PERSONAS.firm.subject,
+            steps: [],
+            decisions: [
+              {
+                run_step_id: 'step-1',
+                ord: 0,
+                decision: 'rejected',
+                actor: APP_PERSONAS.firm.subject,
+                decided_at: '2026-08-02T00:00:00Z',
+                reason: 'Budget exceeded, escalate to finance',
+              },
+            ],
+          }),
+      },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const table = await screen.findByTestId('violations-table')
+    const trail = screen.getByTestId('approval-trail')
+    expect(within(trail).getByText('Budget exceeded, escalate to finance')).toBeTruthy()
+    expect(within(table).queryByText('Budget exceeded, escalate to finance')).toBeNull()
+  })
+
+  it('the card sits below Compliance and above Status history', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const table = await screen.findByTestId('violations-table')
+    const trail = screen.getByTestId('approval-trail')
+    const doc = screen.getByTestId('source-document-card')
+    const history = screen.getByTestId('status-history')
+    expect(table.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(trail.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(trail.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the card sits above a historical rejection card', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const rejection = await screen.findByTestId('rejection-reasons')
+    const trail = screen.getByTestId('approval-trail')
+    expect(trail.compareDocumentPosition(rejection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 

@@ -44,7 +44,7 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 
 // step / role / holder-warning / due / overdue / approve_blocked_reason -- wire values
 // passed through, except roleLabel's own em-dash fallback for a null pending_role_title
-// (the ONLY fallback this file may author, A02-15).
+// (A02-15; approvalTrailSteps's roleTitle repeats the same em-dash convention below).
 export interface ApprovalRowView {
   approvable: boolean
   pendingOrd: number | null

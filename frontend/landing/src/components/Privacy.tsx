@@ -14,7 +14,8 @@ const P = { fontSize: 16, lineHeight: 1.65, color: 'var(--fg-2)', margin: '0 0 1
 const LIST = { ...P, paddingLeft: 22 } as const
 const ITEM = { margin: '0 0 10px' } as const
 // .asc-app a is `color: inherit; text-decoration: none`, so an unstyled link is invisible.
-const LINK = { color: 'var(--action)', textDecoration: 'underline' } as const
+// overflowWrap lets the long gaoptout URL break instead of overhanging its column at 390px.
+const LINK = { color: 'var(--action)', textDecoration: 'underline', overflowWrap: 'anywhere' } as const
 
 export function Privacy() {
   // index.html carries one static title, written for the sales page.

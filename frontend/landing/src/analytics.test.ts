@@ -174,6 +174,25 @@ describe('honeypot cannot reach outcome senders (AC-5)', () => {
     expect(line).toBeDefined()
     expect(line).toContain('submitDemoLead')
   })
+
+  // Closes a gap the row above leaves open: it never checked that trackedHubSpotSubmit
+  // is the ONLY analytics binding DemoModal.tsx pulls in. Exporting a private sender
+  // and calling it directly at the shared success/catch transition (:186/:190) would
+  // still satisfy every assertion above — the import regex's [^}]* tolerates extra
+  // names alongside trackedHubSpotSubmit, and neither outcome event's literal string
+  // is written in this file (only in analytics.ts). That mutation makes the honeypot
+  // and closed-gate branches count as conversions, and it survives unless this row
+  // exists.
+  it('DemoModal imports exactly one binding from analytics.ts, and never via a namespace import', () => {
+    const braceImports = Array.from(DEMO_MODAL_SRC.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/analytics['"]/g))
+    expect(braceImports.length, 'expected exactly one import statement from ../analytics').toBe(1)
+    const names = braceImports[0][1]
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    expect(names).toEqual(['trackedHubSpotSubmit'])
+    expect(DEMO_MODAL_SRC).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
+  })
 })
 
 describe('honeypot branch and runStub pinned (AC-6)', () => {

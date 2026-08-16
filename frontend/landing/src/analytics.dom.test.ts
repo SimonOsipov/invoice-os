@@ -227,6 +227,33 @@ describe('trackDemoOpen', () => {
     expect((window as TestWindow).dataLayer).toBeUndefined()
     expect((window as TestWindow).gtag).toBeUndefined()
   })
+
+  it('the demo_open entry is an arguments object, not an array (mirrors analytics.dom.test.ts:93-94 for this sender)', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+    mod.trackDemoOpen('hero')
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const entry = layer[layer.length - 1]
+    expect(Object.prototype.toString.call(entry)).toBe('[object Arguments]')
+    expect(Array.isArray(entry)).toBe(false)
+  })
+
+  it('an unexpected source string is still forwarded as cta_location — TypeScript is the only gate, send() does not validate', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    // Cast past the DemoCtaSource union to prove there is no runtime guard —
+    // documents current behaviour, not a defect: the union is enforced at
+    // compile time by AC-7's static App.tsx check, not by this function.
+    mod.trackDemoOpen('sidebar' as unknown as (typeof mod.DEMO_CTA_SOURCES)[number])
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const entry = Array.from(layer[layer.length - 1] as IArguments)
+    expect(entry).toEqual(['event', 'demo_open', { cta_location: 'sidebar' }])
+  })
 })
 
 describe('trackedHubSpotSubmit', () => {
@@ -274,6 +301,109 @@ describe('trackedHubSpotSubmit', () => {
     await mod.trackedHubSpotSubmit(() => Promise.reject(new Error('x'))).catch(() => {})
     expect(named('generate_lead').length).toBe(1)
     expect(named('demo_submit_failed').length).toBe(1)
+  })
+
+  it('the outcome entry is an arguments object, not an array', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    await mod.trackedHubSpotSubmit(async () => {})
+    const layer = (window as TestWindow).dataLayer ?? []
+    const entry = layer[layer.length - 1]
+    expect(Object.prototype.toString.call(entry)).toBe('[object Arguments]')
+    expect(Array.isArray(entry)).toBe(false)
+  })
+
+  it('a run() that throws synchronously is caught the same as a rejected promise', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    const err = new Error('sync boom')
+    const thrower = () => {
+      throw err
+    }
+    await expect(mod.trackedHubSpotSubmit(thrower)).rejects.toBe(err)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const outcomes = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'demo_submit_failed' || e[1] === 'generate_lead')
+    expect(outcomes).toEqual([['event', 'demo_submit_failed', { form_name: 'book_a_demo' }]])
+  })
+
+  it('a rejection with a non-Error value (a string) is recorded and rethrown identically', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    await expect(mod.trackedHubSpotSubmit(() => Promise.reject('hubspot 500'))).rejects.toBe('hubspot 500')
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const outcomes = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'demo_submit_failed' || e[1] === 'generate_lead')
+    expect(outcomes).toEqual([['event', 'demo_submit_failed', { form_name: 'book_a_demo' }]])
+  })
+
+  it('a rejection with undefined is recorded and rethrown identically', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    await expect(mod.trackedHubSpotSubmit(() => Promise.reject(undefined))).rejects.toBeUndefined()
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const outcomes = layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === 'demo_submit_failed' || e[1] === 'generate_lead')
+    expect(outcomes).toEqual([['event', 'demo_submit_failed', { form_name: 'book_a_demo' }]])
+  })
+
+  it('concurrent calls do not cross-contaminate their outcomes', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    const err = new Error('concurrent failure')
+    const resolving = mod.trackedHubSpotSubmit(() => new Promise<void>((resolve) => setTimeout(resolve, 5)))
+    const rejecting = mod.trackedHubSpotSubmit(() => new Promise<void>((_, reject) => setTimeout(() => reject(err), 1)))
+
+    // Both handlers attached in the same tick — awaiting `resolving` first would
+    // leave `rejecting` unobserved for several ticks and trip Node's unhandled-
+    // rejection detector even though the assertion below does handle it.
+    await Promise.all([expect(resolving).resolves.toBeUndefined(), expect(rejecting).rejects.toBe(err)])
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    const named = (name: string) => layer.map((e) => Array.from(e as IArguments)).filter((e) => e[1] === name)
+    expect(named('generate_lead').length).toBe(1)
+    expect(named('demo_submit_failed').length).toBe(1)
+  })
+
+  it('an explicitly closed gate (ensureTag called and returns false) still rethrows while sending nothing', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    // Distinct from the "never called ensureTag" row below: this path exercises
+    // ensureTag's early return, not merely an untouched `loaded` flag.
+    expect(mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)).toBe(false)
+
+    const err = new Error('closed gate')
+    await expect(mod.trackedHubSpotSubmit(() => Promise.reject(err))).rejects.toBe(err)
+    await expect(mod.trackedHubSpotSubmit(async () => {})).resolves.toBeUndefined()
+
+    expect((window as TestWindow).dataLayer).toBeUndefined()
+    expect((window as TestWindow).gtag).toBeUndefined()
+  })
+})
+
+describe('send — the loaded guard, isolated from the gtag optional-chain (gap coverage)', () => {
+  it('a sender no-ops even when window.gtag is already defined but this module never loaded the tag', async () => {
+    const mod = await import('./analytics')
+    // window.gtag can outlive a module instance (e.g. jsdom's window persists
+    // across vi.resetModules()) while this fresh module's private `loaded` is
+    // still false — the one state gtag?.() alone cannot distinguish. Removing
+    // send()'s `if (!loaded) return` guard is invisible to every other case in
+    // this file, because window.gtag is otherwise always undefined until this
+    // module's own ensureTag sets it.
+    const spy = vi.fn()
+    ;(window as TestWindow).gtag = spy
+    mod.trackDemoOpen('nav')
+    expect(spy).not.toHaveBeenCalled()
   })
 })
 

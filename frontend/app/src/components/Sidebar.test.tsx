@@ -55,8 +55,8 @@ function rollup(f: BucketFixture & { entity?: BucketFixture }): Rollup {
   }
 }
 
-// mode 'inhouse' resolves scopedBucket straight to rollup.totals, and is the only mode
-// whose nav carries the Approvals item at all.
+// mode 'inhouse' resolves scopedBucket straight to rollup.totals. Both modes carry the
+// Approvals item since APPR-12-05; firm resolves the SELECTED entity's row instead.
 function sidebarCtx(over: Record<string, unknown> = {}): PlatformCtx {
   const ctx = {
     mode: 'inhouse',
@@ -65,7 +65,6 @@ function sidebarCtx(over: Record<string, unknown> = {}): PlatformCtx {
     entities: [],
     user: { name: 'Ada Nwosu', initials: 'AN', verified: false, tenantName: null },
     view: 'dashboard',
-    filter: '',
     switcherOpen: false,
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     toggleSwitcher: vi.fn(),
@@ -227,12 +226,29 @@ describe('Sidebar nav badges, firm mode', () => {
     expect(switcherSubLabel()).toBe('3 needing attention')
   })
 
-  it('carries no Approvals item at all', async () => {
+  // APPR-12-05 (task-530): firm gains Approvals in the CLIENT group. This asserts BOTH
+  // that the item now renders AND that its badge follows the SELECTED entity (6), not the
+  // firm-wide totals (5) -- the same scoping FIRM_ROLLUP already proves for Invoices above.
+  it('the Approvals badge follows the selected entity, not the firm total', async () => {
     mockRollupFetch(FIRM_ROLLUP)
     render(<Sidebar ctx={firmCtx()} />)
     await within(navButton('Invoices')).findByText('3')
 
-    expect(screen.queryByText('Approvals')).toBeNull()
+    expect(badgeOf('Approvals')?.textContent).toBe('6')
+  })
+
+  // QA adversarial: the selected entity's row, not the firm total, decides absence too.
+  // Mirrors the in-house 'awaiting_approval of 0 renders no Approvals badge' case above,
+  // but for scopedBucket's firm branch -- a badge that fell back to the firm total on a
+  // falsy (zero) entity value would render '5' here instead of staying absent.
+  it('the Approvals badge is absent when the selected entity has zero, even while the firm total is non-zero', async () => {
+    mockRollupFetch(rollup({ validated: 7, awaitingApproval: 5, needsAttention: 9, entity: { validated: 11, awaitingApproval: 0, needsAttention: 3 } }))
+    render(<Sidebar ctx={firmCtx()} />)
+    await within(navButton('Invoices')).findByText('3')
+
+    expect(badgeOf('Approvals')).toBeNull()
+    expect(within(navButton('Approvals')).queryByText('0')).toBeNull()
+    expect(within(navButton('Approvals')).queryByText('5')).toBeNull()
   })
 
   // QA adversarial, the asymmetry with the Reports card: that one was cut off this overlay,

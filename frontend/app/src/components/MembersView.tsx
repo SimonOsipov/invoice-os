@@ -1,6 +1,6 @@
 // Settings › Members — the first and default Settings tab.
 //
-// A TAB, not a screen: no `View` member, no `NavId`, no crumb. SettingsView already
+// A TAB, not a screen: no `View` member, no nav item, no crumb. SettingsView already
 // renders the page eyebrow / heading / subtitle above the tab strip, so this panel opens
 // with an intro paragraph and its top bar, exactly as the ERP connectors tab does.
 //

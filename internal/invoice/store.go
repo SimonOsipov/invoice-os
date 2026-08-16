@@ -1570,22 +1570,64 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 	return out, nil
 }
 
-// RowFacts reads the list-row approval standing of a page of invoice ids in ONE
-// transaction. Unlike ApprovalFacts above it must NOT consult
-// s.approvalsEnforced: the flag gates enforcement, not visibility
+// ListGateFacts is the page's approve-gate input, resolved once per request: the
+// caller's membership role, plus which invoices' pending workflow role the caller
+// actually holds, keyed by invoice id. An absent id reads false -- fail closed.
+type ListGateFacts struct {
+	CallerRole       string
+	HoldsPendingRole map[string]bool
+}
+
+// RowFacts reads the list-row approval standing of a page of invoice ids, plus the
+// caller's gate inputs, in ONE transaction. Unlike ApprovalFacts above it must NOT
+// consult s.approvalsEnforced: the flag gates enforcement, not visibility
 // (docs/approvals.md section 11, TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
 // RLS is the only tenant scope (TestStoreRowFacts_IsTenantScopedByRLS).
-func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+//
+// The two gate reads are here rather than inside approval.RowFactsTx so that helper's
+// statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
+// both are set-shaped, so the whole request stays constant in page size.
+func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	var out map[string]approval.RowFacts
+	var gate ListGateFacts
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		f, err := approval.RowFactsTx(ctx, tx, ids)
-		out = f
-		return err
+		facts, err := approval.RowFactsTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		subject := actorFromContext(ctx).Subject
+		role, err := callerRoleTx(ctx, tx, subject)
+		if err != nil {
+			return err
+		}
+
+		keys := []string{}
+		seen := map[string]bool{}
+		for _, f := range facts {
+			if f.PendingRoleKey != nil && !seen[*f.PendingRoleKey] {
+				seen[*f.PendingRoleKey] = true
+				keys = append(keys, *f.PendingRoleKey)
+			}
+		}
+		held, err := approval.HeldRoleKeysTx(ctx, tx, keys, subject)
+		if err != nil {
+			return err
+		}
+
+		holds := make(map[string]bool, len(facts))
+		for id, f := range facts {
+			if f.PendingRoleKey != nil && held[*f.PendingRoleKey] {
+				holds[id] = true
+			}
+		}
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds}
+		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, ListGateFacts{}, err
 	}
-	return out, nil
+	return out, gate, nil
 }
 
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System

@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ import (
 func doInvoiceListWithFacts(
 	t *testing.T,
 	list func(ctx context.Context, f ListFilter) ([]Invoice, int, error),
-	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error),
+	rowFacts func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error),
 	id *auth.Identity,
 	query string,
 ) *httptest.ResponseRecorder {
@@ -177,8 +178,8 @@ func TestListHandler_RowCarriesApprovalOrNull(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: armed, Status: StatusValidated}, {ID: bare, Status: StatusDraft}}, 2, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{armed: armedRowFacts()}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{armed: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -225,8 +226,8 @@ func TestListHandler_ApprovalKeyPresentOnEveryRow(t *testing.T) {
 			{ID: uuid.NewString(), Status: StatusAccepted},
 		}, 3, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -257,8 +258,14 @@ func TestListHandler_ApprovalKeyPresentOnEveryRow(t *testing.T) {
 
 // TestListItem_InvoiceKeysUnmovedAndUnrenamed: the wrapper is ADDITIVE. Marshalling
 // listItem must emit every Invoice key with the same name, the same value and the
-// same POSITION it has when Invoice is marshalled alone, with `approval` appended
-// last -- the declaration-order-is-wire-order rule getResponse's comment states.
+// same POSITION it has when Invoice is marshalled alone, with the three siblings
+// appended after it IN ORDER -- the declaration-order-is-wire-order rule getResponse's
+// comment states.
+//
+// A09-6 (APPR-12-09) widened the tail from one sibling to three: `approval`, then
+// `can_approve`, then `approve_blocked_reason`. The leading-keys check below is
+// deliberately byte-unchanged -- that half is what proves the widening is purely
+// additive rather than a reshuffle.
 func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
 	inv := populatedInvoice(t, uuid.NewString())
 
@@ -274,16 +281,17 @@ func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
 	bareKeys := jsonKeysInOrder(t, bare)
 	wrappedKeys := jsonKeysInOrder(t, wrapped)
 
-	if len(wrappedKeys) != len(bareKeys)+1 {
-		t.Fatalf("listItem has %d keys %v, want Invoice's %d %v plus exactly one (\"approval\")",
+	if len(wrappedKeys) != len(bareKeys)+3 {
+		t.Fatalf("listItem has %d keys %v, want Invoice's %d %v plus exactly three (\"approval\", \"can_approve\", \"approve_blocked_reason\")",
 			len(wrappedKeys), wrappedKeys, len(bareKeys), bareKeys)
 	}
 	if !reflect.DeepEqual(wrappedKeys[:len(bareKeys)], bareKeys) {
 		t.Errorf("listItem's leading keys = %v, want Invoice's own order %v -- embedding must not move or rename a key",
 			wrappedKeys[:len(bareKeys)], bareKeys)
 	}
-	if last := wrappedKeys[len(wrappedKeys)-1]; last != "approval" {
-		t.Errorf("listItem's last key = %q, want \"approval\" -- the sibling is appended, never interleaved", last)
+	wantTail := []string{"approval", "can_approve", "approve_blocked_reason"}
+	if tail := wrappedKeys[len(bareKeys):]; !reflect.DeepEqual(tail, wantTail) {
+		t.Errorf("listItem's trailing keys = %v, want %v -- the siblings are appended in declaration order, never interleaved", tail, wantTail)
 	}
 
 	// Values, not just names: a key that kept its name but changed type would pass
@@ -312,6 +320,80 @@ func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
 	}
 }
 
+// TestListItem_ApproveFlagsCarryNoOmitempty (A09-5, APPR-12-09): the ZERO listItem is the
+// emptiest row the handler can build, and BOTH new keys must still be on it -- as
+// "can_approve":false and "approve_blocked_reason":null.
+//
+// `omitempty` on a false bool and on a nil *string BOTH drop the key entirely, and an
+// absent key is indistinguishable from an older server that never heard of it: the SPA
+// would read undefined and fail OPEN on a permission-shaped flag. This is getResponse's
+// own rule (handlers.go), applied to the list wrapper.
+func TestListItem_ApproveFlagsCarryNoOmitempty(t *testing.T) {
+	raw, err := json.Marshal(listItem{})
+	if err != nil {
+		t.Fatalf("marshal a zero listItem: %v", err)
+	}
+	for _, want := range []string{`"can_approve":false`, `"approve_blocked_reason":null`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("a zero listItem marshals to %s, want the literal %s -- neither field may carry omitempty", raw, want)
+		}
+	}
+	// Presence, not just the literal: a key emitted with a leading space would pass the
+	// substring check above only by accident, and this says which key is missing.
+	keys := map[string]bool{}
+	for _, k := range jsonKeysInOrder(t, raw) {
+		keys[k] = true
+	}
+	for _, k := range []string{"can_approve", "approve_blocked_reason"} {
+		if !keys[k] {
+			t.Errorf("a zero listItem has no %q key: %s", k, raw)
+		}
+	}
+}
+
+// TestListItem_ApprovalObjectHasExactlySixKeys closes the leak hole APPR-12-09 opens.
+//
+// approval.RowFacts gains an INTERNAL PendingRoleKey field, tagged json:"-" so the list's
+// gate can resolve the pending step's workflow-role key without publishing it. Nothing in
+// this repo asserted the approval object's key SET before this spec: both existing checks
+// (row_approval_envelope_adversarial_test.go's six-key loop and gate_adversarial_test.go's)
+// are PRESENCE-only, so a PendingRoleKey that shipped without its tag would put
+// `pending_role_key` on the public wire with no Go test failing.
+//
+// GREEN before and after. It is the tag's DIRECT oracle: TestListHandler_ApprovalFacts-
+// IgnoreTheEnforcementFlag also reds on an untagged field, but only because its decoded
+// expectation (wantArmedRowFactsOnTheWire) was split out for this change -- a reshaped
+// expectation there would silently take that second oracle away again.
+func TestListItem_ApprovalObjectHasExactlySixKeys(t *testing.T) {
+	facts := armedRowFacts()
+	wrapped, err := json.Marshal(listItem{Invoice: populatedInvoice(t, uuid.NewString()), Approval: &facts})
+	if err != nil {
+		t.Fatalf("marshal listItem: %v", err)
+	}
+	var row map[string]json.RawMessage
+	if err := json.Unmarshal(wrapped, &row); err != nil {
+		t.Fatalf("decode listItem: %v", err)
+	}
+	rawApproval, ok := row["approval"]
+	if !ok || string(rawApproval) == "null" {
+		t.Fatalf("listItem's approval = %s, want a populated object -- the key set below cannot be read off a null", rawApproval)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(rawApproval, &obj); err != nil {
+		t.Fatalf("decode approval %q: %v", string(rawApproval), err)
+	}
+
+	got := make([]string, 0, len(obj))
+	for k := range obj {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	want := []string{"due_at", "overdue", "pending_holder_warn", "pending_ord", "pending_role_title", "run_state"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the approval object's keys = %v,\nwant exactly %v\n-- a field added to approval.RowFacts without json:\"-\" leaks onto the public wire; PendingRoleKey (APPR-12-09) is internal to the gate", got, want)
+	}
+}
+
 // --- AC-3: the envelope is untouched ----------------------------------------
 
 // TestListHandler_EnvelopeStillExactlyTwoKeys: `approval` is a per-ROW key, so the
@@ -325,8 +407,8 @@ func TestListHandler_EnvelopeStillExactlyTwoKeys(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: invID, Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return map[string]approval.RowFacts{invID: armedRowFacts()}, nil
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return map[string]approval.RowFacts{invID: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -370,8 +452,8 @@ func TestListHandler_RowFactsErrorIs500(t *testing.T) {
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 		return []Invoice{{ID: invID, Status: StatusValidated}}, 1, nil
 	}
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
-		return nil, context.DeadlineExceeded
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
+		return nil, ListGateFacts{}, context.DeadlineExceeded
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -405,9 +487,9 @@ func TestListHandler_RowFactsNotCalledOnAnEmptyPage(t *testing.T) {
 		return []Invoice{}, 0, nil
 	}
 	called := false
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		called = true
-		return map[string]approval.RowFacts{}, nil
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -440,10 +522,10 @@ func TestListHandler_RowFactsCalledOncePerRequest(t *testing.T) {
 	}
 	calls := 0
 	var seen []string
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		calls++
 		seen = append([]string(nil), ids...)
-		return map[string]approval.RowFacts{}, nil
+		return map[string]approval.RowFacts{}, ListGateFacts{}, nil
 	}
 
 	rec := doInvoiceListWithFacts(t, list, facts, &id, "")
@@ -476,9 +558,9 @@ func TestListHandler_ApprovalKeyedOnTheStoreReturnedRowID(t *testing.T) {
 		return []Invoice{{ID: canonical, Status: StatusValidated}}, 1, nil
 	}
 	var seen []string
-	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, error) {
+	facts := func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 		seen = append([]string(nil), ids...)
-		return map[string]approval.RowFacts{canonical: armedRowFacts()}, nil
+		return map[string]approval.RowFacts{canonical: armedRowFacts()}, ListGateFacts{}, nil
 	}
 
 	// ?q= carries the SAME invoice's id in Postgres's non-canonical spelling: the only

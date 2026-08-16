@@ -6,7 +6,10 @@
 // (auth.spec.ts's identity-switch regression and import-wizard.spec.ts's
 // [inhouse-can-start]), neither of which navigates past the surface it lands on -- so an
 // in-house-only surface could break in production without a single test going red. That is
-// this story's defect class, and these four tests are the guard against it.
+// this story's defect class, and the tests below are the guard against it -- the first four
+// are PERSONA-01-03's own; Test 5 (task-327), Test 6 (APPR-12-05, task-530) and Test 7
+// (APPR-12-07, task-532) arrived later and carry their own headers explaining why they live
+// in this file. Test 7 must stay LAST -- its own header says why.
 //
 // Fixtures are created through e2e/api/client.ts BEFORE the browser is driven, never
 // through the UI: [write-path-deferred] fences the in-house WRITE path (import filing /
@@ -23,10 +26,11 @@
 // both are used below -- (1) compared against a LIVE API read taken in the same test (the
 // Approvals badge, the Overview KPI), and (2) containment of rows this test itself created.
 // A hardcoded '3' would pass on a clean fixture and fail the moment anything ran first.
-import { test, expect, type Page } from '@playwright/test'
-import { createEntity, createInvoice, login, rollup, validateInvoice, PERSONAS } from '../api/client'
+import { test, expect, type Locator, type Page } from '@playwright/test'
+import { createEntity, createInvoice, listInvoices, login, rollup, validateInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, sidebarRoster, signInAs } from '../personaSession'
+import { WIDE_WIDTHS } from './layout'
 import { FIRM_PERSONA, INHOUSE_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
@@ -52,6 +56,23 @@ function cleanInvoiceFields(invoiceNumber: string) {
   }
 }
 
+// approvableInvoiceFields(): cleanInvoiceFields' ABOVE-THRESHOLD sibling, and the reason
+// Test 7 can build a queue at all. internal/demopolicy's root step is
+// `condition total > 100000` (demopolicy.go's condAmount), so cleanInvoiceFields' 1,075
+// takes the ELSE lane and auto-approves -- excluded from awaiting_approval by construction,
+// and pinned there on purpose by TestSeed_InhouseCanFileFixtureStaysOnTheAutoapproveLane.
+// Still zero violations: vat is exactly 7.5% of subtotal and the one line item reconciles
+// to it. No rule caps the amount.
+function approvableInvoiceFields(invoiceNumber: string) {
+  return {
+    ...cleanInvoiceFields(invoiceNumber),
+    subtotal: '200000',
+    vat: '15000',
+    total: '215000',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '20000', line_total: '200000' }],
+  }
+}
+
 // createValidatedInvoice(): create + validate, with the fixture guard the whole Approvals
 // oracle rests on. POST .../validate is THE gate that earns `validated` (the transitions
 // endpoint 409s on that target, internal/invoice/handlers.go), and a zero-violation invoice
@@ -59,8 +80,18 @@ function cleanInvoiceFields(invoiceNumber: string) {
 // DATA, never an HTTP error -- so without this assertion a rule-set change would silently
 // degrade the fixture to `draft` and Test 2 would fail much later with an unreadable
 // message about a badge that never rendered.
-async function createValidatedInvoice(token: string, entityId: string, invoiceNumber: string): Promise<void> {
-  const created = await createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
+//
+// `fields` defaults to the below-threshold clean fixture every earlier test wants; Test 7
+// passes approvableInvoiceFields() instead. Validation is also what ARMS the approval run
+// (internal/invoice/store.go calls approval.ArmTx in the promoting tx), so which builder is
+// used decides which lane the row lands on.
+async function createValidatedInvoice(
+  token: string,
+  entityId: string,
+  invoiceNumber: string,
+  fields: ReturnType<typeof cleanInvoiceFields> = cleanInvoiceFields(invoiceNumber),
+): Promise<void> {
+  const created = await createInvoice(token, { entity_id: entityId, ...fields })
   const validated = await validateInvoice(token, created.id)
   expect(
     validated.status,
@@ -72,13 +103,15 @@ function sidebar(page: Page) {
   return page.locator('aside.pf-sidebar')
 }
 
-// navButton(): a sidebar nav item by its rendered label. Scoped to the aside so it can
-// never pick up a same-named control elsewhere on the screen (the header's lowercase "New
-// invoice" CTA, a view's own buttons). Playwright matches `name` as a case-insensitive
-// SUBSTRING by default, which is what makes this work on a badged item too: the Approvals
-// button's accessible name is "Approvals <count>" once its badge renders.
+// navButton(): a sidebar nav item by its rendered label. Scoped to nav.pf-nav-list, not just
+// the aside, because the firm company switcher is also a <button> in the aside whose
+// accessible name embeds the selected entity's name (Sidebar.tsx:149-161) -- a substring
+// match against a fixture named e.g. "... approvals ..." resolves to both. Playwright
+// matches `name` as a case-insensitive SUBSTRING by default, which is what makes this work
+// on a badged item too: the Approvals button's accessible name is "Approvals <count>" once
+// its badge renders.
 function navButton(page: Page, label: string) {
-  return sidebar(page).getByRole('button', { name: label })
+  return sidebar(page).locator('nav.pf-nav-list').getByRole('button', { name: label })
 }
 
 async function goTo(page: Page, label: string): Promise<void> {
@@ -105,6 +138,27 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
   return page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
 }
 
+// The Approvals queue's row, same exact-text discipline as invoiceRowByNumber above.
+function approvalRowByNumber(page: Page, invoiceNumber: string) {
+  return page.getByTestId('approval-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
+}
+
+// Mirrors approvalSelectRowLabel (frontend/app/src/lib/approvals.ts). Restated rather than
+// imported: this package has no dependency on the app's source, the same reason
+// cleanInvoiceFields above is a copy.
+function selectRowLabel(invoiceNumber: string): string {
+  return `Select invoice ${invoiceNumber}`
+}
+
+// awaitingNumbers(): the server's own awaiting_approval set, by invoice number. Membership
+// only -- the set also holds the seeded rows and whatever earlier runs left, so no caller
+// may read a size off it. The list is ORDER BY created_at DESC with the handler's default
+// limit of 50, so a run's own fixtures are always on page 1.
+async function awaitingNumbers(token: string): Promise<Set<string>> {
+  const res = await listInvoices(token, { awaiting_approval: true })
+  return new Set(res.invoices.map((i) => i.invoice_number))
+}
+
 // selectEntity(): a fourth copy of invoice-surfaces.spec.ts / import-wizard.spec.ts's
 // helper of the same name -- this package's convention for small Page-driving helpers (see
 // invoice-surfaces.spec.ts:31-34's own note on why the copies are not hoisted). Required by
@@ -123,11 +177,11 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
   await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
-// The two rosters, derived from Sidebar.tsx:111-123 (navGroups) x glyphs.tsx:62-110 (each
-// NavDef's label). Firm mode splits into a CLIENT group of 6 and a FIRM-WIDE group of 3;
+// The two rosters, derived from Sidebar.tsx's navGroups x glyphs.tsx (each NavDef's
+// label). Firm mode splits into a CLIENT group of 7 and a FIRM-WIDE group of 3;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
-const FIRM_ROSTER = ['Overview', 'Invoices', 'Validation', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Settings']
+const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Validation', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Settings']
 const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Validation', 'Workflows', 'Rules', 'Approvals', 'Reports', 'Settings']
 
 // ---------------------------------------------------------------------------------------
@@ -295,9 +349,11 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
 })
 
 // ---------------------------------------------------------------------------------------
-// Test 2 -- Approvals as an in-house-exclusive surface (Core AC 3)
+// Test 2 -- the in-house Approvals badge and surface (Core AC 3)
 // ---------------------------------------------------------------------------------------
-test('Approvals: the in-house-only badge equals the live awaiting-approval count, and the surface opens', async ({ page }) => {
+// Approvals stopped being in-house-exclusive at APPR-12-05: the firm carries it too, in
+// the CLIENT group. Test 6 below is this test's firm sibling.
+test('Approvals: the in-house badge equals the live awaiting-approval count, and the surface opens', async ({ page }) => {
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.B)
@@ -342,14 +398,13 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   await expect(approvalsBadge).toHaveText(String(expectedAwaiting))
 
   // --- The click did something: the active-nav state moves to Approvals. ------------------
-  // App.tsx:266's nav('approvals') sets view='invoices' + filter='Pending', and
-  // Sidebar.tsx:124-125 turns that pair into activeNav='approvals'. That highlight is the
-  // ONLY thing in the rendered tree that distinguishes Approvals from Invoices (see the
-  // comment on clause 2 below), and it carries no class, aria-current or data attribute --
-  // Sidebar.tsx:231 expresses it purely as inline style. font-weight is the discriminator
-  // used here rather than the accent bar's colour, which resolves to a design-system token
-  // whose serialized value is a moving target. Asserted as a TRANSITION (before -> after)
-  // and PAIRED against Invoices, so "everything is bold" cannot pass it.
+  // Since APPR-12-05 nav('approvals') sets view='approvals' outright and Sidebar's
+  // activeNav is just `view`. The highlight carries no class, aria-current or data
+  // attribute -- Sidebar.tsx expresses it purely as inline style. font-weight is the
+  // discriminator used here rather than the accent bar's colour, which resolves to a
+  // design-system token whose serialized value is a moving target. Asserted as a
+  // TRANSITION (before -> after) and PAIRED against Invoices, so "everything is bold"
+  // cannot pass it.
   const approvalsNav = navButton(page, 'Approvals')
   const invoicesNav = navButton(page, 'Invoices')
   await expect(approvalsNav, 'Approvals is not the active nav item before the click').toHaveCSS('font-weight', '500')
@@ -357,23 +412,18 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
   await expect(approvalsNav, 'Approvals became the active nav item').toHaveCSS('font-weight', '600')
   await expect(invoicesNav, 'and Invoices did not').toHaveCSS('font-weight', '500')
 
-  // WEAK CORROBORATOR — not a full-strength assertion, and deliberately so.
-  // Approvals is not a separate screen: App.tsx:266's nav('approvals') sets
-  // view='invoices' + filter='Pending', and ctx.filter's ONLY consumer is
-  // Sidebar.tsx:125's active-nav highlight — InvoicesList.tsx never reads it, so
-  // this opens the UNFILTERED Invoices list (finding F-A, recorded in
-  // [PERSONA-01-07], not fixed here per [approvals-filter-not-fixed]). These rows
-  // would be visible whether or not the badge is correct, so this catches only a
-  // GROSS failure: Approvals opening the wrong screen, or this tenant's rows
-  // missing entirely. Clause 1 above carries the weight. Do NOT "strengthen" this
-  // into an assertion that the list is narrowed to validated rows — that is a
-  // product change wearing a test's clothes ([coverage-honesty]).
-  await expect(page.getByTestId('invoices-list')).toBeVisible()
-  for (const number of validatedNumbers) {
-    const row = invoiceRowByNumber(page, number)
-    await expect(row).toBeVisible()
-    await expect(row.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  }
+  // --- Clause 2: the click opened the APPROVALS SCREEN, not the Invoices list. ------------
+  // This assertion was impossible before APPR-12 and the old [coverage-honesty] comment
+  // said so: nav('approvals') used to set view='invoices' + filter='Pending', ctx.filter's
+  // ONLY consumer was Sidebar.tsx's active-nav highlight, and InvoicesList.tsx never read
+  // it — so Approvals rendered the UNFILTERED Invoices list and the two screens were
+  // indistinguishable in the DOM (finding F-A, [PERSONA-01-07]). APPR-12-03 gave Approvals
+  // its own view and its own listAwaitingApproval fetch, and APPR-12-05 deleted the alias,
+  // so the narrowing is now the PRODUCT's and asserting it is no longer a product change
+  // wearing a test's clothes. F-A is closed; [approvals-filter-not-fixed] is retired.
+  // Clause 1 above still carries the count; this pins WHICH screen opened.
+  await expect(page.getByTestId('approvals-list')).toBeVisible()
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -381,16 +431,18 @@ test('Approvals: the in-house-only badge equals the live awaiting-approval count
 // ---------------------------------------------------------------------------------------
 // Test 3 -- the sidebar roster, per persona (Core AC 7, clause 1)
 // ---------------------------------------------------------------------------------------
-// EXACT ORDERED equality, never toContain: presence and absence are pinned in one shot.
-// The firm has Clients and Customers and NO Approvals; in-house has Approvals and neither
-// Clients nor Customers. A nav item silently vanishing for one persona -- or appearing for
-// the wrong one -- is precisely this story's defect class, and nothing else in the suite
-// would catch it. This is also the honest home of the four firm `nav-only` coverage cells
-// (e2e/personas.ts): it proves those surfaces EXIST for the firm without claiming to have
-// opened them.
+// EXACT ORDERED equality, never toContain: presence, absence AND slot are pinned in one
+// shot. The firm has Clients and Customers; in-house has neither. Both carry Approvals
+// since APPR-12-05, but in DIFFERENT slots -- firm directly after Invoices, in-house after
+// Rules -- which only an ordered assertion can hold (see Sidebar.tsx's placement-rule
+// comment on why the two deliberately diverge). A nav item silently vanishing for one
+// persona, appearing for the wrong one, or sliding to the other's slot is precisely this
+// story's defect class, and nothing else in the suite would catch it. This is also the
+// honest home of the firm `nav-only` coverage cell (e2e/personas.ts): it proves that
+// surface EXISTS for the firm without claiming to have opened it.
 //
 // No fixtures: the roster renders regardless of data. approvalsItem is unconditionally in
-// navGroups (Sidebar.tsx:121); only its BADGE is conditional.
+// both branches of navGroups; only its BADGE is conditional.
 //
 // Left on the config's 60s default even though it is the only 60s test doing TWO full
 // sign-ins: it creates no fixtures, makes no writes, and runs third, by which point Test 1
@@ -479,8 +531,8 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
 // ---------------------------------------------------------------------------------------
 // Sidebar.tsx wraps each nav glyph in an UNSIZED span, so a glyph's own width leaks into
 // where its label starts. Scope choice: FIRM_ROSTER, which spans BOTH firm nav groups
-// (CLIENT: Overview/Invoices/Validation/Rules/Customers/Reports, FIRM-WIDE: Workflows/
-// Clients/Settings, Sidebar.tsx:113-114) -- required, not incidental: NAV_CLIENTS (the
+// (CLIENT: Overview/Invoices/Approvals/Validation/Rules/Customers/Reports, FIRM-WIDE:
+// Workflows/Clients/Settings) -- required, not incidental: NAV_CLIENTS (the
 // 14px forked glyph) lives in FIRM-WIDE and NAV_VALIDATION (the 16px shieldGlyph) lives in
 // CLIENT, so scoping to a single group would miss one of the two reported defects.
 //
@@ -521,5 +573,302 @@ test('nav-alignment: every sidebar nav item renders its label and icon column at
     expect(width, `icon-column width must match every other nav item's (${JSON.stringify(iconWidth)})`).toBe(firstIconWidth)
   }
 
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ---------------------------------------------------------------------------------------
+// Test 6 -- Approvals opens for the FIRM persona too (APPR-12-05, task-530)
+// ---------------------------------------------------------------------------------------
+// What e2e/personas.ts's firm NAV_APPROVALS `drives` cell is paid for. Test 3 proves the
+// item is PRESENT in the firm roster; this proves clicking it opens the Approvals screen
+// rather than the Invoices list, which is the whole point of deleting the alias.
+//
+// The queue is empty BY CONSTRUCTION, not by assumption about the environment: this test
+// creates its own firm entity, selects it, and that entity is seconds old and owns no
+// invoices, so nothing can be awaiting approval under it. (internal/demopolicy arms the
+// in-house tenant only, so the firm queue is empty on the deployed environment anyway --
+// but an assertion resting on THAT would go red the day a firm policy is seeded.) The
+// empty rung is still the Approvals screen: its own eyebrow, its own h1, its own empty
+// testid, and no invoices-list anywhere.
+test('firm Approvals: the nav item opens the Approvals screen, not the Invoices list', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `PERSONA-01 firm approvals ${Date.now()}`, tin: freshTin() })
+
+  await signInAs(page, 'firm')
+  await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  // Mandatory, same reason as Test 4: Approvals is CLIENT-scoped, and the default
+  // selection is clients[0] by name ASC, never this test's own entity.
+  await selectEntity(page, entity.name)
+
+  await goTo(page, 'Approvals')
+  await expect(page.getByRole('heading', { level: 1, name: 'Approvals', exact: true })).toBeVisible()
+  await expect(page.getByText('AWAITING YOUR APPROVAL', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('approvals-empty')).toBeVisible()
+  // The alias is gone: opening Approvals must not render the Invoices list.
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// APPROVALS_GRID_COLUMNS is '24px 140px 1fr 130px 90px 180px 110px' (ApprovalsView.tsx):
+// seven tracks, one of them fluid. The indices below name what the two layout claims are
+// about; neither claim ever asserts one of these px values.
+const APPROVALS_TRACKS = 7
+const BUYER_TRACK = 2
+const FIXED_TRACKS = [0, 1, 3, 4, 5, 6]
+
+// gridCells(): the x and width of each of a grid container's seven direct children, in
+// track order. The count assertion is load-bearing twice over -- it is what makes an
+// index-by-index comparison meaningful at all, and a row that rendered a blocked-reason
+// node would carry an eighth child on an implicit second grid line (see Test 7's header).
+// Track 0 measures the CHECKBOX, a replaced element that aligns to the track start instead
+// of stretching to it, so its width is the control's, not the 24px track's -- invariant
+// either way, which is all the claims below need.
+async function gridCells(container: Locator, label: string): Promise<Array<{ x: number; width: number }>> {
+  const cells = container.locator('> *')
+  await expect(cells, `${label}: a grid built from APPROVALS_GRID_COLUMNS renders exactly ${APPROVALS_TRACKS} cells`).toHaveCount(APPROVALS_TRACKS)
+  const measured: Array<{ x: number; width: number }> = []
+  for (let i = 0; i < APPROVALS_TRACKS; i++) {
+    const box = await cells.nth(i).boundingBox()
+    expect(box, `${label}: track ${i} never rendered`).toBeTruthy()
+    measured.push({ x: box!.x, width: box!.width })
+  }
+  return measured
+}
+
+// ---------------------------------------------------------------------------------------
+// Test 7 -- the in-house approval queue journey, and the APPROVALS_GRID_COLUMNS layout
+// assertions (APPR-12-07, task-532: A07-1..A07-3, A07-5..A07-7)
+// ---------------------------------------------------------------------------------------
+// LAST BY DECLARATION ORDER, and it must stay last. This suite is workers:1 /
+// fullyParallel:false, so Playwright runs declaration order, and Test 2's badge oracle
+// (`expectedAwaiting > 0`) must read the queue BEFORE this journey drains part of it.
+//
+// THE FIXTURE IS ABOVE THRESHOLD ON PURPOSE -- see approvableInvoiceFields. The API guard
+// below asserts each created row actually reached the queue, so a future threshold move
+// fails as "the fixture left the approval lane" rather than as an unreadable timeout on a
+// row that never rendered.
+//
+// THREE controls, each answering a different way this journey could pass on a broken
+// screen:
+//   - a BELOW-THRESHOLD row, absent from the queue. Without it the narrowing step only
+//     asserts presence, which any unfiltered list satisfies.
+//   - an above-threshold row this run creates and never TICKS, still on the queue after
+//     the bulk approve. Without it, "approved every row on the page" passes.
+//   - the wire re-read at the end. Without it, a client-side optimistic removal passes the
+//     DOM assertion -- which is the exact claim A07-3 is making about this screen.
+//
+// NEVER `approvals-select-all`, here or in any later journey. The queue also holds the
+// seeded DEMO-2026-9001/9002/9003 rows, all approvable by this persona; approvals are
+// permanent (epic Q12) and demopolicy's armBacklog anti-join skips an invoice already
+// carrying an approved run, so a later boot does NOT restore them -- select-all would kill
+// Test 2's oracle for the rest of that deployment's life. Rows are ticked individually, by
+// their own aria-label.
+//
+// DEFERRED, deliberately: the blocked-reason node's `gridColumn: '2 / -1'` span
+// (ApprovalsView.tsx) has no rendered oracle in this suite. demopolicy's one approval step
+// targets `fin_dir` and db/seed.dev.sql staffs this subject into it, so every armed row
+// here is approvable and `approval-blocked-reason` never renders; the firm queue (Test 6)
+// is empty. [topology-never-publishes] forbids publishing the second policy that would
+// manufacture a blocked row, so the span stays on the unit suite's coverage until a story
+// arms one. That is also why the grids below are asserted to hold exactly 7 children: a
+// blocked row would add an eighth on an implicit second grid line.
+//
+// Cannot be run locally, same as Test 5: every Playwright config in this package is
+// deliberately webServer-less and points at deployed URLs, so its first real run -- red or
+// green -- is the post-deploy gate (dev-env.yml).
+test('in-house Approvals: the queue narrows, bulk approve settles per item, and the refetch confirms it', async ({ page }, testInfo) => {
+  // Four fixtures with their own validate round trips, four viewport sweeps and a
+  // two-request fan-out. Same in-file headroom precedent as Tests 1 and 4.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.B)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `APPR-12 queue ${stamp}`, tin: freshTin() })
+  // TWO above-threshold rows to approve, so the per-item results panel is asserted on a
+  // set; ONE more this run leaves untouched; ONE below-threshold row. See the header.
+  const approveNumbers = [`INV-A12-QUEUE-1-${stamp}`, `INV-A12-QUEUE-2-${stamp}`]
+  const untickedNumber = `INV-A12-UNTICKED-${stamp}`
+  const belowThresholdNumber = `INV-A12-BELOW-${stamp}`
+  const onQueue = [...approveNumbers, untickedNumber]
+  for (const number of onQueue) {
+    await createValidatedInvoice(token, entity.id, number, approvableInvoiceFields(number))
+  }
+  await createValidatedInvoice(token, entity.id, belowThresholdNumber)
+
+  // --- The fixture guard, at the wire, before the browser is driven ----------------------
+  // Both halves of the narrowing, read from the server's own awaiting_approval predicate
+  // (internal/invoice/store.go). Containment only -- the queue also holds the seeded rows
+  // and whatever earlier runs left, and no assertion here may name a total.
+  const queuedBefore = await awaitingNumbers(token)
+  for (const number of onQueue) {
+    expect(
+      queuedBefore.has(number),
+      `${number} must be awaiting approval; if this fails the fixture left the approval lane (demopolicy's total > 100000 threshold moved, or the seeded policy is no longer active)`,
+    ).toBe(true)
+  }
+  expect(
+    queuedBefore.has(belowThresholdNumber),
+    `${belowThresholdNumber} is below demopolicy's threshold, so the policy's else lane auto-approves it and it must never reach the queue`,
+  ).toBe(false)
+
+  await signInAs(page, 'inhouse')
+  await expect(sidebar(page)).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
+
+  // --- A07-1: the queue is the real filtered set, not the Invoices list -------------------
+  await goTo(page, 'Approvals')
+  await expect(page.getByTestId('approvals-list')).toBeVisible()
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
+  for (const number of onQueue) {
+    await expect(approvalRowByNumber(page, number), `${number} is awaiting approval and must be on the queue`).toBeVisible()
+  }
+  await expect(
+    approvalRowByNumber(page, belowThresholdNumber),
+    'the auto-approved row must be absent -- the narrowing is the server\'s, not a presence check',
+  ).toHaveCount(0)
+
+  // --- A07-5 / A07-6: what APPROVALS_GRID_COLUMNS actually encodes -------------------------
+  // RELATIONSHIPS, never a raw dimension (layout.ts's header: BUG-03-05's own `width <=
+  // 1082` check was SATISFIED by the 588px it stranded). Both claims are made at all four
+  // WIDE_WIDTHS, widest first, and both need a POPULATED queue -- which is why they live in
+  // this journey and not in Test 6's empty firm surface.
+  //
+  // assertFillsColumn is NOT used here, and the three reasons are worth writing down.
+  // (1) Mechanically its default slackPx = 24 throws against this view's own 36px
+  // horizontal inset -- `approvals-list` is not the padded root the way `invoice-detail`
+  // is (ApprovalsView.tsx puts the padding on an unnamed wrapper). (2) Substantively "the
+  // table fills its column" does not test this constant at all: swapping the `1fr` for a
+  // fixed track leaves the list div full-width while the TRACKS stop early, so the fill
+  // claim stays green on the defect. (3) Raising the slack past 36 does not rescue it --
+  // the |left - right| claim it would then rest on is off by whatever gutter `.pf-scroll`
+  // (overflow-y:auto) takes out of its own content box, which is a function of how many
+  // rows the queue holds rather than of the constant under test. The two claims below
+  // measure INSIDE the grid, so a gutter cancels out of both.
+  const head = page.getByTestId('approvals-list').locator('.pf-list-head')
+  const entryViewport = page.viewportSize()
+  const sweep: Array<{ viewport: number; rowWidth: number; cells: number[] }> = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect
+        .poll(() => page.evaluate(() => window.innerWidth), { message: `the viewport never reached ${width}px` })
+        .toBe(width)
+
+      const headCells = await gridCells(head, 'the list head')
+      for (const [rowIndex, number] of onQueue.entries()) {
+        const row = approvalRowByNumber(page, number)
+        const rowBox = await row.boundingBox()
+        expect(rowBox, `${number}: the row disappeared mid-sweep`).toBeTruthy()
+        const rowCells = await gridCells(row, number)
+
+        // A07-6 -- ONE track definition, not two. The head and every body row are SEPARATE
+        // grid containers consuming the same constant, which is exactly the two-literal
+        // drift ClientsView carries and APPROVALS_GRID_COLUMNS' own comment rejects. Per
+        // track, left edge against left edge; 1px is sub-pixel rounding, and a second
+        // literal drifting out of step moves whole columns.
+        for (const [i, headCell] of headCells.entries()) {
+          expect(
+            Math.abs(headCell.x - rowCells[i].x),
+            `track ${i}: the head and ${number} disagree on where it starts at ${width}px (head ${headCell.x}, row ${rowCells[i].x}) -- two track definitions, not one`,
+          ).toBeLessThanOrEqual(1)
+        }
+
+        if (rowIndex === 0) sweep.push({ viewport: width, rowWidth: rowBox!.width, cells: rowCells.map((c) => c.width) })
+      }
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // A07-5 -- the `1fr` absorbs the window. Six fixed tracks stay put while the Buyer track
+  // takes every pixel the window gives the row.
+  expect(sweep.length, 'the sweep measured nothing, so every comparison below is vacuous').toBe(WIDE_WIDTHS.length)
+  const widest = sweep[0]
+  const narrowest = sweep[sweep.length - 1]
+  const rowGrowth = widest.rowWidth - narrowest.rowWidth
+  // ANTI-VACUITY, and the reason this is an assertion rather than a comment: a cap anywhere
+  // above the grid freezes every delta below at zero, which would satisfy the invariance
+  // claim AND the absorption claim while the queue sat in a dead band.
+  expect(
+    rowGrowth,
+    `the row did not grow between ${narrowest.viewport}px and ${widest.viewport}px, so something above the grid is capping it and the two claims below are vacuous`,
+  ).toBeGreaterThan(0)
+  for (const fit of sweep) {
+    for (const i of FIXED_TRACKS) {
+      expect(
+        Math.abs(fit.cells[i] - widest.cells[i]),
+        `track ${i} is a FIXED track and must not move with the window: ${fit.cells[i]} at ${fit.viewport}px vs ${widest.cells[i]} at ${widest.viewport}px`,
+      ).toBeLessThanOrEqual(1)
+    }
+  }
+  const buyerGrowth = widest.cells[BUYER_TRACK] - narrowest.cells[BUYER_TRACK]
+  expect(
+    Math.abs(buyerGrowth - rowGrowth),
+    `the Buyer track must absorb ALL of the row's growth: it took ${buyerGrowth}px of the row's ${rowGrowth}px between ${narrowest.viewport}px and ${widest.viewport}px`,
+  ).toBeLessThanOrEqual(1)
+  await testInfo.attach('approvals-grid-sweep.json', {
+    body: JSON.stringify(sweep, null, 2),
+    contentType: 'application/json',
+  })
+
+  // --- A07-2: select individually, arm, confirm -------------------------------------------
+  // INDIVIDUALLY. `approvals-select-all` would also tick the seeded rows -- see this test's
+  // header for why that is unrecoverable -- and it would take untickedNumber with it,
+  // collapsing the selection-binding control below.
+  for (const number of approveNumbers) {
+    await approvalRowByNumber(page, number).getByLabel(selectRowLabel(number), { exact: true }).check()
+  }
+  const bar = page.getByTestId('approvals-bulk-bar')
+  await expect(bar).toBeVisible()
+  // This run's OWN selection, not a fixture-volume count.
+  await expect(bar).toContainText(`${approveNumbers.length} selected on this page`)
+
+  await page.getByTestId('approvals-bulk-submit').click()
+  // Arming renders the confirm section INSIDE the same bar -- never a modal ([no-modal]).
+  await expect(bar).toContainText(`Approve ${approveNumbers.length} invoices?`)
+  const confirm = page.getByTestId('approvals-bulk-confirm')
+  await expect(confirm).toBeVisible()
+  await confirm.click()
+
+  // Per-item, never a headline count: a count cannot say WHICH invoice was refused. The
+  // outcome is matched EXACTLY -- 'Not approved' contains 'Approved' as a substring.
+  const results = page.getByTestId('approvals-results')
+  await expect(results).toBeVisible()
+  await expect(results.getByTestId('approval-result-row')).toHaveCount(approveNumbers.length)
+  for (const number of approveNumbers) {
+    const resultRow = results.getByTestId('approval-result-row').filter({ has: page.getByText(number, { exact: true }) })
+    await expect(resultRow, `${number} must appear exactly once in the results panel`).toHaveCount(1)
+    await expect(resultRow.getByText('Approved', { exact: true }), `${number} must have been approved`).toBeVisible()
+  }
+
+  // --- A07-3: the refetch is the affirmation ---------------------------------------------
+  // Nothing is optimistic -- list.run() after settle is what removes these rows. The
+  // unticked row is what makes this a NARROWING rather than an emptying: it proves the
+  // list rung re-rendered with content and that only the ticked rows were sent.
+  for (const number of approveNumbers) {
+    await expect(approvalRowByNumber(page, number), `${number} was approved and must leave the queue`).toHaveCount(0)
+  }
+  await expect(page.getByTestId('approvals-list'), 'the refetched queue still renders its remaining rows').toBeVisible()
+  await expect(
+    approvalRowByNumber(page, untickedNumber),
+    `${untickedNumber} was never ticked and must still be awaiting approval`,
+  ).toBeVisible()
+  // The panel is gated on `results !== null` ALONE, outside every `state ===` rung, so it
+  // survives the refetch that nulls list.data (G-04-D). That placement is the claim.
+  await expect(results, 'the results panel must survive the refetch that removed the rows').toBeVisible()
+
+  // The same three facts at the WIRE, where a client-side removal cannot reach them. The
+  // DOM assertions above are what the user sees; this is what the server did.
+  const queuedAfter = await awaitingNumbers(token)
+  for (const number of approveNumbers) {
+    expect(queuedAfter.has(number), `${number} must have left the server's awaiting_approval set, not just the DOM`).toBe(false)
+  }
+  expect(queuedAfter.has(untickedNumber), `${untickedNumber} must still be awaiting approval on the server`).toBe(true)
+
+  // A07-7
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

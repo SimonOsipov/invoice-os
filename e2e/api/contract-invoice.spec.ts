@@ -1357,6 +1357,13 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         const rows = body.invoices as Record<string, unknown>[]
         for (const row of rows) {
           expect('approval' in row, `row ${row.id} should carry the approval key`).toBe(true)
+          // APPR-12-09 (A09-13): the approve pair rides every row too, and the REJECT
+          // pair must NOT (U5a). `in`, not a truthiness read: an omitted key and an
+          // explicit false are different answers on a permission flag.
+          expect('can_approve' in row, `row ${row.id} should carry can_approve`).toBe(true)
+          expect('approve_blocked_reason' in row, `row ${row.id} should carry approve_blocked_reason`).toBe(true)
+          expect('can_reject' in row, `row ${row.id} must NOT carry can_reject`).toBe(false)
+          expect('reject_blocked_reason' in row, `row ${row.id} must NOT carry reject_blocked_reason`).toBe(false)
         }
 
         const armedRow = rows.find((r) => r.id === invoiceId)
@@ -1365,9 +1372,23 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         expect(approval, 'an armed invoice carries an approval object').not.toBeNull()
         expect(approval?.run_state, 'the newest run of an armed invoice is open').toBe('open')
 
+        // The deployed wire agrees with itself: ONE approvalGate call feeds both, so the
+        // same invoice read two ways cannot answer differently. An all-false pair would
+        // agree vacuously, so the allowed value is asserted too.
+        const detail = await approveFlags(invoiceId, token)
+        expect(armedRow?.can_approve, 'list and detail must agree on can_approve').toBe(detail.can_approve)
+        expect(armedRow?.approve_blocked_reason, 'list and detail must agree on the refusal').toBe(
+          detail.approve_blocked_reason,
+        )
+        expect(armedRow?.can_approve, 'a staffed admin on an open run can decide from the list too').toBe(true)
+        expect(armedRow?.approve_blocked_reason, 'an allowed gate names no refusal').toBeNull()
+
         const unarmedRow = rows.find((r) => r.id === unarmed.id)
         expect(unarmedRow, 'the fresh draft should be on page 1').toBeDefined()
         expect(unarmedRow?.approval, 'a row with no run carries an explicit null, never an omitted key').toBeNull()
+        // The polarity control for the armed row above.
+        expect(unarmedRow?.can_approve, 'a draft cannot be approved').toBe(false)
+        expect(typeof unarmedRow?.approve_blocked_reason, 'a refused gate names a sentence, not null').toBe('string')
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }

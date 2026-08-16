@@ -42,7 +42,7 @@ export interface SurfaceDef {
 }
 
 // The COMPLETE catalogue of app-SPA nav surfaces: every constant reachable from
-// Sidebar.tsx's navGroups (:111-123, 9 firm-mode items + 8 in-house), paired with the label
+// Sidebar.tsx's navGroups (10 firm-mode items + 8 in-house), paired with the label
 // glyphs.tsx renders for it (:63-110). Complete from this subtask onward, which is what lets
 // personas.test.ts's G3 assert equality against the live Sidebar rather than containment.
 //
@@ -105,12 +105,16 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     specToken: 'FIRM_PERSONA',
     tenantName: 'Okafor & Partners',
     // Every surface here is DRIVEN as the firm persona except NAV_RULES, which is only
-    // proven to EXIST for it (see its own note below). Approvals stays absent at every
-    // grade -- it is not a firm-mode surface at all. Each cell is added in the SAME commit
-    // as the spec that covers it, never ahead of one.
+    // proven to EXIST for it (see its own note below). Each cell is added in the SAME
+    // commit as the spec that covers it, never ahead of one.
     coverage: [
       { navConst: 'NAV_DASHBOARD', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_INVOICES', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
+      // APPR-12-05 (task-530): the firm CLIENT group gains Approvals directly after
+      // Invoices. Pointed at persona-surfaces.spec.ts's roster test, not
+      // invoice-surfaces.spec.ts (which does not cover it until task-532) -- the
+      // same-commit rule above without a forward reference (Decision V4).
+      { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_VALIDATION', grade: 'drives', coveredBy: 'e2e/topology/validation.spec.ts' },
       { navConst: 'NAV_CLIENTS', grade: 'drives', coveredBy: 'e2e/topology/portfolio.spec.ts' },
       // PERSONA-01-04: the firm policy LIST plus the per-workspace proof (delete a policy,
@@ -120,8 +124,8 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       { navConst: 'NAV_CUSTOMERS', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       // nav-only, and honestly so: persona-surfaces.spec.ts's roster test asserts the firm
       // sidebar's nav labels as an EXACT ordered list, so it pins that this surface is
-      // present (and that Approvals is absent) for this persona -- but it never opens it as
-      // the firm. Its firm-mode CONTENT is unproven, which is exactly what `nav-only` states.
+      // present for this persona -- but it never opens it as the firm. Its firm-mode
+      // CONTENT is unproven, which is exactly what `nav-only` states.
       // Three surfaces have left this group as specs arrived to drive them: NAV_WORKFLOWS,
       // then NAV_CUSTOMERS, then NAV_SETTINGS.
       { navConst: 'NAV_RULES', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },

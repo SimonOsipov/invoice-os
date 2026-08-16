@@ -44,6 +44,8 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     failure_kind: null,
     approval: null,
     rule_set_version: null,
+    can_approve: false,
+    approve_blocked_reason: null,
     ...over,
   }
 }
@@ -274,5 +276,29 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
     }, 'awaiting-approval renders exactly the draft row shape').toEqual(draftShape)
     // Stated absolutely too, so the pair cannot pass by both sprouting a tooltip.
     expect(awaitingBox.getAttribute('title'), '[selectable-parity-not-new-copy]').toBeNull()
+  })
+})
+
+// GREEN-BEFORE guard (APPR-12-06, task-531, A06-6) — the orchestrator's scope ruling on
+// GAP-1 keeps the missing-reason work OFF ReviewRow entirely: [selectable-parity-not-new-
+// copy] stands, and this checkbox's row sits in a shape RR-appr-2 already asserts parity
+// for. Extends RR-appr-2 (which pins `title` alone) to also pin `aria-describedby`, so a
+// future edit that harmonises ReviewRow with InvoicesList's new reason node reds HERE
+// first, not silently.
+describe('ReviewRow: the checkbox carries no reason at all (APPR-12-06, A06-6, [selectable-parity-not-new-copy])', () => {
+  it('A06-6: an awaiting-approval row still renders no title and no aria-describedby on the checkbox', () => {
+    const openRun: InvoiceApproval = {
+      run_state: 'open',
+      pending_ord: 1,
+      pending_role_title: 'Reviewer',
+      pending_holder_warn: false,
+      due_at: null,
+      overdue: false,
+    }
+    renderRow({ status: 'validated', approval: openRun })
+    const box = screen.getByTestId('review-select') as HTMLInputElement
+
+    expect(box.getAttribute('title'), '[selectable-parity-not-new-copy] must still hold').toBeNull()
+    expect(box.getAttribute('aria-describedby'), 'this subtask must not add aria-describedby to ReviewRow either').toBeNull()
   })
 })

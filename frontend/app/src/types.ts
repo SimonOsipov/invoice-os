@@ -167,7 +167,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
+export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals'
 
 // 'review' was added by M4-08-04 under its former name (plan B1/DRIFT-1) — one subtask
 // ahead of story §6's original assignment (M4-08-05), because wizardHeader's index-2
@@ -213,10 +213,6 @@ export type FieldMapRow = { erp: string; ubl: string }
 // Mappings edited in the field-mapping modal, by connector. A connector absent here
 // still renders its default mapping — only edited ones are held.
 export type ConnectorMappings = Partial<Record<ConnectorId, FieldMapRow[]>>
-
-// Sidebar nav ids — a superset of `View`: 'approvals' is a synthetic in-house-mode nav
-// item that `nav()` translates into `{ view: 'invoices', filter: 'Pending' }`.
-export type NavId = View | 'approvals'
 
 // The signed-in caller shown in the sidebar footer. `tenantName`/`verified` come from
 // the GET /v1/me round trip (M2-13): when verified, the tenant name was proven against
@@ -271,7 +267,6 @@ export type PlatformCtx = {
   armedField: string | null
   dragField: string | null
   selectedId: string | null
-  filter: string
   // The header search box's committed term (BUG-01-05) -- set on submit, read by
   // InvoicesList as the `q` server-side filter. `''` means unfiltered.
   invoiceQuery: string
@@ -408,8 +403,7 @@ export type PlatformCtx = {
   // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
 
-  nav: (id: NavId) => void
-  setFilter: (f: string) => void
+  nav: (id: View) => void
   setInvoiceQuery: (q: string) => void
   toggleSwitcher: () => void
   // [entity-picker] keystone: takes a real entity id, never an array index — the active

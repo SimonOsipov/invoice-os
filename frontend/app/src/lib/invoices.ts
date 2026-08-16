@@ -18,7 +18,7 @@
 // seam from M3-07-02, src/lib/authedFetch.ts), mirroring listEntities/updateEntity in
 // portfolio.ts. Gateway path prefix confirmed `${base}/api/invoice/v1/…`
 // (importApi.ts:248,263):
-// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?<any of the nine
+// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?<any of the eleven
 //                       filters>]`, resolving the ENVELOPE whole -- `{invoices,
 //                       pagination}`, not the bare array it used to unwrap (INVCR-01-08,
 //                       task-284 AC-1: `pagination.total` is what every review filter-pill
@@ -223,10 +223,20 @@ export interface InvoiceRecord {
   // omits it -- reviewBatch.ts), not followed. On a list row it is REQUIRED and
   // nullable: normaliseInvoiceRow makes that true for every row.
   approval: InvoiceApproval | null
+  // can_approve/approve_blocked_reason (APPR-12-09, U5) -- the ONE action pair the LIST
+  // wire carries, so the queue can gate its Approve control per row without a fetch each.
+  // Go emits both on listItem AND on getResponse from the SAME approvalGate call
+  // (handlers.go), so InvoiceDetailRecord inherits these two rather than redeclaring
+  // them. REQUIRED, never `?`: an optional key lets a consumer read undefined and fail
+  // OPEN. The REJECT pair stays detail-only (U5a) -- the queue has no reject action.
+  can_approve: boolean
+  approve_blocked_reason: string | null
 }
 
-// One list row's approval standing, mirroring approval.RowFacts (gate.go) field for
-// field. `due_at` is the wire's RFC3339 string, not a Date.
+// One list row's approval standing, mirroring approval.RowFacts (gate.go) key for key --
+// its six WIRE keys. RowFacts also carries PendingRoleKey, tagged json:"-" because it is
+// the list gate's input and not wire copy (APPR-12-09), so it has no member here.
+// `due_at` is the wire's RFC3339 string, not a Date.
 export interface InvoiceApproval {
   run_state: string
   pending_ord: number | null
@@ -261,10 +271,14 @@ export interface InvoiceApproval {
 // lets a consumer read `undefined` and treat "the server did not say" as an open
 // question, the fail-open shape [gates-on-the-wire] exists to remove. The same holds for
 // every action key added since, `can_approve`/`can_reject` and their reasons included
-// (APPR-08-06): all four are REQUIRED, never `?`. The ACTION FLAGS sit on
-// InvoiceDetailRecord ONLY, never InvoiceRecord -- TestListHandler_NoActionFlagKeys
-// keeps them off the list wire. `approval` runs the other way -- a list-only key
-// (APPR-08-08), Omitted here so it cannot be read off a detail record at all.
+// (APPR-08-06): all four are REQUIRED, never `?`.
+//
+// Most action flags are detail-only, and TestListHandler_NoActionFlagKeys keeps them off
+// the list wire. `can_approve`/`approve_blocked_reason` are the exception (APPR-12-09,
+// U5): both wires carry them, from one approvalGate call, so they are declared on
+// InvoiceRecord and INHERITED here -- never redeclared, or the two could drift.
+// `approval` runs the other way -- a list-only key (APPR-08-08), Omitted here so it
+// cannot be read off a detail record at all.
 export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   rule_set_version: number | null
   qr_png_base64: string | null
@@ -279,12 +293,10 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   // fail-closed convention as the four flags above.
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
-  // can_approve/can_reject and their reasons (APPR-08-06) -- same convention again.
-  // Approve and reject availability are IDENTICAL (one backend gate feeds both), so
-  // the two booleans always agree and the two reasons are the same string; they ship
-  // as two pairs because the screen renders two buttons, each needing its own slot.
-  can_approve: boolean
-  approve_blocked_reason: string | null
+  // can_reject/reject_blocked_reason (APPR-08-06) -- same convention again. Approve and
+  // reject availability are IDENTICAL (one backend gate feeds both), so these always
+  // agree with the inherited can_approve pair; they ship separately because the screen
+  // renders two buttons, each needing its own slot.
   can_reject: boolean
   reject_blocked_reason: string | null
 }
@@ -307,8 +319,8 @@ export interface StatusChange {
   changed_at: string
 }
 
-// listInvoices's nine filters (ListFilter, invoice.go:200-217; ListHandler,
-// handlers.go:349-451). All nine AND together server-side, and EVERY one is optional:
+// listInvoices's eleven filters (ListFilter, invoice.go:200-217; ListHandler,
+// handlers.go:349-451). All eleven AND together server-side, and EVERY one is optional:
 // an absent option emits NO query param, so `listInvoices(af, base, {})` is byte-identical
 // to the pre-INVCR-01 tenant-wide call.
 //
@@ -349,6 +361,10 @@ export interface ListInvoicesOptions {
   // pills (System Design §7's own table) -- see reviewBatch.ts's ReviewPill union,
   // which is unchanged by this field.
   keptAsIs?: boolean
+  // awaitingApproval (APPR-12-01) -- the Approvals screen's own filter, mirroring
+  // needsFix/keptAsIs's boolean shape. Server param shipped in APPR-08-07
+  // (ListFilter.AwaitingApproval); this is the first caller to send it.
+  awaitingApproval?: boolean
 }
 
 // The server's `q` cap is 200 UTF-8 BYTES, not JS string length (handlers.go
@@ -502,6 +518,7 @@ export async function listInvoices(
   if (opts.ruleKey) params.set('rule_key', opts.ruleKey)
   if (opts.q) params.set('q', opts.q)
   if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
+  if (opts.awaitingApproval === true) params.set('awaiting_approval', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
   const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
   // EVERY row, never just the first (ROW-6). The envelope itself rides through whole --
@@ -509,14 +526,16 @@ export async function listInvoices(
   return { ...res, invoices: res.invoices.map(normaliseInvoiceRow) }
 }
 
-// normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval`, the
-// same convention getInvoice applies to the action flags below: booleans via `=== true`
-// (never `?? false`), nullable fields via `?? null`, a missing or non-object `approval`
-// to `null` (never `undefined`). Exported so the specs can drive it directly.
+// normaliseInvoiceRow is listInvoices' per-row fail-closed pass over `approval` and the
+// approve pair, the same convention getInvoice applies to the action flags below:
+// booleans via `=== true` (never `?? false`), nullable fields via `?? null`, a missing or
+// non-object `approval` to `null` (never `undefined`). Exported so the specs can drive it
+// directly.
 //
-// `run_state` is passed through UNTOUCHED, like `pending_role_title`: both are backend
-// copy, and a `?? ''` here would be the SPA-authored fallback [gates-on-the-wire]
-// forbids. Every other key rides the spread byte-identical (ROW-5).
+// `run_state` is passed through UNTOUCHED, like `pending_role_title` and
+// `approve_blocked_reason`: all three are backend copy, and a `?? ''` here would be the
+// SPA-authored fallback [gates-on-the-wire] forbids. Every key other than these three
+// rides the spread byte-identical (ROW-5).
 export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
   const wire = raw.approval
   // An array is `typeof 'object'` too, and a consumer reading `.run_state` off one gets
@@ -532,7 +551,12 @@ export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
           overdue: wire.overdue === true,
         }
       : null
-  return { ...raw, approval }
+  return {
+    ...raw,
+    approval,
+    can_approve: raw.can_approve === true,
+    approve_blocked_reason: raw.approve_blocked_reason ?? null,
+  }
 }
 
 // The register's own page size (mirrors REVIEW_PAGE_SIZE, reviewBatch.ts:702). Stays
@@ -1169,6 +1193,26 @@ export function singleSubmitOutcome(
 // pinned decision, not an oversight: see A-sel-8..11.
 export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>): boolean {
   return row.status === 'validated' && row.approval?.run_state !== 'open'
+}
+
+// Total over the causes it can HONESTLY name, not over every non-selectable row. Only
+// draft/validated are pre-submission (legalTransitions, store.go), so only there does a
+// submit block have a cause worth naming: an open run names the approval cause, a draft
+// names the not-validated one. Every later status returns null and the row renders no
+// reason -- its STATUS PILL is already the explanation, and "validate it first" beside an
+// accepted invoice is simply false. No new SPA string for the silent statuses
+// ([gates-on-the-wire]); the two it does return come from skipReasonLabel (GAP-3), never a
+// fresh literal, so they stay byte-identical to the post-click skip panel. Never reads
+// `can_approve` (AC #7) -- this is the SUBMIT gate's reason. Pinned by A06-4's per-cell
+// truthfulness table over the whole status x run_state matrix.
+export function selectBlockedReason(row: Pick<InvoiceRecord, 'status' | 'approval'>): string | null {
+  if (isRowSelectable(row)) return null
+  // Before the approval check, not after: a post-submission row carrying a lingering open
+  // run would otherwise read "waiting on approval" beside an ACCEPTED pill -- the same lie
+  // in a different sentence.
+  if (row.status !== 'draft' && row.status !== 'validated') return null
+  if (row.approval?.run_state === 'open') return skipReasonLabel('awaiting_approval')
+  return skipReasonLabel('not_validated')
 }
 
 export function selectableIds(rows: InvoiceRecord[]): string[] {

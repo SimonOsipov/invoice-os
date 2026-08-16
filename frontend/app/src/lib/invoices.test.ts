@@ -66,6 +66,7 @@ import {
   revalidateInvoice,
   selectableIds,
   selectAllState,
+  selectBlockedReason,
   shouldFetchInvoices,
   shouldPollInvoice,
   shouldPollList,
@@ -174,6 +175,8 @@ const draftInvoice: InvoiceRecord = {
   failure_kind: null,
   approval: null,
   rule_set_version: null,
+  can_approve: false,
+  approve_blocked_reason: null,
 }
 
 // Approval fixtures (APPR-08-09). `run_state` is the only field the predicate reads;
@@ -544,6 +547,253 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
   })
 })
 
+// --- APPR-12-01 (task-525): awaitingApproval reaches the wire client --------
+describe('APPR-12-01: awaitingApproval reaches the wire client', () => {
+  it('A01-1: {awaitingApproval: true} emits awaiting_approval=true on the URL', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { awaitingApproval: true })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url).searchParams.get('awaiting_approval')).toBe('true')
+  })
+
+  it('A01-2: {awaitingApproval: false} emits nothing -- not even the literal "awaiting_approval=false" -- paired against a true leg so the absence is not a vacuous pass', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    // Positive leg first, combined with a filter that already works today: proves this
+    // test's harness DOES observe the param when it reaches the wire, so the false leg's
+    // absence below can't pass merely because nothing here is ever emitted.
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { awaitingApproval: true, entityId: 'e1' })
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('entity_id=e1')
+    expect(trueUrl).toContain('awaiting_approval=true')
+
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { awaitingApproval: false, entityId: 'e1' })
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).toContain('entity_id=e1')
+    expect(falseUrl).not.toContain('awaiting_approval')
+    expect(falseUrl).not.toContain('awaiting_approval=false')
+  })
+
+  it('A01-3 (green-before guard): listInvoices(af, base, {}) still emits no ? at all', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {})
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('?')
+  })
+
+  it('A01-4: {awaitingApproval:true, entityId, limit:25, offset:0} composes all four -- offset:0 included (the LIST-4 falsy trap)', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 25, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {
+      awaitingApproval: true,
+      entityId: 'e1',
+      limit: 25,
+      offset: 0,
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url).searchParams
+    expect(params.get('awaiting_approval')).toBe('true')
+    expect(params.get('entity_id')).toBe('e1')
+    expect(params.get('limit')).toBe('25')
+    expect(params.get('offset')).toBe('0')
+  })
+})
+
+// A01-5 (task-525, architect validation addendum Gap 2): the only oracle for a doc
+// comment is the source text itself -- TS interfaces are erased at runtime. Walks up/
+// out from live anchors (mirrors dashboard.test.ts's rollupBucketDoc) rather than fixed
+// line numbers, so edits elsewhere in the file can't silently move the scan off target.
+const NUMBER_WORDS: Record<string, number> = { nine: 9, ten: 10, eleven: 11, twelve: 12 }
+
+function numberWordsIn(text: string): number[] {
+  const matches = text.toLowerCase().match(/\b(nine|ten|eleven|twelve)\b/g) ?? []
+  return matches.map((w) => NUMBER_WORDS[w])
+}
+
+function readInvoicesSource(): string {
+  return readFileSync(fileURLToPath(new URL('./invoices.ts', import.meta.url)), 'utf8')
+}
+
+// Live field count of ListInvoicesOptions: walks from the interface declaration to its
+// closing brace, counting non-comment field-declaration lines.
+function listInvoicesOptionsFieldCount(): number {
+  const lines = readInvoicesSource().split('\n')
+  const start = lines.findIndex((l) => l.startsWith('export interface ListInvoicesOptions {'))
+  if (start < 0) return -1
+  let count = 0
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.trimStart().startsWith('}')) break
+    if (line.trimStart().startsWith('//')) continue
+    if (/^\s+\w+\??:/.test(line)) count++
+  }
+  return count
+}
+
+// The doc paragraph directly above the interface (:310-311 today) -- walks up from the
+// declaration while lines stay comments, same technique as dashboard.test.ts's
+// rollupBucketDoc.
+function listInvoicesOptionsDoc(): string {
+  const lines = readInvoicesSource().split('\n')
+  const anchor = lines.findIndex((l) => l.startsWith('export interface ListInvoicesOptions {'))
+  if (anchor < 0) return ''
+  const block: string[] = []
+  for (let i = anchor - 1; i >= 0 && lines[i].trimStart().startsWith('//'); i--) block.unshift(lines[i])
+  return block.join('\n')
+}
+
+// The file-header bullet for listInvoices (:21-28 today) -- a separate comment block
+// from the paragraph above the interface. Starts at the bullet's own line, stops at the
+// next `// - ` bullet or the first non-comment line.
+function listInvoicesHeaderBulletDoc(): string {
+  const lines = readInvoicesSource().split('\n')
+  const start = lines.findIndex((l) => l.includes('- listInvoices:'))
+  if (start < 0) return ''
+  const block: string[] = [lines[start]]
+  for (let i = start + 1; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart()
+    if (!trimmed.startsWith('//')) break
+    if (/^\/\/\s*-\s/.test(trimmed)) break
+    block.push(lines[i])
+  }
+  return block.join('\n')
+}
+
+describe('A01-5 control: the anchors locate the interface and both comment blocks', () => {
+  // Non-vacuity control (mirrors dashboard.test.ts's LIB-DOC control). Green today: if
+  // the real assertion below ever passes because a scan read the wrong region -- or
+  // nothing -- this control fails first and says so.
+  it('finds the interface, the header bullet, and the doc paragraph, each with a number-word present', () => {
+    expect(listInvoicesOptionsFieldCount(), 'lost anchor on the interface declaration').toBeGreaterThan(0)
+
+    const headerDoc = listInvoicesHeaderBulletDoc()
+    expect(headerDoc, 'lost anchor on the listInvoices header bullet').toContain('listInvoices')
+    expect(numberWordsIn(headerDoc).length, 'control needle: a number-word must be present today').toBeGreaterThanOrEqual(1)
+
+    const paraDoc = listInvoicesOptionsDoc()
+    expect(paraDoc, 'lost anchor on the doc paragraph above the interface').toContain('filters')
+    expect(
+      numberWordsIn(paraDoc).length,
+      'control needle: BOTH "nine filters" and "All nine" occurrences must be present today',
+    ).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('A01-5: both comment blocks name the live ListInvoicesOptions field count, not a stale one', () => {
+  it('the header bullet (:21) and every number-word in the doc paragraph (:310-311) equal the live field count', () => {
+    const liveCount = listInvoicesOptionsFieldCount()
+
+    const headerWords = numberWordsIn(listInvoicesHeaderBulletDoc())
+    expect(headerWords.length, 'the header bullet must still name a number-word').toBeGreaterThanOrEqual(1)
+    for (const n of headerWords) {
+      expect(n, 'the file-header bullet (:21) must name the live field count').toBe(liveCount)
+    }
+
+    const paraWords = numberWordsIn(listInvoicesOptionsDoc())
+    // Two occurrences today: "nine filters" (:310) and "All nine" (:311) -- both must be
+    // caught, not just the first one a naive find-and-replace would touch (architect
+    // validation addendum, Gap 1).
+    expect(paraWords.length, 'both "nine filters" and "All nine" occurrences must be present').toBeGreaterThanOrEqual(2)
+    for (const n of paraWords) {
+      expect(n, 'the doc paragraph above the interface (:310-311) must name the live field count').toBe(liveCount)
+    }
+  })
+})
+
+// --- APPR-12-01 (task-525) QA adversarial coverage --------------------------
+describe('APPR-12-01 adversarial (QA): awaitingApproval edge cases', () => {
+  it('QA-1: {awaitingApproval: undefined} explicitly passed emits nothing, same as absent', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { awaitingApproval: undefined })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('awaiting_approval')
+  })
+
+  it('QA-2: awaitingApproval + needsAttention + keptAsIs all emit independently -- none suppresses another', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { awaitingApproval: true, needsAttention: true, keptAsIs: true })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url).searchParams
+    expect(params.get('awaiting_approval')).toBe('true')
+    expect(params.get('needs_attention')).toBe('true')
+    expect(params.get('kept_as_is')).toBe('true')
+  })
+
+  it('QA-3: composes with status/needsFix and is unaffected by the options object\'s key declaration order', async () => {
+    const mockA = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    await listInvoices(af, base, { awaitingApproval: true, status: 'rejected', needsFix: true })
+    const [urlA] = mockA.mock.calls[0] as [string, RequestInit]
+
+    const mockB = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    // Same options, keys declared in the opposite order -- object key order must not
+    // change which params are emitted.
+    await listInvoices(af, base, { needsFix: true, status: 'rejected', awaitingApproval: true })
+    const [urlB] = mockB.mock.calls[0] as [string, RequestInit]
+
+    const paramsA = new URL(urlA).searchParams
+    const paramsB = new URL(urlB).searchParams
+    for (const key of ['awaiting_approval', 'status', 'needs_fix']) {
+      expect(paramsB.get(key), `${key} must match regardless of declaration order`).toBe(paramsA.get(key))
+    }
+    expect(paramsA.get('awaiting_approval')).toBe('true')
+    expect(paramsA.get('status')).toBe('rejected')
+    expect(paramsA.get('needs_fix')).toBe('true')
+  })
+})
+
 // --- APPR-08-08 (task-499): the per-row `approval` envelope -----------------
 //
 // ROW-1..5 drive `normaliseInvoiceRow` directly; ROW-6 goes through `listInvoices`,
@@ -626,13 +876,16 @@ describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pa
     }
   })
 
-  it('ROW-5: every non-approval key is left byte-identical -- the normaliser widens nothing else', () => {
+  it('ROW-5: every key the normaliser does not own is left byte-identical', () => {
     const wire = wireRow({ approval: { ...fullApproval, overdue: 1 } })
     const got = normaliseInvoiceRow(wire)
 
     expect(Object.keys(got).sort()).toEqual(Object.keys(wire).sort())
+    // The three the normaliser DOES own are skipped, not asserted byte-identical:
+    // A09-11 (APPR-12-09) owns the approve pair, ROW-1..4 own `approval`. Leaving them
+    // in this loop would make its claim silently false the moment either is touched.
     for (const key of Object.keys(wire)) {
-      if (key === 'approval') continue
+      if (key === 'approval' || key === 'can_approve' || key === 'approve_blocked_reason') continue
       expect(got[key as keyof InvoiceRecord], key).toEqual(wire[key as keyof InvoiceRecord])
     }
   })
@@ -698,6 +951,156 @@ describe('normaliseInvoiceRow (APPR-08-08): the list row fail-closed approval pa
     expect(malformed.approval?.pending_holder_warn).toBe(false)
     expect(malformed.approval?.due_at).toBeNull()
     expect(malformed.approval?.overdue).toBe(false)
+  })
+})
+
+// --- APPR-12-09 (task-526): can_approve / approve_blocked_reason on the LIST row ---
+//
+// A09-11 is the RUNTIME oracle for the two new normalisation lines; A09-12 is the tsc +
+// source oracle for the type having MOVED to InvoiceRecord rather than being copied.
+//
+// The hazard is stated verbatim at the APPROVE-1/2/3/5 block above: normaliseInvoiceRow
+// returns `{ ...raw, approval }` and `raw` is already typed InvoiceRecord, so OMITTING
+// either new line COMPILES and tsc reports nothing. There is no list-side equivalent of
+// APPROVE-1/2/3/5 today -- ROW-2 hardcodes pending_holder_warn/overdue and ROW-4 loops
+// three approval sub-keys, so neither reaches these two. This block is that equivalent,
+// and DELETING either normalisation line reds it.
+
+// approveFlagsOn reads the two keys off a row without depending on InvoiceRecord already
+// declaring them: A09-12 owns the type move, this block owns the runtime behaviour, and
+// keeping them separate means a tsc failure in one cannot mask the other.
+const approveFlagsOn = (row: InvoiceRecord) =>
+  row as unknown as { can_approve: unknown; approve_blocked_reason: unknown }
+
+// The OLDER-SERVER wire: both keys absent, not null. Written as a delete rather than an
+// omission so it stays honest once draftInvoice itself carries them.
+const rowWithoutApproveKeys = (): InvoiceRecord => {
+  const clone: Record<string, unknown> = { ...draftInvoice }
+  delete clone.can_approve
+  delete clone.approve_blocked_reason
+  return clone as unknown as InvoiceRecord
+}
+
+describe('normaliseInvoiceRow (APPR-12-09): the list row fails CLOSED on can_approve', () => {
+  it('A09-11a: can_approve is `=== true`, never truthy -- and a genuine true survives', () => {
+    // `1` survives `?? false` AND plain truthiness; the STRING "false" is truthy too.
+    // This flag gates the queue's Approve button, so anything not literally true denies.
+    for (const hostile of [undefined, null, 'true', 'false', 1, 0, {}, []]) {
+      const got = approveFlagsOn(normaliseInvoiceRow(wireRow({ can_approve: hostile })))
+      expect(got.can_approve, `can_approve=${JSON.stringify(hostile)}`).toBe(false)
+    }
+
+    // An ABSENT key must normalise to false and be PRESENT afterwards -- undefined is the
+    // fail-open shape [gates-on-the-wire] exists to remove.
+    const older = normaliseInvoiceRow(rowWithoutApproveKeys())
+    expect(approveFlagsOn(older).can_approve).toBe(false)
+    expect(approveFlagsOn(older).can_approve).not.toBeUndefined()
+    expect('can_approve' in older).toBe(true)
+
+    // The permissive control -- without it a hardcoded `false` passes everything above.
+    expect(approveFlagsOn(normaliseInvoiceRow(wireRow({ can_approve: true }))).can_approve).toBe(true)
+  })
+
+  it('A09-11b: approve_blocked_reason passes through byte-identically, null when absent', () => {
+    // approvalGate's rung 5 (internal/invoice/handlers.go), verbatim -- em dash U+2014.
+    // The SPA has no authority over this copy; a fallback authored here is the drift
+    // [gates-on-the-wire] forbids.
+    const reasonText =
+      "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+    const got = approveFlagsOn(
+      normaliseInvoiceRow(wireRow({ can_approve: false, approve_blocked_reason: reasonText })),
+    )
+    expect(got.approve_blocked_reason).toBe(reasonText)
+
+    for (const absent of [undefined, null]) {
+      const normalised = approveFlagsOn(normaliseInvoiceRow(wireRow({ approve_blocked_reason: absent })))
+      expect(normalised.approve_blocked_reason, `approve_blocked_reason=${JSON.stringify(absent)}`).toBeNull()
+      expect(normalised.approve_blocked_reason).not.toBeUndefined()
+    }
+
+    const older = normaliseInvoiceRow(rowWithoutApproveKeys())
+    expect(approveFlagsOn(older).approve_blocked_reason).toBeNull()
+    expect('approve_blocked_reason' in older).toBe(true)
+  })
+
+  it('A09-11c: each key reads its OWN wire key, never a neighbour', () => {
+    // A normalisation line copied from its neighbour and half-edited is the likeliest way
+    // these two go wrong, and tsc cannot see it (APPROVE-7's argument, list side).
+    const got = approveFlagsOn(
+      normaliseInvoiceRow(
+        wireRow({ can_approve: true, approve_blocked_reason: 'a stale reason the server still sent' }),
+      ),
+    )
+    expect(got.can_approve).toBe(true)
+    expect(got.approve_blocked_reason).toBe('a stale reason the server still sent')
+  })
+})
+
+// interfaceLines returns one interface's declaration lines from invoices.ts, comments and
+// blanks stripped. Anchored on the `export interface` line and the closing brace at column
+// zero, so edits elsewhere in the file cannot move the scan off target (A01-5's idiom).
+function interfaceLines(name: string): string[] {
+  const lines = readInvoicesSource().split('\n')
+  const start = lines.findIndex((l) => l.startsWith(`export interface ${name} `) || l.startsWith(`export interface ${name}{`))
+  if (start < 0) return []
+  const out: string[] = []
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].startsWith('}')) break
+    const trimmed = lines[i].trim()
+    if (!trimmed || trimmed.startsWith('//')) continue
+    out.push(trimmed)
+  }
+  return out
+}
+
+const fieldNamesOf = (name: string): string[] =>
+  interfaceLines(name).map((l) => l.split(':')[0].replace('?', '').trim())
+
+describe('APPR-12-09 A09-12: the approve pair MOVED to InvoiceRecord, it was not duplicated', () => {
+  it('control: both interfaces are located and still carry their own anchors', () => {
+    // Non-vacuity needle (A01-5's control idiom): if either scan below reads the wrong
+    // region -- or nothing -- this fails first and says so.
+    expect(fieldNamesOf('InvoiceRecord'), 'lost anchor on InvoiceRecord').toContain('approval')
+    expect(fieldNamesOf('InvoiceDetailRecord'), 'lost anchor on InvoiceDetailRecord').toContain('qr_png_base64')
+    // U5a: the REJECT pair stays detail-only, so it is also the control proving the
+    // "absent from InvoiceDetailRecord" assertions below are about the approve pair
+    // specifically and not about an empty scan.
+    expect(fieldNamesOf('InvoiceDetailRecord')).toContain('can_reject')
+    expect(fieldNamesOf('InvoiceDetailRecord')).toContain('reject_blocked_reason')
+  })
+
+  it('both keys are declared on InvoiceRecord, REQUIRED and nullable-typed', () => {
+    const lines = interfaceLines('InvoiceRecord')
+    // REQUIRED, never `?`: an optional key lets a consumer read undefined and treat "the
+    // server did not say" as an open question (invoices.ts's own rule for every action key).
+    expect(lines, 'can_approve must be declared on InvoiceRecord, without `?`').toContain('can_approve: boolean')
+    expect(lines, 'approve_blocked_reason must be declared on InvoiceRecord, without `?`').toContain(
+      'approve_blocked_reason: string | null',
+    )
+  })
+
+  it('InvoiceDetailRecord INHERITS them and no longer redeclares them', () => {
+    const detail = fieldNamesOf('InvoiceDetailRecord')
+    expect(detail, 'can_approve must be inherited via Omit<InvoiceRecord,\'approval\'>, not redeclared').not.toContain(
+      'can_approve',
+    )
+    expect(detail, 'approve_blocked_reason must be inherited, not redeclared').not.toContain('approve_blocked_reason')
+  })
+
+  it('tsc: the two keys are reachable off InvoiceRecord and off InvoiceDetailRecord alike', () => {
+    // Pick<> over a key the interface does not declare is a COMPILE error, so this row is
+    // the typecheck half of the move -- red under `pnpm typecheck` until the keys land.
+    const onBase: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_reason'> = {
+      can_approve: false,
+      approve_blocked_reason: null,
+    }
+    const onDetail: Pick<InvoiceDetailRecord, 'can_approve' | 'approve_blocked_reason'> = {
+      can_approve: true,
+      approve_blocked_reason: null,
+    }
+    expect(onBase.can_approve).toBe(false)
+    expect(onBase.approve_blocked_reason).toBeNull()
+    expect(onDetail.can_approve).toBe(true)
   })
 })
 
@@ -2447,6 +2850,97 @@ describe('isRowSelectable over the whole status x run_state surface (APPR-08-09,
   })
 })
 
+// RED specs (APPR-12-06, task-531, Stage 2.5/Mode A) — selectBlockedReason is the pure
+// helper the register/review checkboxes read to name WHY a row can't be selected for
+// submit. Built on skipReasonLabel(batchSubmitReason*) (GAP-3), never a fresh literal, so
+// the pre-click reason stays byte-identical to the post-click skip panel. Every spec below
+// fails on the stub's thrown `not implemented`, the correct RED reason.
+describe('selectBlockedReason (APPR-12-06)', () => {
+  it('A06-1: a selectable row (validated, no open run) has a null reason', () => {
+    expect(selectBlockedReason({ ...draftInvoice, status: 'validated', approval: null })).toBeNull()
+  })
+
+  it("A06-2: an open-run row names the approval cause, byte-identical to skipReasonLabel('awaiting_approval')", () => {
+    const row = { ...draftInvoice, status: 'validated' as InvoiceStatus, approval: OPEN_RUN }
+    expect(selectBlockedReason(row)).toBe(skipReasonLabel('awaiting_approval'))
+  })
+
+  it("A06-3: a draft row -- the only pre-submission status that isn't validated -- names the status cause, byte-identical to skipReasonLabel('not_validated')", () => {
+    const row = { ...draftInvoice, status: 'draft' as InvoiceStatus, approval: null }
+    expect(selectBlockedReason(row)).toBe(skipReasonLabel('not_validated'))
+  })
+
+  // A06-4 asserted TOTALITY only (`not.toBeNull()`), which is why it stayed green while
+  // ten deployed rows read "Not validated — validate it first" beside an ACCEPTED pill.
+  // It now asserts TRUTHFULNESS: the EXACT expected string, or null, for all 35 cells.
+  it('A06-4: truthfulness — every cell of the status x run_state matrix returns the exact reason it can honestly name, or null', () => {
+    const AWAITING = skipReasonLabel('awaiting_approval')
+    const NOT_VALIDATED = skipReasonLabel('not_validated')
+    const runStates = ['none', 'open', 'approved', 'rejected', 'cancelled'] as const
+    type RunKey = (typeof runStates)[number]
+
+    // Written out cell by cell ON PURPOSE. An expectation derived from a predicate would
+    // just re-run the implementation and pass on whatever it does. Only the two
+    // pre-submission statuses may carry a sentence; the five later ones say nothing,
+    // because the status pill beside them is already the answer.
+    const EXPECTED: Record<InvoiceStatus, Record<RunKey, string | null>> = {
+      draft: { none: NOT_VALIDATED, open: AWAITING, approved: NOT_VALIDATED, rejected: NOT_VALIDATED, cancelled: NOT_VALIDATED },
+      validated: { none: null, open: AWAITING, approved: null, rejected: null, cancelled: null },
+      queued: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      submitted: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      accepted: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      rejected: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+      failed: { none: null, open: null, approved: null, rejected: null, cancelled: null },
+    }
+
+    const statuses = Object.keys(EXPECTED) as InvoiceStatus[]
+    let cells = 0
+    for (const status of statuses) {
+      for (const run of runStates) {
+        cells++
+        const candidate = { ...draftInvoice, status, approval: run === 'none' ? null : { ...OPEN_RUN, run_state: run } }
+        expect(selectBlockedReason(candidate), `status=${status} run_state=${run}`).toBe(EXPECTED[status][run])
+      }
+    }
+
+    // The table must cover the whole union, not a subset someone trimmed: 7 statuses x 5
+    // run states. A shrunken EXPECTED would otherwise pass by simply asserting less.
+    expect(statuses).toHaveLength(7)
+    expect(cells).toBe(35)
+  })
+
+  // The defect stated as its own spec, so the guard survives a future rewrite of A06-4's
+  // table: no post-submission row may be told to validate itself.
+  it('A06-4b: no post-submission status ever returns the not-validated sentence, at any run_state', () => {
+    const postSubmission: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of postSubmission) {
+      for (const approval of [null, OPEN_RUN, APPROVED_RUN]) {
+        const candidate = { ...draftInvoice, status, approval }
+        expect(
+          selectBlockedReason(candidate),
+          `status=${status} run_state=${approval?.run_state ?? 'null'} -- a row already past submission cannot be "validated first"`,
+        ).toBeNull()
+      }
+    }
+  })
+})
+
+describe('selectBlockedReason does not read can_approve (APPR-12-06, AC #7)', () => {
+  it('A06-12: a validated row with no open run stays SELECTABLE with a NULL reason even when blocked from approving (can_approve:false + a non-null approve_blocked_reason) — guards against harmonising the submit and approve gates', () => {
+    const candidate: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'validated',
+      approval: null,
+      can_approve: false,
+      approve_blocked_reason: 'Waiting on the Finance Lead seat',
+    }
+
+    expect(isRowSelectable(candidate), 'the submit gate must stay independent of the approve gate').toBe(true)
+    expect(selectBlockedReason(candidate)).toBeNull()
+  })
+})
+
 describe('live-refresh predicates', () => {
   it('I-poll-1: isInFlight is true for exactly queued and submitted', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
@@ -2887,7 +3381,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 27 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 29 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -2930,6 +3424,11 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // list already held 26 (rule_set_version was added without updating it); the
       // count is 27 now and the title says so.
       'approval',
+      // APPR-12-09 (task-526): +2 -- the approve pair is a listItem sibling too, and the
+      // ONE action pair both wires carry. The reject pair stays detail-only (U5a), so it
+      // must NOT appear here.
+      'can_approve',
+      'approve_blocked_reason',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]
@@ -4333,6 +4832,7 @@ describe('fetchAllInvoices forwards every filter, not just entityId (QA adversar
       q: 'acme',
       importBatchIds: ['batch-1', 'batch-2'],
       keptAsIs: true,
+      awaitingApproval: true,
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -4346,6 +4846,7 @@ describe('fetchAllInvoices forwards every filter, not just entityId (QA adversar
       expect(params.get('q')).toBe('acme')
       expect(params.getAll('import_batch_id')).toEqual(['batch-1', 'batch-2'])
       expect(params.get('kept_as_is')).toBe('true')
+      expect(params.get('awaiting_approval')).toBe('true')
     }
   })
 })

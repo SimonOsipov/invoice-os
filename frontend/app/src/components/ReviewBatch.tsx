@@ -78,7 +78,7 @@ interface ReviewShellData {
   // The footer's "N kept as-is" count (INVCR-01-15, D6, task-291) -- a real server
   // total (`ListFilter.KeptAsIs`, store.go), never an arithmetic derivation of the
   // other totals ([filters-are-server-side]). NOT one of the four toolbar pills
-  // (System Design §7's own table only names All/Needs a fix/Ready to submit/Queued),
+  // (System Design §7's own table only names All/Needs a fix/Validated/Queued),
   // so it is fetched here rather than through reviewQuery/filterToQuery.
   keptTotal: number
 }

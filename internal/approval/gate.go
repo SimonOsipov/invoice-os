@@ -1,6 +1,6 @@
 package approval
 
-// The transmit gate: the pure predicate plus the three tx-scoped reads that feed it.
+// The transmit gate: the pure predicate plus the four tx-scoped reads that feed it.
 // RLS is the only tenant scope here (store.go:27-30) -- TestGateFile_NoTenantIdPredicate
 // scans this file for a per-tenant column predicate and fails on one.
 
@@ -22,6 +22,9 @@ type GateFacts struct {
 }
 
 // RowFacts is one invoice row's approval standing, for the list.
+//
+// PendingRoleKey is the list gate's input, never wire copy: json:"-" keeps the six
+// public keys unchanged (TestListItem_ApprovalObjectHasExactlySixKeys).
 type RowFacts struct {
 	RunState          string     `json:"run_state"`
 	PendingOrd        *int       `json:"pending_ord"`
@@ -29,6 +32,7 @@ type RowFacts struct {
 	PendingHolderWarn bool       `json:"pending_holder_warn"`
 	DueAt             *time.Time `json:"due_at"`
 	Overdue           bool       `json:"overdue"`
+	PendingRoleKey    *string    `json:"-"`
 }
 
 // TransmitClear reports whether an invoice may pass into queued.
@@ -137,28 +141,58 @@ func GateFactsTx(ctx context.Context, tx pgx.Tx, invoiceID, subject string) (Gat
 	}
 	gf.PendingStepOrd = &stepOrd
 
-	// AXIS 2, copied from decideTx (decision.go:183-193) with its roleKey != nil guard, so
-	// the gate and the decision refuse on the same rung
-	// (TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding). AXIS 1 is absent: the
-	// caller's own access role is internal/invoice's rung, and this already implies it.
+	// AXIS 2, with decideTx's roleKey != nil guard, so the gate and the decision refuse on
+	// the same rung (TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding). AXIS 1 is
+	// absent: the caller's own access role is internal/invoice's rung, and this implies it.
 	if roleKey != nil {
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (
-			   SELECT 1
-			     FROM workflow_roles wr
-			     JOIN workflow_role_members wrm ON wrm.workflow_role_id = wr.id
-			     JOIN memberships m ON m.user_id = wrm.user_id
-			    WHERE wr.key = $1
-			      AND wr.deleted_at IS NULL
-			      AND wrm.user_id = $2
-			      AND m.status = 'active'
-			      AND m.role IN ('admin', 'reviewer')
-			 )`, *roleKey, subject,
-		).Scan(&gf.CallerHoldsRole); err != nil {
+		held, err := HeldRoleKeysTx(ctx, tx, []string{*roleKey}, subject)
+		if err != nil {
 			return GateFacts{}, err
 		}
+		gf.CallerHoldsRole = held[*roleKey]
 	}
 	return gf, nil
+}
+
+// HeldRoleKeysTx answers, for a SET of workflow-role keys, which ones subject holds as an
+// active approver -- AXIS 2 of the refusal ladder, resolved for a whole list page in one
+// statement (TestHeldRoleKeysTx_OneStatementRegardlessOfKeyAndHolderCount).
+//
+// An unheld, soft-deleted or unknown key is simply absent from the map, which reads false
+// in Go: absence and an explicit false are the same answer. decideTx (decision.go) keeps
+// its own byte-identical copy of this query -- it is the WRITE path, separately
+// mutation-pinned, and deliberately not re-pointed here.
+func HeldRoleKeysTx(ctx context.Context, tx pgx.Tx, keys []string, subject string) (map[string]bool, error) {
+	held := make(map[string]bool, len(keys))
+
+	// No DISTINCT: workflow_roles_tenant_key_uq and workflow_role_members_tenant_role_user_uq
+	// make a duplicate key impossible within one tenant, and RLS is the tenant scope.
+	rows, err := tx.Query(ctx,
+		`SELECT wr.key
+		   FROM workflow_roles wr
+		   JOIN workflow_role_members wrm ON wrm.workflow_role_id = wr.id
+		   JOIN memberships m ON m.user_id = wrm.user_id
+		  WHERE wr.key = ANY($1::text[])
+		    AND wr.deleted_at IS NULL
+		    AND wrm.user_id = $2
+		    AND m.status = 'active'
+		    AND m.role IN ('admin', 'reviewer')`, keys, subject)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		held[key] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return held, nil
 }
 
 // RowFactsTx reads the list-row approval standing of a set of invoice ids. An id with no
@@ -248,6 +282,7 @@ func RowFactsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]RowFac
 		// A NULL key is skipped, never run through resolveHolder, which would answer
 		// "Role no longer exists" (read_model.go:183-186).
 		if p.roleKey != nil {
+			rf.PendingRoleKey = p.roleKey
 			title := roleTitle(exists[*p.roleKey], titles[*p.roleKey])
 			rf.PendingRoleTitle = &title
 			rf.PendingHolderWarn = resolveHolder(exists[*p.roleKey], holders[*p.roleKey]).Warn

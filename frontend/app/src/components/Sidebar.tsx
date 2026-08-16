@@ -36,7 +36,7 @@ import type { PlatformCtx } from '../types'
 type SidebarNavItem = NavDef & { badge?: string | null }
 
 export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
-  const { user, mode, active, clients, switcherOpen, view, filter } = ctx
+  const { user, mode, active, clients, switcherOpen, view } = ctx
   const isFirm = mode === 'firm'
   const isInhouse = !isFirm
   const orgLabel = isFirm ? 'OKAFOR & PARTNERS' : active.short.toUpperCase() + ' · FINANCE'
@@ -108,9 +108,16 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // not change them and listing them under the CLIENT scope header would mislabel a
   // firm-wide dataset as the switched-to client's. This is a deliberate deviation from
   // the prototype, whose `clientScoped` array includes `workflows`.
+  //
+  // NAV_APPROVALS is client-scoped too, because the rule keys on what the ROWS are
+  // scoped to, not on what drives them: the queue lists INVOICES, and those are
+  // client-scoped, even though a firm-wide policy decides what enters it. Its SLOT
+  // deliberately differs by mode — firm puts it directly after Invoices, in-house keeps
+  // the prototype's slot after Rules. Do not "align" the two: persona-surfaces.spec.ts
+  // asserts each roster as an exact ordered list.
   const navGroups: { key: string; label: string; scope: string; items: SidebarNavItem[] }[] = isFirm
     ? [
-        { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_RULES, NAV_CUSTOMERS, NAV_REPORTS] },
+        { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, approvalsItem, NAV_VALIDATION, NAV_RULES, NAV_CUSTOMERS, NAV_REPORTS] },
         { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_SETTINGS] },
       ]
     : [
@@ -121,8 +128,9 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
           items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_WORKFLOWS, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_SETTINGS],
         },
       ]
+  // `let`, never `const`: e2e/personas.test.ts G3 slices this file between the
+  // `const navGroups` and `let activeNav` anchors, and A05-9 guards the binding.
   let activeNav: string = view === 'create' || view === 'detail' ? 'invoices' : view
-  if (isInhouse && view === 'invoices' && filter === 'Pending') activeNav = 'approvals'
 
   return (
     <aside className="pf-sidebar" style={{ width: 252, flex: 'none', background: 'var(--bg-2)', borderRight: '1px solid var(--line-1)', display: 'flex', flexDirection: 'column' }}>

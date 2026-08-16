@@ -35,16 +35,27 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// wantArmedRowFacts is what an armInvoice'd fixture must answer: an open run whose
-// single kind='approval' step is pending at ord 0 on a live, staffed role.
-// seedOneStepActivePolicyTenant sets no sla_hours, so due_at is NULL and overdue false.
+// wantArmedRowFacts is what an armInvoice'd fixture must answer when read from the DB:
+// an open run whose single kind='approval' step is pending at ord 0 on a live, staffed
+// role. seedOneStepActivePolicyTenant sets no sla_hours, so due_at is NULL and overdue
+// false.
 func wantArmedRowFacts() approval.RowFacts {
 	ord := 0
 	title := "Finance Lead"
+	key := "finance-lead"
 	return approval.RowFacts{
 		RunState: "open", PendingOrd: &ord, PendingRoleTitle: &title,
-		PendingHolderWarn: false, DueAt: nil, Overdue: false,
+		PendingHolderWarn: false, DueAt: nil, Overdue: false, PendingRoleKey: &key,
 	}
+}
+
+// wantArmedRowFactsOnTheWire is the same standing after a round trip: PendingRoleKey is
+// json:"-" (gate.go), so a decoded value can never carry it. Kept separate from the
+// DB-read expectation above rather than merged -- one of the two would have to be wrong.
+func wantArmedRowFactsOnTheWire() approval.RowFacts {
+	want := wantArmedRowFacts()
+	want.PendingRoleKey = nil
+	return want
 }
 
 // --- AC-6: the flag gates enforcement, not visibility -----------------------
@@ -72,11 +83,11 @@ func TestStoreRowFacts_DoesNotConsultApprovalsEnforced(t *testing.T) {
 	on := NewStore(app, WithApprovalsEnforced(true))
 	off := NewStore(app, WithApprovalsEnforced(false))
 
-	gotOn, err := on.RowFacts(fx.ctx, []string{fx.invID})
+	gotOn, _, err := on.RowFacts(fx.ctx, []string{fx.invID})
 	if err != nil {
 		t.Fatalf("RowFacts (flag on): %v", err)
 	}
-	gotOff, err := off.RowFacts(fx.ctx, []string{fx.invID})
+	gotOff, _, err := off.RowFacts(fx.ctx, []string{fx.invID})
 	if err != nil {
 		t.Fatalf("RowFacts (flag off): %v", err)
 	}
@@ -124,7 +135,7 @@ func TestStoreRowFacts_IsTenantScopedByRLS(t *testing.T) {
 	store := NewStore(app, WithApprovalsEnforced(true))
 
 	// Control: tenant A sees its own armed invoice.
-	own, err := store.RowFacts(fx.ctx, []string{fx.invID})
+	own, _, err := store.RowFacts(fx.ctx, []string{fx.invID})
 	if err != nil {
 		t.Fatalf("RowFacts (owning tenant): %v", err)
 	}
@@ -136,7 +147,7 @@ func TestStoreRowFacts_IsTenantScopedByRLS(t *testing.T) {
 
 	// The leak this test exists for: a foreign tenant asking about A's id by value.
 	otherTenant := seedTenant(t, super, "APPR-08-08-RLS other tenant")
-	leaked, err := store.RowFacts(tenantCtx(otherTenant), []string{fx.invID})
+	leaked, _, err := store.RowFacts(tenantCtx(otherTenant), []string{fx.invID})
 	if err != nil {
 		t.Fatalf("RowFacts (foreign tenant): %v (want an empty map, never an error -- an error is an existence oracle)", err)
 	}
@@ -157,7 +168,7 @@ func TestStoreRowFacts_TenantlessContextErrors(t *testing.T) {
 	_, app := dbTestPools(t)
 	store := NewStore(app, WithApprovalsEnforced(true))
 
-	got, err := store.RowFacts(context.Background(), []string{uuid.NewString()})
+	got, _, err := store.RowFacts(context.Background(), []string{uuid.NewString()})
 	if err == nil {
 		t.Fatalf("RowFacts(no identity) = %+v, nil -- want an error; answering an empty map would read as \"no invoice has a run\" and downgrade the 500 to a silent 200", got)
 	}
@@ -185,7 +196,7 @@ func TestStoreRowFacts_EmptyIDSlice(t *testing.T) {
 	store := NewStore(app, WithApprovalsEnforced(true))
 
 	// Control: this tenant really does have an armed invoice to over-return.
-	armed, err := store.RowFacts(fx.ctx, []string{fx.invID})
+	armed, _, err := store.RowFacts(fx.ctx, []string{fx.invID})
 	if err != nil {
 		t.Fatalf("RowFacts (control): %v", err)
 	}
@@ -201,7 +212,7 @@ func TestStoreRowFacts_EmptyIDSlice(t *testing.T) {
 		{"nil slice", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := store.RowFacts(fx.ctx, tc.ids)
+			got, _, err := store.RowFacts(fx.ctx, tc.ids)
 			if err != nil {
 				t.Fatalf("RowFacts(%s): %v, want no error", tc.name, err)
 			}
@@ -264,8 +275,8 @@ func TestListHandler_ApprovalFactsIgnoreTheEnforcementFlag(t *testing.T) {
 	if err := json.Unmarshal(rawOn, &gotOn); err != nil {
 		t.Fatalf("decode approval (flag on) %q: %v", string(rawOn), err)
 	}
-	if !reflect.DeepEqual(gotOn, wantArmedRowFacts()) {
-		t.Errorf("approval (flag on) = %+v, want %+v", gotOn, wantArmedRowFacts())
+	if !reflect.DeepEqual(gotOn, wantArmedRowFactsOnTheWire()) {
+		t.Errorf("approval (flag on) = %+v, want %+v", gotOn, wantArmedRowFactsOnTheWire())
 	}
 
 	if string(rawOn) != string(rawOff) {

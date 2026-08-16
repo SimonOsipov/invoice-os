@@ -200,16 +200,18 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
   return page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
 }
 
-// submitSelected(): clicks batch-submit and waits for the POST .../invoices/submissions
-// response. Unlike a list GET, this URL is unambiguous -- a poll tick never POSTs
-// ([waitForResponse-on-the-list-is-poll-ambiguous] only applies to the list's GET) -- so
-// this needs none of that care. Shared by every submit click below: the happy-path
-// test's only submit, and the reject test's initial submit and its resubmit leg.
+// submitSelected(): arms via batch-submit, confirms via batch-submit-confirm, then waits
+// for the POST .../invoices/submissions response. Unlike a list GET, this URL is
+// unambiguous -- a poll tick never POSTs ([waitForResponse-on-the-list-is-poll-ambiguous]
+// only applies to the list's GET) -- so this needs none of that care. Shared by every
+// submit click below: the happy-path test's only submit, and the reject test's initial
+// submit and its resubmit leg.
 async function submitSelected(page: Page): Promise<void> {
   const resp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions'),
   )
   await page.getByTestId('batch-submit').click()
+  await page.getByTestId('batch-submit-confirm').click()
   await resp
 }
 

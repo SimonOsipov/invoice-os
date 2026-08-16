@@ -1248,6 +1248,21 @@ describe('ReviewBatch captions name validation, not entitlement (APPR-16-01, AC-
     expect(line).toContain('3 kept as-is')
   })
 
+  it('A16-1f: reviewFooterSummary stays grammatical at all-zero totals', () => {
+    const zero = { allTotal: 0, cleanTotal: 0, queuedTotal: 0, failingTotal: 0, keptTotal: 0 }
+    const line = (reviewFooterSummary as unknown as (t: typeof zero) => string)(zero)
+
+    expect(line).toBe('0 invoices stored · 0 validated · 0 queued for transmission · 0 awaiting a fix · 0 kept as-is')
+  })
+
+  it('A16-1g: reviewFooterSummary keeps the five-clause · separator at large totals', () => {
+    const big = { allTotal: 1_234_567, cleanTotal: 999_999, queuedTotal: 42, failingTotal: 100_000, keptTotal: 7 }
+    const line = (reviewFooterSummary as unknown as (t: typeof big) => string)(big)
+
+    expect(line).toBe('1234567 invoices stored · 999999 validated · 42 queued for transmission · 100000 awaiting a fix · 7 kept as-is')
+    expect(line.split(' · ')).toHaveLength(5)
+  })
+
   it("A16-1c: ReviewBatch.tsx source contains no 'ready to submit', in any case", () => {
     const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
     const source = readFileSync(srcPath, 'utf8')
@@ -1263,6 +1278,22 @@ describe('ReviewBatch captions name validation, not entitlement (APPR-16-01, AC-
     // scan apart from an accidental read of the wrong file (LIB-SCAN-1's own URL).
     expect(source.length).toBeGreaterThan(0)
     expect(source, 'lost anchor on ReviewBatch.tsx').toContain('export function ReviewBatch(')
+  })
+
+  // AC-1's "not authored inline" is a DIFFERENT claim than "no forbidden substring":
+  // a hand-typed inline literal with the SAME wording as the export passes A16-1c/1d
+  // and every runtime render check, because the rendered text is identical either way.
+  // Only a source-level check on the call site itself can tell "imported" from
+  // "retyped by hand".
+  it('A16-1e: both call sites are wired to the exports, not retyped inline', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    expect(source).toContain('caption={TILE_CAPTION_VALID}')
+    expect(source).not.toMatch(/caption=["']Passed every rule\.?["']/)
+
+    expect(source).toContain('{reviewFooterSummary(')
+    expect(source).not.toContain('invoices stored')
   })
 
   it('A16-1d: the pill and the captions no longer contradict each other', () => {

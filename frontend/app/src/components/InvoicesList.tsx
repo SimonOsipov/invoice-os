@@ -63,6 +63,7 @@ import {
   type InvoiceListResponse,
   type InvoiceRecord,
 } from '../lib/invoices'
+import { BULK_COPY, bulkBarView, bulkPhaseReducer, type BulkPhase } from '../lib/reviewBatch'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import type { PlatformCtx } from '../types'
 import { Pager } from './Pager'
@@ -158,6 +159,20 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   )
 
   const [selected, setSelected] = useState<string[]>([])
+  const [phase, setPhase] = useState<BulkPhase>('idle')
+
+  // Every phase change goes through the pure reducer and bails on identity (ApprovalsView.tsx:135-140).
+  function toPhase(action: Parameters<typeof bulkPhaseReducer>[1]): boolean {
+    const next = bulkPhaseReducer(phase, action)
+    if (next === phase) return false
+    setPhase(next)
+    return true
+  }
+
+  // ANY selection change invalidates an armed confirmation (ApprovalsView.tsx:142-152).
+  function disarm() {
+    toPhase({ type: 'cancel' })
+  }
 
   // A new search term resets the page and clears the selection
   // ([paging-clears-the-selection]), mirroring the inline reset the needs-attention
@@ -166,6 +181,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   useEffect(() => {
     setOffset(0)
     setSelected([])
+    disarm()
   }, [ctx.invoiceQuery])
 
   // Drops any selected id that fell out of `rows` (paged/filtered away) or is no longer
@@ -181,9 +197,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       const next = pruneSelection(sel, rows)
       return next.length === sel.length ? sel : next
     })
+    // Not disarm(): this is the one observer of a rows change with no user event behind
+    // it (a live-refresh tick can shrink the eligible set mid-arm) -- inline, matching
+    // ApprovalsView.tsx:126-128 literally.
+    setPhase((p) => (p === 'submitting' ? p : 'idle'))
   }, [rows])
 
   const allState = selectAllState(selected, rows)
+  const bar = bulkBarView(selected, rows, phase, loading)
 
   // One result item plus the invoice number it resolves to, captured from `rows` at
   // submit time (see submitSelection) rather than looked up live at render time: the
@@ -192,13 +213,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // UUID until the refetch lands.
   const [results, setResults] = useState<{ item: BatchSubmitResultItem; invoiceNumber: string }[] | null>(null)
   const [submitError, setSubmitError] = useState<ApiError | null>(null)
-  const [submitting, setSubmitting] = useState(false)
   // Ref guard mirrors App.tsx's `reqInFlight` (App.tsx:106-113): React batches state
-  // updates, so a fast double-click on Submit can fire this handler a second time before
-  // `submitting` re-renders the button as `disabled`. The ref is checked and set
-  // synchronously, before anything async, so it can't lose that race the way `disabled`
-  // alone would. `submitting` stays alongside it purely to drive the visible
-  // disabled/opacity state — mutating a ref never triggers a re-render on its own.
+  // updates, so a fast double-click on confirm can fire this handler a second time before
+  // `phase` re-renders the confirm button as disabled. Checked and set synchronously,
+  // before anything async, so it can't lose that race the way `disabled` alone would.
   const submitInFlight = useRef(false)
 
   // M5-09-07 live-refresh poll ([poll-interval-2s]): gated on any row being in-flight
@@ -237,6 +255,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   function toggleAll() {
     setSelected(allState === 'all' ? [] : selectableIds(rows))
     setSubmitError(null) // stale error from a previous, now-superseded selection
+    disarm()
   }
 
   // Every submit mints a brand-new idempotency key (never reused across clicks or
@@ -263,12 +282,21 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // independent constants that nothing ties together), and selection never spanning pages.
   async function submitSelection() {
     if (base == null) return
+    // Recomputed here, not read off the render-scoped `bar` above: this must see the
+    // eligible set AS OF THE CLICK, not the one captured by the closure the render that
+    // last drew the confirm button created (InvoicesList.test.tsx A16-3b/guard-order).
+    const ids = bulkBarView(selected, rows, phase, loading).eligible
+    // Order matters (AC-15): base -> ids.length === 0 -> toPhase(confirm) -> submitInFlight.
+    // Arming confirm BEFORE this bail would strand the bar in 'submitting' with nothing
+    // left to fire `settled` (ReviewInvoicesTab.tsx:304-310 names this bug).
+    if (ids.length === 0) return
+    // Identity IS "do nothing": no arm ⇒ no request (AC-1/AC-2).
+    if (!toPhase({ type: 'confirm' })) return
     if (submitInFlight.current) return
     submitInFlight.current = true
-    setSubmitting(true)
     setSubmitError(null)
     try {
-      const res = await submitInvoices(ctx.authedFetch, base, selected, newIdempotencyKey())
+      const res = await submitInvoices(ctx.authedFetch, base, ids, newIdempotencyKey())
       // submitInvoices returns `res.results` unguarded (invoices.test.ts SUB-3 pins a
       // malformed 2xx body resolving to `undefined` and names this call site as the
       // guard) — normalize once, here, so `results !== null` below can never see
@@ -293,7 +321,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       setSubmitError(toApiError(err))
     } finally {
       submitInFlight.current = false
-      setSubmitting(false)
+      // Functional: runs after an await, so the closure's `phase` is stale. Fires from
+      // the finally ONLY, never the end of the try (AC-6) -- matches ApprovalsView.tsx:178
+      // / InvoiceDetail.tsx:448, not ReviewInvoicesTab.tsx's end-of-try/catch split.
+      setPhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
     }
   }
 
@@ -317,6 +348,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             setNeedsAttention((v) => !v)
             setOffset(0)
             setSelected([])
+            disarm()
           }}
           data-testid="needs-attention-toggle"
           className="pf-chip"
@@ -410,6 +442,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               onGo={(o) => {
                 setOffset(o)
                 setSelected([])
+                disarm() // defensive: the bar can't be visible under an empty page, but keep phase honest
               }}
               testId="invoices-pager"
             />
@@ -419,24 +452,69 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'ready' && list.data != null && fresh && rows.length > 0 && (
         <>
-          {selected.length > 0 && (
-            <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{selected.length} selected on this page</span>
-              <button
-                data-testid="batch-submit"
-                onClick={submitSelection}
-                disabled={submitting}
-                className="v2-btn v2-btn-primary pf-btn"
-                style={{ height: 34, fontSize: 13, opacity: submitting ? 0.5 : 1, cursor: submitting ? 'not-allowed' : 'pointer' }}
-              >
-                {submitting ? 'Submitting…' : 'Submit'}
-              </button>
+          {/* Two stages in ONE bar, the confirm a borderTop-separated section inside it --
+              never a modal ([no-modal]), mirroring ApprovalsView.tsx:231-310. The outer
+              wrapper carries the testid; its first child is the action row (arm, or
+              cancel+confirm), its later child (phase !== 'idle') is the confirm block. */}
+          {bar.visible && (
+            <div
+              data-testid="batch-submit-summary"
+              style={{ display: 'flex', flexDirection: 'column', gap: 9, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{bar.countLabel}</span>
+                {phase === 'idle' ? (
+                  <button
+                    data-testid="batch-submit"
+                    onClick={() => toPhase({ type: 'arm' })}
+                    disabled={!bar.canSubmit}
+                    className="v2-btn v2-btn-primary pf-btn"
+                    style={{ height: 34, fontSize: 13, opacity: bar.canSubmit ? 1 : 0.5, cursor: bar.canSubmit ? 'pointer' : 'not-allowed' }}
+                  >
+                    {bar.submitLabel}
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {/* Visibly disabled while submitting: submitInvoices takes no AbortSignal
+                        (AbortSignal/navigation freeze is APPR-16-04's, D-05), nothing left to cancel. */}
+                    <button
+                      data-testid="batch-submit-cancel"
+                      onClick={disarm}
+                      disabled={phase === 'submitting'}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{ height: 34, fontSize: 13, opacity: phase === 'submitting' ? 0.45 : 1, cursor: phase === 'submitting' ? 'not-allowed' : 'pointer' }}
+                    >
+                      {BULK_COPY.cancel}
+                    </button>
+                    <button
+                      data-testid="batch-submit-confirm"
+                      onClick={() => void submitSelection()}
+                      disabled={!bar.canSubmit}
+                      className="v2-btn v2-btn-primary pf-btn"
+                      style={{ height: 34, fontSize: 13, opacity: bar.canSubmit ? 1 : 0.5, cursor: bar.canSubmit ? 'pointer' : 'not-allowed' }}
+                    >
+                      {phase === 'submitting' ? BULK_COPY.sending : bar.confirmLabel}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {phase !== 'idle' && (
+                <div style={{ borderTop: '1px solid var(--line-1)', paddingTop: 9 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{bar.confirmPrompt}</div>
+                  <p style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: '4px 0 0', lineHeight: 1.55 }}>{bar.confirmDetail}</p>
+                </div>
+              )}
             </div>
           )}
 
-          {selected.length > 0 && submitError && (
+          {/* NO onRetry: retrying is arming and confirming again in the bar above
+              (ReviewInvoicesTab.tsx:541-547's precedent) -- a one-click retry would either
+              fire unconfirmed or, since confirm-from-idle is the reducer's identity arm,
+              do nothing at all. */}
+          {bar.visible && submitError && (
             <div style={{ marginBottom: 14 }}>
-              <ErrorState error={submitError} onRetry={submitSelection} />
+              <ErrorState error={submitError} />
             </div>
           )}
 
@@ -497,6 +575,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       e.stopPropagation()
                       setSelected((sel) => toggleSelection(sel, r.id))
                       setSubmitError(null) // stale error from a previous, now-superseded selection
+                      disarm()
                     }}
                   />
                   <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
@@ -554,6 +633,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               onGo={(o) => {
                 setOffset(o)
                 setSelected([])
+                disarm()
               }}
               testId="invoices-pager"
             />

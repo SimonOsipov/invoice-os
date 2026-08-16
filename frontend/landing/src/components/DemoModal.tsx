@@ -20,6 +20,7 @@ import {
   type DemoFormErrors,
 } from './demoForm'
 import { resolveSubmitTarget, submitDemoLead, type DemoLead } from '../hubspot'
+import { trackedHubSpotSubmit } from '../analytics'
 
 function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -180,7 +181,9 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       else if (submit) await submit(lead)
       else {
         const target = resolveSubmitTarget(window.location.hostname)
-        if (target) await submitDemoLead(target, lead, CONSENT_TEXT)
+        // Wrapped here, not around the shared success transition below: this is the
+        // only branch of the four that reaches HubSpot.
+        if (target) await trackedHubSpotSubmit(() => submitDemoLead(target, lead, CONSENT_TEXT))
         else await runStub()
       }
       if (mounted.current) setDemoStep('success')

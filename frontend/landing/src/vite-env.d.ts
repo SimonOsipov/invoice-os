@@ -17,6 +17,9 @@ interface ImportMetaEnv {
   // The GUID of that portal's Book-a-Demo form. Both this and the portal id must be
   // set, or the gate stays closed.
   readonly VITE_HUBSPOT_FORM_GUID?: string
+  // The GA4 measurement id. Unset means measurementId() returns null and the gate stays
+  // closed (see analytics.ts), so a PR or fork build reports nothing.
+  readonly VITE_GA_MEASUREMENT_ID?: string
 }
 
 interface ImportMeta {

@@ -7,7 +7,10 @@
 // really carry the current offset) was unverified. The poll-tick call-shape source-scan
 // lives in InvoicesList.pollShape.test.ts (node env) -- jsdom rewrites import.meta.url
 // off file: scheme, breaking readFileSync(fileURLToPath(...)) here.
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -1481,5 +1484,100 @@ describe('InvoicesList: batch-submit arms before it confirms (APPR-16-03, task-5
     assertNoOutcomeClaim('idle')
     fireEvent.click(screen.getByTestId('batch-submit'))
     assertNoOutcomeClaim('armed')
+  })
+})
+
+// --- APPR-16-04 (task-536, Mode A) -- RED specs for the register's own in-flight pager
+// freeze (AC-6/AC-7) and AC-8's regression guard. A16-4e/f (unmount-abort, the approvals
+// pager) live in ApprovalsView.test.tsx -- this component has no fan-out to abort
+// (submitSelection is one request, AC #9), so only the freeze applies here.
+describe('A16-4: the register pager freezes for the whole in-flight window and states why (APPR-16-04)', () => {
+  it('A16-4g: the register pager is disabled for the whole in-flight window, and re-enabled even when the request rejects', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const b = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/submissions')) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      // limit:1/offset:1/total:3 -- both Prev and Next start enabled absent `busy`, so
+      // the freeze under test is the OR clause, not an edge-of-set disable.
+      return Promise.resolve(listResponse([a, b], { limit: 1, offset: 1, total: 3 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    const pager = () => screen.getByTestId('invoices-pager')
+    const prevBtn = () => within(pager()).getByText('← Previous').closest('button') as HTMLButtonElement
+    const nextBtn = () => within(pager()).getByText('Next →').closest('button') as HTMLButtonElement
+    expect(prevBtn().disabled, 'both buttons must start enabled -- an edge-of-set disable would make this test vacuous').toBe(false)
+    expect(nextBtn().disabled).toBe(false)
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm')) // now submitting, POST held pending
+
+    // `loading` is false here (list.data is still the settled page) -- only `phase ===
+    // 'submitting'` can be freezing the pager in this window.
+    expect(prevBtn().disabled, 'the pager must freeze for the whole in-flight window').toBe(true)
+    expect(nextBtn().disabled).toBe(true)
+
+    resolvers[0](submitErrorResponse(500, 'boom')) // the rejection path
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+    expect(nextBtn().disabled, 'the pager must re-enable in the finally, even on the rejection path').toBe(false)
+    expect(prevBtn().disabled).toBe(false)
+  })
+
+  it('A16-4h: the frozen pager states its reason (D-25); InvoicesList.tsx carries no nav-locking machinery (D-31)', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/submissions')) return new Promise<MockResponse>((resolve) => resolvers.push(resolve))
+      return Promise.resolve(listResponse([a], { limit: 1, offset: 1, total: 3 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm')) // now submitting, POST held pending
+
+    const pager = screen.getByTestId('invoices-pager')
+    const buttons = within(pager).getAllByRole('button') as HTMLButtonElement[]
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const btn of buttons) {
+      expect(btn.disabled, 'the pager -- the one control the freeze disables -- must be disabled while submitting').toBe(true)
+      expect(btn.title, 'a disabled control must state WHY (D-25/Q6-Q10), never a bare disabled attribute').toBeTruthy()
+    }
+
+    // D-31 regression guard: only the pager freezes. Not itself expected to flip red-to-
+    // green from this subtask's own work (neither line exists today, for or against) --
+    // it exists so a LATER subtask cannot quietly reintroduce the declined nav lock.
+    const source = readFileSync(path.join(process.cwd(), 'src/components/InvoicesList.tsx'), 'utf8')
+    expect(source, 'no PlatformCtx.navLocked reference belongs in InvoicesList.tsx').not.toMatch(/navLocked/)
+    expect(source, "InvoicesList.tsx must never call ctx.nav -- navigation stays Sidebar/App.tsx's job").not.toMatch(/ctx\.nav\(/)
+    expect(source, 'InvoicesList.tsx must never call ctx.switchClient -- the entity switcher stays live').not.toMatch(/ctx\.switchClient\(/)
+
+    resolvers[0](submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]))
+    await waitFor(() => expect(screen.queryByTestId('batch-submit-confirm')).toBeNull())
+  })
+})
+
+describe('A16-4i: submitSelection carries no AbortSignal, and says why (D-05, APPR-16-04)', () => {
+  it('submitSelection() takes zero params, and a comment ahead of it names the one-request reason', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/components/InvoicesList.tsx'), 'utf8')
+
+    const declIdx = source.indexOf('async function submitSelection(')
+    expect(declIdx, 'submitSelection must still exist').toBeGreaterThan(-1)
+    expect(
+      source.slice(declIdx, declIdx + 40),
+      'submitSelection is one request, not a loop -- there are no rows to check a signal between',
+    ).toMatch(/^async function submitSelection\(\)/)
+
+    const preamble = source.slice(Math.max(0, declIdx - 700), declIdx)
+    expect(preamble, 'a comment must say WHY submitSelection takes no AbortSignal -- omission alone is not documentation').toMatch(/\bsignal\b/i)
+    expect(preamble, 'the stated reason must be single request vs. a loop, not a vague deferral').toMatch(/\b(one|single)\s+request\b/i)
   })
 })

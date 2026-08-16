@@ -61,3 +61,16 @@ describe('Pager: testId prop defaults to review-pager and drives data-testid (AC
     expect(callSite, 'must not pass an explicit testId prop').not.toMatch(/testId=/)
   })
 })
+
+// APPR-16-04 (task-536, D-28 carve-out): ReviewInvoicesTab's pager is deliberately left
+// un-frozen -- it has no component test file, so widening its `busy` here would trace to
+// no acceptance criterion. Not itself a red-today check (this call site is untouched by
+// this subtask either way); it guards against a LATER subtask quietly widening it.
+describe("Pager: ReviewInvoicesTab.tsx's call site stays out of the in-flight freeze (D-28 carve-out)", () => {
+  it('busy is still busy={loading} alone -- no phase/submitting term, no reason prop', () => {
+    const callSite = /<Pager[\s\S]*?\/>/.exec(tabSrc)?.[0]
+    expect(callSite, 'exactly one <Pager ... /> call site').toBeTruthy()
+    expect(callSite, "D-28: ReviewInvoicesTab's pager must stay busy={loading} alone, never widened").toMatch(/busy=\{loading\}/)
+    expect(callSite, 'no reason prop belongs on the one call site D-28 carves out').not.toMatch(/reason=/)
+  })
+})

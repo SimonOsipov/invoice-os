@@ -717,3 +717,115 @@ describe('ApprovalsView.tsx source: no inline copy -- everything routes through 
     expect(violations, 'ApprovalsView.tsx must author no inline copy; the ruled-on exception moves into APPROVALS_COPY, it is not allowlisted').toEqual([])
   })
 })
+
+// --- APPR-16-04 (task-536, Mode A) -- RED specs for approveInvoices' optional 5th
+// AbortSignal param (AC-1..AC-4). The row-boundary check must sit at the TOP of each
+// loop iteration, before the request fires -- never mid-request. A16-4b is the one spec
+// that would catch a signal wrongly forwarded into the inner authedFetch call, not just
+// the absence of a boundary check.
+// Calls approveInvoices with a 5th arg through a permissive cast, not a direct call --
+// today's 4-param signature makes a direct 5-arg call a tsc error (TS2554), and Mode A
+// prefers a RED that fails on the VALUE, not the type (G4's precedent, this same file).
+// Same function reference at runtime either way.
+type ApproveInvoicesWithSignal = (
+  authedFetch: ReturnType<typeof createAuthedFetch>,
+  base: string,
+  ids: string[],
+  onProgress: ((result: ApproveResult, index: number) => void) | undefined,
+  signal: AbortSignal | undefined,
+) => Promise<ApproveResult[]>
+const approveInvoicesWithSignal = approveInvoices as unknown as ApproveInvoicesWithSignal
+
+describe('approveInvoices: optional AbortSignal, checked at the row boundary only (APPR-16-04, task-536)', () => {
+  it('A16-4a: aborting after row 2 of 5 leaves 2 sent and issues no third request', async () => {
+    const fetchMock = stubFetch(() => okResponse())
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const controller = new AbortController()
+
+    const results = await approveInvoicesWithSignal(
+      af,
+      base,
+      ['a', 'b', 'c', 'd', 'e'],
+      (_result, index) => {
+        if (index === 1) controller.abort()
+      },
+      controller.signal,
+    )
+
+    expect(fetchMock, 'row 3 must never be requested once the row boundary sees the abort').toHaveBeenCalledTimes(2)
+    expect(results).toHaveLength(2)
+    expect(results.map((r) => r.id)).toEqual(['a', 'b'])
+  })
+
+  it('A16-4b: abort never cancels an in-flight request -- it settles, then row 4 is never sent', async () => {
+    const resolvers = new Map<string, (v: MockResponse) => void>()
+    // Mirrors what a REAL fetch does with a forwarded AbortSignal (rejects the pending
+    // call on 'abort') -- this is what makes the test catch a signal wrongly plumbed
+    // into authedFetch, not merely the absence of a row-boundary check.
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const id = idFromUrl(url)
+      return new Promise<MockResponse>((resolve, reject) => {
+        resolvers.set(id, resolve)
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const controller = new AbortController()
+
+    const resultPromise = approveInvoicesWithSignal(af, base, ['a', 'b', 'c', 'd'], undefined, controller.signal)
+    resultPromise.catch(() => {})
+
+    await waitUntil(() => resolvers.has('a'))
+    resolvers.get('a')!(okResponse())
+    await waitUntil(() => resolvers.has('b'))
+    resolvers.get('b')!(okResponse())
+    await waitUntil(() => resolvers.has('c'))
+
+    controller.abort() // row c is in flight right now -- must not be cancelled mid-wire
+    expect(fetchMock, 'aborting must not touch the in-flight fetch call').toHaveBeenCalledTimes(3)
+    resolvers.get('c')!(okResponse())
+
+    // Bounded flush, never an indefinite wait: a correct implementation settles
+    // resultPromise within a few microtask hops without row d ever being requested. A
+    // buggy one that keeps looping WOULD request row d -- and nothing in this test ever
+    // resolves it -- so this assertion (not an unconditional `await resultPromise`) is
+    // what has to catch that, or the buggy path hangs instead of failing cleanly.
+    for (let i = 0; i < 30 && fetchMock.mock.calls.length < 4; i++) await Promise.resolve()
+    expect(fetchMock, 'row 4 must never be requested once the boundary sees the abort').toHaveBeenCalledTimes(3)
+
+    const results = await resultPromise
+    expect(results, "row c's own response is still recorded, not discarded mid-wire").toHaveLength(3)
+    expect(results.map((r) => r.id)).toEqual(['a', 'b', 'c'])
+    expect(results[2]).toEqual({ id: 'c', ok: true })
+  })
+
+  it('A16-4c: an already-aborted signal issues zero requests', async () => {
+    const fetchMock = stubFetch(() => okResponse())
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const controller = new AbortController()
+    controller.abort()
+
+    const results = await approveInvoicesWithSignal(af, base, ['a', 'b'], undefined, controller.signal)
+
+    expect(fetchMock).toHaveBeenCalledTimes(0)
+    expect(results).toEqual([])
+  })
+
+  it('A16-4d: no signal behaves exactly as today -- 5 requests, 5 results, a per-item failure does not abort the run', async () => {
+    // Backward compatibility for a caller that omits the signal is mechanical once it's
+    // optional and 5th (Stage 1 architecture note) -- this arity check is the one part
+    // of "no behaviour change for existing callers" that can actually go red before the
+    // param exists; the behaviour itself is provably unchanged either way.
+    expect(approveInvoices.length, 'approveInvoices must gain the optional 5th signal param').toBe(5)
+
+    const fetchMock = stubFetch((url) => (idFromUrl(url) === 'c' ? errorResponse(409, 'closed') : okResponse()))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const results = await approveInvoices(af, base, ['a', 'b', 'c', 'd', 'e'])
+
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(results).toHaveLength(5)
+    expect(results.map((r) => r.ok)).toEqual([true, true, false, true, true])
+  })
+})

@@ -24,10 +24,10 @@ const NAV_LINKS: { label: string; href: string; shed?: string }[] = [
 
 const NAV_HREFS = NAV_LINKS.map((l) => l.href)
 
-// hrefPrefix: task-557 stub — accepted, not yet applied to any href (RED until wired).
 export function Nav({
   onSignIn,
   onBookDemo,
+  hrefPrefix = '',
 }: {
   onSignIn: () => void
   onBookDemo: () => void
@@ -114,7 +114,7 @@ export function Nav({
           alignItems: 'center',
         }}
       >
-        <a href="#top" style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg-1)' }}>
+        <a href={`${hrefPrefix}#top`} style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg-1)' }}>
           <BrandMark size={22} />
           <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: '-0.02em' }}>ASComply</span>
           <span
@@ -142,7 +142,7 @@ export function Nav({
             return (
               <a
                 key={l.href}
-                href={l.href}
+                href={`${hrefPrefix}${l.href}`}
                 // Not .ios-link: that rule's hover resolves to amber (the prototype's
                 // generic link behaviour, still what the footer wants). The nav's own
                 // state machine is teal-on-hover, teal-when-current.

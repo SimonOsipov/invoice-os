@@ -13,7 +13,9 @@ import { Developers } from './components/Developers'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
+import { Privacy } from './components/Privacy'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
+import { isPrivacyPath } from './route'
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
@@ -28,6 +30,7 @@ export default function App() {
     setDemoOpen(true)
   }
   const onSignIn = () => setSignInOpen(true)
+  const privacy = isPrivacyPath(window.location.pathname)
 
   // Page-level depth, deliberately outside Nav.tsx's scroll effect: that one owns the
   // nav indicator, and folding analytics in makes every nav change an analytics change.
@@ -70,17 +73,23 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} />
-      <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
-      <TrustStrip />
-      <Problem />
-      <Modules />
-      <HowItWorks />
-      <Compliance />
-      <Audience onBookDemo={book('audience')} />
-      <Developers />
-      <Pricing onBookDemo={book('pricing')} />
-      <DemoCta onBookDemo={book('demo_cta')} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} />
+      {privacy ? (
+        <Privacy />
+      ) : (
+        <>
+          <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
+          <TrustStrip />
+          <Problem />
+          <Modules />
+          <HowItWorks />
+          <Compliance />
+          <Audience onBookDemo={book('audience')} />
+          <Developers />
+          <Pricing onBookDemo={book('pricing')} />
+          <DemoCta onBookDemo={book('demo_cta')} />
+        </>
+      )}
       <Footer onBookDemo={book('footer')} />
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}

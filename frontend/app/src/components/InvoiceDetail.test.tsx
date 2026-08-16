@@ -2870,4 +2870,59 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(reasonEl?.textContent).toBe(S)
     expect(screen.getByText(S)).toBeTruthy()
   })
+
+  // QA-added (task-554, Mode B adversarial): HTML-significant characters in the reason
+  // survive to textContent unchanged -- React's own child-text escaping, not a bespoke
+  // sanitiser, so this pins that nothing mangles the wire string on the way to the DOM.
+  it('a reason with an ampersand, an em dash and a quote survives to the DOM unchanged', async () => {
+    const tricky = 'Blocked — "urgent" review needed & a second signer must confirm.'
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: tricky }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('approve-blocked-reason')
+    expect(reasonEl.textContent).toBe(tricky)
+  })
+
+  // QA-added (task-554, Mode B adversarial, defensive): Stage 1 confirmed can_approve and
+  // can_reject can never differ on the real wire (handlers.go:481-508 shares one
+  // canDecide/decideReason pair) -- this pins that the component still behaves sanely on a
+  // shape the type permits but the server never sends, not that the server sends it.
+  it('defensive: can_approve true with can_reject false and a reject-only reason does not crash, and Approve stays enabled', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(false)
+    expect(rejectBtn.disabled).toBe(true)
+  })
+
+  // QA-added (task-554, Mode B adversarial): D-49's accepted density cost -- the pair
+  // renders on EVERY status, terminal included. Nothing else in this file's task-554 suite
+  // pins the full union; a later narrowing (e.g. excluding 'accepted'/'rejected') would
+  // pass every other row here unnoticed without this loop.
+  it.each(ALL_STATUSES)('renders on a %s invoice (D-49 density cost)', async (status) => {
+    mockDetailFetch(detailRecord({ id: ID, status, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
+  })
+
+  // QA-added (task-554, Mode B adversarial): the two surfaces this story adds -- the
+  // decision pair here and ApprovalTrailCard (APPR-13-03) -- must agree on the same
+  // invoice. A disabled pair alongside an empty trail is a real, reachable state (no
+  // approval run yet), not a contradiction between the two.
+  it('both controls render disabled while the trail card shows its empty state, in agreement', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect(((await screen.findByTestId('detail-approve')) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(true)
+    expect(await screen.findByTestId('approval-trail-empty')).toBeTruthy()
+  })
 })

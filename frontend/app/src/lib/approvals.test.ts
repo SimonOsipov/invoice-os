@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError, type ApiFetchOptions } from '@invoice-os/api-client'
+
 import { createAuthedFetch } from './authedFetch'
 import {
   APPROVALS_COPY,
@@ -22,12 +24,17 @@ import {
   approvalSelectAllState,
   approvalsBarView,
   approveInvoices,
+  canRejectReason,
+  decideInvoice,
+  decisionBlockedReasons,
+  getInvoiceApprovalRun,
   isApprovableRow,
   listAwaitingApproval,
   pruneApprovalSelection,
   type ApproveResult,
 } from './approvals'
 import type { InvoiceApproval, InvoiceRecord, ListInvoicesOptions } from './invoices'
+import type { AuthedFetch } from './portfolio'
 
 interface MockResponse {
   ok: boolean
@@ -827,5 +834,243 @@ describe('approveInvoices: optional AbortSignal, checked at the row boundary onl
     expect(fetchMock).toHaveBeenCalledTimes(5)
     expect(results).toHaveLength(5)
     expect(results.map((r) => r.ok)).toEqual([true, true, false, true, true])
+  })
+})
+
+// --- APPR-13-01 (task-550, Mode A) -- RED specs for the approval-run wire mirror:
+// getInvoiceApprovalRun/decideInvoice (AC-3/AC-4) and the two pure reason helpers
+// (AC-2/AC-3), plus the three-way wire-mirror guard (AC-5/AC-6). The four wire types in
+// lib/approvals.ts are real and complete (a type carries no behaviour); the five
+// functions throw `new Error('not implemented')`. The wire-mirror rows below pin
+// already-complete static text (the types, and internal/approval/read_model.go +
+// e2e/api/client.ts, both untouched by this subtask) and so are expected to pass now --
+// only the function-behaviour rows (getInvoiceApprovalRun/decideInvoice/canRejectReason/
+// decisionBlockedReasons) are red on the stub throw.
+
+const GO_READ_MODEL_PATH = fileURLToPath(new URL('../../../../internal/approval/read_model.go', import.meta.url))
+const E2E_CLIENT_PATH = fileURLToPath(new URL('../../../../e2e/api/client.ts', import.meta.url))
+const LIB_APPROVALS_PATH = fileURLToPath(new URL('./approvals.ts', import.meta.url))
+
+// Struct-scoped extraction (D-46/AC-6): a file-wide tag regex would fold RunStep's own
+// json tags into Resolved's count and silently corrupt every floor -- this delimits each
+// struct body first, brace-balanced, then extracts keys only from within it.
+function goStructKeys(source: string, structName: string): string[] {
+  const body = new RegExp(`type\\s+${structName}\\s+struct\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const keys: string[] = []
+  for (const m of body.matchAll(/`json:"([^"]+)"`/g)) {
+    const key = m[1].split(',')[0]
+    if (key !== '-') keys.push(key)
+  }
+  return keys
+}
+
+// Same brace-balanced trick for a TS interface body, works for both the multi-line style
+// (e2e/api/client.ts) and a hypothetical single-line style without two code paths.
+function tsInterfaceKeys(source: string, interfaceName: string): string[] {
+  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const keys: string[] = []
+  for (const rawSeg of body.split(/[\n;]/)) {
+    const seg = rawSeg.trim()
+    if (!seg || seg.startsWith('//')) continue
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(seg)
+    if (m) keys.push(m[1])
+  }
+  return keys
+}
+
+// The comparator itself: symmetric-difference key names, [] means the two sets agree.
+// Exercised for real by the equality row below and proven non-trivial by the
+// planted-positive row -- it must be able to report a real mismatch, not just agree.
+function keySetDiff(a: string[], b: string[]): string[] {
+  const setA = new Set(a)
+  const setB = new Set(b)
+  const diff = new Set<string>()
+  for (const k of a) if (!setB.has(k)) diff.add(k)
+  for (const k of b) if (!setA.has(k)) diff.add(k)
+  return [...diff]
+}
+
+const WIRE_STRUCTS = [
+  { go: 'Resolved', ts: 'ApprovalResolved', floor: 2 },
+  { go: 'RunStep', ts: 'ApprovalRunStep', floor: 13 },
+  { go: 'RunDecision', ts: 'ApprovalRunDecision', floor: 6 },
+  { go: 'Run', ts: 'ApprovalRun', floor: 7 },
+] as const
+
+describe('wire mirror: Go read_model.go <-> lib/approvals.ts <-> e2e/api/client.ts (AC-5, AC-6)', () => {
+  // Needle and floor rows run BEFORE the equality row (D-46): a broken json-tag or
+  // interface-key regex yields {} for every source, and equality would otherwise pass
+  // vacuously on {} === {} === {}.
+  it('control needle: all three source files were actually read, not stubbed or empty', () => {
+    const goSource = readFileSync(GO_READ_MODEL_PATH, 'utf8')
+    const libSource = readFileSync(LIB_APPROVALS_PATH, 'utf8')
+    const e2eSource = readFileSync(E2E_CLIENT_PATH, 'utf8')
+
+    expect(goSource.length).toBeGreaterThan(0)
+    expect(goSource, 'lost anchor on read_model.go').toContain('func (r Run) MarshalJSON')
+
+    expect(libSource.length).toBeGreaterThan(0)
+    expect(libSource, 'lost anchor on lib/approvals.ts').toContain('export interface ApprovalRun')
+
+    expect(e2eSource.length).toBeGreaterThan(0)
+    expect(e2eSource, 'lost anchor on e2e/api/client.ts').toContain('getInvoiceApproval')
+  })
+
+  it('population FLOOR: the struct-scoped extractor produced a non-empty key set per struct per source', () => {
+    const goSource = readFileSync(GO_READ_MODEL_PATH, 'utf8')
+    const libSource = readFileSync(LIB_APPROVALS_PATH, 'utf8')
+    const e2eSource = readFileSync(E2E_CLIENT_PATH, 'utf8')
+
+    for (const { go, ts, floor } of WIRE_STRUCTS) {
+      expect(goStructKeys(goSource, go).length, `Go ${go} must clear its floor of ${floor}`).toBeGreaterThanOrEqual(
+        floor,
+      )
+      expect(
+        tsInterfaceKeys(libSource, ts).length,
+        `lib/approvals.ts ${ts} must clear its floor of ${floor}`,
+      ).toBeGreaterThanOrEqual(floor)
+      expect(
+        tsInterfaceKeys(e2eSource, ts).length,
+        `e2e/api/client.ts ${ts} must clear its floor of ${floor}`,
+      ).toBeGreaterThanOrEqual(floor)
+    }
+  })
+
+  it('three-way equality: every struct/interface key set agrees across all three sources (runs AFTER the floor row above, which is what makes this equality meaningful)', () => {
+    const goSource = readFileSync(GO_READ_MODEL_PATH, 'utf8')
+    const libSource = readFileSync(LIB_APPROVALS_PATH, 'utf8')
+    const e2eSource = readFileSync(E2E_CLIENT_PATH, 'utf8')
+
+    for (const { go, ts } of WIRE_STRUCTS) {
+      const goKeys = goStructKeys(goSource, go)
+      const libKeys = tsInterfaceKeys(libSource, ts)
+      const e2eKeys = tsInterfaceKeys(e2eSource, ts)
+
+      expect(keySetDiff(goKeys, libKeys), `${ts}: Go ${go} vs lib/approvals.ts`).toEqual([])
+      expect(keySetDiff(goKeys, e2eKeys), `${ts}: Go ${go} vs e2e/api/client.ts`).toEqual([])
+      expect(keySetDiff(libKeys, e2eKeys), `${ts}: lib/approvals.ts vs e2e/api/client.ts`).toEqual([])
+    }
+  })
+
+  it('planted-positive: the comparator can detect a real mismatch, not just agree', () => {
+    // Synthetic, in-memory only -- not read from disk. One field ('b') is present on the
+    // Go side and deliberately missing on the TS side.
+    const goFixture = 'type Fixture struct {\n\tA string `json:"a"`\n\tB string `json:"b"`\n}'
+    const tsFixtureMissingB = 'export interface Fixture {\n  a: string\n}'
+
+    const goKeys = goStructKeys(goFixture, 'Fixture')
+    const tsKeys = tsInterfaceKeys(tsFixtureMissingB, 'Fixture')
+    expect(goKeys).toEqual(['a', 'b'])
+    expect(tsKeys).toEqual(['a'])
+
+    const diff = keySetDiff(goKeys, tsKeys)
+    expect(diff.length, 'the comparator must not agree on a genuinely mismatched pair').toBeGreaterThan(0)
+    expect(diff, 'the missing key must surface by name, not just a boolean flag').toContain('b')
+  })
+})
+
+describe('getInvoiceApprovalRun (AC-3: 404 -> null, every other error rethrows including 401)', () => {
+  it('a 404 resolves null, not an error', async () => {
+    stubFetch(() => errorResponse(404, 'no approval run for this invoice'))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await expect(getInvoiceApprovalRun(af, base, 'inv-1')).resolves.toBeNull()
+  })
+
+  it('a 401 still rethrows the exact caught error (not a re-wrap), and the sign-out seam still fires', async () => {
+    stubFetch(() => errorResponse(401, 'unauthorized'))
+    const onUnauthorized = vi.fn()
+    const realAf = createAuthedFetch(() => 'tok', onUnauthorized)
+    // Wraps the real authedFetch to capture the exact promise it hands back for the one
+    // call getInvoiceApprovalRun makes -- proves the catch does `throw e`, not a re-wrap.
+    let inner: Promise<unknown> | undefined
+    const af = ((url: string, opts?: ApiFetchOptions) => {
+      const p = realAf(url, opts)
+      inner = p
+      return p
+    }) as unknown as AuthedFetch
+
+    const outer = getInvoiceApprovalRun(af, base, 'inv-1')
+    await expect(outer).rejects.toBeInstanceOf(ApiError)
+
+    expect(inner, 'getInvoiceApprovalRun must call authedFetch, not short-circuit').toBeDefined()
+    const [outerCaught, innerCaught] = await Promise.all([
+      outer.catch((e: unknown) => e),
+      inner!.catch((e: unknown) => e),
+    ])
+    expect(outerCaught, 'must rethrow the exact caught error, not a re-wrap').toBe(innerCaught)
+    expect(onUnauthorized, "authedFetch's own 401 seam must still fire").toHaveBeenCalledTimes(1)
+  })
+
+  it('a 500 still rethrows as an ApiError carrying the same status', async () => {
+    stubFetch(() => errorResponse(500, 'internal error'))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const caught = await getInvoiceApprovalRun(af, base, 'inv-1').catch((e: unknown) => e)
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).status).toBe(500)
+  })
+})
+
+describe('decideInvoice (AC-4: reason omitted on approve, carried verbatim on reject)', () => {
+  it('approve sends no reason', async () => {
+    const fetchMock = stubFetch(() => okResponse())
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await decideInvoice(af, base, 'inv-1', 'approved')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1/approvals')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ decision: 'approved' })
+  })
+
+  it('reject sends the reason verbatim, untrimmed -- the server does the trimming', async () => {
+    const fetchMock = stubFetch(() => okResponse())
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const reason = '  not our supplier  '
+
+    await decideInvoice(af, base, 'inv-1', 'rejected', reason)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ decision: 'rejected', reason })
+  })
+})
+
+describe('canRejectReason (AC-3 story-level: the trim guard)', () => {
+  it('rejects whitespace-only or empty strings; accepts anything with a non-whitespace character', () => {
+    expect(canRejectReason('   ')).toBe(false)
+    expect(canRejectReason('')).toBe(false)
+    expect(canRejectReason('\t\n')).toBe(false)
+    expect(canRejectReason(' x ')).toBe(true)
+  })
+})
+
+// The five approvalGate rungs (internal/invoice/handlers.go:378-394), verbatim -- the
+// same reasons the wire actually sends as approve_blocked_reason/reject_blocked_reason.
+const APPROVAL_GATE_SENTENCES = [
+  'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.',
+  'Only a validated invoice can be approved or rejected.',
+  'This invoice has no approval run to decide on.',
+  "This invoice's approval run is already closed.",
+  "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role.",
+]
+
+describe('decisionBlockedReasons (AC-2: dedup rule)', () => {
+  it('identical reasons collapse to one, for each of the five approvalGate sentences', () => {
+    expect(APPROVAL_GATE_SENTENCES.length).toBe(5)
+    for (const s of APPROVAL_GATE_SENTENCES) {
+      expect(decisionBlockedReasons(s, s)).toEqual([s])
+    }
+  })
+
+  it('divergent reasons both survive; a null side drops out; both null is empty', () => {
+    expect(decisionBlockedReasons('a', 'b')).toEqual(['a', 'b'])
+    expect(decisionBlockedReasons(null, 'b')).toEqual(['b'])
+    expect(decisionBlockedReasons('a', null)).toEqual(['a'])
+    expect(decisionBlockedReasons(null, null)).toEqual([])
   })
 })

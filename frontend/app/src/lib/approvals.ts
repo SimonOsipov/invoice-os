@@ -31,6 +31,8 @@
 // (epic Q12) -- the page is a snapshot and another approver can decide a row between
 // the fetch and the confirm.
 
+import { ApiError } from '@invoice-os/api-client'
+
 import { listInvoices, type InvoiceListResponse, type InvoiceRecord, type ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -263,3 +265,86 @@ export const APPROVALS_COPY = {
   unstaffedSeat: 'Unstaffed seat',
   overdue: 'Overdue',
 } as const
+
+// ---- Approval-run wire types (APPR-13-01), mirrored key-for-key from
+// internal/approval/read_model.go's Resolved/RunStep/RunDecision/Run -- the app-side
+// counterpart to e2e/api/client.ts's ApprovalResolved/ApprovalRunStep/
+// ApprovalRunDecision/ApprovalRun. kind/state stay `string`, never a union: the DB
+// column is untyped, and a union would make an unrecognised value a type error the SPA
+// cannot represent honestly.
+
+export interface ApprovalResolved {
+  text: string
+  warn: boolean
+}
+
+export interface ApprovalRunStep {
+  ord: number
+  kind: string
+  state: string
+  workflow_role_key: string | null
+  workflow_role_title: string | null
+  holder: ApprovalResolved | null
+  sla_hours: number | null
+  due_at: string | null
+  overdue: boolean
+  satisfied_at: string | null
+  satisfied_by: string | null
+  notify_target: string | null
+  notify_channel: string | null
+}
+
+export interface ApprovalRunDecision {
+  run_step_id: string
+  ord: number
+  decision: string
+  actor: string
+  decided_at: string
+  reason: string | null
+}
+
+export interface ApprovalRun {
+  run_id: string
+  state: string
+  opened_at: string
+  closed_at: string | null
+  closed_by: string | null
+  steps: ApprovalRunStep[]
+  decisions: ApprovalRunDecision[]
+}
+
+// Mirrors isUnauthorized's exact shape (authedFetch.ts:16-18), 404 swapped for 401.
+export function isNoApprovalRun(e: unknown): boolean {
+  return e instanceof ApiError && e.kind === 'http' && e.status === 404
+}
+
+// Stage 3 stub: resolves the run, null on 404. Catch sits OUTSIDE authedFetch so the
+// 401->sign-out seam still fires on a 401.
+export async function getInvoiceApprovalRun(
+  _authedFetch: AuthedFetch,
+  _base: string,
+  _id: string,
+): Promise<ApprovalRun | null> {
+  throw new Error('not implemented')
+}
+
+// Stage 3 stub: POST the decision. Body omits `reason` on 'approved'.
+export async function decideInvoice(
+  _authedFetch: AuthedFetch,
+  _base: string,
+  _id: string,
+  _decision: 'approved' | 'rejected',
+  _reason?: string,
+): Promise<ApprovalRun> {
+  throw new Error('not implemented')
+}
+
+// Stage 3 stub: the reject-reason trim guard.
+export function canRejectReason(_reason: string): boolean {
+  throw new Error('not implemented')
+}
+
+// Stage 3 stub: 0/1/2-sentence de-dup for the approve/reject blocked reasons.
+export function decisionBlockedReasons(_approve: string | null, _reject: string | null): string[] {
+  throw new Error('not implemented')
+}

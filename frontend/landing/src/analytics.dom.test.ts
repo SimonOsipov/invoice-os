@@ -135,6 +135,62 @@ describe('ensureTag — open gate', () => {
   })
 })
 
+describe('ensureTag — adversarial and edge cases', () => {
+  it('AC-2: a null consent record falls back to the granted default', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+    expect(mod.ensureTag('www.ascomply.com', null)).toBe(true)
+    expect(document.head.querySelectorAll('script').length).toBe(1)
+    expect((window as TestWindow).dataLayer?.length).toBe(2)
+  })
+
+  // Guards a `loaded = true` set before the gate check: a closed-gate call must not
+  // silently block a later open-gate call on the same module instance.
+  it('a closed-gate call does not poison a later open-gate call', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+
+    expect(mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)).toBe(false)
+    expect(document.head.querySelectorAll('script').length).toBe(0)
+
+    expect(mod.ensureTag('www.ascomply.com', GRANTED)).toBe(true)
+    expect(document.head.querySelectorAll('script').length).toBe(1)
+    expect((window as TestWindow).dataLayer?.length).toBe(2)
+  })
+
+  it('a loaded tag ignores a later call with a different hostname', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const mod = await import('./analytics')
+
+    expect(mod.ensureTag('www.ascomply.com', GRANTED)).toBe(true)
+    expect(mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)).toBe(true)
+    expect(document.head.querySelectorAll('script').length).toBe(1)
+  })
+
+  it('appends to a dataLayer another script already populated, never resets it', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    ;(window as TestWindow).dataLayer = ['external-marker'] as unknown as IArguments[]
+    const mod = await import('./analytics')
+    mod.ensureTag('www.ascomply.com', GRANTED)
+
+    const layer = (window as TestWindow).dataLayer ?? []
+    expect(layer.length).toBe(3)
+    expect(layer[0]).toBe('external-marker')
+  })
+
+  it('overwrites a pre-existing window.gtag without throwing', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
+    const sentinel = vi.fn()
+    ;(window as TestWindow).gtag = sentinel
+    const mod = await import('./analytics')
+
+    expect(() => mod.ensureTag('www.ascomply.com', GRANTED)).not.toThrow()
+    expect((window as TestWindow).gtag).not.toBe(sentinel)
+    expect(sentinel).not.toHaveBeenCalled()
+    expect((window as TestWindow).dataLayer?.length).toBe(2)
+  })
+})
+
 describe('console silence', () => {
   it('the console spies detect a call (non-vacuity control)', () => {
     const spies = spyOnConsole()

@@ -39,6 +39,11 @@ describe('measurementId', () => {
     vi.stubEnv('VITE_GA_MEASUREMENT_ID', '   ')
     expect(measurementId()).toBeNull()
   })
+
+  it('trims surrounding whitespace around a real id, not just blanks', () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', `  ${ID}  `)
+    expect(measurementId()).toBe(ID)
+  })
 })
 
 describe('shouldLoadTag', () => {
@@ -57,6 +62,12 @@ describe('shouldLoadTag', () => {
   it('AC-2: the gate is open only on the exact production hostname', () => {
     expect(shouldLoadTag('www.ascomply.com', true, ID)).toBe(true)
     expect(shouldLoadTag(' WWW.ASCOMPLY.COM ', true, ID)).toBe(true)
+  })
+
+  it('the gate stays closed on a trailing dot, a port, or a userinfo prefix', () => {
+    for (const h of ['www.ascomply.com.', 'www.ascomply.com:443', 'user@www.ascomply.com']) {
+      expect(shouldLoadTag(h, true, ID), h).toBe(false)
+    }
   })
 
   it('AC-8: denied consent closes the gate on the production hostname', () => {

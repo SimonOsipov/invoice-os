@@ -406,7 +406,9 @@ export function approvalRunStateView(state: string): { label: string; tone: 'amb
     cancelled: { label: APPROVAL_TRAIL_COPY.stateCancelled, tone: 'muted' },
   }
   // Unknown state falls back to its own raw value, never a guessed label (AC-3).
-  return known[state] ?? { label: state, tone: 'muted' }
+  // hasOwn guards against a wire value like 'constructor'/'toString' resolving to an
+  // inherited Object.prototype function instead of falling through (CodeRabbit PR #167).
+  return Object.hasOwn(known, state) ? known[state] : { label: state, tone: 'muted' }
 }
 
 export function approvalTrailSteps(run: ApprovalRun): TrailStepView[] {
@@ -437,8 +439,10 @@ export function approvalTrailSteps(run: ApprovalRun): TrailStepView[] {
       ord1: step.ord + 1,
       kind: step.kind,
       // Unknown kind/state falls back to its own raw value, never a guessed label (AC-3).
-      kindLabel: kindLabels[step.kind] ?? step.kind,
-      stateLabel: stateLabels[step.state] ?? step.state,
+      // hasOwn guards both maps against inherited Object.prototype keys (see
+      // approvalRunStateView above).
+      kindLabel: Object.hasOwn(kindLabels, step.kind) ? kindLabels[step.kind] : step.kind,
+      stateLabel: Object.hasOwn(stateLabels, step.state) ? stateLabels[step.state] : step.state,
       roleTitle: step.workflow_role_title ?? '—',
       holderText: step.holder?.text ?? null,
       holderWarn: step.holder?.warn ?? false,
@@ -460,7 +464,8 @@ export function approvalTrailDecisions(run: ApprovalRun): TrailDecisionView[] {
     const actor = actorLabel(decision.actor)
     return {
       ord1: decision.ord + 1,
-      outcomeLabel: outcomeLabels[decision.decision] ?? decision.decision,
+      // hasOwn guards against an inherited Object.prototype key, same as above.
+      outcomeLabel: Object.hasOwn(outcomeLabels, decision.decision) ? outcomeLabels[decision.decision] : decision.decision,
       actorText: actor.text,
       actorMono: actor.mono,
       whenLabel: fmtDateTime(decision.decided_at),

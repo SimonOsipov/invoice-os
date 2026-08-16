@@ -2986,6 +2986,62 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(true)
     expect(await screen.findByTestId('approval-trail-empty')).toBeTruthy()
   })
+
+  // CodeRabbit PR #167 fix: decisionBlockedReasons's array was positional
+  // (index 0 always rendered as "approve"), so a reject-only reason was mislabelled
+  // as the approve reason. These four rows bind each attribute/node to its own wire
+  // field directly and prove the mislabelling is gone.
+  it('same sentence on both fields: one visible node under approve-blocked-reason, no reject-blocked-reason, both controls describedby it', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+    expect(rejectBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+  })
+
+  it('different sentences on both fields: two nodes, each under its own testid, each control describedby its own node', async () => {
+    const reject = 'A different reason entirely.'
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: reject }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(screen.getByTestId('reject-blocked-reason').textContent).toBe(reject)
+    expect(approveBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+    expect(rejectBtn.getAttribute('aria-describedby')).toBe('reject-blocked-reason-text')
+  })
+
+  it('regression: a reject-only reason never mislabels as the approve reason, and Approve stays clean', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+
+    expect(screen.getByTestId('reject-blocked-reason').textContent).toBe(S)
+    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.disabled).toBe(false)
+    expect(approveBtn.hasAttribute('title')).toBe(false)
+    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('approve blocked, reject clear: only approve-blocked-reason renders, Reject carries no title/aria-describedby', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: true, reject_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
+
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(rejectBtn.hasAttribute('title')).toBe(false)
+    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
+  })
 })
 
 // RED specs (task-547, APPR-13-05, Mode A). Neither machine exists yet -- `detail-approve`

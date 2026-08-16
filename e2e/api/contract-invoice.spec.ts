@@ -1036,11 +1036,19 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       await putApprovalPolicyDraft(token, policy.id, { steps: [{ kind: 'approval', workflow_role_key: roleKey }] })
       await publishApprovalPolicy(token, policy.id)
 
-      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR-${freshTin()}`) })
-      const validated = await validateInvoice(token, created.id)
-      expect(validated.status, 'the clean fixture should promote draft -> validated, arming a run').toBe('validated')
+      try {
+        const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR-${freshTin()}`) })
+        const validated = await validateInvoice(token, created.id)
+        expect(validated.status, 'the clean fixture should promote draft -> validated, arming a run').toBe('validated')
 
-      return { invoiceId: created.id, policyId: policy.id }
+        return { invoiceId: created.id, policyId: policy.id }
+      } catch (e) {
+        // A throw here happens before the caller's own try/finally starts, so it must
+        // free the tenant's single active-policy slot (D38) itself; best-effort so a
+        // delete failure can never mask the real setup error.
+        await deleteApprovalPolicy(token, policy.id).catch(() => {})
+        throw e
+      }
     }
 
     test('approve: 200, a single-step run closes approved', async () => {

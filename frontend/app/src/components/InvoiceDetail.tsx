@@ -19,7 +19,6 @@ import {
   canRejectReason,
   decideInvoice,
   DETAIL_DECISION_COPY,
-  decisionBlockedReasons,
   getInvoiceApprovalRun,
   type ApprovalRun,
 } from '../lib/approvals'
@@ -381,8 +380,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
     const revalidateDisabled = !inv.can_revalidate || revalidating
     const resolveOutsideDisabled = !inv.can_resolve_outside || resolving || !canResolveOutside(resolveReason)
-    // 0, 1 or 2 sentences, byte-identical reasons collapsed to one (task-554, D-19).
-    const decisionReasons = decisionBlockedReasons(inv.approve_blocked_reason, inv.reject_blocked_reason)
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
     // (established by the `if (base == null)` branch above) does not survive into a
@@ -691,8 +688,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         data-testid="detail-approve"
                         onClick={() => toApprovePhase({ type: 'arm' })}
                         disabled={!inv.can_approve}
-                        title={decisionReasons[0] ?? undefined}
-                        aria-describedby={decisionReasons[0] != null ? APPROVE_REASON_ID : undefined}
+                        title={inv.approve_blocked_reason ?? undefined}
+                        aria-describedby={inv.approve_blocked_reason != null ? APPROVE_REASON_ID : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
                           height: 32,
@@ -744,9 +741,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       data-testid="detail-reject"
                       onClick={() => setRejectOpen(true)}
                       disabled={!inv.can_reject || rejectOpen}
-                      title={(decisionReasons.length > 1 ? decisionReasons[1] : decisionReasons[0]) ?? undefined}
+                      title={inv.reject_blocked_reason ?? undefined}
                       aria-describedby={
-                        decisionReasons.length > 1 ? REJECT_REASON_ID : decisionReasons[0] != null ? APPROVE_REASON_ID : undefined
+                        inv.reject_blocked_reason == null
+                          ? undefined
+                          : inv.reject_blocked_reason === inv.approve_blocked_reason
+                            ? APPROVE_REASON_ID
+                            : REJECT_REASON_ID
                       }
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
@@ -759,14 +760,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       {DETAIL_DECISION_COPY.reject}
                     </button>
                   </div>
-                  {decisionReasons[0] != null && (
+                  {inv.approve_blocked_reason != null && (
                     <div id={APPROVE_REASON_ID} data-testid="approve-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {decisionReasons[0]}
+                      {inv.approve_blocked_reason}
                     </div>
                   )}
-                  {decisionReasons.length > 1 && (
+                  {inv.reject_blocked_reason != null && inv.reject_blocked_reason !== inv.approve_blocked_reason && (
                     <div id={REJECT_REASON_ID} data-testid="reject-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {decisionReasons[1]}
+                      {inv.reject_blocked_reason}
                     </div>
                   )}
                   {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement

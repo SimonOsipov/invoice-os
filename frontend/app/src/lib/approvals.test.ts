@@ -1494,3 +1494,66 @@ describe('approvalRunStateView: adversarial edges (QA Stage 4, Mode B)', () => {
     expect(approvalRunStateView('Open')).not.toEqual({ label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' })
   })
 })
+
+// CodeRabbit PR #167 fix: known/kindLabels/stateLabels/outcomeLabels are plain object
+// literals, so an unguarded `map[key] ?? fallback` resolves an inherited
+// Object.prototype member ('constructor', 'toString', ...) as a hit instead of falling
+// through -- `??` never fires because the inherited value isn't null/undefined. Each
+// lookup now guards with Object.hasOwn first.
+describe('prototype-pollution guard: inherited Object.prototype keys never resolve as labels (CodeRabbit PR #167)', () => {
+  it('approvalRunStateView("constructor") falls through to the raw string, not Object', () => {
+    expect(approvalRunStateView('constructor')).toEqual({ label: 'constructor', tone: 'muted' })
+  })
+
+  it('approvalRunStateView("toString") falls through to the raw string', () => {
+    expect(approvalRunStateView('toString')).toEqual({ label: 'toString', tone: 'muted' })
+  })
+
+  it('approvalTrailSteps: a step kind of "constructor" falls through to the raw string', () => {
+    const run = trailRun([baseStep({ kind: 'constructor' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.kindLabel).toBe('constructor')
+  })
+
+  it('approvalTrailSteps: a step kind of "toString" falls through to the raw string', () => {
+    const run = trailRun([baseStep({ kind: 'toString' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.kindLabel).toBe('toString')
+  })
+
+  it('approvalTrailSteps: a step state of "constructor" falls through to the raw string', () => {
+    const run = trailRun([baseStep({ state: 'constructor' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.stateLabel).toBe('constructor')
+  })
+
+  it('approvalTrailSteps: a step state of "toString" falls through to the raw string', () => {
+    const run = trailRun([baseStep({ state: 'toString' })])
+
+    const [view] = approvalTrailSteps(run)
+
+    expect(view.stateLabel).toBe('toString')
+  })
+
+  it('approvalTrailDecisions: a decision of "constructor" falls through to the raw string', () => {
+    const run = trailRun([], [baseDecision({ decision: 'constructor' })])
+
+    const [view] = approvalTrailDecisions(run)
+
+    expect(view.outcomeLabel).toBe('constructor')
+  })
+
+  it('approvalTrailDecisions: a decision of "toString" falls through to the raw string', () => {
+    const run = trailRun([], [baseDecision({ decision: 'toString' })])
+
+    const [view] = approvalTrailDecisions(run)
+
+    expect(view.outcomeLabel).toBe('toString')
+  })
+})

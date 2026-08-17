@@ -5,7 +5,7 @@ import { PRODUCTION_HOSTNAMES } from '../hubspot'
 export const GA_RETENTION_MONTHS = 14
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
-export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is on unless you turn it off in your browser.'
+export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
 
 const PAGE_TITLE = 'Privacy and cookies — ASComply Africa'
 
@@ -52,7 +52,7 @@ export function Privacy() {
           <h2 style={H2}>Google Analytics</h2>
           <p style={P}>
             We use Google Analytics 4 to measure how people use this marketing site — which pages get read, what
-            visitors do next, and where the site is confusing. It is running right now, on this page.
+            visitors do next, and where the site is confusing. It runs only if you have allowed analytics.
           </p>
           <p style={P}>
             It runs on this public site only. There is no analytics code anywhere inside the signed-in ASComply product.
@@ -86,8 +86,8 @@ export function Privacy() {
             specific to our analytics property. Together they are what let Google tell a returning visit from a new one.
           </p>
           <p style={P}>
-            Our own code sets no cookies at all — these come from Google's script. This is happening now: open your
-            browser's cookie list for this site and you will find them.
+            Our own code sets no cookies at all — these come from Google's script. They appear only once you have
+            allowed analytics; until then your cookie list for this site holds neither of them.
           </p>
 
           <h2 style={H2}>Where the data goes</h2>
@@ -151,9 +151,9 @@ export function Privacy() {
           <h2 style={H2}>How to stop being measured</h2>
           <p style={P}>
             <strong>{ANALYTICS_DEFAULT_SENTENCE}</strong> This site has no privacy control of its own yet — no notice,
-            no toggle, no settings page. One that lets you choose is being built. Until it ships, you are counted from
-            the moment the page loads, and the four options below are what actually exist. We would rather say that
-            plainly than point you at a control you cannot find.
+            no toggle, no settings page. One that lets you choose is being built. Until it ships, no analytics runs at
+            all, and the four options below are what actually exist. We would rather say that plainly than point you
+            at a control you cannot find.
           </p>
           <ol style={LIST}>
             <li style={ITEM}>

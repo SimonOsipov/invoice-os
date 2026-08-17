@@ -231,11 +231,31 @@ async function guardGoogleAnalytics(page: Page, sinks: LandingSinks): Promise<vo
   )
 }
 
+/**
+ * The consent default is denied, so with no stored record the tag never loads and the
+ * EXPECT_TAG biconditional below would be false on production. Seeds the granted record the
+ * biconditional was written under. addInitScript, not evaluate: there is no origin before the
+ * first navigation, and bootAnalytics() runs at module scope.
+ */
+async function seedGrantedConsent(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    // `asc_consent` / `v: 1` retyped from frontend/landing/src/consent.ts, same reason as
+    // TAXPAYER_SIZE_BANDS: e2e pins what the deployed build serves.
+    try {
+      window.localStorage.setItem('asc_consent', JSON.stringify({ analytics: true, ts: new Date().toISOString(), v: 1 }))
+    } catch {
+      // about:blank has an opaque origin; the real navigation re-runs this. A seed that never
+      // landed cannot pass silently — the biconditional goes red on the production target.
+    }
+  })
+}
+
 /** goto + settle. Fonts are settled ONCE here, before any interaction or measurement. */
 async function openLanding(page: Page): Promise<LandingSinks> {
   const sinks = attachSinks(page)
   await guardHubSpot(page, sinks)
   await guardGoogleAnalytics(page, sinks)
+  await seedGrantedConsent(page)
 
   const response = await page.goto(LANDING_URL)
   expect(response, `no response from ${LANDING_URL}`).toBeTruthy()

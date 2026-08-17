@@ -24,7 +24,7 @@ const html = renderToStaticMarkup(createElement(Privacy))
 // One row per ledger claim that had no render assertion. docs/privacy-policy-claims.md
 // is the authority for what each id means.
 const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
-  ['C1 present tense', 'It is running right now, on this page'],
+  ['C1 consent-gated', 'It runs only if you have allowed analytics'],
   ['C2 not in the signed-in product', 'There is no analytics code anywhere inside the signed-in ASComply product'],
   ['C5 no identifying detail', 'We never send Google your name, your email address, your company'],
   ['C6 two cookies', 'Google Analytics sets two cookies on your device'],

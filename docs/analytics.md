@@ -13,7 +13,8 @@ must **all** hold (`shouldLoadTag`, `analytics.ts:22`):
 1. the browser is on a production hostname — exact match against `PRODUCTION_HOSTNAMES`
    (`frontend/landing/src/hubspot.ts:9`), which today holds `www.ascomply.com` alone;
 2. analytics consent is granted — a versioned `localStorage` record (`src/consent.ts`), whose
-   default when no record is stored is **granted** (`CONSENT_DEFAULT_ANALYTICS`);
+   default when no record is stored is **denied** (`CONSENT_DEFAULT_ANALYTICS`), so a first-time
+   visitor loads no tag until they accept;
 3. `VITE_GA_MEASUREMENT_ID` was baked into the build.
 
 Any one of the three missing and `https://www.googletagmanager.com/gtag/js` is never requested.
@@ -67,7 +68,10 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    `G-E409H76XYY`, `https://www.googletagmanager.com/gtag/js?id=G-E409H76XYY` returns 200, a browser
    load of `https://www.ascomply.com/` holds `_ga` cookies and hits `region1.google-analytics.com`.
    Nothing local or in CI catches a regression here — every automated check passes on a dark build
-   by construction, so re-measure in a browser after any landing redeploy.
+   by construction, so re-measure in a browser after any landing redeploy. **That measurement was
+   taken under the old granted-by-default gate.** From LAND-05 the tag loads only for a browser that
+   has accepted analytics, so re-measure with consent granted; a clean profile now correctly holds
+   no `_ga`.
 2. **GA4 data retention → 14 months** (Admin → Data settings → Data retention). The default is
    2 months, which makes year-on-year comparison impossible after the fact.
    **Done — operator-confirmed 2026-08-16.**
@@ -149,6 +153,7 @@ every run.
 - `frontend/landing/src/hubspot.ts` — `PRODUCTION_HOSTNAMES` and `isProductionHost`, shared with
   the Book-a-demo submit gate.
 - `e2e/smoke/landing-demo.spec.ts` — the deployed proof: the analytics-host classifier, the
-  request sink, the fulfilling safety net and the biconditional.
+  request sink, the fulfilling safety net and the biconditional. `openLanding()` seeds a granted
+  consent record before navigating; without it the biconditional would be false on production.
 - `docs/e2e-convention.md` — why that proof lives in a browser suite at all.
 </content>

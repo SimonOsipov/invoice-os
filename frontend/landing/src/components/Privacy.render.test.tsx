@@ -101,14 +101,14 @@ describe('Privacy SSR render (LAND-04-02)', () => {
     }
   })
 
-  it('D7: the page says analytics is on until the visitor blocks it', () => {
+  it('D7: the page carries the default-state sentence', () => {
     expect(html).toContain(ANALYTICS_DEFAULT_SENTENCE)
   })
 
-  it('D7 (NEW): the analytics-on-by-default sentence is the reviewed wording', () => {
+  it('D7 (NEW): the default-state sentence is the reviewed wording', () => {
     // Without this pin, softening the constant changes both sides of the row
     // above and it stays green.
-    expect(ANALYTICS_DEFAULT_SENTENCE).toBe('Analytics is on unless you turn it off in your browser.')
+    expect(ANALYTICS_DEFAULT_SENTENCE).toBe('Analytics is off unless you turn it on.')
   })
 
   it('W4 (NEW): the opt-out is a real link, not just text', () => {

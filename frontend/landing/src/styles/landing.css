@@ -286,7 +286,8 @@ html {
   .cn-actions button {
     height: 44px;
   }
+  /* The reopened card's band: 256.09px measured + the 12px inset. e2e C10 bounds it. */
   .cn-spacer {
-    height: 291px;
+    height: 274px;
   }
 }

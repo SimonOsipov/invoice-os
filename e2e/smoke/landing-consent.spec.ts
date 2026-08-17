@@ -59,6 +59,45 @@ function settleLayout(page: Page): Promise<boolean> {
   )
 }
 
+/**
+ * Scroll to the document end and wait for it to LAND.
+ *
+ * `html { scroll-behavior: smooth }` (landing.css:24) animates window.scrollTo over ~1.5s
+ * and Playwright sets no reduced-motion preference, so two rAFs read the page at scrollY 1
+ * of 14369 — every rect taken there is mid-flight, and a `scrollY > 0` control passes on a
+ * page that has barely moved. Poll to the maximum offset instead: that is the settle AND
+ * the non-vacuity control.
+ */
+async function scrollToDocumentEnd(page: Page): Promise<void> {
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.documentElement
+          return Math.round(el.scrollHeight - el.clientHeight - window.scrollY)
+        }),
+      { message: 'the page never reached the document end (scroll-behavior: smooth animates window.scrollTo)' },
+    )
+    .toBeLessThanOrEqual(1)
+  await settleLayout(page)
+}
+
+/** Do two rects share a text line? The y half of rectsOverlap, on its own. */
+function sharesLine(a: Rect, b: Rect): boolean {
+  return Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) > 0
+}
+
+/** Does `outer` enclose `inner`, sub-pixel rounding aside? */
+function enclosesRect(outer: Rect, inner: Rect): boolean {
+  return (
+    inner.x >= outer.x - BOX_SLACK_PX &&
+    inner.y >= outer.y - BOX_SLACK_PX &&
+    inner.x + inner.width <= outer.x + outer.width + BOX_SLACK_PX &&
+    inner.y + inner.height <= outer.y + outer.height + BOX_SLACK_PX
+  )
+}
+
 function notice(page: Page): Locator {
   return page.getByRole('region', { name: 'Cookie notice' })
 }
@@ -523,25 +562,61 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
 
 // C10 — the closing CTA scrolls clear, and the spacer reserves the band the notice covers
 // without becoming a second scroll gap of its own.
-test('landing consent: the closing CTA scrolls clear of the notice at 390px', async ({ page }) => {
+test('landing consent: the closing CTA scrolls clear of the notice at 390px', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   const { errors, card } = await openLanding(page)
 
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-  await settleLayout(page)
-  expect(await page.evaluate(() => window.scrollY), 'control: the page never scrolled').toBeGreaterThan(0)
+  await scrollToDocumentEnd(page)
+  const firstVisit = await rectOf(card, 'the cookie notice', 'at the document end')
+  const spacerRect = await rectOf(page.locator('.cn-spacer'), 'the scroll spacer', 'at the document end')
 
+  // boundingBox() is viewport-relative, and at the document end the spacer has carried the
+  // button off the TOP of the viewport — a read there is clear of the notice on any layout.
+  // Scroll it in: that is the state its click happens in (C4's reason).
   const button = page.locator('#demo').getByRole('button', { name: /Book my demo/ })
   await expect(button).toHaveCount(1)
-  const buttonRect = await rectOf(button, "the closing CTA's button", 'at the document end')
-  const noticeRect = await rectOf(card, 'the cookie notice', 'at the document end')
+  await button.scrollIntoViewIfNeeded()
+  await settleLayout(page)
+  const buttonRect = await rectOf(button, "the closing CTA's button", 'scrolled into view')
+  const noticeRect = await rectOf(card, 'the cookie notice', 'with the closing CTA in view')
+  expect(
+    buttonRect.y >= 0 && buttonRect.y + buttonRect.height <= PHONE.height,
+    `the closing CTA's button is still off-screen (y ${buttonRect.y}, height ${buttonRect.height}, viewport ${PHONE.height})`,
+  ).toBe(true)
   expect(
     buttonRect.y + buttonRect.height,
     `the closing CTA's button (bottom ${buttonRect.y + buttonRect.height}) is still under the notice (top ${noticeRect.y})`,
   ).toBeLessThanOrEqual(noticeRect.y)
 
-  const spacerRect = await rectOf(page.locator('.cn-spacer'), 'the scroll spacer', 'at the document end')
-  const reserved = noticeRect.height + MOBILE_INSET_PX
+  // One CSS literal serves BOTH card states, so the band it must reserve is the TALLER
+  // one: the reopened card carries an extra .cn-setting line, and a visitor reopens from
+  // the footer control — which sits at the document end, where the spacer is the only
+  // thing holding the last footer row clear of the notice.
+  await card.locator('[data-consent="reject"]').click()
+  await expect(card).toHaveCount(0)
+  await page.reload()
+  await expect(card, 'the notice came back on its own after Reject').toHaveCount(0)
+  await page.evaluate(() => document.fonts.ready.then(() => true))
+  await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+  await expect(card).toBeVisible()
+  await expect(card.locator('.cn-setting')).toHaveText('Analytics cookies are off.')
+  await scrollToDocumentEnd(page)
+  const reopened = await rectOf(card, 'the reopened cookie notice', 'at the document end')
+
+  const reserved = reopened.height + MOBILE_INSET_PX
+  await testInfo.attach('cookie-notice-spacer.json', {
+    body: JSON.stringify({ firstVisit, reopened, spacer: spacerRect, inset: MOBILE_INSET_PX, reserved }, null, 2),
+    contentType: 'application/json',
+  })
+  testInfo.annotations.push({
+    type: 'measurement',
+    description: `spacer ${spacerRect.height}px vs a ${reserved}px band (first visit ${firstVisit.height}px, reopened ${reopened.height}px)`,
+  })
+
+  expect(
+    reopened.height,
+    `the reopened card (${reopened.height}px) is not taller than the first-visit card (${firstVisit.height}px), so the band below is derived from the wrong state`,
+  ).toBeGreaterThan(firstVisit.height)
   expect(
     spacerRect.height,
     `the spacer reserves ${spacerRect.height}px but the notice covers ${reserved}px`,
@@ -599,8 +674,9 @@ test('landing consent: nothing is written to storage until the visitor answers',
 })
 
 // C13 — the footer control belongs to the version string, and the row survives narrow
-// widths. Euclidean, not x-only: the row wraps, so at a narrow width the separation is
-// vertical and an x-only metric reads it wrong in both directions.
+// widths. Two oracles, because one does not span the wrap: the control and the version
+// share a group box at EVERY width, and centre-to-centre proximity is asserted where the
+// row has not wrapped.
 test('landing consent: the Cookie choices control reads as part of the version string', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   const { errors } = await openLanding(page)
@@ -609,12 +685,21 @@ test('landing consent: the Cookie choices control reads as part of the version s
   const control = footer.getByRole('button', { name: 'Cookie choices' })
   const version = footer.getByText('v 1.0 · MBS ADAPTER · SANDBOX', { exact: true })
   const copyright = footer.getByText('© 2026 ASCOMPLY AFRICA · LAGOS · NG', { exact: true })
+  const group = control.locator('xpath=..')
   for (const [label, locator] of [['the Cookie choices control', control], ['the version string', version], ['the copyright string', copyright]] as const) {
     await expect(locator, `${label} is not unique in the footer`).toHaveCount(1)
   }
 
   const entry = page.viewportSize()
-  const sweep: Array<{ width: number; toVersion: number; toCopyright: number }> = []
+  const sweep: Array<{
+    width: number
+    toVersion: number
+    toCopyright: number
+    rowWrapped: boolean
+    groupHoldsControl: boolean
+    groupHoldsVersion: boolean
+    groupClearsCopyright: boolean
+  }> = []
 
   try {
     for (const width of [...WIDE_WIDTHS, ...NARROW_WIDTHS]) {
@@ -627,7 +712,16 @@ test('landing consent: the Cookie choices control reads as part of the version s
       const c = await rectOf(control, 'the Cookie choices control', at)
       const v = await rectOf(version, 'the version string', at)
       const r = await rectOf(copyright, 'the copyright string', at)
-      sweep.push({ width, toVersion: centreDistance(c, v), toCopyright: centreDistance(c, r) })
+      const g = await rectOf(group, "the control's group box", at)
+      sweep.push({
+        width,
+        toVersion: centreDistance(c, v),
+        toCopyright: centreDistance(c, r),
+        rowWrapped: !sharesLine(c, r),
+        groupHoldsControl: enclosesRect(g, c),
+        groupHoldsVersion: enclosesRect(g, v),
+        groupClearsCopyright: !rectsOverlap(g, r),
+      })
     }
   } finally {
     if (entry) await page.setViewportSize(entry)
@@ -639,11 +733,34 @@ test('landing consent: the Cookie choices control reads as part of the version s
   })
   testInfo.annotations.push({
     type: 'measurement',
-    description: sweep.map((m) => `${m.width}px: version ${Math.round(m.toVersion)}px, copyright ${Math.round(m.toCopyright)}px`).join(' | '),
+    description: sweep.map((m) => `${m.width}px: version ${Math.round(m.toVersion)}px, copyright ${Math.round(m.toCopyright)}px${m.rowWrapped ? ' (row wrapped)' : ''}`).join(' | '),
   })
 
   expect(sweep, 'the proximity sweep did not visit every width').toHaveLength(WIDE_WIDTHS.length + NARROW_WIDTHS.length)
+
+  // (a1) Belonging, at EVERY width including the narrow ones: one box holds the control
+  // and the version string, and the copyright string is outside it. This is the claim that
+  // goes red if the control is ever moved next to the copyright.
   for (const m of sweep) {
+    expect(m.groupHoldsControl, `at ${m.width}px the Cookie choices control is not inside its own group box`).toBe(true)
+    expect(m.groupHoldsVersion, `at ${m.width}px the version string is not inside the control's group box`).toBe(true)
+    expect(m.groupClearsCopyright, `at ${m.width}px the control's group box overlaps the copyright string`).toBe(true)
+  }
+
+  // (a2) Centre-to-centre distance, scoped to the unwrapped row. It is a proximity proxy
+  // only while all three sit on ONE line; once the row wraps it is confounded by string
+  // width and INVERTS. At 390 the control and the version share a line 16px apart, yet the
+  // version's centre reads 164px away because that string is 204px wide, while the
+  // copyright — a whole line above — reads 93px; at 375 the metric passes only because the
+  // group itself broke apart and stacked the version under the control. AC #2 claims the
+  // belonging at 2560/1920/1440/1280, and that is exactly the unwrapped set; the narrow
+  // widths stay in the sweep and are carried by (a1) and (b).
+  const unwrapped = sweep.filter((m) => !m.rowWrapped)
+  expect(
+    unwrapped.map((m) => m.width),
+    'the footer row no longer wraps where this test assumes it does, so the scoping below is stale',
+  ).toEqual([...WIDE_WIDTHS])
+  for (const m of unwrapped) {
     expect(
       m.toVersion,
       `at ${m.width}px the Cookie choices control sits nearer the copyright string (${Math.round(m.toCopyright)}px) than the version string (${Math.round(m.toVersion)}px)`,

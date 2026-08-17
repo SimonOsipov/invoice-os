@@ -54,7 +54,13 @@ import {
   getInvoiceHistory,
   PERSONAS,
   type Entity,
+  type ApprovalRun,
 } from './client'
+// task-570 (APPR-14-04): approveUntilClosed/firmApproverTokens ship in client.ts as part of
+// this same story. Reached through the namespace + an `unknown` cast, not the named export
+// list above -- a named import would fail `tsc --noEmit` until they land, which is the
+// wrong kind of red for this RED spec (Mode A wants "not implemented" at runtime).
+import * as clientApi from './client'
 import { freshTin, freshPolicyName } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -131,6 +137,11 @@ const APPROVE_NOT_VALIDATED_REASON = 'Only a validated invoice can be approved o
 const APPROVE_RUN_CLOSED_REASON = "This invoice's approval run is already closed."
 const APPROVE_NOT_ROLE_HOLDER_REASON =
   "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+
+const { approveUntilClosed, firmApproverTokens } = clientApi as unknown as {
+  approveUntilClosed: (invoiceId: string, tokens: Record<string, string>, max?: number) => Promise<ApprovalRun>
+  firmApproverTokens: () => Promise<Record<string, string>>
+}
 
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
@@ -1020,6 +1031,59 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const preparerBody = preparerRes.body as Record<string, unknown>
       expect(preparerBody.can_submit, 'a preparer cannot submit any invoice').toBe(false)
       expect(preparerBody.submit_blocked_reason, 'the role refusal is emitted on every status, not only the editable ones').toBe(NOT_APPROVER_REASON)
+    })
+  })
+
+  // task-570 (APPR-14-04): unlike 'approval decision' below, these rely on the SEEDED
+  // firm policy (internal/demopolicy, "Standard approval policy": fin_mgr@0, compliance@1
+  // for every invoice under the firm's ~193,500 backlog ceiling -- both condition
+  // thresholds are above it) rather than publishing their own. Placed ABOVE 'approval
+  // decision': that block's armedInvoice() deactivates the tenant's one active-policy slot
+  // per test, so anything relying on the seeded policy must run before it does.
+  //
+  // KNOWN, deferred to APPR-14-05: contract-approvals.spec.ts currently strips the firm
+  // tenant's seeded policy before this file runs, so these are red at the deploy gate until
+  // that story's restore lands. Not worked around here.
+  test.describe('approveUntilClosed against the seeded firm policy', () => {
+    test('AC-1: a two-step firm run closes approved after fin_mgr then compliance decide', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated, arming the seeded firm run').toBe('validated')
+
+      const armed = await getInvoiceApproval(token, created.id)
+      expect(armed.state, 'the seeded firm policy should arm an open run').toBe('open')
+      expect(
+        armed.steps.map((s) => s.workflow_role_key),
+        "run ords are dense over EMITTED steps only -- both condition lanes sit above this fixture's amount",
+      ).toEqual(['fin_mgr', 'compliance'])
+
+      const tokens = await firmApproverTokens()
+      const result = await approveUntilClosed(created.id, tokens)
+
+      expect(result.state, 'two decisions by the two staffed holders should close the run approved').toBe('approved')
+      expect(result.decisions.length, 'exactly two decisions for a two-step run').toBe(2)
+    })
+
+    test('AC-6: a 403 refusing the pending role surfaces the role key and the caller subject', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-403-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated, arming the seeded firm run').toBe('validated')
+
+      const armed = await getInvoiceApproval(token, created.id)
+      expect(armed.steps[0]?.workflow_role_key, 'the first pending step should be fin_mgr').toBe('fin_mgr')
+
+      // A seeded preparer is a member but neither admin nor reviewer (HeldRoleKeysTx's
+      // third conjunct), so deciding with this token 403s server-side.
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      let caught: Error | undefined
+      try {
+        await approveUntilClosed(created.id, { fin_mgr: preparerToken })
+      } catch (e) {
+        caught = e as Error
+      }
+      expect(caught, 'a 403 from the server must surface as a thrown error, not an unhandled rejection').toBeInstanceOf(Error)
+      expect(caught?.message, 'the surfaced error must name the pending role key').toContain('fin_mgr')
+      expect(caught?.message, 'the surfaced error must name the caller subject the 403 was for').toContain(PREPARER_SUBJECT)
     })
   })
 

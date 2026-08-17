@@ -1175,6 +1175,12 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       // Copy 1 (rollup) vs copy 2 (list filter): pagination.total, never invoices.length --
       // the list defaults to 50 and clamps at 200, and this entity's backlog accumulates
       // across the whole file's run.
+      //
+      // The oracle here is COUNT equality, not membership equality -- this proves the two
+      // totals agree, not that they agree on WHICH invoices make up the total. Deliberate:
+      // membership equality would need pagination.total > 50 handled or a second list call,
+      // and the accumulated multi-invoice backlog this entity carries by this point in the
+      // file already makes a same-total-different-set coincidence unlikely, not impossible.
       expect(clientRow!.awaiting_approval, 'the rollup badge and the filtered list total must agree').toBe(list.pagination.total)
       expect(clientRow!.awaiting_approval, 'the agreed count must be positive, not a vacuous 0 == 0').toBeGreaterThan(0)
       expect(list.pagination.total, 'the agreed count must be positive, not a vacuous 0 == 0').toBeGreaterThan(0)

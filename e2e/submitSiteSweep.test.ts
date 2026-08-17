@@ -274,12 +274,16 @@ function scanTopologyFile(filePath: string): RawMatch[] {
 
 // Response-predicate OBSERVERS: page.waitForResponse(...) / page.on('request', ...) whose
 // predicate references the submissions path. These do not drive a submit -- AC-16 excludes
-// them from the floor and states the observer count is not the submit count. Reported by
-// the STRING LITERAL's own line, matching how the story's notes cite them.
-function scanObservers(filePath: string): number[] {
+// them from the floor and states the observer count is not the submit count. Keyed the same
+// way as every submit-driving site below (file, enclosing label, needle, ordinal) -- NOT by
+// line: this file's own AC-11 rationale (a line-pinned check reds on an unrelated edit and
+// teaches everyone to bump the number without reading) applies here as much as anywhere else
+// in it. QA found this function doing exactly that to itself; fixed by giving it the same
+// manifest treatment as scanApiFile/scanTopologyFile.
+function scanObservers(filePath: string): RawMatch[] {
   const file = basename(filePath)
   const sourceFile = parseFile(filePath)
-  const lines: number[] = []
+  const out: RawMatch[] = []
   walk(sourceFile, (node) => {
     if (!ts.isCallExpression(node)) return
     const callee = node.expression
@@ -293,12 +297,13 @@ function scanObservers(filePath: string): number[] {
     if (!isWaitForResponse && !isPageOnRequest) return
     for (const arg of node.arguments) {
       walk(arg, (n) => {
-        if (ts.isStringLiteralLike(n) && n.text.endsWith('/invoices/submissions')) lines.push(lineOf(sourceFile, n))
+        if (ts.isStringLiteralLike(n) && n.text.endsWith('/invoices/submissions')) {
+          out.push({ file, line: lineOf(sourceFile, n), needle: 'observer:/invoices/submissions', enclosing: resolveEnclosing(n) })
+        }
       })
     }
   })
-  void file
-  return lines
+  return out
 }
 
 // ==================================================================================
@@ -399,6 +404,25 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   ],
 ]
 
+// AC-16's four observers, keyed the same way as the two manifests above -- not by line
+// (see scanObservers's own comment for why).
+const OBSERVER_MANIFEST: ManifestEntry[] = [
+  [INVOICE_SURFACES, 'helper:submitSelected', 'observer:/invoices/submissions', 1],
+  [
+    INVOICE_SURFACES,
+    'test:detail surface: submit one invoice from its own page -- cancel sends nothing, confirm sends one, and the verdict lands without leaving',
+    'observer:/invoices/submissions',
+    1,
+  ],
+  [INVOICE_SURFACES, 'test:register-confirm-stage: arm, a selection change disarms, re-arm sends exactly one POST', 'observer:/invoices/submissions', 1],
+  [
+    IMPORT_WIZARD,
+    'test:INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-validate -> select -> submit, badges from a re-fetch',
+    'observer:/invoices/submissions',
+    1,
+  ],
+]
+
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --
 // not manifested, not floored. Their population moves with every assertion this story
 // rewrites (Stage 1 notes), and most are prose (test titles, comments) rather than call
@@ -495,18 +519,29 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
       expect(stale.map(([f, l, n, o]) => `${f} [${l} / ${n} #${o}]`), 'manifest entry no longer resolves to a live site').toEqual([])
     })
 
-    // AC-16: the four response predicates are OBSERVERS, not submits -- named by the exact
-    // lines the Stage 1 notes cite, so a fifth appearing (or one of these four vanishing)
-    // is itself a signal something about the submissions wire changed shape.
+    // AC-16: the four response predicates are OBSERVERS, not submits -- keyed by (file,
+    // enclosing test/helper, needle, ordinal), same as every submit-driving site, so an
+    // unrelated edit above one of them cannot red this check on a pure line-shift. A genuine
+    // 5th appearing (or one of these four vanishing) still fails, naming which site.
     it('observers: exactly the four known response predicates, excluded from the floor above', () => {
-      const observed = [
-        ...scanObservers(join(TOPOLOGY_DIR, INVOICE_SURFACES)).map((line) => `${INVOICE_SURFACES}:${line}`),
-        ...scanObservers(join(TOPOLOGY_DIR, IMPORT_WIZARD)).map((line) => `${IMPORT_WIZARD}:${line}`),
-      ].sort()
+      const observed = withOrdinals([
+        ...scanObservers(join(TOPOLOGY_DIR, INVOICE_SURFACES)),
+        ...scanObservers(join(TOPOLOGY_DIR, IMPORT_WIZARD)),
+      ])
+      const observedKeys = new Set(observed.map((m) => `${m.file}||${m.label}||${m.needle}||${m.ordinal}`))
+      const manifestKeys = new Set(OBSERVER_MANIFEST.map(([f, l, n, o]) => `${f}||${l}||${n}||${o}`))
+
+      const unexpected = observed.filter((m) => !manifestKeys.has(`${m.file}||${m.label}||${m.needle}||${m.ordinal}`))
       expect(
-        observed,
-        'the observer count is NOT the submit count -- these four watch the wire, they do not drive it',
-      ).toEqual([`${IMPORT_WIZARD}:1184`, `${INVOICE_SURFACES}:1379`, `${INVOICE_SURFACES}:1671`, `${INVOICE_SURFACES}:242`].sort())
+        unexpected.map(describeMatch),
+        'a 5th response predicate appeared -- the observer count is NOT the submit count; give it a verdict and add it to OBSERVER_MANIFEST if it is really just watching the wire',
+      ).toEqual([])
+
+      const missing = OBSERVER_MANIFEST.filter(([f, l, n, o]) => !observedKeys.has(`${f}||${l}||${n}||${o}`))
+      expect(
+        missing.map(([f, l, n, o]) => `${f} [${l} / ${n} #${o}]`),
+        'a known observer no longer resolves -- if the enclosing test/helper still exists this is a pure line-shift from an unrelated edit (harmless, re-run); if the test/helper was renamed or removed, update OBSERVER_MANIFEST to match',
+      ).toEqual([])
     })
   })
 })

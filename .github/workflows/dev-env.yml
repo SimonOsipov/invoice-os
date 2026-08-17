@@ -512,6 +512,19 @@ jobs:
           bash scripts/ci/railway-env.sh reconcile-urls \
             "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
 
+      # PR ONLY, same reasoning as the URL-variables step above: on push/dispatch
+      # the target is the persistent environment, and turning enforcement on
+      # there is an OPERATOR action (APPR-14-10), never a CI one. The
+      # subcommand's own refusal is the second line of defence. No
+      # continue-on-error: a silent failure here would leave the deploy gate
+      # proving flag-OFF behaviour while claiming to prove flag-ON.
+      - name: Turn approvals enforcement ON in the fork (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-approvals-enforced "$ENV_ID"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The

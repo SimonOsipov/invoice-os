@@ -934,7 +934,7 @@ func TestSeed_PublishClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
 	var versionID string
 	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
 		var err error
-		versionID, err = publishSeedPolicy(ctx, tx, f.tenantID)
+		versionID, err = publishSeedPolicy(ctx, tx, f.tenantID, planFor(f.tenantID))
 		return err
 	}); err != nil {
 		t.Fatalf("publishSeedPolicy over a stray foreign active version: %v", err)

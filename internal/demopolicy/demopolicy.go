@@ -242,6 +242,16 @@ type activeVersion struct {
 func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p *plan) (Result, error) {
 	var res Result
 	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		// One converger per tenant at a time. clearActive would otherwise let a
+		// boot that probed before a sibling committed deactivate that sibling and
+		// insert a SECOND policy of the same name -- approval_policies has no
+		// unique index on name, and one_active no longer refuses it. Released on
+		// commit or rollback (TestSeed_ConcurrentBootsLeaveOneActiveVersion).
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID); err != nil {
+			res.Note = "tenant lock failed"
+			return err
+		}
+
 		// RLS is the only tenant filter from here down; tenant_id is still written
 		// as a column value because the composite FKs require it.
 		var present bool
@@ -438,14 +448,9 @@ func reactivateSealedVersion(ctx context.Context, tx pgx.Tx, tenantID, versionID
 // ORDER is the contract: a step INSERT after the seal raises 23001, and
 // is_active ahead of sealed raises 23514 (TestSeed_IsIdempotentAcrossBoots).
 //
-// The plan is variadic so the boot path passes the one it already resolved,
-// while a caller holding only a tenant id gets planFor's answer.
-func publishSeedPolicy(ctx context.Context, tx pgx.Tx, tenantID string, want ...*plan) (string, error) {
-	p := planFor(tenantID)
-	if len(want) > 0 {
-		p = want[0]
-	}
-
+// The plan is an argument rather than resolved here: seedTenantPlan may be
+// driving a plan planFor would never answer for this tenant.
+func publishSeedPolicy(ctx context.Context, tx pgx.Tx, tenantID string, p *plan) (string, error) {
 	// scope is left to its column DEFAULT: CHECK (scope = 'All invoices') admits
 	// exactly one value.
 	var policyID string

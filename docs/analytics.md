@@ -63,11 +63,16 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
 1. **Set `VITE_GA_MEASUREMENT_ID=G-E409H76XYY`** on the production landing service (project
    `ASComply`, environment `production` `6c864094-6a06-452f-8495-be77d8a94fe7`, service `landing`
    `21e62d5d-82c9-48d8-8f6b-b2a53104c046`), then redeploy so `vite build` bakes it.
-   **Measured absent 2026-08-16.** Until this is done the tag loads nowhere, and nothing local or
-   in CI catches that — every automated check passes on a dark build by construction.
+   **Done — measured live 2026-08-16.** The variable is set, the deployed bundle carries
+   `G-E409H76XYY`, `https://www.googletagmanager.com/gtag/js?id=G-E409H76XYY` returns 200, a browser
+   load of `https://www.ascomply.com/` holds `_ga` cookies and hits `region1.google-analytics.com`.
+   Nothing local or in CI catches a regression here — every automated check passes on a dark build
+   by construction, so re-measure in a browser after any landing redeploy.
 2. **GA4 data retention → 14 months** (Admin → Data settings → Data retention). The default is
    2 months, which makes year-on-year comparison impossible after the fact.
+   **Done — operator-confirmed 2026-08-16.**
 3. **Google Signals → off** (Admin → Data settings → Data collection).
+   **Done — operator-confirmed 2026-08-16.**
 4. **Register `cta_location` and `form_name` as GA4 custom dimensions** (Admin → Custom
    definitions → Create custom dimension, scope *Event*). Both are collected without this and
    **invisible in every standard report** — the call-site attribution this story exists to deliver

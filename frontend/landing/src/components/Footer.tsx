@@ -23,11 +23,19 @@ const COLS = [
       { label: 'Book a demo', href: '#demo' },
       { label: 'Security', href: '#' },
       { label: 'Status', href: '#' },
+      { label: 'Privacy & cookies', href: '/privacy' },
     ],
   },
 ]
 
-export function Footer({ onBookDemo }: { onBookDemo: () => void }) {
+// Only real cross-section anchors take the prefix. The `#` stubs (Open the app,
+// Security, Status) and the /privacy path render exactly as authored — prefixing
+// /privacy would produce //privacy.
+function footerHref(href: string, prefix: string): string {
+  return href.startsWith('#') && href !== '#' ? `${prefix}${href}` : href
+}
+
+export function Footer({ onBookDemo, hrefPrefix = '' }: { onBookDemo: () => void; hrefPrefix?: string }) {
   return (
     <footer style={{ background: 'var(--bg-2)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '56px 32px 40px' }}>
@@ -68,7 +76,7 @@ export function Footer({ onBookDemo }: { onBookDemo: () => void }) {
                         {l.label}
                       </button>
                     ) : (
-                      <a key={l.label} href={l.href} className="ios-link" style={{ fontSize: 13, color: 'var(--fg-2)' }}>
+                      <a key={l.label} href={footerHref(l.href, hrefPrefix)} className="ios-link" style={{ fontSize: 13, color: 'var(--fg-2)' }}>
                         {l.label}
                       </a>
                     ),

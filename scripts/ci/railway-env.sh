@@ -1882,7 +1882,10 @@ approvals_self_test() {
   approvals_expect_select A1 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-gw","serviceName":"gateway"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-app","serviceName":"app"}}]}}}}' svc-inv
   # A2 same fleet, edges reversed — order must not decide.
   approvals_expect_select A2 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-app","serviceName":"app"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-gw","serviceName":"gateway"}}]}}}}' svc-inv
-  # A3 invoices + invoice-legacy present, no invoice — kills substring matching.
+  # A3 invoices + invoice-legacy present, no invoice. NOTE: does not by itself
+  # kill substring matching — two near-misses read as an ambiguous 2-match
+  # refusal even under a contains() regression. A11 is the fixture that
+  # actually isolates that class of bug.
   approvals_expect_refusal A3 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"invoices"}},{"node":{"serviceId":"svc-2","serviceName":"invoice-legacy"}}]}}}}'
   # A4 Invoice only — kills case-insensitive matching.
   approvals_expect_refusal A4 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"Invoice"}}]}}}}'
@@ -1896,6 +1899,11 @@ approvals_self_test() {
   approvals_expect_refusal A8 '{"errors":[{"message":"Not Authorized"}],"data":null}'
   # A9 bare `[]` top level — a jq index error, a different mechanism from A7.
   approvals_expect_refusal A9 '[]'
+  # A11 invoice-legacy alone, no exact invoice. The ONLY fixture with exactly
+  # one near-miss and zero exact matches: a contains()/prefix regression would
+  # SELECT this instance (1 match), so this is the fixture that actually
+  # catches that class of bug, unlike A3.
+  approvals_expect_refusal A11 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"invoice-legacy"}}]}}}}'
 
   # A10: A3 (zero matches among known instances) and A6 (no instances at all)
   # must produce DISTINCT messages — an operator must not have to guess which
@@ -1914,7 +1922,7 @@ approvals_self_test() {
     echo "::error::approvals enforcement self-test: $failures fixture(s) FAILED."
     exit 1
   fi
-  echo "Approvals enforcement self-test: 10 fixtures passed, no token read, no network call."
+  echo "Approvals enforcement self-test: 11 fixtures passed, no token read, no network call."
 }
 
 # cmd_set_approvals_enforced <environment-id|--self-test>

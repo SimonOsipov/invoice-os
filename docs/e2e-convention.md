@@ -119,13 +119,18 @@ pre-existing row;
 module that predated those live reads, `policyFixtures.ts`, was deleted by APPR-10.
 
 `invoice-surfaces.spec.ts` extends this to the invoice-level decision controls and trail
-card, but covers only the **unarmed** case for those controls specifically — both disabled,
-the trail empty. (Its own submitting fixtures, and `import-wizard.spec.ts`'s, do arm and
-close a run since APPR-14-07 — over the API side channel via `approveUntilClosed`, never
-through the UI's own Approve/Reject buttons.) The **armed, UI-driven** approve/reject
-journey still lives in `e2e/api/contract-invoice.spec.ts` instead, because
-`[topology-never-publishes]` still bars a topology spec from publishing the dedicated probe
-policy that journey would need.
+card. The firm tenant's policy is active tenant-wide (`ensureFirmPolicyActive`'s `beforeAll`
+convergence), so a validated firm invoice always arms a run — the suite's decision-block
+test covers the **armed, read-only** case: both controls disabled because the driving
+persona holds neither workflow role, the AXIS-2 reason rendered beside them, and the trail
+card showing the open run's pending step and role. The **empty-trail** branch (no run at
+all) is still reachable on any never-validated draft, and is asserted there instead. (This
+file's own submitting fixtures, and `import-wizard.spec.ts`'s, arm and close a run since
+APPR-14-07 — over the API side channel via `approveUntilClosed`, never through the UI's
+own Approve/Reject buttons.) The **UI-driven approve/reject journey itself** — a persona
+who does hold the role clicking through to a decision — still lives in
+`e2e/api/contract-invoice.spec.ts` instead, because `[topology-never-publishes]` still bars
+a topology spec from publishing the dedicated probe policy that journey would need.
 
 That trail card reads its run on mount, and that GET answers 404 when there is no run —
 which Chromium logs as a console error, tripping the `collectErrors` gate in every

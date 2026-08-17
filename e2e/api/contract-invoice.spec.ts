@@ -52,15 +52,11 @@ import {
   getInvoiceApproval,
   decideInvoiceApproval,
   getInvoiceHistory,
+  approveUntilClosed,
+  firmApproverTokens,
   PERSONAS,
   type Entity,
-  type ApprovalRun,
 } from './client'
-// task-570 (APPR-14-04): approveUntilClosed/firmApproverTokens ship in client.ts as part of
-// this same story. Reached through the namespace + an `unknown` cast, not the named export
-// list above -- a named import would fail `tsc --noEmit` until they land, which is the
-// wrong kind of red for this RED spec (Mode A wants "not implemented" at runtime).
-import * as clientApi from './client'
 import { freshTin, freshPolicyName } from './fixtures'
 import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 
@@ -148,11 +144,6 @@ const APPROVE_NOT_VALIDATED_REASON = 'Only a validated invoice can be approved o
 const APPROVE_RUN_CLOSED_REASON = "This invoice's approval run is already closed."
 const APPROVE_NOT_ROLE_HOLDER_REASON =
   "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
-
-const { approveUntilClosed, firmApproverTokens } = clientApi as unknown as {
-  approveUntilClosed: (invoiceId: string, tokens: Record<string, string>, max?: number) => Promise<ApprovalRun>
-  firmApproverTokens: () => Promise<Record<string, string>>
-}
 
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
@@ -1519,9 +1510,12 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
     test('404: a validated invoice with no armed run answers 404, not an empty run', async () => {
       // Distinct from :1227-1234 (a nonexistent invoice id on POST): this is a real,
-      // validated invoice with no policy active, reaching ErrRunNotFound through a real
-      // row lookup on the GET endpoint -- the contract the SPA's empty state depends on
-      // (isNoApprovalRun, APPR-13-01). No policy is created, so no finally is needed.
+      // validated invoice reaching ErrRunNotFound through a real row lookup on the GET
+      // endpoint -- the contract the SPA's empty state depends on (isNoApprovalRun,
+      // APPR-13-01). Unarmed here not because the tenant lacks a policy (it has a seeded
+      // one, :1104-1109) but because every prior test in this describe deletes its own
+      // probe policy in a `finally` (:1161-1162) first. No policy of its own is created,
+      // so no finally is needed here.
       const created = await createInvoice(token, {
         entity_id: entity.id,
         ...cleanInvoiceFields(`INV-APPR-NORUN-${freshTin()}`),

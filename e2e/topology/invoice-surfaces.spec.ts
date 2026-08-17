@@ -302,7 +302,8 @@ test('list surface: real rows render with real status badges, and Needs attentio
   // needs_attention (internal/invoice/needs_attention_test.go's
   // matchesNeedsAttentionPredicate: rejected matches, failed matches unless kept;
   // a draft matches on a severity:"error" violation or a newest approval run that
-  // closed 'rejected' -- this flow creates no approval runs).
+  // closed 'rejected' -- attn never promotes past draft, so it never arms a run at all;
+  // clean below does arm one under the active firm policy, but 'open' isn't 'rejected').
   const attnNumber = `INV-M409-ATTN-${Date.now()}`
   const attn = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(attnNumber) })
   await validateInvoice(token, attn.id)
@@ -1386,6 +1387,10 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   // the backend's own sentence is on screen ([revalidate-visibility] convention, extended to
   // Submit).
   await openInvoiceRow(page, draftNumber)
+  // The approval-trail card fetches its run unconditionally on mount (InvoiceDetail.tsx:
+  // 196-199), so this never-validated draft still renders the empty branch -- topology's
+  // only remaining assertion of it now that a validated firm invoice always arms a run.
+  await expect(page.getByTestId('approval-trail-empty')).toBeVisible()
   await expect(page.getByTestId('detail-submit')).toBeVisible()
   await expect(page.getByTestId('detail-submit')).toBeDisabled()
   await expect(page.getByTestId('submit-blocked-reason')).toContainText(
@@ -2315,16 +2320,19 @@ test("invoice detail: an incomplete invoice shows a disabled View UBL/XML carryi
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// APPR-13-06 (task-548): D-26 -- the firm tenant (signInFirm) seeds NO
-// approval_policies/approval_runs, so a freshly validated firm invoice is reliably
-// run-less without publishing anything. [topology-never-publishes] stays intact: no
-// armedInvoice()-style helper, no policy call anywhere below.
-test('detail surface: the no-run decision block and trail card, plus their layout at every wide width', async ({ page }) => {
+// The firm tenant's policy is active tenant-wide (beforeAll's ensureFirmPolicyActive), so
+// a freshly validated firm invoice always arms a run now -- the no-run case
+// (APPR-13-06/task-548) this test originally covered is no longer reachable this way; its
+// empty-trail branch moved to a draft-detail test instead (still reachable there, since a
+// draft never arms anything). [topology-never-publishes] still holds: no
+// armedInvoice()-style helper, no policy call anywhere below -- this test only validates,
+// same as every other case in this file.
+test('detail surface: the armed decision block and trail card, plus their layout at every wide width', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
-  const entity = await createEntity(token, { name: `APPR-13-06 no-run ${Date.now()}`, tin: freshTin() })
+  const entity = await createEntity(token, { name: `APPR-13-06 armed ${Date.now()}`, tin: freshTin() })
   const invoiceNumber = `INV-APPR1306-${Date.now()}`
   const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
   await validateInvoice(token, invoice.id)
@@ -2334,10 +2342,12 @@ test('detail surface: the no-run decision block and trail card, plus their layou
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
 
-  // AC-2: the real backend, over the real wire, on a real no-run invoice -- proving the
-  // exact sentence (handlers.go:386's approvalGate) reaches the browser as VISIBLE text,
-  // not only `title`. NOT a duplicate of InvoiceDetail.test.tsx:2798, which parametrizes
-  // all five gate sentences against a mock and never leaves it.
+  // The real backend, over the real wire: this invoice's total sits below both firm
+  // conditions, so materialise emits fin_mgr (ord0) then compliance (ord1), both pending.
+  // PERSONAS.A holds neither seat, so the lowest-ord pending check (fin_mgr) fails and
+  // both controls stay disabled with the AXIS-2 sentence (handlers.go:394) reaching the
+  // browser as VISIBLE text, not only `title`. NOT a duplicate of InvoiceDetail.test.tsx:
+  // 2798, which parametrizes all five gate sentences against a mock and never leaves it.
   const detailApprove = page.getByTestId('detail-approve')
   const detailReject = page.getByTestId('detail-reject')
   await expect(detailApprove).toBeVisible()
@@ -2346,12 +2356,22 @@ test('detail surface: the no-run decision block and trail card, plus their layou
   await expect(detailReject).toBeDisabled()
   const approveReason = page.getByTestId('approve-blocked-reason')
   await expect(approveReason).toBeVisible()
-  await expect(approveReason).toHaveText('This invoice has no approval run to decide on.')
+  await expect(approveReason).toHaveText(
+    "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role.",
+  )
+  // reject-blocked-reason never renders: handlers.go:506-509 assigns reject the same reason
+  // as approve, and InvoiceDetail.tsx:769 only renders reject's own div when they differ.
 
-  // AC-4: the trail card is honest about there being no run. approval-trail-step's count
-  // is deliberately NOT asserted -- empty/has-steps are mutually exclusive branches of one
-  // if/else if (ApprovalTrailCard.tsx:112-123), so one can't fail independently of the other.
-  await expect(page.getByTestId('approval-trail-empty')).toBeVisible()
+  // The pending step and its role live on the TRAIL CARD, not the decision block above.
+  // `Engagement Manager` is the FIRM tenant's fin_mgr title (db/seed.dev.sql:65) --
+  // Honeywell's title for the same key is `Finance Manager` and would be wrong here.
+  const trailState = page.getByTestId('approval-trail-state')
+  await expect(trailState).toBeVisible()
+  await expect(trailState).toHaveText('In progress')
+  const trailSteps = page.getByTestId('approval-trail-step')
+  await expect(trailSteps).toHaveCount(2)
+  await expect(trailSteps.first()).toContainText('Approval · Engagement Manager')
+  await expect(page.getByTestId('approval-trail-empty')).toHaveCount(0)
 
   // AC-1: containment -- decision block inside its action column, the file's own idiom
   // verbatim (:1626-1632). NOT assertFillsColumn here: the decision block right-aligns
@@ -2402,10 +2422,9 @@ test('detail surface: the no-run decision block and trail card, plus their layou
     expect(entry.right, `trail card must not overflow status-history's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
   }
 
-  // D-27: getInvoiceApprovalRun (approvals.ts:327-338) catches the 404 and resolves null
-  // -- no console.error anywhere in that chain. The one thing this couldn't settle by
-  // reading: whether Chromium's own "Failed to load resource" line reaches Playwright's
-  // page.on('console') listener. It's a CDP Log-domain message, not a console-API call,
-  // so it's expected NOT to -- if that's wrong, this assertion goes red and says so.
+  // General console hygiene only now -- this invoice is armed, so its approval GET
+  // returns 200, not a 404. D-27's no-console-error-on-404 observation moved with
+  // approval-trail-empty to the "submit one invoice from its own page" test's draft
+  // leg above, the only site left where a detail page's approval GET still 404s.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

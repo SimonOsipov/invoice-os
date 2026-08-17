@@ -93,7 +93,7 @@ export function Privacy() {
           </p>
           <p style={P}>
             Your answer itself is stored on your device too, though not as a cookie. It is a small record named
-            asc_consent, which this site writes to your browser's own storage and we never send anywhere: it holds
+            asc_consent, which our own code writes to your browser's own storage and never sends anywhere: it holds
             whether you allowed analytics, when you chose, and which version of the record it is. It is what stops the
             cookie notice asking you again on every visit, and, apart from the deletions described above, it is the
             only thing our own code writes when you choose Reject.
@@ -163,10 +163,10 @@ export function Privacy() {
             allows Google Analytics, Reject leaves it off. You can change your answer whenever you like: Cookie
             choices, at the foot of every page, brings the notice back with the setting you last chose. If you choose
             Reject after having accepted earlier, we delete the _ga cookies described above and our own code sends
-            Google nothing more. Google's script is already loaded into the page you are on, though, and until you
-            reload it can still send measurements of its own and re-create the _ga cookies we just deleted, so reload
-            the page to clear that out too — and nothing already sent can be taken back. The four options below work
-            whatever you choose here.
+            Google nothing more. If analytics was running, though, Google's script is still loaded into the page you
+            are on, and until you reload it can send measurements of its own and re-create the _ga cookies we just
+            deleted, so reload the page to clear that out too — and nothing already sent can be taken back. The four
+            options below work whatever you choose here.
           </p>
           <ol style={LIST}>
             <li style={ITEM}>

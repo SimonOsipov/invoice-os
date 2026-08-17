@@ -364,6 +364,11 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 		{"fin approver with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"reviewer"}`, finApproverSubject, firmTenant), http.StatusForbidden},
 		{"compliance approver with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"reviewer"}`, complianceApproverSubject, firmTenant), http.StatusForbidden},
 		{"fin approver with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, personaRole, firmTenant), http.StatusForbidden},
+		// the comparison is a plain Go struct == on strings: case and whitespace variants must not
+		// match. firmTenant/inhouseTenant are all-digit UUIDs (no hex letters), so the case
+		// variant has to hit the subject, which does carry one ("c0000000-...").
+		{"fin approver with uppercased subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, strings.ToUpper(finApproverSubject), firmTenant, personaRole), http.StatusForbidden},
+		{"fin approver with trailing-whitespace tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":"%s ","role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusForbidden},
 		{"unknown tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole), http.StatusForbidden},
 		{"mismatched pairing", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole), http.StatusForbidden},
 		{"unknown subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole), http.StatusForbidden},
@@ -627,11 +632,20 @@ func TestMockLoginHostedRefusalOpaque(t *testing.T) {
 	mux.ServeHTTP(unknownSubject, httptest.NewRequest("POST", "/auth/login",
 		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole))))
 
-	if unknownTenant.Code != http.StatusForbidden || unknownSubject.Code != http.StatusForbidden {
-		t.Fatalf("status = %d/%d, want 403/403", unknownTenant.Code, unknownSubject.Code)
+	// A listed subject on the wrong tenant must be as opaque as a wholly unknown
+	// subject -- the two refusal reasons cannot be told apart from the body.
+	admittedWrongTenant := httptest.NewRecorder()
+	mux.ServeHTTP(admittedWrongTenant, httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, inhouseTenant, personaRole))))
+
+	if unknownTenant.Code != http.StatusForbidden || unknownSubject.Code != http.StatusForbidden || admittedWrongTenant.Code != http.StatusForbidden {
+		t.Fatalf("status = %d/%d/%d, want 403/403/403", unknownTenant.Code, unknownSubject.Code, admittedWrongTenant.Code)
 	}
 	if unknownTenant.Body.String() != unknownSubject.Body.String() {
 		t.Fatalf("refusal bodies differ: %q vs %q", unknownTenant.Body.String(), unknownSubject.Body.String())
+	}
+	if unknownTenant.Body.String() != admittedWrongTenant.Body.String() {
+		t.Fatalf("admitted-subject-wrong-tenant refusal body differs: %q vs %q", admittedWrongTenant.Body.String(), unknownTenant.Body.String())
 	}
 	for _, leak := range []string{"subject", "tenant_id", `"role"`} {
 		if strings.Contains(unknownTenant.Body.String(), leak) {
@@ -666,6 +680,29 @@ func TestMockLoginPostureAsymmetry(t *testing.T) {
 			mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestLoginAllowlistOnlyGatesHostedPosture proves the widened allowlist cannot
+// leak into a non-Hosted posture: the check at gateway.go's login handler is
+// gated by "posture == PostureHosted &&", so outside Hosted the two new
+// personas mint even for a pairing the allowlist would never contain.
+func TestLoginAllowlistOnlyGatesHostedPosture(t *testing.T) {
+	tg := setupGateway(t)
+	// finApproverSubject paired with unlistedTenant: no loginPersonas row can match this.
+	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, unlistedTenant, personaRole)
+
+	for _, posture := range []platform.PostureKind{platform.PosturePreview, platform.PostureLocal} {
+		t.Run(string(posture), func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, posture))
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s) -- the allowlist must not be consulted here", rec.Code, rec.Body.String())
 			}
 		})
 	}

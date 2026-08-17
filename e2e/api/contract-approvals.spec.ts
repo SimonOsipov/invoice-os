@@ -43,12 +43,7 @@ import {
   PERSONAS,
   type ApprovalPolicy,
 } from './client'
-import { assertErrorEnvelope, type RawResult } from './contract-helpers'
-// task-571 (APPR-14-05): ensureFirmPolicyActive ships in contract-helpers.ts as part of this
-// same story. Reached through the namespace + an `unknown` cast, not a named import above --
-// a named import would fail `tsc --noEmit` until it lands, the wrong kind of red for this RED
-// spec (Mode A wants "not implemented" at runtime, mirroring task-570's approveUntilClosed).
-import * as contractHelpers from './contract-helpers'
+import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 import { freshPolicyName, freshRoleTitle } from './fixtures'
 
 // The four keys internal/approval's Role serializes, sorted. No omitempty on any field, so
@@ -403,10 +398,6 @@ function collectStepIds(steps: unknown[], out: string[] = []): string[] {
     collectStepIds(s.else as unknown[], out)
   }
   return out
-}
-
-const { ensureFirmPolicyActive } = contractHelpers as unknown as {
-  ensureFirmPolicyActive: (token: string) => Promise<ApprovalPolicy>
 }
 
 test.describe('approval-policy contract (API E2E, over the deployed gateway)', () => {

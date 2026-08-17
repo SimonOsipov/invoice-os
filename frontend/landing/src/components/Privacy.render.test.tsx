@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
+import { CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 
@@ -46,6 +47,23 @@ function sourceFiles(dir: string): string[] {
     else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(path)
   }
   return out
+}
+
+// The D7 guard's list, hoisted at LAND-05-03 so the narrowing is assertable rather
+// than buried in a loop. It is an instrument, not scaffolding: a preference centre
+// still does not exist, and it was proven non-vacuous against a planted hit at
+// LAND-05-01's QA. LAND-05-03 narrows it to the terms that stay wrong once the notice
+// mounts; `banner` and `Reject` come off only because the rewritten copy names the
+// real control.
+const FORBIDDEN_WITHDRAWAL_TERMS: readonly string[] = ['banner', 'Reject', 'preference centre', 'preference center']
+
+// The same loop the guard runs, exposed so the narrowed list can be proven non-vacuous
+// against a planted string instead of being trusted.
+function firstForbiddenHit(text: string, terms: readonly string[]): string | null {
+  for (const term of terms) {
+    if (text.includes(term)) return term
+  }
+  return null
 }
 
 describe('Privacy SSR render (LAND-04-02)', () => {
@@ -96,9 +114,10 @@ describe('Privacy SSR render (LAND-04-02)', () => {
 
   it('D7: the withdrawal section names only mechanisms that exist', () => {
     expect(html).toContain('tools.google.com/dlpage/gaoptout')
-    for (const forbidden of ['banner', 'Reject', 'preference centre', 'preference center']) {
-      expect(html, `withdrawal section mentions "${forbidden}"`).not.toContain(forbidden)
-    }
+    // Same helper the planted-hit control below runs, so the control proves THIS
+    // loop still discriminates rather than a lookalike one.
+    const hit = firstForbiddenHit(html, FORBIDDEN_WITHDRAWAL_TERMS)
+    expect(hit, `withdrawal section mentions "${hit}"`).toBeNull()
   })
 
   it('D7: the page carries the default-state sentence', () => {
@@ -286,5 +305,107 @@ describe('T1-7: the published default-state claim tracks CONSENT_DEFAULT_ANALYTI
 
   it('the shipped disclosure does not claim analytics is on by default', () => {
     expect(classifyDefaultClaim(ANALYTICS_DEFAULT_SENTENCE)).toBe('off')
+  })
+})
+
+// RED specs (task-562, LAND-05-03, Test-first) — T3-15, T3-17 and T3-18. Oracles
+// only: the wording is Stage 3's and needs the user's line-by-line sign-off, so
+// nothing below pins a sentence this file invented. Each spec ties the published
+// claim to something the CODE decides — the control's own button labels, or the
+// qualifier the page already uses six lines further down.
+//
+// Privacy renders in ISOLATION here (renderToStaticMarkup of the component, not the
+// App tree), so the mounted notice never enters this markup: the guards below trip
+// only on the privacy page's own prose, which is the point.
+
+const NOTICE_DENIALS: readonly string[] = [
+  'This site has no privacy control of its own yet',
+  'no notice, no toggle, no settings page',
+  'One that lets you choose is being built',
+  'Until it ships',
+]
+
+// Wording the page ALREADY uses for the same condition (the cookies section). The
+// classifier reads for a consent condition, never for a particular sentence.
+const CONSENT_QUALIFIERS: readonly RegExp[] = [
+  /\bif you have allowed analytics\b/i,
+  /\bonce you have allowed analytics\b/i,
+  /\bonly (?:if|once|after|when) you\b/i,
+  /\bunless you (?:have )?(?:allowed|accepted|turned it on)\b/i,
+  /\bafter you (?:allow|accept|choose)\b/i,
+]
+
+function carriesConsentQualifier(text: string): boolean {
+  return CONSENT_QUALIFIERS.some((re) => re.test(text))
+}
+
+describe('T3-15/T3-17/T3-18: the page describes the control that now exists', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+  const noticeHtml = renderToStaticMarkup(
+    createElement(CookieNotice, { current: null, suppressed: false, onChoose: () => undefined }),
+  )
+
+  function paragraphContaining(needle: string): string {
+    const hits = html.split('</p>').filter((segment) => segment.includes(needle))
+    expect(hits.length, `expected exactly one paragraph containing "${needle}"`).toBe(1)
+    return hits[0]
+  }
+
+  it('control: both renders resolved', () => {
+    expect(html.length).toBeGreaterThan(0)
+    expect(html).toContain('<h1')
+    expect(noticeHtml.length).toBeGreaterThan(0)
+    expect(noticeHtml).toContain('cookie-note')
+  })
+
+  it('control: the qualifier classifier discriminates on shipped copy', () => {
+    // Positive: the cookies section already carries the condition this spec asks the
+    // other two sentences to carry. Negative: an unrelated shipped sentence does not.
+    expect(carriesConsentQualifier(paragraphContaining('Our own code sets no cookies at all'))).toBe(true)
+    expect(carriesConsentQualifier('HubSpot holds all of this on their EU servers.')).toBe(false)
+    expect(carriesConsentQualifier('Google measures how this site is used.')).toBe(false)
+  })
+
+  it('T3-15 (AC-9): the page no longer denies that a control exists', () => {
+    for (const denial of NOTICE_DENIALS) {
+      expect(html, `the page still denies the notice: "${denial}"`).not.toContain(denial)
+    }
+  })
+
+  it('T3-15 (AC-9): the page names the control using the control own labels', () => {
+    // Read out of CookieNotice, never retyped — the same technique as C3 (the
+    // hostname comes from the allowlist) and D6 (the consent sentence comes from
+    // demoForm). Relabel the buttons and this forces the copy to follow.
+    const labels = Array.from(noticeHtml.matchAll(/<button[^>]*>([^<]+)<\/button>/g)).map((m) => m[1].trim())
+    expect(labels.length, 'the notice rendered no buttons to read labels from').toBeGreaterThan(0)
+    expect(labels).toEqual(['Accept', 'Reject'])
+    for (const label of labels) {
+      expect(html, `the page does not name the "${label}" control`).toContain(label)
+    }
+  })
+
+  it('T3-17 (AC-10): the lede carries the consent qualifier', () => {
+    // Anchored on the sentence Privacy.claims.test.tsx already pins for this
+    // paragraph, so the anchor cannot vanish silently.
+    const lede = paragraphContaining('Your browser loads nothing on this site from any other company')
+    expect(carriesConsentQualifier(lede), `no consent condition in the lede: ${lede}`).toBe(true)
+  })
+
+  it('T3-17 (AC-10): the collection-endpoint sentence carries the consent qualifier', () => {
+    const endpoint = paragraphContaining('region1.google-analytics.com')
+    expect(carriesConsentQualifier(endpoint), `no consent condition in: ${endpoint}`).toBe(true)
+  })
+
+  it('T3-18 (AC-11): the forbidden-substring guard is narrowed, not deleted', () => {
+    expect(FORBIDDEN_WITHDRAWAL_TERMS).toEqual(['preference centre', 'preference center'])
+  })
+
+  it('T3-18 (AC-11): the narrowed guard still finds a planted hit', () => {
+    // Non-vacuity, through the SAME loop the guard runs. Without this the narrowing
+    // could go all the way to an empty list and the D7 row would stay green.
+    const narrowed = ['preference centre', 'preference center']
+    expect(firstForbiddenHit('Manage this in our preference centre at any time.', narrowed)).toBe('preference centre')
+    expect(firstForbiddenHit('Open the preference center to change it.', narrowed)).toBe('preference center')
+    expect(firstForbiddenHit('There is a cookie notice with Accept and Reject.', narrowed)).toBeNull()
   })
 })

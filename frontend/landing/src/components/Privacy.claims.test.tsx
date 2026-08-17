@@ -131,3 +131,106 @@ describe('AC11 + AC12: the docs this page is defended by', () => {
     expect(analytics.match(/operator-confirmed 2026-08-16/g) ?? []).toHaveLength(2)
   })
 })
+
+// RED specs (task-562, LAND-05-03, Test-first) — T3-16, T3-19 and the docs sweep the
+// mount falsifies. Oracles only: none of them pins wording this file invented.
+
+describe('T3-16 (AC-9): the C18 needle is retargeted, not dropped', () => {
+  it('a C18 row still exists and no longer pins a denial', () => {
+    expect(LEDGER_NEEDLES.length, 'the ledger needle table shrank').toBeGreaterThanOrEqual(17)
+    const rows = LEDGER_NEEDLES.filter(([id]) => id.startsWith('C18'))
+    expect(rows.length, 'expected exactly one C18 row').toBe(1)
+
+    const needle = rows[0][1]
+    expect(needle.length, 'the C18 needle is empty').toBeGreaterThan(0)
+    for (const denial of ['no privacy control', 'no notice, no toggle', 'is being built', 'does not exist yet']) {
+      expect(needle.toLowerCase(), `C18 still pins a denial: "${needle}"`).not.toContain(denial)
+    }
+    // The it.each row above already asserts the needle is on the page, so deleting
+    // the replacement sentence from Privacy.tsx turns C18 red.
+    expect(html, `C18 needle is not on the page: "${needle}"`).toContain(needle)
+  })
+})
+
+describe('T3-19 (AC-12): both branches of the W3 passage are pinned', () => {
+  it('the denied branch has a needle of its own beside the allowed one', () => {
+    const rows = WITHDRAWAL_NEEDLES.filter(([id]) => id.startsWith('W3'))
+    expect(rows.length, 'expected a W3 lead-in plus both branches').toBeGreaterThanOrEqual(3)
+
+    const allowed = rows.filter(([, needle]) => /if you have allowed analytics/i.test(needle))
+    const denied = rows.filter(([, needle]) => /have not allowed analytics/i.test(needle))
+    expect(allowed.length, 'the allowed branch lost its needle').toBe(1)
+    expect(denied.length, 'the denied branch has no needle — deleting that sentence stays green').toBe(1)
+
+    for (const [id, needle] of rows) {
+      expect(html, `${id} is not on the page`).toContain(needle)
+    }
+  })
+})
+
+describe('AC-12: the claim ledger asserts nothing the mount makes false', () => {
+  const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
+  // The ledger wraps its prose, so every needle is matched against a whitespace-
+  // flattened copy.
+  const flat = ledger.replace(/\s+/g, ' ')
+
+  // Ten line-sites, not the five the plan named. gaCookies.ts becomes the repo's
+  // first document.cookie writer and consentActions.ts writeConsent's first
+  // production caller, which is what falsifies E3's evidence and C18/W2.
+  const FALSIFIED: readonly (readonly [string, string])[] = [
+    ['C18 and W2 — zero call sites', 'zero production call sites'],
+    ['Table 2 lead — no control', 'There is no consent control on this site yet'],
+    ['Table 2 lead — never called', 'is never called by anything that ships'],
+    ['Table 2 lead — no way to allow', 'there is no way for a visitor to allow it either'],
+    ['the rule behind the D7 guard', 'may not mention a notice, a banner, a Reject button or a preference centre'],
+    ['forward instruction to this subtask', 'LAND-05-03 still rewrites this section'],
+    ['W2 — no control of its own', 'The site has no privacy control of its own yet'],
+    ['W5 — the quoted send() guard', 'if (!loaded) return'],
+    ['E3 — the document.cookie grep', 'occurrences in `frontend/landing/src`'],
+    ['E3 — nothing writes the key', 'and nothing writes it'],
+    ['deliberate omissions — no description', 'No description of the consent notice'],
+  ]
+
+  it('control: the ledger read resolved and its stable markers survive', () => {
+    expect(ledger.length).toBeGreaterThan(0)
+    expect(ledger, 'the C18 row marker must never be renamed, only its cell text').toContain('| C18 |')
+    expect(ledger).toContain('Privacy.tsx')
+    expect(FALSIFIED.length).toBe(11)
+  })
+
+  it.each(FALSIFIED)('%s is corrected in the same commit as the mount', (_label, needle) => {
+    expect(flat, `the ledger still asserts: "${needle}"`).not.toContain(needle)
+  })
+
+  it('the section this subtask discharges is recorded as closed, per the ledger own rule', () => {
+    expect(flat).toContain('Closed at LAND-05-03')
+  })
+})
+
+describe('AC-12: docs/analytics.md carries the OWED enhanced-measurement item', () => {
+  const analytics = readFileSync(join(DOCS, 'analytics.md'), 'utf8')
+  const items = Array.from(analytics.matchAll(/^(\d+)\. \*\*/gm))
+
+  it('control: the doc read resolved and its checklist is numbered', () => {
+    expect(analytics.length).toBeGreaterThan(0)
+    expect(analytics).toContain('## Operator checklist')
+    expect(items.length, 'no numbered checklist items found').toBeGreaterThan(0)
+  })
+
+  it('the stated count matches the list', () => {
+    expect(analytics, 'the checklist header still says six').not.toContain('Six items.')
+    expect(analytics).toContain('Seven items.')
+    expect(items.length).toBe(7)
+  })
+
+  it('the new item is OPEN, never reported as done', () => {
+    const idx = analytics.indexOf('\n7. **')
+    expect(idx, 'no seventh checklist item').toBeGreaterThan(-1)
+    const seventh = analytics.slice(idx)
+    expect(seventh.toLowerCase()).toContain('enhanced measurement')
+    // The tripwire: the row above pins exactly two `operator-confirmed 2026-08-16`
+    // over this file, so wording item 7 as confirmed turns it red. That is the
+    // mechanism that stops the owed item being reported as discharged on merge.
+    expect(seventh, 'the owed item is worded as already confirmed').not.toContain('operator-confirmed 2026-08-16')
+  })
+})

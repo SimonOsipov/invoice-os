@@ -167,6 +167,10 @@ var loginPersonas = []loginPersona{
 	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
 	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},
 	{"c0000000-0000-0000-0000-000000000003", "11111111-1111-1111-1111-111111111111", "authenticated"},
+	// The firm policy's two unconditional approval seats: fin_mgr and compliance.
+	// Without them nobody on the hosted demo can close a firm run.
+	{"c0000000-0000-0000-0000-000000000004", "11111111-1111-1111-1111-111111111111", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000005", "11111111-1111-1111-1111-111111111111", "authenticated"},
 }
 
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is

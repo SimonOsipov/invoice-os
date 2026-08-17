@@ -9,6 +9,8 @@ package demopolicy
 import (
 	"context"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -112,6 +115,22 @@ func publishForeignPolicy(t *testing.T, super *pgxpool.Pool, tenantID string) {
 		`UPDATE approval_policy_versions SET sealed = true, is_active = true, published_at = now(),
 		        published_by = 'ngozi' WHERE id = $1`, versionID); err != nil {
 		t.Fatalf("foreign seal: %v", err)
+	}
+}
+
+// publishStaleOwnPolicy seeds the tenant with demopolicy's OWN pre-notify
+// shape: exactly what publishSeedPolicy writes today (3 steps, no Q10 notify)
+// — sealed, active, published_by "system". Reused directly rather than
+// hand-rolled, so this fixture cannot drift from what the seeder itself
+// writes.
+func publishStaleOwnPolicy(t *testing.T, app *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := publishSeedPolicy(ctx, tx, tenantID)
+		return err
+	}); err != nil {
+		t.Fatalf("publish the stale own policy: %v", err)
 	}
 }
 
@@ -217,11 +236,59 @@ func TestSeed_NoteNamesEveryCauseItCanReport(t *testing.T) {
 		if res.Note != "an active version this seeder did not write governs" {
 			t.Errorf("Note = %q — this is the difference between the seeder working and the seeder having been overridden", res.Note)
 		}
-		if n := countRows(t, super, "approval_policies", f.tenantID); n != 1 {
-			t.Errorf("the seeder wrote a second policy alongside the human one (%d total)", n)
+		// NAME-scoped, not a raw count: ensureDraft still runs unconditionally
+		// even when a foreign policy governs, so the tenant now holds the
+		// foreign policy PLUS our Executive escalation draft (2 total) — the
+		// property this proves is that our NAMED policy never appears, not
+		// that nothing else got written.
+		names := policyNames(t, super, f.tenantID)
+		if len(names) != 2 {
+			t.Fatalf("the tenant holds %d named polic(y/ies) %v, want 2 — the foreign policy plus our draft", len(names), names)
+		}
+		if slices.Contains(names, wantPolicyName) {
+			t.Errorf("the seeder wrote its own %q alongside the human one; a foreign active version must leave it alone", wantPolicyName)
+		}
+		if !slices.Contains(names, "Executive escalation") {
+			t.Errorf("names = %v, want the draft \"Executive escalation\" still written even though a foreign policy governs", names)
 		}
 		if res.RunsArmed != len(backlogTotals) {
 			t.Errorf("armed %d, want %d — the sweep runs under whichever version is active", res.RunsArmed, len(backlogTotals))
+		}
+	})
+
+	t.Run("policy reactivated after a deactivation", func(t *testing.T) {
+		f := newFixture(t, super, app, "demopolicy reactivate note")
+		f.addBacklog()
+
+		first, err := seedTenant(ctx, app, f.tenantID)
+		if err != nil {
+			t.Fatalf("first boot: %v", err)
+		}
+		if _, err := super.Exec(ctx,
+			`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, first.VersionID); err != nil {
+			t.Fatalf("deactivate the seeded version: %v", err)
+		}
+
+		res, err := seedTenant(ctx, app, f.tenantID)
+		if err != nil {
+			t.Fatalf("reactivate boot: %v", err)
+		}
+		if res.Note != "policy reactivated; backlog armed" {
+			t.Errorf("Note = %q, want %q", res.Note, "policy reactivated; backlog armed")
+		}
+	})
+
+	t.Run("policy superseded after a shape change", func(t *testing.T) {
+		f := newFixture(t, super, app, "demopolicy supersede note")
+		f.addBacklog()
+		publishStaleOwnPolicy(t, app, f.tenantID)
+
+		res, err := seedTenant(ctx, app, f.tenantID)
+		if err != nil {
+			t.Fatalf("supersede boot: %v", err)
+		}
+		if res.Note != "policy superseded; backlog armed" {
+			t.Errorf("Note = %q, want %q", res.Note, "policy superseded; backlog armed")
 		}
 	})
 }
@@ -374,9 +441,9 @@ func TestSeed_ConcurrentBootsLeaveOneActiveVersion(t *testing.T) {
 		t.Errorf("every racing boot failed (%v); one must win", errs)
 	}
 	for table, want := range map[string]int{
-		"approval_policies":        1,
-		"approval_policy_versions": 1,
-		"approval_policy_steps":    3,
+		"approval_policies":        2, // the active policy plus the Executive escalation draft
+		"approval_policy_versions": 2,
+		"approval_policy_steps":    9, // 4 active (with the Q10 notify) + 5 draft (polH2)
 		"approval_runs":            len(backlogTotals),
 	} {
 		if got := countRows(t, super, table, f.tenantID); got != want {
@@ -439,8 +506,8 @@ func TestSeed_ConcurrentRearmsLeaveOneRunPerInvoice(t *testing.T) {
 	if got := rollupFor(t, app, f.tenantID, f.memberID).Totals.AwaitingApproval; got != 3 {
 		t.Errorf("awaiting_approval = %d after the race, want 3", got)
 	}
-	if n := countRows(t, super, "approval_policy_versions", f.tenantID); n != 1 {
-		t.Errorf("%d version(s) after the race, want 1", n)
+	if n := countRows(t, super, "approval_policy_versions", f.tenantID); n != 2 {
+		t.Errorf("%d version(s) after the race, want 2 (the active version plus the draft)", n)
 	}
 }
 
@@ -504,19 +571,20 @@ func TestSeed_WritesTheSystemActorTheExactNameAndNoDeadline(t *testing.T) {
 		t.Fatalf("seedTenant: %v", err)
 	}
 
+	// Two names now: the active policy plus the Executive escalation draft.
+	// versionsOf's version,id order is a tie-break across the two policies
+	// (both sit at version 1) — deliberately NOT used here for "the" version;
+	// activeVersionOf resolves it deterministically instead.
 	names := policyNames(t, super, f.tenantID)
-	if len(names) != 1 || names[0] != wantPolicyName {
-		t.Errorf("policy names = %v, want exactly [%q] — e2e/topology/roles.spec.ts records this literal", names, wantPolicyName)
+	if len(names) != 2 || !slices.Contains(names, wantPolicyName) {
+		t.Errorf("policy names = %v, want exactly 2 including %q — e2e/topology/roles.spec.ts records this literal", names, wantPolicyName)
 	}
-	versions := versionsOf(t, super, f.tenantID)
-	if len(versions) != 1 {
-		t.Fatalf("%d version(s), want 1", len(versions))
-	}
-	if versions[0].PublishedBy == nil {
+	active := activeVersionOf(t, super, f.tenantID)
+	if active.PublishedBy == nil {
 		t.Errorf("published_by is NULL, want %q", wantSeedActor)
-	} else if *versions[0].PublishedBy != wantSeedActor {
+	} else if *active.PublishedBy != wantSeedActor {
 		t.Errorf("published_by = %q, want %q — PublishPolicy would have stamped a human who never touched it",
-			*versions[0].PublishedBy, wantSeedActor)
+			*active.PublishedBy, wantSeedActor)
 	}
 
 	var steps, dated int
@@ -565,10 +633,517 @@ func TestSeed_ActivePolicyWithNoValidatedInvoicesArmsNothing(t *testing.T) {
 	if res.BacklogFound != 0 || res.RunsArmed != 0 {
 		t.Errorf("found %d and armed %d, want 0 and 0", res.BacklogFound, res.RunsArmed)
 	}
-	if n := countRows(t, super, "approval_policy_versions", f.tenantID); n != 1 {
-		t.Errorf("%d version(s), want 1", n)
+	if n := countRows(t, super, "approval_policy_versions", f.tenantID); n != 2 {
+		t.Errorf("%d version(s), want 2 (the active version plus the draft) — the draft is written whether or not anything is armable", n)
 	}
 	if got := rollupFor(t, app, f.tenantID, f.memberID).Totals.AwaitingApproval; got != 0 {
 		t.Errorf("awaiting_approval = %d with nothing validated, want 0", got)
+	}
+}
+
+// AC-6. A policy deactivated between boots is REACTIVATED, not duplicated:
+// the SAME version comes back active and sealed, one policy row of that name
+// survives, and the boot reports it via Note (Result carries no
+// VersionReactivated field to assert on directly — Note is the one
+// observable channel this suite has for it).
+func TestSeed_ReactivatesADeactivatedPolicyRatherThanDuplicatingIt(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy reactivate not duplicate")
+	f.addBacklog()
+	ctx := context.Background()
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("first boot: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, first.VersionID); err != nil {
+		t.Fatalf("deactivate the seeded version: %v", err)
+	}
+	wipeRuns(t, super, f.tenantID)
+
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("reactivate boot: %v", err)
+	}
+	if res.Note != "policy reactivated; backlog armed" {
+		t.Errorf("Note = %q, want %q", res.Note, "policy reactivated; backlog armed")
+	}
+	if res.VersionID != first.VersionID {
+		t.Errorf("reactivate boot reports version %s, want the SAME version %s reactivated, not a new one", res.VersionID, first.VersionID)
+	}
+	if res.RunsArmed != len(backlogTotals) {
+		t.Errorf("reactivate boot armed %d run(s), want %d", res.RunsArmed, len(backlogTotals))
+	}
+
+	var namedCount int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policies WHERE tenant_id = $1 AND name = $2 AND deleted_at IS NULL`,
+		f.tenantID, wantPolicyName).Scan(&namedCount); err != nil {
+		t.Fatalf("count %q policies: %v", wantPolicyName, err)
+	}
+	if namedCount != 1 {
+		t.Errorf("%d live %q polic(y/ies), want exactly 1 — reactivation must not duplicate", namedCount, wantPolicyName)
+	}
+
+	active := activeVersionOf(t, super, f.tenantID)
+	if !active.Sealed || !active.IsActive {
+		t.Errorf("the reactivated version is sealed=%v is_active=%v, want both true", active.Sealed, active.IsActive)
+	}
+	if active.ID != first.VersionID {
+		t.Errorf("the active version is %s, want the SAME version %s reactivated", active.ID, first.VersionID)
+	}
+}
+
+// AC-6. A soft-deleted policy must not be resurrected: the boot that finds no
+// active version writes a NEW live policy, and the dead row keeps its
+// deleted_at. This is a GUARD, true both before and after Stage 3 — today's
+// seeder has no name-based reuse at all, so "create fresh when nothing is
+// active" already produces this shape; the point is that it must KEEP doing
+// so once Stage 3 adds probe-B-by-name (which must itself filter
+// deleted_at IS NULL).
+func TestSeed_ASoftDeletedSeededPolicyIsNotResurrected(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy soft delete not resurrected")
+	f.addBacklog()
+	ctx := context.Background()
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("first boot: %v", err)
+	}
+	var deadPolicyID string
+	if err := super.QueryRow(ctx,
+		`SELECT policy_id::text FROM approval_policy_versions WHERE id = $1`, first.VersionID).Scan(&deadPolicyID); err != nil {
+		t.Fatalf("read the seeded policy id: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policies SET deleted_at = now() WHERE id = $1`, deadPolicyID); err != nil {
+		t.Fatalf("soft-delete the policy: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, first.VersionID); err != nil {
+		t.Fatalf("deactivate the deleted policy's version: %v", err)
+	}
+
+	if _, err := seedTenant(ctx, app, f.tenantID); err != nil {
+		t.Fatalf("re-seed boot: %v", err)
+	}
+
+	var deadStillDeleted bool
+	if err := super.QueryRow(ctx,
+		`SELECT deleted_at IS NOT NULL FROM approval_policies WHERE id = $1`, deadPolicyID).Scan(&deadStillDeleted); err != nil {
+		t.Fatalf("re-read the soft-deleted policy: %v", err)
+	}
+	if !deadStillDeleted {
+		t.Error("the soft-deleted policy's deleted_at was cleared; it must stay dead")
+	}
+
+	names := policyNames(t, super, f.tenantID) // already scoped deleted_at IS NULL
+	if !slices.Contains(names, wantPolicyName) {
+		t.Errorf("live policy names = %v, want a NEW live %q", names, wantPolicyName)
+	}
+	active := activeVersionOf(t, super, f.tenantID)
+	if active.ID == first.VersionID {
+		t.Error("the active version is the soft-deleted one; a live tenant must not be governed by a dead policy")
+	}
+	if !active.Sealed || !active.IsActive {
+		t.Errorf("the new active version is sealed=%v is_active=%v, want both true", active.Sealed, active.IsActive)
+	}
+}
+
+// AC-7. A required seat (the firm plan's compliance) with no active holder
+// refuses the create entirely: error, Note names it, zero rows.
+func TestSeed_RefusesWhenARequiredSeatIsUnstaffed(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFirmFixture(t, super, app, "demopolicy firm refuses")
+	f.addBacklog()
+	suspendHolders(t, super, f.tenantID, "compliance")
+	ctx := context.Background()
+
+	res, err := seedTenantPlan(ctx, app, f.tenantID, firmPlan)
+	if err == nil {
+		t.Fatal("a required seat (compliance) with no active holder must fail the create")
+	}
+	if !strings.Contains(res.Note, "compliance") {
+		t.Errorf("Note = %q, want it to name compliance", res.Note)
+	}
+	for _, table := range []string{"approval_policies", "approval_policy_versions", "approval_runs"} {
+		if n := countRows(t, super, table, f.tenantID); n != 0 {
+			t.Errorf("%s holds %d row(s) after the refused create, want 0", table, n)
+		}
+	}
+}
+
+// AC-7. An unstaffed DRAFT seat (ceo, which the in-house tenant does not even
+// define as a role) must never refuse the seed — seatProblem takes only the
+// plan's REQUIRED seats (fin_dir here), never a draft's.
+func TestSeed_AnUnstaffedDraftSeatNeverRefusesTheSeed(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy draft seat never refuses")
+	f.addSeat("cfo", "CFO", "suspended")
+	f.addBacklog()
+	ctx := context.Background()
+
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("an unstaffed DRAFT seat must never refuse the seed: %v", err)
+	}
+	if !res.VersionCreated {
+		t.Error("VersionCreated = false; the required seat (fin_dir) is staffed")
+	}
+
+	versionID := draftVersionOf(t, super, f.tenantID) // fails loudly if the draft is absent
+	var ceoSteps int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_steps WHERE version_id = $1 AND workflow_role_key = 'ceo'`,
+		versionID).Scan(&ceoSteps); err != nil {
+		t.Fatalf("count ceo steps on the draft: %v", err)
+	}
+	if ceoSteps == 0 {
+		t.Error("the draft names no ceo step; this test's premise (an unstaffed DRAFT seat) is not exercised")
+	}
+
+	roles, active := activeHolders(t, super, f.tenantID, "ceo")
+	if roles != 0 {
+		t.Errorf("ceo resolves to %d live workflow_roles row(s), want 0 — this test's premise requires the seat to not exist", roles)
+	}
+	if active != 0 {
+		t.Errorf("ceo has %d active holder(s), want 0", active)
+	}
+}
+
+// AC-8. Every approval step on every ACTIVE version of both demo tenants
+// resolves to a live role with at least one active holder; quality_reviewer
+// (the firm's deliberately unstaffed seat) appears on none. FLOORED: without
+// a minimum population this loop is vacuously satisfied by zero rows.
+func TestSeed_NoActivePolicySeatIsUnstaffedAcrossTheDemoTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, os.Getenv("DATABASE_SUPERUSER_URL"), dbsql.FS); err != nil {
+		t.Fatalf("db.Seed: %v", err)
+	}
+	for _, tenantID := range []string{inhouseDemoTenantID, firmDemoTenantID} {
+		for _, table := range []string{"approval_policies", "approval_policy_versions", "approval_policy_steps", "approval_runs"} {
+			if got := countRows(t, super, table, tenantID); got != 0 {
+				t.Fatalf("tenant %s already holds %d %s row(s); this test's teardown would delete rows it did not create", tenantID, got, table)
+			}
+		}
+		id := tenantID
+		t.Cleanup(func() { teardownApprovalRows(t, super, id) })
+	}
+
+	if _, err := Seed(ctx, app, nil); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var activeVersions int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = ANY($1) AND is_active`,
+		[]string{inhouseDemoTenantID, firmDemoTenantID}).Scan(&activeVersions); err != nil {
+		t.Fatalf("count active versions: %v", err)
+	}
+	if activeVersions < 2 {
+		t.Fatalf("%d active version(s) across both tenants, want at least 2 — the floor below would be vacuous", activeVersions)
+	}
+
+	rows, err := super.Query(ctx,
+		`SELECT s.tenant_id::text, s.workflow_role_key FROM approval_policy_steps s
+		   JOIN approval_policy_versions v ON v.id = s.version_id
+		  WHERE s.tenant_id = ANY($1) AND v.is_active AND s.kind = 'approval'`,
+		[]string{inhouseDemoTenantID, firmDemoTenantID})
+	if err != nil {
+		t.Fatalf("read active-version approval steps: %v", err)
+	}
+	type pair struct{ tenantID, key string }
+	var pairs []pair
+	for rows.Next() {
+		var tid string
+		var k *string
+		if err := rows.Scan(&tid, &k); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if k == nil {
+			t.Fatal("an approval step's workflow_role_key is NULL")
+		}
+		pairs = append(pairs, pair{tid, *k})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read approval_policy_steps: %v", err)
+	}
+	if len(pairs) < 5 {
+		t.Fatalf("walked %d approval step(s), want at least 5 — the loop below would be vacuous", len(pairs))
+	}
+
+	seen := map[pair]bool{}
+	for _, p := range pairs {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		roles, active := activeHolders(t, super, p.tenantID, p.key)
+		if roles == 0 {
+			t.Errorf("tenant %s: workflow_role_key %q resolves to no live role", p.tenantID, p.key)
+		}
+		if active == 0 {
+			t.Errorf("tenant %s: workflow_role_key %q has no ACTIVE holder", p.tenantID, p.key)
+		}
+		if p.key == "quality_reviewer" {
+			t.Errorf("tenant %s: an active-policy lane names quality_reviewer, an unstaffed seat", p.tenantID)
+		}
+	}
+}
+
+// AC-11. publishSeedPolicy, called directly over a tenant that already holds
+// a FOREIGN sealed active version, must clear that slot before activating
+// its own — otherwise approval_policy_versions_one_active raises 23505.
+func TestSeed_PublishClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy publish clears stray")
+	publishForeignPolicy(t, super, f.tenantID)
+	ctx := context.Background()
+
+	var versionID string
+	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
+		var err error
+		versionID, err = publishSeedPolicy(ctx, tx, f.tenantID)
+		return err
+	}); err != nil {
+		t.Fatalf("publishSeedPolicy over a stray foreign active version: %v", err)
+	}
+
+	var activeCount int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = $1 AND is_active`,
+		f.tenantID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active versions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("%d active version(s) after publish, want exactly 1", activeCount)
+	}
+	active := activeVersionOf(t, super, f.tenantID)
+	if active.ID != versionID {
+		t.Errorf("the active version is %s, want the newly published %s", active.ID, versionID)
+	}
+}
+
+// AC-11. reactivateSealedVersion, called directly over a tenant whose OWN
+// version is deactivated while a FOREIGN version holds the active slot, must
+// clear that slot before reactivating ours.
+func TestSeed_ReactivateClearsAStrayActiveVersionBeforeActivating(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy reactivate clears stray")
+	ctx := context.Background()
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("seed the tenant's own version: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, first.VersionID); err != nil {
+		t.Fatalf("deactivate the seeded version: %v", err)
+	}
+	publishForeignPolicy(t, super, f.tenantID) // now holds the active slot
+
+	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
+		return reactivateSealedVersion(ctx, tx, f.tenantID, first.VersionID)
+	}); err != nil {
+		t.Fatalf("reactivateSealedVersion over a stray foreign active version: %v", err)
+	}
+
+	var oursActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT is_active FROM approval_policy_versions WHERE id = $1`, first.VersionID).Scan(&oursActive); err != nil {
+		t.Fatalf("read the seeded version: %v", err)
+	}
+	if !oursActive {
+		t.Error("the seeded version is inactive, want active after reactivation")
+	}
+
+	var strayActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT coalesce(bool_or(v.is_active), false) FROM approval_policy_versions v
+		   JOIN approval_policies p ON p.id = v.policy_id
+		  WHERE v.tenant_id = $1 AND p.name = 'Human published policy'`, f.tenantID).Scan(&strayActive); err != nil {
+		t.Fatalf("read the foreign version's state: %v", err)
+	}
+	if strayActive {
+		t.Error("the foreign policy's version is still active; reactivation must clear it first")
+	}
+}
+
+// AC-12. An active version this seeder wrote (published_by "system", our
+// name) whose step shape no longer matches the plan is superseded by
+// version N+1: v1 stays sealed and inactive, v2 is sealed, active, and
+// carries the current shape, and exactly one version is active tenant-wide.
+// The second boot proves the numeric(14,2) scale trap: cond_amount always
+// renders at 2dp, so an unscaled literal in the comparator never matches and
+// the seeder would republish on every boot.
+func TestSeed_SupersedesItsOwnStaleActiveVersionWithVersionTwo(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy supersede v2")
+	f.addBacklog()
+	publishStaleOwnPolicy(t, app, f.tenantID)
+	ctx := context.Background()
+
+	var staleVersionID string
+	if err := super.QueryRow(ctx,
+		`SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1 AND is_active`, f.tenantID).
+		Scan(&staleVersionID); err != nil {
+		t.Fatalf("read the stale active version: %v", err)
+	}
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("first seedTenant over a stale own version: %v", err)
+	}
+	if first.Note != "policy superseded; backlog armed" {
+		t.Errorf("Note = %q, want %q", first.Note, "policy superseded; backlog armed")
+	}
+
+	scopedVersionCount := func() int {
+		t.Helper()
+		var n int
+		if err := super.QueryRow(ctx,
+			`SELECT count(*) FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+			  WHERE v.tenant_id = $1 AND p.name = $2`, f.tenantID, wantPolicyName).Scan(&n); err != nil {
+			t.Fatalf("count versions of %q: %v", wantPolicyName, err)
+		}
+		return n
+	}
+
+	var policies int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policies WHERE tenant_id = $1 AND name = $2`,
+		f.tenantID, wantPolicyName).Scan(&policies); err != nil {
+		t.Fatalf("count policies named %q: %v", wantPolicyName, err)
+	}
+	if policies != 1 {
+		t.Errorf("%d %q polic(y/ies), want exactly 1 — a supersede is a NEW VERSION, not a new policy", policies, wantPolicyName)
+	}
+	if n := scopedVersionCount(); n != 2 {
+		t.Errorf("%q carries %d version(s), want 2 (v1 stale + v2 superseding)", wantPolicyName, n)
+	}
+
+	var staleSealed, staleActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT sealed, is_active FROM approval_policy_versions WHERE id = $1`, staleVersionID).
+		Scan(&staleSealed, &staleActive); err != nil {
+		t.Fatalf("read the stale version: %v", err)
+	}
+	if !staleSealed || staleActive {
+		t.Errorf("v1 (stale) sealed=%v is_active=%v, want sealed=true is_active=false", staleSealed, staleActive)
+	}
+
+	active := activeVersionOf(t, super, f.tenantID)
+	if active.ID == staleVersionID {
+		t.Error("the active version is STILL v1; supersede must publish v2")
+	}
+	if !active.Sealed {
+		t.Error("v2 (active) is not sealed, want sealed")
+	}
+	if active.PublishedBy == nil || *active.PublishedBy != wantSeedActor {
+		t.Errorf("v2's published_by = %v, want %q", active.PublishedBy, wantSeedActor)
+	}
+
+	var oneActive int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = $1 AND is_active`, f.tenantID).
+		Scan(&oneActive); err != nil {
+		t.Fatalf("count active versions: %v", err)
+	}
+	if oneActive != 1 {
+		t.Errorf("%d active version(s) tenant-wide, want exactly 1", oneActive)
+	}
+
+	got := stepTreeOf(t, super, active.ID)
+	notifyCount := 0
+	for _, s := range got {
+		if s.Kind == "notify" {
+			notifyCount++
+		}
+	}
+	if notifyCount != 1 {
+		t.Errorf("v2 carries %d notify step(s), want exactly 1 — the shape supersede exists to fix", notifyCount)
+	}
+
+	second, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("second seedTenant: %v", err)
+	}
+	if second.Note == "policy superseded; backlog armed" {
+		t.Error("the second boot superseded again; a matching shape must write nothing — this is the numeric(14,2) scale trap")
+	}
+	if n := scopedVersionCount(); n != 2 {
+		t.Errorf("%q carries %d version(s) after the second boot, want still 2 — no v3", wantPolicyName, n)
+	}
+}
+
+// AC-12. The three supersede guards, table-driven with the control in the
+// SAME test: (a) published by a human and (b) a different policy entirely
+// both pass vacuously today (today's seeder has no supersede logic at all,
+// so it never touches either), so the CONTROL row (c) — system-published,
+// our name, a stale shape — must live here too, or this test proves nothing.
+// Counts are scoped to policies named wantPolicyName specifically: the
+// in-house plan's Executive escalation draft is written unconditionally by
+// every case here and must not be mistaken for a supersede.
+func TestSeed_NeverSupersedesAVersionItDidNotPublish(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name         string
+		setup        func(t *testing.T, f *fixture)
+		wantVersions int
+	}{
+		{
+			name: "published by a human",
+			setup: func(t *testing.T, f *fixture) {
+				publishStaleOwnPolicy(t, app, f.tenantID)
+				if _, err := super.Exec(ctx,
+					`UPDATE approval_policy_versions SET published_by = 'ngozi'
+					   WHERE tenant_id = $1 AND is_active`, f.tenantID); err != nil {
+					t.Fatalf("stamp a human publisher: %v", err)
+				}
+			},
+			wantVersions: 1, // ours, untouched
+		},
+		{
+			name: "a different policy entirely",
+			setup: func(t *testing.T, f *fixture) {
+				publishForeignPolicy(t, super, f.tenantID)
+			},
+			wantVersions: 0, // "Company approval policy" was never created under this branch
+		},
+		{
+			name: "CONTROL: system-published, our name, stale shape",
+			setup: func(t *testing.T, f *fixture) {
+				publishStaleOwnPolicy(t, app, f.tenantID)
+			},
+			wantVersions: 2, // v1 stale + v2 superseding
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, super, app, "demopolicy never supersedes "+tc.name)
+			f.addBacklog()
+			tc.setup(t, f)
+
+			if _, err := seedTenant(ctx, app, f.tenantID); err != nil {
+				t.Fatalf("seedTenant: %v", err)
+			}
+			var n int
+			if err := super.QueryRow(ctx,
+				`SELECT count(*) FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+				  WHERE v.tenant_id = $1 AND p.name = $2`, f.tenantID, wantPolicyName).Scan(&n); err != nil {
+				t.Fatalf("count versions of %q: %v", wantPolicyName, err)
+			}
+			if n != tc.wantVersions {
+				t.Errorf("%d version(s) of %q, want %d", n, wantPolicyName, tc.wantVersions)
+			}
+		})
 	}
 }

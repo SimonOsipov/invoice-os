@@ -1249,6 +1249,10 @@ func TestSeed_TheDraftIsNeverActivatedAndNeverArms(t *testing.T) {
 	}
 
 	versionID := draftVersionOf(t, super, f.tenantID) // fails loudly if the draft is absent
+	// EXISTS is only half of it: a draft that got sealed and activated would
+	// still satisfy every count below, because it would be the version the runs
+	// name rather than an extra one.
+	assertDraftUntouched(t, super, f.tenantID)
 
 	var runsOnDraft int
 	if err := super.QueryRow(ctx,
@@ -1509,6 +1513,37 @@ func TestSeed_ArmsOnlyTheDemoTenants(t *testing.T) {
 	}
 	if got := countRows(t, super, "approval_runs", firmDemoTenantID); got != 7 {
 		t.Errorf("firm approval_runs = %d, want 7 (one per validated invoice)", got)
+	}
+
+	// AC-2 on the REAL firm tenant, not a fixture. polF1's two conditions sit at
+	// 250,000,000 and 1,000,000,000 while the largest seeded firm invoice is
+	// 193,500, so every run takes the same two-step lane: fin_mgr then compliance.
+	// A run that materialised fin_dir or cfo would mean the thresholds moved.
+	firmRuns, err := super.Query(ctx,
+		`SELECT r.id::text, coalesce(string_agg(rs.workflow_role_key, ',' ORDER BY rs.ord)
+		            FILTER (WHERE rs.state = 'pending'), '')
+		   FROM approval_runs r LEFT JOIN approval_run_steps rs ON rs.run_id = r.id
+		  WHERE r.tenant_id = $1 GROUP BY r.id`, firmDemoTenantID)
+	if err != nil {
+		t.Fatalf("read the firm tenant's run shapes: %v", err)
+	}
+	shapes := 0
+	for firmRuns.Next() {
+		var runID, pending string
+		if err := firmRuns.Scan(&runID, &pending); err != nil {
+			t.Fatalf("scan a firm run shape: %v", err)
+		}
+		shapes++
+		if pending != "fin_mgr,compliance" {
+			t.Errorf("firm run %s has pending steps %q, want \"fin_mgr,compliance\" (ord 0 then ord 1)", runID, pending)
+		}
+	}
+	firmRuns.Close()
+	if err := firmRuns.Err(); err != nil {
+		t.Fatalf("read the firm tenant's run shapes: %v", err)
+	}
+	if shapes != 7 {
+		t.Errorf("walked %d firm run shape(s), want 7 — an empty collection would satisfy the loop above vacuously", shapes)
 	}
 
 	// AC-9: in-house discriminates (3 of 4), the firm cannot (7 of 7) — expected,

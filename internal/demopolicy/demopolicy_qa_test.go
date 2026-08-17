@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -432,8 +433,18 @@ func armOutsideTheAntiJoin(t *testing.T, app *pgxpool.Pool, tenantID, invoiceID 
 var errAlwaysRollBack = errors.New("demopolicy qa: roll back")
 
 // A fleet can start more than one invoice container, and both run this at boot.
-// approval_policy_versions_one_active is a partial unique index, so the loser
-// must fail cleanly and non-fatally rather than crash-loop.
+//
+// RE-AIMED. This test was written against the pre-lock seeder, where the racing
+// boots reached one_active together and the loser rolled back on 23505. The
+// per-tenant advisory lock (demopolicy.go:250) means they now SERIALISE, so the
+// property to assert is the one the lock actually produces: EVERY boot succeeds,
+// exactly one of them writes, and the rest report the idempotent note. Asserting
+// "one must win" would still pass with the lock gone, which is what made the old
+// shape misleading.
+//
+// The lock's own load-bearing proof is
+// TestSeed_TheTenantLockOrdersTheConvergeBehindACommittingSibling — a race with a
+// deterministic interleaving. This one pins the fleet-level outcome.
 func TestSeed_ConcurrentBootsLeaveOneActiveVersion(t *testing.T) {
 	super, app := dbTestPools(t)
 	f := newFixture(t, super, app, "demopolicy concurrent boots")
@@ -441,31 +452,41 @@ func TestSeed_ConcurrentBootsLeaveOneActiveVersion(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
+	notes := make([]string, 4)
+	created := make([]bool, 4)
 	start := make(chan struct{})
 	for i := range errs {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, errs[i] = seedTenant(context.Background(), app, f.tenantID)
+			res, err := seedTenant(context.Background(), app, f.tenantID)
+			errs[i], notes[i], created[i] = err, res.Note, res.VersionCreated
 		}(i)
 	}
 	close(start)
 	wg.Wait()
 
-	// A boot that starts after another committed takes the idempotent path and
-	// also returns nil, so the count is a floor. What must hold either way is the
-	// row shape below: the index refuses the second active version, and the loser
-	// rolls back rather than crashing.
-	won := 0
-	for _, err := range errs {
-		if err == nil {
-			won++
+	// Serialised, so every boot commits — not "at least one".
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("boot %d failed (%v); the tenant lock serialises the converge, so each boot takes either the create or the idempotent path", i, err)
 		}
 	}
-	if won == 0 {
-		t.Errorf("every racing boot failed (%v); one must win", errs)
+	wrote := 0
+	for i := range created {
+		if created[i] {
+			wrote++
+			continue
+		}
+		if notes[i] != "policy already active; backlog already armed" && notes[i] != "policy already active; backlog re-armed" {
+			t.Errorf("boot %d reported %q; a boot that did not create must report the idempotent note", i, notes[i])
+		}
 	}
+	if wrote != 1 {
+		t.Errorf("%d of 4 boots reported VersionCreated (notes %q), want exactly 1", wrote, notes)
+	}
+
 	for table, want := range map[string]int{
 		"approval_policies":        2, // the active policy plus the Executive escalation draft
 		"approval_policy_versions": 2,
@@ -473,7 +494,7 @@ func TestSeed_ConcurrentBootsLeaveOneActiveVersion(t *testing.T) {
 		"approval_runs":            len(backlogTotals),
 	} {
 		if got := countRows(t, super, table, f.tenantID); got != want {
-			t.Errorf("%s holds %d row(s) after the race, want %d — the loser must roll back whole", table, got, want)
+			t.Errorf("%s holds %d row(s) after the race, want %d", table, got, want)
 		}
 	}
 	if got := rollupFor(t, app, f.tenantID, f.memberID).Totals.AwaitingApproval; got != 3 {
@@ -483,9 +504,13 @@ func TestSeed_ConcurrentBootsLeaveOneActiveVersion(t *testing.T) {
 
 // The race that recurs: after the first deploy the policy always exists, so two
 // containers booting together both skip the create and both sweep the same
-// backlog. approval_runs_one_open refuses the second arm and ArmTx does not
-// catch it, so the losing boot must roll back whole and report — never crash,
-// never double-arm.
+// backlog.
+//
+// RE-AIMED alongside TestSeed_ConcurrentBootsLeaveOneActiveVersion. Pre-lock,
+// approval_runs_one_open refused the second arm and the losing boot rolled back
+// whole; under the tenant advisory lock the boots serialise, so exactly ONE finds
+// a backlog and the other three find the anti-join empty. That partition is a
+// stronger claim than "one must win" and is the one the lock produces.
 func TestSeed_ConcurrentRearmsLeaveOneRunPerInvoice(t *testing.T) {
 	super, app := dbTestPools(t)
 	f := newFixture(t, super, app, "demopolicy concurrent re-arm")
@@ -499,6 +524,7 @@ func TestSeed_ConcurrentRearmsLeaveOneRunPerInvoice(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
+	armed := make([]int, 4)
 	start := make(chan struct{})
 	for i := range errs {
 		wg.Add(1)
@@ -506,7 +532,7 @@ func TestSeed_ConcurrentRearmsLeaveOneRunPerInvoice(t *testing.T) {
 			defer wg.Done()
 			<-start
 			res, err := seedTenant(context.Background(), app, f.tenantID)
-			errs[i] = err
+			errs[i], armed[i] = err, res.RunsArmed
 			if res.VersionCreated {
 				t.Errorf("boot %d created a version; the policy was already active", i)
 			}
@@ -515,14 +541,23 @@ func TestSeed_ConcurrentRearmsLeaveOneRunPerInvoice(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	won := 0
-	for _, err := range errs {
-		if err == nil {
-			won++
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("boot %d failed (%v); serialised re-arms must all commit", i, err)
 		}
 	}
-	if won == 0 {
-		t.Errorf("every racing re-arm failed (%v); the backlog would stay unarmed and the badge would read counts.validated", errs)
+	sweepers, total := 0, 0
+	for _, n := range armed {
+		total += n
+		if n > 0 {
+			sweepers++
+		}
+	}
+	if sweepers != 1 {
+		t.Errorf("%d of 4 boots armed something (%v), want exactly 1 — the rest must find the anti-join empty", sweepers, armed)
+	}
+	if total != len(backlogTotals) {
+		t.Errorf("the four boots armed %d run(s) between them (%v), want %d", total, armed, len(backlogTotals))
 	}
 	for _, id := range ids {
 		if _, _, runs := runOf(t, super, id); runs != 1 {
@@ -534,6 +569,195 @@ func TestSeed_ConcurrentRearmsLeaveOneRunPerInvoice(t *testing.T) {
 	}
 	if n := countRows(t, super, "approval_policy_versions", f.tenantID); n != 2 {
 		t.Errorf("%d version(s) after the race, want 2 (the active version plus the draft)", n)
+	}
+}
+
+// waitForBlockedTenantLock polls until exactly the tenant's advisory key shows an
+// UNGRANTED waiter, and fails if none appears. pg_locks renders a bigint advisory
+// key as classid = the high 32 bits and objid = the low 32; the arithmetic below
+// is the same split, so this pins the KEY and not merely "something is waiting" —
+// a lock keyed to a constant, or to the fleet, never matches.
+func waitForBlockedTenantLock(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := super.QueryRow(ctx,
+			`SELECT count(*) FROM pg_locks
+			  WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+			    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			    AND classid = (((hashtext($1)::bigint >> 32) & 4294967295))::bigint::oid
+			    AND objid = ((hashtext($1)::bigint & 4294967295))::bigint::oid`, tenantID).Scan(&n); err != nil {
+			t.Fatalf("read pg_locks: %v", err)
+		}
+		if n > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("no converge ever waited on hashtext(%s): the tenant lock is absent, keyed to something else, or taken too late to order the read below", tenantID)
+}
+
+// publishCurrentPlanAsSibling writes the plan's CURRENT shape sealed, active and
+// system-published — what a sibling boot leaves behind. Takes a caller-owned tx
+// so the caller controls when it commits.
+func publishCurrentPlanAsSibling(t *testing.T, tx pgx.Tx, tenantID string, p *plan) {
+	t.Helper()
+	ctx := context.Background()
+	var policyID, versionID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`,
+		tenantID, p.policyName).Scan(&policyID); err != nil {
+		t.Fatalf("sibling policy: %v", err)
+	}
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1) RETURNING id::text`,
+		tenantID, policyID).Scan(&versionID); err != nil {
+		t.Fatalf("sibling version: %v", err)
+	}
+	if err := writeLane(ctx, tx, tenantID, versionID, nil, nil, p.steps); err != nil {
+		t.Fatalf("sibling steps: %v", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE approval_policy_versions SET sealed = true, is_active = true, published_at = now(),
+		        published_by = $2 WHERE id = $1`, versionID, wantSeedActor); err != nil {
+		t.Fatalf("sibling seal: %v", err)
+	}
+}
+
+// The advisory lock's load-bearing proof, with the interleaving made
+// deterministic rather than hoped for.
+//
+// approval_policies carries no unique index on name, and clearActive removed the
+// one_active refusal that used to stop a second same-named policy. What replaces
+// it is the lock at demopolicy.go:250 — taken as the transaction's FIRST
+// statement, so the active-version probe below it cannot read a snapshot older
+// than the sibling that already committed.
+//
+// A sibling holds the tenant's key, then writes and activates the policy while
+// this boot waits. The boot must come out of the wait, SEE the sibling's version
+// and converge on it — never insert a duplicate of the same name. Take the lock
+// away, or take it after the probe, and the wait never happens: the poll above
+// fails the test rather than letting a timing-dependent pass through.
+func TestSeed_TheTenantLockOrdersTheConvergeBehindACommittingSibling(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy tenant lock ordering")
+	f.addBacklog()
+	ctx := context.Background()
+
+	sibling, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the sibling tx: %v", err)
+	}
+	defer func() { _ = sibling.Rollback(ctx) }()
+	if _, err := sibling.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.tenantID); err != nil {
+		t.Fatalf("hold the tenant lock: %v", err)
+	}
+
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := seedTenant(context.Background(), app, f.tenantID)
+		done <- outcome{res, err}
+	}()
+
+	waitForBlockedTenantLock(t, super, f.tenantID)
+
+	publishCurrentPlanAsSibling(t, sibling, f.tenantID, inhousePlan)
+	if err := sibling.Commit(ctx); err != nil {
+		t.Fatalf("commit the sibling: %v", err)
+	}
+
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the blocked converge never returned after the sibling released the tenant lock")
+	}
+	if got.err != nil {
+		t.Fatalf("the converge behind the sibling failed: %v", got.err)
+	}
+
+	// THE property: one policy row of that name, not two.
+	var named int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policies WHERE tenant_id = $1 AND name = $2`,
+		f.tenantID, wantPolicyName).Scan(&named); err != nil {
+		t.Fatalf("count %q policies: %v", wantPolicyName, err)
+	}
+	if named != 1 {
+		t.Errorf("%d %q polic(y/ies) after the ordered race, want exactly 1 — the boot read a snapshot from before the sibling committed and inserted its own", named, wantPolicyName)
+	}
+	if got.res.VersionCreated {
+		t.Error("the blocked boot reported VersionCreated; the sibling had already published, so this boot must converge on it")
+	}
+	if n := countRows(t, super, "approval_policy_versions", f.tenantID); n != 2 {
+		t.Errorf("%d version(s) after the ordered race, want 2 (the sibling's active version plus the draft)", n)
+	}
+	var active int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE tenant_id = $1 AND is_active`, f.tenantID).Scan(&active); err != nil {
+		t.Fatalf("count active versions: %v", err)
+	}
+	if active != 1 {
+		t.Errorf("%d active version(s), want exactly 1", active)
+	}
+	// The sibling published but armed nothing, so this boot still owes the sweep.
+	if got.res.RunsArmed != len(backlogTotals) {
+		t.Errorf("the blocked boot armed %d run(s), want %d — waiting on the lock must cost ordering, not the backlog", got.res.RunsArmed, len(backlogTotals))
+	}
+}
+
+// The lock is keyed per TENANT, not per fleet: one tenant's converge blocked on
+// its own key must not hold up the other's. A fleet-wide key would serialise
+// every demo tenant behind whichever one is slowest to sweep.
+func TestSeed_TheTenantLockDoesNotBlockADifferentTenantsConverge(t *testing.T) {
+	super, app := dbTestPools(t)
+	blocked := newFixture(t, super, app, "demopolicy lock scope blocked")
+	other := newFixture(t, super, app, "demopolicy lock scope other")
+	other.addBacklog()
+	ctx := context.Background()
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the holder tx: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, blocked.tenantID); err != nil {
+		t.Fatalf("hold the first tenant's key: %v", err)
+	}
+
+	// Non-vacuity: the held key must actually block ITS tenant, or the assertion
+	// below proves nothing about scoping.
+	stuck := make(chan error, 1)
+	go func() {
+		bounded, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, err := seedTenant(bounded, app, blocked.tenantID)
+		stuck <- err
+	}()
+	waitForBlockedTenantLock(t, super, blocked.tenantID)
+
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
+	res, err := seedTenantPlan(bounded, app, other.tenantID, inhousePlan)
+	cancel()
+	if err != nil {
+		t.Fatalf("a second tenant's converge blocked behind the first tenant's key: %v", err)
+	}
+	if !res.VersionCreated || res.RunsArmed != len(backlogTotals) {
+		t.Errorf("the unblocked tenant reported VersionCreated=%v armed=%d, want true and %d",
+			res.VersionCreated, res.RunsArmed, len(backlogTotals))
+	}
+
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatalf("release the held key: %v", err)
+	}
+	if err := <-stuck; err != nil {
+		t.Errorf("the blocked tenant's converge failed after the key was released: %v", err)
 	}
 }
 
@@ -920,6 +1144,35 @@ func TestSeed_NoActivePolicySeatIsUnstaffedAcrossTheDemoTenants(t *testing.T) {
 			t.Errorf("tenant %s: an active-policy lane names quality_reviewer, an unstaffed seat", p.tenantID)
 		}
 	}
+
+	// The other half of AC-8, and the demo the draft exists to show: an
+	// unsatisfiable seat must live ONLY on the draft. The in-house tenant's cfo
+	// has exactly one holder and that holder is suspended (APPR-15), so a
+	// member-ROW count passes it while nobody can actually act. Unasserted on
+	// live data anywhere else — every other unstaffed-seat spec builds its own
+	// fixture.
+	roles, active := activeHolders(t, super, inhouseDemoTenantID, "cfo")
+	if roles == 0 {
+		t.Error("the in-house tenant defines no cfo seat; the draft's unstaffed-seat demo has nothing behind it")
+	}
+	if active != 0 {
+		t.Errorf("the in-house cfo has %d ACTIVE holder(s), want 0 — the seat's sole holder is meant to be suspended, which is what makes the draft a demo of an unstaffed seat", active)
+	}
+
+	var onDraft, onActive int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE NOT v.is_active), count(*) FILTER (WHERE v.is_active)
+		   FROM approval_policy_steps s JOIN approval_policy_versions v ON v.id = s.version_id
+		  WHERE s.tenant_id = $1 AND s.workflow_role_key = 'cfo'`,
+		inhouseDemoTenantID).Scan(&onDraft, &onActive); err != nil {
+		t.Fatalf("locate the in-house cfo steps: %v", err)
+	}
+	if onDraft == 0 {
+		t.Error("no unpublished version names cfo; the Executive escalation draft is the only place an unstaffed seat may appear")
+	}
+	if onActive != 0 {
+		t.Errorf("%d ACTIVE-version step(s) name cfo, want 0 — an active lane on a seat nobody holds blocks every run with nothing red", onActive)
+	}
 }
 
 // AC-11. publishSeedPolicy, called directly over a tenant that already holds
@@ -1104,6 +1357,361 @@ func TestSeed_SupersedesItsOwnStaleActiveVersionWithVersionTwo(t *testing.T) {
 	}
 	if n := scopedVersionCount(); n != 2 {
 		t.Errorf("%q carries %d version(s) after the second boot, want still 2 — no v3", wantPolicyName, n)
+	}
+}
+
+// condSteps walks a plan lane and returns every condition step in it.
+func condSteps(lane []approval.Step) []approval.Step {
+	var out []approval.Step
+	for _, s := range lane {
+		if s.Kind == "condition" {
+			out = append(out, s)
+		}
+		out = append(out, condSteps(s.Then)...)
+		out = append(out, condSteps(s.Else)...)
+	}
+	return out
+}
+
+// scaledAmount matches a literal that already carries cond_amount's
+// numeric(14,2) scale.
+var scaledAmount = regexp.MustCompile(`^[0-9]+\.[0-9]{2}$`)
+
+// The numeric(14,2) scale trap, as a pure unit tripwire over EVERY plan.
+//
+// supersedeIfStale compares the plan's Go literal against the column's ::text
+// rendering, which always shows two decimals. An unscaled literal therefore never
+// matches, and the tenant it belongs to publishes a new version on EVERY boot of
+// the persistent demo environment -- unbounded version churn with nothing red
+// anywhere. TestSeed_SupersedesItsOwnStaleActiveVersionWithVersionTwo's second
+// boot pins this for the in-house plan only; the firm plan's two literals had no
+// guard at all until this test and
+// TestSeed_ASecondBootWritesNoNewVersionForEitherPlan.
+func TestSeed_EveryPlanAmountCarriesTheColumnScale(t *testing.T) {
+	plans := map[string][]approval.Step{
+		"firmPlan":    firmPlan.steps,
+		"inhousePlan": inhousePlan.steps,
+	}
+	if inhousePlan.draft != nil {
+		plans["inhousePlan.draft"] = inhousePlan.draft.steps
+	}
+
+	seen := 0
+	for label, steps := range plans {
+		for _, s := range condSteps(steps) {
+			if s.CondAmount == nil {
+				t.Errorf("%s: a condition step carries no cond_amount", label)
+				continue
+			}
+			seen++
+			if !scaledAmount.MatchString(*s.CondAmount) {
+				t.Errorf("%s: cond_amount literal %q does not carry numeric(14,2)'s scale; the stored value renders at 2dp, so the shape comparison never matches and this tenant republishes on every boot",
+					label, *s.CondAmount)
+			}
+		}
+	}
+	if seen < 4 {
+		t.Fatalf("walked %d condition step(s) across %d plan(s), want at least 4 — this scan would be vacuous", seen, len(plans))
+	}
+}
+
+// AC-5/AC-12. The behavioural half of the scale trap, for BOTH plans: a second
+// boot over an untouched tenant must write no new version and must NOT report a
+// supersede. Table-driven because the firm plan carries two of the three seeded
+// cond_amount literals and nothing else boots it twice.
+func TestSeed_ASecondBootWritesNoNewVersionForEitherPlan(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		label   string
+		plan    *plan
+		fixture func(*testing.T, *pgxpool.Pool, *pgxpool.Pool, string) *fixture
+	}{
+		{"the in-house plan", inhousePlan, newFixture},
+		{"the firm plan", firmPlan, newFirmFixture},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			f := tc.fixture(t, super, app, "demopolicy second boot "+tc.label)
+			f.addBacklog()
+
+			first, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("first boot: %v", err)
+			}
+			if !first.VersionCreated {
+				t.Fatal("the first boot created nothing; the second-boot assertions below would prove nothing")
+			}
+
+			second, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("second boot: %v", err)
+			}
+			if second.VersionCreated {
+				t.Error("the second boot created a version")
+			}
+			if second.Note == "policy superseded; backlog armed" {
+				t.Error("the second boot SUPERSEDED an untouched policy: the plan's shape does not round-trip through the DB, so this tenant publishes a new version on every boot forever. Check every cond_amount literal for numeric(14,2)'s scale")
+			}
+			if second.VersionID != first.VersionID {
+				t.Errorf("the second boot reports version %s, want the first boot's %s", second.VersionID, first.VersionID)
+			}
+
+			var versions int
+			if err := super.QueryRow(ctx,
+				`SELECT count(*) FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+				  WHERE v.tenant_id = $1 AND p.name = $2`, f.tenantID, tc.plan.policyName).Scan(&versions); err != nil {
+				t.Fatalf("count versions of %q: %v", tc.plan.policyName, err)
+			}
+			if versions != 1 {
+				t.Errorf("%q carries %d version(s) after two boots, want 1", tc.plan.policyName, versions)
+			}
+
+			// Names the cause directly, so a failure above does not need a
+			// second investigation to reach the literal.
+			active := activeVersionOf(t, super, f.tenantID)
+			var stored string
+			if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
+				got, err := readStepTree(ctx, tx, active.ID)
+				stored = shapeOf(got)
+				return err
+			}); err != nil {
+				t.Fatalf("read the active version's tree: %v", err)
+			}
+			if want := shapeOf(tc.plan.steps); stored != want {
+				t.Errorf("the stored shape does not equal the plan's:\nstored:\n%s\nplan:\n%s", stored, want)
+			}
+		})
+	}
+}
+
+// AC-12, guard 1 of three. A version published by `system` under a name that is
+// NOT the plan's must be left strictly alone: no version N+1 under it, and no
+// policy of the plan's name alongside it.
+//
+// This case is what makes the NAME guard load-bearing. The
+// TestSeed_NeverSupersedesAVersionItDidNotPublish table's "a different policy
+// entirely" row uses a HUMAN-published foreign policy, which guard 2
+// (published_by) already refuses — so deleting the name guard changed nothing
+// there. `system` is a literal only this seeder writes, so the state below is
+// reachable the moment a plan's policyName changes.
+func TestSeed_NeverSupersedesAPolicyOfAnotherName(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy foreign name system published")
+	f.addBacklog()
+	ctx := context.Background()
+
+	const otherName = "Legacy approval policy"
+	stale := []approval.Step{
+		{Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("100000.00"),
+			Then: []approval.Step{{Kind: "approval", WorkflowRoleKey: ptr(seededRoleKey)}},
+			Else: []approval.Step{{Kind: "autoapprove"}}},
+	}
+	if shapeOf(stale) == shapeOf(inhousePlan.steps) {
+		t.Fatal("the fixture's shape matches the plan, so the shape guard would refuse before the name guard is reached")
+	}
+
+	var otherPolicyID, otherVersionID string
+	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`,
+			f.tenantID, otherName).Scan(&otherPolicyID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
+			 VALUES ($1, $2, 1) RETURNING id::text`, f.tenantID, otherPolicyID).Scan(&otherVersionID); err != nil {
+			return err
+		}
+		if err := writeLane(ctx, tx, f.tenantID, otherVersionID, nil, nil, stale); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
+			`UPDATE approval_policy_versions
+			    SET sealed = true, is_active = true, published_at = now(), published_by = $2
+			  WHERE id = $1`, otherVersionID, wantSeedActor)
+		return err
+	}); err != nil {
+		t.Fatalf("publish a system-published policy of another name: %v", err)
+	}
+
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.Note != "an active version this seeder did not write governs" {
+		t.Errorf("Note = %q, want %q", res.Note, "an active version this seeder did not write governs")
+	}
+
+	var otherVersions int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE policy_id = $1`, otherPolicyID).Scan(&otherVersions); err != nil {
+		t.Fatalf("count %q versions: %v", otherName, err)
+	}
+	if otherVersions != 1 {
+		t.Errorf("%q carries %d version(s), want 1 — the seeder reached into a policy it does not own and published version N+1 under it", otherName, otherVersions)
+	}
+	active := activeVersionOf(t, super, f.tenantID)
+	if active.ID != otherVersionID {
+		t.Errorf("the active version is %s, want the untouched %s", active.ID, otherVersionID)
+	}
+	if names := policyNames(t, super, f.tenantID); slices.Contains(names, wantPolicyName) {
+		t.Errorf("names = %v, want no %q — a foreign active version must leave the seeder's own policy unwritten", names, wantPolicyName)
+	}
+}
+
+// AC-5/AC-6. Every prior state the boot can find, for BOTH plans: nothing there,
+// the policy already active, and the policy present but deactivated. Named
+// because the reactivate branch was only ever exercised against the in-house
+// plan, and a plan-shaped bug in it would surface first on the firm tenant.
+func TestSeed_ConvergesFromEveryPriorStateForBothPlans(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		label   string
+		plan    *plan
+		fixture func(*testing.T, *pgxpool.Pool, *pgxpool.Pool, string) *fixture
+	}{
+		{"the in-house plan", inhousePlan, newFixture},
+		{"the firm plan", firmPlan, newFirmFixture},
+	} {
+		namedVersions := func(t *testing.T, tenantID string) int {
+			t.Helper()
+			var n int
+			if err := super.QueryRow(ctx,
+				`SELECT count(*) FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+				  WHERE v.tenant_id = $1 AND p.name = $2 AND p.deleted_at IS NULL`,
+				tenantID, tc.plan.policyName).Scan(&n); err != nil {
+				t.Fatalf("count versions of %q: %v", tc.plan.policyName, err)
+			}
+			return n
+		}
+
+		t.Run(tc.label+"/absent", func(t *testing.T) {
+			f := tc.fixture(t, super, app, "demopolicy converge absent")
+			f.addBacklog()
+			res, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("converge: %v", err)
+			}
+			if !res.VersionCreated || res.Note != "policy created; backlog armed" {
+				t.Errorf("created=%v note=%q, want true and %q", res.VersionCreated, res.Note, "policy created; backlog armed")
+			}
+			if n := namedVersions(t, f.tenantID); n != 1 {
+				t.Errorf("%d version(s) of %q, want 1", n, tc.plan.policyName)
+			}
+			if got := activeVersionOf(t, super, f.tenantID).ID; got != res.VersionID {
+				t.Errorf("the active version is %s, want the created %s", got, res.VersionID)
+			}
+		})
+
+		t.Run(tc.label+"/present and active", func(t *testing.T) {
+			f := tc.fixture(t, super, app, "demopolicy converge active")
+			f.addBacklog()
+			first, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("first converge: %v", err)
+			}
+			res, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("second converge: %v", err)
+			}
+			if res.VersionCreated {
+				t.Error("the second converge created a version over an already-active policy")
+			}
+			if res.VersionID != first.VersionID {
+				t.Errorf("reports version %s, want the standing %s", res.VersionID, first.VersionID)
+			}
+			if n := namedVersions(t, f.tenantID); n != 1 {
+				t.Errorf("%d version(s) of %q, want 1", n, tc.plan.policyName)
+			}
+		})
+
+		t.Run(tc.label+"/present but inactive", func(t *testing.T) {
+			f := tc.fixture(t, super, app, "demopolicy converge inactive")
+			f.addBacklog()
+			first, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("first converge: %v", err)
+			}
+			if _, err := super.Exec(ctx,
+				`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, first.VersionID); err != nil {
+				t.Fatalf("deactivate: %v", err)
+			}
+			wipeRuns(t, super, f.tenantID)
+
+			res, err := seedTenantPlan(ctx, app, f.tenantID, tc.plan)
+			if err != nil {
+				t.Fatalf("reactivating converge: %v", err)
+			}
+			if res.Note != "policy reactivated; backlog armed" {
+				t.Errorf("Note = %q, want %q", res.Note, "policy reactivated; backlog armed")
+			}
+			if res.VersionID != first.VersionID {
+				t.Errorf("reports version %s, want the SAME version %s reactivated", res.VersionID, first.VersionID)
+			}
+			if n := namedVersions(t, f.tenantID); n != 1 {
+				t.Errorf("%d version(s) of %q, want 1 — reactivation must not duplicate", n, tc.plan.policyName)
+			}
+			active := activeVersionOf(t, super, f.tenantID)
+			if active.ID != first.VersionID || !active.Sealed {
+				t.Errorf("the active version is %s sealed=%v, want %s sealed=true", active.ID, active.Sealed, first.VersionID)
+			}
+			if res.RunsArmed != len(backlogTotals) {
+				t.Errorf("armed %d run(s), want %d", res.RunsArmed, len(backlogTotals))
+			}
+		})
+	}
+}
+
+// Converging one tenant must write nothing for another. clearActive carries NO
+// policy or tenant predicate (demopolicy.go:411) and armBacklog's anti-join none
+// either: RLS is the whole boundary. A neighbour that already holds an active
+// version is the case that costs something — a clearActive that escaped its
+// tenant would deactivate it and silently drop that tenant's awaiting_approval
+// to counts.validated.
+func TestSeed_ConvergingOneTenantLeavesItsNeighbourAlone(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	neighbour := newFixture(t, super, app, "demopolicy neighbour")
+	neighbour.addBacklog()
+	subject := newFixture(t, super, app, "demopolicy subject")
+	subject.addBacklog()
+
+	before, err := seedTenant(ctx, app, neighbour.tenantID)
+	if err != nil {
+		t.Fatalf("converge the neighbour: %v", err)
+	}
+	if !before.VersionCreated {
+		t.Fatal("the neighbour has no active version, so the cross-tenant assertions below would be vacuous")
+	}
+
+	res, err := seedTenant(ctx, app, subject.tenantID)
+	if err != nil {
+		t.Fatalf("converge the subject: %v", err)
+	}
+	if !res.VersionCreated || res.RunsArmed != len(backlogTotals) {
+		t.Fatalf("the subject converge did nothing (created=%v armed=%d); a neighbour left alone by a no-op proves nothing",
+			res.VersionCreated, res.RunsArmed)
+	}
+
+	active := activeVersionOf(t, super, neighbour.tenantID)
+	if active.ID != before.VersionID {
+		t.Errorf("the neighbour's active version is %s, want the untouched %s", active.ID, before.VersionID)
+	}
+	if !active.IsActive {
+		t.Error("the neighbour's version was deactivated by another tenant's clearActive")
+	}
+	for table, want := range map[string]int{
+		"approval_policies":        2,
+		"approval_policy_versions": 2,
+		"approval_policy_steps":    9,
+		"approval_runs":            len(backlogTotals),
+	} {
+		if got := countRows(t, super, table, neighbour.tenantID); got != want {
+			t.Errorf("the neighbour holds %d %s row(s) after another tenant converged, want %d", got, table, want)
+		}
 	}
 }
 

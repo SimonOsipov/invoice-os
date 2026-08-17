@@ -41,6 +41,41 @@ export function gaps(inner: Box, outer: Box): { left: number; right: number } {
   }
 }
 
+/** A rendered element's full extent. Playwright's boundingBox() shape; satisfies Box. */
+export type Rect = { x: number; y: number; width: number; height: number }
+
+/**
+ * Do two elements cover any of the same pixels?
+ *
+ * Both axes, never one — gaps()'s rule in two dimensions. The cookie notice shares an
+ * x band with the closing CTA's copy at every width in WIDE_WIDTHS, so an x-only check
+ * calls a correct page broken and the whole clearance claim lives on y. A shared edge,
+ * and an element collapsed to zero on either axis, are clearance rather than contact.
+ */
+export function rectsOverlap(a: Rect, b: Rect): boolean {
+  const o = overlapOf(a, b)
+  return o.width > 0 && o.height > 0
+}
+
+/**
+ * The intersection of two elements, clamped per axis so an extent is never negative.
+ *
+ * A rect, not an area: 2x232 and 232x2 are both 464 and are different defects — a sliver
+ * down one edge versus a card sitting on a paragraph. Clamping per axis instead of
+ * zeroing the whole rect on a miss keeps the axis that saved the layout readable in the
+ * failure message. The caller multiplies if it wants the area.
+ */
+export function overlapOf(a: Rect, b: Rect): Rect {
+  const x = Math.max(a.x, b.x)
+  const y = Math.max(a.y, b.y)
+  return {
+    x,
+    y,
+    width: Math.max(0, Math.min(a.x + a.width, b.x + b.width) - x),
+    height: Math.max(0, Math.min(a.y + a.height, b.y + b.height) - y),
+  }
+}
+
 /**
  * Asserts `inner` fills `outer` horizontally at every width in WIDE_WIDTHS, and
  * returns what it measured so the caller can attach the numbers.

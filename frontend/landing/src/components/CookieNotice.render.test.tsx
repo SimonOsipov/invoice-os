@@ -1,0 +1,173 @@
+// RED specs (task-561, LAND-05-02, Test-first) — T2-1..T2-9 from the architect's
+// Test Specs table, authored before CookieNotice.tsx exists. SSR via
+// renderToStaticMarkup, no jsdom, no testing-library (vitest.config.ts: 'node').
+//
+// The component is loaded through a runtime specifier rather than a static import
+// so a missing module fails as an ASSERTION (loadNotice's existsSync guard) instead
+// of a collection error. tsc does not resolve non-literal dynamic imports, so
+// `pnpm -r typecheck` stays green while the module is absent.
+//
+// React 19 SSR facts relied on here (react-dom 19.2.7, also stated in
+// Privacy.render.test.tsx / Footer.render.test.tsx): `&` in JSX text emits `&amp;`;
+// `inert={true}` emits `inert=""` and `inert={false}` emits nothing; attribute
+// output order follows JSX source order.
+/// <reference types="node" />
+import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import type { ReactElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { CONSENT_VERSION } from '../consent'
+import type { ConsentRecord } from '../consent'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const COMPONENT_PATH = join(HERE, 'CookieNotice.tsx')
+// Non-literal on purpose — see the header note.
+const COMPONENT_SPECIFIER = './CookieNotice'
+
+type ConsentChoice = 'accept' | 'reject'
+type NoticeProps = {
+  current: ConsentRecord | null
+  suppressed: boolean
+  onChoose: (choice: ConsentChoice) => void
+}
+type CookieNoticeModule = { CookieNotice: (props: NoticeProps) => ReactElement }
+
+function noop() {}
+
+const GRANTED: ConsentRecord = { analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
+const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
+
+// Verbatim from the story's Final copy table. Not paraphrased, punctuation untouched.
+const BODY_COPY =
+  'We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we set: no advertising, no remarketing, no data sold to anyone.'
+const LINK_TEXT = 'Read the privacy &amp; cookie policy'
+const SETTING_ON = 'Analytics cookies are on.'
+const SETTING_OFF = 'Analytics cookies are off.'
+
+async function loadNotice(): Promise<CookieNoticeModule> {
+  expect(existsSync(COMPONENT_PATH), `expected ${COMPONENT_PATH} to exist`).toBe(true)
+  const mod = (await import(COMPONENT_SPECIFIER)) as CookieNoticeModule
+  expect(typeof mod.CookieNotice, 'expected a CookieNotice named export').toBe('function')
+  return mod
+}
+
+async function render(overrides: Partial<NoticeProps> = {}): Promise<string> {
+  const mod = await loadNotice()
+  const props: NoticeProps = { current: null, suppressed: false, onChoose: noop, ...overrides }
+  const html = renderToStaticMarkup(createElement(mod.CookieNotice, props))
+  // Population floor: a component that rendered nothing would satisfy every
+  // absence claim below vacuously.
+  expect(html.length, 'expected non-empty SSR markup').toBeGreaterThan(0)
+  expect(html, 'expected the card root class as a control needle').toContain('cookie-note')
+  return html
+}
+
+// Uses expect rather than a throw so a miss is a failing assertion, not an error.
+function extractTag(html: string, re: RegExp): string {
+  const match = html.match(re)
+  expect(match, `expected to find a tag matching ${re}`).not.toBeNull()
+  return match![0]
+}
+
+describe('CookieNotice SSR render (LAND-05-02)', () => {
+  it('T2-1 / AC-1: the card is a polite live region, and is not a modal', async () => {
+    const html = await render()
+    const root = extractTag(html, /<div[^>]*\bclass="cookie-note"[^>]*>/)
+
+    expect(root).toContain('role="region"')
+    expect(root).toContain('aria-label="Cookie notice"')
+    expect(root).toContain('aria-live="polite"')
+    expect(html).not.toContain('aria-modal')
+  })
+
+  it('T2-2: the body copy is verbatim', async () => {
+    const html = await render()
+    expect(html).toContain(BODY_COPY)
+  })
+
+  it('T2-3 / AC-4: exactly two buttons, both type="button", labelled Accept and Reject', async () => {
+    const html = await render()
+
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*data-consent="accept"[^>]*>Accept</)
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*data-consent="reject"[^>]*>Reject</)
+
+    const buttons = html.match(/<button/g) ?? []
+    expect(buttons.length).toBe(2)
+  })
+
+  it('T2-4 / AC-3: the policy link carries BOTH classes and href="/privacy"', async () => {
+    const html = await render()
+
+    // Ordered form. Requires the JSX to write className before href — the order the
+    // architect's markup block specifies, and the order React reproduces verbatim.
+    expect(html).toMatch(/<a [^>]*class="lnk cn-link"[^>]*href="\/privacy"/)
+
+    // Order-agnostic siblings, so an attribute reorder fails loudly on its own line
+    // rather than silently taking the whole claim with it.
+    expect(html).toContain('class="lnk cn-link"')
+    expect(html).toContain('href="/privacy"')
+    expect(html).toContain(LINK_TEXT)
+  })
+
+  it('T2-5 / AC-5: no dismissal affordance of any kind exists', async () => {
+    const html = await render()
+
+    const buttons = html.match(/<button/g) ?? []
+    expect(buttons.length).toBe(2)
+    expect(html).not.toMatch(/close/i)
+    expect(html).not.toMatch(/dismiss/i)
+    for (const glyph of ['×', '✕', '✖', '&times;']) {
+      expect(html, `expected no ${glyph}`).not.toContain(glyph)
+    }
+  })
+
+  it('T2-6 / AC-2: the eyebrow reuses the shared class and renders the copy-table text', async () => {
+    const html = await render()
+
+    // Rendered text, not the ALL-CAPS literal every other landing eyebrow passes:
+    // text-transform: uppercase makes the two render identically, so a literal check
+    // would let `COOKIES` through against a copy table that says `Cookies`.
+    expect(html).toMatch(/class="eyebrow"[^>]*>Cookies</)
+    expect(html).not.toContain('>COOKIES<')
+
+    // No hand-rolled 24px rule standing in for .eyebrow::before.
+    expect(html).not.toMatch(/<span[^>]*style="[^"]*24px/)
+  })
+
+  it('T2-7 / AC-6: current === null renders no .cn-setting line', async () => {
+    const html = await render({ current: null })
+    expect(html).not.toContain('cn-setting')
+    expect(html).not.toContain(SETTING_ON)
+    expect(html).not.toContain(SETTING_OFF)
+  })
+
+  it('T2-7 / AC-6: a granted record renders the "on" sentence', async () => {
+    const html = await render({ current: GRANTED })
+    expect(html).toMatch(/class="cn-setting"[^>]*>Analytics cookies are on\.</)
+    expect(html).not.toContain(SETTING_OFF)
+  })
+
+  it('T2-7 / AC-6: a denied record renders the "off" sentence', async () => {
+    const html = await render({ current: DENIED })
+    expect(html).toMatch(/class="cn-setting"[^>]*>Analytics cookies are off\.</)
+    expect(html).not.toContain(SETTING_ON)
+  })
+
+  it('T2-8 / AC-7: inert appears on the card root only when suppressed', async () => {
+    const suppressed = await render({ suppressed: true })
+    const root = extractTag(suppressed, /<div[^>]*\bclass="cookie-note"[^>]*>/)
+    expect(root).toContain('inert=""')
+
+    const live = await render({ suppressed: false })
+    expect(live).not.toContain('inert')
+  })
+
+  it('T2-9: the spacer is present and hidden from assistive tech', async () => {
+    const html = await render()
+    expect(html).toContain('<div aria-hidden="true" class="cn-spacer">')
+  })
+})

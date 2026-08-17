@@ -107,8 +107,9 @@ publishes (`[topology-never-publishes]`: a publish seals a version permanently a
 tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` builds and
 deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
 now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
-`internal/demopolicy` seeds one policy onto the in-house tenant and none onto the firm one,
-and `persona-surfaces.spec.ts` names neither it nor any other pre-existing row;
+`internal/demopolicy` seeds an active policy onto BOTH persona tenants (plus an unpublished
+draft on the in-house one), and `persona-surfaces.spec.ts` names none of them, nor any other
+pre-existing row;
 `workflows.spec.ts` and `roles.spec.ts` name only rows they create. The mock fixture
 module that predated those live reads, `policyFixtures.ts`, was deleted by APPR-10.
 

@@ -119,15 +119,41 @@ func publishForeignPolicy(t *testing.T, super *pgxpool.Pool, tenantID string) {
 }
 
 // publishStaleOwnPolicy seeds the tenant with demopolicy's OWN pre-notify
-// shape: exactly what publishSeedPolicy writes today (3 steps, no Q10 notify)
-// — sealed, active, published_by "system". Reused directly rather than
-// hand-rolled, so this fixture cannot drift from what the seeder itself
-// writes.
+// shape: three steps, no Q10 notify — sealed, active, published_by "system".
+// Written out rather than by calling publishSeedPolicy, which now writes the
+// CURRENT plan and would leave every supersede case below vacuous. The shape
+// guard is what keeps this fixture stale as the plan moves.
 func publishStaleOwnPolicy(t *testing.T, app *pgxpool.Pool, tenantID string) {
 	t.Helper()
 	ctx := context.Background()
+	stale := []approval.Step{
+		{Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("100000.00"),
+			Then: []approval.Step{{Kind: "approval", WorkflowRoleKey: ptr(seededRoleKey)}},
+			Else: []approval.Step{{Kind: "autoapprove"}}},
+	}
+	if shapeOf(stale) == shapeOf(inhousePlan.steps) {
+		t.Fatal("the stale fixture matches the current in-house plan, so no supersede case here exercises anything")
+	}
+
 	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		_, err := publishSeedPolicy(ctx, tx, tenantID)
+		var policyID, versionID string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`,
+			tenantID, wantPolicyName).Scan(&policyID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
+			 VALUES ($1, $2, 1) RETURNING id::text`, tenantID, policyID).Scan(&versionID); err != nil {
+			return err
+		}
+		if err := writeLane(ctx, tx, tenantID, versionID, nil, nil, stale); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
+			`UPDATE approval_policy_versions
+			    SET sealed = true, is_active = true, published_at = now(), published_by = $2
+			  WHERE id = $1`, versionID, wantSeedActor)
 		return err
 	}); err != nil {
 		t.Fatalf("publish the stale own policy: %v", err)

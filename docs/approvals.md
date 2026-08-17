@@ -913,30 +913,50 @@ no deployment configuration for it either — the Go services ship no `.env.exam
 (`docs/add-a-service.md`) and the dev-environment workflow rewrites only URL variables, so
 Railway is where it will be set.
 
-### Flipping it alone changes nothing on a seeded dev tenant — except the in-house one
+### Flipping it alone changes nothing on a seeded dev tenant — except the two demo ones
 
-`db/seed.dev.sql` publishes **no approval policy**. Three of the four seeded tenants
+`db/seed.dev.sql` publishes **no approval policy**. Two of the four seeded tenants
 therefore have no active policy version, and with no active version nothing arms — no run
 opens, so there is no open run for the gate to refuse (§2 has the full no-active-policy
 behaviour). Setting `APPROVALS_ENFORCED=true` against those is observably a no-op. To watch
 the gate act, publish a policy first, then validate an invoice under it.
 
-**The in-house demo tenant (`22222222-…`, Honeywell Group) is the exception, and it is the
-only seeded approval policy in the fleet.** The invoice service writes it at boot —
-`internal/demopolicy`, named `Company approval policy`: one root condition `total >
-100,000`, a `fin_dir` approval on the `then` lane, an autoapprove on the `else` lane,
-sealed and active with `published_by = 'system'`. The firm tenant `11111111-…` carries
-none. The allowlist is a package variable, not configuration, because `ENVIRONMENT` reads
-`development` on production and gating on it would be fail-open. Three of that tenant's
-four validated invoices sit above the threshold, so its `awaiting_approval` reads 3 while
-`counts.validated` reads 4 — the gap is what makes the Approvals badge observable on the
-deploy gate rather than coincidentally non-zero.
+**The two demo tenants are the exception, and they carry the only seeded approval policies
+in the fleet.** The invoice service writes them at boot from `internal/demopolicy`:
+
+- **In-house (`22222222-…`, Honeywell Group), `Company approval policy`** — one root
+  condition `total > 100,000` with a `fin_dir` approval on the `then` lane and an
+  autoapprove on the `else` lane, then a root-level `notify` to the Tax Team over In-app.
+  Sealed and active with `published_by = 'system'`. Three of that tenant's four validated
+  invoices sit above the threshold, so its `awaiting_approval` reads 3 while
+  `counts.validated` reads 4 — the gap is what makes the Approvals badge observable on the
+  deploy gate rather than coincidentally non-zero. It also carries **`Executive
+  escalation`**, an unsealed inactive DRAFT naming seats nobody holds (`cfo` suspended,
+  `ceo` unstaffed); a draft never governs and never arms.
+- **Firm (`11111111-…`, Okafor & Partners), `Standard approval policy`** — the SPA seed's
+  polF1 verbatim: `fin_mgr`, a `> 250,000,000` condition gating `fin_dir`, a
+  `> 1,000,000,000` condition gating `cfo` plus a notify to the Audit Committee, then
+  `compliance`. Every one of its seven validated invoices is below both thresholds, so each
+  arms on `fin_mgr` then `compliance` and its `awaiting_approval` reads 7 of 7 — that badge
+  cannot discriminate, by construction.
+
+No seeded step carries `sla_hours`: a deadline would render every seeded run overdue two
+days after the environment's last deploy. The allowlist is a package variable, not
+configuration, because `ENVIRONMENT` reads `development` on production and gating on it
+would be fail-open.
 
 The seeder **converges** rather than inserting-if-absent: it re-runs the validated-backlog
 sweep on every boot, whether or not it wrote the policy on that boot, because the gateway's
 `db.Reset` truncates `approval_runs` and deliberately leaves the three policy tables
 standing. A seeder that no-opped on finding its own policy would arm nothing on the second
-deploy, and `awaiting_approval` would silently equal `counts.validated`.
+deploy, and `awaiting_approval` would silently equal `counts.validated`. Convergence has
+three writes: publish when nothing of that name exists, **reactivate** the sealed version
+when the policy exists but something deactivated it, and **supersede** with version N+1 when
+the active version's step shape has drifted from the plan. Supersede is guarded three ways —
+the active version must be of the plan's own policy, `published_by = 'system'`, and its shape
+must actually differ — so a version a human published is left strictly alone even when stale.
+An invoice already armed under version N keeps version N's trail; only invoices validated
+after the supersede render the new shape.
 
 **Known residual, recorded and undefended.** A gateway restarted out of band — a
 single-service redeploy, an OOM, a manual restart — runs `Reset` again and re-truncates

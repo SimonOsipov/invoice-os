@@ -210,7 +210,7 @@ describe('CookieNotice adversarial (LAND-05-02)', () => {
 
   it('a record with an unexpected shape fails CLOSED, and never renders both sentences', async () => {
     // parseConsent guarantees a boolean, but the prop is a plain object at runtime and
-    // LAND-05-03 wires a caller. Anything not truthy must read as declined.
+    // App.tsx wires a caller. Anything not truthy must read as declined.
     for (const shape of [{}, { analytics: undefined }, { analytics: null }, { analytics: 0 }]) {
       const html = await render({ current: shape as unknown as ConsentRecord })
       expect(html, `${JSON.stringify(shape)} must read as declined`).toContain(SETTING_OFF)

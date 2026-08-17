@@ -36,7 +36,7 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C13 empties are dropped', 'Anything left empty is not sent at all'],
   ['C16 no browsing history to HubSpot', 'We do not send HubSpot your browsing history, the pages you visited'],
   ['C17 no advertising network', 'We run no advertising network on this site'],
-  ['C18 no privacy control yet', 'This site has no privacy control of its own yet'],
+  ['C18 the notice is the control', 'The cookie notice on this site is where you choose'],
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 not a marketing list', 'does not add you to a marketing list'],
   ['E3 our code sets no cookies', 'Our own code sets no cookies at all'],
@@ -52,6 +52,11 @@ const WITHDRAWAL_NEEDLES: readonly (readonly [string, string])[] = [
   [
     'W3 does not stop the measurement, once analytics is allowed',
     'If you have allowed analytics, it does not stop the measurement itself',
+  ],
+  // Without this the denied branch could be deleted and every other row stays green.
+  [
+    'W3 there is nothing to stop, while analytics is not allowed',
+    'If you have not allowed analytics, you are not being measured at all',
   ],
   ['W4 does not stop fonts or the form', 'It does not affect the fonts and it does not affect the demo form'],
   ['W5 lead-in', 'Block googletagmanager.com with a content blocker'],

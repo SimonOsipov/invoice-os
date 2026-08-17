@@ -67,11 +67,11 @@ export const DEMO_CTA_SOURCES: readonly DemoCtaSource[] =
 
 const FORM_NAME = 'book_a_demo'
 
-// The one choke point for every sender: no tag, no send. `window` is read only
-// after the flag check, so a sender is inert under node and on every non-production
-// host. Pinned by "a sender before ensureTag touches no browser global".
+// The one choke point for every sender: no tag or a withdrawn consent, no send. `revoked`
+// is declared at the foot of this file, where it moves no analytics.ts:NN citation in
+// docs/. Pinned by "a sender before ensureTag touches no browser global".
 function send(name: string, params: Record<string, string | number>): void {
-  if (!loaded) return
+  if (!loaded || revoked) return
   ;(window as GtagWindow).gtag?.('event', name, params)
 }
 
@@ -129,4 +129,18 @@ export function trackScrollDepth(percent: number): void {
     firedMilestones.add(m)
     send('scroll_depth', { percent_scrolled: m })
   }
+}
+
+// Revocation, deliberately at the foot of the file: every earlier line is cited by
+// file:line from docs/privacy-policy-claims.md and docs/analytics.md. `send()` reads
+// `revoked` before this runs only if a sender fires during module evaluation, and none can.
+let revoked = false
+
+export function tagIsLoaded(): boolean {
+  return loaded
+}
+
+/** Called on every choice, never only on injection — see consentActions.applyChoice. */
+export function setAnalyticsRevoked(v: boolean): void {
+  revoked = v
 }

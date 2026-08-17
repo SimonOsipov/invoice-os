@@ -44,9 +44,9 @@ export function Privacy() {
             It is not legal advice, and we do not claim here that it satisfies any particular data-protection law.
           </p>
           <p style={P}>
-            Two other companies receive information about your visit. Google measures how this site is used and also
-            serves the fonts it is typeset in. HubSpot stores the answers you give if you book a demo. Your browser
-            loads nothing on this site from any other company.
+            Two other companies receive information about your visit. Google serves the fonts this site is typeset
+            in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give
+            if you book a demo. Your browser loads nothing on this site from any other company.
           </p>
 
           <h2 style={H2}>Google Analytics</h2>
@@ -87,14 +87,16 @@ export function Privacy() {
           </p>
           <p style={P}>
             Our own code sets no cookies at all — these come from Google's script. They appear only once you have
-            allowed analytics; until then your cookie list for this site holds neither of them.
+            allowed analytics; until then your cookie list for this site holds neither of them. The only thing our
+            code ever writes to that list is the instruction that deletes these two, which is what choosing Reject
+            does.
           </p>
 
           <h2 style={H2}>Where the data goes</h2>
           <p style={P}>
-            Your visit is collected through one of Google's regional collection endpoints — from this site,
-            region1.google-analytics.com. Google LLC then processes and stores that data, including in the United
-            States.
+            If you have allowed analytics, your visit is collected through one of Google's regional collection
+            endpoints — from this site, region1.google-analytics.com. Google LLC then processes and stores that data,
+            including in the United States.
           </p>
           <p style={P}>
             Using this site therefore transfers information about your visit outside Nigeria and outside the EEA.
@@ -150,10 +152,11 @@ export function Privacy() {
 
           <h2 style={H2}>How to stop being measured</h2>
           <p style={P}>
-            <strong>{ANALYTICS_DEFAULT_SENTENCE}</strong> This site has no privacy control of its own yet — no notice,
-            no toggle, no settings page. One that lets you choose is being built. Until it ships, no analytics runs at
-            all, and the four options below are what actually exist. We would rather say that plainly than point you
-            at a control you cannot find.
+            <strong>{ANALYTICS_DEFAULT_SENTENCE}</strong> The cookie notice on this site is where you choose: Accept
+            allows Google Analytics, Reject leaves it off. If you choose Reject after having accepted earlier, we
+            delete the _ga cookies described above and our own code sends Google nothing more. Google's script is
+            already loaded into the page you are on, though, so reload the page to clear that out too — and nothing
+            already sent can be taken back. The four options below work whatever you choose here.
           </p>
           <ol style={LIST}>
             <li style={ITEM}>

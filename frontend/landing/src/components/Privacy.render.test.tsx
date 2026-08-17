@@ -55,7 +55,7 @@ function sourceFiles(dir: string): string[] {
 // LAND-05-01's QA. LAND-05-03 narrows it to the terms that stay wrong once the notice
 // mounts; `banner` and `Reject` come off only because the rewritten copy names the
 // real control.
-const FORBIDDEN_WITHDRAWAL_TERMS: readonly string[] = ['banner', 'Reject', 'preference centre', 'preference center']
+const FORBIDDEN_WITHDRAWAL_TERMS: readonly string[] = ['preference centre', 'preference center']
 
 // The same loop the guard runs, exposed so the narrowed list can be proven non-vacuous
 // against a planted string instead of being trusted.

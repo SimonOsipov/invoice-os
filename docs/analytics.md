@@ -20,9 +20,16 @@ must **all** hold (`shouldLoadTag`, `analytics.ts:22`):
 Any one of the three missing and `https://www.googletagmanager.com/gtag/js` is never requested.
 That is what keeps every preview and PR environment dark: none of them carries the variable.
 
+A choice in the cookie notice is applied without a page reload (`consentActions.ts` `applyChoice`).
+Accept injects the tag; Reject sets a module flag that makes every sender return early
+(`analytics.ts:74` `if (!loaded || revoked) return`) and expires the `_ga` cookies. The gate above
+governs the tag REQUEST, the flag governs the SENDERS: a tag injected earlier in the same page
+load stays resident until the page is reloaded. See operator checklist item 7.
+
 Out of scope, by decision: **Google Consent Mode v2** in any form (no `gtag('consent', …)` call
-ships — Q2), the cookie notice and the privacy policy (LAND-04 / LAND-05), and all GA-console
-configuration, which is why the operator checklist below exists.
+ships — Q2), the cookie notice's own UI and copy and the privacy policy (LAND-04 / LAND-05) —
+what the notice does to the tag is described above — and all GA-console configuration, which is
+why the operator checklist below exists.
 
 ## Events
 
@@ -59,7 +66,7 @@ build arg is silently dropped and `vite build` bakes an empty string.
 
 ## Operator checklist
 
-Six items. None of them is dischargeable by CI, and the first is load-bearing.
+Seven items. None of them is dischargeable by CI, and the first is load-bearing.
 
 1. **Set `VITE_GA_MEASUREMENT_ID=G-E409H76XYY`** on the production landing service (project
    `ASComply`, environment `production` `6c864094-6a06-452f-8495-be77d8a94fe7`, service `landing`
@@ -113,6 +120,16 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    `ensureTag` returns at its `!id` check before the host gate is consulted, so with no variable
    there is no request either way. Every existing unit test survives the allowlist mutation — their
    pinned hostnames all differ from a live PR host. Budget two extra full 11-service rebuilds.
+
+7. **Turn GA4 enhanced measurement off** (Admin → Data streams → the web stream → Enhanced
+   measurement). **OPEN — nobody has done this.** Scroll, outbound click, file download, form
+   interaction, site search and video events fire from `gtag.js` itself, with no call from this
+   codebase. So a visitor who rejects after accepting can still generate hits until the page is
+   reloaded, and each one re-creates `_ga`. **No change in this repository can stop that** — the
+   revocation flag gates our four senders and nothing else. Until an operator changes this
+   setting, W2 in `docs/privacy-policy-claims.md` is true only up to that residual, and the
+   ledger says so. Leave this item open until the setting is changed and re-measured in a
+   browser; do not mark it done on merge.
 
 ## Verifying the classifier
 

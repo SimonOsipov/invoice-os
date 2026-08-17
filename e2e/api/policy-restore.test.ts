@@ -76,7 +76,7 @@ function approvalStep(id: string, role: string): ApprovalStep {
   }
 }
 
-function conditionStep(id: string, then: ApprovalStep[]): ApprovalStep {
+function conditionStep(id: string, then: ApprovalStep[], elseBranch: ApprovalStep[] = []): ApprovalStep {
   return {
     id,
     kind: 'condition',
@@ -87,7 +87,7 @@ function conditionStep(id: string, then: ApprovalStep[]): ApprovalStep {
     notify_target: null,
     notify_channel: null,
     then,
-    else: [],
+    else: elseBranch,
   }
 }
 
@@ -171,6 +171,27 @@ describe('mapApprovalSteps', () => {
       },
     ])
     expect(mapped[1].else).toEqual([])
+  })
+
+  // QA gap-fill: the test above only exercises `then` with a nested step -- `else` is [] on
+  // every fixture including GOOD_TREE, so a mapper that recurses into `then` but forgets
+  // `else` (`else: []` instead of `else: mapApprovalSteps(s.else)`) passed the whole suite
+  // uncaught. Same truncation failure mode, the other lane.
+  it('recurses into else, not just then, so an else-branch step is not truncated', () => {
+    const mapped = mapApprovalSteps([conditionStep('cnd-1', [], [approvalStep('srv-9', 'compliance')])])
+    expect(mapped[0].else).toEqual([
+      {
+        kind: 'approval',
+        workflow_role_key: 'compliance',
+        sla_hours: null,
+        cond_op: null,
+        cond_amount: null,
+        notify_target: null,
+        notify_channel: null,
+        then: [],
+        else: [],
+      },
+    ])
   })
 })
 

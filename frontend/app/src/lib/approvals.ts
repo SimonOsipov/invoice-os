@@ -1,5 +1,7 @@
 // Approvals screen pure core + fan-out client (APPR-12-02, task-527), covered by
-// approvals.test.ts (A02-1..A02-18).
+// approvals.test.ts (A02-1..A02-18). Also carries the invoice-detail run read model +
+// decide client (APPR-13-01, task-550) and the trail projection + copy consts
+// (APPR-13-02, task-552) -- each carries its own comment block further down.
 //
 // listAwaitingApproval wraps invoices.ts's listInvoices, forcing awaiting_approval=true
 // (ListFilter.AwaitingApproval, internal/invoice/handlers.go:349-451, shipped APPR-08-07)
@@ -31,6 +33,10 @@
 // (epic Q12) -- the page is a snapshot and another approver can decide a row between
 // the fetch and the confirm.
 
+import { ApiError } from '@invoice-os/api-client'
+
+import { actorLabel } from './actor'
+import { fmtDate, fmtDateTime } from './format'
 import { listInvoices, type InvoiceListResponse, type InvoiceRecord, type ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -38,7 +44,7 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 
 // step / role / holder-warning / due / overdue / approve_blocked_reason -- wire values
 // passed through, except roleLabel's own em-dash fallback for a null pending_role_title
-// (the ONLY fallback this file may author, A02-15).
+// (A02-15; approvalTrailSteps's roleTitle repeats the same em-dash convention below).
 export interface ApprovalRowView {
   approvable: boolean
   pendingOrd: number | null
@@ -262,4 +268,260 @@ export const APPROVALS_COPY = {
   emptyPageMessage: 'Go back to see the rest of the queue.',
   unstaffedSeat: 'Unstaffed seat',
   overdue: 'Overdue',
+} as const
+
+// ---- Approval-run wire types (APPR-13-01), mirrored key-for-key from
+// internal/approval/read_model.go's Resolved/RunStep/RunDecision/Run -- the app-side
+// counterpart to e2e/api/client.ts's ApprovalResolved/ApprovalRunStep/
+// ApprovalRunDecision/ApprovalRun. kind/state stay `string`, never a union: the DB
+// column is untyped, and a union would make an unrecognised value a type error the SPA
+// cannot represent honestly.
+
+export interface ApprovalResolved {
+  text: string
+  warn: boolean
+}
+
+export interface ApprovalRunStep {
+  ord: number
+  kind: string
+  state: string
+  workflow_role_key: string | null
+  workflow_role_title: string | null
+  holder: ApprovalResolved | null
+  sla_hours: number | null
+  due_at: string | null
+  overdue: boolean
+  satisfied_at: string | null
+  satisfied_by: string | null
+  notify_target: string | null
+  notify_channel: string | null
+}
+
+export interface ApprovalRunDecision {
+  run_step_id: string
+  ord: number
+  decision: string
+  actor: string
+  decided_at: string
+  reason: string | null
+}
+
+export interface ApprovalRun {
+  run_id: string
+  state: string
+  opened_at: string
+  closed_at: string | null
+  closed_by: string | null
+  steps: ApprovalRunStep[]
+  decisions: ApprovalRunDecision[]
+}
+
+// Mirrors isUnauthorized's exact shape (authedFetch.ts:16-18), 404 swapped for 401.
+export function isNoApprovalRun(e: unknown): boolean {
+  return e instanceof ApiError && e.kind === 'http' && e.status === 404
+}
+
+// Resolves the run, null on 404. Catch sits OUTSIDE authedFetch so the 401->sign-out
+// seam still fires on a 401 -- every non-404 error rethrows unwrapped.
+export async function getInvoiceApprovalRun(
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+): Promise<ApprovalRun | null> {
+  try {
+    return await authedFetch<ApprovalRun>(`${base}/api/invoice/v1/invoices/${id}/approval`)
+  } catch (e) {
+    if (isNoApprovalRun(e)) return null
+    throw e
+  }
+}
+
+// POSTs the decision. Body omits `reason` on 'approved'; 'rejected' sends it verbatim
+// and untrimmed -- the server does the trimming.
+export async function decideInvoice(
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  decision: 'approved' | 'rejected',
+  reason?: string,
+): Promise<ApprovalRun> {
+  const body = decision === 'rejected' ? { decision, reason } : { decision }
+  return authedFetch<ApprovalRun>(`${base}/api/invoice/v1/invoices/${id}/approvals`, {
+    method: 'POST',
+    body,
+  })
+}
+
+// Mirrors invoices.ts's canResolveOutside -- the reject-reason trim guard.
+export function canRejectReason(reason: string): boolean {
+  return reason.trim() !== ''
+}
+
+// 0/1/2-sentence de-dup for the approve/reject blocked reasons: null drops out,
+// byte-identical strings collapse to one.
+export function decisionBlockedReasons(approve: string | null, reject: string | null): string[] {
+  if (approve == null) return reject == null ? [] : [reject]
+  if (reject == null || reject === approve) return [approve]
+  return [approve, reject]
+}
+
+// ---- Trail projection (APPR-13-02, task-552): the pure core the invoice-detail trail
+// card renders. holderText is a straight passthrough of step.holder?.text -- never
+// re-derived through ./roles's resolve()/inspectorResolve() (D-34), which need a
+// Role[]/Member[] this projection never receives.
+
+export interface TrailStepView {
+  ord1: number
+  kind: string
+  kindLabel: string
+  stateLabel: string
+  roleTitle: string
+  holderText: string | null
+  holderWarn: boolean
+  dueLabel: string | null
+  overdue: boolean
+  notifyNote: string | null
+  // AC-4 (card renders "<target> · <channel>" on the notify row): straight passthrough
+  // of notify_target/notify_channel, null for every non-notify kind exactly as
+  // notifyNote is -- avoids a second read of the raw step for the same data (D-34).
+  notifyTarget: string | null
+  notifyChannel: string | null
+}
+
+export interface TrailDecisionView {
+  ord1: number
+  outcomeLabel: string
+  actorText: string
+  actorMono: boolean
+  whenLabel: string
+  reason: string | null
+}
+
+export function approvalRunStateView(state: string): { label: string; tone: 'amber' | 'green' | 'red' | 'muted' } {
+  const known: Record<string, { label: string; tone: 'amber' | 'green' | 'red' | 'muted' }> = {
+    open: { label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' },
+    approved: { label: APPROVAL_TRAIL_COPY.stateApproved, tone: 'green' },
+    rejected: { label: APPROVAL_TRAIL_COPY.stateRejected, tone: 'red' },
+    cancelled: { label: APPROVAL_TRAIL_COPY.stateCancelled, tone: 'muted' },
+  }
+  // Unknown state falls back to its own raw value, never a guessed label (AC-3).
+  // hasOwn guards against a wire value like 'constructor'/'toString' resolving to an
+  // inherited Object.prototype function instead of falling through (CodeRabbit PR #167).
+  return Object.hasOwn(known, state) ? known[state] : { label: state, tone: 'muted' }
+}
+
+export function approvalTrailSteps(run: ApprovalRun): TrailStepView[] {
+  const kindLabels: Record<string, string> = {
+    approval: APPROVAL_TRAIL_COPY.kindApproval,
+    condition: APPROVAL_TRAIL_COPY.kindCondition,
+    notify: APPROVAL_TRAIL_COPY.kindNotify,
+    autoapprove: APPROVAL_TRAIL_COPY.kindAutoapprove,
+  }
+  const stateLabels: Record<string, string> = {
+    pending: APPROVAL_TRAIL_COPY.stepWaiting,
+    satisfied: APPROVAL_TRAIL_COPY.stepSigned,
+    skipped: APPROVAL_TRAIL_COPY.stepSkipped,
+    rejected: APPROVAL_TRAIL_COPY.stepRejected,
+  }
+  return run.steps.map((step) => {
+    const isNotify = step.kind === 'notify'
+    // overdue is the server's own answer (read_model.go:161), passed through -- never
+    // re-derived from due_at here. Overdue wins over a formatted due date, which wins
+    // over null.
+    let dueLabel: string | null = null
+    if (step.overdue) {
+      dueLabel = APPROVAL_TRAIL_COPY.overdue
+    } else if (step.due_at != null) {
+      dueLabel = fmtDate(step.due_at)
+    }
+    return {
+      ord1: step.ord + 1,
+      kind: step.kind,
+      // Unknown kind/state falls back to its own raw value, never a guessed label (AC-3).
+      // hasOwn guards both maps against inherited Object.prototype keys (see
+      // approvalRunStateView above).
+      kindLabel: Object.hasOwn(kindLabels, step.kind) ? kindLabels[step.kind] : step.kind,
+      stateLabel: Object.hasOwn(stateLabels, step.state) ? stateLabels[step.state] : step.state,
+      roleTitle: step.workflow_role_title ?? '—',
+      holderText: step.holder?.text ?? null,
+      holderWarn: step.holder?.warn ?? false,
+      dueLabel,
+      overdue: step.overdue,
+      notifyNote: isNotify ? APPROVAL_TRAIL_COPY.notifyNote : null,
+      notifyTarget: isNotify ? (step.notify_target ?? null) : null,
+      notifyChannel: isNotify ? (step.notify_channel ?? null) : null,
+    }
+  })
+}
+
+export function approvalTrailDecisions(run: ApprovalRun): TrailDecisionView[] {
+  const outcomeLabels: Record<string, string> = {
+    approved: APPROVAL_TRAIL_COPY.stateApproved,
+    rejected: APPROVAL_TRAIL_COPY.stateRejected,
+  }
+  return run.decisions.map((decision) => {
+    const actor = actorLabel(decision.actor)
+    return {
+      ord1: decision.ord + 1,
+      // hasOwn guards against an inherited Object.prototype key, same as above.
+      outcomeLabel: Object.hasOwn(outcomeLabels, decision.decision) ? outcomeLabels[decision.decision] : decision.decision,
+      actorText: actor.text,
+      actorMono: actor.mono,
+      whenLabel: fmtDateTime(decision.decided_at),
+      reason: decision.reason,
+    }
+  })
+}
+
+export const APPROVAL_TRAIL_COPY = {
+  cardTitle: 'Approvals',
+  loading: 'Loading the approval trail…',
+  emptyTitle: 'No approval run',
+  emptyMessage:
+    'Nothing on this invoice is waiting on a sign-off. Either this workspace has no active approval policy, or this invoice has not been validated yet.',
+  stepsHeading: 'Steps',
+  decisionsHeading: 'Decisions',
+  noDecisions: 'No decision has been recorded on this run.',
+  voided: 'This approval was voided by an edit — the invoice must be approved again from step one.',
+  notifyNote: 'No message is delivered — notifications are recorded but not yet sent.',
+  autoApproved: 'Settled automatically — nobody was asked.',
+  // Same string as APPROVALS_COPY.unstaffedSeat (:269) -- deliberate duplication, not
+  // aliased: per-screen copy consts already repeat labels (e.g. `cancel`), so one edit
+  // here never silently changes the queue screen's wording too.
+  unstaffedSeat: 'Unstaffed seat',
+  // Same string as APPROVALS_COPY.overdue (:270) -- deliberate duplication, see
+  // unstaffedSeat above.
+  overdue: 'Overdue',
+  stateOpen: 'In progress',
+  stateApproved: 'Approved',
+  stateRejected: 'Rejected',
+  stateCancelled: 'Voided',
+  // kindApproval/kindAutoapprove diverge from WorkflowInspector.tsx's private TITLES map
+  // ('Approval'/'Auto-approved' here vs 'Approval step'/'Auto-approve' there) --
+  // deliberate: that map is the policy-authoring domain, this is the run-trail domain.
+  kindApproval: 'Approval',
+  kindCondition: 'Condition',
+  kindNotify: 'Notification',
+  kindAutoapprove: 'Auto-approved',
+  stepWaiting: 'Waiting',
+  stepSigned: 'Signed',
+  stepSkipped: 'Skipped',
+  stepRejected: 'Rejected',
+} as const
+
+// approveDetail names the ACTION, never claims the OUTCOME -- the same rule
+// approvalsBarView.confirmDetail follows (:172-174).
+export const DETAIL_DECISION_COPY = {
+  approve: 'Approve',
+  approvePrompt: 'Approve this invoice?',
+  approveDetail: 'Another approver may have already acted on it.',
+  approveConfirm: 'Yes, approve now',
+  approveSending: 'Approving…',
+  cancel: 'Cancel',
+  reject: 'Reject',
+  rejectPrompt: 'Why is this invoice being rejected?',
+  rejectPlaceholder: 'Reason for rejection (required)',
+  rejectConfirm: 'Reject invoice',
+  rejectSending: 'Rejecting…',
 } as const

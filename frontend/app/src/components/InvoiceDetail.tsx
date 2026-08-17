@@ -15,6 +15,13 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
+import {
+  canRejectReason,
+  decideInvoice,
+  DETAIL_DECISION_COPY,
+  getInvoiceApprovalRun,
+  type ApprovalRun,
+} from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
@@ -59,6 +66,7 @@ import {
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
+import { ApprovalTrailCard } from './ApprovalTrailCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
 import { ViolationsTable } from './ViolationsTable'
@@ -158,6 +166,10 @@ const VIEW_UBL_REASON_ID = 'view-ubl-blocked-reason-text'
 // Same rationale again; a fourth distinct id, for the resolve-outside button.
 const RESOLVE_OUTSIDE_REASON_ID = 'resolve-outside-blocked-reason-text'
 
+// Same rationale again; a fifth and sixth distinct id, for the Approve/Reject pair.
+const APPROVE_REASON_ID = 'approve-blocked-reason-text'
+const REJECT_REASON_ID = 'reject-blocked-reason-text'
+
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView/ValidationView ([A-e]/[A-m]) —
@@ -177,6 +189,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // `document: null` for a manually created invoice.
   const source = useAsync<SourceDocumentResponse>(
     () => (base ? getSourceDocument(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
+  )
+  // Not extended to the live-refresh tick below (D-23): shouldPollInvoice only ticks
+  // queued/submitted, by which point every approval run has closed.
+  const approval = useAsync<ApprovalRun | null>(
+    () => (base ? getInvoiceApprovalRun(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -276,6 +294,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitSkipped, setSubmitSkipped] = useState<string | null>(null)
   const submitInFlight = useRef(false)
+
+  // Single-invoice approve machine (task-547), same reducer/ref shape as Submit above.
+  const [approvePhase, setApprovePhase] = useState<BulkPhase>('idle')
+  const approveInFlight = useRef(false)
+
+  // Inline reject row (task-547) -- resolve-outside's state shape, plus its own in-flight
+  // ref (submitInFlight's stronger precedent, not resolve-outside's state-only guard).
+  const [rejectOpen, setRejectOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
+  const [rejecting, setRejecting] = useState(false)
+  const rejectInFlight = useRef(false)
+  const [decisionError, setDecisionError] = useState<string | null>(null)
 
   // Resolve-outside control (failed invoices only, Core AC #1/#4/#5/#6). Both handlers DO
   // gen-bump / setLive(null) before detail.run() (handleRevalidate's precedent) -- `live`
@@ -379,6 +409,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       setLive(null)
       detail.run()
       history.run()
+      approval.run() // Q13's visible face (D-22) -- an edit can demote to draft and close the live run
     }
 
     // INVED-01-07: the button this drives is now DISABLED whenever `!inv.can_revalidate`,
@@ -402,10 +433,73 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         setLive(null) // see handleSaved above -- clear the overlay before the real refresh
         detail.run()
         history.run()
+        approval.run() // see handleSaved above -- a re-validate opens a NEW run
       } catch (err) {
         setRevalidateError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         setRevalidating(false)
+      }
+    }
+
+    // Same reducer as Submit's own machine below -- identity IS "do nothing", so an
+    // unarmed confirm or a second confirm mid-flight fires no request.
+    const toApprovePhase = (action: Parameters<typeof bulkPhaseReducer>[1]): boolean => {
+      const next = bulkPhaseReducer(approvePhase, action)
+      if (next === approvePhase) return false
+      setApprovePhase(next)
+      return true
+    }
+
+    // Indistinguishable in shape from handleSubmit below (D-47's identifier correction):
+    // guard -> arm/confirm gate -> in-flight ref -> POST with the returned run DISCARDED
+    // (non-optimistic, AC-6) -> refetch trio -> catch surfaces the server's own sentence.
+    const handleApprove = async () => {
+      setDecisionError(null)
+      if (!inv.can_approve) return
+      if (!toApprovePhase({ type: 'confirm' })) return // no arm => no request
+      if (approveInFlight.current) return
+      approveInFlight.current = true
+      try {
+        await decideInvoice(ctx.authedFetch, base, invoiceId, 'approved')
+        gen.current++
+        setLive(null)
+        detail.run()
+        history.run()
+        approval.run()
+      } catch (err) {
+        setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        // Functional setter -- see handleSubmit's own finally comment below; same stale-
+        // closure rationale applies here.
+        setApprovePhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
+        approveInFlight.current = false
+      }
+    }
+
+    // Same shape as handleApprove above, guarded by the trim rule instead of the reducer
+    // (reject has no arm stage -- the inline row IS the arm) and reset via `rejecting`
+    // (a plain boolean, not a phase reducer) rather than a functional setter.
+    const handleReject = async () => {
+      setDecisionError(null)
+      if (!inv.can_reject) return
+      if (!canRejectReason(rejectReason)) return
+      if (rejectInFlight.current) return
+      rejectInFlight.current = true
+      setRejecting(true)
+      try {
+        await decideInvoice(ctx.authedFetch, base, invoiceId, 'rejected', rejectReason)
+        setRejectOpen(false)
+        setRejectReason('')
+        gen.current++
+        setLive(null)
+        detail.run()
+        history.run()
+        approval.run()
+      } catch (err) {
+        setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        setRejecting(false)
+        rejectInFlight.current = false
       }
     }
 
@@ -570,6 +664,180 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                 </>
               )}
+              {/* The decision pair, gated on `!editing` alone like View UBL above -- NOT
+                  `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
+                  where `can_edit` is false (queued, submitted, failed, ...), and a decision
+                  is taken on the STORED record for the same reason UBL is hidden while
+                  editing. A row wrapper (`detail-decision-actions`), not bare siblings --
+                  two buttons side by side need a flex row, same pattern as
+                  `invoice-actions`'s own inner row below -- but the wrapper itself sits
+                  outside `invoice-actions`, never inside it, so it survives that div's
+                  disappearance. Same four disabled layers as View UBL/Re-validate/Submit
+                  above; Approve additionally needs `filter: 'none'` (`.v2-btn-primary`),
+                  Reject (ghost) does not. */}
+              {!editing && (
+                <>
+                  <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8 }}>
+                    {/* Arm -> confirm, same inline machine as Submit below ([no-modal]) --
+                        swaps in place to detail-approve-cancel/-confirm while armed. Reject
+                        stays independently clickable throughout (disabled only while its own
+                        row is open, below), so the two decisions are never mutually exclusive. */}
+                    {approvePhase === 'idle' ? (
+                      <button
+                        type="button"
+                        data-testid="detail-approve"
+                        onClick={() => toApprovePhase({ type: 'arm' })}
+                        disabled={!inv.can_approve}
+                        title={inv.approve_blocked_reason ?? undefined}
+                        aria-describedby={inv.approve_blocked_reason != null ? APPROVE_REASON_ID : undefined}
+                        className="v2-btn v2-btn-primary pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          ...(!inv.can_approve
+                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                            : null),
+                        }}
+                      >
+                        {DETAIL_DECISION_COPY.approve}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          data-testid="detail-approve-cancel"
+                          onClick={() => toApprovePhase({ type: 'cancel' })}
+                          disabled={approvePhase === 'submitting'}
+                          className="v2-btn v2-btn-ghost pf-btn"
+                          style={{
+                            height: 32,
+                            padding: '0 14px',
+                            fontSize: 13,
+                            ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                          }}
+                        >
+                          {DETAIL_DECISION_COPY.cancel}
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="detail-approve-confirm"
+                          onClick={() => void handleApprove()}
+                          disabled={approvePhase === 'submitting'}
+                          className="v2-btn v2-btn-primary pf-btn"
+                          style={{
+                            height: 32,
+                            padding: '0 14px',
+                            fontSize: 13,
+                            ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                          }}
+                        >
+                          {approvePhase === 'submitting' ? DETAIL_DECISION_COPY.approveSending : DETAIL_DECISION_COPY.approveConfirm}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="detail-reject"
+                      onClick={() => setRejectOpen(true)}
+                      disabled={!inv.can_reject || rejectOpen}
+                      title={inv.reject_blocked_reason ?? undefined}
+                      aria-describedby={
+                        inv.reject_blocked_reason == null
+                          ? undefined
+                          : inv.reject_blocked_reason === inv.approve_blocked_reason
+                            ? APPROVE_REASON_ID
+                            : REJECT_REASON_ID
+                      }
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        fontSize: 13,
+                        ...(!inv.can_reject || rejectOpen ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                      }}
+                    >
+                      {DETAIL_DECISION_COPY.reject}
+                    </button>
+                  </div>
+                  {inv.approve_blocked_reason != null && (
+                    <div id={APPROVE_REASON_ID} data-testid="approve-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {inv.approve_blocked_reason}
+                    </div>
+                  )}
+                  {inv.reject_blocked_reason != null && inv.reject_blocked_reason !== inv.approve_blocked_reason && (
+                    <div id={REJECT_REASON_ID} data-testid="reject-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {inv.reject_blocked_reason}
+                    </div>
+                  )}
+                  {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
+                      and styling as detail-submit-confirm-prompt below. */}
+                  {approvePhase !== 'idle' && (
+                    <div data-testid="detail-approve-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      <div>{DETAIL_DECISION_COPY.approvePrompt}</div>
+                      <div>{DETAIL_DECISION_COPY.approveDetail}</div>
+                    </div>
+                  )}
+                  {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
+                      detail-decision-actions, resolve-outside's row shape verbatim
+                      (:944-991 below): flexWrap:'wrap' is mandatory, not cosmetic -- the
+                      input plus both button labels don't fit on one line at 320px. */}
+                  {rejectOpen && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        data-testid="detail-reject-reason"
+                        aria-label="Reason for rejection"
+                        placeholder={DETAIL_DECISION_COPY.rejectPlaceholder}
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        disabled={rejecting}
+                        className="pf-input"
+                        style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="detail-reject-cancel"
+                        onClick={() => {
+                          setRejectOpen(false)
+                          setRejectReason('')
+                        }}
+                        disabled={rejecting}
+                        className="v2-btn v2-btn-ghost pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(rejecting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        }}
+                      >
+                        {DETAIL_DECISION_COPY.cancel}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="detail-reject-confirm"
+                        onClick={() => void handleReject()}
+                        disabled={rejecting || !canRejectReason(rejectReason)}
+                        className="v2-btn v2-btn-primary pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(rejecting || !canRejectReason(rejectReason)
+                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                            : null),
+                        }}
+                      >
+                        {rejecting ? DETAIL_DECISION_COPY.rejectSending : DETAIL_DECISION_COPY.rejectConfirm}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
               {inv.can_edit && !editing && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -593,10 +861,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         (2) the inline background/color/cursor swap below, which both mutes the
                             button and, being inline, outranks that unguarded :hover rule so a
                             disabled button stops reacting to the pointer. Treatment copied from
-                            CreateUpload.tsx:154-156/:217-219, the repo's shipped PERSISTENT
-                            disabled gating; deliberately NOT InvoicesList.tsx:347's `opacity`,
-                            which is a sub-second in-flight state and provably does not suppress
-                            the hover swap (Surface Conflicts -- one precedent picked, not blended);
+                            CreateUpload.tsx:277-284 (layers (1)+(2) only there -- no reason text,
+                            no aria), the repo's shipped PERSISTENT disabled gating; deliberately
+                            NOT InvoicesList.tsx:347's `opacity`, which is a sub-second in-flight
+                            state and provably does not suppress the hover swap (Surface Conflicts
+                            -- one precedent picked, not blended);
                         (3) the visible sibling text below, carrying the backend's reason
                             verbatim -- the only layer a keyboard/screen-reader user and a
                             Playwright text assertion can both reach, since a disabled button is
@@ -731,6 +1000,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               {submitError != null && (
                 <div data-testid="detail-submit-error" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
                   {submitError}
+                </div>
+              )}
+              {/* Copies detail-submit-error's shape exactly, sourced from the decide
+                  handlers' catch. A late child of this column, outside the can_edit gate
+                  above -- a decision that lands can flip can_edit on refetch, and this
+                  banner must survive that. Carries ApiError.message verbatim (D-24: never
+                  the ErrorState retry surface). */}
+              {decisionError != null && (
+                <div data-testid="detail-decision-error" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
+                  {decisionError}
                 </div>
               )}
             </div>
@@ -998,6 +1277,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             </div>
 
+            <ApprovalTrailCard run={approval} />
+
             {!rejectionLeadsRail && rejectionCard}
 
             {/* INVED-01-07 deleted the fused "Fix & re-validate" card that used to sit
@@ -1007,7 +1288,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 
             {/* Directly above `Status history`, because that is where the evidence sits.
                 NOT titled "Audit trail" (the design's name for the same card):
-                import-wizard.spec.ts:538 asserts that string has zero matches here. */}
+                import-wizard.spec.ts:557 asserts that string has zero matches here. */}
             <SourceDocumentCard meta={source} onOpen={openPreview} />
 
             {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge

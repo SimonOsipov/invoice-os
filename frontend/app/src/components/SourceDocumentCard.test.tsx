@@ -104,6 +104,12 @@ function mockFetch(source: SourceDocumentResponse | null) {
     if (url.endsWith('/sheet')) {
       return new Promise(() => {}) // the sheet canvas is DOC-02-06's; hold it open here
     }
+    // APPR-13-03: LiveInvoiceDetail now fires a fourth request for the approval trail
+    // card. Default 404 so this file's assertions (about SourceDocumentCard, not the
+    // trail card) are unaffected.
+    if (url.endsWith('/approval')) {
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) })
+    }
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(detailRecord()) })
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -140,7 +146,7 @@ afterEach(() => {
 
 describe('SourceDocumentCard on the invoice detail', () => {
   // The design says "directly above Audit trail"; no card by that name exists here, and
-  // import-wizard.spec.ts:538 asserts that string has zero matches on this screen.
+  // import-wizard.spec.ts:557 asserts that string has zero matches on this screen.
   it('the card precedes status-history in DOM order', async () => {
     mockFetch(withDocument())
     render(<InvoiceDetail ctx={detailCtx()} />)

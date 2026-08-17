@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
+import { APPROVAL_TRAIL_COPY, type ApprovalRun } from '../lib/approvals'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { fmtDateTime } from '../lib/format'
 import {
@@ -91,12 +92,14 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
   }
 }
 
-function detailCtx(importedInvoiceId: string): PlatformCtx {
+// onUnauthorized defaults to a throwaway spy -- exposed as a param (not read back off ctx)
+// so a 401 test can pass its own spy and assert on it directly.
+function detailCtx(importedInvoiceId: string, onUnauthorized: () => void = vi.fn()): PlatformCtx {
   const ctx = {
     mode: 'firm',
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
-    authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    authedFetch: createAuthedFetch(() => 'tok', onUnauthorized),
     selectedId: null,
     importedInvoiceId,
     nav: () => {},
@@ -114,6 +117,10 @@ interface ResolveCall {
   body: { reason: string } | null
 }
 
+interface DecideCall {
+  body: { decision: 'approved' | 'rejected'; reason?: string }
+}
+
 interface DetailFetchOptions {
   // Real getInvoice() GET calls after the first (always `detail`) resolve from here in
   // order; the last entry repeats once exhausted. The source-document GET never touches
@@ -126,6 +133,23 @@ interface DetailFetchOptions {
   revalidateResponse?: MockResponse
   resolveResponse?: MockResponse
   unresolveResponse?: MockResponse
+  // GET .../approval (APPR-13-03). Defaults to 404 inside the dispatcher below so no
+  // pre-existing test's behaviour changes. Only the FIRST call reads this -- calls after
+  // the first consult `approvalSequence` (below), mirroring `detailSequence`'s own
+  // first-call/later-calls split.
+  approvalResponse?: MockResponse
+  // Real GET .../approval calls AFTER the first resolve from here in order (null -> 404
+  // no-run), the last entry repeating once exhausted. Undefined (the default) repeats
+  // `approvalResponse` forever, unchanged from pre-task-547 behaviour.
+  approvalSequence?: (ApprovalRun | null)[]
+  // Real GET .../history calls AFTER the first resolve from here in order, the last entry
+  // repeating once exhausted. Undefined (the default) repeats `history` forever, unchanged
+  // from pre-task-547 behaviour.
+  historySequence?: StatusChange[][]
+  // POST .../approvals (task-547, D-29's decide arm). Every call is recorded into the
+  // returned `decideCalls`, win or lose. Defaults to a 200 carrying a plausible ApprovalRun
+  // shaped by the posted decision.
+  decideResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -139,14 +163,21 @@ interface DetailFetchOptions {
 // `detailSequence` indexing.
 function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = [], opts: DetailFetchOptions = {}) {
   let detailCalls = 0
+  let historyCalls = 0
+  let approvalCalls = 0
   const submitCalls: SubmitCallBody[] = []
   const resolveCalls: ResolveCall[] = []
+  const decideCalls: DecideCall[] = []
+  const NO_RUN: MockResponse = { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) }
 
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET'
 
     if (url.endsWith('/history')) {
-      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(history) })
+      const call = historyCalls
+      historyCalls++
+      const rows = call === 0 ? history : (opts.historySequence?.[call - 1] ?? opts.historySequence?.at(-1) ?? history)
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(rows) })
     }
     // resolveInvoiceOutside/unresolveInvoiceOutside (lib/invoices.ts:614/626) -- must be
     // dispatched before the GET fallback below, or a POST/DELETE here silently falls
@@ -208,6 +239,47 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     if (url.endsWith('/source-document')) {
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(detail) })
     }
+    // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
+    // like /ubl and /source-document above. `.endsWith('/approval')` is false for
+    // '/approvals' (the POST decide route), so that arm is unaffected. First call always
+    // answers `approvalResponse`; later calls consume `approvalSequence` in order like
+    // `detailSequence` does, repeating the last entry once exhausted -- or, if no sequence
+    // was configured, repeating `approvalResponse` forever (unchanged pre-task-547 shape).
+    if (method === 'GET' && url.endsWith('/approval')) {
+      const call = approvalCalls
+      approvalCalls++
+      if (call === 0) {
+        return Promise.resolve<MockResponse>(opts.approvalResponse ?? NO_RUN)
+      }
+      const next = opts.approvalSequence?.[call - 1] ?? opts.approvalSequence?.at(-1)
+      if (next === undefined) return Promise.resolve<MockResponse>(opts.approvalResponse ?? NO_RUN)
+      if (next === null) return Promise.resolve<MockResponse>(NO_RUN)
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(next) })
+    }
+    // decideInvoice (lib/approvals.ts:342-354) -- POST .../approvals. Dispatched before the
+    // detail-refetch counter below (D-29's convention, task-547): without its own arm a
+    // decide POST falls through and silently consumes a detailSequence slot instead of
+    // being recorded here.
+    if (method === 'POST' && url.endsWith('/approvals')) {
+      const body = JSON.parse(String(init.body)) as { decision: 'approved' | 'rejected'; reason?: string }
+      decideCalls.push({ body })
+      return Promise.resolve<MockResponse>(
+        opts.decideResponse ?? {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              run_id: 'run-decided-1',
+              state: body.decision,
+              opened_at: '2026-08-01T00:00:00Z',
+              closed_at: '2026-08-01T01:00:00Z',
+              closed_by: APP_PERSONAS.firm.subject,
+              steps: [],
+              decisions: [],
+            }),
+        },
+      )
+    }
     // getInvoice GET: the first call is always `detail`; later calls consume
     // detailSequence in order, repeating the last entry once exhausted.
     const record =
@@ -216,7 +288,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(record) })
   })
   vi.stubGlobal('fetch', fetchMock)
-  return { fetchMock, submitCalls, resolveCalls }
+  return { fetchMock, submitCalls, resolveCalls, decideCalls }
 }
 
 beforeEach(() => {
@@ -323,6 +395,12 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
     const buttons = Array.from(card.querySelectorAll('button'))
     expect(buttons.map((b) => b.dataset.testid)).toEqual(['resolve-outside'])
     expect(buttons.some((b) => /submit|retry|re-?drive|resubmit|validate/i.test(b.textContent ?? ''))).toBe(false)
+    // task-554/APPR-13-04 (AC-1, AC-2): the decision pair renders on every status,
+    // including this failed/terminal one, but lives in the action column, not this card.
+    expect(screen.getByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
+    expect(card.contains(screen.getByTestId('detail-approve'))).toBe(false)
+    expect(card.contains(screen.getByTestId('detail-reject'))).toBe(false)
   })
 })
 
@@ -455,6 +533,100 @@ describe('InvoiceDetail terminal rail order', () => {
     const history = screen.getByTestId('status-history')
     expect(card.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(card.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+// RED specs (task-553, APPR-13-03, Mode A): ApprovalTrailCard is not yet mounted in
+// InvoiceDetail.tsx -- that is Stage 3's work. Every row below fails on the card's
+// absence, an honest red for a not-yet-mounted component, never on a broken fixture.
+describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => {
+  it('a 404 renders the no-run empty state', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }), [], {
+      approvalResponse: { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.getByTestId('approval-trail-empty')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('a 500 renders ErrorState, not the empty state', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }), [], {
+      approvalResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(screen.queryByTestId('approval-trail-empty')).toBeNull()
+  })
+
+  it('a rejection reason never reaches the violations table', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3, violations: [] }), [], {
+      approvalResponse: {
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            run_id: 'run-1',
+            state: 'rejected',
+            opened_at: '2026-08-01T00:00:00Z',
+            closed_at: '2026-08-02T00:00:00Z',
+            closed_by: APP_PERSONAS.firm.subject,
+            steps: [],
+            decisions: [
+              {
+                run_step_id: 'step-1',
+                ord: 0,
+                decision: 'rejected',
+                actor: APP_PERSONAS.firm.subject,
+                decided_at: '2026-08-02T00:00:00Z',
+                reason: 'Budget exceeded, escalate to finance',
+              },
+            ],
+          }),
+      },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const table = await screen.findByTestId('violations-table')
+    const trail = screen.getByTestId('approval-trail')
+    expect(within(trail).getByText('Budget exceeded, escalate to finance')).toBeTruthy()
+    expect(within(table).queryByText('Budget exceeded, escalate to finance')).toBeNull()
+  })
+
+  it('the card sits below Compliance and above Status history', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const table = await screen.findByTestId('violations-table')
+    const trail = screen.getByTestId('approval-trail')
+    const doc = screen.getByTestId('source-document-card')
+    const history = screen.getByTestId('status-history')
+    expect(table.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(trail.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(trail.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the card sits above a historical rejection card', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const rejection = await screen.findByTestId('rejection-reasons')
+    const trail = screen.getByTestId('approval-trail')
+    expect(trail.compareDocumentPosition(rejection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 
@@ -932,8 +1104,12 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(screen.queryByTestId('edit-toggle')).toBeNull()
     expect(screen.queryByTestId('revalidate')).toBeNull()
     expect(screen.queryByTestId('detail-submit')).toBeNull()
-    // The read-only viewer is the one control that stays -- see this test's comment.
+    // view-ubl and the decision pair are the controls that stay -- see this test's comment.
     expect(screen.getByTestId('view-ubl')).toBeTruthy()
+    // task-554/APPR-13-04 (AC-1): gated on `!editing` only, like view-ubl -- a can_edit:false
+    // refetch must not drag the decision pair out with the lifecycle controls it deletes.
+    expect(screen.getByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
   })
 
   // Layer 3 (the visible reason text) is the whole justification for rendering disabled
@@ -992,7 +1168,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
         })
       // 1 initial mount fetch + 1 poll tick fetch.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -1796,7 +1972,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
         })
       // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -1830,7 +2006,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
         })
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
 
@@ -2479,12 +2655,16 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     fireEvent.click(screen.getByTestId('detail-submit-confirm'))
     await screen.findByTestId('detail-submit-skipped')
     expect(screen.getByTestId('invoice-actions'), 'anchor: the bar is up before editing').toBeTruthy()
+    // task-554/APPR-13-04 (AC-1) anchors: the decision pair is gated on `!editing` too,
+    // and must be up before editing starts for its absence below to be a real assertion.
+    expect(screen.getByTestId('detail-approve'), 'anchor: approve is up before editing').toBeTruthy()
+    expect(screen.getByTestId('detail-reject'), 'anchor: reject is up before editing').toBeTruthy()
 
     fireEvent.click(screen.getByTestId('edit-toggle'))
 
     expect(screen.getByTestId('detail-submit-skipped'), 'the column is still mounted').toBeTruthy()
     expect(screen.queryAllByTestId('invoice-actions')).toHaveLength(0)
-    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit', 'detail-approve', 'detail-reject']) {
       expect(screen.queryAllByTestId(id), `${id} goes with the bar`).toHaveLength(0)
     }
   })
@@ -2498,5 +2678,818 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     const declared = [...(block as RegExpMatchArray)[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
     expect(declared.length, 'floor: the union really was parsed').toBeGreaterThan(1)
     expect([...ALL_STATUSES].sort()).toEqual([...declared].sort())
+  })
+})
+
+// RED specs (task-554, APPR-13-04, Mode A). Neither `detail-approve` nor `detail-reject`
+// exists yet, so every row below fails on a missing element, never an import/type error.
+// Arm/confirm and the reject-reason input row are APPR-13-05 -- this subtask (and these
+// specs) cover only the resting/idle pair and its four-layer disabled recipe.
+describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
+  const ID = 'inv-decision-1'
+  const editable = { status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: false, can_submit: true }
+  const S = 'Only a validated invoice can be approved or rejected.'
+  // internal/invoice/handlers.go:378-394's five approvalGate rungs, verbatim -- mirrors
+  // approvals.test.ts:1064-1070's APPROVAL_GATE_SENTENCES, duplicated here since that
+  // const is module-private to that file.
+  const APPROVAL_GATE_SENTENCES = [
+    'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.',
+    'Only a validated invoice can be approved or rejected.',
+    'This invoice has no approval run to decide on.',
+    "This invoice's approval run is already closed.",
+    "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role.",
+  ]
+
+  it('1: both controls render on a queued, can_edit:false invoice, while invoice-actions stays gone (AC-1)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+  })
+
+  it('2: the pair sits outside invoice-actions and after view-ubl in document order (AC-1, AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const bar = await screen.findByTestId('invoice-actions')
+    const viewUbl = screen.getByTestId('view-ubl')
+    const approveBtn = screen.getByTestId('detail-approve')
+    expect(within(bar).queryByTestId('detail-approve')).toBeNull()
+    expect(within(bar).queryByTestId('detail-reject')).toBeNull()
+    expect(viewUbl.compareDocumentPosition(approveBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('3: the pair hides while editing (AC-1)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+
+    expect(screen.queryAllByTestId('detail-approve')).toHaveLength(0)
+    expect(screen.queryAllByTestId('detail-reject')).toHaveLength(0)
+  })
+
+  it('4: permutation 1 -- both allowed, no reason: enabled, unmuted, no reason node (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: true, reject_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(false)
+    expect(rejectBtn.disabled).toBe(false)
+    expect(approveBtn.style.background).toBe('')
+    expect(rejectBtn.style.background).toBe('')
+    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+  })
+
+  it('5: permutation 2 -- both blocked, same reason: disabled, muted, one visible node (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(true)
+    expect(rejectBtn.disabled).toBe(true)
+    expect(approveBtn.style.background).not.toBe('')
+    expect(rejectBtn.style.background).not.toBe('')
+    const nodes = screen.getAllByText(S)
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].textContent).toBe(S)
+  })
+
+  it('6: permutation 3 -- both blocked, no reason: disabled, muted, no reason node, nothing invented (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(true)
+    expect(rejectBtn.disabled).toBe(true)
+    expect(approveBtn.style.background).not.toBe('')
+    expect(rejectBtn.style.background).not.toBe('')
+    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.hasAttribute('title')).toBe(false)
+    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
+    expect(rejectBtn.hasAttribute('title')).toBe(false)
+    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('7: permutation 4 -- a contradictory wire (can_approve:true with a reason set) still enables Approve, and the reason still renders (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(false)
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+  })
+
+  it.each(APPROVAL_GATE_SENTENCES)('8: the visible reason is byte-identical to the wire -- %s (AC-2)', async (sentence) => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: sentence, can_reject: false, reject_blocked_reason: sentence }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('approve-blocked-reason')
+    expect(reasonEl.textContent).toBe(sentence)
+  })
+
+  it('9: the disabled Approve neutralises filter, guarding .v2-btn-primary:hover from brightening it (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+
+    expect(btn.style.filter).toBe('none')
+  })
+
+  it('10: an enabled Approve carries no muted inline style, preserving :hover (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+
+    expect(btn.disabled).toBe(false)
+    expect(btn.style.background).toBe('')
+    expect(btn.style.color).toBe('')
+    expect(btn.style.cursor).toBe('')
+  })
+
+  it('11: the disabled Approve refuses focus, and its reason stays reachable (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-approve')
+
+    btn.focus()
+    expect(document.activeElement).not.toBe(btn)
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+  })
+
+  it('12: aria-describedby on both controls resolves to a real element in the document (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = await screen.findByTestId('detail-approve')
+    const rejectBtn = screen.getByTestId('detail-reject')
+
+    const approveDescribedBy = approveBtn.getAttribute('aria-describedby')
+    const rejectDescribedBy = rejectBtn.getAttribute('aria-describedby')
+    expect(approveDescribedBy).toBeTruthy()
+    expect(rejectDescribedBy).toBeTruthy()
+    expect(document.getElementById(approveDescribedBy as string)).toBeTruthy()
+    expect(document.getElementById(rejectDescribedBy as string)).toBeTruthy()
+  })
+
+  it('13: a sentence shared by both controls prints exactly once in the document (AC-2)', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-approve')
+
+    expect(screen.getAllByText(S)).toHaveLength(1)
+  })
+
+  it('14: clicking a disabled Approve sends no request and adds no new control to the page (AC-2)', async () => {
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-approve')
+    const callsBefore = fetchMock.mock.calls.length
+    const buttonsBefore = screen.getAllByRole('button').length
+
+    fireEvent.click(btn)
+
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+    expect(screen.getAllByRole('button').length).toBe(buttonsBefore)
+  })
+
+  // QA-added (task-554 row 17), corrected during Stage 3 (task-554): the row as originally
+  // written asserted `detail-approve`/`detail-reject`'s `parentElement` equals `view-ubl`'s
+  // AND `invoice-actions`'s -- i.e. bare siblings with no wrapper. That is not AC-1's
+  // invariant: two buttons side by side need a row wrapper (`detail-decision-actions`,
+  // this repo's own precedent for a row inside this column being `invoice-actions`'s own
+  // inner `<div style={{display:'flex'}}>`), and the plan's markup sketch names that
+  // wrapper explicitly. AC-1's "sibling BLOCK... NOT inside that div" constrains which
+  // CONTAINER, not whether one exists. Reworked to assert the real invariant, strengthened
+  // rather than weakened: (a) neither button is inside `invoice-actions`, the guarantee
+  // that survives a `can_edit:false` refetch and is the whole point of AC-1; (b) the shared
+  // wrapper is a direct child of the same parent holding `view-ubl` and `invoice-actions`,
+  // so all three are siblings in the action column; (c) the wrapper renders under the same
+  // `!editing` gate as `view-ubl`, not `can_edit` -- proven by a second render where
+  // `can_edit:false` removes `invoice-actions` but not the wrapper.
+  it('17: detail-decision-actions is a sibling of view-ubl and invoice-actions in the action column, gated on !editing like view-ubl -- never on can_edit', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const bar = await screen.findByTestId('invoice-actions')
+    const viewUbl = screen.getByTestId('view-ubl')
+    const decisionActions = screen.getByTestId('detail-decision-actions')
+    const approveBtn = screen.getByTestId('detail-approve')
+    const rejectBtn = screen.getByTestId('detail-reject')
+
+    expect(bar.contains(approveBtn)).toBe(false)
+    expect(bar.contains(rejectBtn)).toBe(false)
+    expect(decisionActions.parentElement).toBe(viewUbl.parentElement)
+    expect(decisionActions.parentElement).toBe(bar.parentElement)
+    cleanup()
+
+    // can_edit:false removes invoice-actions (its own can_edit && !editing gate) but must
+    // not remove detail-decision-actions, which is gated on !editing alone, like view-ubl.
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: true, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect(await screen.findByTestId('detail-decision-actions')).toBeTruthy()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+  })
+
+  // QA-added (task-554 row 19): closes the Approve/Reject asymmetry left by row 11, which
+  // only proves reachability for Approve. AC-2 layer 3's whole justification is that a
+  // disabled button is out of the tab order, so Reject's own reason must clear the same
+  // bar, not just Approve's.
+  it('19: the disabled Reject refuses focus while its reason stays reachable in the accessible tree', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const rejectBtn = await screen.findByTestId('detail-reject')
+
+    rejectBtn.focus()
+    expect(document.activeElement).not.toBe(rejectBtn)
+    const describedBy = rejectBtn.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const reasonEl = document.getElementById(describedBy as string)
+    expect(reasonEl).toBeTruthy()
+    expect(reasonEl?.textContent).toBe(S)
+    expect(screen.getByText(S)).toBeTruthy()
+  })
+
+  // QA-added (task-554, Mode B adversarial): HTML-significant characters in the reason
+  // survive to textContent unchanged -- React's own child-text escaping, not a bespoke
+  // sanitiser, so this pins that nothing mangles the wire string on the way to the DOM.
+  it('a reason with an ampersand, an em dash and a quote survives to the DOM unchanged', async () => {
+    const tricky = 'Blocked — "urgent" review needed & a second signer must confirm.'
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: tricky }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('approve-blocked-reason')
+    expect(reasonEl.textContent).toBe(tricky)
+  })
+
+  // QA-added (task-554, Mode B adversarial, defensive): Stage 1 confirmed can_approve and
+  // can_reject can never differ on the real wire (handlers.go:481-508 shares one
+  // canDecide/decideReason pair) -- this pins that the component still behaves sanely on a
+  // shape the type permits but the server never sends, not that the server sends it.
+  it('defensive: can_approve true with can_reject false and a reject-only reason does not crash, and Approve stays enabled', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+    expect(approveBtn.disabled).toBe(false)
+    expect(rejectBtn.disabled).toBe(true)
+  })
+
+  // QA-added (task-554, Mode B adversarial): D-49's accepted density cost -- the pair
+  // renders on EVERY status, terminal included. Nothing else in this file's task-554 suite
+  // pins the full union; a later narrowing (e.g. excluding 'accepted'/'rejected') would
+  // pass every other row here unnoticed without this loop.
+  it.each(ALL_STATUSES)('renders on a %s invoice (D-49 density cost)', async (status) => {
+    mockDetailFetch(detailRecord({ id: ID, status, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect(await screen.findByTestId('detail-approve')).toBeTruthy()
+    expect(screen.getByTestId('detail-reject')).toBeTruthy()
+  })
+
+  // QA-added (task-554, Mode B adversarial): the two surfaces this story adds -- the
+  // decision pair here and ApprovalTrailCard (APPR-13-03) -- must agree on the same
+  // invoice. A disabled pair alongside an empty trail is a real, reachable state (no
+  // approval run yet), not a contradiction between the two.
+  it('both controls render disabled while the trail card shows its empty state, in agreement', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect(((await screen.findByTestId('detail-approve')) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(true)
+    expect(await screen.findByTestId('approval-trail-empty')).toBeTruthy()
+  })
+
+  // CodeRabbit PR #167 fix: decisionBlockedReasons's array was positional
+  // (index 0 always rendered as "approve"), so a reject-only reason was mislabelled
+  // as the approve reason. These four rows bind each attribute/node to its own wire
+  // field directly and prove the mislabelling is gone.
+  it('same sentence on both fields: one visible node under approve-blocked-reason, no reject-blocked-reason, both controls describedby it', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+    expect(rejectBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+  })
+
+  it('different sentences on both fields: two nodes, each under its own testid, each control describedby its own node', async () => {
+    const reject = 'A different reason entirely.'
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: reject }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
+
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(screen.getByTestId('reject-blocked-reason').textContent).toBe(reject)
+    expect(approveBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+    expect(rejectBtn.getAttribute('aria-describedby')).toBe('reject-blocked-reason-text')
+  })
+
+  it('regression: a reject-only reason never mislabels as the approve reason, and Approve stays clean', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: S }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+
+    expect(screen.getByTestId('reject-blocked-reason').textContent).toBe(S)
+    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.disabled).toBe(false)
+    expect(approveBtn.hasAttribute('title')).toBe(false)
+    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('approve blocked, reject clear: only approve-blocked-reason renders, Reject carries no title/aria-describedby', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: true, reject_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
+
+    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(rejectBtn.hasAttribute('title')).toBe(false)
+    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
+  })
+})
+
+// RED specs (task-547, APPR-13-05, Mode A). Neither machine exists yet -- `detail-approve`
+// only toggles its own disabled/reason presentation today (APPR-13-04); clicking it fires
+// no handler, so every row below fails on a genuine missing element
+// (`detail-approve-confirm-prompt`, `detail-reject-reason`, `detail-decision-error`) or a
+// real assertion (the two AC-4 refetch-count rows), never an import/type/harness error.
+// Does NOT implement handleApprove/handleReject/the approval.run() refetch wiring -- Stage
+// 3 does; this file only pins the 18 Test Specs rows plus one extra (the reject row's
+// flexWrap pin, matching T7-19's precedent in technique).
+describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)', () => {
+  const ID = 'inv-decide-1'
+  const APPROVED_RUN: ApprovalRun = {
+    run_id: 'run-1',
+    state: 'approved',
+    opened_at: '2026-08-01T00:00:00Z',
+    closed_at: '2026-08-01T01:00:00Z',
+    closed_by: APP_PERSONAS.firm.subject,
+    steps: [],
+    decisions: [],
+  }
+
+  // ---- AC-3: the approve arm->confirm machine ------------------------------------------
+
+  it('AC-3: Approve arms rather than sends', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+
+    expect(await screen.findByTestId('detail-approve-confirm-prompt')).toBeTruthy()
+    expect(screen.getByTestId('detail-approve-confirm')).toBeTruthy()
+    expect(screen.getByTestId('detail-approve-cancel')).toBeTruthy()
+    expect(decideCalls).toHaveLength(0)
+  })
+
+  it('AC-3: cancelling the arm sends nothing and restores the idle bar', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    await screen.findByTestId('detail-approve-confirm-prompt')
+    fireEvent.click(screen.getByTestId('detail-approve-cancel'))
+
+    await waitFor(() => expect(screen.queryByTestId('detail-approve-confirm-prompt')).toBeNull())
+    expect(screen.getByTestId('detail-approve')).toBeTruthy()
+    expect(decideCalls).toHaveLength(0)
+  })
+
+  it('AC-3: confirming posts exactly one approve', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-approve') // settled back to idle after the refetch
+
+    expect(decideCalls).toHaveLength(1)
+    expect(decideCalls[0].body).toEqual({ decision: 'approved' })
+  })
+
+  it('AC-3: a double confirm fires one request', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    const confirmBtn = screen.getByTestId('detail-approve-confirm')
+    fireEvent.click(confirmBtn)
+    // Proves the guards *together* send once. It does not isolate the in-flight ref:
+    // fireEvent is act-wrapped, so the reducer identity check already blocks click two.
+    // The ref covers the same-tick case jsdom cannot stage -- removing it keeps this green.
+    fireEvent.click(confirmBtn)
+
+    await screen.findByTestId('detail-approve')
+    expect(decideCalls).toHaveLength(1)
+  })
+
+  // ---- AC-3: the inline reject row ------------------------------------------------------
+
+  it('AC-3: Reject reveals an inline row, never a modal', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+
+    expect(await screen.findByTestId('detail-reject-reason')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('AC-3: a blank reason cannot be sent', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: '   ' } })
+
+    const confirmBtn = screen.getByTestId('detail-reject-confirm') as HTMLButtonElement
+    expect(confirmBtn.disabled).toBe(true)
+    fireEvent.click(confirmBtn)
+    expect(decideCalls).toHaveLength(0)
+  })
+
+  it('AC-3: a filled reason posts it verbatim', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'wrong buyer TIN' } })
+    fireEvent.click(screen.getByTestId('detail-reject-confirm'))
+    await screen.findByTestId('detail-reject') // settled back to idle after the refetch
+
+    expect(decideCalls).toHaveLength(1)
+    expect(decideCalls[0].body).toEqual({ decision: 'rejected', reason: 'wrong buyer TIN' })
+  })
+
+  it('AC-3: a double reject confirm fires one request', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'wrong buyer TIN' } })
+    const confirmBtn = screen.getByTestId('detail-reject-confirm')
+    fireEvent.click(confirmBtn)
+    // Same caveat as the approve row above: the `rejecting` disabled term, not the
+    // in-flight ref, is what stops click two here.
+    fireEvent.click(confirmBtn)
+
+    await screen.findByTestId('detail-reject')
+    expect(decideCalls).toHaveLength(1)
+  })
+
+  // Extra (not one of the 18 Test Specs rows): pins the reject row's width-fit declarations
+  // the same way T7-19 (:2009-2018) pins resolve-outside's -- jsdom applies no CSS, so this
+  // cannot prove the row stops overflowing on screen, only that the fix stays wired up.
+  it('extra: the reject row is pinned to the resolve-outside wrap recipe', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+
+    const input = (await screen.findByTestId('detail-reject-reason')) as HTMLInputElement
+    const confirmBtn = screen.getByTestId('detail-reject-confirm') as HTMLButtonElement
+    expect(input.style.flex).toBe('1 1 220px')
+    expect(input.style.minWidth).toBe('160px')
+    expect(input.style.height).toBe('32px')
+    expect(input.style.fontSize).toBe('12.5px')
+    expect(confirmBtn.style.flexShrink).toBe('0')
+    expect(confirmBtn.style.whiteSpace).toBe('nowrap')
+    expect(input.parentElement?.style.flexWrap).toBe('wrap')
+  })
+
+  // ---- AC-6: the non-optimistic refetch sequence ----------------------------------------
+
+  it('AC-6: a successful approve refetches detail, history and the run', async () => {
+    const afterApprove = detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true })
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      detailSequence: [afterApprove],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-approve')
+
+    const detailGets = fetchMock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith(`/invoices/${ID}`))
+    const historyGets = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/history'))
+    const approvalGets = fetchMock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith('/approval'))
+    expect(detailGets.length).toBe(2)
+    expect(historyGets.length).toBe(2)
+    expect(approvalGets.length).toBe(2)
+  })
+
+  it('AC-6: no success banner is rendered', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      approvalResponse: { ok: true, status: 200, json: () => Promise.resolve(APPROVED_RUN) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-approve')
+
+    // Scoped to the whole card, not the `approval-trail` body: the state pill
+    // says "Approved" from the header, and that is the record, not a banner.
+    const card = screen.getByTestId('approval-trail-card')
+    const outsideTrail = screen.queryAllByText(/approved|success|sent/i).filter((el) => !card.contains(el))
+    expect(outsideTrail).toHaveLength(0)
+  })
+
+  // Latent guard: no one-line mutation of today's code can fail this row, because
+  // useAsync exposes no setter and handleApprove never binds decideInvoice's return.
+  // It bites the day someone adds one. Do not count it as proven coverage.
+  it("AC-6: the POST's returned run is not installed", async () => {
+    const openRun: ApprovalRun = { ...APPROVED_RUN, state: 'open', closed_at: null, closed_by: null }
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      approvalResponse: { ok: true, status: 200, json: () => Promise.resolve(openRun) },
+      decideResponse: { ok: true, status: 200, json: () => Promise.resolve(APPROVED_RUN) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-approve')
+
+    expect(screen.getByTestId('approval-trail-state').textContent).toBe(APPROVAL_TRAIL_COPY.stateOpen)
+  })
+
+  it("AC-6: a rejection's demotion surfaces through the refetch", async () => {
+    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, changed_at: '2026-08-01T00:00:00Z' }
+    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, changed_at: '2026-08-02T00:00:00Z' }
+    const afterReject = detailRecord({ id: ID, status: 'draft', can_edit: true, can_reject: false })
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }), [row1], {
+      detailSequence: [afterReject],
+      historySequence: [[row1, row2]],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'wrong buyer TIN' } })
+    fireEvent.click(screen.getByTestId('detail-reject-confirm'))
+
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('DRAFT'))
+    expect(screen.getAllByTestId('status-history-row')).toHaveLength(2)
+  })
+
+  it('AC-6: the error leg unsticks the bar', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      decideResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+
+    expect((await screen.findByTestId('detail-decision-error')).textContent).toBe('boom')
+    expect(screen.getByTestId('detail-approve')).toBeTruthy()
+  })
+
+  it('AC-6: a 403 renders the server\'s sentence, not ErrorState', async () => {
+    const sentence = 'you do not hold the workflow role this step is waiting on'
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: sentence }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+
+    const errEl = await screen.findByTestId('detail-decision-error')
+    expect(errEl.textContent).toBe(sentence)
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('AC-6: a 401 still signs out', async () => {
+    const onUnauthorized = vi.fn()
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      decideResponse: { ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID, onUnauthorized)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+
+    await waitFor(() => expect(onUnauthorized).toHaveBeenCalledTimes(1))
+  })
+
+  // ---- AC-4: handleSaved/handleRevalidate also refetch the run --------------------------
+
+  it('AC-4: saving an edit refetches the run', async () => {
+    const afterEdit = detailRecord({ id: ID, invoice_number: 'INV-EDIT-1-EDITED', status: 'validated', can_edit: true, buyer_name: 'Beta Ltd 2' })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'INV-EDIT-1', status: 'validated', can_edit: true, buyer_name: 'Beta Ltd' }),
+      [],
+      { detailSequence: [afterEdit], editResponse: { ok: true, status: 200, json: () => Promise.resolve(afterEdit) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByText('INV-EDIT-1')
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    const buyerInput = await screen.findByDisplayValue('Beta Ltd')
+    fireEvent.change(buyerInput, { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await screen.findByText('INV-EDIT-1-EDITED')
+    const approvalGets = fetchMock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith('/approval'))
+    expect(approvalGets.length).toBe(2)
+  })
+
+  it('AC-4: re-validating refetches the run', async () => {
+    const afterRevalidate = detailRecord({
+      id: ID,
+      invoice_number: 'INV-REVAL-1-REVALIDATED',
+      status: 'validated',
+      can_edit: true,
+      can_revalidate: false,
+      revalidate_blocked_reason: 'Already validated.',
+    })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'INV-REVAL-1', status: 'draft', can_edit: true, can_revalidate: true }),
+      [],
+      { detailSequence: [afterRevalidate], revalidateResponse: { ok: true, status: 200, json: () => Promise.resolve(afterRevalidate) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('revalidate'))
+    await screen.findByText('INV-REVAL-1-REVALIDATED')
+
+    const approvalGets = fetchMock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith('/approval'))
+    expect(approvalGets.length).toBe(2)
+  })
+
+  it('AC-4: an edit that voids an approval shows the voided card, not a stale approved one', async () => {
+    const cancelledRun: ApprovalRun = { ...APPROVED_RUN, state: 'cancelled' }
+    const afterEdit = detailRecord({ id: ID, invoice_number: 'INV-VOID-1-EDITED', status: 'draft', can_edit: true, buyer_name: 'Beta Ltd 2' })
+    mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'INV-VOID-1', status: 'validated', can_edit: true, buyer_name: 'Beta Ltd' }),
+      [],
+      {
+        detailSequence: [afterEdit],
+        editResponse: { ok: true, status: 200, json: () => Promise.resolve(afterEdit) },
+        approvalResponse: { ok: true, status: 200, json: () => Promise.resolve(APPROVED_RUN) },
+        approvalSequence: [cancelledRun],
+      },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByText('INV-VOID-1')
+    expect(screen.getByTestId('approval-trail-state').textContent).toBe(APPROVAL_TRAIL_COPY.stateApproved)
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    const buyerInput = await screen.findByDisplayValue('Beta Ltd')
+    fireEvent.change(buyerInput, { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await screen.findByText('INV-VOID-1-EDITED')
+    expect(screen.getByTestId('approval-trail-voided')).toBeTruthy()
+    expect(screen.getByTestId('approval-trail-state').textContent).not.toBe(APPROVAL_TRAIL_COPY.stateApproved)
+  })
+
+  // ---- QA adversarial (task-547 verification pass): gaps the 18 Test Specs rows left open --
+
+  // Row 14 only proves the AXIS-2 sentence renders exactly; it never checks the bar
+  // recovers. Row "the error leg unsticks the bar" only proves recovery with a generic 500.
+  // Neither pairs the two, and neither exercises AXIS-1 (ErrNotPermitted).
+  it('adversarial: a 403 (AXIS-1) unsticks the bar too, not just a generic 500', async () => {
+    const sentence = 'only an approver can decide an approval step'
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: sentence }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+
+    expect((await screen.findByTestId('detail-decision-error')).textContent).toBe(sentence)
+    expect((await screen.findByTestId('detail-approve') as unknown as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // No row asserts the row actually CLOSES and the reason actually CLEARS on success --
+  // only that decideCalls fired and detail-reject reappears (which the button does even if
+  // rejectOpen were stuck true, since it just checks the testid exists, not disabled).
+  it('adversarial: a successful reject closes the row and clears the reason, not just settles the button', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'wrong buyer TIN' } })
+    fireEvent.click(screen.getByTestId('detail-reject-confirm'))
+
+    await waitFor(() => expect(screen.queryByTestId('detail-reject-reason')).toBeNull())
+    const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
+    expect(rejectBtn.disabled).toBe(false)
+
+    // Re-opening must show a blank input -- proves rejectReason state itself reset, not
+    // just that the row got hidden while still holding the stale text.
+    fireEvent.click(rejectBtn)
+    expect((await screen.findByTestId('detail-reject-reason') as unknown as HTMLInputElement).value).toBe('')
+  })
+
+  // D-24 (Stage-1 section 8): resolve-outside/undo can never touch a live run, so
+  // approval.run() must NOT be added to either handler -- unlike handleSaved/handleRevalidate
+  // above. Nothing in the resolve-outside describe block (T7-*) checks the approval GET
+  // count, so this asymmetry currently has no test on either side of it.
+  it('adversarial: resolve-outside does not refetch the run (D-24 asymmetry)', async () => {
+    const RID = 'inv-failed-appr13-05a'
+    const afterResolve = detailRecord({
+      id: RID,
+      status: 'failed',
+      can_resolve_outside: true,
+      kept_as_is_at: '2026-08-06T12:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Filed manually.',
+    })
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: RID, status: 'failed', can_resolve_outside: true }), [], {
+      detailSequence: [afterResolve],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(RID)} />)
+    fireEvent.change(await screen.findByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+    fireEvent.click(screen.getByTestId('resolve-outside'))
+
+    await screen.findByTestId('detail-resolved-banner')
+    const approvalGets = fetchMock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith('/approval'))
+    expect(approvalGets.length).toBe(1) // mount only
+  })
+
+  it('adversarial: undo-resolve-outside does not refetch the run either (D-24 asymmetry)', async () => {
+    const RID = 'inv-failed-appr13-05b'
+    const afterUndo = detailRecord({ id: RID, status: 'failed', can_resolve_outside: true })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({
+        id: RID,
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually.',
+      }),
+      [],
+      { detailSequence: [afterUndo] },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(RID)} />)
+    fireEvent.click(await screen.findByTestId('resolve-outside-undo'))
+
+    await waitFor(() => expect(screen.queryByTestId('detail-resolved-banner')).toBeNull())
+    const approvalGets = fetchMock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith('/approval'))
+    expect(approvalGets.length).toBe(1) // mount only
+  })
+
+  // Neither machine's own spec rows exercise the other machine being open at the same
+  // time -- Stage-1 section 10 confirmed the two are deliberately not mutually exclusive.
+  it('adversarial: arming Approve does not disturb an already-open Reject row, and the reject row survives the approve cycle', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'wrong buyer TIN' } })
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+
+    expect((screen.getByTestId('detail-reject-reason') as HTMLInputElement).value).toBe('wrong buyer TIN')
+    expect(screen.getByTestId('detail-approve-confirm-prompt')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-approve')
+
+    expect(decideCalls).toHaveLength(1)
+    expect(decideCalls[0].body).toEqual({ decision: 'approved' })
+    expect((screen.getByTestId('detail-reject-reason') as HTMLInputElement).value).toBe('wrong buyer TIN')
   })
 })

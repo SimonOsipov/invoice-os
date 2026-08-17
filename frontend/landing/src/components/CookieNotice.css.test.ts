@@ -1,6 +1,6 @@
-// RED specs (task-561, LAND-05-02, Test-first) — T2-10..T2-13 plus the AC-8 and
-// focus/duration source arms. FIRST CSS-reading test in this repo; the source-read
-// idiom is analytics.test.ts:22-27.
+// The cookie notice's CSS-source claims: the button box contract, the cascade win on
+// the policy link, and the reduced-motion, geometry and focus arms. Source-read idiom
+// from analytics.test.ts:22-27.
 //
 // Why a parser and not toContain: landing.css:29-33 ALREADY carries a
 // `@media (prefers-reduced-motion: reduce)` block (for `html { scroll-behavior: auto }`),
@@ -122,12 +122,17 @@ function buttonBaseRules(css: string): CssRule[] {
 
 type ConsentBlock = { selector: string; props: string[]; pseudo: boolean }
 
-/** Every block keyed off a [data-consent=…] hook, base and pseudo-class alike. */
+// Matches the hook under any attribute operator (=, ^=, *=, |=, ~=) and any interior
+// whitespace. A literal '[data-consent=' misses `[data-consent = "accept"]` and
+// `[data-consent^="acc"]`, both of which style a real button.
+const CONSENT_ATTR = /\[\s*data-consent\b/
+
+/** Every block keyed off a [data-consent…] hook, base and pseudo-class alike. */
 function consentBlocks(css: string): ConsentBlock[] {
   const out: ConsentBlock[] = []
   for (const rule of parseRules(css)) {
     for (const part of selectorParts(rule)) {
-      if (!part.includes('[data-consent=')) continue
+      if (!CONSENT_ATTR.test(part)) continue
       // Strip the attribute selector before looking for a pseudo-class, so a colon
       // inside an attribute value can never be mistaken for one.
       const bare = part.replace(/\[[^\]]*\]/g, '')
@@ -154,6 +159,32 @@ function bareCnLinkDecorationRules(css: string): CssRule[] {
       selectorParts(r).some((p) => /\.cn-link\b/.test(p) && !/\.lnk\.cn-link\b/.test(p)) &&
       propertiesOf(r.body).includes('text-decoration'),
   )
+}
+
+// Any selector that can reach a <button> inside the card, whether or not it names the
+// [data-consent] hook. `.cn-actions button:first-child` and `.cn-actions button + button`
+// diverge the two boxes without mentioning the hook at all, so the hook-keyed arms alone
+// do not encode "the two buttons cannot diverge".
+const CARD_SCOPE = /\.cn-actions|\.cookie-note/
+const SHARED_BUTTON_SELECTOR = '.cn-actions button'
+
+function cardButtonBlocks(css: string): { selector: string; props: string[] }[] {
+  const out: { selector: string; props: string[] }[] = []
+  for (const rule of parseRules(css)) {
+    for (const part of selectorParts(rule)) {
+      const reachesButton = /\bbutton\b/.test(part) && CARD_SCOPE.test(part)
+      if (!reachesButton && !CONSENT_ATTR.test(part)) continue
+      out.push({ selector: part, props: propertiesOf(rule.body) })
+    }
+  }
+  return out
+}
+
+/** Box declarations made anywhere BUT the one shared selector. */
+function boxOffenders(css: string): string[] {
+  return cardButtonBlocks(css)
+    .filter((b) => b.selector !== SHARED_BUTTON_SELECTOR)
+    .flatMap((b) => b.props.filter(isBoxProp).map((prop) => `${b.selector} { ${prop} }`))
 }
 
 function baseRulesFor(css: string, selector: string): CssRule[] {
@@ -189,6 +220,17 @@ const PLANTED_RM_CSS = `
   html { scroll-behavior: auto; }
   .cookie-note { animation: none; }
 }
+`
+
+// Five selector shapes that each diverge the two button boxes on a live page while the
+// hook-keyed arms (T2-10 a/b) stay green. Every one was verified to slip through before
+// cardButtonBlocks existed.
+const EVASION_CSS = `
+[data-consent = "accept"] { height: 72px; }
+[data-consent^="acc"] { padding: 0 48px; }
+.cn-actions button:first-child { flex: 3; }
+.cn-actions button + button { font-weight: 800; }
+.cookie-note .cn-actions button:nth-child(2) { min-width: 300px; }
 `
 
 // ---------------------------------------------------------------- specs
@@ -349,5 +391,70 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     expect(bareCnLinkDecorationRules('.lnk.cn-link { text-decoration: underline; }')).toEqual([])
 
     expect(bareCnLinkDecorationRules(CSS_SRC)).toEqual([])
+  })
+
+  it('AC-9: only the shared .cn-actions button selector declares box geometry on the card buttons', () => {
+    const blocks = cardButtonBlocks(CSS_SRC)
+    expect(blocks.length, 'expected the card button rules to exist').toBeGreaterThan(0)
+    expect(
+      blocks.some((b) => b.selector === SHARED_BUTTON_SELECTOR),
+      'control needle: the shared base selector must be among them',
+    ).toBe(true)
+    expect(boxOffenders(CSS_SRC)).toEqual([])
+  })
+
+  it('control: the box-geometry scan catches the five shapes that evaded the hook-keyed arms', () => {
+    // Without this the claim above passes on an extractor that simply sees nothing.
+    expect(boxOffenders(EVASION_CSS).sort()).toEqual(
+      [
+        '.cn-actions button + button { font-weight }',
+        '.cn-actions button:first-child { flex }',
+        '.cookie-note .cn-actions button:nth-child(2) { min-width }',
+        '[data-consent = "accept"] { height }',
+        '[data-consent^="acc"] { padding }',
+      ].sort(),
+    )
+    // The two attribute shapes must also reach the hook-keyed arms, not only this one.
+    const consent = consentBlocks(EVASION_CSS).map((b) => b.selector)
+    expect(consent).toContain('[data-consent = "accept"]')
+    expect(consent).toContain('[data-consent^="acc"]')
+  })
+
+  it('AC-8 / Core AC 5: the desktop spacer is zero-height, so mounting the card moves nothing', () => {
+    const spacer = baseRulesFor(CSS_SRC, '.cn-spacer')
+    expect(spacer.length, 'expected exactly one base .cn-spacer rule').toBe(1)
+    expect(spacer[0].body).toMatch(/height:\s*0\b/)
+  })
+
+  it('the mobile form is one max-width: 640px query and keeps the 44px touch target', () => {
+    // Correction 3 fixed the breakpoint at 640; the file's own ladder is 600/920/1079.98/
+    // 1239.98 and "harmonising" to 600 is explicitly rejected. Decision 2 fences the 44px.
+    const queries = new Set(
+      parseRules(CSS_SRC)
+        .filter((r) => selectorParts(r).some((p) => /\.cookie-note|\.cn-/.test(p)))
+        .flatMap((r) => r.at)
+        .filter((a) => /max-width/.test(a)),
+    )
+    expect([...queries], 'the card must use exactly one width query, at 640px').toEqual([
+      '@media (max-width: 640px)',
+    ])
+
+    const mobileButton = parseRules(CSS_SRC).filter(
+      (r) =>
+        r.at.some((a) => /max-width:\s*640px/.test(a)) &&
+        selectorParts(r).some((p) => p === SHARED_BUTTON_SELECTOR),
+    )
+    expect(mobileButton.length, 'expected the shared mobile button rule').toBe(1)
+    expect(mobileButton[0].body).toMatch(/height:\s*44px/)
+  })
+
+  it('landing.css does not override the shared .eyebrow', () => {
+    // `.cookie-note .eyebrow` is (0,2,0) and merely TIES `.asc-app .eyebrow`
+    // (app-layer.css:163) — it would win on source order alone. Correction 6 says reuse
+    // the class; an override here also risks defeating the 24px ::before rule.
+    const probe = (css: string) =>
+      parseRules(css).filter((r) => selectorParts(r).some((p) => /\.eyebrow\b/.test(p)))
+    expect(probe('.cookie-note .eyebrow { font-size: 11.5px; }').length, 'control').toBe(1)
+    expect(probe(CSS_SRC).map((r) => r.selector)).toEqual([])
   })
 })

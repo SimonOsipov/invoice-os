@@ -1,11 +1,8 @@
-// RED specs (task-561, LAND-05-02, Test-first) — T2-1..T2-9 from the architect's
-// Test Specs table, authored before CookieNotice.tsx exists. SSR via
-// renderToStaticMarkup, no jsdom, no testing-library (vitest.config.ts: 'node').
+// SSR via renderToStaticMarkup — no jsdom, no testing-library (vitest.config.ts: 'node').
 //
-// The component is loaded through a runtime specifier rather than a static import
-// so a missing module fails as an ASSERTION (loadNotice's existsSync guard) instead
-// of a collection error. tsc does not resolve non-literal dynamic imports, so
-// `pnpm -r typecheck` stays green while the module is absent.
+// The component is loaded through a runtime specifier rather than a static import so a
+// missing or renamed module fails as an ASSERTION (loadNotice's existsSync guard) rather
+// than a collection error that reports nothing about which claim broke.
 //
 // React 19 SSR facts relied on here (react-dom 19.2.7, also stated in
 // Privacy.render.test.tsx / Footer.render.test.tsx): `&` in JSX text emits `&amp;`;
@@ -169,5 +166,106 @@ describe('CookieNotice SSR render (LAND-05-02)', () => {
   it('T2-9: the spacer is present and hidden from assistive tech', async () => {
     const html = await render()
     expect(html).toContain('<div aria-hidden="true" class="cn-spacer">')
+  })
+})
+
+describe('CookieNotice adversarial (LAND-05-02)', () => {
+  // SSR drops event handlers, so the only way to see the wiring is the element tree.
+  function buttonsOf(element: ReactElement): ReactElement[] {
+    const found: ReactElement[] = []
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return void node.forEach(walk)
+      if (!node || typeof node !== 'object') return
+      const el = node as ReactElement<{ children?: unknown }>
+      if (el.type === 'button') found.push(el)
+      walk(el.props?.children)
+    }
+    walk(element)
+    return found
+  }
+
+  async function tree(overrides: Partial<NoticeProps> = {}): Promise<ReactElement> {
+    const mod = await loadNotice()
+    return mod.CookieNotice({ current: null, suppressed: false, onChoose: noop, ...overrides })
+  }
+
+  it('each button calls onChoose with its OWN verdict — a swapped pair is not a cosmetic bug', () => {
+    return (async () => {
+      const seen: string[] = []
+      const el = await tree({ onChoose: (choice) => seen.push(choice) })
+      const buttons = buttonsOf(el)
+      expect(buttons.length, 'expected the walker to reach both buttons').toBe(2)
+
+      for (const button of buttons) {
+        const props = button.props as { onClick?: () => void; 'data-consent'?: string }
+        expect(typeof props.onClick, `${props['data-consent']} must carry a handler`).toBe('function')
+        props.onClick!()
+      }
+
+      const hooks = buttons.map((b) => (b.props as { 'data-consent'?: string })['data-consent'])
+      expect(hooks).toEqual(['accept', 'reject'])
+      expect(seen, 'the handler must match the hook on its own element').toEqual(hooks)
+    })()
+  })
+
+  it('a record with an unexpected shape fails CLOSED, and never renders both sentences', async () => {
+    // parseConsent guarantees a boolean, but the prop is a plain object at runtime and
+    // LAND-05-03 wires a caller. Anything not truthy must read as declined.
+    for (const shape of [{}, { analytics: undefined }, { analytics: null }, { analytics: 0 }]) {
+      const html = await render({ current: shape as unknown as ConsentRecord })
+      expect(html, `${JSON.stringify(shape)} must read as declined`).toContain(SETTING_OFF)
+      expect(html).not.toContain(SETTING_ON)
+      expect((html.match(/cn-setting/g) ?? []).length).toBe(1)
+    }
+  })
+
+  it('the copy survives HTML escaping intact — decoded once, never twice', async () => {
+    const html = await render()
+    expect(html, 'double-escaped ampersand').not.toContain('&amp;amp;')
+
+    const decode = (t: string) =>
+      t.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, '<')
+
+    const body = html.match(/<p class="cn-body">([\s\S]*?)<\/p>/)
+    expect(body, 'expected the body paragraph').not.toBeNull()
+    expect(decode(body![1])).toBe(BODY_COPY)
+
+    const link = html.match(/<a class="lnk cn-link" href="\/privacy">([\s\S]*?)<\/a>/)
+    expect(link, 'expected the policy link').not.toBeNull()
+    expect(decode(link![1])).toBe('Read the privacy & cookie policy')
+  })
+
+  it('suppressing the card changes the inert attribute and NOTHING else', async () => {
+    const suppressed = await render({ suppressed: true })
+    const live = await render({ suppressed: false })
+    expect(suppressed.replace(' inert=""', '')).toBe(live)
+  })
+
+  it('a not-suppressed card emits no inert attribute in any form', async () => {
+    // React 19 drops `inert={false}`; a downgrade that emitted the truthy string
+    // `inert="false"` would suppress the live card. Control first, then the claim.
+    const probe = (html: string) => /\binert(=|\b)/.test(html)
+    expect(probe('<div class="cookie-note" inert="false">'), 'control').toBe(true)
+    expect(probe('<div class="cookie-note" inert="">'), 'control').toBe(true)
+    expect(probe(await render({ suppressed: false }))).toBe(false)
+  })
+
+  it('renders silently on every path', async () => {
+    const calls: string[] = []
+    const methods = ['error', 'warn', 'log'] as const
+    const originals = methods.map((m) => console[m])
+    methods.forEach((m) => {
+      console[m] = (...args: unknown[]) => void calls.push(`${m}: ${String(args[0])}`)
+    })
+    try {
+      await render({ current: null })
+      await render({ current: GRANTED, suppressed: true })
+      await render({ current: DENIED, suppressed: false })
+    } finally {
+      methods.forEach((m, i) => {
+        console[m] = originals[i]
+      })
+    }
+    expect(calls).toEqual([])
   })
 })

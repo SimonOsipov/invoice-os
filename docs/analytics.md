@@ -82,7 +82,10 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    **invisible in every standard report** — the call-site attribution this story exists to deliver
    would silently not appear.
 5. **Confirm in GA4 DebugView after deploy** that a real visit to `https://www.ascomply.com`
-   reports `page_view` with a traffic source, that a real submission reports `generate_lead`, that
+   reports `page_view` with a traffic source. **Accept analytics on that visit first** — from
+   LAND-05 the gate's consent arm is closed by default, so a clean profile that has not accepted
+   reports nothing at all, and an empty DebugView then means the gate is working rather than the
+   tag being broken. Also confirm that a real submission reports `generate_lead`, that
    **all six** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`, `demo_cta`,
    `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
    `percent_scrolled` 25, 50, 75 and 100 — four events, no repeats on scrolling back up.

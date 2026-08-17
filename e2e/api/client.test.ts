@@ -216,6 +216,37 @@ describe('approveUntilClosed', () => {
     expect(decide).toHaveBeenCalledTimes(1)
   })
 
+  // QA adversarial: a fresh run (new run_id) starting at the same ord as the previous
+  // run's last-decided step -- a cancel-and-re-arm -- must not be mistaken for a stall.
+  it('the stalled-ord guard is keyed on (run_id, ord), not ord alone: a fresh run at the same ord is not a stall', async () => {
+    const runA = run({ run_id: 'run-A', steps: [step(0, 'fin_mgr')] })
+    const runBOpen = run({ run_id: 'run-B', steps: [step(0, 'fin_mgr')] })
+    const runBClosed = run({ run_id: 'run-B', state: 'approved', closed_at: '2026-01-01T02:00:00Z', closed_by: 'fin_mgr' })
+    const read = vi.fn().mockResolvedValue(runA)
+    const decide = vi.fn().mockResolvedValueOnce(runBOpen).mockResolvedValueOnce(runBClosed)
+
+    const result = await approveUntilClosed('inv-1', { fin_mgr: 'tok-fin_mgr' }, 6, { read, decide })
+
+    expect(result).toEqual(runBClosed)
+    expect(decide).toHaveBeenCalledTimes(2)
+  })
+
+  // QA adversarial: pins AC-6's role-key-and-subject wrap deployment-free (the other AC-6
+  // row needs a live gateway). Token payload is real base64url JSON, matching decodeJwtSubject.
+  it('AC-6: a decide failure is wrapped with the pending role key and the subject decoded from the token', async () => {
+    const openRun = run({ steps: [step(0, 'fin_mgr')] })
+    const read = vi.fn().mockResolvedValue(openRun)
+    const decide = vi.fn().mockRejectedValue(new Error('403 forbidden'))
+    const subject = 'c0000000-0000-0000-0000-000000000099'
+    const token = `header.${Buffer.from(JSON.stringify({ sub: subject })).toString('base64url')}.sig`
+
+    const err = await captureRejection(approveUntilClosed('inv-1', { fin_mgr: token }, 6, { read, decide }))
+
+    expect(err.message).toBe(
+      `approveUntilClosed: decide failed for role "fin_mgr" as subject ${subject} (invoice inv-1): 403 forbidden`,
+    )
+  })
+
   it('AC-5: throws on max exceeded, naming the invoice and the last pending role', async () => {
     // ord advances on every call (read or decide alike) so the stalled-ord guard never
     // fires -- this test is only about the max guard.
@@ -247,14 +278,31 @@ describe('approveUntilClosed', () => {
 })
 
 describe('firmApproverTokens', () => {
-  it('AC-7: mints each holder token once per worker, even called twice', async () => {
+  // QA adversarial, runs FIRST to see a cold cache (the module-scope memo persists across
+  // tests in this file). No await between the two calls -- a sequential pair can't tell
+  // "memoise the promise" apart from "memoise the value", since by call 2 call 1 already
+  // settled either way. Concurrency is the only oracle that distinguishes them.
+  it('AC-7: two concurrent callers mint exactly two logins, not four', async () => {
     calls.length = 0
 
-    const first = await firmApproverTokens()
-    const second = await firmApproverTokens()
+    const [first, second] = await Promise.all([firmApproverTokens(), firmApproverTokens()])
 
     const logins = calls.filter((c) => c.url.endsWith('/auth/login'))
-    expect(logins).toHaveLength(2) // fin_mgr + compliance, minted once total across both calls
+    expect(logins).toHaveLength(2) // fin_mgr + compliance, minted once despite the race
     expect(second).toEqual(first)
+  })
+
+  // Runs second, against the warm cache the test above left: a further call must not re-mint.
+  it('AC-7: a further call after the cache is warm mints no additional logins', async () => {
+    calls.length = 0
+
+    const third = await firmApproverTokens()
+
+    const logins = calls.filter((c) => c.url.endsWith('/auth/login'))
+    expect(logins).toHaveLength(0)
+    expect(third).toEqual({
+      fin_mgr: 'token-for-c0000000-0000-0000-0000-000000000004',
+      compliance: 'token-for-c0000000-0000-0000-0000-000000000005',
+    })
   })
 })

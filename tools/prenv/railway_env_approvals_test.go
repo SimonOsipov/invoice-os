@@ -343,3 +343,54 @@ func TestDevEnvYmlWiresApprovalsEnforcedIntoPrepareEnv(t *testing.T) {
 		t.Errorf("deploy-gateway's needs: list %q does not name prepare-env — the gate that stops the whole deploy on a failed prepare-env step (needs.prepare-env.result == 'success') would not apply", needsMatch[1])
 	}
 }
+
+// TestRailwayInvariantsYmlWiresApprovalsEnforcedSelfTest is a SOURCE-TEXT
+// assertion, same technique as TestDevEnvYmlWiresApprovalsEnforcedIntoPrepareEnv.
+// railway-invariants.yml is where this belongs, not dev-env.yml's `go` job or
+// ci.yml: both are paths-filtered on a list without scripts/**, so a PR that
+// only edits railway-env.sh would run neither — the comment at
+// railway-invariants.yml:63-65 states this for domain-selection-self-test and
+// it applies identically here. This workflow has no paths filter.
+//
+// WEAK BY DESIGN, same as the dev-env.yml wiring test: it proves the job is
+// wired to the right subcommand, not that it runs or passes in Actions.
+//
+// Checked first: nothing in this package pins domain-selection-self-test's
+// own wiring today (grepped this file for "domain-selection-self-test" and
+// "railway-invariants" before writing this test — no hit). That sibling job
+// could be renamed or deleted with no test noticing. This test is added
+// anyway for the NEW job rather than left unpinned to match: an unpinned CI
+// job is exactly the silent-deletion risk this subtask exists to close, and
+// matching an existing gap is not a reason to add a second one.
+//
+// KILLS: the job renamed away from `set-approvals-enforced --self-test`; the
+// job removed; the run line pointing at a different subcommand.
+//
+// Matches the `run:` line only, not the step `name:` — that line echoes the
+// same text on purpose, following domain-selection-self-test's own step-name
+// convention ("Run select-domain --self-test"), so both lines legitimately
+// carry the string and only the run line is the thing that actually executes.
+func TestRailwayInvariantsYmlWiresApprovalsEnforcedSelfTest(t *testing.T) {
+	path := filepath.Join(repoRoot(t), ".github", "workflows", "railway-invariants.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	content := string(raw)
+
+	callSites := regexp.MustCompile(`run: bash scripts/ci/railway-env\.sh set-approvals-enforced --self-test`).FindAllStringIndex(content, -1)
+	if len(callSites) == 0 {
+		t.Fatalf("%s never runs `set-approvals-enforced --self-test` — the self-test job is not wired up", path)
+	}
+	if len(callSites) > 1 {
+		t.Fatalf("%s runs `set-approvals-enforced --self-test` %d times, want exactly 1 — two call sites is two places to keep in sync", path, len(callSites))
+	}
+
+	jobAt := strings.Index(content, "\n  approvals-enforced-self-test:")
+	if jobAt == -1 {
+		t.Fatalf("%s has no `approvals-enforced-self-test:` job header", path)
+	}
+	if callSites[0][0] < jobAt {
+		t.Errorf("set-approvals-enforced --self-test is called at byte %d, before its own job header at byte %d — it belongs to a different job", callSites[0][0], jobAt)
+	}
+}

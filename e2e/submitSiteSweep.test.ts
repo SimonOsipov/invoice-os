@@ -431,8 +431,12 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
       expect(hit, 'target:queued not found inside createFailedInvoice -- the helper, or its inner call, moved').toBe(true)
     })
 
-    it('floor: at least 18 submit-driving sites (AC-8: 13 target:queued + 5 batch POSTs)', () => {
-      expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 18`).toBeGreaterThanOrEqual(18)
+    // AC-8's literal floor (18: 13 target:queued + 5 batch POSTs) is the file's population
+    // BEFORE this subtask's own rollup/list/enforcement test added a 14th target:queued site
+    // (line ~1196). Floored at the measured 19, not the AC's stale 18, so this scanner cannot
+    // itself carry the slack it exists to remove from the topology side.
+    it('floor: at least 19 submit-driving sites (AC-8 baseline 18 + this subtask\'s own new site)', () => {
+      expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 19`).toBeGreaterThanOrEqual(19)
     })
 
     it('every submit-driving call site is in the manifest', () => {
@@ -449,8 +453,16 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
   })
 
   describe('topology', () => {
-    it('floor: at least 7 submit-driving sites (AC-9: submit-confirm testids + 2 transitionInvoice(queued), not the 4 observers)', () => {
-      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 7`).toBeGreaterThanOrEqual(7)
+    // AC-9 as literally worded said "fails below 7"; the story's own author confirmed that
+    // was a miscount (7 was meant as "5 submitSelected callers + detail-submit-confirm +
+    // review-bulk-confirm", forgetting it should then ADD the 2 transitionInvoice calls to
+    // reach 9, not stop at 7). A floor of 7 against a measured population of 9 lets someone
+    // delete two real submit sites and stay green -- the same defect class as counting
+    // observers instead of submits. Floored at the measured 9: 5 submitSelected callers
+    // (batch-submit-confirm) + 1 detail-submit-confirm + 1 review-bulk-confirm + 2
+    // transitionInvoice(..., 'queued').
+    it('floor: at least 9 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 9`).toBeGreaterThanOrEqual(9)
     })
 
     it('every submit-driving call site is in the manifest', () => {
@@ -506,16 +518,23 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 //    matches nothing here. Nothing in e2e/ does this today for the needles this file cares
 //    about.
 //
-// 4. THE FLOORS ARE DELIBERATELY SOFT, NOT EXACT. AC-8's api floor (18) equals the file's
-//    full measured population -- any new test currently must raise it. AC-9's topology
-//    floor (7) sits below the current measured population (9: 5 submitSelected callers + 1
-//    detail-submit-confirm + 1 review-bulk-confirm + 2 transitionInvoice), giving two sites
-//    of slack rather than pinning the exact count, per the story's own Implementation Notes.
-//    A regression has to remove at least three real topology submit sites, not one, before
-//    the floor alone catches it -- the manifest's per-site check (AC-12) is what catches a
-//    single removed or added site; the floor exists only as the belt to that suspenders,
-//    matching workspaceCoverage.test.ts's own precedent (floor 5 against a larger real
-//    count).
+// 4. THE FLOORS ARE EXACT, NOT SOFT -- both equal today's full measured population: api 19
+//    (this file's own scan), topology 9 (5 submitSelected callers + 1 detail-submit-confirm +
+//    1 review-bulk-confirm + 2 transitionInvoice). AC-9 as literally worded said "fails below
+//    7"; re-verified 2026-08-18 as a miscount (7 was arithmetic on the way to 9, not the
+//    intended floor) and corrected here, rather than quietly kept, once a floor of 7 against
+//    a population of 9 was pointed out to let someone delete two real submit sites and stay
+//    green. Because both floors are now exact, deleting even ONE real site fails the floor
+//    directly, independent of the manifest.
+//
+//    What remains genuinely unguarded: a single commit that removes one real site and adds
+//    an unrelated one elsewhere (or edits an existing manifest entry's file/label/needle/
+//    ordinal to point at a different, coincidentally-real, call site) leaves the count
+//    unchanged and the manifest internally consistent -- both the floor and the per-site
+//    manifest check (AC-12/13) pass. Nothing here verifies a manifest diff was itself an
+//    intentional, reviewed change; that remains code review's job, not this scanner's.
+//    Needing to bump either floor when a legitimate new test raises the population is
+//    expected friction from this design, not a bug.
 //
 // 5. `can_submit` / `awaiting_approval` MATCHES ARE ENTIRELY OUT OF SCOPE (AC-14) -- neither
 //    scanned, manifested, nor floored. Their population is dominated by prose (test titles,

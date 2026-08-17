@@ -47,7 +47,12 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
 // qualification left Privacy.render.test.tsx green.
 const WITHDRAWAL_NEEDLES: readonly (readonly [string, string])[] = [
   ['W3 lead-in', 'Block or clear cookies for this site'],
-  ['W3 does not stop the measurement', 'It does not stop the measurement itself'],
+  // The condition is load-bearing: unqualified, this claim is false under the
+  // denied default (consent.ts CONSENT_DEFAULT_ANALYTICS), because no tag loads.
+  [
+    'W3 does not stop the measurement, once analytics is allowed',
+    'If you have allowed analytics, it does not stop the measurement itself',
+  ],
   ['W4 does not stop fonts or the form', 'It does not affect the fonts and it does not affect the demo form'],
   ['W5 lead-in', 'Block googletagmanager.com with a content blocker'],
   ['W5 does not stop the fonts', 'It does not stop the fonts, which come from a different Google host'],

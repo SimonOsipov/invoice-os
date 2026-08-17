@@ -62,12 +62,13 @@ The page therefore may not mention a notice, a banner, a Reject button or a pref
 centre in the present tense. Every mechanism below is one a visitor can use today, and
 each row records what it does **and what it does not** stop.
 
-**Open, at LAND-05-01:** `Privacy.tsx` still carries W3's qualification unconditionally —
-"It does not stop the measurement itself — the Google Analytics code still runs". Under the
-denied default that sentence is false, and it contradicts the same section's "no analytics
-runs at all" four lines above it. The row above is corrected; the page copy is not, because
-changing published privacy copy needs line-by-line approval. Owner: LAND-05-03, which
-rewrites this section when the notice mounts.
+**Closed at LAND-05-01:** `Privacy.tsx` carried W3's qualification unconditionally —
+"It does not stop the measurement itself — the Google Analytics code still runs". That was
+false under the denied default and contradicted the same section's "no analytics runs at
+all" four lines above it. The copy now splits the two cases in the order a visitor meets
+them: not allowed, so nothing is running to stop; allowed, so the measurement continues.
+`Privacy.claims.test.tsx` pins the qualified claim, not the bare one, so dropping the
+condition goes red. LAND-05-03 still rewrites this section when the notice mounts.
 
 | # | Mechanism | What it stops | What it does **not** stop | Class | Evidence |
 |---|---|---|---|---|---|

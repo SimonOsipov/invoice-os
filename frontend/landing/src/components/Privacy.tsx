@@ -159,9 +159,10 @@ export function Privacy() {
             <li style={ITEM}>
               <strong>Block or clear cookies for this site.</strong> Your browser's own site settings can delete the _ga
               cookies and stop new ones being issued. That breaks the thread between your visits: Google can no longer
-              tell that today's visit and last week's came from the same browser. It does not stop the measurement
-              itself — the Google Analytics code still runs, and Google still receives the page you are on and the IP
-              address your request comes from.
+              tell that today's visit and last week's came from the same browser. If you have not allowed analytics, you
+              are not being measured at all, so there is nothing here to stop. If you have allowed analytics, it does not
+              stop the measurement itself — the Google Analytics code still runs, and Google still receives the page you
+              are on and the IP address your request comes from.
             </li>
             <li style={ITEM}>
               <strong>Install Google's own opt-out add-on.</strong> Google publishes a browser add-on at{' '}

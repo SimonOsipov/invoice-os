@@ -278,7 +278,7 @@ html {
     bottom: 12px;
     width: auto;
     padding: 16px;
-    gap: 10px;
+    gap: 12px;
   }
   .cn-actions {
     flex-direction: column;
@@ -286,8 +286,9 @@ html {
   .cn-actions button {
     height: 44px;
   }
-  /* The reopened card's band: 256.09px measured + the 12px inset. e2e C10 bounds it. */
+  /* Reopened card ~264.1px (256.09 measured at gap 10, +8 restoring its 4 gaps to 12px) + the 12px
+     inset. Modeled, not measured: landing-consent.spec.ts C10 re-derives the band on the live build. */
   .cn-spacer {
-    height: 274px;
+    height: 282px;
   }
 }

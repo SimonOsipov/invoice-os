@@ -134,9 +134,9 @@ describe('parseConsent', () => {
 })
 
 describe('analyticsAllowed / readConsent', () => {
-  it('no stored record means analytics is allowed', () => {
+  it('no stored record means analytics is denied', () => {
     const store = createStore()
-    expect(analyticsAllowed(readConsent(store))).toBe(true)
+    expect(analyticsAllowed(readConsent(store))).toBe(false)
   })
 
   it('a stored granted record is honoured', () => {
@@ -157,12 +157,44 @@ describe('analyticsAllowed / readConsent', () => {
     expect(analyticsAllowed(null)).toBe(CONSENT_DEFAULT_ANALYTICS)
   })
 
+  // Pairs with the symbol comparison above: that one alone passes for either
+  // value, so the literal itself is pinned here rather than inside it.
+  it('the default literal is denied', () => {
+    expect(CONSENT_DEFAULT_ANALYTICS).toBe(false)
+  })
+
   it('a record from a superseded policy version is ignored', () => {
     const store = createStore({
       [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: 0 }),
     })
     expect(readConsent(store)).toBeNull()
     expect(analyticsAllowed(readConsent(store))).toBe(CONSENT_DEFAULT_ANALYTICS)
+    // Value pin: the symbol comparison above re-prompts under either default.
+    expect(analyticsAllowed(readConsent(store))).toBe(false)
+  })
+
+  // Non-vacuity control is the console-spy test at the top of this file.
+  it('every branch that consults the default is silent', () => {
+    const spies = spyOnConsole()
+
+    const stores = [
+      createStore(),
+      createStore({
+        [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: true, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION }),
+      }),
+      createStore({
+        [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION }),
+      }),
+      createStore({
+        [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: 0 }),
+      }),
+    ]
+    // Floor on the population exercised: a shrunk list would make silence cheap.
+    expect(stores.length).toBe(4)
+    for (const store of stores) analyticsAllowed(readConsent(store))
+    analyticsAllowed(null)
+
+    expectNoConsoleCalls(spies)
   })
 
   it('malformed storage falls back to the default, silently', () => {

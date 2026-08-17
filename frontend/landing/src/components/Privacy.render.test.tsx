@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
+import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
@@ -214,5 +215,76 @@ describe('C2 (NEW): no analytics reference exists in the three signed-in SPAs', 
     for (const needle of FORBIDDEN) {
       expect(combined, `${label} references "${needle}"`).not.toContain(needle)
     }
+  })
+})
+
+
+// T1-7 (LAND-05-01). The two pins above compare ANALYTICS_DEFAULT_SENTENCE to
+// itself, so the published page can state the opposite of the code's actual
+// default and stay green. These tie the prose to CONSENT_DEFAULT_ANALYTICS.
+//
+// Two-sided and fail-closed on purpose: copy matching neither vocabulary, or
+// both, fails rather than passes, so a reword cannot silently decouple the
+// disclosure from the gate. It reads polarity, never a particular wording.
+const CLAIMS_ON = [
+  /\bis on\b/i,
+  /\bon unless\b/i,
+  /\bon by default\b/i,
+  /\benabled by default\b/i,
+  /\bturned on\b/i,
+  /\bcounted from the moment\b/i,
+]
+
+const CLAIMS_OFF = [
+  /\bis off\b/i,
+  /\boff until\b/i,
+  /\boff by default\b/i,
+  /\bdisabled by default\b/i,
+  /\bnothing is (?:sent|measured|collected|loaded)\b/i,
+  /\bonly (?:runs|loads|starts|measures)\b/i,
+  /\bonly (?:after|once|if|when) you\b/i,
+  /\b(?:until|after) you (?:accept|agree|allow|choose|turn it on)\b/i,
+  /\bopt[- ]in\b/i,
+]
+
+type DefaultClaim = 'on' | 'off' | 'unreadable' | 'contradictory'
+
+function classifyDefaultClaim(text: string): DefaultClaim {
+  const on = CLAIMS_ON.some((re) => re.test(text))
+  const off = CLAIMS_OFF.some((re) => re.test(text))
+  if (on && off) return 'contradictory'
+  if (on) return 'on'
+  if (off) return 'off'
+  return 'unreadable'
+}
+
+describe('T1-7: the published default-state claim tracks CONSENT_DEFAULT_ANALYTICS', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+
+  it('control: the classifier discriminates and is not answering everything the same way', () => {
+    expect(classifyDefaultClaim('Analytics is on unless you turn it off in your browser.')).toBe('on')
+    expect(classifyDefaultClaim('Analytics is off until you accept.')).toBe('off')
+    expect(classifyDefaultClaim('Nothing is measured until you choose Accept.')).toBe('off')
+    expect(classifyDefaultClaim('The demo form posts to HubSpot.')).toBe('unreadable')
+    expect(classifyDefaultClaim('Analytics is on by default and off until you accept.')).toBe('contradictory')
+  })
+
+  it('control: the sentence being classified is the one the page actually renders', () => {
+    expect(html.length).toBeGreaterThan(0)
+    expect(html).toContain(ANALYTICS_DEFAULT_SENTENCE)
+  })
+
+  it('the page claims analytics is on by default if and only if the code default is granted', () => {
+    const claim = classifyDefaultClaim(ANALYTICS_DEFAULT_SENTENCE)
+    expect(claim, `no readable default in: "${ANALYTICS_DEFAULT_SENTENCE}"`).not.toBe('unreadable')
+    expect(claim, `both defaults claimed in: "${ANALYTICS_DEFAULT_SENTENCE}"`).not.toBe('contradictory')
+    expect(
+      claim === 'on',
+      `page claims "${claim}" by default, CONSENT_DEFAULT_ANALYTICS is ${CONSENT_DEFAULT_ANALYTICS}`,
+    ).toBe(CONSENT_DEFAULT_ANALYTICS)
+  })
+
+  it('the shipped disclosure does not claim analytics is on by default', () => {
+    expect(classifyDefaultClaim(ANALYTICS_DEFAULT_SENTENCE)).toBe('off')
   })
 })

@@ -136,12 +136,16 @@ describe('ensureTag — open gate', () => {
 })
 
 describe('ensureTag — adversarial and edge cases', () => {
-  it('AC-2: a null consent record falls back to the granted default', async () => {
+  // T1-5 (an explicit granted record still opens the gate) is this case's
+  // non-vacuity partner and already exists, unchanged by the flip: see
+  // 'AC-1: exactly one async gtag script is appended on the live hostname'
+  // above, plus the dataLayer count in the idempotency case.
+  it('AC-2: a null consent record falls back to the denied default', async () => {
     vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
     const mod = await import('./analytics')
-    expect(mod.ensureTag('www.ascomply.com', null)).toBe(true)
-    expect(document.head.querySelectorAll('script').length).toBe(1)
-    expect((window as TestWindow).dataLayer?.length).toBe(2)
+    expect(mod.ensureTag('www.ascomply.com', null)).toBe(false)
+    expect(document.head.querySelectorAll('script').length).toBe(0)
+    expect((window as TestWindow).dataLayer).toBeUndefined()
   })
 
   // Guards a `loaded = true` set before the gate check: a closed-gate call must not

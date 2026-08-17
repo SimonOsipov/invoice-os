@@ -130,14 +130,33 @@ function describeMatch(m: Match): string {
 // Never expanded (see file header) -- each occurrence is counted where it is written.
 // ==================================================================================
 
+// Peels a string literal through wrapper forms that don't change its value -- `as const`,
+// `as T`, `satisfies T`, plain parens. QA's mutation battery (task-575) found `'queued' as
+// const` a real, silent bypass: valid TS, identical at runtime, invisible to a bare
+// ts.isStringLiteralLike(node) check.
+function unwrapLiteral(node: ts.Node): ts.Node {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    node = node.expression
+  }
+  return node
+}
+
+// A property key's text, however it's written -- bare identifier (`target: ...`), quoted
+// (`'target': ...`), or computed (`['target']: ...`). The same mutation battery found both
+// non-identifier forms bypassing a bare ts.isIdentifier(node.name) check.
+function propertyKeyText(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text
+  if (ts.isComputedPropertyName(name)) {
+    const inner = unwrapLiteral(name.expression)
+    return ts.isStringLiteralLike(inner) ? inner.text : undefined
+  }
+  return undefined
+}
+
 function isTargetQueued(node: ts.Node): boolean {
-  return (
-    ts.isPropertyAssignment(node) &&
-    ts.isIdentifier(node.name) &&
-    node.name.text === 'target' &&
-    ts.isStringLiteralLike(node.initializer) &&
-    node.initializer.text === 'queued'
-  )
+  if (!ts.isPropertyAssignment(node) || propertyKeyText(node.name) !== 'target') return false
+  const value = unwrapLiteral(node.initializer)
+  return ts.isStringLiteralLike(value) && value.text === 'queued'
 }
 
 // rawFetch('.../invoices/submissions', { method: 'POST', ... }) -- the batch-submit door.
@@ -146,18 +165,16 @@ function isTargetQueued(node: ts.Node): boolean {
 function isBatchSubmitPost(node: ts.Node): boolean {
   if (!ts.isCallExpression(node)) return false
   if (!ts.isIdentifier(node.expression) || node.expression.text !== 'rawFetch') return false
-  const url = node.arguments[0]
+  const urlArg = node.arguments[0]
+  const url = urlArg && unwrapLiteral(urlArg)
   if (!url || !ts.isStringLiteralLike(url) || !url.text.endsWith('/invoices/submissions')) return false
   const opts = node.arguments[1]
   if (!opts || !ts.isObjectLiteralExpression(opts)) return false
-  return opts.properties.some(
-    (p) =>
-      ts.isPropertyAssignment(p) &&
-      ts.isIdentifier(p.name) &&
-      p.name.text === 'method' &&
-      ts.isStringLiteralLike(p.initializer) &&
-      p.initializer.text === 'POST',
-  )
+  return opts.properties.some((p) => {
+    if (!ts.isPropertyAssignment(p) || propertyKeyText(p.name) !== 'method') return false
+    const value = unwrapLiteral(p.initializer)
+    return ts.isStringLiteralLike(value) && value.text === 'POST'
+  })
 }
 
 function scanApiFile(filePath: string): RawMatch[] {
@@ -205,7 +222,8 @@ function transitionInvoiceTarget(node: ts.Node): string | undefined {
   if (!ts.isCallExpression(node)) return undefined
   if (!ts.isIdentifier(node.expression) || node.expression.text !== 'transitionInvoice') return undefined
   const arg = node.arguments[2]
-  return arg && ts.isStringLiteralLike(arg) ? arg.text : undefined
+  const value = arg && unwrapLiteral(arg)
+  return value && ts.isStringLiteralLike(value) ? value.text : undefined
 }
 
 // Every direct call site of `name` in this file, e.g. `submitSelected(page)` -- used to

@@ -23,12 +23,34 @@
 // .../validate round-trips the identical verdict fixtures.ts's BAD_INVOICE_KEYS
 // pins for the nested path.
 import { test, expect, type Page, type Request } from '@playwright/test'
-import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
+import {
+  login,
+  createEntity,
+  createInvoice,
+  validateInvoice,
+  transitionInvoice,
+  approveUntilClosed,
+  firmApproverTokens,
+  PERSONAS,
+} from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper } from './consoleGate'
 import { assertFillsColumn, gaps, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
+
+// [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
+// self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped (D3
+// protocol, ../api/validation.spec.ts:14-26) -- the api run ahead of this one (dev-env.yml)
+// leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
+// cleanup), so every approval below would otherwise 404 against an invoice that armed no
+// run. A genuine convergence failure must abort this file loudly, not surface as confusing
+// per-test 404s.
+test.beforeAll(async () => {
+  const token = await login(PERSONAS.A)
+  await ensureFirmPolicyActive(token)
+})
 
 // collectErrors()/signInFirm(): the same console/pageerror + firm-persona
 // sign-in idiom topology.spec.ts and import-wizard.spec.ts each inline (no
@@ -173,6 +195,11 @@ const MOCK_TIN_REJECT = '99999999-0002'
 // needs. -0001/-0002 both converge synchronously (~800ms) and can't prove live refresh at
 // all -- see the reject/resubmit test below.
 const MOCK_TIN_PENDING = '99999999-0003'
+
+// internal/invoice/handlers.go's awaitingApprovalReason, byte for byte -- the detail
+// page's undecided-state reason (AC-4 below). Own copy, not a cross-spec import (repo
+// convention, e2e/api/contract-invoice.spec.ts's own note on the same string).
+const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
 
 function submittableInvoiceFields(invoiceNumber: string, buyerTin: string) {
   return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin }
@@ -677,9 +704,10 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // pre-fix pill is asserted to an exact value, not just captured for a later diff.
   await page.getByRole('button', { name: /Clients/ }).click()
   const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
-  // Exact because this flow creates no approval_runs, and needs_attention's approval arm is
+  // Exact even though this flow now arms an open approval run on validate (the firm tenant
+  // is governed, this file's own beforeAll) -- needs_attention's approval arm is
   // draft-with-a-latest-rejected-run only (TestStoreRollup_ApprovalRejectedArmIsDraftOnly,
-  // TestStoreRollup_NeedsAttentionIncludesApprovalRejected for the run-less control).
+  // TestStoreRollup_NeedsAttentionIncludesApprovalRejected), and an open run is not that.
   await expect(clientRow, 'fresh entity row must render on Clients before the fix').toContainText('1 NEEDS ATTENTION')
 
   // 4. Open the violating invoice's live detail. Invoices is a CLIENT-scoped surface now
@@ -741,9 +769,9 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // not a stale snapshot) -- `toContainText` retries while the fresh ClientsView mount's
   // rollup refetch settles.
   await page.getByRole('button', { name: /Clients/ }).click()
-  // Zero survives approvals: this flow creates no approval_runs, and a validated invoice is
-  // awaiting_approval's population, never needs_attention's
-  // (TestStoreRollup_ApprovalRejectedArmIsDraftOnly).
+  // Zero survives approvals: this flow now arms an open run on validate (governed tenant),
+  // but a validated invoice with an open run is awaiting_approval's population, never
+  // needs_attention's (TestStoreRollup_ApprovalRejectedArmIsDraftOnly).
   await expect(clientRow, 'fresh entity health pill must flip to ALL CLEAR once its only violation is fixed').toContainText('ALL CLEAR')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -784,6 +812,10 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
     ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT),
   })
   await validateInvoice(token, inv.id)
+  // The firm tenant is governed (this file's own beforeAll) -- validating arms an open
+  // approval run, and isRowSelectable disables the checkbox on one. Close it over the side
+  // channel before the row is ever selected.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -854,6 +886,7 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
     ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
   })
   await validateInvoice(token, inv.id)
+  await approveUntilClosed(inv.id, await firmApproverTokens())
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -905,6 +938,14 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
 
   await page.getByTestId('revalidate').click()
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+
+  // AC-10: the transmit GATE is already clear here -- TransmitClearTx tests
+  // EXISTS(state='approved') over ALL runs, and the first leg's approval above already
+  // satisfies that. This approval is for isRowSelectable instead, which reads only the
+  // LATEST run's state, and the revalidate above just cancelled that run and armed a fresh
+  // open one (revalidate.go/store.go demotion path). Without this, the checkbox below stays
+  // disabled even though the server would happily accept the resubmit.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
 
   // Resubmit leg: back to the list -- this test still resubmits through the register's
   // batch-select-and-submit path (AC-3), not the detail page's own Submit control.
@@ -974,6 +1015,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
     ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
   })
   await validateInvoice(token, inv.id)
+  await approveUntilClosed(inv.id, await firmApproverTokens())
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -1129,6 +1171,9 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   const invoiceNumber = `INV-M509-FAILED-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
   await validateInvoice(token, inv.id)
+  // TransmitClearTx gates this transition server-side too (EXISTS(state='approved')) -- the
+  // governed tenant's open run must close before the queued edge is legal here.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
   await transitionInvoice(token, inv.id, 'queued')
   await transitionInvoice(token, inv.id, 'failed')
 
@@ -1197,6 +1242,8 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
   const invoiceNumber = `INV-M509-RESOLVE-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
   await validateInvoice(token, inv.id)
+  // Same server-side gate as the dead-end test above (TransmitClearTx).
+  await approveUntilClosed(inv.id, await firmApproverTokens())
   await transitionInvoice(token, inv.id, 'queued')
   await transitionInvoice(token, inv.id, 'failed')
 
@@ -1351,6 +1398,20 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
 
   const submitBtn = page.getByTestId('detail-submit')
   await expect(submitBtn).toBeVisible()
+  // AC-4: the undecided state, observed in a browser for the first time -- disabled, with
+  // the server's own reason RENDERED (submit-blocked-reason is a sibling text node, not a
+  // `title` attribute -- a title-only reason is invisible in Chromium and has bitten this
+  // suite before).
+  await expect(submitBtn).toBeDisabled()
+  await expect(page.getByTestId('submit-blocked-reason')).toContainText(AWAITING_APPROVAL_REASON)
+
+  // Approve over the side channel, then force a refetch: a validated invoice does not poll
+  // (shouldPollList needs queued/submitted), so nothing on screen would notice otherwise.
+  // Reuses the same back-then-reopen round trip the draft leg above already needed.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await page.getByRole('button', { name: '← All invoices' }).click()
+  await openInvoiceRow(page, invoiceNumber)
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
   await expect(submitBtn).toBeEnabled()
 
   await submitBtn.click()
@@ -1530,6 +1591,11 @@ test('register-selection: select-all is page-scoped and paging clears it', async
   // makes page 1's select-all count known ahead of time without depending on row order.
   const SELECTABLE_COUNT = 12
   await Promise.all(bulk.slice(0, SELECTABLE_COUNT).map((inv) => validateInvoice(token, inv.id)))
+  // AC-2: this test submits NOTHING -- it fails purely on SELECTABILITY, not submission.
+  // Every one of these 12 now arms an open run on validate (governed tenant); close them
+  // all before select-all or the summary bar unmounts entirely at zero selectable.
+  const approverTokens = await firmApproverTokens()
+  await Promise.all(bulk.slice(0, SELECTABLE_COUNT).map((inv) => approveUntilClosed(inv.id, approverTokens)))
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -1578,6 +1644,10 @@ test('register-confirm-stage: arm, a selection change disarms, re-arm sends exac
     createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(num2) }),
   ])
   await Promise.all([validateInvoice(token, inv1.id), validateInvoice(token, inv2.id)])
+  // Both rows are checked below (inv2 only to prove the uncheck disarms), so both must be
+  // selectable -- close the open run each validate just armed.
+  const approverTokens = await firmApproverTokens()
+  await Promise.all([approveUntilClosed(inv1.id, approverTokens), approveUntilClosed(inv2.id, approverTokens)])
 
   await signInFirm(page)
   await selectEntity(page, entity.name)

@@ -104,7 +104,12 @@ endpoints are real (`docs/approvals.md`), `App.tsx` fetches them, and both specs
 surface have been re-derived against live data (APPR-09-07/08). `e2e/topology/workflows.spec.ts`
 holds the firm half — it creates its own policy through the UI, imports no fixture, and never
 publishes (`[topology-never-publishes]`: a publish seals a version permanently and takes the
-tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` builds and
+tenant's one active slot on a shared deployment). The decision is scoped to policy
+**identity**, not the verb: a topology spec must never publish a policy it authored and must
+never change which policy governs the tenant, but restoring the tenant's own already-seeded
+policy to the active slot it already owns (`ensureFirmPolicyActive`,
+`e2e/api/contract-helpers.ts`) is convergence, not publication — every firm-tenant submitting
+spec self-heals through it in a `beforeAll` (APPR-14-07). `e2e/topology/roles.spec.ts` builds and
 deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
 now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
 `internal/demopolicy` seeds an active policy onto BOTH persona tenants (plus an unpublished
@@ -114,10 +119,13 @@ pre-existing row;
 module that predated those live reads, `policyFixtures.ts`, was deleted by APPR-10.
 
 `invoice-surfaces.spec.ts` extends this to the invoice-level decision controls and trail
-card, but covers only the **unarmed** case — both disabled, the trail empty. The
-**armed** approve/reject journey lives in `e2e/api/contract-invoice.spec.ts` instead,
-because `[topology-never-publishes]` bars a topology spec from publishing the policy an
-armed run requires.
+card, but covers only the **unarmed** case for those controls specifically — both disabled,
+the trail empty. (Its own submitting fixtures, and `import-wizard.spec.ts`'s, do arm and
+close a run since APPR-14-07 — over the API side channel via `approveUntilClosed`, never
+through the UI's own Approve/Reject buttons.) The **armed, UI-driven** approve/reject
+journey still lives in `e2e/api/contract-invoice.spec.ts` instead, because
+`[topology-never-publishes]` still bars a topology spec from publishing the dedicated probe
+policy that journey would need.
 
 That trail card reads its run on mount, and that GET answers 404 when there is no run —
 which Chromium logs as a console error, tripping the `collectErrors` gate in every

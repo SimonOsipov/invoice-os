@@ -1,10 +1,6 @@
-// RED specs (task-562, LAND-05-03, Test-first) — T3-9 (no reload, no ga-disable),
-// the module-scope purity pair the T3 table has no row for, and AC-13's mount
-// wiring. Source-text and import-inertness only; the behaviour is in the two
+// T3-9 (no reload, no ga-disable), module-scope purity for the two new modules, and
+// AC-13's mount wiring. Source-text and import-inertness only; the behaviour is in the
 // jsdom files. Environment 'node' (vitest.config.ts).
-//
-// The two new modules are loaded through a runtime specifier behind an existsSync
-// guard so their absence fails as an ASSERTION rather than a collection error.
 /// <reference types="node" />
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
@@ -24,13 +20,33 @@ const SCANNED: readonly (readonly [string, string])[] = [
   ['components/CookieNotice.tsx', join(HERE, 'components', 'CookieNotice.tsx')],
 ]
 
-// `location.href =` is matched with flexible whitespace because SignInModal.tsx:81
-// proves this repo writes it spaced.
+// The property enforced is "these four files navigate nothing and disable nothing",
+// not "these four literal spellings are absent". Measured at QA: the four dotted
+// needles alone passed against nine working reloads — an aliased location, a computed
+// member, document.location, a whole-object assignment, history.go(0), a programmatic
+// anchor click and a concatenated ga-disable key. The receiver-free needles carry the
+// guard; the dotted ones stay because they name the shapes USER DECISION 1 called out.
+// A future legitimate navigation from one of these files must re-narrow this list with
+// a stated reason rather than be waved through.
 const FORBIDDEN: readonly (readonly [string, RegExp])[] = [
   ['location.reload', /location\.reload/],
   ['location.assign', /location\.assign/],
   ['location.href assignment', /location\.href\s*=/],
   ['ga-disable', /ga-disable/],
+  ['reload, any receiver', /\breload\b/],
+  ['assign, any receiver', /\bassign\b/],
+  ['replace, any receiver', /\breplace\b/],
+  // `const l = window.location` defeats every dotted needle above.
+  ['location aliased to a binding', /=\s*(?:(?:window|document|self|top|globalThis)\.)?location\s*[;\n]/],
+  ['whole-location assignment', /\blocation\s*=[^=]/],
+  ['computed location member', /location\s*\[/],
+  ['computed window member', /window\s*\[/],
+  ['history navigation', /\bhistory\s*\./],
+  // A self-href anchor clicked in script is a reload with no location reference.
+  ['programmatic click', /\.click\s*\(/],
+  // ga-disable assembled from fragments.
+  ['ga- fragment', /ga-/],
+  ['disable- fragment', /disable-/],
 ]
 
 function readScanned(): { label: string; src: string }[] {
@@ -48,20 +64,45 @@ function readScanned(): { label: string; src: string }[] {
 }
 
 describe('T3-9: no page reload and no ga-disable (USER DECISION 1)', () => {
-  it('control: each needle finds a planted hit and rejects a decoy', () => {
-    expect(FORBIDDEN.length).toBe(4)
+  it('control: each needle finds a planted hit', () => {
+    expect(FORBIDDEN.length).toBe(15)
     const planted: Record<string, string> = {
       'location.reload': 'window.location.reload()',
       'location.assign': 'window.location.assign(dest)',
-      'location.href assignment': "window.location.href = dest",
+      'location.href assignment': 'window.location.href = dest',
       'ga-disable': "w['ga-disable-G-E409H76XYY'] = true",
+      'reload, any receiver': 'const l = w.location; l.reload()',
+      'assign, any receiver': 'const l = w.location; l.assign(dest)',
+      'replace, any receiver': 'const l = w.location; l.replace(dest)',
+      'location aliased to a binding': 'const l = window.location\n',
+      'whole-location assignment': "window.location = '/'",
+      'computed location member': "window.location['reload']()",
+      'computed window member': "window['loc' + 'ation'].replace('/')",
+      'history navigation': 'window.history.go(0)',
+      'programmatic click': 'a.click()',
+      'ga- fragment': "w['ga-' + 'disable-' + id] = true",
+      'disable- fragment': "w['ga' + '-disable-' + id] = true",
     }
     for (const [label, re] of FORBIDDEN) {
+      expect(planted[label], `${label}: no planted sample`).toBeDefined()
       expect(re.test(planted[label]), `${label}: planted hit not found`).toBe(true)
     }
-    // A read of location.href is not an assignment to it.
-    expect(/location\.href\s*=/.test('const here = window.location.href')).toBe(false)
-    expect(/ga-disable/.test("w.gtag('config', id)")).toBe(false)
+  })
+
+  it('control: the needles reject the shapes the four files legitimately carry', () => {
+    // A read of location.href is not an assignment to it, and the pathname read
+    // App.tsx:38 already makes must stay legal.
+    const legal = [
+      'const here = window.location.href',
+      'const privacy = isPrivacyPath(window.location.pathname)',
+      "const hostname = opts?.hostname ?? window.location.hostname",
+      "w.gtag('config', id)",
+    ]
+    for (const sample of legal) {
+      for (const [label, re] of FORBIDDEN) {
+        expect(re.test(sample), `${label} false-positives on shipped code: ${sample}`).toBe(false)
+      }
+    }
   })
 
   it('AC-5: none of the four files reloads the page or sets ga-disable', () => {

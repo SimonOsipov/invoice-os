@@ -137,8 +137,8 @@ describe('AC11 + AC12: the docs this page is defended by', () => {
   })
 })
 
-// RED specs (task-562, LAND-05-03, Test-first) — T3-16, T3-19 and the docs sweep the
-// mount falsifies. Oracles only: none of them pins wording this file invented.
+// T3-16, T3-19 and the docs sweep the mount falsifies. Oracles only: none of them
+// pins wording this file invented.
 
 describe('T3-16 (AC-9): the C18 needle is retargeted, not dropped', () => {
   it('a C18 row still exists and no longer pins a denial', () => {

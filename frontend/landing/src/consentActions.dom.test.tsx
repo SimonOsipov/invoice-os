@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// RED specs (task-562, LAND-05-03, Test-first) — T3-5, T3-6, T3-7, T3-10, T3-11 and
-// T3-12, driven through a real App mount (createRoot + act, the Nav.scrollSpy.test.tsx
+// T3-5, T3-6, T3-7, T3-10, T3-11 and T3-12, driven through a real App mount (createRoot + act, the Nav.scrollSpy.test.tsx
 // precedent; this package has no @testing-library/react).
 //
 // The document URL is the production host ON PURPOSE. ensureTag's gate needs
@@ -19,11 +18,9 @@
 // global at call time (consent.ts:14-20), so nothing in the source needs a seam.
 //
 // DELIBERATE DEVIATION from the plan's [C-5]: no vi.mock(…, importOriginal) seam for
-// ensureTag / clearGaCookies. vi.mock must resolve the module it names, and
-// consentActions.ts and gaCookies.ts do not exist yet, so a mock here turns this RED
-// into a collection error. The behavioural oracles used instead — the injected gtag
-// script element and the cookie jar itself — are strictly stronger than a call count,
-// and they keep vi.mock out of frontend/landing/, where it has no precedent.
+// ensureTag / clearGaCookies. The behavioural oracles used instead — the injected gtag
+// script element and the cookie jar itself — are stronger than a call count, and they
+// keep vi.mock out of frontend/landing/, where it has no precedent.
 //
 // T3-8 and T3-14 are NOT in this file: see consentActions.revocation.dom.test.ts.
 /// <reference types="node" />

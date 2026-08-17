@@ -1,11 +1,8 @@
-// RED specs (task-562, LAND-05-03, Test-first) — T3-1..T3-3, authored before
-// gaCookies.ts exists. Pure functions only, environment 'node' (vitest.config.ts).
-// The jar-level behaviour is gaCookies.dom.test.ts.
+// T3-1..T3-3: the pure functions only, environment 'node' (vitest.config.ts). The
+// jar-level behaviour is gaCookies.dom.test.ts, the write log gaCookies.adversarial.test.ts.
 //
 // The module is loaded through a runtime specifier behind an existsSync guard so a
-// missing module fails as an ASSERTION rather than a collection error; tsc does not
-// resolve non-literal dynamic imports, so typecheck stays green while it is absent.
-// Same idiom as CookieNotice.render.test.tsx (task-561).
+// missing module fails as an ASSERTION rather than a collection error.
 /// <reference types="node" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync } from 'node:fs'

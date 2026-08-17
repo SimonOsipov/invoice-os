@@ -1,9 +1,6 @@
 // @vitest-environment jsdom
-// RED spec (task-562, LAND-05-03, Test-first) — T3-4, authored before gaCookies.ts
-// exists. gaCookies.ts becomes the repo's FIRST document.cookie writer and this file
-// its first reader-back: a tree-wide grep for document.cookie / sessionStorage /
-// indexedDB over frontend/, packages/ and e2e/ returns zero hits at a497516, so
-// there is no in-repo idiom to copy.
+// T3-4. gaCookies.ts is the repo's only document.cookie writer and this file its only
+// reader-back, so there is no in-repo idiom to copy.
 //
 // Two jsdom limits shape the file, and both are proven rather than asserted in prose:
 //   1. the cookie jar persists across tests in one file, so every case resets it;
@@ -13,6 +10,9 @@
 //
 // The module is loaded through a runtime specifier behind an existsSync guard so a
 // missing module fails as an ASSERTION rather than a collection error.
+//
+// This file cannot see the host-only write (gaCookies.ts:49) — jsdom does not separate
+// a host-only cookie from a domain-scoped one. gaCookies.adversarial.test.ts owns it.
 /// <reference types="node" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync } from 'node:fs'

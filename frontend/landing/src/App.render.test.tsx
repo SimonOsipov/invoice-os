@@ -23,11 +23,8 @@ function renderAppAt(pathname: string): string {
   }
 }
 
-// Narrowed at LAND-05-03 to stop at </footer>. It previously ran from <footer> to
-// the end of the document, so the cookie notice mounting after <Footer> would have
-// started silently changing what the assertions below cover. Measured: none of them
-// would have BROKEN — the card emits no href="#", no second <footer> and no hash
-// anchor — so this is a fragility repair, not a fix for a break.
+// Bounded at </footer> on purpose: the cookie notice mounts after <Footer>, and an
+// open-ended slice would silently widen what the assertions below cover.
 function footerSlice(html: string): string {
   const idx = html.lastIndexOf('<footer')
   expect(idx, 'expected to find a <footer> element').toBeGreaterThan(-1)

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-// RED specs (task-562, LAND-05-03, Test-first) — T3-8 and T3-14, the two the plan
-// specified VACUOUSLY. Both are here rather than in consentActions.dom.test.tsx, and
-// both call applyChoice directly, for reasons that are load-bearing:
+// T3-8 and T3-14. Both are here rather than in consentActions.dom.test.tsx, and both
+// call applyChoice directly, for reasons that are load-bearing:
 //
 //   1. send() needs loaded === true, which needs a successful ensureTag, which needs
 //      isProductionHost(hostname). PRODUCTION_HOSTNAMES is ['www.ascomply.com'], exact

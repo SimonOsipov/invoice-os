@@ -308,11 +308,10 @@ describe('T1-7: the published default-state claim tracks CONSENT_DEFAULT_ANALYTI
   })
 })
 
-// RED specs (task-562, LAND-05-03, Test-first) — T3-15, T3-17 and T3-18. Oracles
-// only: the wording is Stage 3's and needs the user's line-by-line sign-off, so
-// nothing below pins a sentence this file invented. Each spec ties the published
-// claim to something the CODE decides — the control's own button labels, or the
-// qualifier the page already uses six lines further down.
+// T3-15, T3-17 and T3-18. Oracles only: the published wording still needs the user's
+// line-by-line sign-off, so nothing below pins a sentence this file invented. Each spec
+// ties the published claim to something the CODE decides — the control's own button
+// labels, or the qualifier the page already uses six lines further down.
 //
 // Privacy renders in ISOLATION here (renderToStaticMarkup of the component, not the
 // App tree), so the mounted notice never enters this markup: the guards below trip

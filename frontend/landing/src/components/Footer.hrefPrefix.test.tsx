@@ -15,6 +15,27 @@ const REAL_ANCHORS = ['#modules', '#compliance', '#accountants', '#developers', 
 // own href/src attribute must never count here.
 const ANCHOR_HREF = /<a\s+href="([^"]*)"/g
 
+// Duplicated rather than shared, matching the openLanding() precedent. Both bounds are
+// load-bearing: Company is the last column and the copyright row follows it, so an
+// unbounded slice counts the copyright row's own controls as Company items.
+const COPYRIGHT_ROW = '2026 ASCOMPLY AFRICA'
+
+function companySlice(html: string): string {
+  const start = html.indexOf('>Company<')
+  expect(start, 'expected to find the Company column heading').toBeGreaterThan(-1)
+  const end = html.indexOf(COPYRIGHT_ROW)
+  expect(end, 'expected the copyright row to follow the Company column').toBeGreaterThan(start)
+  return html.slice(start, end)
+}
+
+function copyrightRowSlice(html: string): string {
+  const idx = html.indexOf(COPYRIGHT_ROW)
+  expect(idx, 'expected to find the copyright row').toBeGreaterThan(-1)
+  const open = html.lastIndexOf('<div', idx)
+  expect(open, 'expected an opening div for the copyright row').toBeGreaterThan(-1)
+  return html.slice(open)
+}
+
 describe('Footer hrefPrefix contract', () => {
   it('AC-6: default hrefPrefix leaves every href byte-identical to today', () => {
     const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop }))
@@ -44,9 +65,17 @@ describe('Footer hrefPrefix contract', () => {
     expect(html).not.toContain('href="//privacy"')
   })
 
-  it('AC-9b: exactly one button regardless of hrefPrefix', () => {
+  // T4-7 (task-563): the same claim — hrefPrefix multiplies no button — taken per region
+  // instead of as a whole-file constant, so a second footer control cannot invert it.
+  it('AC-9b: one button in the Company column and one in the copyright row, regardless of hrefPrefix', () => {
     const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' }))
-    const buttons = html.match(/<button/g) ?? []
-    expect(buttons.length).toBe(1)
+
+    const company = companySlice(html)
+    expect(company.length, 'the Company slice resolved empty').toBeGreaterThan(0)
+    expect((company.match(/<button/g) ?? []).length, 'Company column button count').toBe(1)
+
+    const row = copyrightRowSlice(html)
+    expect(row.length, 'the copyright row slice resolved empty').toBeGreaterThan(0)
+    expect((row.match(/<button/g) ?? []).length, 'copyright row button count').toBe(1)
   })
 })

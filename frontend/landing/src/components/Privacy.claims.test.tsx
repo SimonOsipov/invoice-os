@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { Footer } from './Footer'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
@@ -237,5 +238,117 @@ describe('AC-12: docs/analytics.md carries the OWED enhanced-measurement item', 
     // over this file, so wording item 7 as confirmed turns it red. That is the
     // mechanism that stops the owed item being reported as discharged on merge.
     expect(seventh, 'the owed item is worded as already confirmed').not.toContain('operator-confirmed 2026-08-16')
+  })
+})
+
+// T4-10, T4-12, T4-13, T4-14 (task-563). The footer control makes three already-shipped
+// privacy sentences true; these tie the two surfaces together so they cannot diverge again.
+
+function privacyParagraphs(needle: string): string[] {
+  return html.split('</p>').filter((segment) => segment.includes(needle))
+}
+
+// A split segment carries the heading above the paragraph too, so a needle matched off an
+// <h2> would pass as if it were body copy. Trim to the paragraph's own open tag.
+function paragraphBody(segment: string): string {
+  const at = segment.lastIndexOf('<p')
+  expect(at, 'no paragraph open tag in this segment').toBeGreaterThan(-1)
+  return segment.slice(at)
+}
+
+describe('T4-10 (AC-11): the page describes reopening iff a reopen control renders', () => {
+  const footerHtml = renderToStaticMarkup(createElement(Footer, { onBookDemo: () => undefined }))
+  const REOPEN_CLAIM = 'The cookie notice on this site is where you choose'
+
+  const reopenControlRenders = (markup: string): boolean =>
+    Array.from(markup.matchAll(/<button[^>]*>([^<]*)<\/button>/g)).some((m) => /cookie choices/i.test(m[1]))
+  const reopenClaimRenders = (markup: string): boolean => markup.includes(REOPEN_CLAIM)
+
+  it('control: both detectors fire on planted markup and stay quiet on shipped siblings', () => {
+    expect(footerHtml.length).toBeGreaterThan(0)
+    expect(html.length).toBeGreaterThan(0)
+    expect(reopenControlRenders('<button type="button">Cookie choices</button>')).toBe(true)
+    expect(reopenControlRenders('<button class="ios-link">Book a demo</button>')).toBe(false)
+    expect(reopenClaimRenders(`<p>${REOPEN_CLAIM}: Accept allows it.</p>`)).toBe(true)
+    expect(reopenClaimRenders('<p>Google Analytics sets two cookies on your device.</p>')).toBe(false)
+  })
+
+  it('the two are equal — delete the control OR delete the claim and this goes red', () => {
+    expect(
+      reopenControlRenders(footerHtml),
+      'the page claims a reopen control the footer does not render, or the reverse',
+    ).toBe(reopenClaimRenders(html))
+  })
+})
+
+describe('T4-12 (AC-12): asc_consent is disclosed, and E3 is not softened to buy it', () => {
+  const E3 = 'Our own code sets no cookies at all'
+
+  it('control: the splitter works and E3 sits in exactly one paragraph', () => {
+    expect(html.split('</p>').length, 'the page rendered no paragraphs').toBeGreaterThan(1)
+    expect(privacyParagraphs(E3).length, 'E3 must stay in exactly one paragraph').toBe(1)
+  })
+
+  it('E3 survives verbatim', () => {
+    expect(html, 'ledger claim E3 was weakened or removed').toContain(E3)
+  })
+
+  it('the page names asc_consent, says the device holds it, and says it stops the notice returning', () => {
+    expect(html, 'the consent record is not disclosed anywhere on the page').toContain('asc_consent')
+    const hits = privacyParagraphs('asc_consent')
+    expect(hits.length, 'expected exactly one paragraph naming asc_consent').toBe(1)
+    const para = paragraphBody(hits[0])
+    expect(para, 'asc_consent is named in a heading, not in body copy').toContain('asc_consent')
+    expect(para, 'the disclosure does not say where the record is held').toMatch(/your (?:device|browser)/i)
+    expect(para, 'the disclosure does not mention the notice').toMatch(/notice/i)
+    expect(para, 'the disclosure does not say it is what stops the notice returning').toMatch(
+      /again|back|reappear|return|every visit|each visit/i,
+    )
+  })
+})
+
+describe('T4-13 (AC-13): the page says WHY a reload matters after a Reject that follows an Accept', () => {
+  const RELOAD = 'reload the page to clear that out too'
+
+  it('control: the reload instruction is on the page, in exactly one paragraph', () => {
+    expect(html, 'the reload instruction anchor is gone').toContain(RELOAD)
+    expect(privacyParagraphs(RELOAD).length).toBe(1)
+  })
+
+  it('the residual is explained: the already-loaded script can re-create the _ga cookies', () => {
+    const para = paragraphBody(privacyParagraphs(RELOAD)[0])
+    expect(para).toContain(RELOAD)
+    expect(para, 'no causal clause — the page still only instructs, it never explains').toMatch(/re-?creat/i)
+    expect(para, 'the causal clause does not name what comes back').toContain('_ga')
+  })
+})
+
+describe('T4-14 (AC-11): the ledger no longer forbids what the page now says', () => {
+  const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
+  const flat = ledger.replace(/\s+/g, ' ')
+  const PROHIBITION = 'the page must not tell a visitor they can change their answer at'
+  const SURVIVOR = 'No cookie table and no per-category breakdown'
+
+  it('control: the read resolved, a surviving bullet is found, and the scan finds a planted copy', () => {
+    expect(ledger.length).toBeGreaterThan(0)
+    expect(flat, 'the surviving deliberate-omission bullet is gone — wrong file or wrong section').toContain(SURVIVOR)
+    expect(`x ${PROHIBITION} any time.`.replace(/\s+/g, ' '), 'the scan cannot find a planted copy').toContain(
+      PROHIBITION,
+    )
+  })
+
+  it('the prohibition bullet is deleted', () => {
+    expect(flat, 'the ledger still forbids the sentence the page now carries').not.toContain(PROHIBITION)
+  })
+
+  it('C18 names the footer reopen control', () => {
+    const row = ledger.split('\n').find((line) => line.includes('| C18 |'))
+    expect(row, 'the C18 row marker must never be renamed, only its cell text').toBeDefined()
+    expect(row!, 'no ledger row names the footer reopen control').toMatch(/cookie choices/i)
+  })
+
+  it('the section this subtask discharges is recorded as closed, per the ledger own rule', () => {
+    expect(flat, 'the LAND-05-03 marker must survive').toContain('Closed at LAND-05-03')
+    expect(flat, 'no Closed at LAND-05-04 marker').toContain('Closed at LAND-05-04')
   })
 })

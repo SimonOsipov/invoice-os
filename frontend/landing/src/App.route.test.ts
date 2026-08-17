@@ -30,4 +30,15 @@ describe('App.tsx route wiring', () => {
     expect(footerTag, 'expected to find a <Footer> element').not.toBeNull()
     expect(footerTag![0]).toMatch(/hrefPrefix=\{privacy/)
   })
+
+  it('T4-8 (task-563): onCookieChoices is wired onto <Footer>, not merely declared optional', () => {
+    // Control needle first: an optional prop ships silently unwired, so presence of the
+    // prop on the tag is the only thing that separates wired from declared.
+    expect(APP_SRC.length).toBeGreaterThan(0)
+    expect(APP_SRC).toContain('onBookDemo')
+
+    const footerTag = APP_SRC.match(/<Footer\b[^>]*>/)
+    expect(footerTag, 'expected to find a <Footer> element').not.toBeNull()
+    expect(footerTag![0], 'the Footer tag does not pass onCookieChoices').toMatch(/onCookieChoices=\{/)
+  })
 })

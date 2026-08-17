@@ -11,10 +11,14 @@ import { Footer } from './Footer'
 
 function noop() {}
 
+const COPYRIGHT_ROW = '2026 ASCOMPLY AFRICA'
+
 function companySlice(html: string): string {
-  const idx = html.indexOf('>Company<')
-  expect(idx, 'expected to find the Company column heading').toBeGreaterThan(-1)
-  return html.slice(idx)
+  const start = html.indexOf('>Company<')
+  expect(start, 'expected to find the Company column heading').toBeGreaterThan(-1)
+  const end = html.indexOf(COPYRIGHT_ROW)
+  expect(end, 'expected the copyright row to follow the Company column').toBeGreaterThan(start)
+  return html.slice(start, end)
 }
 
 describe('Footer adversarial coverage (LAND-04-04)', () => {

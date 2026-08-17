@@ -295,3 +295,51 @@ describe('T3-11: inert tracks the modal state', () => {
     expectNoConsoleCalls(consoleSpies)
   })
 })
+
+// T4-6 and T4-11 (task-563). The footer control is the ONLY way to reach the notice once a
+// record is stored, so both cases start from a granted record and go through the footer.
+describe('T4-6: the footer control reopens the notice with the stored setting', () => {
+  it('AC-9: a granted record hides it, Cookie choices brings it back showing "on", and a choice closes it', async () => {
+    store.setItem(
+      CONSENT_STORAGE_KEY,
+      JSON.stringify({ analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }),
+    )
+    await mountApp()
+    expect(noticeNodes().length, 'a stored record did not suppress the notice').toBe(0)
+
+    await clickByText('Cookie choices')
+    expect(noticeNodes().length, 'the footer control did not reopen the notice').toBe(1)
+    expect(
+      document.querySelector(NOTICE)!.textContent,
+      'the reopened notice does not show the stored setting',
+    ).toContain('Analytics cookies are on.')
+
+    // Without setReopened(false) in onChoose the notice never closes again: consent is
+    // already non-null, so the mount condition stays true on `reopened` alone.
+    await clickConsent('accept')
+    expect(noticeNodes().length, 'the reopened notice stayed up after a choice').toBe(0)
+    expectNoConsoleCalls(consoleSpies)
+  })
+})
+
+describe('T4-11: Reject from a reopened notice persists and closes', () => {
+  it('AC-9: the notice goes away and the store holds a denied record', async () => {
+    store.setItem(
+      CONSENT_STORAGE_KEY,
+      JSON.stringify({ analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }),
+    )
+    await mountApp()
+    expect(noticeNodes().length).toBe(0)
+
+    await clickByText('Cookie choices')
+    expect(noticeNodes().length, 'the footer control did not reopen the notice').toBe(1)
+
+    await clickConsent('reject')
+    expect(noticeNodes().length, 'the reopened notice stayed up after Reject').toBe(0)
+
+    const record = storedRecord()
+    expect(record.analytics, 'Reject from a reopened notice did not persist').toBe(false)
+    expect(record.v).toBe(CONSENT_VERSION)
+    expectNoConsoleCalls(consoleSpies)
+  })
+})

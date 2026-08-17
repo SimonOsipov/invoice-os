@@ -865,8 +865,16 @@ export async function approveUntilClosed(
   invoiceId: string,
   tokens: Record<string, string>,
   max = 6,
-  transport: ApprovalTransport = { read: getInvoiceApproval, decide: decideInvoiceApproval },
+  transport?: ApprovalTransport,
 ): Promise<ApprovalRun> {
+  // Empty tokens against the real transport would reach the initial read unauthenticated
+  // and surface a bare 401; fail before that call. A scripted transport doesn't touch the
+  // network on the token's account, so this only guards the default pair.
+  if (!transport && Object.keys(tokens).length === 0) {
+    throw new Error(`approveUntilClosed: tokens is empty; cannot authenticate the initial read (invoice ${invoiceId})`)
+  }
+  transport = transport ?? { read: getInvoiceApproval, decide: decideInvoiceApproval }
+
   let run = await transport.read(Object.values(tokens)[0] ?? '', invoiceId)
   let decided = 0
   let lastPending: { runId: string; ord: number } | null = null
@@ -897,8 +905,16 @@ export async function approveUntilClosed(
       run = await transport.decide(token, invoiceId, { decision: 'approved' })
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e)
+      // decodeJwtSubject throws on a non-JWT token; degrade rather than let that parse
+      // error replace the real decide failure being reported here.
+      let subject: string
+      try {
+        subject = decodeJwtSubject(token)
+      } catch {
+        subject = 'unavailable'
+      }
       throw new Error(
-        `approveUntilClosed: decide failed for role "${roleKey}" as subject ${decodeJwtSubject(token)} (invoice ${invoiceId}): ${reason}`,
+        `approveUntilClosed: decide failed for role "${roleKey}" as subject ${subject} (invoice ${invoiceId}): ${reason}`,
       )
     }
     decided += 1

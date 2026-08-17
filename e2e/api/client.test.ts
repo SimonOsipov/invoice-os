@@ -247,6 +247,20 @@ describe('approveUntilClosed', () => {
     )
   })
 
+  // A non-JWT token must not let decodeJwtSubject's own parse error replace the real decide
+  // failure being reported here; the subject degrades to 'unavailable' instead.
+  it('a decide failure with an undecodable token reports the subject as unavailable', async () => {
+    const openRun = run({ steps: [step(0, 'fin_mgr')] })
+    const read = vi.fn().mockResolvedValue(openRun)
+    const decide = vi.fn().mockRejectedValue(new Error('403 forbidden'))
+
+    const err = await captureRejection(approveUntilClosed('inv-1', { fin_mgr: 'not-a-jwt' }, 6, { read, decide }))
+
+    expect(err.message).toBe(
+      'approveUntilClosed: decide failed for role "fin_mgr" as subject unavailable (invoice inv-1): 403 forbidden',
+    )
+  })
+
   it('AC-5: throws on max exceeded, naming the invoice and the last pending role', async () => {
     // ord advances on every call (read or decide alike) so the stalled-ord guard never
     // fires -- this test is only about the max guard.
@@ -274,6 +288,21 @@ describe('approveUntilClosed', () => {
     const decides = calls.filter((c) => c.method === 'POST' && c.url.includes('/approval'))
     expect(reads).toHaveLength(1)
     expect(decides).toHaveLength(0)
+  })
+
+  // Empty tokens against the real transport would reach the initial read unauthenticated
+  // and surface a bare 401; this must fail before that call, naming the real problem.
+  // Scripted transports (AC-2/AC-3 above) don't touch the network on the token's account,
+  // so this only guards the default pair.
+  it('throws before any network call when tokens is empty and no transport is injected', async () => {
+    calls.length = 0
+
+    const err = await captureRejection(approveUntilClosed('inv-empty-tokens', {}))
+
+    expect(err.message).toBe(
+      'approveUntilClosed: tokens is empty; cannot authenticate the initial read (invoice inv-empty-tokens)',
+    )
+    expect(calls).toHaveLength(0)
   })
 })
 

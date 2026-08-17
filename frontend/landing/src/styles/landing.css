@@ -160,3 +160,135 @@ html {
     padding: 36px 22px !important;
   }
 }
+
+/* ------------------------------------------------------------------
+   Cookie consent notice. Fixed card bottom-left on desktop, a full-width
+   band below 640px. The spacer is 0 tall on desktop, so mounting the card
+   adds no document height and moves nothing.
+   ------------------------------------------------------------------ */
+@keyframes cn-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.cookie-note {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 40;
+  width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  font-size: 14px;
+  line-height: 1.43;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-elegant);
+  animation: cn-in var(--dur-base) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cookie-note {
+    animation: none;
+  }
+}
+
+.cn-setting {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.cn-body {
+  margin: 0;
+  color: var(--foreground);
+}
+
+/* Two classes (0,2,0) to outrank `.asc-app a { text-decoration: none }` (0,1,1);
+   a single-class rule loses and the link ships un-underlined. Colour is left to
+   .lnk, which is (0,2,1) and would win over this rule anyway. */
+.lnk.cn-link {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cn-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* Every box-affecting property is declared here once, so the two buttons cannot
+   diverge. font-family / font-size / cursor are in the list because a native
+   <button> inherits none of them and there is no `.asc-app button` rule. */
+.cn-actions button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
+}
+
+.cn-actions button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Accept's border matches its own fill, so it is invisible; it exists only so the
+   two buttons occupy an identical box. */
+[data-consent="accept"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+[data-consent="reject"] {
+  background: var(--card);
+  color: var(--primary);
+}
+[data-consent="accept"]:hover {
+  filter: brightness(1.22);
+}
+[data-consent="reject"]:hover {
+  background: var(--primary-10);
+}
+
+.cn-spacer {
+  height: 0;
+}
+
+@media (max-width: 640px) {
+  .cookie-note {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    padding: 16px;
+    gap: 12px;
+  }
+  .cn-actions {
+    flex-direction: column;
+  }
+  .cn-actions button {
+    height: 44px;
+  }
+  /* Reopened card ~264.1px (256.09 measured at gap 10, +8 restoring its 4 gaps to 12px) + the 12px
+     inset. Modeled, not measured: landing-consent.spec.ts C10 re-derives the band on the live build. */
+  .cn-spacer {
+    height: 282px;
+  }
+}

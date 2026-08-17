@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
+import { seedConsent } from './landingConsent'
 
 // The Book-a-Demo lead-capture modal against the PR's own deployed landing (LAND-02).
 //
@@ -236,6 +237,8 @@ async function openLanding(page: Page): Promise<LandingSinks> {
   const sinks = attachSinks(page)
   await guardHubSpot(page, sinks)
   await guardGoogleAnalytics(page, sinks)
+  // Granted: EXPECT_TAG asserts the tag loads, which a denied default would falsify.
+  await seedConsent(page, true)
 
   const response = await page.goto(LANDING_URL)
   expect(response, `no response from ${LANDING_URL}`).toBeTruthy()

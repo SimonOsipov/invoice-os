@@ -14,7 +14,10 @@ import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
+import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
+import { readConsent, type ConsentRecord } from './consent'
+import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
@@ -23,6 +26,10 @@ import { isPrivacyPath } from './route'
 export default function App() {
   const [signInOpen, setSignInOpen] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
+  // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
+  const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
+  // Once a choice is stored the footer control is the only route back to the notice.
+  const [reopened, setReopened] = useState(false)
   // Source-bound per call site: the six components keep `onBookDemo: () => void`
   // and stay untouched, so one file carries the attribution instead of seven.
   const book = (source: DemoCtaSource) => () => {
@@ -90,7 +97,20 @@ export default function App() {
           <DemoCta onBookDemo={book('demo_cta')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} hrefPrefix={privacy ? '/' : ''} />
+      <Footer onBookDemo={book('footer')} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
+      {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the
+          spacer's scroll room at the document end and the tab order after the footer. */}
+      {(consent === null || reopened) && (
+        <CookieNotice
+          current={consent}
+          suppressed={signInOpen || demoOpen}
+          onChoose={(choice) => {
+            setConsent(applyChoice(choice))
+            // consent is already non-null on a reopen, so only this closes it again.
+            setReopened(false)
+          }}
+        />
+      )}
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
     </div>

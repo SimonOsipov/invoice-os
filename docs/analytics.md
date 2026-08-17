@@ -13,15 +13,23 @@ must **all** hold (`shouldLoadTag`, `analytics.ts:22`):
 1. the browser is on a production hostname — exact match against `PRODUCTION_HOSTNAMES`
    (`frontend/landing/src/hubspot.ts:9`), which today holds `www.ascomply.com` alone;
 2. analytics consent is granted — a versioned `localStorage` record (`src/consent.ts`), whose
-   default when no record is stored is **granted** (`CONSENT_DEFAULT_ANALYTICS`);
+   default when no record is stored is **denied** (`CONSENT_DEFAULT_ANALYTICS`), so a first-time
+   visitor loads no tag until they accept;
 3. `VITE_GA_MEASUREMENT_ID` was baked into the build.
 
 Any one of the three missing and `https://www.googletagmanager.com/gtag/js` is never requested.
 That is what keeps every preview and PR environment dark: none of them carries the variable.
 
+A choice in the cookie notice is applied without a page reload (`consentActions.ts` `applyChoice`).
+Accept injects the tag; Reject sets a module flag that makes every sender return early
+(`analytics.ts:74` `if (!loaded || revoked) return`) and expires the `_ga` cookies. The gate above
+governs the tag REQUEST, the flag governs the SENDERS: a tag injected earlier in the same page
+load stays resident until the page is reloaded. See operator checklist item 7.
+
 Out of scope, by decision: **Google Consent Mode v2** in any form (no `gtag('consent', …)` call
-ships — Q2), the cookie notice and the privacy policy (LAND-04 / LAND-05), and all GA-console
-configuration, which is why the operator checklist below exists.
+ships — Q2), the cookie notice's own UI and copy and the privacy policy (LAND-04 / LAND-05) —
+what the notice does to the tag is described above — and all GA-console configuration, which is
+why the operator checklist below exists.
 
 ## Events
 
@@ -58,7 +66,7 @@ build arg is silently dropped and `vite build` bakes an empty string.
 
 ## Operator checklist
 
-Six items. None of them is dischargeable by CI, and the first is load-bearing.
+Seven items. None of them is dischargeable by CI, and the first is load-bearing.
 
 1. **Set `VITE_GA_MEASUREMENT_ID=G-E409H76XYY`** on the production landing service (project
    `ASComply`, environment `production` `6c864094-6a06-452f-8495-be77d8a94fe7`, service `landing`
@@ -67,7 +75,10 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    `G-E409H76XYY`, `https://www.googletagmanager.com/gtag/js?id=G-E409H76XYY` returns 200, a browser
    load of `https://www.ascomply.com/` holds `_ga` cookies and hits `region1.google-analytics.com`.
    Nothing local or in CI catches a regression here — every automated check passes on a dark build
-   by construction, so re-measure in a browser after any landing redeploy.
+   by construction, so re-measure in a browser after any landing redeploy. **That measurement was
+   taken under the old granted-by-default gate.** From LAND-05 the tag loads only for a browser that
+   has accepted analytics, so re-measure with consent granted; a clean profile now correctly holds
+   no `_ga`.
 2. **GA4 data retention → 14 months** (Admin → Data settings → Data retention). The default is
    2 months, which makes year-on-year comparison impossible after the fact.
    **Done — operator-confirmed 2026-08-16.**
@@ -78,7 +89,10 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    **invisible in every standard report** — the call-site attribution this story exists to deliver
    would silently not appear.
 5. **Confirm in GA4 DebugView after deploy** that a real visit to `https://www.ascomply.com`
-   reports `page_view` with a traffic source, that a real submission reports `generate_lead`, that
+   reports `page_view` with a traffic source. **Accept analytics on that visit first** — from
+   LAND-05 the gate's consent arm is closed by default, so a clean profile that has not accepted
+   reports nothing at all, and an empty DebugView then means the gate is working rather than the
+   tag being broken. Also confirm that a real submission reports `generate_lead`, that
    **all six** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`, `demo_cta`,
    `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
    `percent_scrolled` 25, 50, 75 and 100 — four events, no repeats on scrolling back up.
@@ -106,6 +120,16 @@ Six items. None of them is dischargeable by CI, and the first is load-bearing.
    `ensureTag` returns at its `!id` check before the host gate is consulted, so with no variable
    there is no request either way. Every existing unit test survives the allowlist mutation — their
    pinned hostnames all differ from a live PR host. Budget two extra full 11-service rebuilds.
+
+7. **Turn GA4 enhanced measurement off** (Admin → Data streams → the web stream → Enhanced
+   measurement). **OPEN — nobody has done this.** Scroll, outbound click, file download, form
+   interaction, site search and video events fire from `gtag.js` itself, with no call from this
+   codebase. So a visitor who rejects after accepting can still generate hits until the page is
+   reloaded, and each one re-creates `_ga`. **No change in this repository can stop that** — the
+   revocation flag gates our four senders and nothing else. Until an operator changes this
+   setting, W2 in `docs/privacy-policy-claims.md` is true only up to that residual, and the
+   ledger says so. Leave this item open until the setting is changed and re-measured in a
+   browser; do not mark it done on merge.
 
 ## Verifying the classifier
 
@@ -149,6 +173,7 @@ every run.
 - `frontend/landing/src/hubspot.ts` — `PRODUCTION_HOSTNAMES` and `isProductionHost`, shared with
   the Book-a-demo submit gate.
 - `e2e/smoke/landing-demo.spec.ts` — the deployed proof: the analytics-host classifier, the
-  request sink, the fulfilling safety net and the biconditional.
+  request sink, the fulfilling safety net and the biconditional. `openLanding()` seeds a granted
+  consent record before navigating; without it the biconditional would be false on production.
 - `docs/e2e-convention.md` — why that proof lives in a browser suite at all.
 </content>

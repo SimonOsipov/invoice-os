@@ -134,9 +134,9 @@ describe('parseConsent', () => {
 })
 
 describe('analyticsAllowed / readConsent', () => {
-  it('no stored record means analytics is allowed', () => {
+  it('no stored record means analytics is denied', () => {
     const store = createStore()
-    expect(analyticsAllowed(readConsent(store))).toBe(true)
+    expect(analyticsAllowed(readConsent(store))).toBe(false)
   })
 
   it('a stored granted record is honoured', () => {
@@ -157,12 +157,44 @@ describe('analyticsAllowed / readConsent', () => {
     expect(analyticsAllowed(null)).toBe(CONSENT_DEFAULT_ANALYTICS)
   })
 
+  // Pairs with the symbol comparison above: that one alone passes for either
+  // value, so the literal itself is pinned here rather than inside it.
+  it('the default literal is denied', () => {
+    expect(CONSENT_DEFAULT_ANALYTICS).toBe(false)
+  })
+
   it('a record from a superseded policy version is ignored', () => {
     const store = createStore({
       [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: 0 }),
     })
     expect(readConsent(store)).toBeNull()
     expect(analyticsAllowed(readConsent(store))).toBe(CONSENT_DEFAULT_ANALYTICS)
+    // Value pin: the symbol comparison above re-prompts under either default.
+    expect(analyticsAllowed(readConsent(store))).toBe(false)
+  })
+
+  // Non-vacuity control is the console-spy test at the top of this file.
+  it('every branch that consults the default is silent', () => {
+    const spies = spyOnConsole()
+
+    const stores = [
+      createStore(),
+      createStore({
+        [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: true, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION }),
+      }),
+      createStore({
+        [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION }),
+      }),
+      createStore({
+        [CONSENT_STORAGE_KEY]: JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: 0 }),
+      }),
+    ]
+    // Floor on the population exercised: a shrunk list would make silence cheap.
+    expect(stores.length).toBe(4)
+    for (const store of stores) analyticsAllowed(readConsent(store))
+    analyticsAllowed(null)
+
+    expectNoConsoleCalls(spies)
   })
 
   it('malformed storage falls back to the default, silently', () => {
@@ -339,5 +371,74 @@ describe('writeConsent', () => {
     const result = writeConsent(true, null, FIXED_DATE)
     expect(result).toEqual({ analytics: true, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION })
     expect(backing.size).toBe(0)
+  })
+})
+
+// Added at QA (LAND-05-01). The cases above prove parseConsent REJECTS bad input;
+// these prove the rejection reaches the gate as a denial rather than as the old
+// granted default, and that every route out of analyticsAllowed is a boolean.
+describe('adversarial: nothing malformed may open the gate', () => {
+  function storeWith(raw: string): ConsentStore {
+    return createStore({ [CONSENT_STORAGE_KEY]: raw })
+  }
+
+  it('a record from a FUTURE version denies rather than grandfathering consent', () => {
+    // The shipped case pins v: 0. A forward version is the one a future policy
+    // bump actually produces, and `!==` rejects both directions.
+    const store = storeWith(JSON.stringify({ analytics: true, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION + 1 }))
+    expect(readConsent(store)).toBeNull()
+    expect(analyticsAllowed(readConsent(store))).toBe(false)
+  })
+
+  it.each([
+    ['string true', JSON.stringify({ analytics: 'true', ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION })],
+    ['numeric 1', JSON.stringify({ analytics: 1, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION })],
+    ['absent analytics', JSON.stringify({ ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION })],
+    ['JSON null', 'null'],
+    ['JSON array', '[]'],
+    ['JSON number', '3'],
+    ['JSON string', '"granted"'],
+    ['JSON true', 'true'],
+    ['unterminated object', '{'],
+    ['empty string', ''],
+  ])('a stored %s denies analytics', (_label, raw) => {
+    expect(analyticsAllowed(readConsent(storeWith(raw)))).toBe(false)
+  })
+
+  it('control: the same store shape DOES open the gate when the record is well formed', () => {
+    // Non-vacuity for the rows above: without this, a readConsent that always
+    // returned null would satisfy every one of them.
+    const raw = JSON.stringify({ analytics: true, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION })
+    expect(analyticsAllowed(readConsent(storeWith(raw)))).toBe(true)
+  })
+
+  it('analyticsAllowed is boolean-valued for every record parseConsent can produce', () => {
+    const raws = [
+      JSON.stringify({ analytics: true, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION }),
+      JSON.stringify({ analytics: false, ts: FIXED_DATE.toISOString(), v: CONSENT_VERSION }),
+      JSON.stringify({ analytics: true, v: CONSENT_VERSION }),
+      JSON.stringify({ analytics: true, ts: 12345, v: CONSENT_VERSION }),
+      'null',
+      '{',
+    ]
+    expect(raws.length).toBe(6)
+    for (const raw of raws) {
+      expect(typeof analyticsAllowed(readConsent(storeWith(raw))), raw).toBe('boolean')
+    }
+    expect(typeof analyticsAllowed(null)).toBe('boolean')
+  })
+
+  it('a hand-built record bypassing parseConsent is the ONE route to a non-boolean answer', () => {
+    // analyticsAllowed returns record.analytics unguarded, so a caller that
+    // constructs a ConsentRecord itself can hand the gate a truthy non-boolean,
+    // and shouldLoadTag's `&& allowed` would open on it. Every production route
+    // goes through parseConsent or writeConsent, both of which return a real
+    // boolean; LAND-05-03's Accept handler must keep doing so.
+    const hostile = { analytics: 'yes', ts: '', v: CONSENT_VERSION } as unknown as ConsentRecord
+    expect(typeof analyticsAllowed(hostile)).not.toBe('boolean')
+    expect(typeof analyticsAllowed(writeConsent(true, createStore(), FIXED_DATE))).toBe('boolean')
+    expect(typeof analyticsAllowed(parseConsent(JSON.stringify({ analytics: true, v: CONSENT_VERSION })))).toBe(
+      'boolean',
+    )
   })
 })

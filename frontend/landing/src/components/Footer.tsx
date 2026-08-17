@@ -35,7 +35,15 @@ function footerHref(href: string, prefix: string): string {
   return href.startsWith('#') && href !== '#' ? `${prefix}${href}` : href
 }
 
-export function Footer({ onBookDemo, hrefPrefix = '' }: { onBookDemo: () => void; hrefPrefix?: string }) {
+export function Footer({
+  onBookDemo,
+  hrefPrefix = '',
+  onCookieChoices = () => undefined,
+}: {
+  onBookDemo: () => void
+  hrefPrefix?: string
+  onCookieChoices?: () => void
+}) {
   return (
     <footer style={{ background: 'var(--bg-2)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '56px 32px 40px' }}>
@@ -99,9 +107,33 @@ export function Footer({ onBookDemo, hrefPrefix = '' }: { onBookDemo: () => void
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
             © 2026 ASCOMPLY AFRICA · LAGOS · NG
           </span>
-          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-            v 1.0 · MBS ADAPTER · SANDBOX
-          </span>
+          {/* One wrapper, not two loose children: space-between across three children would
+              push the control toward the row's centre. It wraps because the outer row's own
+              break point is the only thing between a narrow viewport and overflow that
+              App.tsx's `overflow-x: clip` would hide without a scrollbar. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <button
+              onClick={onCookieChoices}
+              className="ios-link"
+              style={{
+                fontSize: 11,
+                color: 'var(--primary)',
+                textDecoration: 'underline',
+                textUnderlineOffset: 3,
+                textAlign: 'left',
+                background: 'none',
+                border: 0,
+                padding: 0,
+                cursor: 'pointer',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              Cookie choices
+            </button>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
+              v 1.0 · MBS ADAPTER · SANDBOX
+            </span>
+          </div>
         </div>
       </div>
     </footer>

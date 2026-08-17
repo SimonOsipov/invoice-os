@@ -4,8 +4,8 @@
 export const CONSENT_STORAGE_KEY = 'asc_consent'
 export const CONSENT_VERSION = 1
 
-/** No stored record ⇒ this answer. LAND-05 flips this one literal to `false`. */
-export const CONSENT_DEFAULT_ANALYTICS: boolean = true
+/** No stored record ⇒ this answer. Stays one literal, never a branch: consent.test.ts pins both. */
+export const CONSENT_DEFAULT_ANALYTICS: boolean = false
 
 export type ConsentRecord = { analytics: boolean; ts: string; v: number }
 export type ConsentStore = Pick<Storage, 'getItem' | 'setItem'>

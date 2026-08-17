@@ -12,12 +12,17 @@ import { Footer } from './Footer'
 
 function noop() {}
 
-// Company is the last column; slicing from its heading to end-of-doc scopes every
-// assertion below to it, so Platform/Solutions items can never leak into a count.
+// ASCII sub-needle: sidesteps the copyright row's escaped glyphs, occurs exactly once.
+const COPYRIGHT_ROW = '2026 ASCOMPLY AFRICA'
+
+// Company is the last column and the copyright row follows it in markup, so BOTH bounds
+// are load-bearing: unbounded, a control in that row counts as a Company item.
 function companySlice(html: string): string {
-  const idx = html.indexOf('>Company<')
-  expect(idx, 'expected to find the Company column heading').toBeGreaterThan(-1)
-  return html.slice(idx)
+  const start = html.indexOf('>Company<')
+  expect(start, 'expected to find the Company column heading').toBeGreaterThan(-1)
+  const end = html.indexOf(COPYRIGHT_ROW)
+  expect(end, 'expected the copyright row to follow the Company column').toBeGreaterThan(start)
+  return html.slice(start, end)
 }
 
 describe('Footer SSR render (LAND-04-04)', () => {

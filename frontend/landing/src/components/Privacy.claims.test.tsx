@@ -241,8 +241,9 @@ describe('AC-12: docs/analytics.md carries the OWED enhanced-measurement item', 
   })
 })
 
-// T4-10, T4-12, T4-13, T4-14 (task-563). The footer control makes three already-shipped
-// privacy sentences true; these tie the two surfaces together so they cannot diverge again.
+// T4-10, T4-12, T4-13, T4-14 (task-563). The control makes three already-shipped privacy
+// sentences reachable rather than aspirational; these tie the two surfaces together so
+// they cannot diverge again.
 
 function privacyParagraphs(needle: string): string[] {
   return html.split('</p>').filter((segment) => segment.includes(needle))
@@ -258,7 +259,11 @@ function paragraphBody(segment: string): string {
 
 describe('T4-10 (AC-11): the page describes reopening iff a reopen control renders', () => {
   const footerHtml = renderToStaticMarkup(createElement(Footer, { onBookDemo: () => undefined }))
-  const REOPEN_CLAIM = 'The cookie notice on this site is where you choose'
+  // C18's anchor. It is the sentence LAND-05-03 shipped and the control made honest — but
+  // it describes WHERE you choose, not that you may choose AGAIN, so it cannot carry the
+  // biconditional on its own. REOPEN_CLAIM does that.
+  const CHOICE_ANCHOR = 'The cookie notice on this site is where you choose'
+  const REOPEN_CLAIM = 'brings the notice back with the setting you last chose'
 
   const reopenControlRenders = (markup: string): boolean =>
     Array.from(markup.matchAll(/<button[^>]*>([^<]*)<\/button>/g)).some((m) => /cookie choices/i.test(m[1]))
@@ -269,15 +274,28 @@ describe('T4-10 (AC-11): the page describes reopening iff a reopen control rende
     expect(html.length).toBeGreaterThan(0)
     expect(reopenControlRenders('<button type="button">Cookie choices</button>')).toBe(true)
     expect(reopenControlRenders('<button class="ios-link">Book a demo</button>')).toBe(false)
-    expect(reopenClaimRenders(`<p>${REOPEN_CLAIM}: Accept allows it.</p>`)).toBe(true)
-    expect(reopenClaimRenders('<p>Google Analytics sets two cookies on your device.</p>')).toBe(false)
+    expect(reopenClaimRenders(`<p>Cookie choices ${REOPEN_CLAIM}.</p>`)).toBe(true)
+    expect(reopenClaimRenders(`<p>${CHOICE_ANCHOR}: Accept allows it.</p>`), 'the detector fires on the wrong sentence').toBe(
+      false,
+    )
   })
 
-  it('the two are equal — delete the control OR delete the claim and this goes red', () => {
+  it('the two are equal — delete the control OR delete the reopen sentence and this goes red', () => {
     expect(
       reopenControlRenders(footerHtml),
       'the page claims a reopen control the footer does not render, or the reverse',
     ).toBe(reopenClaimRenders(html))
+  })
+
+  it('the reopen sentence names the control and says where it is, in one paragraph', () => {
+    const hits = privacyParagraphs(REOPEN_CLAIM)
+    expect(hits.length, 'expected exactly one paragraph describing the reopen').toBe(1)
+    const para = paragraphBody(hits[0])
+    expect(para, 'the sentence does not name the control a visitor must find').toContain('Cookie choices')
+    // The published copy promises the control is on EVERY page. App.render.test.tsx
+    // sweeps every route the SPA serves so this promise cannot go stale silently.
+    expect(para, 'the sentence does not say where the control is').toContain('at the foot of every page')
+    expect(para, 'the choice anchor and the reopen sentence drifted apart').toContain(CHOICE_ANCHOR)
   })
 })
 
@@ -304,6 +322,10 @@ describe('T4-12 (AC-12): asc_consent is disclosed, and E3 is not softened to buy
     expect(para, 'the disclosure does not say it is what stops the notice returning').toMatch(
       /again|back|reappear|return|every visit|each visit/i,
     )
+    // applyChoice on Reject writes asc_consent and the cookie expiries, nothing else.
+    // The page says so; without this the clause is the one sentence here nothing pins.
+    expect(para, 'the disclosure drops what Reject writes').toMatch(/only thing our own code writes/i)
+    expect(para, 'the Reject clause does not name Reject').toContain('Reject')
   })
 })
 
@@ -341,10 +363,18 @@ describe('T4-14 (AC-11): the ledger no longer forbids what the page now says', (
     expect(flat, 'the ledger still forbids the sentence the page now carries').not.toContain(PROHIBITION)
   })
 
-  it('C18 names the footer reopen control', () => {
+  it('C18 names the footer reopen control in its CLAIM cell, not merely in its evidence', () => {
     const row = ledger.split('\n').find((line) => line.includes('| C18 |'))
     expect(row, 'the C18 row marker must never be renamed, only its cell text').toBeDefined()
-    expect(row!, 'no ledger row names the footer reopen control').toMatch(/cookie choices/i)
+
+    // Column 2 is the CLAIM. Scanning the whole row passes on the evidence cell alone,
+    // which already cites Footer.tsx — so the claim itself could silently revert.
+    const cells = row!.split('|').map((cell) => cell.trim())
+    expect(cells[1], 'the row shape changed: column 1 is no longer the id').toBe('C18')
+    expect(cells.length, 'the C18 row lost a column').toBeGreaterThanOrEqual(5)
+    // Control needle: the claim cell is the withdrawal claim and is not empty.
+    expect(cells[2], 'control: the C18 claim cell is empty or moved').toContain('Withdrawal')
+    expect(cells[2], 'the C18 CLAIM does not name the footer reopen control').toMatch(/cookie choices/i)
   })
 
   it('the section this subtask discharges is recorded as closed, per the ledger own rule', () => {

@@ -91,7 +91,7 @@ describe('T3-9: no page reload and no ga-disable (USER DECISION 1)', () => {
 
   it('control: the needles reject the shapes the four files legitimately carry', () => {
     // A read of location.href is not an assignment to it, and the pathname read
-    // App.tsx:38 already makes must stay legal.
+    // App.tsx already makes must stay legal.
     const legal = [
       'const here = window.location.href',
       'const privacy = isPrivacyPath(window.location.pathname)',

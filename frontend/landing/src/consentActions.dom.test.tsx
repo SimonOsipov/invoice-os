@@ -343,3 +343,127 @@ describe('T4-11: Reject from a reopened notice persists and closes', () => {
     expectNoConsoleCalls(consoleSpies)
   })
 })
+
+// Adversarial coverage (QA, task-563). T4-6/T4-11 walk the happy round trip; these are the
+// ways the control can be reached that the round trip never touches.
+
+function cookieChoicesControl(): HTMLButtonElement {
+  const button = Array.from(document.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === 'Cookie choices',
+  )
+  expect(button, 'expected the footer Cookie choices control to be mounted').toBeDefined()
+  return button as HTMLButtonElement
+}
+
+describe('the Cookie choices control under repeated and out-of-order use', () => {
+  const granted = () =>
+    store.setItem(
+      CONSENT_STORAGE_KEY,
+      JSON.stringify({ analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }),
+    )
+
+  it('clicking it twice reopens once, not twice, and writes nothing', async () => {
+    granted()
+    await mountApp()
+    const setItem = vi.spyOn(store, 'setItem')
+
+    await clickByText('Cookie choices')
+    await clickByText('Cookie choices')
+
+    expect(noticeNodes().length, 'a second click stacked a second notice').toBe(1)
+    expect(setItem, 'reopening the notice wrote to the store').not.toHaveBeenCalled()
+    expectNoConsoleCalls(consoleSpies)
+  })
+
+  it('clicking it with the notice already open changes nothing and stores nothing', async () => {
+    await mountApp()
+    const setItem = vi.spyOn(store, 'setItem')
+    expect(noticeNodes().length, 'an empty store should already show the notice').toBe(1)
+    // No record stored, so `consent === null` already holds the notice open; the control
+    // sets `reopened` on top of that and must be a no-op rather than a remount.
+    expect(document.querySelector(NOTICE)!.querySelector('.cn-setting'), 'a setting line with no record').toBeNull()
+
+    await clickByText('Cookie choices')
+
+    expect(noticeNodes().length).toBe(1)
+    expect(document.querySelector(NOTICE)!.querySelector('.cn-setting'), 'a setting line appeared from nowhere').toBeNull()
+    expect(setItem).not.toHaveBeenCalled()
+    expect(store.getItem(CONSENT_STORAGE_KEY)).toBeNull()
+    expectNoConsoleCalls(consoleSpies)
+  })
+
+  it('clicking it while a modal is open reopens the notice INERT, and the close un-inerts it', async () => {
+    granted()
+    await mountApp()
+
+    await clickByText('Explore the platform')
+    expect(document.querySelectorAll('[role="dialog"]').length, 'the sign-in modal did not open').toBe(1)
+
+    await clickByText('Cookie choices')
+    const card = document.querySelector(NOTICE)
+    expect(card, 'the control did not reopen the notice while a modal was open').not.toBeNull()
+    // Same contract as T3-11: a notice that mounts under an open scrim must not be reachable.
+    expect(card!.hasAttribute('inert'), 'the reopened notice is reachable under the scrim').toBe(true)
+
+    await clickBySelector('button[aria-label="Close"]')
+    expect(document.querySelector(NOTICE)!.hasAttribute('inert'), 'it stayed inert after the modal closed').toBe(false)
+    expectNoConsoleCalls(consoleSpies)
+  })
+
+  it('it survives a choice: the control is still there after the notice closes again', async () => {
+    granted()
+    await mountApp()
+    await clickByText('Cookie choices')
+    await clickConsent('reject')
+
+    expect(noticeNodes().length).toBe(0)
+    // A control that vanishes after use would strand the visitor on their last answer.
+    expect(cookieChoicesControl().isConnected, 'the control unmounted with the notice').toBe(true)
+    await clickByText('Cookie choices')
+    expect(noticeNodes().length, 'the control stopped working after one use').toBe(1)
+    expect(document.querySelector(NOTICE)!.textContent, 'the reopened notice shows a stale setting').toContain(
+      'Analytics cookies are off.',
+    )
+    expectNoConsoleCalls(consoleSpies)
+  })
+})
+
+describe('the Cookie choices control is reachable by keyboard and assistive technology', () => {
+  it('its accessible name survives the wrapper, and nothing on the ancestor chain hides it', async () => {
+    await mountApp()
+    const control = cookieChoicesControl()
+
+    // Control needle: the DOM really did resolve a distinct sibling to compare against.
+    const sibling = Array.from(document.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Book a demo',
+    )
+    expect(sibling, 'control: the Book a demo sibling is missing').toBeDefined()
+    expect(sibling).not.toBe(control)
+
+    expect(control.textContent?.trim()).toBe('Cookie choices')
+    expect(control.getAttribute('aria-label'), 'an aria-label overrides the visible name').toBeNull()
+    expect(control.getAttribute('aria-labelledby')).toBeNull()
+    expect(control.getAttribute('title')).toBeNull()
+    expect(control.disabled, 'the control ships disabled beside an enabled sibling').toBe(false)
+    expect(control.closest('[aria-hidden="true"]'), 'an ancestor hides the control from AT').toBeNull()
+    expect(control.closest('[inert]'), 'an ancestor makes the control unreachable').toBeNull()
+    expect(control.closest('footer'), 'the control left the footer').not.toBeNull()
+  })
+
+  it('it takes focus, and the footer tab order runs Book a demo then Cookie choices', async () => {
+    await mountApp()
+    const control = cookieChoicesControl()
+
+    expect(control.tabIndex, 'the control was taken out of the tab order').toBe(0)
+    control.focus()
+    expect(document.activeElement, 'the control cannot take focus').toBe(control)
+
+    const footer = document.querySelector('footer')!
+    const focusable = Array.from(footer.querySelectorAll<HTMLElement>('a[href], button')).filter(
+      (el) => el.tabIndex >= 0,
+    )
+    expect(focusable.length, 'control: the footer exposes no focusable elements').toBeGreaterThan(1)
+    expect(focusable[focusable.length - 1], 'the control is not the last footer tab stop').toBe(control)
+    expectNoConsoleCalls(consoleSpies)
+  })
+})

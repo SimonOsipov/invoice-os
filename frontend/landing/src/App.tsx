@@ -26,7 +26,7 @@ import { isPrivacyPath } from './route'
 export default function App() {
   const [signInOpen, setSignInOpen] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
-  // Read once at mount: a stored choice means the notice never appears.
+  // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)

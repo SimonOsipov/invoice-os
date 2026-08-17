@@ -247,7 +247,7 @@ test('landing privacy: the prose column renders as wide as it declares itself to
 })
 
 // P9 — 390px. Assertion 2 is what actually carries the readability claim: .asc-app's
-// overflowX:'clip' (App.tsx:73) removes descendant overflow from the document's
+// overflowX:'clip' (App.tsx) removes descendant overflow from the document's
 // scrollable region, so an overflowing element is invisible AND unscrollable to
 // assertion 3 alone.
 test('landing privacy: the page is readable at 390px', async ({ page }) => {

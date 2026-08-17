@@ -40,5 +40,18 @@ describe('App.tsx route wiring', () => {
     const footerTag = APP_SRC.match(/<Footer\b[^>]*>/)
     expect(footerTag, 'expected to find a <Footer> element').not.toBeNull()
     expect(footerTag![0], 'the Footer tag does not pass onCookieChoices').toMatch(/onCookieChoices=\{/)
+
+    // Wired is not the same as always wired. A conditional handler ships a control that
+    // renders, focuses and reads as live while doing nothing — invisible to every render
+    // and DOM assertion, because the markup is byte-identical either way.
+    //
+    // Matched off the whole self-closing tag, not footerTag: `[^>]*` truncates at the `>`
+    // of the first arrow function, so it cannot see a handler expression at all.
+    const wholeTag = APP_SRC.match(/<Footer\b[\s\S]*?\/>/)
+    expect(wholeTag, 'expected a self-closing <Footer … /> tag').not.toBeNull()
+    const value = wholeTag![0].match(/onCookieChoices=\{([^}]*)\}/)
+    expect(value, 'the onCookieChoices value did not parse').not.toBeNull()
+    expect(value![1], 'control: the handler expression is empty').toContain('setReopened(true)')
+    expect(value![1], 'the reopen handler is conditional').not.toMatch(/[?]|&&/)
   })
 })

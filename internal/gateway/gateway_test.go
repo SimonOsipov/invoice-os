@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -328,15 +330,17 @@ func TestMockLoginRoundTrip(t *testing.T) {
 // subject and tenant are seeded; role is the GoTrue JWT role every client sends,
 // not the seed's memberships.role (admin/preparer/reviewer).
 const (
-	firmSubject          = "c0000000-0000-0000-0000-000000000001"
-	firmTenant           = "11111111-1111-1111-1111-111111111111"
-	inhouseSubject       = "c0000000-0000-0000-0000-000000000002"
-	inhouseTenant        = "22222222-2222-2222-2222-222222222222"
-	preparerSubject      = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
-	seededNotAllowlisted = "c0000000-0000-0000-0000-000000000004" // seed-only reviewer, never a login identity
-	unlistedTenant       = "99999999-9999-9999-9999-999999999999"
-	unlistedSubject      = "88888888-8888-8888-8888-888888888888"
-	personaRole          = "authenticated"
+	firmSubject               = "c0000000-0000-0000-0000-000000000001"
+	firmTenant                = "11111111-1111-1111-1111-111111111111"
+	inhouseSubject            = "c0000000-0000-0000-0000-000000000002"
+	inhouseTenant             = "22222222-2222-2222-2222-222222222222"
+	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
+	finApproverSubject        = "c0000000-0000-0000-0000-000000000004" // firm-tenant reviewer staffed fin_mgr + fin_dir
+	complianceApproverSubject = "c0000000-0000-0000-0000-000000000005" // firm-tenant reviewer staffed compliance
+	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000006" // seed-only preparer, never a login identity
+	unlistedTenant            = "99999999-9999-9999-9999-999999999999"
+	unlistedSubject           = "88888888-8888-8888-8888-888888888888"
+	personaRole               = "authenticated"
 )
 
 func TestMockLoginHostedAllowlist(t *testing.T) {
@@ -352,6 +356,14 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 		{"firm persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, firmTenant, personaRole), http.StatusOK},
 		{"in-house persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, inhouseTenant, personaRole), http.StatusOK},
 		{"preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, firmTenant, personaRole), http.StatusOK},
+		{"fin approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusOK},
+		{"compliance approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, firmTenant, personaRole), http.StatusOK},
+		{"fin approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
+		{"compliance approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
+		// the seed's own memberships.role for both -- the substitution the persona table warns about.
+		{"fin approver with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"reviewer"}`, finApproverSubject, firmTenant), http.StatusForbidden},
+		{"compliance approver with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"reviewer"}`, complianceApproverSubject, firmTenant), http.StatusForbidden},
+		{"fin approver with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, personaRole, firmTenant), http.StatusForbidden},
 		{"unknown tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole), http.StatusForbidden},
 		{"mismatched pairing", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole), http.StatusForbidden},
 		{"unknown subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole), http.StatusForbidden},
@@ -398,13 +410,60 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 	}
 }
 
+// TestMockLoginHostedApproverRoundTrip proves the two new firm-approver personas
+// mint tokens whose claims survive injectIdentity end to end — a 200 alone does
+// not show the token carries the right identity.
+func TestMockLoginHostedApproverRoundTrip(t *testing.T) {
+	cases := []struct {
+		name    string
+		subject string
+	}{
+		{"fin approver", finApproverSubject},
+		{"compliance approver", complianceApproverSubject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tg := setupGateway(t)
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
+			mux.Handle("/api/", tg.handler)
+
+			login := httptest.NewRecorder()
+			body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, tc.subject, firmTenant, personaRole)
+			mux.ServeHTTP(login, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+			if login.Code != http.StatusOK {
+				t.Fatalf("login status = %d, want 200", login.Code)
+			}
+			var resp struct {
+				AccessToken string `json:"access_token"`
+				TokenType   string `json:"token_type"`
+			}
+			if err := json.NewDecoder(login.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode login response: %v", err)
+			}
+			if resp.TokenType != "bearer" || resp.AccessToken == "" {
+				t.Fatalf("login response = %+v, want a bearer access_token", resp)
+			}
+
+			api := httptest.NewRecorder()
+			mux.ServeHTTP(api, request("GET", "/api/tenancy/v1/ping", resp.AccessToken))
+			if api.Code != http.StatusOK {
+				t.Fatalf("proxied request with minted token = %d, want 200", api.Code)
+			}
+			assertHeader(t, tg.caps["tenancy"].header, headerTenantID, firmTenant)
+			assertHeader(t, tg.caps["tenancy"].header, headerUserID, tc.subject)
+			assertHeader(t, tg.caps["tenancy"].header, headerUserRole, personaRole)
+		})
+	}
+}
+
 // TestLoginPersonas_AllSeeded checks the table itself, not the wire: every entry
 // must be a real seeded membership and carry the GoTrue role. loginPersona's
 // literals are unkeyed, so an entry written (subject, role, tenant) compiles —
 // it fails both halves here.
 func TestLoginPersonas_AllSeeded(t *testing.T) {
-	if len(loginPersonas) != 3 {
-		t.Errorf("len(loginPersonas) = %d, want 3 (firm admin, in-house admin, firm preparer)", len(loginPersonas))
+	if len(loginPersonas) != 5 {
+		t.Errorf("len(loginPersonas) = %d, want 5 (firm admin, in-house admin, firm preparer, fin approver, compliance approver)", len(loginPersonas))
 	}
 
 	rows := seedMembershipRows(t)
@@ -461,6 +520,71 @@ func seedRowFor(t *testing.T, rows []string, subject, tenant string) string {
 	}
 	t.Fatalf("no memberships row for (%s, %s)", subject, tenant)
 	return ""
+}
+
+// roleMemberSeedRowRe matches one role_member_seed VALUES tuple: tenant, role key, user.
+var roleMemberSeedRowRe = regexp.MustCompile(`'([0-9a-f-]{36})'::uuid,\s+'([a-z_]+)',\s+'([0-9a-f-]{36})'::uuid`)
+
+// seedRoleMemberRows returns the VALUES rows of the role_member_seed CTE
+// (db/seed.dev.sql). seedMembershipRows cannot see this staffing: it is a
+// separate INSERT (workflow_role_members), not the memberships table.
+func seedRoleMemberRows(t *testing.T) []string {
+	t.Helper()
+	b, err := fs.ReadFile(dbsql.FS, "seed.dev.sql")
+	if err != nil {
+		t.Fatalf("read embedded seed.dev.sql: %v", err)
+	}
+	var rows []string
+	inBlock := false
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case strings.HasPrefix(line, "WITH role_member_seed"):
+			inBlock = true
+		case inBlock && strings.HasPrefix(line, "INSERT INTO workflow_role_members"):
+			inBlock = false
+		case inBlock && roleMemberSeedRowRe.MatchString(line):
+			rows = append(rows, line)
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatalf("no role_member_seed rows in embedded seed.dev.sql — the block markers moved")
+	}
+	return rows
+}
+
+// TestApproverPersonasHoldTheirWorkflowRoles pins the workflow-role staffing that
+// justifies admitting the two new personas. If a seed edit moves a role off one of
+// them, the login tests above stay green while the justification evaporates.
+func TestApproverPersonasHoldTheirWorkflowRoles(t *testing.T) {
+	rows := seedRoleMemberRows(t)
+	rolesFor := func(subject string) []string {
+		seen := map[string]bool{}
+		for _, row := range rows {
+			m := roleMemberSeedRowRe.FindStringSubmatch(row)
+			if m != nil && m[3] == subject {
+				seen[m[2]] = true
+			}
+		}
+		keys := make([]string, 0, len(seen))
+		for k := range seen {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		return keys
+	}
+
+	cases := []struct {
+		subject string
+		want    []string
+	}{
+		{finApproverSubject, []string{"fin_dir", "fin_mgr"}},
+		{complianceApproverSubject, []string{"compliance"}},
+	}
+	for _, tc := range cases {
+		if got := rolesFor(tc.subject); !slices.Equal(got, tc.want) {
+			t.Errorf("workflow roles for %s = %v, want %v", tc.subject, got, tc.want)
+		}
+	}
 }
 
 // A suspended member resolves to no role at all (callerRoleTx filters

@@ -706,9 +706,9 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // internal/validation/**, one of the two named §c e2e artifacts,
 // validationApi.test.ts, the seed migrations, or pnpm-lock.yaml (the plan's own
 // "no Category-A hit exists outside this scope" claim). The allowlist is
-// detectionHitAllowed below; internal/approval/** and frontend/app/src/** were
-// added to it for the approval-policy version (a different version entirely) and
-// are narrowed there, not exempted.
+// detectionHitAllowed below; internal/approval/**, frontend/app/src/**, and
+// e2e/api/policy-restore.test.ts were added to it for the approval-policy
+// version (a different version entirely) and are narrowed there, not exempted.
 //
 // EXECUTOR NOTE (M4-04-01 Stage 3): this test originally also asserted
 // `wantCount == 90`. That assertion was REMOVED, for two reasons, and the
@@ -810,7 +810,8 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 		if !detectionHitAllowed(file, line) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
 				"internal/validation/**, a non-rule-set version pin in internal/approval/**, a "+
-				"Policy.version/activeVersion pin in frontend/app/src/**, the two §c e2e "+
+				"Policy.version/activeVersion pin in frontend/app/src/**, an ApprovalPolicy."+
+				"version pin in e2e/api/policy-restore.test.ts, the two §c e2e "+
 				"artifacts, validationApi.test.ts, the version-defining seed "+
 				"migrations, or pnpm-lock.yaml [RS-V2-14 scope]", line)
 		}
@@ -835,6 +836,15 @@ func detectionHitAllowed(file, line string) bool {
 	// SPA still trips this guard. Falls through instead of returning false, leaving
 	// validationApi.test.ts's rule_set_version hits on the named allowlist below.
 	if strings.HasPrefix(file, "frontend/app/src/") &&
+		!namesRuleSetConstruct(line) && pinsOnlyPolicyVersion(line) {
+		return true
+	}
+	// e2e/api/policy-restore.test.ts (APPR-14) fixtures pin that same approval-policy
+	// version -- ensureFirmPolicyActive's restore tests. Scoped to this ONE file, not
+	// the e2e tree, since no other e2e file has ever pinned an approval-policy version;
+	// a directory carve-out would blind the guard to a real rule-set pin landing
+	// anywhere else under e2e/. Narrowed the same way as the SPA carve-out above.
+	if file == "e2e/api/policy-restore.test.ts" &&
 		!namesRuleSetConstruct(line) && pinsOnlyPolicyVersion(line) {
 		return true
 	}
@@ -892,9 +902,10 @@ func pinsOnlyPolicyVersion(line string) bool {
 	return true
 }
 
-// TestRuleSetV2_DetectionAllowlistScope pins the internal/approval and
-// frontend/app/src carve-outs to the shape each was opened for. A directory-wide
-// exemption would make every one of the "still trips" rows below pass silently.
+// TestRuleSetV2_DetectionAllowlistScope pins the internal/approval,
+// frontend/app/src, and e2e/api/policy-restore.test.ts carve-outs to the shape
+// each was opened for. A directory-wide (or tree-wide) exemption would make
+// every one of the "still trips" rows below pass silently.
 func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 	cases := []struct {
 		name string
@@ -941,6 +952,15 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`frontend/app/src/lib/policies.ts:9:  const schemaVersion = 1`, false},
 		{"a policy version pin outside the SPA source tree", "frontend/app/e2e/policies.spec.ts",
 			`frontend/app/e2e/policies.spec.ts:9:    version: 1,`, false},
+
+		{"an ApprovalPolicy version fixture in the restore e2e file", "e2e/api/policy-restore.test.ts",
+			`e2e/api/policy-restore.test.ts:230:    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 1, steps: GOOD_TREE, versions: [version(1, false)] })`, true},
+		{"a rule-set construct smuggled into the restore e2e file", "e2e/api/policy-restore.test.ts",
+			`e2e/api/policy-restore.test.ts:9:    expect(ruleSet.version).toBe(1)`, false},
+		{"a non-policy version pinned in the restore e2e file", "e2e/api/policy-restore.test.ts",
+			`e2e/api/policy-restore.test.ts:9:    const schemaVersion = 1`, false},
+		{"the same policy-version shape in a DIFFERENT e2e file", "e2e/api/other.test.ts",
+			`e2e/api/other.test.ts:9:    const source = policy({ version: 1 })`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

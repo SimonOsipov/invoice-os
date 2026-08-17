@@ -45,6 +45,7 @@ import {
   validateInvoice,
   rawFetch,
   listInvoices,
+  rollup,
   createApprovalPolicy,
   putApprovalPolicyDraft,
   publishApprovalPolicy,
@@ -1142,6 +1143,63 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(caught, 'a 403 from the server must surface as a thrown error, not an unhandled rejection').toBeInstanceOf(Error)
       expect(caught?.message, 'the surfaced error must name the pending role key').toContain('fin_mgr')
       expect(caught?.message, 'the surfaced error must name the caller subject the 403 was for').toContain(PREPARER_SUBJECT)
+    })
+
+    // task-575 upgrade (AC-19..27): the dashboard rollup's awaiting_approval overlay, the
+    // ?awaiting_approval=true list filter, and the transitions door that actually enforces
+    // it are three copies of one predicate (internal/dashboard/store.go, internal/invoice/
+    // store.go, internal/approval/gate.go's TransmitClearTx). This must run ABOVE :1154:
+    // below that boundary armedInvoice()'s own finally deletes the tenant's only active
+    // policy version between tests, so both reporting predicates' EXISTS(is_active) conjunct
+    // would read zero and the agreement would hold vacuously.
+    //
+    // Self-seeded, not leaned on the file's leftover backlog (task-575's own notes reject a
+    // probe policy: NOT EXISTS(approved run) is satisfied vacuously by an invoice with ZERO
+    // runs, so a probe would agree with itself even if ArmTx never ran). This invoice's run
+    // is proved open before either predicate is read, so what gets counted below is known.
+    test('rollup, the awaiting_approval list filter, and the enforcing transitions door agree on one self-seeded open run', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-AGREE-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated, arming the seeded firm run').toBe('validated')
+
+      const armed = await getInvoiceApproval(token, created.id)
+      expect(armed.state, 'the self-seeded fixture must carry an open run before either predicate is read').toBe('open')
+
+      const [data, list] = await Promise.all([
+        rollup(token),
+        listInvoices(token, { awaiting_approval: true, entity_id: entity.id }),
+      ])
+      const clientRow = data.clients.find((c) => c.entity_id === entity.id)
+      expect(clientRow, 'the fresh entity should have its own rollup client row').toBeDefined()
+
+      // Copy 1 (rollup) vs copy 2 (list filter): pagination.total, never invoices.length --
+      // the list defaults to 50 and clamps at 200, and this entity's backlog accumulates
+      // across the whole file's run.
+      expect(clientRow!.awaiting_approval, 'the rollup badge and the filtered list total must agree').toBe(list.pagination.total)
+      expect(clientRow!.awaiting_approval, 'the agreed count must be positive, not a vacuous 0 == 0').toBeGreaterThan(0)
+      expect(list.pagination.total, 'the agreed count must be positive, not a vacuous 0 == 0').toBeGreaterThan(0)
+
+      // Anti-vacuity: without this, the predicate could degenerate to "count the validated"
+      // and still pass. AC-1 above already left this entity with one validated invoice whose
+      // run closed approved -- validated status untouched by decide, run no longer open -- so
+      // counts.validated must exceed the awaiting_approval count.
+      expect(
+        clientRow!.awaiting_approval,
+        'awaiting_approval must differ from counts.validated, or the predicate has degenerated to "count the validated"',
+      ).not.toBe(clientRow!.counts.validated)
+
+      // Copy 3, the ENFORCING door (task-575 AC-27 upgrade): the same self-seeded, still-open
+      // fixture that copies 1 and 2 report is the one copy 3 actually refuses.
+      const blocked = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'queued' },
+      })
+      assertErrorEnvelope(blocked, 409, 'the self-seeded open run must refuse a queued transition')
+      expect(
+        (blocked.body as { error: string }).error,
+        'the 409 must carry the same awaiting-approval sentence the transitions door uses elsewhere',
+      ).toBe(AWAITING_APPROVAL_REASON)
     })
   })
 

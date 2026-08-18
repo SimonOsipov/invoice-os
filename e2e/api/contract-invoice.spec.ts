@@ -1155,8 +1155,11 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     //
     // Self-seeded, not leaned on the file's leftover backlog (task-575's own notes reject a
     // probe policy: NOT EXISTS(approved run) is satisfied vacuously by an invoice with ZERO
-    // runs, so a probe would agree with itself even if ArmTx never ran). This invoice's run
-    // is proved open before either predicate is read, so what gets counted below is known.
+    // runs, so a probe would agree with itself even if ArmTx never ran) and not leaned on a
+    // sibling test's leftovers either (a Playwright retry gets a fresh worker and skips
+    // straight to the failed test -- see the comment at the closed-sibling fixture below).
+    // Both this fixture's run and the closed sibling's are proved before either predicate is
+    // read, so what gets counted below is known.
     test('rollup, the awaiting_approval list filter, and the enforcing transitions door agree on one self-seeded open run', async () => {
       const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-AGREE-${freshTin()}`) })
       const validated = await validateInvoice(token, created.id)
@@ -1164,6 +1167,17 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
       const armed = await getInvoiceApproval(token, created.id)
       expect(armed.state, 'the self-seeded fixture must carry an open run before either predicate is read').toBe('open')
+
+      // A retry runs in a FRESH worker (playwright.api.config.ts's retries: 1 in CI), so
+      // beforeAll re-mints `entity` and this describe's earlier AC-1 test does not re-run
+      // alongside it -- the closed-run sibling the anti-vacuity check below needs cannot come
+      // from a leftover test. Own it here instead: close a second fixture's run so
+      // counts.validated and awaiting_approval differ for reasons this test seeds itself.
+      const closedSibling = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-AGREE-CLOSED-${freshTin()}`) })
+      const closedValidated = await validateInvoice(token, closedSibling.id)
+      expect(closedValidated.status, 'the closed-sibling fixture should promote draft -> validated too').toBe('validated')
+      const closedResult = await approveUntilClosed(closedSibling.id, await firmApproverTokens())
+      expect(closedResult.state, 'the closed sibling must actually close approved, or it would still read as awaiting').toBe('approved')
 
       const [data, list] = await Promise.all([
         rollup(token),
@@ -1186,8 +1200,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(list.pagination.total, 'the agreed count must be positive, not a vacuous 0 == 0').toBeGreaterThan(0)
 
       // Anti-vacuity: without this, the predicate could degenerate to "count the validated"
-      // and still pass. AC-1 above already left this entity with one validated invoice whose
-      // run closed approved -- validated status untouched by decide, run no longer open -- so
+      // and still pass. closedSibling above is validated with its run closed approved -- so
       // counts.validated must exceed the awaiting_approval count.
       expect(
         clientRow!.awaiting_approval,

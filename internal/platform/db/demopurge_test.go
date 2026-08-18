@@ -1,8 +1,4 @@
-// Test-Spec stage (RED) suite for the demo-tenant purge primitive
-// (demopurge.go). That file ships as a stub whose PurgeDemoTenants/purgeWithin
-// return errPurgeNotImplemented, so every behavioural spec below fails on its
-// own target assertion rather than on a missing symbol — the Mode A shape
-// provision_test.go established for this package.
+// Suite for the demo-tenant purge primitive (demopurge.go).
 //
 // The four proof obligations that discharge the ratified condition ("delete, as
 // long as you don't mess up with the real production data, only the demo") are

@@ -5,7 +5,7 @@ package db
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,7 +43,7 @@ var purgeTables = []string{
 	"invitations",
 	"workflow_role_members",
 	"workflow_roles",
-	"audit_log",
+	auditLogTable,
 }
 
 // purgeExcludedTables carries tenant_id but is deliberately never purged:
@@ -58,7 +58,30 @@ var purgeExcludedTables = []string{
 	"approval_policy_steps",
 }
 
-// PurgeResult reports what one purge deleted, per table and in total.
+// auditLogTable names the replica window by table rather than by position, so
+// reordering purgeTables cannot leave the bypass wrapped around some other
+// statement.
+const auditLogTable = "audit_log"
+
+const (
+	setRoleReplica = `SET LOCAL session_replication_role = 'replica'`
+	setRoleOrigin  = `SET LOCAL session_replication_role = 'origin'`
+)
+
+// purgeGuards open the purge transaction. 'origin' is set explicitly because
+// the bypass suppresses referential integrity transaction-wide: the sixteen
+// ordered deletes must stay checked, so a future reorder of purgeTables fails
+// loudly instead of silently orphaning rows. The purge runs at gateway boot, so
+// the two timeouts make it fail rather than hold the boot open behind someone
+// else's lock.
+var purgeGuards = []string{
+	setRoleOrigin,
+	`SET LOCAL lock_timeout = '15s'`,
+	`SET LOCAL statement_timeout = '60s'`,
+}
+
+// PurgeResult reports what one purge deleted, per table and in total. ByTable
+// names only the tables that actually lost rows.
 type PurgeResult struct {
 	ByTable  map[string]int64
 	Rows     int64
@@ -75,19 +98,41 @@ const (
 	DemoPurgeErrored DemoPurgeOutcome = "error"
 )
 
-// errPurgeNotImplemented is the Test-Spec stage's stub answer: every DB-backed
-// spec fails on this returned error, never on a missing symbol.
-var errPurgeNotImplemented = errors.New("db: PurgeDemoTenants not implemented")
-
 // purgeStmt builds the only statement form this package emits. The tenant
 // predicate must live in the SAME string literal as DELETE FROM
 // (TestPurgeHasNoUnscopedDeleteStatement scans for exactly that).
-func purgeStmt(table string) string { return "" }
+func purgeStmt(table string) string {
+	return fmt.Sprintf("DELETE FROM %s WHERE tenant_id = ANY($1)", table)
+}
 
 // PurgeDemoTenants deletes every tenant-owned row of the four DemoTenants on a
 // dedicated superuser connection, in one transaction.
 func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, error) {
-	return PurgeResult{}, errPurgeNotImplemented
+	started := time.Now()
+
+	conn, err := connectSuperuser(ctx, superuserDSN)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return PurgeResult{}, fmt.Errorf("db: purge: begin tx: %w", err)
+	}
+	// Rolled back on any early return; a no-op after a successful Commit.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	res, err := purgeWithin(ctx, tx, DemoTenants)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return PurgeResult{}, fmt.Errorf("db: purge: commit: %w", err)
+	}
+
+	res.Duration = time.Since(started)
+	return res, nil
 }
 
 // purgeWithin issues the whole purge inside a caller-owned transaction: the
@@ -96,5 +141,47 @@ func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, er
 // can trace the statements and re-run the purge over an extended tenant list
 // inside a rolled-back transaction.
 func purgeWithin(ctx context.Context, tx pgx.Tx, tenants []string) (PurgeResult, error) {
-	return PurgeResult{}, errPurgeNotImplemented
+	for _, guard := range purgeGuards {
+		if err := setLocal(ctx, tx, guard); err != nil {
+			return PurgeResult{}, err
+		}
+	}
+
+	res := PurgeResult{ByTable: map[string]int64{}}
+	for _, table := range purgeTables {
+		// audit_log's append-only trigger refuses a DELETE under 'origin' even
+		// for a superuser, and the bypass is transaction-wide while it is on —
+		// so it opens around this one statement and closes again.
+		if table == auditLogTable {
+			if err := setLocal(ctx, tx, setRoleReplica); err != nil {
+				return PurgeResult{}, err
+			}
+		}
+
+		tag, err := tx.Exec(ctx, purgeStmt(table), tenants)
+		if err != nil {
+			// Worded without the two SQL keywords: obligation 2's scanner reads every
+			// literal in this file and is deliberately case-insensitive.
+			return PurgeResult{}, fmt.Errorf("db: purge: %s: %w", table, err)
+		}
+
+		if table == auditLogTable {
+			if err := setLocal(ctx, tx, setRoleOrigin); err != nil {
+				return PurgeResult{}, err
+			}
+		}
+
+		if n := tag.RowsAffected(); n > 0 {
+			res.ByTable[table] = n
+			res.Rows += n
+		}
+	}
+	return res, nil
+}
+
+func setLocal(ctx context.Context, tx pgx.Tx, stmt string) error {
+	if _, err := tx.Exec(ctx, stmt); err != nil {
+		return fmt.Errorf("db: purge: %s: %w", stmt, err)
+	}
+	return nil
 }

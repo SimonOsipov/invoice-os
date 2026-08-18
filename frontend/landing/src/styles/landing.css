@@ -267,10 +267,11 @@ html {
   background: var(--primary-10);
 }
 
-/* Reopened card 266.08px + the 24px inset. The footer's link column sits inside the
-   card's x band, so only this reservation keeps those links clickable. */
+/* Reopened card 266.08px + the 24px inset + one 20.02px body line (14px x 1.43) = 310.1,
+   rounded up. The extra line is deliberate headroom: the footer's link column sits inside
+   the card's x band, so a wrap this does not cover puts those links back under it. */
 .cn-spacer {
-  height: 292px;
+  height: 320px;
 }
 
 @media (max-width: 640px) {

@@ -438,7 +438,7 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     expect(card.length, 'expected exactly one base .cookie-note rule').toBe(1)
 
     // Control: the extractor reads a planted value and refuses a unitless one.
-    expect(pxOf('height: 292px;', 'height'), 'control: the px extractor found nothing').toBe(292)
+    expect(pxOf('height: 137px;', 'height'), 'control: the px extractor found nothing').toBe(137)
     expect(pxOf('height: 0;', 'height'), 'control: the px extractor accepted a unitless value').toBeNull()
 
     const reserved = pxOf(spacer[0].body, 'height')

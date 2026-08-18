@@ -126,10 +126,11 @@ describe('SourceDocumentRail', () => {
     const note = rail.lastElementChild
     expect(note).not.toBeNull()
     expect((note?.textContent ?? '').length).toBeGreaterThan(0) // vacuity floor
-    expect(note?.textContent).toContain('holds no permission to update or delete this row')
-    // 'delete' left the incapability list: a gated boot deletes this row on the
-    // four demo tenants, which is the only surface the old wording was false on.
-    expect(note?.textContent).not.toContain('cannot delete')
+    expect(note?.textContent).toContain('cannot replace, rename or annotate a source document')
+    // Non-modification only: a gated boot deletes this row on the four demo tenants
+    // and re-inserts it under a new id, so no persistence claim holds for its readers.
+    expect(note?.textContent).not.toContain('Stored once')
+    expect(note?.textContent).not.toContain('delete')
     expect(note?.textContent).toContain('Lagos Logistics Ltd')
   })
 

@@ -1,12 +1,15 @@
-// The doc-side half of AC-2: docs/demo-reset.md's two tables must list exactly
-// what demopurge.go purges and spares, in the same order. Nothing else compared
-// them, so a table added to purgeTables left the operator page silently wrong.
+// The doc-side oracles for docs/demo-reset.md. Its two tables must list exactly
+// what demopurge.go purges and spares, in the same order (AC-2), and it must
+// still carry the operator facts an operator acts on (AC-1, AC-3, AC-4).
+// Nothing else compared them, so a table added to purgeTables left the operator
+// page silently wrong and a deleted paragraph left no trace at all.
 //
 // Named TestPurge* so ci.yml's -run alternation reaches it
 // (TestCIRunFiltersReachEveryTestInThePackage). No database.
 package db_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,5 +108,118 @@ func TestPurgeDemoResetDocTablesMatchTheCode(t *testing.T) {
 			t.Errorf("%s's %s list is %v, want %v (demopurge.go's %s, same order) — the operator page is what a human reads before a deploy",
 				demoResetDoc, c.what, got, want, c.list)
 		}
+	}
+}
+
+// AC-1, AC-3 and AC-4: the operator facts the page exists to carry. Presence of
+// the load-bearing claim, not its prose — every needle below is a short phrase
+// the fact cannot be stated without.
+var demoResetDocFacts = []struct {
+	ac      string
+	heading string
+	must    []string
+	mustRE  []*regexp.Regexp
+	mustNot []string
+}{
+	{
+		ac:      "AC-1 operator checklist",
+		heading: "## Operator checklist after a deploy",
+		must:    []string{"gateway first", "invoice service"},
+		mustRE:  []*regexp.Regexp{regexp.MustCompile(`(?i)\b(one|1)\s+minute\b`)},
+	},
+	{
+		ac:      "AC-4 gateway-only residuals",
+		heading: "### Why a gateway-only restart is not enough",
+		must:    []string{"source_document_id", "backlog is unarmed", "unbounded", "until a human"},
+		mustNot: []string{"automatically repaired", "repairs itself", "self-heal", "automatically recovers"},
+	},
+	{
+		ac:      "AC-4 regenerated ids",
+		heading: "## Demo ids are not stable across a deploy",
+		must:    []string{"new uuid on every deploy"},
+	},
+	{
+		ac:      "AC-3 audit_log purge count",
+		heading: "## Reading the `audit_log` purge count",
+		must:    []string{"no seeded baseline", "since the last purge"},
+	},
+}
+
+// docBody returns one heading's own paragraphs, stopping at the next heading of
+// any level so a subsection cannot satisfy its parent's assertions.
+func docBody(t *testing.T, doc, heading string) string {
+	t.Helper()
+	i := strings.Index(doc, "\n"+heading+"\n")
+	if i < 0 {
+		t.Fatalf("%s has no %q section — the operator facts it carries would go unasserted", demoResetDoc, heading)
+	}
+	body := doc[i+1+len(heading):]
+	if j := strings.Index(body, "\n#"); j >= 0 {
+		body = body[:j]
+	}
+	return body
+}
+
+// Needles are matched on the FLOWED section — markdown wraps mid-phrase, so a
+// raw match reds on a rewrap rather than on a missing fact.
+func docFactFaults(sec string, must []string, mustRE []*regexp.Regexp, mustNot []string) []string {
+	flow := strings.Join(strings.Fields(sec), " ")
+	low := strings.ToLower(flow)
+	var faults []string
+	for _, m := range must {
+		if !strings.Contains(low, strings.ToLower(m)) {
+			faults = append(faults, fmt.Sprintf("states no %q", m))
+		}
+	}
+	for _, re := range mustRE {
+		if !re.MatchString(flow) {
+			faults = append(faults, "matches no "+re.String())
+		}
+	}
+	for _, m := range mustNot {
+		if strings.Contains(low, strings.ToLower(m)) {
+			faults = append(faults, fmt.Sprintf("claims %q — the residual is recorded as fixed", m))
+		}
+	}
+	return faults
+}
+
+func TestPurgeDemoResetDocStatesTheOperatorFacts(t *testing.T) {
+	root := repoRootDir(t)
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(demoResetDoc)))
+	if err != nil {
+		t.Fatalf("read %s: %v", demoResetDoc, err)
+	}
+	doc := string(b)
+
+	// Control: the checker must be able to report a fault, not only agree.
+	for _, f := range demoResetDocFacts {
+		if faults := docFactFaults("", f.must, f.mustRE, nil); len(faults) == 0 {
+			t.Fatalf("%s reports an empty section clean — it asserts nothing", f.ac)
+		}
+		if len(f.mustNot) == 0 {
+			continue
+		}
+		if faults := docFactFaults(f.mustNot[0], nil, nil, f.mustNot); len(faults) == 0 {
+			t.Fatalf("%s reports %q clean — its fixed-residual check asserts nothing", f.ac, f.mustNot[0])
+		}
+	}
+
+	for _, f := range demoResetDocFacts {
+		if faults := docFactFaults(docBody(t, doc, f.heading), f.must, f.mustRE, f.mustNot); len(faults) > 0 {
+			t.Errorf("%s (%s %q): %s", f.ac, demoResetDoc, f.heading, strings.Join(faults, "; "))
+		}
+	}
+
+	// The two numbered steps in order. The gateway purges and re-seeds; the
+	// invoice service's seeders write on top of that seed.
+	steps := docBody(t, doc, "## Operator checklist after a deploy")
+	if i := strings.Index(steps, "1. "); i >= 0 {
+		steps = steps[i:]
+	}
+	gateway, invoice := strings.Index(steps, "gateway"), strings.Index(steps, "invoice service")
+	if gateway < 0 || invoice < 0 || gateway > invoice {
+		t.Errorf("%s's numbered steps do not restart the gateway before the invoice service (gateway at %d, invoice service at %d)",
+			demoResetDoc, gateway, invoice)
 	}
 }

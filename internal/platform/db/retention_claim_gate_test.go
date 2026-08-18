@@ -16,6 +16,11 @@
 // frontend-only or e2e-only commit to the Go job, so a Go assertion over them
 // would be unreachable on exactly the commit it guards. SourceDocumentRail's
 // copy is held by SourceDocumentRail.test.tsx instead.
+//
+// Known limits. The needles are literals, so a claim reworded around all of them
+// escapes the discovery walk; an ENUMERATED site still fails, because its needle
+// must keep matching. Scanner 1 walks no .yml, and blocksOf reads only // and --
+// runs, so a Go string literal or a SQL COMMENT ON is invisible to both.
 package db_test
 
 import (
@@ -166,6 +171,20 @@ func walkRepo(t *testing.T, root string, roots, exts []string) []string {
 	}
 	var out []string
 	for _, r := range roots {
+		// "." is the repo root's own files only; recursing there would walk
+		// node_modules, frontend/ and e2e/, which are deliberately out of scope.
+		if r == "." {
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatalf("read repo root: %v", err)
+			}
+			for _, e := range entries {
+				if !e.IsDir() && want[filepath.Ext(e.Name())] {
+					out = append(out, e.Name())
+				}
+			}
+			continue
+		}
 		err := filepath.WalkDir(filepath.Join(root, filepath.FromSlash(r)), func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -273,16 +292,28 @@ var retentionExempt = map[string]string{
 	"internal/invoice/kept_as_is_test.go":                     "an audit row as the permanent record of the FIRST keep-as-is decision against a mutable column — a claim about rewriting, which the purge does not do",
 }
 
-var retentionWalkRoots = []string{"docs", "migrations", "internal", "cmd", "db"}
+var retentionWalkRoots = []string{".", "docs", "migrations", "internal", "cmd", "db", "tools"}
 
 var retentionWalkExts = []string{".md", ".sql", ".go"}
+
+// demoExceptionPhrase is what a corrected block must SAY, over and above
+// linking to the doc. Matched on the block with every mention of the doc's
+// filename removed: exceptionDoc contains "demo", so a bare link satisfies a
+// naive "contains demo" check on its own — an uncorrected sentence plus a link
+// then passes clean, which is what AC-6 exists to catch.
+const demoExceptionPhrase = "demo tenant"
+
+// exceptionDocFile is exceptionDoc's base name, which markdown cross-references
+// also use in their relative form.
+var exceptionDocFile = filepath.Base(exceptionDoc)
 
 // retentionFaults reports why block states a permanence claim without scoping it
 // to the demo exception. Empty means the block is corrected.
 func retentionFaults(block string) []string {
 	var faults []string
-	if !strings.Contains(strings.ToLower(block), "demo") {
-		faults = append(faults, "names no demo exception")
+	prose := strings.ReplaceAll(strings.ToLower(block), exceptionDocFile, "")
+	if !strings.Contains(prose, demoExceptionPhrase) {
+		faults = append(faults, "names no "+demoExceptionPhrase+" exception outside the link")
 	}
 	if !strings.Contains(block, exceptionDoc) {
 		faults = append(faults, "points at no "+exceptionDoc)
@@ -314,6 +345,17 @@ func TestPurgeAuditRetentionClaimNamesTheDemoException(t *testing.T) {
 		}
 		if faults := retentionFaults(corrected); len(faults) != 0 {
 			t.Fatalf("the scanner reports %v against a fixture carrying both the demo exception and %s — it cannot recognise a correction", faults, exceptionDoc)
+		}
+
+		// The bypass: an uncorrected claim with a bare cross-reference bolted on.
+		// exceptionDoc contains "demo", so any check that looks for "demo" across
+		// the whole block reports this clean while the sentence stays false.
+		linkOnly := flowLines("--", []string{
+			"-- audit_log is append-only and permanently retained: it holds no",
+			"-- UPDATE/DELETE grant for the application role ([" + exceptionDoc + "](" + exceptionDocFile + ")).",
+		})
+		if faults := retentionFaults(linkOnly); len(faults) == 0 {
+			t.Fatalf("an uncorrected claim carrying only a link to %s reports clean — the demo-exception half of this scan is satisfied by the link's own path", exceptionDoc)
 		}
 
 		// Both fixtures wrap mid-needle. If flowLines stopped joining, the two

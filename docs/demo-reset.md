@@ -9,10 +9,18 @@ tenant-owned tables, then re-seeds them from `db/seed.dev.sql`. It runs inside
 `db.Provision`, between `Reset` and `Seed` (`internal/platform/db/provision.go`), and the
 primitive is `db.PurgeDemoTenants` (`internal/platform/db/demopurge.go`).
 
-**On the persistent production environment, this is the only place committed rows are
-deleted.** Every retention claim in this repo — `audit_log` is permanently retained,
-approval decisions are retained permanently, a submission job is never deleted by the app
-— is true of every real tenant, and is scoped by this page and by nothing else.
+**On the persistent production environment, this is the only place a row covered by a
+retention claim is deleted.** Ordinary request handling does delete committed rows —
+`line_items` on a re-import, `workflow_role_members` when a role's staffing changes,
+`approval_policy_steps` when a policy version is edited, plus River's own job cleanup — but
+`invoice_app` holds no `DELETE` grant on any table those claims are about (`audit_log`,
+`approval_runs`, `approval_run_steps`, `approval_decisions`, `submission_jobs`,
+`app_exchange`, `idempotency_keys`, `invoice_status_history`, `documents`), so no request
+can reach one. The purge reaches them because it runs as superuser.
+
+Every retention claim in this repo — `audit_log` is permanently retained, approval
+decisions are retained permanently, a submission job is never deleted by the app — is true
+of every real tenant, and is scoped by this page and by nothing else.
 
 ## Scope: four tenants, by literal uuid
 
@@ -175,6 +183,12 @@ Consequences, all of them intended:
 - Anything that must stay addressable across deploys has to key on something the seed
   states literally — an invoice number, an entity name, a `workflow_roles.key` — never on
   a generated uuid.
+
+`documents` behaves the same way one step later. The purge deletes the row, and
+`internal/demodocs` re-`Put`s the object on the next invoice-service boot; `Upsert`'s
+`ON CONFLICT (tenant_id, content_hash)` finds nothing to resolve, so it inserts a fresh
+row under a new id and records `document.created` — not `document.reused` — again. The
+stored bytes are the same bytes; the row that points at them is a new one every cycle.
 
 Tenant ids, by contrast, **are** stable: all four are literals in the seed, which is what
 makes the allowlist above possible in the first place.

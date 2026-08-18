@@ -18,3 +18,7 @@ var (
 func PurgeWithinForTest(ctx context.Context, tx pgx.Tx, tenants []string) (PurgeResult, error) {
 	return purgeWithin(ctx, tx, tenants)
 }
+
+// LockProvisionTailForTest isolates the tail lock from Bootstrap's, which
+// Provision takes first on the same key.
+var LockProvisionTailForTest = lockProvisionTail

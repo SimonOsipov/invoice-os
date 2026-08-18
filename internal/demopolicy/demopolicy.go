@@ -5,10 +5,12 @@
 // holds actively (cfo suspended, ceo unstaffed) -- the demo's unstaffed-seat
 // example.
 //
-// It CONVERGES rather than inserting-if-absent. db.Reset truncates approval_runs
-// and deliberately leaves the three policy tables standing, so a seeder that
-// no-ops once its policy exists arms nothing on the second deploy and every
-// validated invoice then satisfies awaiting_approval vacuously
+// It CONVERGES rather than inserting-if-absent. db.PurgeDemoTenants empties
+// approval_runs on every gated boot, production included, and deliberately leaves
+// the three policy tables standing (docs/demo-reset.md); db.Reset truncates the
+// same rows, but only in a pr-<N> environment. So a seeder that no-ops once its
+// policy exists arms nothing on the second deploy and every validated invoice
+// then satisfies awaiting_approval vacuously
 // (TestSeed_AfterResetRearmsSeededInvoices). Three writes converge it: a first
 // publish, a reactivation of a version something deactivated, and a version N+1
 // when the active version's step shape no longer matches the plan.
@@ -17,8 +19,9 @@
 // seals the version found by WHERE NOT sealed and so answers
 // ErrPolicyNothingToPublish on the second boot.
 //
-// RESIDUAL, recorded and undefended: a gateway restarted out of band runs Reset
-// again and re-truncates approval_runs, and nothing re-runs this seeder because
+// RESIDUAL, recorded and undefended: a gateway restarted out of band empties
+// approval_runs again -- the purge does it everywhere, and a pr-<N> environment
+// runs Reset again on top -- and nothing re-runs this seeder because
 // the invoice service did not restart. The fleet stays green, /healthz stays 200,
 // and awaiting_approval silently reads counts.validated. Recovery is one operator
 // action -- restart the invoice service. Also in docs/approvals.md.

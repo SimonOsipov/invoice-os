@@ -9,6 +9,10 @@
 -- statutory retention requirement is UNCONFIRMED; tracked as an open legal question,
 -- not invented here.
 --
+-- The four seeded demo tenants are the one exception: db.PurgeDemoTenants deletes their
+-- runs, steps and decisions on every gated gateway boot, production included
+-- (docs/demo-reset.md).
+--
 -- approval_runs -> invoices and approval_runs -> approval_policy_versions are both ON
 -- DELETE RESTRICT: a durable fiscal record, and the policy version that governed it,
 -- must not be destroyed out from under the evidence of its approval. run_steps -> runs

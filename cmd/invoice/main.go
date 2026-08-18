@@ -159,9 +159,11 @@ func main() {
 
 	// Give each demo tenant one active approval policy and re-arm its validated
 	// backlog, so awaiting_approval is non-zero and the Approvals badge is
-	// observable on the deploy gate. Runs on EVERY boot, not just the first:
-	// the gateway's db.Reset truncates approval_runs and leaves the policy
-	// standing. Here rather than in the gateway, which is a different process.
+	// observable on the deploy gate. Runs on EVERY boot, not just the first: the
+	// gateway's db.PurgeDemoTenants empties approval_runs on every gated boot and
+	// leaves the policy tables standing (docs/demo-reset.md); db.Reset truncates
+	// the same rows, but only in a pr-<N> environment. Here rather than in the
+	// gateway, which is a different process.
 	// Non-fatal, matching demodocs above -- a crash-loop costs an environment, a
 	// missing demo policy costs one assertion.
 	// Bounded because this runs BEFORE app.Run: the sweep takes FOR UPDATE row

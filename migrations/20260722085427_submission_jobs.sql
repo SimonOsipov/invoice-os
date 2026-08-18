@@ -121,7 +121,9 @@ CREATE POLICY tenant_isolation ON submission_jobs
 
 -- Least-privilege grants (docs/migrations.md §3). No DELETE: the row is mutable state but a
 -- permanent record of the attempt, never deleted by the app. Nothing to
--- invoice_tenant_reader, whose only grant repo-wide is tenants/SELECT.
+-- invoice_tenant_reader, whose only grant repo-wide is tenants/SELECT. The four seeded
+-- demo tenants' rows are deleted out of band, by the boot-time purge running as superuser
+-- (docs/demo-reset.md).
 GRANT SELECT, INSERT, UPDATE ON submission_jobs TO invoice_app;
 
 -- +goose Down

@@ -174,7 +174,9 @@ distinction:
   cleanup-only `DELETE` on `river_notification`) — explicit and per-table, never a blanket
   `ALL`. The same migration's app-owned `idempotency_keys` (the outbox dedupe ledger) IS
   tenant data and copies the FORCE-RLS `tenants` template; being permanent/append-only it
-  gets `SELECT`/`INSERT` only, like `audit_log`.
+  gets `SELECT`/`INSERT` only, like `audit_log`. Both grants hold for every tenant. The
+  only rows either table ever loses are the four seeded demo tenants', deleted by the
+  gateway as superuser on every gated boot ([`docs/demo-reset.md`](demo-reset.md)).
 
 Least privilege is a per-object decision, so it lives in the per-object migration.
 
@@ -308,7 +310,8 @@ The **`development` environment's own Postgres is different: it is stateful, per
 and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
 environment is created from, and the target of live demo calls.
 
-> **DEMO-04 narrows that persistence, and this is the one place it is written down.**
+> **DEMO-04 narrows that persistence** ([`docs/demo-reset.md`](demo-reset.md) is the full
+> account; this is the migration-side summary).
 > "Never torn down" still holds for the volume, the service and every non-demo tenant.
 > It no longer holds row-for-row: `db.PurgeDemoTenants` runs inside `db.Provision` on
 > **every** gated boot, this environment included, and deletes those four tenants'

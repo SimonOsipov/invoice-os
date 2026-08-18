@@ -123,10 +123,13 @@ ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 -- demo portfolio into the boot-time seed ([demo-seed-shape]). No DELETE is
 -- ported here: a boot-time seed must stay destructive-statement-free
 -- (TestSeedFileHasNoDestructiveStatements) -- only CREATE, or REPAIR on a
--- re-seed. Clearing is no longer this file's problem at all: since DEMO-04,
--- db.PurgeDemoTenants runs immediately before this seed on every gated boot
--- and has already emptied the four demo tenants, so these upserts land on a
--- clean slate rather than on the last demo's residue.
+-- re-seed. Clearing is mostly no longer this file's problem: db.PurgeDemoTenants
+-- runs immediately before this seed on every gated boot and has already emptied
+-- 17 of the four demo tenants' tables, so those upserts land on a clean slate.
+-- Two caveats: the purge is non-fatal, so a failed one leaves the residue in
+-- place and the boot still reaches this seed; and it deliberately spares
+-- memberships and the three approval-policy tables, whose upserts below are what
+-- converge them (docs/demo-reset.md).
 --
 -- Rules are GLOBAL (no tenant_id, no RLS): restores any rule a prior demo
 -- kill-switched (e.g. vat-standard-rate). Safe under the M4-17

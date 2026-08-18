@@ -437,8 +437,11 @@ a policy has several.
 The other three events on the same policy carry the same two payload keys:
 `approval_policy.created`, `approval_policy.updated`, `approval_policy.deleted`.
 
-`audit_log` is append-only and permanently retained: it holds no `UPDATE`/`DELETE` grant
-for the application role and carries triggers refusing both, plus `TRUNCATE`.
+`audit_log` is append-only and permanently retained for every real tenant: it holds no
+`UPDATE`/`DELETE` grant for the application role and carries triggers refusing both, plus
+`TRUNCATE`. The one exception is the four seeded demo tenants, whose rows the gateway
+deletes as superuser on every gated boot, production included
+([`docs/demo-reset.md`](demo-reset.md)).
 
 ---
 
@@ -711,15 +714,21 @@ record of who approved what. Three independent mechanisms guarantee it:
 
 - `approval_decisions` holds `GRANT SELECT, INSERT` for the application role — **no
   `UPDATE`, no `DELETE`**. A decision, once written, cannot be altered or removed by any
-  service. This grant *is* the retention mechanism; there is no trigger and no purge job.
+  service. On every real tenant this grant *is* the retention mechanism; there is no
+  trigger and no purge job. The four seeded demo tenants are the one exception: the
+  gateway deletes their decisions as superuser on every gated boot
+  ([`docs/demo-reset.md`](demo-reset.md)).
 - `approval_runs → approval_policy_versions` is `ON DELETE RESTRICT`. A policy version
   that governed a run cannot be removed out from under the evidence of that approval.
 - Hard delete is impossible regardless: the application role holds **no `DELETE` grant**
   on `approval_policies` or on `approval_policy_versions` (attempting it is `42501`, §4),
   and a sealed version blocks even a cascaded delete from a role that does hold one.
 
-Approval decisions are retained **permanently**, matching the audit log's posture. There
-is no TTL, no archival table, no purge job and no deletion endpoint.
+On every real tenant, approval decisions are retained **permanently**, matching the audit
+log's posture: there is no TTL, no archival table, no purge job and no deletion endpoint.
+The four seeded demo tenants are the one exception — the gateway deletes their runs, steps
+and decisions as superuser on every gated boot, production included
+([`docs/demo-reset.md`](demo-reset.md)).
 
 > **Open, and not an engineering question.** The Nigerian FIRS/NRS statutory retention
 > requirement is **unconfirmed**. Permanent retention is a safe default, not a verified

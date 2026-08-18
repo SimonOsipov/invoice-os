@@ -13,7 +13,7 @@ import type { PlatformCtx } from '../types'
 
 const COPIED_MS = 1800
 
-const NOTE = 'Stored once, never changed. ASComply cannot delete, replace, rename or annotate a source document. The database rejects any write to this row'
+const NOTE = 'Stored once, never changed. ASComply cannot replace, rename or annotate a source document. The app holds no permission to update or delete this row'
 
 function scopeOwner(ctx: Pick<PlatformCtx, 'mode' | 'active' | 'user'>): string {
   const name = ctx.mode === 'firm' ? ctx.active.name : (ctx.user.tenantName ?? ctx.active.name)

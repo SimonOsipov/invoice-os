@@ -35,6 +35,10 @@
 --     UPDATE — and a true SUPERUSER bypasses all of this. This is tamper-EVIDENCE, not
 --     cryptographic immutability. The M2 exit criterion ("immutable at the DB-grant level")
 --     is met by the grant; the trigger is defense-in-depth above it.
+--   * That superuser bypass is exercised deliberately in two places. db.Reset issues a
+--     TRUNCATE here, but only in a pr-<N> environment. db.PurgeDemoTenants deletes the four
+--     seeded demo tenants' rows on every gated gateway boot, production included
+--     (docs/demo-reset.md); it names four uuids and reaches no other tenant.
 --
 -- No FK to tenants: matches idempotency_keys — the tenant_id is a bare uuid, keeping the
 -- hot audit write path free of a cross-table lock. bigserial id gives the log a natural

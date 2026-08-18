@@ -11,6 +11,9 @@
 // db.WithinTenantTx already set on tx, and the table's RLS WITH CHECK refuses any row whose
 // tenant diverges — so Record cannot write to the wrong tenant, and a call outside a
 // tenant-scoped tx fails closed (NULL tenant_id fails the WITH CHECK, 42501, no row written).
+//
+// One exception, superuser-only: db.PurgeDemoTenants deletes the four seeded demo tenants'
+// rows on every gated gateway boot, production included (docs/demo-reset.md).
 package audit
 
 import (

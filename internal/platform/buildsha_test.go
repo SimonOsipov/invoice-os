@@ -127,3 +127,38 @@ func TestHealthzCarriesDemoPurgeOnlyWhenSet(t *testing.T) {
 		}
 	}
 }
+
+// TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions: eight of the nine
+// fleet binaries never call db.Provision, so neither package var is ever
+// assigned and their /healthz bodies must stay byte-identical to what they were
+// before demo_purge existed. Asserting the absence of one key is weaker than
+// asserting the whole key set — a third field added on the same reasoning would
+// pass the absence check and still change every non-gateway body.
+func TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions(t *testing.T) {
+	t.Cleanup(func(purge, reset string) func() {
+		return func() { DemoPurge, DBReset = purge, reset }
+	}(DemoPurge, DBReset))
+
+	DemoPurge, DBReset = "", ""
+
+	rec := httptest.NewRecorder()
+	healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))
+
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if len(body) == 0 {
+		t.Fatalf("/healthz returned an empty object (%q); the comparison below would be vacuous", rec.Body.String())
+	}
+
+	want := map[string]string{"status": "ok", "build": BuildSHA}
+	if len(body) != len(want) {
+		t.Errorf("/healthz carries %d field(s) %v on a non-provisioning service, want exactly %v", len(body), body, want)
+	}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("/healthz %q = %q, want %q", k, body[k], v)
+		}
+	}
+}

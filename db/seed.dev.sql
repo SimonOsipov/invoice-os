@@ -121,8 +121,11 @@ ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 -- task-162/M4-22-03: fold the former reset script's rule re-enable + curated
 -- demo portfolio into the boot-time seed ([demo-seed-shape]). No DELETE is
 -- ported here: a boot-time seed must stay destructive-statement-free
--- (TestSeedFileHasNoDestructiveStatements), and a fresh per-PR env has
--- nothing to clear anyway -- only CREATE, or REPAIR on a re-seed.
+-- (TestSeedFileHasNoDestructiveStatements) -- only CREATE, or REPAIR on a
+-- re-seed. Clearing is no longer this file's problem at all: since DEMO-04,
+-- db.PurgeDemoTenants runs immediately before this seed on every gated boot
+-- and has already emptied the four demo tenants, so these upserts land on a
+-- clean slate rather than on the last demo's residue.
 --
 -- Rules are GLOBAL (no tenant_id, no RLS): restores any rule a prior demo
 -- kill-switched (e.g. vat-standard-rate). Safe under the M4-17

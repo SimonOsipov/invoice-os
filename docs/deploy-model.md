@@ -88,7 +88,8 @@ PR opened ──> dev-env.yml:
                              ──> deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
                              5 URLs
-                gateway ──> gate on /healthz (schema migrated + seeded at boot, M4-21-04)
+                gateway ──> gate on /healthz (schema migrated + demo tenants purged +
+                seeded at boot, M4-21-04 / DEMO-04)
                 ──> 8 context services + 4 SPAs (app is gateway-wired)
                 ──> verify: smoke (landing + both consoles) + api + topology (app login,
                     cross-tenant isolation, fleet /healthz/fleet gate) + demo
@@ -106,7 +107,10 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
                       bypassing the CI gate — the manual override
                    ──> same deploy + health-gate + fleet-gate flow, no E2E (M4-22-07
-                       dropped the reset/seed job and dispatch-path E2E run)
+                       dropped the reset/seed job and dispatch-path E2E run). The
+                       gateway's boot-time demo purge (DEMO-04) DOES run on this path:
+                       it has no environment gate, so the four demo tenants are cleared
+                       and re-seeded on the persistent environment too.
 ```
 
 ### Why per-PR environments, not one shared env
@@ -378,7 +382,7 @@ contradict what the docs imply.
 | Public domains | Railway-**generated** ones only, auto-renamed `<svc>-pr-<N>.up.railway.app`; a custom domain never forks | Once the source environment holds only custom domains, a fork starts with none, so domain reconcile **creates** one per service: a query, a `serviceDomainCreate`, and a confirming re-query. Not a no-op. |
 | `targetPort` on those domains | Only the **gateway's** generated domain is `null`; the four SPA generated domains and all five custom domains report `8080` (re-measured 2026-08-02, all five services) | CI **reads** it off whichever domain it selected in the source environment — never a literal, so the gateway now gets a real `8080` from its custom domain. A `null` is still valid (Railway magic-port detection) and is replicated by **omitting** the field, not by substituting a port. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
-| Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates and seeds at boot. |
+| Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
 | Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |

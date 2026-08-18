@@ -25,6 +25,18 @@ name: Dev Env (deploy full fleet + verify)
 # gating rationale, including why it deliberately does NOT reuse ENVIRONMENT/
 # GATEWAY_DB_BOOTSTRAP the way the existing seed gate does.
 #
+# DEMO-04 overrides the "PR forks only" property above for a SECOND destructive
+# step, and the paragraph above no longer covers everything Provision destroys.
+# The demo-tenant purge (internal/platform/db/demopurge.go) runs from the same
+# boot seam, between the reset and the seed, but has NO environment gate at all
+# — only GATEWAY_DB_BOOTSTRAP — so it DOES run against the persistent
+# environment on the push/workflow_dispatch path. It is narrowed by allowlist
+# instead of by environment: it deletes tenant-owned rows for exactly the four
+# seeded demo tenants (db.DemoTenants) and nothing else, and db.Seed restores
+# their curated state in the same call. Anything an operator created by hand on
+# those four tenants — a pending invitation, a runtime-created workflow role,
+# a staffing edit — is gone on every deploy, production included.
+#
 # THE TARGET DISCRIMINATOR IS `github.event_name == 'pull_request'`, NOT
 # `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and
 # dispatch both target the persistent environment, whose variables and domains
@@ -576,7 +588,11 @@ jobs:
   #    fully migrated — this is what the context services, the SPAs, and the
   #    reset/seed all wait behind. Also now the SOLE Postgres liveness proof
   #    (M4-22-08 removed the pg_isready probe) — Provision() runs to
-  #    completion, fatal-on-error, before the gateway's listener opens.
+  #    completion before the gateway's listener opens. Every step of it is
+  #    fatal on error except the demo-tenant purge (DEMO-04), which logs at
+  #    ERROR and continues to the seed: it is one transaction that rolls back
+  #    whole, so a failed purge leaves the database exactly as it was, and
+  #    crash-looping the fleet over it would be worse than a stale demo.
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
     needs: [deploy-gateway, prepare-env]

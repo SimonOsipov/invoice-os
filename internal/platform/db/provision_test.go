@@ -1,5 +1,7 @@
 // [M4-21-04] Test-first (RED) suite for db.Provision (task-128): wiring
-// bootstrap→migrate→seed into the gateway boot path. Pre-authored BEFORE
+// bootstrap→migrate→seed into the gateway boot path (reset and the demo-tenant
+// purge joined the sequence later, covered in reset_test.go and
+// provision_purge_test.go). Pre-authored BEFORE
 // provision.go's real body exists (Test-first: yes) — the shipped stub always
 // returns a non-nil "not implemented" error, so every test below fails
 // immediately on that assertion, never on a missing symbol (Mode A, per this
@@ -265,7 +267,7 @@ func TestProvisionBootstrapFailureShortCircuitsMigrateAndSeed(t *testing.T) {
 		t.Errorf("Provision error = %q, want Bootstrap's own RolePasswords validation error specifically", err.Error())
 	}
 	if strings.Contains(err.Error(), migrationPoisonDSN) {
-		t.Errorf("Provision error = %q, mentions the migration DSN marker — migrate must not run after bootstrap fails (boot order is bootstrap → migrate → seed, short-circuiting on the first error)", err.Error())
+		t.Errorf("Provision error = %q, mentions the migration DSN marker — migrate must not run after bootstrap fails (boot order is bootstrap → migrate → reset → purge → seed, short-circuiting on the first error)", err.Error())
 	}
 }
 

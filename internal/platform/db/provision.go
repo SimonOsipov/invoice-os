@@ -1,9 +1,11 @@
 // provision.go — the gateway boot-time provisioning sequence (M4-21-04,
-// task-128): bootstrap → migrate → seed, gated by BootstrapEnabled, all fatal on
-// error and all complete before the gateway's listener opens (so a green /healthz
-// continues to mean "fully provisioned"). See db.go for the package doc and
-// bootstrap.go for the underlying BootstrapEnabled/Bootstrap/Seed primitives this
-// composes; MigrateUp (migrate.go) is the third leg, unchanged.
+// task-128): bootstrap → migrate → reset (PR environments only) → purge →
+// seed, gated by BootstrapEnabled and all complete before the gateway's
+// listener opens (so a green /healthz continues to mean "fully provisioned").
+// Every step is fatal on error except the demo-tenant purge — see Provision's
+// doc comment. See db.go for the package doc and bootstrap.go for the
+// underlying BootstrapEnabled/Bootstrap/Seed primitives this composes;
+// MigrateUp (migrate.go) and PurgeDemoTenants (demopurge.go) are the others.
 //
 // cmd/gateway/main.go calls Provision with Environment set to the RAW
 // os.Getenv("ENVIRONMENT") — never app.Config.Environment, which substitutes
@@ -26,7 +28,7 @@ import (
 )
 
 // ProvisionConfig bundles everything Provision needs to run the boot-time
-// bootstrap→migrate→seed sequence.
+// bootstrap→migrate→reset→purge→seed sequence.
 //
 // Environment MUST be the raw os.Getenv("ENVIRONMENT") value (see
 // BootstrapEnabled's doc comment) — Provision applies no substitution of its
@@ -171,15 +173,46 @@ func waitForPostgres(ctx context.Context, dsn string, budget time.Duration, logg
 	}
 }
 
+// lockProvisionTail holds BootstrapAdvisoryLockKey on a dedicated superuser
+// connection and returns its release. It serializes the destructive tail of the
+// sequence — reset, purge, seed — against a peer replica running the same tail:
+// purgeWithin deletes leaf-first while seed.dev.sql inserts parent-first, so
+// two concurrent boots deadlock without it
+// (TestProvisionConcurrentBootsSerializeCleanly). Bootstrap's key is reused
+// rather than a second one, so the tail cannot race a peer's Bootstrap either;
+// it is taken only after Bootstrap has released it.
+func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error) {
+	conn, err := connectSuperuser(ctx, superuserDSN)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, BootstrapAdvisoryLockKey); err != nil {
+		_ = conn.Close(ctx)
+		return nil, fmt.Errorf("db: acquire provision advisory lock: %w", err)
+	}
+	return func() {
+		// Closing the session releases the lock server-side; the explicit
+		// unlock keeps pg_locks clean for the tests that read it.
+		bg := context.Background()
+		_, _ = conn.Exec(bg, `SELECT pg_advisory_unlock($1)`, BootstrapAdvisoryLockKey)
+		_ = conn.Close(bg)
+	}, nil
+}
+
 // Provision runs the gateway's boot-time provisioning sequence: bootstrap
 // (gated by BootstrapEnabled) → migrate (unconditional — the existing
 // gateway-as-migrator behavior, unchanged) → reset (gated by ResetEnabled,
 // PR-environments only — persona-handoff-fix, Decision [pr-only-reset]) →
-// seed (gated by BootstrapEnabled), short-circuiting fatally on the first
-// error so a partially provisioned database is never served. Bootstrap, Reset
-// and Seed each open/close their own dedicated superuser connection
-// (bootstrap.go, reset.go); Provision retains no DSN or connection past the
-// call that used it.
+// purge (gated by BootstrapEnabled, Decision [purge-non-fatal]) → seed (gated
+// by BootstrapEnabled), short-circuiting fatally on the first error so a
+// partially provisioned database is never served. The purge is the one
+// exception to that: it runs as a single transaction that rolls back whole, so
+// a failed purge leaves the database exactly as it was and the boot continues
+// to Seed. Bootstrap, Reset, PurgeDemoTenants and Seed each open/close their
+// own dedicated superuser connection (bootstrap.go, reset.go, demopurge.go),
+// and Provision opens one more of its own to hold the advisory lock across the
+// reset/purge/seed tail (lockProvisionTail). All of them are closed before
+// Provision returns; it retains no DSN or connection past the call that used it.
 //
 // The bootstrap/seed guard is evaluated exactly once, from
 // cfg.Environment/cfg.BootstrapFlag — never re-read from the process
@@ -198,7 +231,15 @@ func waitForPostgres(ctx context.Context, dsn string, budget time.Duration, logg
 // environment ResetEnabled ever permits is a strict subset of what
 // BootstrapEnabled permits (see ResetEnabled's doc comment), so this nesting
 // never silently skips a reset that should have run.
+//
+// The purge has no such second gate. Unlike Reset it runs on the persistent
+// environment too, narrowed only by the four tenants DemoTenants names
+// (demopurge.go) — see TestProvisionPurgeRunsAgainstThePersistentEnvironmentName.
 func Provision(ctx context.Context, cfg ProvisionConfig) error {
+	// Set before the early returns below, so "false" is truthful on every path
+	// that never reaches the purge.
+	DemoPurgeOutcome = DemoPurgeSkipped
+
 	enabled := BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag)
 
 	// Named-variable validation BEFORE any dial. Without it an empty or
@@ -242,15 +283,39 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	}
 
 	if enabled {
+		// Held across reset, purge and seed — see lockProvisionTail.
+		unlock, err := lockProvisionTail(ctx, cfg.SuperuserDSN)
+		if err != nil {
+			return fmt.Errorf("db: provision: %w", err)
+		}
+		defer unlock()
+
 		// PR-environment-only, gated independently of the bootstrap/seed guard
 		// above (see this function's doc comment and ResetEnabled/reset.go) —
-		// runs AFTER the schema is migrated and BEFORE Seed repopulates it, so
-		// a PR fork's inherited residue is gone before the curated fixtures
-		// land.
+		// runs AFTER the schema is migrated and BEFORE the purge and Seed
+		// repopulate it, so a PR fork's inherited residue is gone before the
+		// curated fixtures land.
 		if cfg.ResetWillRun() {
 			if err := Reset(ctx, cfg.SuperuserDSN); err != nil {
 				return fmt.Errorf("db: provision: reset: %w", err)
 			}
+		}
+
+		// The only non-fatal step in this sequence: the purge is one transaction
+		// that rolls back whole, so a failure leaves the database exactly as it
+		// was, and aborting here would crash-loop the fleet instead of letting
+		// the deploy gate go red. TestProvisionPurgeIsTheOnlyNonFatalStep and
+		// TestProvisionPurgeOrderIsResetThenPurgeThenSeed pin both properties.
+		if _, err := PurgeDemoTenants(ctx, cfg.SuperuserDSN); err != nil {
+			logger := cfg.Logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Error("db: provision: demo-tenant purge failed — continuing to seed",
+				slog.String("error", err.Error()))
+			DemoPurgeOutcome = DemoPurgeErrored
+		} else {
+			DemoPurgeOutcome = DemoPurgeRan
 		}
 
 		if err := Seed(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {

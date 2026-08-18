@@ -1,6 +1,6 @@
 // demopurge.go — the demo-tenant purge primitive. Deletes every tenant-owned
-// row belonging to the four seeded demo tenants and nothing else. Nothing calls
-// it yet; DEMO-04-02 wires it into Provision.
+// row belonging to the four seeded demo tenants and nothing else. Provision
+// (provision.go) calls it on every gated boot, between Reset and Seed.
 package db
 
 import (
@@ -23,7 +23,10 @@ var DemoTenants = []string{
 }
 
 // purgeTables is the delete order, leaf-first, so all sixteen FK-bearing
-// deletes succeed under full referential-integrity enforcement. audit_log is
+// deletes succeed under full referential-integrity enforcement. It is the
+// reverse of seed.dev.sql's parent-first inserts, which deadlocks two
+// concurrent boots unless they are serialized (lockProvisionTail,
+// provision.go). audit_log is
 // last because it is the only statement issued under the 'replica' bypass, and
 // that window is kept as small as possible ([bypass-narrowed-to-audit-log]).
 //

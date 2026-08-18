@@ -1,6 +1,11 @@
 -- Repairs already-deployed demo environments: withdraws the 17 clients
 -- db/seed.dev.sql stopped declaring, and clears the stale seeded source-document
 -- links so the demo-document seeder rebuilds them. An UPSERT-only seed can do neither.
+--
+-- Since DEMO-04 this is a no-op on the demo tenants: db.PurgeDemoTenants deletes
+-- their rows before every seed, so there is nothing left for it to repair. Kept
+-- because migrations are forward-only and it may still have work to do on a
+-- database that has not yet booted a gateway carrying the purge.
 
 -- +goose Up
 

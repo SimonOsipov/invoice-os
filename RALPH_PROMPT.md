@@ -2,7 +2,7 @@
 
 ## Overview
 
-Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — created by `dev-env.yml`'s `prepare-env` job as a fork of `development`, M4-23; its database is bootstrapped, migrated and seeded at gateway boot, M4-21-04 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
+Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — created by `dev-env.yml`'s `prepare-env` job as a fork of `development`, M4-23; its database is bootstrapped, migrated, demo-purged and seeded at gateway boot, M4-21-04 / DEMO-04 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
 
 **Story unit:** one **build-plan task** = one story = one branch = one PR (e.g. `M3-04` "Validation v1"). RALPH decomposes it into sub-subtasks (`M3-04-01`, …) internally. This matches exactly how M1/M2 shipped (`task-20` → `task-20.1–.4`).
 
@@ -370,7 +370,7 @@ Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This i
    RUN_ID="$(gh run list --workflow dev-env.yml --branch "$BRANCH" --limit 1 --json databaseId -q '.[0].databaseId')"
    gh run watch "$RUN_ID" --exit-status   # or poll `gh run view "$RUN_ID" --json status,conclusion` per CI Monitoring Protocol
    ```
-   A green run means: fleet deployed to the PR's own environment, gateway migrated (health-gate) and the DB bootstrapped + seeded fresh at boot (M4-21-04), all 8 backends up (fleet-gate), and the **smoke + topology E2E passed** — including cross-tenant isolation.
+   A green run means: fleet deployed to the PR's own environment, gateway migrated (health-gate) and the DB bootstrapped + demo-purged + seeded fresh at boot (M4-21-04 / DEMO-04), all 8 backends up (fleet-gate), and the **smoke + topology E2E passed** — including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** (default critique disposition) to verify **each** original acceptance criterion against the green run:
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion (topology proves cross-tenant refusal; the milestone demo script — e.g. M3-11 — proves the wedge flow).
    - **UI ACs (rendered surfaces)** → drive the deployed dev SPA read-only with the standalone Playwright MCP, authenticated as the seeded user, and capture each touched surface (including interactive states) to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` / layout against the Claude Design **prototype** (`.dc.html`, deployed to Netlify — confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a real fail; uncited taste is advisory → escalate to the user, never bounce the executor.
@@ -451,7 +451,7 @@ git -C "$WORKTREE_PATH" add ... && git -C "$WORKTREE_PATH" commit -m "fix: ..." 
 
 **2. The aggregate `CI` check green?** → proceed to CodeRabbit, then to the Phase 3.5 deploy gate.
 
-**3. The `dev-env.yml` run green?** → the deploy gate passed (fleet up + migrate+seed at boot + smoke + topology). Proceed to Phase 3.5 step 4 (per-AC verification).
+**3. The `dev-env.yml` run green?** → the deploy gate passed (fleet up + migrate+purge+seed at boot + smoke + topology). Proceed to Phase 3.5 step 4 (per-AC verification).
 
 ### Get the current run IDs
 ```bash

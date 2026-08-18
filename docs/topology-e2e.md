@@ -36,7 +36,7 @@ environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway b
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
                 empty (M3-16 invariant) ──> discover the 5 public URLs fresh
-gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
+gateway     ──> gate on /healthz (schema migrated + demo tenants purged + DB seeded at boot)
             ──> deploy 8 context services + 4 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
             ──> verify: smoke (landing + consoles) + api (typed contract suite) +
@@ -113,11 +113,15 @@ variable that anything reads.
 `db/seed.dev.sql` inserts the canonical fixtures — the isolation pair (`aaaa…`/`bbbb…`)
 plus the persona tenants (`1111…` Okafor & Partners / `2222…` Honeywell Group) — and
 re-enables every validation rule. It runs as part of `internal/platform/db.Provision`
-(bootstrap → migrate → reset → seed) on every gateway boot in an allow-listed environment
-(`development` or a Railway PR-environment name), gated behind `BootstrapEnabled`,
-idempotent (upserts, not a table wipe) so re-running never loses data mid-test. A PR's own
-ephemeral Postgres is born empty and is seeded once its gateway first comes up;
-`development`'s Postgres is re-seeded the same way on every redeploy.
+(bootstrap → migrate → reset → purge → seed) on every gateway boot in an allow-listed
+environment (`development` or a Railway PR-environment name), gated behind
+`BootstrapEnabled`, idempotent (upserts, not a table wipe) so re-running never loses data
+mid-test. A PR's own ephemeral Postgres is born empty and is seeded once its gateway
+first comes up;
+`development`'s Postgres is purged-then-re-seeded the same way on every redeploy — the
+purge (DEMO-04) is what makes the seed's upserts converge on curated state instead of
+accumulating on top of whatever the last demo left, and it runs on every environment,
+not only PR forks.
 
 **Boot-time reset, PR environments only (persona-handoff-fix, Decision [pr-only-reset]).**
 Because a PR environment's Postgres is actually a FORK of the persistent environment's live
@@ -143,6 +147,20 @@ genuine PR fork.
 There is still no *manual* reset step anywhere in the repo — M4-22-07 deleted the last one
 of those, along with the only unconditional table wipe this repo ran before this one; the
 reset above is automatic, boot-time, and gated exactly as described.
+
+**Boot-time demo purge, every environment (DEMO-04).** The two paragraphs above describe
+the *reset* and remain exactly true of it. They are no longer the whole story of what
+`Provision` destroys. `db.PurgeDemoTenants` runs from the same boot seam, between the reset
+and the seed, and is gated by `GATEWAY_DB_BOOTSTRAP` alone — no `RAILWAY_ENVIRONMENT_NAME`
+check, no PR-fork requirement. So this IS boot-time destruction reaching the persistent
+production environment, which the reset deliberately never does. The override is
+deliberate: the demo has to reset itself on deploy with no operator step. What keeps it
+safe is a different narrowing — an allowlist of exactly four tenant IDs (`db.DemoTenants`,
+the tenants `db/seed.dev.sql` creates), not an environment name. No row outside those four
+tenants is reachable by it, and `db.Seed` restores their curated state in the same
+`Provision` call. The operator consequence: hand-made state on a demo tenant — a pending
+invitation, a runtime-created workflow role, a staffing edit — does not survive a deploy,
+on any environment.
 
 ## Cold-fleet recovery (M3-16)
 

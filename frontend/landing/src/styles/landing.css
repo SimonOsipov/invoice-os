@@ -162,9 +162,9 @@ html {
 }
 
 /* ------------------------------------------------------------------
-   Cookie consent notice. Fixed card bottom-left on desktop, a full-width
-   band below 640px. The spacer is 0 tall on desktop, so mounting the card
-   adds no document height and moves nothing.
+   Cookie consent notice. Fixed card bottom-right on desktop, a full-width
+   band below 640px. Right-anchoring clears the closing CTA's copy on x; the
+   spacer then holds the footer's link column clear of the card on y.
    ------------------------------------------------------------------ */
 @keyframes cn-in {
   from {
@@ -179,7 +179,7 @@ html {
 
 .cookie-note {
   position: fixed;
-  left: 24px;
+  right: 24px;
   bottom: 24px;
   z-index: 40;
   width: 460px;
@@ -267,8 +267,10 @@ html {
   background: var(--primary-10);
 }
 
+/* Reopened card 266.08px + the 24px inset. The footer's link column sits inside the
+   card's x band, so only this reservation keeps those links clickable. */
 .cn-spacer {
-  height: 0;
+  height: 292px;
 }
 
 @media (max-width: 640px) {

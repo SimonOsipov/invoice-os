@@ -36,6 +36,17 @@ const MIN_COPYRIGHT_ROW_NODES = 4
 // clearance claim that only holds at 1080 is a claim about a viewport no test uses.
 const CTA_STATES = [...WIDE_WIDTHS.map((width) => ({ width, height: 1080 })), { width: 1280, height: 720 }]
 
+// The closing CTA scrolls past a fixed card, so clearance is a claim about EVERY offset
+// in the band, not the one `scrollIntoViewIfNeeded` happens to pick. 50px is fine enough
+// that no target can cross the card between two stops — the shortest is ~17px tall.
+const CTA_SWEEP_STEP_PX = 50
+// The band is the CTA's height plus a viewport, ~1400px at 1280x720; anything near this
+// floor means the band collapsed and the sweep proved nothing.
+const MIN_SWEEP_STOPS = 10
+// Three footer link columns (3 + 3 + 4) plus the Cookie choices control. A floor, not the
+// count: the claim is that the query reached the footer at all.
+const MIN_FOOTER_CONTROLS = 8
+
 /** Attach the console/pageerror gate BEFORE navigating; returns the sink to assert on. */
 function consoleGate(page: Page): string[] {
   const errors: string[] = []
@@ -79,6 +90,17 @@ async function scrollToDocumentEnd(page: Page): Promise<void> {
         }),
       { message: 'the page never reached the document end (scroll-behavior: smooth animates window.scrollTo)' },
     )
+    .toBeLessThanOrEqual(1)
+  await settleLayout(page)
+}
+
+/** Back to the top, polled for the same reason scrollToDocumentEnd polls. */
+async function scrollToTop(page: Page): Promise<void> {
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+  await expect
+    .poll(() => page.evaluate(() => Math.round(window.scrollY)), {
+      message: 'the page never returned to the top (scroll-behavior: smooth animates window.scrollTo)',
+    })
     .toBeLessThanOrEqual(1)
   await settleLayout(page)
 }
@@ -200,13 +222,19 @@ test('landing consent: the notice mounts on both routes with no stored answer, a
   expectNoConsoleErrors(errors)
 })
 
-// C2 — the notice must not cover the closing CTA's copy. They share an x band at every
-// width, so the whole claim lives on y. Scoped to a visitor who has scrolled the CTA into
-// view: at some scroll offset the two must overlap, by construction.
-test('landing consent: the notice never covers the closing CTA copy at any desktop width', async ({
+// C2 — the notice must not cover the closing CTA's copy, at ANY scroll offset in the
+// band, not the one `scrollIntoViewIfNeeded` happens to land on. That single sample is
+// why this read green at 1080 and red at 720 on the same build.
+//
+// Right-anchored the card opens at x = W-484 while the CTA's left column ends at
+// 88 + 0.6*(min(W,1280)-224); those separate at W >= 1094, so across CTA_STATES the two
+// x bands cannot intersect and no scroll offset can produce an overlap. The sweep is
+// what turns that from an argument into an assertion — and the y-band arm below is what
+// stops it passing on a page where the card simply never reaches the copy.
+test('landing consent: the notice never covers the closing CTA copy at any scroll offset', async ({
   page,
 }, testInfo) => {
-  test.setTimeout(90_000)
+  test.setTimeout(180_000)
   const { errors, card } = await openLanding(page)
 
   const demo = page.locator('#demo')
@@ -217,26 +245,83 @@ test('landing consent: the notice never covers the closing CTA copy at any deskt
   ]
   for (const t of targets) await expect(t.locator, `${t.label} is not unique`).toHaveCount(1)
 
+  type Stop = { state: string; scrollY: number; landedAt: number; notice: Rect; target: Rect; label: string }
+  const sweep: Stop[] = []
+  const perState: Array<{ state: string; stops: number; band: { from: number; to: number } }> = []
   const entry = page.viewportSize()
-  const sweep: Array<{ width: number; height: number; label: string; notice: Rect; target: Rect }> = []
 
   try {
     for (const state of CTA_STATES) {
+      const label = `${state.width}x${state.height}`
       await page.setViewportSize(state)
       await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(state.width)
-      await demo.scrollIntoViewIfNeeded()
       await settleLayout(page)
 
-      const at = `at ${state.width}x${state.height}`
-      const noticeRect = await rectOf(card, 'the cookie notice', at)
-      for (const t of targets) {
-        sweep.push({
-          width: state.width,
-          height: state.height,
-          label: t.label,
-          notice: noticeRect,
-          target: await rectOf(t.locator, t.label, at),
-        })
+      // Tag from Playwright so the in-page sweep reads the SAME elements the locators
+      // resolve to; a selector retyped in the browser is a second source of truth.
+      await card.evaluate((el) => el.setAttribute('data-sweep', 'notice'))
+      for (const [i, t] of targets.entries()) {
+        await t.locator.evaluate((el, index) => el.setAttribute('data-sweep', `t${index}`), i)
+      }
+
+      // One round trip per state: scrolling and measuring from the page keeps a ~30-stop
+      // sweep at four widths inside the timeout. `behavior: 'instant'` overrides
+      // `html { scroll-behavior: smooth }`; landedAt is what proves it did.
+      const result = await page.evaluate(
+        ({ step, count }) => {
+          const boxOf = (el: Element) => {
+            const r = el.getBoundingClientRect()
+            return { x: r.x, y: r.y, width: r.width, height: r.height }
+          }
+          const notice = document.querySelector('[data-sweep="notice"]')
+          if (!notice) return { error: 'the cookie notice carries no sweep tag' }
+          const els: Element[] = []
+          for (let i = 0; i < count; i++) {
+            const el = document.querySelector(`[data-sweep="t${i}"]`)
+            if (!el) return { error: `target ${i} carries no sweep tag` }
+            els.push(el)
+          }
+
+          const doc = document.documentElement
+          const demoEl = document.querySelector('#demo')
+          if (!demoEl) return { error: 'the closing CTA is not on the page' }
+          const maxScroll = Math.max(0, doc.scrollHeight - doc.clientHeight)
+          const box = demoEl.getBoundingClientRect()
+          const demoTop = box.top + window.scrollY
+          const from = Math.max(0, Math.min(maxScroll, Math.floor(demoTop - window.innerHeight)))
+          const to = Math.max(from, Math.min(maxScroll, Math.ceil(demoTop + box.height)))
+
+          const offsets: number[] = []
+          for (let y = from; y < to; y += step) offsets.push(y)
+          offsets.push(to)
+
+          const samples = offsets.map((y) => {
+            window.scrollTo({ top: y, behavior: 'instant' })
+            return { scrollY: y, landedAt: window.scrollY, notice: boxOf(notice), targets: els.map(boxOf) }
+          })
+          return { band: { from, to }, samples }
+        },
+        { step: CTA_SWEEP_STEP_PX, count: targets.length },
+      )
+
+      await page.evaluate(() =>
+        document.querySelectorAll('[data-sweep]').forEach((el) => el.removeAttribute('data-sweep')),
+      )
+
+      expect(result.error, `the sweep could not run at ${label}: ${result.error}`).toBeUndefined()
+      const { band, samples } = result as { band: { from: number; to: number }; samples: Array<{ scrollY: number; landedAt: number; notice: Rect; targets: Rect[] }> }
+      perState.push({ state: label, stops: samples.length, band })
+      for (const sample of samples) {
+        for (const [i, t] of targets.entries()) {
+          sweep.push({
+            state: label,
+            scrollY: sample.scrollY,
+            landedAt: sample.landedAt,
+            notice: sample.notice,
+            target: sample.targets[i],
+            label: t.label,
+          })
+        }
       }
     }
   } finally {
@@ -245,54 +330,118 @@ test('landing consent: the notice never covers the closing CTA copy at any deskt
 
   // Attach before asserting, so a red run still carries the numbers.
   await testInfo.attach('cookie-notice-cta-clearance.json', {
-    body: JSON.stringify(sweep, null, 2),
+    body: JSON.stringify({ perState, sweep }, null, 2),
     contentType: 'application/json',
   })
   testInfo.annotations.push({
     type: 'measurement',
-    description: sweep
-      .map((m) => {
-        const o = overlapOf(m.notice, m.target)
-        return `${m.width}x${m.height} ${m.label}: overlap ${Math.round(o.width)}x${Math.round(o.height)}`
+    description: perState
+      .map((p) => {
+        const worst = sweep
+          .filter((m) => m.state === p.state)
+          .reduce((acc, m) => {
+            const o = overlapOf(m.notice, m.target)
+            return o.width * o.height > acc.width * acc.height ? o : acc
+          }, { x: 0, y: 0, width: 0, height: 0 })
+        return `${p.state}: ${p.stops} stops over ${p.band.from}-${p.band.to}, worst overlap ${Math.round(worst.width)}x${Math.round(worst.height)}`
       })
       .join(' | '),
   })
 
-  expect(sweep, 'the clearance sweep did not visit every state').toHaveLength(CTA_STATES.length * targets.length)
+  // Non-vacuity, four ways: the sweep ran, it visited every state, each band is a real
+  // band, and every offset it claims to have measured is the offset it actually reached.
+  expect(sweep.length, 'the clearance sweep collected nothing').toBeGreaterThan(0)
+  expect(
+    perState.map((p) => p.state),
+    'the clearance sweep did not visit every state',
+  ).toEqual(CTA_STATES.map((s) => `${s.width}x${s.height}`))
+  for (const p of perState) {
+    expect(p.stops, `the ${p.state} band collapsed to ${p.stops} stops (${p.band.from}-${p.band.to})`).toBeGreaterThanOrEqual(MIN_SWEEP_STOPS)
+  }
+  for (const m of sweep) {
+    expect(
+      Math.abs(m.landedAt - m.scrollY),
+      `the page never reached scrollY ${m.scrollY} at ${m.state} (landed at ${m.landedAt}) — scroll-behavior: smooth beat the instant hint`,
+    ).toBeLessThanOrEqual(1)
+    expect(m.target.width * m.target.height, `${m.label} measured an empty box at ${m.state}`).toBeGreaterThan(0)
+    expect(m.notice.width * m.notice.height, `the cookie notice measured an empty box at ${m.state}`).toBeGreaterThan(0)
+  }
+
+  // The claim that makes the sweep mean something: at some offset the card and the copy
+  // DO share a y band, so the only thing keeping them apart is x. Without this arm a
+  // page that never scrolls the CTA under the card passes every assertion below.
+  for (const state of CTA_STATES) {
+    const label = `${state.width}x${state.height}`
+    for (const t of targets) {
+      const shared = sweep.filter((m) => m.state === label && m.label === t.label && sharesLine(m.notice, m.target))
+      expect(
+        shared.length,
+        `${t.label} never shared a y band with the notice at ${label}, so its clearance is untested`,
+      ).toBeGreaterThan(0)
+    }
+  }
+
   for (const m of sweep) {
     const o = overlapOf(m.notice, m.target)
     expect(
       rectsOverlap(m.notice, m.target),
-      `the cookie notice covers ${m.label} at ${m.width}x${m.height} (overlap ${o.width}px wide by ${o.height}px tall)`,
+      `the cookie notice covers ${m.label} at ${m.state}, scrollY ${m.scrollY} (overlap ${o.width}px wide by ${o.height}px tall)`,
     ).toBe(false)
   }
   expectNoConsoleErrors(errors)
 })
 
-// C3 — the notice takes nothing out of the flow. One page, two phases, one build.
-test('landing consent: the header and the document are identical with and without the notice', async ({ page }) => {
+// C3 — Core AC 5, as amended on 2026-08-18. The card is right-anchored, so the footer's
+// link column now sits inside its x band and only a real reservation keeps those links
+// reachable; the desktop spacer is therefore no longer zero. What survives unchanged is
+// the claim that actually mattered: the card moves nothing that is laid out above it.
+// The reservation is asserted as a relationship — the spacer accounts for exactly the
+// document growth, and the footer's bottom edge clears the card's top edge — never as a
+// second copy of the CSS literal, which would pass on the bug it exists to catch.
+test('landing consent: the notice moves nothing above it and reserves the band it covers', async ({
+  page,
+}, testInfo) => {
   const { errors, card } = await openLanding(page)
   await expect(card).toHaveCount(1)
 
   const header = page.getByRole('banner')
   const demo = page.locator('#demo')
+  const footer = page.getByRole('contentinfo')
+
+  const spacerRect = await rectOf(page.locator('.cn-spacer'), 'the desktop spacer', 'with the notice up')
   const before = {
     header: await rectOf(header, 'the sticky header', 'with the notice up'),
     demo: await rectOf(demo, 'the closing CTA', 'with the notice up'),
     scrollHeight: await page.evaluate(() => document.documentElement.scrollHeight),
   }
 
+  // The reservation has to hold at the one offset where the footer and the card are
+  // closest, which is the document end — anywhere above it the footer is still rising.
+  await scrollToDocumentEnd(page)
+  const footerRect = await rectOf(footer, 'the footer', 'at the document end')
+  const noticeRect = await rectOf(card, 'the cookie notice', 'at the document end')
+
   await seedConsent(page, true)
   await page.reload()
   await expect(notice(page)).toHaveCount(0)
   await page.evaluate(() => document.fonts.ready.then(() => true))
-  await settleLayout(page)
+  await scrollToTop(page)
 
   const after = {
     header: await rectOf(header, 'the sticky header', 'with the notice down'),
     demo: await rectOf(demo, 'the closing CTA', 'with the notice down'),
     scrollHeight: await page.evaluate(() => document.documentElement.scrollHeight),
   }
+
+  const clearance = noticeRect.y - (footerRect.y + footerRect.height)
+  await testInfo.attach('cookie-notice-spacer-desktop.json', {
+    body: JSON.stringify({ spacerRect, footerRect, noticeRect, clearance, before, after }, null, 2),
+    contentType: 'application/json',
+  })
+  testInfo.annotations.push({
+    type: 'measurement',
+    description: `spacer ${spacerRect.height}px, document grew ${before.scrollHeight - after.scrollHeight}px, footer clears the card by ${Math.round(clearance)}px`,
+  })
 
   for (const field of ['x', 'y', 'width', 'height'] as const) {
     expect(
@@ -304,12 +453,33 @@ test('landing consent: the header and the document are identical with and withou
       `the closing CTA's ${field} moved when the notice mounted (${before.demo[field]} -> ${after.demo[field]})`,
     ).toBeLessThanOrEqual(BOX_SLACK_PX)
   }
-  expect(after.scrollHeight, 'the notice changed the document height').toBe(before.scrollHeight)
+
+  // Non-vacuity: a zero-height spacer would satisfy the growth identity trivially.
+  expect(spacerRect.height, 'the desktop spacer reserves nothing').toBeGreaterThan(0)
+  expect(
+    before.scrollHeight - after.scrollHeight,
+    `the notice changed the document by ${before.scrollHeight - after.scrollHeight}px but its spacer is ${spacerRect.height}px — something other than the spacer moved`,
+  ).toBe(Math.round(spacerRect.height))
+  expect(
+    footerRect.y + footerRect.height,
+    `the footer's bottom edge (${footerRect.y + footerRect.height}) is under the notice's top edge (${noticeRect.y}) — the spacer does not reserve the band the card covers`,
+  ).toBeLessThanOrEqual(noticeRect.y + BOX_SLACK_PX)
+
   expectNoConsoleErrors(errors)
 })
 
-// C4 — out of flow, beneath the header, covering nothing that is clicked.
-test('landing consent: the notice is fixed under the header and clears the footer privacy link', async ({ page }) => {
+// C4 — out of flow, beneath the header, and covering nothing that is clicked.
+//
+// This is the regression that must not come back. Right-anchored the card's x band holds
+// the footer's whole right-hand link column: measured on the deployed build before the
+// spacer existed, the privacy link, Cookie choices, Security, Status and Pricing were all
+// covered AND unclickable at 1280, 1440 and 1920 — elementFromPoint returned the card.
+// So the oracle is elementFromPoint on EVERY footer control at every width, not a rect
+// check on one link: an overlap test alone cannot tell a covered control from a clear one
+// when the two only ever meet on one axis.
+test('landing consent: the notice is fixed under the header and leaves every footer control clickable', async ({
+  page,
+}, testInfo) => {
   const { errors, card } = await openLanding(page)
 
   const style = await card.evaluate((el) => {
@@ -337,26 +507,104 @@ test('landing consent: the notice is fixed under the header and clears the foote
   expect(hits.headerCentreIsNotice, "the notice covers the sticky header's centre").toBe(false)
   expect(hits.headerCentreIsHeader, 'the header no longer receives a click at its own centre').toBe(true)
 
-  // boundingBox() is viewport-relative and the footer sits ~6000px down, so an unscrolled
-  // read passes on any layout. Scroll it in first: that is the state its click happens in.
-  const link = page.getByRole('contentinfo').locator('a[href="/privacy"]')
-  await expect(link).toHaveCount(1)
-  await link.scrollIntoViewIfNeeded()
-  await settleLayout(page)
+  type ControlProbe = {
+    label: string
+    rect: Rect
+    inViewport: boolean
+    hitIsControl: boolean
+    hitIsNotice: boolean
+  }
+  const probes: Array<{ state: string; notice: Rect; controls: ControlProbe[] }> = []
+  const entry = page.viewportSize()
 
-  const linkRect = await rectOf(link, 'the footer privacy link', 'scrolled into view')
-  const noticeRect = await rectOf(card, 'the cookie notice', 'with the footer in view')
-  const viewport = page.viewportSize()!
-  expect(
-    linkRect.y >= 0 && linkRect.y + linkRect.height <= viewport.height,
-    `the footer privacy link is still off-screen (y ${linkRect.y}, height ${linkRect.height}, viewport ${viewport.height})`,
-  ).toBe(true)
+  try {
+    for (const state of CTA_STATES) {
+      await page.setViewportSize(state)
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(state.width)
+      // The document end is where the footer and the card are closest; every offset
+      // above it holds the footer further clear.
+      await scrollToDocumentEnd(page)
 
-  const o = overlapOf(noticeRect, linkRect)
-  expect(
-    rectsOverlap(noticeRect, linkRect),
-    `the cookie notice covers the footer privacy link (overlap ${o.width}px wide by ${o.height}px tall)`,
-  ).toBe(false)
+      const read = await page.evaluate(() => {
+        const boxOf = (el: Element): Rect => {
+          const r = el.getBoundingClientRect()
+          return { x: r.x, y: r.y, width: r.width, height: r.height }
+        }
+        const noticeEl = document.querySelector('[aria-label="Cookie notice"]')
+        const controls = [...document.querySelectorAll('footer a, footer button')]
+        return {
+          notice: noticeEl ? boxOf(noticeEl) : null,
+          controls: controls.map((el) => {
+            const r = el.getBoundingClientRect()
+            const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+            return {
+              label: (el.textContent || '').trim().slice(0, 40) || el.tagName,
+              rect: boxOf(el),
+              inViewport:
+                r.y >= 0 && r.y + r.height <= window.innerHeight && r.x >= 0 && r.x + r.width <= window.innerWidth,
+              hitIsControl: hit === el || el.contains(hit),
+              hitIsNotice: !!hit?.closest('[aria-label="Cookie notice"]'),
+            }
+          }),
+        }
+      })
+      expect(read.notice, `the cookie notice did not render at ${state.width}x${state.height}`).toBeTruthy()
+      probes.push({ state: `${state.width}x${state.height}`, notice: read.notice!, controls: read.controls })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await testInfo.attach('cookie-notice-footer-clearance.json', {
+    body: JSON.stringify(probes, null, 2),
+    contentType: 'application/json',
+  })
+  testInfo.annotations.push({
+    type: 'measurement',
+    description: probes
+      .map((p) => {
+        const covered = p.controls.filter((c) => rectsOverlap(p.notice, c.rect)).length
+        const blocked = p.controls.filter((c) => c.hitIsNotice).length
+        return `${p.state}: ${p.controls.length} controls, ${covered} covered, ${blocked} blocked`
+      })
+      .join(' | '),
+  })
+
+  expect(probes.map((p) => p.state), 'the footer sweep did not visit every state').toEqual(
+    CTA_STATES.map((s) => `${s.width}x${s.height}`),
+  )
+  for (const probe of probes) {
+    // Population floor: the footer ships three link columns plus the Cookie choices
+    // control, so a handful of hits means the query missed the footer, not that the
+    // footer is clear.
+    expect(
+      probe.controls.length,
+      `only ${probe.controls.length} footer controls were found at ${probe.state}`,
+    ).toBeGreaterThanOrEqual(MIN_FOOTER_CONTROLS)
+
+    for (const control of probe.controls) {
+      // elementFromPoint answers null outside the viewport, which would read as "not
+      // blocked" on a control that is simply off screen.
+      expect(
+        control.inViewport,
+        `"${control.label}" is off screen at ${probe.state} (${JSON.stringify(control.rect)}), so the click probe below proves nothing`,
+      ).toBe(true)
+      const o = overlapOf(probe.notice, control.rect)
+      expect(
+        rectsOverlap(probe.notice, control.rect),
+        `the cookie notice covers "${control.label}" at ${probe.state} (overlap ${o.width}px wide by ${o.height}px tall)`,
+      ).toBe(false)
+      expect(
+        control.hitIsNotice,
+        `the cookie notice takes the click on "${control.label}" at ${probe.state}`,
+      ).toBe(false)
+      expect(
+        control.hitIsControl,
+        `"${control.label}" does not receive a click at its own centre at ${probe.state}`,
+      ).toBe(true)
+    }
+  }
+
   expectNoConsoleErrors(errors)
 })
 

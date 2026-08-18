@@ -26,6 +26,12 @@ var DemoTenants = []string{
 // deletes succeed under full referential-integrity enforcement. audit_log is
 // last because it is the only statement issued under the 'replica' bypass, and
 // that window is kept as small as possible ([bypass-narrowed-to-audit-log]).
+//
+// Deliberately WIDER than reset.go, which excludes invitations, workflow_roles
+// and workflow_role_members: db.Seed follows the purge in the same Provision
+// call and restores all 14 roles and 13 staffing rows under their literal
+// seeded ids, and the seed inserts no invitation — zero is their seeded state
+// ([include-workflow-roles]).
 var purgeTables = []string{
 	"approval_decisions",
 	"approval_run_steps",
@@ -47,9 +53,10 @@ var purgeTables = []string{
 }
 
 // purgeExcludedTables carries tenant_id but is deliberately never purged:
-// memberships has no runtime INSERT path, and the three approval-policy tables
-// are configuration reset.go excludes for the same reasons. Together with
-// purgeTables it must equal the live schema's tenant_id-bearing set
+// memberships has no runtime INSERT path, and internal/demopolicy rebuilds the
+// approval-policy tables for the two persona tenants only, so purging them
+// would leave the other two with no policy and nothing to restore it. Together
+// with purgeTables it must equal the live schema's tenant_id-bearing set
 // (TestPurgeTableListCoversEveryTenantOwnedTable).
 var purgeExcludedTables = []string{
 	"memberships",

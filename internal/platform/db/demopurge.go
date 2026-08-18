@@ -95,15 +95,18 @@ type PurgeResult struct {
 	Duration time.Duration
 }
 
-// DemoPurgeOutcome is what cmd/gateway/main.go publishes on /healthz as
-// demo_purge, set once per Provision call exactly as ResetWillRun() is today.
-type DemoPurgeOutcome string
+// PurgeOutcome is what cmd/gateway/main.go publishes on /healthz as demo_purge.
+type PurgeOutcome string
 
 const (
-	DemoPurgeRan     DemoPurgeOutcome = "true"
-	DemoPurgeSkipped DemoPurgeOutcome = "false"
-	DemoPurgeErrored DemoPurgeOutcome = "error"
+	DemoPurgeRan     PurgeOutcome = "true"
+	DemoPurgeSkipped PurgeOutcome = "false"
+	DemoPurgeErrored PurgeOutcome = "error"
 )
+
+// DemoPurgeOutcome is set once per Provision call exactly as ResetWillRun() is
+// today. Single-writer: only Provision assigns it.
+var DemoPurgeOutcome PurgeOutcome
 
 // purgeStmt builds the only statement form this package emits. The tenant
 // predicate must live in the SAME string literal as DELETE FROM

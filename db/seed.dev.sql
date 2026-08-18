@@ -21,7 +21,8 @@
 -- db.PurgeDemoTenants keeps a literal copy of these four ids as its allowlist
 -- (internal/platform/db/demopurge.go); adding a fifth tenant here widens what a
 -- deploy is allowed to delete, and TestPurgeAllowlistMatchesSeedFileTenants goes
--- red until a human decides that is intended.
+-- red until a human decides that is intended. That purge deletes leaf-first while
+-- this file inserts parent-first, so the two must never run concurrently.
 INSERT INTO tenants (id, name, kind) VALUES
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)',    'firm'),
     ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)',    'firm'),

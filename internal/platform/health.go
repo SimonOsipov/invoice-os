@@ -53,7 +53,8 @@ var DBReset string
 // DemoPurge is "true", "false" or "error" once a process has run boot-time
 // provisioning, and empty on every process that does not. It carries
 // db.PurgeOutcome's value verbatim; the purge is deliberately non-fatal, so
-// "error" is the only signal a swallowed failure ever gives.
+// "error" is the only signal a swallowed failure ever gives. dev-env.yml's
+// health-gate asserts this field on every trigger, not only on PRs.
 var DemoPurge string
 
 // healthzHandler is a liveness probe: 200 as long as the process is running.
@@ -61,6 +62,9 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	body := map[string]string{"status": "ok", "build": BuildSHA}
 	if DBReset != "" {
 		body["db_reset"] = DBReset
+	}
+	if DemoPurge != "" {
+		body["demo_purge"] = DemoPurge
 	}
 	writeJSON(w, http.StatusOK, body)
 }

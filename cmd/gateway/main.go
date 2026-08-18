@@ -106,6 +106,9 @@ func main() {
 	// only symptom is tests that get harder to keep passing. dev-env.yml's
 	// health-gate asserts db_reset on every PR run.
 	platform.DBReset = strconv.FormatBool(provisionCfg.ResetWillRun())
+	// The purge is the one non-fatal step in Provision, so this field is the
+	// only thing that tells a green boot from a swallowed purge failure.
+	platform.DemoPurge = string(db.DemoPurgeOutcome)
 
 	verifier, err := auth.NewVerifier(auth.Config{
 		Issuer:  mustEnv("AUTH_ISSUER"),

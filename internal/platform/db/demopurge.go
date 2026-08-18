@@ -100,8 +100,10 @@ type PurgeResult struct {
 	Duration time.Duration
 }
 
-// PurgeOutcome is the outcome of one Provision call's purge. Nothing publishes
-// it yet — /healthz carries no demo_purge field (DEMO-04-03).
+// PurgeOutcome is the outcome of one Provision call's purge. The gateway
+// publishes it as /healthz's demo_purge field and dev-env.yml's health-gate
+// asserts it: the purge is non-fatal, so that field is the only thing that can
+// turn a swallowed failure into a red deploy.
 type PurgeOutcome string
 
 const (
@@ -114,9 +116,44 @@ const (
 // today. Single-writer: only Provision assigns it.
 var DemoPurgeOutcome PurgeOutcome
 
-// logPurgeResult emits the one line reporting what a purge did. Stub: the shape
-// is authored test-first in demopurge_log_test.go.
-func logPurgeResult(logger *slog.Logger, res PurgeResult, err error) {}
+const (
+	purgeCompleteMsg = "demo purge complete"
+	purgeFailedMsg   = "db: provision: demo-tenant purge failed — continuing to seed"
+)
+
+// logPurgeResult emits the one line reporting what a purge did. audit_log is
+// lifted out of by_table because the two counts have different denominators:
+// by_table is excess over the curated seed baseline, audit_log is all demo
+// audit activity accumulated since the last purge.
+func logPurgeResult(logger *slog.Logger, res PurgeResult, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	// Never nil: slog.Any over a nil map serializes as `null`, which reads as a
+	// measurement never taken rather than as a converged boot.
+	byTable := make(map[string]int64, len(res.ByTable))
+	for table, rows := range res.ByTable {
+		if table != auditLogTable {
+			byTable[table] = rows
+		}
+	}
+
+	attrs := []any{
+		slog.Int("tenants", len(DemoTenants)),
+		slog.Int64("rows", res.Rows),
+		slog.Int64("audit_log_rows", res.ByTable[auditLogTable]),
+		slog.Any("by_table", byTable),
+	}
+
+	if err != nil {
+		// No duration_ms: PurgeDemoTenants returns a zero PurgeResult on every
+		// error path, so a 0 there would be a measurement never taken.
+		logger.Error(purgeFailedMsg, append(attrs, slog.String("error", err.Error()))...)
+		return
+	}
+	logger.Info(purgeCompleteMsg, append(attrs, slog.Int64("duration_ms", res.Duration.Milliseconds()))...)
+}
 
 // purgeStmt builds the only statement form this package emits. The tenant
 // predicate must live in the SAME string literal as DELETE FROM
@@ -127,6 +164,10 @@ func purgeStmt(table string) string {
 
 // PurgeDemoTenants deletes the four DemoTenants' rows from every purgeTables
 // table on a dedicated superuser connection, in one transaction.
+//
+// It deletes leaf-first while db/seed.dev.sql inserts parent-first, so a caller
+// running the two concurrently must serialize them; Provision does, via
+// lockProvisionTail.
 func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, error) {
 	started := time.Now()
 

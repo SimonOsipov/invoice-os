@@ -307,17 +307,16 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 		// was, and aborting here would crash-loop the fleet instead of letting
 		// the deploy gate go red. TestProvisionPurgeIsTheOnlyNonFatalStep and
 		// TestProvisionPurgeOrderIsResetThenPurgeThenSeed pin both properties.
-		if _, err := PurgeDemoTenants(ctx, cfg.SuperuserDSN); err != nil {
-			logger := cfg.Logger
-			if logger == nil {
-				logger = slog.Default()
-			}
-			logger.Error("db: provision: demo-tenant purge failed — continuing to seed",
-				slog.String("error", err.Error()))
+		res, err := PurgeDemoTenants(ctx, cfg.SuperuserDSN)
+		if err != nil {
 			DemoPurgeOutcome = DemoPurgeErrored
 		} else {
 			DemoPurgeOutcome = DemoPurgeRan
 		}
+		// After the branch, not between it and the call above:
+		// TestProvisionPurgeIsTheOnlyNonFatalStep pairs an err-binding
+		// assignment only with the statement immediately following it.
+		logPurgeResult(cfg.Logger, res, err)
 
 		if err := Seed(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {
 			return fmt.Errorf("db: provision: seed: %w", err)

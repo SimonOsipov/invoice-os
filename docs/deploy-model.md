@@ -89,8 +89,9 @@ PR opened ──> dev-env.yml:
                              (M3-16 invariant, now runtime-asserted) ──> discover the
                              5 URLs
                 gateway ──> gate on /healthz (schema migrated + seeded at boot,
-                M4-21-04; the demo-tenant purge runs in the same sequence but is
-                NON-fatal, so a green /healthz proves nothing about it — DEMO-04)
+                M4-21-04; the demo-tenant purge runs in the same sequence and is
+                NON-fatal, so /healthz carries a `demo_purge` field the gate
+                asserts == "true" separately — DEMO-04)
                 ──> 8 context services + 4 SPAs (app is gateway-wired)
                 ──> verify: smoke (landing + both consoles) + api + topology (app login,
                     cross-tenant isolation, fleet /healthz/fleet gate) + demo

@@ -615,6 +615,7 @@ jobs:
           ok=0
           seen=""
           reset=""
+          purge=""
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
@@ -637,7 +638,8 @@ jobs:
               # rolling deploy is still in progress, which is the whole reason
               # the build field exists.
               reset=$(printf '%s' "$body" | jq -r '.db_reset // empty' 2>/dev/null || echo '')
-              echo "  gateway healthy on $seen (schema migrated, seed complete; db_reset=${reset:-none})"
+              purge=$(printf '%s' "$body" | jq -r '.demo_purge // empty' 2>/dev/null || echo '')
+              echo "  gateway healthy on $seen (schema migrated, seed complete; db_reset=${reset:-none}, demo_purge=${purge:-none})"
               ok=1
               break
             fi
@@ -673,6 +675,31 @@ jobs:
             fi
           elif [ "$reset" = "true" ]; then
             echo "::error::gateway reports db_reset=true against the PERSISTENT environment. db.ResetEnabled is supposed to make that impossible by environment-name shape — its allowlist has been widened, or this run is not targeting the environment it thinks it is. The next boot TRUNCATEs live tenant data that has no fork underneath it."
+            exit 1
+          fi
+
+          # The purge barrier. NOT directional the way db_reset above is, and
+          # deliberately outside that if/elif: the purge's only gate is
+          # BootstrapEnabled (db/bootstrap.go), which is true on the persistent
+          # environment too, so "true" is the expected answer on all three
+          # triggers. Nesting this inside the IS_PR branch would disarm the
+          # production half and look identical in review
+          # (TestPurgeGateAssertionCoversBothPaths).
+          #
+          # The policy it encodes: every environment this workflow deploys to is
+          # expected to have deploy-time provisioning ON. Turning
+          # GATEWAY_DB_BOOTSTRAP off on the persistent environment is a red
+          # deploy, deliberately.
+          #
+          # What it does NOT prove, so do not read it as more than it is:
+          # "true" means one transaction committed — a purge narrowed to zero
+          # tables or zero tenants commits identically. It says nothing about
+          # whether the demo state a viewer sees is correct after purge+seed,
+          # nothing about a Railway-side restart no gate is watching, and
+          # nothing about the second service an operator still has to restart
+          # by hand.
+          if [ "$purge" != "true" ]; then
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}' — the boot-time demo purge did not run, so the seed's upserts landed on top of whatever residue was already there instead of on curated state. 'error' means PurgeDemoTenants failed and Provision swallowed it to keep the fleet up (the gateway logs it at ERROR: look for 'demo-tenant purge failed'). 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true is still set on the gateway service (it fails closed and is lost when a service is recreated) and that ENVIRONMENT is one db.provisionableEnvironment allowlists. 'none' means the gateway predates the /healthz demo_purge field, or cmd/gateway/main.go's assignment was deleted."
             exit 1
           fi
 

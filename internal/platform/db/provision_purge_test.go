@@ -7,10 +7,12 @@
 package db_test
 
 import (
+	"bytes"
 	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"os"
 	"reflect"
 	"slices"
@@ -175,6 +177,40 @@ func TestProvisionPurgeSkippedWhenBootstrapGuardOff(t *testing.T) {
 	}
 	if got := db.DemoPurgeOutcome; got != db.DemoPurgeSkipped {
 		t.Errorf("db.DemoPurgeOutcome = %q after a guard-off Provision, want %q", got, db.DemoPurgeSkipped)
+	}
+}
+
+// TestPurgeLogIsEmittedByProvision (AC-1): the line reaches the logger Provision
+// was handed, not just logPurgeResult's own unit tests. The helper can be
+// perfect and still never be called.
+func TestPurgeLogIsEmittedByProvision(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	restoreCuratedDemoState(t, superDSN)
+	seedBaseline(t, superDSN)
+
+	var buf bytes.Buffer
+	cfg := productionShapedProvisionConfig(superDSN, migDSN)
+	cfg.Logger = slog.New(slog.NewJSONHandler(&buf, nil))
+
+	if err := db.Provision(context.Background(), cfg); err != nil {
+		t.Fatalf("Provision (production shape): %v", err)
+	}
+
+	records := decodeLogRecords(t, &buf)
+	var purgeLines []logRecord
+	for _, rec := range records {
+		if msg := recString(t, rec, "msg"); msg == purgeCompleteMsg || msg == purgeFailedMsg {
+			purgeLines = append(purgeLines, rec)
+		}
+	}
+	if len(purgeLines) != 1 {
+		t.Fatalf("Provision emitted %d purge log line(s), want exactly 1 (it wrote %d record(s) in total)", len(purgeLines), len(records))
+	}
+	if got := recString(t, purgeLines[0], "msg"); got != purgeCompleteMsg {
+		t.Errorf("the purge line reads %q, want %q — the purge succeeded here", got, purgeCompleteMsg)
+	}
+	if _, ok := purgeLines[0]["by_table"]; !ok {
+		t.Errorf("Provision's purge line carries no by_table field: %v", purgeLines[0])
 	}
 }
 

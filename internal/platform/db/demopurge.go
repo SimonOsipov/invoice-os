@@ -7,6 +7,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -112,6 +113,10 @@ const (
 // DemoPurgeOutcome is set once per Provision call exactly as ResetWillRun() is
 // today. Single-writer: only Provision assigns it.
 var DemoPurgeOutcome PurgeOutcome
+
+// logPurgeResult emits the one line reporting what a purge did. Stub: the shape
+// is authored test-first in demopurge_log_test.go.
+func logPurgeResult(logger *slog.Logger, res PurgeResult, err error) {}
 
 // purgeStmt builds the only statement form this package emits. The tenant
 // predicate must live in the SAME string literal as DELETE FROM

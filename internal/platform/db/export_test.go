@@ -22,3 +22,7 @@ func PurgeWithinForTest(ctx context.Context, tx pgx.Tx, tenants []string) (Purge
 // LockProvisionTailForTest isolates the tail lock from Bootstrap's, which
 // Provision takes first on the same key.
 var LockProvisionTailForTest = lockProvisionTail
+
+// LogPurgeResultForTest exposes the log shape without exporting it: the line is
+// a contract with operators and with dev-env.yml, not with any caller in Go.
+var LogPurgeResultForTest = logPurgeResult

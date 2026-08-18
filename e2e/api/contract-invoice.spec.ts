@@ -1100,9 +1100,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   // decision': that block's armedInvoice() deactivates the tenant's one active-policy slot
   // per test, so anything relying on the seeded policy must run before it does.
   //
-  // KNOWN, deferred to APPR-14-05: contract-approvals.spec.ts currently strips the firm
-  // tenant's seeded policy before this file runs, so these are red at the deploy gate until
-  // that story's restore lands. Not worked around here.
+  // RESOLVED by APPR-14-05: contract-approvals.spec.ts strips the firm tenant's seeded
+  // policy in its own tests but restores it in `afterAll`, and this file's own `beforeAll`
+  // (:159) calls `ensureFirmPolicyActive` before relying on it. Not red at the deploy gate.
   test.describe('approveUntilClosed against the seeded firm policy', () => {
     test('AC-1: a two-step firm run closes approved after fin_mgr then compliance decide', async () => {
       const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR14-${freshTin()}`) })
@@ -1209,8 +1209,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
-  // APPR-07-08 (D38): db/seed.dev.sql has NO seeded approval policy, and publishing takes
-  // the tenant's SINGLE active slot tenant-wide, arming every invoice this shared tenant
+  // APPR-07-08 (D38): db/seed.dev.sql has NO seeded approval policy (internal/demopolicy
+  // seeds one at invoice-service boot instead), and publishing takes the tenant's SINGLE
+  // active slot tenant-wide, arming every invoice this shared tenant
   // validates. Every test below creates its own one-step policy and deletes it in a
   // `finally`, so the tenant returns to zero active versions before the next spec runs.
   // Boundary: above here the seeded firm policy governs (armed in this file's beforeAll);

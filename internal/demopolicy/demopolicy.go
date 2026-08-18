@@ -1,8 +1,9 @@
 // Package demopolicy gives each demo tenant one active sealed approval policy
 // and keeps its validated backlog armed, so awaiting_approval is non-zero and
 // the Approvals badge is observable on the deploy gate. The in-house tenant
-// also carries an unpublished draft naming seats nobody holds, which is the
-// demo's unstaffed-seat example.
+// also carries an unpublished draft naming four seats, two of which nobody
+// holds actively (cfo suspended, ceo unstaffed) -- the demo's unstaffed-seat
+// example.
 //
 // It CONVERGES rather than inserting-if-absent. db.Reset truncates approval_runs
 // and deliberately leaves the three policy tables standing, so a seeder that
@@ -122,7 +123,10 @@ type draftPlan struct {
 // No sla_hours anywhere: a deadline renders every seeded run overdue two days
 // after the persistent environment's last deploy.
 var (
-	// firmPlan is polF1 verbatim (frontend/app/src/lib/policies.fixture.ts).
+	// firmPlan mirrors polF1's step shape and role sequence
+	// (frontend/app/src/lib/policies.fixture.ts), not verbatim -- it omits polF1's
+	// sla_hours on every node and its first node's delegate: true (see "No
+	// sla_hours anywhere" above).
 	firmPlan = &plan{
 		policyName:    "Standard approval policy",
 		requiredSeats: []string{"fin_mgr", "compliance"},

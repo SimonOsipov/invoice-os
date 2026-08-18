@@ -16,9 +16,11 @@ so a reader can tell built from unbuilt without reading the code.
 >
 > **It is behind `APPROVALS_ENFORCED`, which defaults OFF.** On a fleet that has not set
 > it, an invoice carrying an open run transmits exactly as it did before — the gate is
-> present and inert. **§11 is the whole flag story and APPR-14 owns the flip.** Every
-> section below states the gate's behaviour in the present tense and adds only "subject
-> to the flag (§11)"; none of them restates §11.
+> present and inert. **§11 is the whole flag story.** CI already sets it true on every PR
+> ephemeral environment; the persistent production environment is the one fleet still on
+> the default, until an operator flips it (§11's checklist). Every section below states
+> the gate's behaviour in the present tense and adds only "subject to the flag (§11)";
+> none of them restates §11.
 
 The API is six routes (`cmd/invoice/main.go:187-192`):
 
@@ -907,11 +909,96 @@ refusal is switched on.
 
 ### APPR-14 owns the flip
 
-**APPR-14 owns turning it on**, and owns the flag-ON deployed proof with it. No
-environment sets `APPROVALS_ENFORCED` today, so every environment is off. The repo carries
-no deployment configuration for it either — the Go services ship no `.env.example`
-(`docs/add-a-service.md`) and the dev-environment workflow rewrites only URL variables, so
-Railway is where it will be set.
+**APPR-14 owns turning it on**, and owns the flag-ON deployed proof with it. CI already
+sets `APPROVALS_ENFORCED=true` on every PR ephemeral environment
+(`.github/workflows/dev-env.yml`'s `set-approvals-enforced` step, APPR-14-03), so it is not
+true that no environment sets it — only the persistent production environment still runs
+the default. The Go services still ship no `.env.example` (`docs/add-a-service.md`), but
+the dev-environment workflow no longer rewrites only URL variables: it now writes this one
+too, directly. What remains is the operator checklist below.
+
+#### Operator checklist: flipping it in production
+
+This is the **execution** of a decision already taken — Q8, 2026-08-08, "SHIP IT, no
+cutover" — not a fresh one. CI already discharges the flag on every PR environment; none
+of the items below are dischargeable by CI, because `scripts/ci/railway-env.sh` refuses on
+purpose to write this variable in the persistent environment ("Refusing to turn
+`APPROVALS_ENFORCED` on in the persistent environment ... Enforcement there is an OPERATOR
+action (APPR-14-10); no CI path may take it.").
+
+**Measured pre-conditions**, source-verified rather than live-measured — production still
+runs the one-tenant seeder until this branch merges and deploys:
+- Both persona tenants hold an active, sealed policy (`DemoTenants`,
+  `internal/demopolicy/demopolicy.go`).
+- Every seat the seeded plans actually require is staffed with an active approver: firm
+  `fin_mgr` = …0004 Musa Danjuma (reviewer); firm `compliance` = …0005 Chiamaka Nwosu
+  (reviewer); in-house `fin_dir` = …0002 and …0008 (both active).
+  Source: `db/seed.dev.sql:35-48, 94-108`.
+- The firm tenant's seven validated invoices all sit below both thresholds, so each arms
+  and is closable by those two seats.
+
+1. **Merge, deploy, and confirm the firm tenant's `awaiting_approval` reads 7 — before
+   flipping.** The seeder runs at invoice-service boot; production still runs the
+   one-tenant seeder until this branch ships. Flipping first would be a no-op on the firm
+   tenant and would gate nothing.
+2. **Confirm the variable is currently unset.** Not measured here — the Railway MCP
+   returned `Unauthorized` and the CLI read was blocked by the permission classifier.
+   ```
+   railway variable list --service invoice \
+     --environment 6c864094-6a06-452f-8495-be77d8a94fe7 \
+     --project 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
+   ```
+3. **Set it.** Project `ASComply`, environment `production` (the persistent environment
+   Railway renamed from `development`, `docs/deploy-model.md:63-70`), service `invoice` —
+   the only binary that reads it (`cmd/invoice/main.go:79`). Addressed by ID so a future
+   rename cannot invalidate the command. `--set` is the CLI's legacy form; this is the
+   current one:
+   ```
+   railway variable set APPROVALS_ENFORCED=true \
+     --project 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 \
+     --environment 6c864094-6a06-452f-8495-be77d8a94fe7 \
+     --service invoice
+   ```
+   Never pass `--skip-deploys`. The flag is read once at boot — without the redeploy the
+   running container keeps the old value and the flip silently does nothing.
+4. **Verify. There is no readback.** `/healthz` carries no flag field, the value is never
+   logged at boot, and `railway variable list` shows what was written, never what the
+   running process read. Open a validated firm invoice with an open run and read
+   `GET /v1/invoices/{id}`:
+   - ON (correct): `can_submit: false`, `submit_blocked_reason` set, Submit renders
+     disabled.
+   - OFF (the flip did not land): `can_submit: true`, `submit_blocked_reason: null`.
+5. **If it did not take effect**, in this order: (a) written but not redeployed — redeploy
+   `invoice`; (b) written on the wrong service — only `invoice` reads it; writing it on
+   `gateway` or `submission` is inert and silent; (c) an unparseable value — that stops the
+   boot with a `fatal` at ERROR (`main.go:80-82`); a service that will not come back up
+   after the flip means a typo (`yes`, `on` and untrimmed whitespace are all rejected).
+6. **Reversible.** Set the same variable to `false` — prefer that to deleting the key:
+   unset also means off, but delete is a second code path. The flag touches exactly one
+   field, `TransmitClear` (`internal/invoice/store.go:1532-1536`, pinned by
+   `internal/invoice/row_facts_store_test.go:115`); arming, runs, decisions and audit rows
+   are written identically either way, so nothing is lost flipping in either direction. The
+   redeploy re-runs `demopolicy.Seed` (idempotent) and `demodocs`; it does not run
+   `db.Reset` (the gateway's, gated off the persistent environment by
+   `RAILWAY_ENVIRONMENT_NAME`).
+7. **Nothing automated catches a regression here**, same as `docs/analytics.md:74-76`, and
+   sharper — there is no readback at all. Re-run the `can_submit` probe (item 4) after any
+   invoice-service redeploy or environment-variable change, not only after this flip.
+
+**Known limitation, out of scope here.** The demo firm persona (…0001 Chinedu Okafor)
+holds only `cfo` on the firm tenant and cannot approve the firm plan's two unconditional
+steps (`fin_mgr`, `compliance`) — he can neither approve nor, once this flips, submit the
+firm tenant's own seeded invoices from the UI. The gateway side is already done
+(APPR-14-01 admitted …0004/…0005 to `loginPersonas`); the missing half is the SPA's
+`APP_PERSONAS` and sign-in screen, which were never extended to those two accounts.
+Dependency: adding demo sign-ins for …0004/…0005, not "demo user-switching" generally.
+
+**Do not delay this flip pending an unrelated copy decision.** The Workflows screen's
+intro currently states "Transmission is not held for approval yet," which is already false
+on every PR ephemeral environment and becomes false in production the moment this flip
+lands. Whether to remove that sentence is a separate product decision, not made under this
+subtask — but it is one more reason not to leave the flip sitting once the merge-deploy
+pre-condition (item 1) is met.
 
 ### Flipping it alone changes nothing on a seeded dev tenant — except the two demo ones
 
@@ -931,11 +1018,14 @@ in the fleet.** The invoice service writes them at boot from `internal/demopolic
   invoices sit above the threshold, so its `awaiting_approval` reads 3 while
   `counts.validated` reads 4 — the gap is what makes the Approvals badge observable on the
   deploy gate rather than coincidentally non-zero. It also carries **`Executive
-  escalation`**, an unsealed inactive DRAFT naming seats nobody holds (`cfo` suspended,
-  `ceo` unstaffed); a draft never governs and never arms.
-- **Firm (`11111111-…`, Okafor & Partners), `Standard approval policy`** — the SPA seed's
-  polF1 verbatim: `fin_mgr`, a `> 250,000,000` condition gating `fin_dir`, a
-  `> 1,000,000,000` condition gating `cfo` plus a notify to the Audit Committee, then
+  escalation`**, an unsealed inactive DRAFT naming four seats, two of which nobody holds
+  actively (`cfo` suspended, `ceo` unstaffed); a draft never governs and never arms.
+- **Firm (`11111111-…`, Okafor & Partners), `Standard approval policy`** — mirrors the SPA
+  seed's polF1 step shape and role sequence, not verbatim: it omits polF1's `sla_hours` on
+  every node and its first node's `delegate: true` (the "no seeded step carries
+  `sla_hours`" sentence below still holds). Its steps: `fin_mgr`, a `> 250,000,000`
+  condition gating `fin_dir`, a `> 1,000,000,000` condition gating `cfo` plus a notify to
+  the Audit Committee, then
   `compliance`. Every one of its seven validated invoices is below both thresholds, so each
   arms on `fin_mgr` then `compliance` and its `awaiting_approval` reads 7 of 7 — that badge
   cannot discriminate, by construction.

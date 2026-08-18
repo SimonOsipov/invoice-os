@@ -10,19 +10,20 @@
 //
 // The IN-HOUSE half of the coverage still lives in persona-surfaces.spec.ts, and is now a
 // heading, a tenant-driven subtitle and a terminal-arm settle — seed-independent, because
-// either terminal arm satisfies it. internal/demopolicy seeds ONE policy onto the IN-HOUSE
-// tenant; the FIRM tenant this file drives still carries none. Nothing in this file signs
-// in as in-house.
+// either terminal arm satisfies it. internal/demopolicy now seeds an active policy onto BOTH
+// persona tenants (plus an in-house-only draft); the FIRM tenant this file drives is itself
+// governed. Nothing in this file signs in as in-house.
 //
 // THIS SPEC CREATES ITS OWN POLICY, THROUGH THE UI. docs/e2e-convention.md:63-74 decides
 // that: every spec creates per-run-unique data, acts on rows it created, and asserts
 // containment or a live-read comparison rather than a literal count. The approval-policy
 // tables are also named there among the ones EXCLUDED from the per-deploy reset, so a
 // seeded row would be a permanently mutable shared fixture across three suites with no
-// reset between them (internal/platform/db/reset.go:238-250). The one exception,
-// internal/demopolicy's policy, is on the IN-HOUSE tenant and sealed; this file drives the
-// FIRM one. A seeded row would also prove nothing about the write path, which is the half
-// of this screen that is new.
+// reset between them (internal/platform/db/reset.go:238-250). The exceptions are
+// internal/demopolicy's three policies -- two sealed actives (one per persona tenant) plus
+// an in-house-only unpublished draft; this file drives the FIRM tenant, itself now governed
+// by its active one. A seeded row would also prove nothing about the write path, which is
+// the half of this screen that is new.
 //
 // [topology-never-publishes] — create, save, delete; NEVER publish. Publishing on a
 // deployment this suite shares seals a version permanently, takes the tenant's ONE active
@@ -50,8 +51,8 @@
 //
 // COUNTS are baseline-relative, never literal: `baseline` is taken off the row locator once
 // the ladder settles, and every later count is `baseline` or `baseline + 1`. Not off the
-// `N POLICIES` counter — that renders only in the roster arm (WorkflowsView.tsx:107-111) and
-// a zero baseline is legal on this deployment.
+// `N POLICIES` counter — that renders only in the roster arm (WorkflowsView.tsx:107-111),
+// whose baseline is now the seeded firm policy, not zero.
 //
 // ISOLATION, by ID first and name second. `ctx.createPolicy()` (App.tsx:1033-1037) mints the
 // row named `Untitled policy`; the per-run-unique name lands only on Save draft. A run that
@@ -190,7 +191,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
 
   // --- 5. settle the ladder, then take the baseline ----------------------------------------
   // Off the ROW locator, never the `N POLICIES` counter: that counter renders only in the
-  // roster arm, and a tenant with zero policies is a legal starting state on this deployment.
+  // roster arm, and this tenant's starting state is now one seeded policy, not zero.
   // Waiting on either terminal arm is both the settle and the guard — a baseline read while
   // the fetch is still in flight would be 0 and would make every later count a lie.
   await expect(

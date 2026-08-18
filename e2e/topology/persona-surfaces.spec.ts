@@ -267,9 +267,10 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   // LIVE, and deliberately thin. APPR-09 wired this list to internal/approval, so everything
   // this block used to assert below the subtitle -- the count, the status pills, the
   // `scope · summary` lines, the `Updated` stamps and the two policy NAMES -- was transcribed
-  // from a frontend constant. internal/demopolicy seeds ONE policy onto this IN-HOUSE tenant
-  // and none onto the FIRM one, so those strings still describe rows that do not exist.
-  // They went with the import (APPR-09-08).
+  // from a frontend constant. internal/demopolicy seeds an active policy onto BOTH persona
+  // tenants now (plus an in-house-only draft), but neither matches the polH1/polF1 tree
+  // shapes those deleted assertions named, so those strings still describe rows that do not
+  // exist. They went with the import (APPR-09-08).
   //
   // The firm/in-house DISJOINTNESS proof went with them rather than being re-derived: this
   // list is a tenant-scoped SERVER read now, so a firm policy cannot appear in it by
@@ -585,9 +586,9 @@ test('nav-alignment: every sidebar nav item renders its label and icon column at
 //
 // The queue is empty BY CONSTRUCTION, not by assumption about the environment: this test
 // creates its own firm entity, selects it, and that entity is seconds old and owns no
-// invoices, so nothing can be awaiting approval under it. (internal/demopolicy arms the
-// in-house tenant only, so the firm queue is empty on the deployed environment anyway --
-// but an assertion resting on THAT would go red the day a firm policy is seeded.) The
+// invoices, so nothing can be awaiting approval under it. (internal/demopolicy now arms BOTH
+// persona tenants, including this one -- the hedge that follows came true -- so it is this
+// test's own fresh entity, not tenant-wide emptiness, that keeps the queue empty.) The
 // empty rung is still the Approvals screen: its own eyebrow, its own h1, its own empty
 // testid, and no invoices-list anywhere.
 test('firm Approvals: the nav item opens the Approvals screen, not the Invoices list', async ({ page }) => {
@@ -668,13 +669,13 @@ async function gridCells(container: Locator, label: string): Promise<Array<{ x: 
 // their own aria-label.
 //
 // DEFERRED, deliberately: the blocked-reason node's `gridColumn: '2 / -1'` span
-// (ApprovalsView.tsx) has no rendered oracle in this suite. demopolicy's one approval step
-// targets `fin_dir` and db/seed.dev.sql staffs this subject into it, so every armed row
-// here is approvable and `approval-blocked-reason` never renders; the firm queue (Test 6)
-// is empty. [topology-never-publishes] forbids publishing the second policy that would
-// manufacture a blocked row, so the span stays on the unit suite's coverage until a story
-// arms one. That is also why the grids below are asserted to hold exactly 7 children: a
-// blocked row would add an eighth on an implicit second grid line.
+// (ApprovalsView.tsx) has no rendered oracle in this suite. demopolicy's in-house ACTIVE plan
+// has exactly one approval step, targeting `fin_dir`, and db/seed.dev.sql staffs this subject
+// into it, so every armed row here is approvable and `approval-blocked-reason` never renders;
+// the firm queue (Test 6) is empty. [topology-never-publishes] forbids publishing the
+// second policy that would manufacture a blocked row, so the span stays on the unit suite's
+// coverage until a story arms one. That is also why the grids below are asserted to hold
+// exactly 7 children: a blocked row would add an eighth on an implicit second grid line.
 //
 // Cannot be run locally, same as Test 5: every Playwright config in this package is
 // deliberately webServer-less and points at deployed URLs, so its first real run -- red or

@@ -863,6 +863,10 @@ jobs:
             mv e2e/playwright-report e2e/report-smoke
           fi
       - name: API E2E (typed contract suite)
+        # !cancelled(): a red smoke step must not silently withhold the api and
+        # topology verdicts (APPR-14 fix) — always() would also run this on a
+        # cancelled workflow, which we don't want.
+        if: '!cancelled()'
         # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
         # must complete before topology's rule-dependent assertions run (D4).
         # Shares the global `rules` fixture with topology, so ordering here is
@@ -879,6 +883,9 @@ jobs:
             mv e2e/playwright-report e2e/report-api
           fi
       - name: Topology (app verified-login + cross-tenant isolation)
+        # !cancelled(): same reasoning as the API E2E step above — a red smoke
+        # or api step must not hide topology's verdict.
+        if: '!cancelled()'
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
         # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).

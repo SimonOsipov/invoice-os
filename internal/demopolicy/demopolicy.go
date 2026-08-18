@@ -124,9 +124,8 @@ type draftPlan struct {
 // after the persistent environment's last deploy.
 var (
 	// firmPlan mirrors polF1's step shape and role sequence
-	// (frontend/app/src/lib/policies.fixture.ts), not verbatim -- it omits polF1's
-	// sla_hours on every node and its first node's delegate: true (see "No
-	// sla_hours anywhere" above).
+	// (frontend/app/src/lib/policies.fixture.ts), not verbatim -- it omits
+	// sla_hours (see "No sla_hours anywhere" above) and node f1n1's delegate: true.
 	firmPlan = &plan{
 		policyName:    "Standard approval policy",
 		requiredSeats: []string{"fin_mgr", "compliance"},

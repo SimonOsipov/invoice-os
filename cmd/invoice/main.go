@@ -157,9 +157,9 @@ func main() {
 			"documents", res.DocumentsStored, "invoices", res.InvoicesLinked)
 	}
 
-	// Give the in-house demo tenant one active approval policy and re-arm its
-	// validated backlog, so awaiting_approval is non-zero and the Approvals badge
-	// is observable on the deploy gate. Runs on EVERY boot, not just the first:
+	// Give each demo tenant one active approval policy and re-arm its validated
+	// backlog, so awaiting_approval is non-zero and the Approvals badge is
+	// observable on the deploy gate. Runs on EVERY boot, not just the first:
 	// the gateway's db.Reset truncates approval_runs and leaves the policy
 	// standing. Here rather than in the gateway, which is a different process.
 	// Non-fatal, matching demodocs above -- a crash-loop costs an environment, a

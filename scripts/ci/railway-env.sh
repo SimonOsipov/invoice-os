@@ -5,6 +5,7 @@
 #                            select-domain [--self-test]|
 #                            reconcile-fork <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
+#                            set-approvals-enforced <environment-id|--self-test>|
 #                            delete-environment <name>|list-environments>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
@@ -1773,6 +1774,196 @@ cmd_reconcile_fork() {
   echo "Fork reconciliation complete for $env_id."
 }
 
+# --- Approvals enforcement: turn the flag ON in a fork ------------------------
+#
+# APPR-14-03. The `invoice` service runs the gate (internal/approval/gate.go);
+# resolved by NAME via SETTLE_QUERY (:648-650), same as assert-db-dsns — never
+# a hardcoded, environment-scoped service UUID. The literal "invoice" is
+# inlined at each call site, not a constant: it must be visible inside
+# cmd_set_approvals_enforced's own body, not one hop away.
+
+# service_id_by_name <settle-response-json> <service-name> <context-label>
+# Pure: no token, no network. Echoes the serviceId on stdout on exactly one
+# match. Every refusal goes to stderr and leaves stdout EMPTY — the caller
+# captures stdout into a service id, so a leak here would upsert against
+# garbage (same property domain_expect_refusal_stdout_empty exists for).
+service_id_by_name() {
+  local resp="$1" name="$2" ctx="$3" total count
+
+  # Not `2>&1`: jq's own parse error is the only signal the response shape
+  # drifted (same discipline as select_domain, :943-944).
+  if ! total=$(printf '%s' "$resp" | jq '[.data.environment.serviceInstances.edges[]?] | length'); then
+    echo "::error::Could not read service instances for $ctx. This is NOT evidence that '$name' is absent. APPROVALS_ENFORCED was NOT set." >&2
+    return 1
+  fi
+
+  if [ "$total" = "0" ]; then
+    echo "::error::Railway returned NO service instances for $ctx (a null environment, a GraphQL error, and an empty edges list all reduce to this). This is NOT evidence that '$name' is absent. APPROVALS_ENFORCED was NOT set." >&2
+    return 1
+  fi
+
+  count=$(printf '%s' "$resp" | jq --arg n "$name" \
+    '[.data.environment.serviceInstances.edges[]?.node | select(.serviceName == $n)] | length')
+
+  if [ "$count" = "0" ]; then
+    echo "::error::None of the $total service instance(s) in $ctx is named '$name' — renamed, or Railway and the deploy matrix have drifted apart. APPROVALS_ENFORCED was NOT set." >&2
+    return 1
+  fi
+
+  if [ "$count" != "1" ]; then
+    echo "::error::$count service instances in $ctx are named '$name'. Refusing to guess which one runs the flag. APPROVALS_ENFORCED was NOT set." >&2
+    return 1
+  fi
+
+  printf '%s' "$resp" | jq -r --arg n "$name" \
+    '.data.environment.serviceInstances.edges[]?.node | select(.serviceName == $n) | .serviceId'
+}
+
+# assert_environment_is_ephemeral <env-id>
+# Second guard alongside cmd_set_approvals_enforced's literal id compare: this
+# one survives a rename or a drifted RAILWAY_DEV_ENVIRONMENT_ID — the class of
+# failure that broke the dispatch path when `development` was renamed
+# `production` on 2026-07-27. Reuses fetch_environment_list/ENV_LIST_QUERY, no
+# new GraphQL.
+assert_environment_is_ephemeral() {
+  local env_id="$1" count ephemeral
+  fetch_environment_list
+
+  count=$(echo "$GQL_RESPONSE" | jq --arg id "$env_id" \
+    '[.data.environments.edges[]?.node | select(.id == $id)] | length')
+  if [ "$count" = "0" ]; then
+    echo "::error::No environment with id $env_id exists in project $RAILWAY_PROJECT_ID — an id this project does not own. APPROVALS_ENFORCED was NOT set."
+    exit 1
+  fi
+
+  ephemeral=$(echo "$GQL_RESPONSE" | jq -r --arg id "$env_id" \
+    '.data.environments.edges[]?.node | select(.id == $id) | .isEphemeral')
+  if [ "$ephemeral" != "true" ]; then
+    echo "::error::Environment $env_id is NOT ephemeral (isEphemeral=$ephemeral). Turning enforcement on there is an OPERATOR action (APPR-14-10); no CI path may take it. APPROVALS_ENFORCED was NOT set."
+    exit 1
+  fi
+}
+
+# The two helpers increment `failures`, a `local` of approvals_self_test (bash
+# dynamic scoping) — same convention as domain_expect_select/_refusal.
+approvals_expect_select() {
+  local id="$1" json="$2" want="$3" got rc=0
+  got=$(service_id_by_name "$json" "invoice" "self-test $id" 2>/dev/null) || rc=$?
+  if [ "$rc" != "0" ] || [ "$got" != "$want" ]; then
+    echo "::error::self-test $id FAILED: expected exit 0 and '$want'; got exit $rc and '$got'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> $got"
+}
+
+# Asserts BOTH the refusal AND that stdout stays empty on every fixture — a
+# leak here would upsert APPROVALS_ENFORCED against a garbage serviceId.
+approvals_expect_refusal() {
+  local id="$1" json="$2" out rc=0
+  out=$(service_id_by_name "$json" "invoice" "self-test $id" 2>/dev/null) || rc=$?
+  if [ "$rc" = "0" ]; then
+    echo "::error::self-test $id FAILED: expected a refusal, got exit 0 and stdout '$out'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  if [ -n "$out" ]; then
+    echo "::error::self-test $id FAILED: refusal leaked onto stdout: '$out'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> refused (exit $rc), stdout empty"
+}
+
+approvals_self_test() {
+  local failures=0
+
+  # A1 realistic 11-instance fleet, invoice neither first nor last.
+  approvals_expect_select A1 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-gw","serviceName":"gateway"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-app","serviceName":"app"}}]}}}}' svc-inv
+  # A2 same fleet, edges reversed — order must not decide.
+  approvals_expect_select A2 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-app","serviceName":"app"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-gw","serviceName":"gateway"}}]}}}}' svc-inv
+  # A3 invoices + invoice-legacy present, no invoice. NOTE: does not by itself
+  # kill substring matching — two near-misses read as an ambiguous 2-match
+  # refusal even under a contains() regression. A11 is the fixture that
+  # actually isolates that class of bug.
+  approvals_expect_refusal A3 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"invoices"}},{"node":{"serviceId":"svc-2","serviceName":"invoice-legacy"}}]}}}}'
+  # A4 Invoice only — kills case-insensitive matching.
+  approvals_expect_refusal A4 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"Invoice"}}]}}}}'
+  # A5 two invoice instances.
+  approvals_expect_refusal A5 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"invoice"}},{"node":{"serviceId":"svc-2","serviceName":"invoice"}}]}}}}'
+  # A6 empty edges — the total==0 refusal.
+  approvals_expect_refusal A6 '{"data":{"environment":{"serviceInstances":{"edges":[]}}}}'
+  # A7 null environment — must read as A6's message, never "the service is absent".
+  approvals_expect_refusal A7 '{"data":{"environment":null}}'
+  # A8 a real GraphQL error response.
+  approvals_expect_refusal A8 '{"errors":[{"message":"Not Authorized"}],"data":null}'
+  # A9 bare `[]` top level — a jq index error, a different mechanism from A7.
+  approvals_expect_refusal A9 '[]'
+  # A11 invoice-legacy alone, no exact invoice. The ONLY fixture with exactly
+  # one near-miss and zero exact matches: a contains()/prefix regression would
+  # SELECT this instance (1 match), so this is the fixture that actually
+  # catches that class of bug, unlike A3.
+  approvals_expect_refusal A11 '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"invoice-legacy"}}]}}}}'
+
+  # A10: A3 (zero matches among known instances) and A6 (no instances at all)
+  # must produce DISTINCT messages — an operator must not have to guess which
+  # happened. Same ctx label for both, so only the refusal kind can differ.
+  local msg_a3 msg_a6
+  msg_a3=$(service_id_by_name '{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-1","serviceName":"invoices"}}]}}}}' "invoice" "self-test A10" 2>&1 >/dev/null) || true
+  msg_a6=$(service_id_by_name '{"data":{"environment":{"serviceInstances":{"edges":[]}}}}' "invoice" "self-test A10" 2>&1 >/dev/null) || true
+  if [ "$msg_a3" = "$msg_a6" ]; then
+    echo "::error::self-test A10 FAILED: the zero-matches and no-instances refusals produced the SAME message"
+    failures=$((failures + 1))
+  else
+    echo "  A10 ok -> zero-matches and no-instances refusals are distinguishable"
+  fi
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::approvals enforcement self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "Approvals enforcement self-test: 11 fixtures passed, no token read, no network call."
+}
+
+# cmd_set_approvals_enforced <environment-id|--self-test>
+# Order is load-bearing. The usage guard (empty argument -> exit 2) MUST run
+# before the persistent-environment compare, copied from cmd_reconcile_fork
+# (:1747-1752): with RAILWAY_DEV_ENVIRONMENT_ID set and no argument, an
+# unguarded compare is `"" = "<real-id>"` — false — so the refusal would PASS
+# and CI would write wherever the caller's bug pointed the argument.
+cmd_set_approvals_enforced() {
+  local env_id="${1:-}"
+
+  # --self-test MUST stay ahead of every other check: it needs no token and no
+  # network, so it runs on a fork PR too, which receives no secrets by design.
+  if [ "$env_id" = "--self-test" ]; then
+    approvals_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-approvals-enforced <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to turn APPROVALS_ENFORCED on in the persistent environment ($env_id). Enforcement there is an OPERATOR action (APPR-14-10); no CI path may take it."
+    exit 1
+  fi
+
+  require_env
+  assert_environment_is_ephemeral "$env_id"
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local svc_id
+  svc_id=$(service_id_by_name "$GQL_RESPONSE" "invoice" "environment $env_id")
+
+  upsert_variable "$env_id" "$svc_id" "invoice" APPROVALS_ENFORCED true
+  verify_variable "$env_id" "$svc_id" "invoice" APPROVALS_ENFORCED true
+  echo "APPROVALS_ENFORCED confirmed true in environment $env_id (service $svc_id)."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -1782,10 +1973,11 @@ case "${1:-}" in
   select-domain)             cmd_select_domain "${2:-}" ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
+  set-approvals-enforced)    cmd_set_approvals_enforced "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-approvals-enforced <environment-id|--self-test>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

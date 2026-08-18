@@ -834,3 +834,111 @@ export function decideInvoiceApproval(
     token,
   })
 }
+
+interface ApprovalTransport {
+  read: (token: string, id: string) => Promise<ApprovalRun>
+  decide: (token: string, id: string, body: { decision: 'approved' | 'rejected'; reason?: string }) => Promise<ApprovalRun>
+}
+
+// decodeJwtSubject(): reads `sub` off a JWT payload without verifying it -- these are
+// always mock-issuer tokens in this suite, and it's the only way to name a subject given
+// approveUntilClosed's (invoiceId, tokens, max) signature carries none.
+function decodeJwtSubject(token: string): string {
+  return JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')).sub
+}
+
+// approveUntilClosed(): drives a run to closed, deciding the first pending approval step
+// each iteration with the token staffed to its role. Reads once up front; every step after
+// that advances on decideInvoiceApproval's own returned run, not a fresh read.
+//
+// Guard order: closed state first -- a one-step run closes with no pending step left, and
+// comparing that missing step's ord against a previous ord would misfire the stalled guard
+// on a correct run. Then no-pending-step, or a stalled open run falls through to
+// tokens[undefined] and reports a misleading missing-token error. Then the stalled-ord
+// check, keyed on (run_id, ord) rather than ord alone -- a concurrent cancel-and-re-arm is
+// the one way ord legitimately goes backward, and run_id turns that would-be false positive
+// into a correctly-worded failure instead.
+//
+// max=6: the deepest reachable policy today needs 4 decisions (a firm invoice over 1bn
+// materialises fin_mgr, fin_dir, cfo, compliance -- demopolicy.go:129-139); 6 is headroom.
+export async function approveUntilClosed(
+  invoiceId: string,
+  tokens: Record<string, string>,
+  max = 6,
+  transport?: ApprovalTransport,
+): Promise<ApprovalRun> {
+  // Empty tokens against the real transport would reach the initial read unauthenticated
+  // and surface a bare 401; fail before that call. A scripted transport doesn't touch the
+  // network on the token's account, so this only guards the default pair.
+  if (!transport && Object.keys(tokens).length === 0) {
+    throw new Error(`approveUntilClosed: tokens is empty; cannot authenticate the initial read (invoice ${invoiceId})`)
+  }
+  transport = transport ?? { read: getInvoiceApproval, decide: decideInvoiceApproval }
+
+  let run = await transport.read(Object.values(tokens)[0] ?? '', invoiceId)
+  let decided = 0
+  let lastPending: { runId: string; ord: number } | null = null
+
+  while (run.state === 'open') {
+    const pending = run.steps.find((s) => s.kind === 'approval' && s.state === 'pending')
+    if (!pending) {
+      throw new Error(`approveUntilClosed: run is open but has no pending approval step (invoice ${invoiceId}, run ${run.run_id})`)
+    }
+    if (lastPending && lastPending.runId === run.run_id && lastPending.ord === pending.ord) {
+      throw new Error(
+        `approveUntilClosed: pending ord did not advance (invoice ${invoiceId}, run ${run.run_id}, ord ${pending.ord}, role ${pending.workflow_role_key})`,
+      )
+    }
+    if (decided >= max) {
+      throw new Error(
+        `approveUntilClosed: exceeded max decisions (${max}) for invoice ${invoiceId}; still pending role ${pending.workflow_role_key}`,
+      )
+    }
+    const roleKey = pending.workflow_role_key
+    const token = roleKey ? tokens[roleKey] : undefined
+    if (!token) {
+      throw new Error(`approveUntilClosed: no token for pending role "${roleKey}" (invoice ${invoiceId})`)
+    }
+
+    lastPending = { runId: run.run_id, ord: pending.ord }
+    try {
+      run = await transport.decide(token, invoiceId, { decision: 'approved' })
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e)
+      // decodeJwtSubject throws on a non-JWT token; degrade rather than let that parse
+      // error replace the real decide failure being reported here.
+      let subject: string
+      try {
+        subject = decodeJwtSubject(token)
+      } catch {
+        subject = 'unavailable'
+      }
+      throw new Error(
+        `approveUntilClosed: decide failed for role "${roleKey}" as subject ${subject} (invoice ${invoiceId}): ${reason}`,
+      )
+    }
+    decided += 1
+  }
+
+  return run
+}
+
+// firmApproverTokens(): mints the seeded firm run's two holder tokens once -- ...0004
+// (fin_mgr) and ...0005 (compliance). Memoises the in-flight PROMISE, not the resolved
+// value, so two concurrent callers can't double-mint; this is the first module-scope token
+// cache in the api suite (every other site uses a per-file beforeAll), which AC-7 mandates.
+// The mock issuer's 1h TTL against a 5-15min run means the cache can't go stale.
+let firmApproverTokensPromise: Promise<Record<string, string>> | null = null
+
+export function firmApproverTokens(): Promise<Record<string, string>> {
+  if (!firmApproverTokensPromise) {
+    firmApproverTokensPromise = (async () => {
+      const [fin_mgr, compliance] = await Promise.all([
+        login({ ...PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000004' }),
+        login({ ...PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000005' }),
+      ])
+      return { fin_mgr, compliance }
+    })()
+  }
+  return firmApproverTokensPromise
+}

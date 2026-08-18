@@ -2536,8 +2536,9 @@ func TestSeedLeavesJunkInvoiceCreatedAtUntouched(t *testing.T) {
 	}
 }
 
-// submittableTriggerTINs are the three reserved TINs the mock adapter converges on, so a
-// `validated` row carrying one is genuinely submittable from the demo UI.
+// submittableTriggerTINs are the three reserved TINs the mock adapter converges on. Under
+// enforcement a `validated` row carrying one is held by the tenant's seeded approval run
+// until it closes -- submittable once approved, not immediately.
 var submittableTriggerTINs = []string{"99999999-0001", "99999999-0002", "99999999-0003"}
 
 // nonConvergentTriggerTINs return Retryable forever (or are unallocated to a converging
@@ -2579,8 +2580,9 @@ func reservedTINList() []string {
 }
 
 // TestSeedSeedsSubmittableTriggerTwinsInBothTenants: each demo tenant carries exactly three
-// `validated` rows on the accept/reject/deferred triggers, so an operator can click Submit and
-// watch a real clearance, refusal and poll cycle. Every clause is a sub-assertion of the count
+// `validated` rows on the accept/reject/deferred triggers, so an operator can watch each row
+// clear its tenant's seeded approval run, then click Submit for a real clearance, refusal
+// and poll cycle. Every clause is a sub-assertion of the count
 // check on purpose: the twins do not exist yet, so a per-row test split out of this function
 // would iterate an empty set and pass vacuously.
 func TestSeedSeedsSubmittableTriggerTwinsInBothTenants(t *testing.T) {
@@ -2634,7 +2636,7 @@ func TestSeedSeedsSubmittableTriggerTwinsInBothTenants(t *testing.T) {
 			twinIDs = append(twinIDs, r.id)
 		}
 		if len(got) != len(submittableTriggerTINs) {
-			t.Errorf("%s tenant: %d validated reserved-TIN invoices %v, want %d carrying exactly %v -- nothing in this tenant is submittable otherwise",
+			t.Errorf("%s tenant: %d validated reserved-TIN invoices %v, want %d carrying exactly %v -- nothing else in this tenant carries a reserved TIN",
 				tc.name, len(got), gotTINs, len(submittableTriggerTINs), submittableTriggerTINs)
 		}
 		if !reflect.DeepEqual(gotTINs, submittableTriggerTINs) {

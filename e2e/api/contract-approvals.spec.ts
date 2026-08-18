@@ -43,7 +43,7 @@ import {
   PERSONAS,
   type ApprovalPolicy,
 } from './client'
-import { assertErrorEnvelope, type RawResult } from './contract-helpers'
+import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 import { freshPolicyName, freshRoleTitle } from './fixtures'
 
 // The four keys internal/approval's Role serializes, sorted. No omitempty on any field, so
@@ -294,7 +294,7 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 // The approval-policy half of the same seam (APPR-05), as a SIBLING describe — the
 // workflow-role block above is untouched. Same shared-environment discipline as that block
 // (approval_policies is excluded from db.Reset too, so nothing here may depend on a list
-// LENGTH or on a predicted id), plus three rules of its own:
+// LENGTH or on a predicted id), plus four rules of its own:
 //
 //   - approval_policy_versions_one_active is ON (tenant_id), so EVERY publish in this file
 //     deactivates whatever the previous test published. No test may assert that a policy
@@ -306,6 +306,19 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 //     as "the active tree".
 //   - every test mints its own policy inline, because a CI retry replays the whole test:
 //     a shared published policy would answer 409 the second time round.
+//   - the firm tenant carries a SEEDED active policy ("Standard approval policy",
+//     internal/demopolicy's firmPlan) at boot, which the four publishes above take turns
+//     deactivating. afterAll ends the file by restoring it through
+//     contract-helpers.ensureFirmPolicyActive — every LATER api spec file depends on the
+//     firm tenant reading governed, not on this file's own tests (D38).
+//
+// Deviation Justification (afterAll's restore, vs. the sweep above it): the sweep's deletes
+// swallow every error including a real one, which is fine there — a second delete on an
+// already-gone probe is expected. The restore does not follow that pattern wholesale:
+// ensureFirmPolicyActive swallows its own PUT-draft + publish mutation internally (that half
+// is cleanup, same reasoning as the deletes) but THROWS when its closing independent read
+// proves the firm tenant did not converge — the one case where staying silent would hand
+// every later api spec file a lie about the tenant's governance.
 //
 // published_at is asserted as a SHAPE (Z-suffixed RFC3339, 0-6 fractional digits) plus an
 // epoch-millis window taken around the publish call. That is deliberately all it can prove:
@@ -408,8 +421,8 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
   // purpose — hooks replay on retry (retries: 1 in CI), the dangling-role test already
   // deleted its own role, and a second policy delete is 404 (deleted_at IS NULL is the
   // existence predicate), so a throw here is expected and must never mask a real assertion
-  // failure. Deleting a policy also releases the tenant's active slot, so the environment
-  // is left with no live probe governing anything.
+  // failure. Deleting a policy also releases the tenant's active slot; the restore below is
+  // what returns the firm tenant to governed before this file exits.
   test.afterAll(async () => {
     for (const id of createdPolicyIds) {
       try {
@@ -437,6 +450,13 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
         }
       }
     }
+
+    // AC-1/3/4/8: NOT wrapped in try/catch, unlike the sweeps above — see this block's
+    // header Deviation Justification. ensureFirmPolicyActive swallows its own mutation
+    // errors and throws only once its independent read proves the firm tenant did not end
+    // this file with exactly one active "Standard approval policy" version carrying a real
+    // tree, which must fail the file rather than be silently absorbed.
+    await ensureFirmPolicyActive(token)
   })
 
   // Registers the runtime id for the sweep — an id is only ever learned, never predicted.
@@ -474,8 +494,9 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(Array.isArray(body.approval_policies), 'approval_policies should be an array').toBe(true)
 
     const policies = body.approval_policies as Array<Record<string, unknown>>
-    // Justified by the probe just created, not by seed content — internal/demopolicy seeds
-    // one policy onto the IN-HOUSE tenant and none onto this FIRM one.
+    // Justified by the probe just created, not by seed content — though the firm tenant now
+    // carries its own seeded "Standard approval policy" too (internal/demopolicy's
+    // firmPlan), so the list this test reads is no longer probe-only.
     // Also what stops the per-element loop below passing vacuously.
     expect(policies.length, 'the probe this test created is in the list').toBeGreaterThan(0)
     for (const policy of policies) {
@@ -816,8 +837,9 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
   //     403 sentence this file pins elsewhere is a different refusal;
   //   - the message is pinned, which separates an RLS 404 from a route-level one;
   //   - B creates her own policy first, so the absence check never runs against a list this
-  //     test does not own. B IS the in-house tenant internal/demopolicy seeds, but the
-  //     sweep below deletes by id, so neither half can reach the seeded row.
+  //     test does not own. Both personas carry a seeded row now (internal/demopolicy seeds
+  //     each tenant its own plan), but the sweep below deletes by id, so neither half can
+  //     reach either seeded row.
   test('AC-7: tenant B can neither read nor delete tenant A policy — 404 not 403, and A row untouched', async () => {
     const probeA = await createPolicyProbe()
     const tokenB = await login(PERSONAS.B)

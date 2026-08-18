@@ -512,6 +512,19 @@ jobs:
           bash scripts/ci/railway-env.sh reconcile-urls \
             "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
 
+      # PR ONLY, same reasoning as the URL-variables step above: on push/dispatch
+      # the target is the persistent environment, and turning enforcement on
+      # there is an OPERATOR action (APPR-14-10), never a CI one. The
+      # subcommand's own refusal is the second line of defence. No
+      # continue-on-error: a silent failure here would leave the deploy gate
+      # proving flag-OFF behaviour while claiming to prove flag-ON.
+      - name: Turn approvals enforcement ON in the fork (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-approvals-enforced "$ENV_ID"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The
@@ -850,6 +863,10 @@ jobs:
             mv e2e/playwright-report e2e/report-smoke
           fi
       - name: API E2E (typed contract suite)
+        # !cancelled(): a red smoke step must not silently withhold the api and
+        # topology verdicts (APPR-14 fix) — always() would also run this on a
+        # cancelled workflow, which we don't want.
+        if: '!cancelled()'
         # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
         # must complete before topology's rule-dependent assertions run (D4).
         # Shares the global `rules` fixture with topology, so ordering here is
@@ -866,6 +883,9 @@ jobs:
             mv e2e/playwright-report e2e/report-api
           fi
       - name: Topology (app verified-login + cross-tenant isolation)
+        # !cancelled(): same reasoning as the API E2E step above — a red smoke
+        # or api step must not hide topology's verdict.
+        if: '!cancelled()'
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
         # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).

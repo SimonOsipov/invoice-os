@@ -64,7 +64,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Page, type Request } from '@playwright/test'
-import { login, createEntity, PERSONAS } from '../api/client'
+import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS } from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
@@ -181,6 +182,20 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 // over it fails loudly instead of passing vacuously.
 function requestBody(req: Request): string {
   return req.postDataBuffer()?.toString('utf8') ?? req.postData() ?? ''
+}
+
+// approveOpenRunsForEntity(): both submitting tests below hold only invoice NUMBERS
+// (review-row locator text filters), never ids -- this recovers them via the entity_id
+// filter (the entity is fresh, so this can only return this run's own rows) and closes
+// every open run over the side channel. Filtered to run_state 'open' rather than
+// approving every row unconditionally: a kept-as-is row is never validated, so it has no
+// run at all, and approveUntilClosed has nothing to read for one.
+async function approveOpenRunsForEntity(token: string, entityId: string): Promise<void> {
+  const { invoices } = await listInvoices(token, { entity_id: entityId })
+  const approverTokens = await firmApproverTokens()
+  await Promise.all(
+    invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
+  )
 }
 
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
@@ -1035,6 +1050,20 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 // leak one row's fetched detail/draft into the other. Verified by CODE READING only until
 // now -- vitest here is environment:'node' (no jsdom/RTL), so there is no unit oracle for
 // this, and this is the first time it runs against a live DOM at all.
+//
+// AC-6/AC-7: this file had no test.describe/beforeAll/module-scope-token infrastructure
+// before this subtask -- scoped to just this submitting test rather than the whole file,
+// so unrelated tests below (INVCR-E2E-2, BULK-E2E-*, ...) stay untouched by it. Self-heal
+// (D3 protocol, ../api/validation.spec.ts:14-26), unwrapped: the api run ahead of this one
+// leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
+// cleanup), and [topology-never-publishes] stays satisfied -- this restores the tenant's
+// OWN seeded policy, never a new one (docs/e2e-convention.md).
+test.describe('INVCR-E2E-1 governs the firm tenant before submitting', () => {
+  test.beforeAll(async () => {
+    const token = await login(PERSONAS.A)
+    await ensureFirmPolicyActive(token)
+  })
+
 test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-validate -> select -> submit, badges from a re-fetch', async ({
   page,
 }) => {
@@ -1127,6 +1156,13 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   await page.getByTestId('review-revalidate').click()
   await expect(violateRow, 'the fixed row drops out of the still-active rule filter').toHaveCount(0)
 
+  // AC-2/[selectability]: CLEAN armed its run at import, VIOLATE only just now (the
+  // revalidate above) -- this test holds only invoice NUMBERS, never ids, so recover both
+  // and close their runs before select-all, or isRowSelectable leaves them disabled. The
+  // rail-pill toggle below re-fetches the table server-side ([filters-are-server-side],
+  // this file's own header), so no separate wait is needed to see the approvals land.
+  await approveOpenRunsForEntity(token, entity.id)
+
   // Toggle the SAME rule filter back off -- the invoice no longer matches it, so this is
   // also what makes the moved verdict (and the still-expanded row's passing panel)
   // observable again. `expandedId` (ReviewInvoicesTab.tsx) is untouched by the filter
@@ -1166,6 +1202,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   await expect(cleanRow.getByTestId('review-verdict')).toContainText('QUEUED')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
 })
 
 // AC-2: Core AC 8's N=1 route, proven on the deployed build for the first time -- a
@@ -1336,6 +1373,15 @@ test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derive
 // AC-7: keeping a failing invoice as-is drops it out of "Needs a fix" but the row -- and
 // its checkbox -- stay on screen, DISABLED, never absent (task-291's own QA finding; the
 // plan's older "checkbox is absent" wording is wrong and the rewritten AC corrects it).
+//
+// AC-6/AC-7: own describe + beforeAll, same reasoning as INVCR-E2E-1's above -- scoped to
+// just this submitting test, self-heals independently rather than sharing that block's.
+test.describe('INVCR-E2E-7 governs the firm tenant before submitting', () => {
+  test.beforeAll(async () => {
+    const token = await login(PERSONAS.A)
+    await ensureFirmPolicyActive(token)
+  })
+
 test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disabled, never absent', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -1384,6 +1430,12 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   await expect(violateRow.getByTestId('review-verdict')).toContainText('KEPT')
   await expect(page.getByTestId('review-kept-banner')).toContainText('Buyer confirmed the VAT discrepancy is intentional')
 
+  // AC-2/[selectability]: CLEAN armed its run at import (auto-promoted to validated, zero
+  // violations); VIOLATE never validates at all (kept stays non-validated), so it has no
+  // run to close. Close CLEAN's before select-all below, or select-all picks up nothing.
+  // The two filter-pill toggles below already re-fetch the table server-side.
+  await approveOpenRunsForEntity(token, entity.id)
+
   // It drops out of "Needs a fix" ...
   await page.getByTestId('review-filter-pill').filter({ hasText: 'Needs a fix' }).click()
   await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })).toHaveCount(0)
@@ -1404,6 +1456,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   await expect(violateRow.getByTestId('review-select')).not.toBeChecked()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
 })
 
 // BULK-01-08 (task-312) -- the FINAL subtask of BULK-01 (multi-file import), and the

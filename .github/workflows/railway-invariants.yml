@@ -72,3 +72,13 @@ jobs:
 
       - name: Run select-domain --self-test
         run: bash scripts/ci/railway-env.sh select-domain --self-test
+
+  approvals-enforced-self-test:
+    name: Approvals-enforced flag write self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run set-approvals-enforced --self-test
+        run: bash scripts/ci/railway-env.sh set-approvals-enforced --self-test

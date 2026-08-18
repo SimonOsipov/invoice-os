@@ -233,7 +233,8 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- own `violations` stay `[]`.
 --
 -- DEMO-2026-1007..1009 carry the mock adapter's reserved trigger buyer TINs and stay
--- `validated`, so a demo can submit them live rather than only see the aftermath.
+-- `validated`, so a demo can submit them live once the seeded firm approval run (fin_mgr,
+-- compliance) closes -- not on validation alone, since that run arms first.
 --
 -- Each buyer_tin below resolves to exactly one buyer_name (roster, not a real customer
 -- list) -- TestSeedOneBuyerNamePerBuyerTIN enforces it.
@@ -274,8 +275,9 @@ WITH invoice_seed (
     ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-01-29', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',        60000.00,  4500.00,  64500.00,  false, '[]', '[]', NULL),
     ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-02-04', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 75000.00,  7500.00,  82500.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]', NULL),
-    -- Reserved trigger buyer TINs, left `validated` so a demo can submit them and watch the
-    -- live outcome. No seeded job or evidence: they have never been submitted. Dated last in
+    -- Reserved trigger buyer TINs, left `validated` so a demo can watch them clear the seeded
+    -- firm approval run and then submit live. No seeded job or evidence: they have never been
+    -- submitted. Dated last in
     -- the tenant (AC-8) so the register's issue_date DESC sort surfaces them first.
     ('10012345-0001', 'DEMO-2026-1007', 'validated', '2026-06-22', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0001', 'Sandbox APP (always accepts)',           120000.00, 9000.00,  129000.00, true,  '[]', '[]', NULL),
     ('10012345-0001', 'DEMO-2026-1008', 'validated', '2026-06-25', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0002', 'Sandbox APP (always rejects)',            96000.00, 7200.00,  103200.00, true,  '[]', '[]', NULL),
@@ -401,8 +403,9 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
 -- either as `accepted` would claim an outcome this sandbox cannot produce. -0005 is skipped --
 -- it accepts exactly like -0001 and would add a row but no new outcome. DEMO-2026-80## are
 -- ordinary counterparty invoices, so the portfolio is not made up entirely of triggers.
--- DEMO-2026-90## are submittable twins of the accept/reject/deferred triggers, left
--- `validated` with no seeded job or evidence: they have never been submitted.
+-- DEMO-2026-90## are twins of the accept/reject/deferred triggers, held by the seeded
+-- in-house fin_dir approval run once validated -- submittable only after it closes -- with
+-- no seeded job or evidence: they have never been submitted.
 WITH inhouse_invoice_seed (
     invoice_number, status, issue_date, buyer_tin, buyer_name,
     subtotal, vat, total, validated, violations, rejection_reasons, failure_kind

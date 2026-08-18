@@ -104,19 +104,33 @@ endpoints are real (`docs/approvals.md`), `App.tsx` fetches them, and both specs
 surface have been re-derived against live data (APPR-09-07/08). `e2e/topology/workflows.spec.ts`
 holds the firm half — it creates its own policy through the UI, imports no fixture, and never
 publishes (`[topology-never-publishes]`: a publish seals a version permanently and takes the
-tenant's one active slot on a shared deployment). `e2e/topology/roles.spec.ts` builds and
+tenant's one active slot on a shared deployment). The decision is scoped to policy
+**identity**, not the verb: a topology spec must never publish a policy it authored and must
+never change which policy governs the tenant, but restoring the tenant's own already-seeded
+policy to the active slot it already owns (`ensureFirmPolicyActive`,
+`e2e/api/contract-helpers.ts`) is convergence, not publication — every firm-tenant submitting
+spec self-heals through it in a `beforeAll` (APPR-14-07). `e2e/topology/roles.spec.ts` builds and
 deletes its own policy on the same terms. `persona-surfaces.spec.ts` holds the in-house half,
 now a heading, a tenant-driven subtitle and a settle on either terminal arm of the list —
-`internal/demopolicy` seeds one policy onto the in-house tenant and none onto the firm one,
-and `persona-surfaces.spec.ts` names neither it nor any other pre-existing row;
+`internal/demopolicy` seeds an active policy onto BOTH persona tenants (plus an unpublished
+draft on the in-house one), and `persona-surfaces.spec.ts` names none of them, nor any other
+pre-existing row;
 `workflows.spec.ts` and `roles.spec.ts` name only rows they create. The mock fixture
 module that predated those live reads, `policyFixtures.ts`, was deleted by APPR-10.
 
 `invoice-surfaces.spec.ts` extends this to the invoice-level decision controls and trail
-card, but covers only the **unarmed** case — both disabled, the trail empty. The
-**armed** approve/reject journey lives in `e2e/api/contract-invoice.spec.ts` instead,
-because `[topology-never-publishes]` bars a topology spec from publishing the policy an
-armed run requires.
+card. The firm tenant's policy is active tenant-wide (`ensureFirmPolicyActive`'s `beforeAll`
+convergence), so a validated firm invoice always arms a run — the suite's decision-block
+test covers the **armed, read-only** case: both controls disabled because the driving
+persona holds neither workflow role, the AXIS-2 reason rendered beside them, and the trail
+card showing the open run's pending step and role. The **empty-trail** branch (no run at
+all) is still reachable on any never-validated draft, and is asserted there instead. (This
+file's own submitting fixtures, and `import-wizard.spec.ts`'s, arm and close a run since
+APPR-14-07 — over the API side channel via `approveUntilClosed`, never through the UI's
+own Approve/Reject buttons.) The **UI-driven approve/reject journey itself** — a persona
+who does hold the role clicking through to a decision — still lives in
+`e2e/api/contract-invoice.spec.ts` instead, because `[topology-never-publishes]` still bars
+a topology spec from publishing the dedicated probe policy that journey would need.
 
 That trail card reads its run on mount, and that GET answers 404 when there is no run —
 which Chromium logs as a console error, tripping the `collectErrors` gate in every

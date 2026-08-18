@@ -29,11 +29,19 @@ jobs:
         id: filter
         with:
           filters: |
+            # docs/** is here for one reason: this job's `go test ./...` runs the
+            # source scanners that hold the retention and boot-rationale claims
+            # (internal/platform/db/retention_claim_gate_test.go). Without it a
+            # docs-only commit matched no filter, so those scanners were inert on
+            # exactly the edit they guard. The cost is that doc-only PRs now run
+            # the Go suite. db/** already reaches this job via the migrations
+            # filter below.
             go:
               - 'cmd/**'
               - 'internal/**'
               - 'tools/**'
               - 'migrations/**'
+              - 'docs/**'
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile'

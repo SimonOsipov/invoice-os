@@ -17,6 +17,11 @@
 -- kind is named explicitly (not left to the tenants.kind DEFAULT 'firm' from M3-01) and
 -- the conflict clause is DO UPDATE so a local `make dev-db` re-run CORRECTS an
 -- already-seeded row's kind (DO NOTHING would leave a stale kind in place).
+-- WARNING: every tenant listed here is one a boot-time purge may wipe.
+-- db.PurgeDemoTenants keeps a literal copy of these four ids as its allowlist
+-- (internal/platform/db/demopurge.go); adding a fifth tenant here widens what a
+-- deploy is allowed to delete, and TestPurgeAllowlistMatchesSeedFileTenants goes
+-- red until a human decides that is intended.
 INSERT INTO tenants (id, name, kind) VALUES
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)',    'firm'),
     ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)',    'firm'),

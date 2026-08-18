@@ -259,7 +259,7 @@ jobs:
         # DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL/DATABASE_URL, all already in
         # this job's env; the gate turns a silently-skipped test (e.g. a future PR
         # that drops DATABASE_URL again) into a failed step instead of a quiet pass.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestSuperuserDSNNotRetainedForRequestPath|TestGatewayMain' ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestPurge|TestSuperuserDSNNotRetainedForRequestPath|TestGatewayMain' ./internal/platform/db/...
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real

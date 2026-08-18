@@ -113,7 +113,9 @@ func TestPurgeDemoResetDocTablesMatchTheCode(t *testing.T) {
 
 // AC-1, AC-3 and AC-4: the operator facts the page exists to carry. Presence of
 // the load-bearing claim, not its prose — every needle below is a short phrase
-// the fact cannot be stated without.
+// the fact cannot be stated without. mustNot is a keyword filter: it catches the
+// known ways of writing a residual up as fixed, not every way. The positive
+// needles are what carry the assertion.
 var demoResetDocFacts = []struct {
 	ac      string
 	heading string
@@ -211,15 +213,47 @@ func TestPurgeDemoResetDocStatesTheOperatorFacts(t *testing.T) {
 		}
 	}
 
-	// The two numbered steps in order. The gateway purges and re-seeds; the
-	// invoice service's seeders write on top of that seed.
-	steps := docBody(t, doc, "## Operator checklist after a deploy")
-	if i := strings.Index(steps, "1. "); i >= 0 {
-		steps = steps[i:]
+	// The checklist by ORDINAL, not by first mention: the gateway purges and
+	// re-seeds, then the invoice service's seeders write on top of that seed.
+	// Comparing positions alone would pass on a step inserted between them.
+	want := []string{"gateway", "invoice service"}
+	steps := numberedSteps(docBody(t, doc, "## Operator checklist after a deploy"))
+	if len(steps) != len(want) {
+		t.Fatalf("%s's checklist has %d numbered steps, want %d — a restart is one step per service",
+			demoResetDoc, len(steps), len(want))
 	}
-	gateway, invoice := strings.Index(steps, "gateway"), strings.Index(steps, "invoice service")
-	if gateway < 0 || invoice < 0 || gateway > invoice {
-		t.Errorf("%s's numbered steps do not restart the gateway before the invoice service (gateway at %d, invoice service at %d)",
-			demoResetDoc, gateway, invoice)
+	for i, w := range want {
+		if got := firstNamed(steps[i], want); got != w {
+			t.Errorf("%s's checklist step %d names %q first, want %q — the gateway is restarted before the invoice service",
+				demoResetDoc, i+1, got, w)
+		}
 	}
+}
+
+var stepMarkerRE = regexp.MustCompile(`(?m)^[0-9]+\. `)
+
+// numberedSteps splits a section into its top-level numbered list items.
+func numberedSteps(sec string) []string {
+	marks := stepMarkerRE.FindAllStringIndex(sec, -1)
+	out := make([]string, 0, len(marks))
+	for i, m := range marks {
+		end := len(sec)
+		if i+1 < len(marks) {
+			end = marks[i+1][0]
+		}
+		out = append(out, sec[m[1]:end])
+	}
+	return out
+}
+
+// firstNamed reports which of names appears earliest in step, "" for none.
+func firstNamed(step string, names []string) string {
+	low := strings.ToLower(step)
+	first, at := "", -1
+	for _, n := range names {
+		if j := strings.Index(low, n); j >= 0 && (at < 0 || j < at) {
+			first, at = n, j
+		}
+	}
+	return first
 }

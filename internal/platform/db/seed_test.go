@@ -101,7 +101,9 @@ func TestSeedFromEmbeddedIsIdempotent(t *testing.T) {
 // ---- QA adversarial coverage (post-implementation, Mode B, task-127) ------------
 
 // TestSeedConcurrentInvocationIsSafeWithoutALock: adversarial coverage for AC-7.
-// db.Seed deliberately takes NO advisory lock (unlike Bootstrap) — the
+// db.Seed deliberately takes NO advisory lock of its own (unlike Bootstrap;
+// Provision serializes the reset/purge/seed tail one layer up, for the purge's
+// reverse lock order rather than for Seed) — the
 // implementation's rationale is that seed.dev.sql's inserts are already
 // idempotent via ON CONFLICT, so concurrent invocation should converge cleanly
 // rather than racing the way unprotected concurrent bootstrap.sql execution does

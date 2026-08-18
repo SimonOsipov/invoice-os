@@ -1,7 +1,8 @@
 // provision.go — the gateway boot-time provisioning sequence (M4-21-04,
 // task-128): bootstrap → migrate → reset (PR environments only) → purge →
 // seed, gated by BootstrapEnabled and all complete before the gateway's
-// listener opens (so a green /healthz continues to mean "fully provisioned").
+// listener opens (so a green /healthz continues to mean "fully provisioned" —
+// the purge excepted, being non-fatal, a failed one greens identically).
 // Every step is fatal on error except the demo-tenant purge — see Provision's
 // doc comment. See db.go for the package doc and bootstrap.go for the
 // underlying BootstrapEnabled/Bootstrap/Seed primitives this composes;

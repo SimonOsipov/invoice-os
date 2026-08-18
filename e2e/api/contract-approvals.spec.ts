@@ -7,16 +7,17 @@
 // staffing order reaching the SPA: roles.test.ts covers the pure functions, not the wire.
 //
 // WRITES to a shared environment, and workflow_roles is one of the tables the per-PR reset
-// deliberately EXCLUDES (resetTables), so these rows really do outlive the run that made
-// them. Following contract-tenancy.spec.ts:
+// deliberately EXCLUDES (resetTables), so these rows outlive the run that made them —
+// until the next gateway boot, whose demo-tenant purge does delete them (DEMO-04).
+// Following contract-tenancy.spec.ts:
 //   - titles come from freshRoleTitle(), unique per run — here for identifiability in the
 //     cleanup sweep, not constraint safety: duplicate titles are legal;
 //   - staffing targets are SEED-ONLY subjects, never …0001/…0002 (the sign-in personas);
 //   - no assertion depends on a key VALUE. The server suffixes a colliding key to -2, so a
 //     re-run cannot predict what it minted;
-//   - no assertion depends on the list's LENGTH or on which other roles exist. Nothing
-//     seeds workflow_roles, it is not in resetTables, and DELETE is soft — rows accumulate
-//     and keys are never reclaimed.
+//   - no assertion depends on the list's LENGTH or on which other roles exist. It is not
+//     in resetTables and DELETE is soft, so rows accumulate and keys are never reclaimed
+//     within a deploy; the seed and the demo-tenant purge both reset that across deploys.
 //
 // Deliberately NOT covered here:
 //   - 401 missing/malformed Bearer: already proven cross-surface by auth-contract.spec.ts.

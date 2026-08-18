@@ -2,10 +2,10 @@
 -- db/seed.dev.sql stopped declaring, and clears the stale seeded source-document
 -- links so the demo-document seeder rebuilds them. An UPSERT-only seed can do neither.
 --
--- Since DEMO-04 this is a no-op on the demo tenants: db.PurgeDemoTenants deletes
--- their rows before every seed, so there is nothing left for it to repair. Kept
--- because migrations are forward-only and it may still have work to do on a
--- database that has not yet booted a gateway carrying the purge.
+-- MigrateUp runs BEFORE db.PurgeDemoTenants within a boot, so this still has work
+-- to do on the boot that first applies it. From the next gated boot on it is a
+-- no-op for the demo tenants, whose rows the purge deletes before every seed.
+-- Kept because migrations are forward-only.
 
 -- +goose Up
 

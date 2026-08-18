@@ -178,8 +178,8 @@ func TestProvisionPurgeSkippedWhenBootstrapGuardOff(t *testing.T) {
 	}
 }
 
-// TestProvisionPurgeOutcomeIsTrueOnSuccess (AC-1): the field /healthz publishes
-// reads "true" after a successful purge.
+// TestProvisionPurgeOutcomeIsTrueOnSuccess (AC-1): the outcome var reads "true"
+// after a successful purge.
 func TestProvisionPurgeOutcomeIsTrueOnSuccess(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	restoreCuratedDemoState(t, superDSN)

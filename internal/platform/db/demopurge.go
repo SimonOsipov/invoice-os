@@ -1,6 +1,7 @@
-// demopurge.go — the demo-tenant purge primitive. Deletes every tenant-owned
-// row belonging to the four seeded demo tenants and nothing else. Provision
-// (provision.go) calls it on every gated boot, between Reset and Seed.
+// demopurge.go — the demo-tenant purge primitive. Deletes the four seeded demo
+// tenants' rows from every tenant-owned table except the four purgeExcludedTables
+// spares, and reaches no other tenant. Provision (provision.go) calls it on every
+// gated boot, between Reset and Seed.
 package db
 
 import (
@@ -98,7 +99,8 @@ type PurgeResult struct {
 	Duration time.Duration
 }
 
-// PurgeOutcome is what cmd/gateway/main.go publishes on /healthz as demo_purge.
+// PurgeOutcome is the outcome of one Provision call's purge. Nothing publishes
+// it yet — /healthz carries no demo_purge field (DEMO-04-03).
 type PurgeOutcome string
 
 const (
@@ -118,8 +120,8 @@ func purgeStmt(table string) string {
 	return fmt.Sprintf("DELETE FROM %s WHERE tenant_id = ANY($1)", table)
 }
 
-// PurgeDemoTenants deletes every tenant-owned row of the four DemoTenants on a
-// dedicated superuser connection, in one transaction.
+// PurgeDemoTenants deletes the four DemoTenants' rows from every purgeTables
+// table on a dedicated superuser connection, in one transaction.
 func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, error) {
 	started := time.Now()
 

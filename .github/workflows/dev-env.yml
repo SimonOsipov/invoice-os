@@ -31,11 +31,12 @@ name: Dev Env (deploy full fleet + verify)
 # boot seam, between the reset and the seed, but has NO environment gate at all
 # — only GATEWAY_DB_BOOTSTRAP — so it DOES run against the persistent
 # environment on the push/workflow_dispatch path. It is narrowed by allowlist
-# instead of by environment: it deletes tenant-owned rows for exactly the four
-# seeded demo tenants (db.DemoTenants) and nothing else, and db.Seed restores
-# their curated state in the same call. Anything an operator created by hand on
-# those four tenants — a pending invitation, a runtime-created workflow role,
-# a staffing edit — is gone on every deploy, production included.
+# instead of by environment: it reaches no tenant outside the four seeded demo
+# tenants (db.DemoTenants), spares four of their tables (db.purgeExcludedTables —
+# memberships and the three approval-policy tables, which nothing would restore),
+# and db.Seed restores their curated state in the same call. Anything an operator
+# created by hand on those four tenants — a pending invitation, a runtime-created
+# workflow role, a staffing edit — is gone on every deploy, production included.
 #
 # THE TARGET DISCRIMINATOR IS `github.event_name == 'pull_request'`, NOT
 # `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and

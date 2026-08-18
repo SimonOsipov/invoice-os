@@ -978,9 +978,11 @@ runs the one-tenant seeder until this branch merges and deploys:
    field, `TransmitClear` (`internal/invoice/store.go:1532-1536`, pinned by
    `internal/invoice/row_facts_store_test.go:115`); arming, runs, decisions and audit rows
    are written identically either way, so nothing is lost flipping in either direction. The
-   redeploy re-runs `demopolicy.Seed` (idempotent) and `demodocs`; it does not run
-   `db.Reset` (the gateway's, gated off the persistent environment by
-   `RAILWAY_ENVIRONMENT_NAME`).
+   redeploy re-runs `demopolicy.Seed` (idempotent) and `demodocs`; it runs neither of
+   the gateway's two boot-time destructive steps — `db.Reset`, gated off the persistent
+   environment by `RAILWAY_ENVIRONMENT_NAME`, nor the DEMO-04 demo-tenant purge, which
+   is NOT gated off production and does delete `approval_runs` for the demo tenants
+   every time the **gateway** boots.
 7. **Nothing automated catches a regression here**, same as `docs/analytics.md:74-76`, and
    sharper — there is no readback at all. Re-run the `can_submit` probe (item 4) after any
    invoice-service redeploy or environment-variable change, not only after this flip.
@@ -1036,10 +1038,12 @@ configuration, because `ENVIRONMENT` reads `development` on production and gatin
 would be fail-open.
 
 The seeder **converges** rather than inserting-if-absent: it re-runs the validated-backlog
-sweep on every boot, whether or not it wrote the policy on that boot, because the gateway's
-`db.Reset` truncates `approval_runs` and deliberately leaves the three policy tables
-standing. A seeder that no-opped on finding its own policy would arm nothing on the second
-deploy, and `awaiting_approval` would silently equal `counts.validated`. Convergence has
+sweep on every boot, whether or not it wrote the policy on that boot, because the gateway
+empties `approval_runs` underneath it while deliberately leaving the three policy tables
+standing — `db.Reset` in PR environments, and since DEMO-04 the demo-tenant purge on every
+gated boot, production included. A seeder that no-opped on finding its own policy would
+arm nothing on the second deploy, and `awaiting_approval` would silently equal
+`counts.validated`. Convergence has
 three writes: publish when nothing of that name exists, **reactivate** the sealed version
 when the policy exists but something deactivated it, and **supersede** with version N+1 when
 the active version's step shape has drifted from the plan. Supersede is guarded three ways —
@@ -1048,12 +1052,18 @@ must actually differ — so a version a human published is left strictly alone e
 An invoice already armed under version N keeps version N's trail; only invoices validated
 after the supersede render the new shape.
 
-**Known residual, recorded and undefended.** A gateway restarted out of band — a
-single-service redeploy, an OOM, a manual restart — runs `Reset` again and re-truncates
-`approval_runs`, and nothing re-runs the seeder, because the invoice service did not
+**Known residual, recorded and undefended — production-wide since DEMO-04.** A gateway
+restarted out of band — a single-service redeploy, an OOM, a manual restart — empties
+`approval_runs` again, and nothing re-runs the seeder, because the invoice service did not
 restart. The fleet stays green, `/healthz` stays 200, and `awaiting_approval` silently
 reads `counts.validated` with no alarm anywhere. **Recovery is one operator action: restart
 the invoice service.**
+
+Until DEMO-04 this was a PR-environment problem only, because `Reset` is gated off the
+persistent environment. The demo-tenant purge is not: it runs on every gated gateway boot,
+production included, and deletes `approval_runs`, `approval_run_steps` and
+`approval_decisions` for the four demo tenants. The same residual now costs the production
+demo its armed runs, on the same one-action recovery.
 
 ---
 

@@ -507,6 +507,9 @@ test('deployed app: switching identity changes who the app says you are', async 
 // ensureFirmPolicyActive is called here, not in a file-level beforeAll, so a throw
 // cannot preempt T6's flag-off diagnosis.
 test('deployed app: as a preparer, the server refuses the same approval it allowed the seat to see', async ({ page }) => {
+  // Seven API calls, two nav cycles and the switch's own floor; the comparable
+  // armed-fixture journey (invoice-surfaces.spec.ts:642) budgets the same.
+  test.setTimeout(120_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
   await ensureFirmPolicyActive(token)
@@ -555,6 +558,8 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
 // scoped to members-table and matched by exact text. member-row is read, never
 // clicked -- its onClick opens the member drawer.
 test('deployed app: the YOU chip follows the persona, and the return row restores the seat', async ({ page }) => {
+  // Two switches, each with its own 700ms floor, across three nav cycles.
+  test.setTimeout(120_000)
   const errors = collectErrors(page)
   await signInAs(page, 'firm')
 

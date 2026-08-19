@@ -3,13 +3,14 @@
 // vi.stubEnv + vi.resetModules() + a dynamic import of Sidebar, same idiom as
 // App.standIn.test.tsx. No VITE_GATEWAY_URL is stubbed, so gatewayBase() is null and
 // Sidebar's rollup fetch never fires (immediate: false) -- no fetch mock needed.
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '@invoice-os/api-client'
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { Member } from '../lib/members'
 import type { PlatformCtx } from '../types'
-import { POPOVER_HEADER } from './copy'
+import { BUSY_NAME, POPOVER_HEADER, TRIGGER_BUSY_ROLE } from './copy'
 
 afterEach(() => {
   cleanup()
@@ -24,6 +25,28 @@ const SEAT: Member = {
   role: 'admin',
   status: 'active',
   isYou: true,
+}
+
+const MUSA: Member = {
+  id: 'm-musa-001',
+  name: 'Musa Danjuma',
+  initials: 'MD',
+  email: 'musa@example.ng',
+  role: 'reviewer',
+  status: 'active',
+  isYou: false,
+}
+
+// A controllable promise for tests that must inspect a busy/pending state before
+// resolving or rejecting it.
+function deferred<T = void>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 // inhouse mode + no entities sidesteps the firm switcher's fetch/list wiring entirely --
@@ -202,6 +225,148 @@ describe('PersonaFooter (flag on)', () => {
 
     fireEvent.mouseDown(trigger)
     fireEvent.click(trigger)
+    expect(screen.queryByTestId('persona-popover')).toBeNull()
+  })
+})
+
+describe('PersonaFooter -- the switch (DEMO-06-05)', () => {
+  it('an active row calls becomePersona with the member and the current view', async () => {
+    const becomePersona = vi.fn().mockResolvedValue(undefined)
+    await renderDemoSidebar(demoCtx({ becomePersona, members: [SEAT, MUSA], view: 'invoices' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+
+    expect(becomePersona).toHaveBeenCalledTimes(1)
+    expect(becomePersona).toHaveBeenCalledWith(MUSA, 'invoices')
+  })
+
+  it('the spinner holds while the mint is pending and clears when it settles', async () => {
+    const gate = deferred<void>()
+    const becomePersona = vi.fn(() => gate.promise)
+    await renderDemoSidebar(demoCtx({ becomePersona, members: [SEAT, MUSA], view: 'invoices' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+
+    expect(screen.getByTestId('persona-spinner')).not.toBeNull()
+    expect(screen.queryByTestId('persona-popover')).toBeNull()
+
+    await act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+    expect(screen.queryByTestId('persona-spinner')).toBeNull()
+  })
+
+  it('the busy trigger matches the design', async () => {
+    const gate = deferred<void>()
+    const becomePersona = vi.fn(() => gate.promise)
+    await renderDemoSidebar(demoCtx({ becomePersona, members: [SEAT, MUSA], view: 'invoices' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+
+    const spinner = screen.getByTestId('persona-spinner')
+    // jsdom/cssstyle drops the `border` shorthand once a same-object `borderTopColor`
+    // override lands on it (verified locally) -- only the longhands below survive.
+    expect(spinner.style.borderTopColor).toBe('var(--status-amber-text)')
+    expect(spinner.style.animation).toContain('spin')
+    expect(spinner.style.width).toBe('16px')
+    expect(spinner.style.height).toBe('16px')
+    expect(spinner.style.borderRadius).toBe('99px')
+
+    expect(screen.getByTestId('persona-name').textContent).toBe(BUSY_NAME.replace('{first name}', 'Musa'))
+    expect(screen.getByTestId('persona-role').textContent).toBe(TRIGGER_BUSY_ROLE)
+    expect(screen.getByTestId('persona-dot').style.background).toBe('var(--status-amber-text)')
+    expect(screen.getByTestId('persona-trigger').style.border).toBe('1px dashed var(--status-amber-text)')
+  })
+
+  it('the trigger cannot start a second switch while busy', async () => {
+    const gate = deferred<void>()
+    const becomePersona = vi.fn(() => gate.promise)
+    await renderDemoSidebar(demoCtx({ becomePersona, members: [SEAT, MUSA], view: 'invoices' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+
+    expect(becomePersona).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('persona-popover')).toBeNull()
+  })
+
+  it("a failed switch ends the beat, reopens the popover and shows the server's message", async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+
+    try {
+      const becomePersona = vi.fn().mockRejectedValue(new ApiError('http', 'forbidden', 403))
+      await renderDemoSidebar(demoCtx({ becomePersona, members: [SEAT, MUSA], view: 'invoices' }))
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('persona-trigger'))
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+      })
+      // Let the rejection settle before asserting the recovered state.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        await Promise.resolve()
+      })
+
+      expect(screen.queryByTestId('persona-spinner')).toBeNull()
+      expect(screen.getByTestId('persona-popover')).not.toBeNull()
+      const row = screen.getByText(MUSA.name).closest('[data-testid="persona-row"]')!
+      expect(within(row as HTMLElement).getByTestId('persona-row-error').textContent).toBe('forbidden')
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+    expect(unhandled).toEqual([])
+  })
+
+  it('the return row calls returnToSeat with the view and the seat member and runs the beat', async () => {
+    const gate = deferred<void>()
+    const returnToSeat = vi.fn(() => gate.promise)
+    await renderDemoSidebar(
+      demoCtx({
+        returnToSeat,
+        members: [{ ...SEAT, isYou: false }, { ...MUSA, isYou: true }],
+        seatSubject: SEAT.id,
+        user: { name: MUSA.name, initials: MUSA.initials, verified: true, tenantName: 'Okafor & Partners' },
+        view: 'dashboard',
+      }),
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-return-row'))
+    })
+
+    expect(returnToSeat).toHaveBeenCalledTimes(1)
+    expect(returnToSeat).toHaveBeenCalledWith('dashboard', SEAT)
+    expect(screen.getByTestId('persona-spinner')).not.toBeNull()
     expect(screen.queryByTestId('persona-popover')).toBeNull()
   })
 })

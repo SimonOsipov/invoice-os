@@ -4,13 +4,15 @@
 // dynamic import, same idiom as demo/flag.test.ts. No gateway is configured under
 // vitest, so signIn never hits the network by default (auth.ts) -- only the failed-
 // mint test needs to force a rejection.
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
-import { APP_PERSONAS, type Session } from './auth'
+import { APP_PERSONAS, type Persona, type Session } from './auth'
 import { SESSION_KEY, serializeSession } from './lib/session'
+import { accessRoleLabel } from './lib/members'
 import type { Member } from './lib/members'
+import { TOAST_META, TOAST_TITLE } from './demo/copy'
 import type { PlatformCtx } from './types'
 
 const { signInMock } = vi.hoisted(() => ({ signInMock: vi.fn() }))
@@ -41,6 +43,18 @@ const MEMBER: Member = {
   initials: 'TB',
   email: 'tunde@example.ng',
   role: 'preparer',
+  status: 'active',
+  isYou: false,
+}
+
+// A second, distinct stand-in -- rows that must prove the LATER switch's identity
+// (toast, timer restart), not just that a switch happened at all.
+const MEMBER_B: Member = {
+  id: 'm-standin-002',
+  name: 'Ngozi Chukwu',
+  initials: 'NC',
+  email: 'ngozi@example.ng',
+  role: 'reviewer',
   status: 'active',
   isYou: false,
 }
@@ -85,6 +99,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 async function renderAppWithSeat(demoMode: boolean) {
@@ -220,6 +235,90 @@ describe('becomePersona / returnToSeat', () => {
     ).toBe(SEAT_SESSION.persona.name)
     expect(signInMock, 'the short-circuit must not call signIn a second time for the seat').toHaveBeenCalledTimes(1)
   })
+
+  it('an instant mint still holds the identity for 700ms', async () => {
+    vi.useFakeTimers()
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    let call!: Promise<void>
+    act(() => {
+      call = capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(699)
+    })
+    expect(capturedCtx!.user.name, 'the floor must not have committed at 699ms').toBe(SEAT_SESSION.persona.name)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2)
+    })
+    expect(capturedCtx!.user.name, 'the floor must have committed by 701ms').toBe(MEMBER.name)
+    await call
+  })
+
+  // GUARD: green today (becomePersona has no floor yet, so it is purely gated by the
+  // round trip either way) -- goes red only against a floor written as a race
+  // (Promise.race) that abandons the round trip instead of awaiting it (Promise.all).
+  it('a slow mint is not committed early', async () => {
+    vi.useFakeTimers()
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    signInMock.mockImplementationOnce(
+      (persona: Persona) => new Promise<Session>((resolve) => setTimeout(() => resolve({ persona, token: null, me: null, verified: false }), 1500)),
+    )
+
+    let call!: Promise<void>
+    act(() => {
+      call = capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1499)
+    })
+    expect(capturedCtx!.user.name, 'the round trip has not settled at 1499ms').toBe(SEAT_SESSION.persona.name)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2)
+    })
+    expect(capturedCtx!.user.name, 'the round trip settled by 1501ms').toBe(MEMBER.name)
+    await call
+  })
+
+  it('a mint that lands after sign-out cannot resurrect the workspace', async () => {
+    vi.useFakeTimers()
+    const { container } = await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    let resolveMint!: () => void
+    signInMock.mockImplementationOnce(
+      (persona: Persona) =>
+        new Promise<Session>((resolve) => {
+          resolveMint = () => resolve({ persona, token: null, me: null, verified: false })
+        }),
+    )
+
+    let call!: Promise<void>
+    act(() => {
+      call = capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+
+    await act(async () => {
+      capturedCtx!.signOut()
+    })
+    expect(localStorage.getItem(SESSION_KEY), 'sign-out must clear the persisted session immediately').toBeNull()
+
+    await act(async () => {
+      resolveMint()
+      await vi.advanceTimersByTimeAsync(750)
+    })
+    await call
+
+    expect(container.querySelector('.pf-shell'), 'a late mint must not resurrect the workspace after sign-out').toBeNull()
+    expect(localStorage.getItem(SESSION_KEY), 'sign-out must stay cleared').toBeNull()
+  })
 })
 
 describe('carryView: create/detail collapse to invoices, other views pass through', () => {
@@ -236,7 +335,7 @@ describe('carryView: create/detail collapse to invoices, other views pass throug
     expect(capturedCtx!.view, 'becomePersona must collapse create to invoices').toBe('invoices')
 
     await act(async () => {
-      capturedCtx!.returnToSeat!('detail')
+      await capturedCtx!.returnToSeat!('detail', SEAT_AS_MEMBER)
     })
     expect(capturedCtx!.view, 'returnToSeat must collapse detail to invoices').toBe('invoices')
 
@@ -271,6 +370,132 @@ describe('AC-5: reload while standing in', () => {
     // is the one field that would expose a standIn (always false) having been the write.
     expect(capturedCtx!.user.verified, "a reload must rehydrate the seat's verified flag, not a mint's").toBe(
       SEAT_SESSION.verified,
+    )
+  })
+})
+
+describe('toast (DEMO-06-05)', () => {
+  it('a completed switch renders the toast; a failed switch renders none', async () => {
+    const { unmount } = await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    expect(capturedCtx!.user.name, 'sanity: the stand-in did not take effect').toBe(MEMBER.name)
+    expect(
+      screen.getByTestId('persona-toast').textContent,
+      'a completed switch must render the toast for the new identity',
+    ).toContain(TOAST_TITLE.replace('{full name}', MEMBER.name))
+
+    // Paired deliberately: the failure half alone is green today (no toast exists at
+    // all), so only the success half above proves this row red. Fresh App, not a second
+    // call on the same one, so no lingering toast from the success half muddies "none".
+    unmount()
+    capturedCtx = undefined
+    const { unmount: unmount2 } = await renderAppWithSeat(true)
+
+    signInMock.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    await expect(
+      act(async () => {
+        await capturedCtx!.becomePersona!(MEMBER_B, 'invoices')
+      }),
+      'the rejection must propagate to the caller',
+    ).rejects.toThrow('forbidden')
+
+    expect(capturedCtx!.user.name, 'a failed switch must not change identity').toBe(SEAT_SESSION.persona.name)
+    expect(screen.queryByTestId('persona-toast'), 'a failed switch must render no toast').toBeNull()
+    unmount2()
+  })
+
+  it('returning after two switches toasts the seat, not the previous stand-in', async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    expect(capturedCtx!.user.name, 'sanity: the first stand-in did not take effect').toBe(MEMBER.name)
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER_B, 'invoices')
+    })
+    expect(capturedCtx!.user.name, 'sanity: the second stand-in did not take effect').toBe(MEMBER_B.name)
+
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('invoices', SEAT_AS_MEMBER)
+    })
+
+    expect(capturedCtx!.user.name, 'returning must land on the seat').toBe(SEAT_SESSION.persona.name)
+    expect(capturedCtx!.seatSubject, 'the seat identity must be unchanged').toBe(SEAT_SESSION.persona.subject)
+    expect(
+      screen.getByTestId('persona-toast').textContent,
+      'the return toast must name the seat, not the previous stand-in',
+    ).toContain(TOAST_TITLE.replace('{full name}', SEAT_SESSION.persona.name))
+  })
+
+  it('a second switch replaces the toast and restarts its timer', async () => {
+    vi.useFakeTimers()
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    let firstCall!: Promise<void>
+    act(() => {
+      firstCall = capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700)
+    })
+    await firstCall
+    expect(screen.getByTestId('persona-toast').textContent).toContain(TOAST_TITLE.replace('{full name}', MEMBER.name))
+
+    // An un-restarted timer from the first toast's mount (t=700) would fire at its
+    // own +5200ms deadline (t=5900). Start the second switch well before that, so the
+    // second toast is already mounted (and must survive) when that stale deadline lands.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900)
+    })
+
+    let secondCall!: Promise<void>
+    act(() => {
+      secondCall = capturedCtx!.becomePersona!(MEMBER_B, 'invoices')
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700)
+    })
+    await secondCall
+    expect(screen.getByTestId('persona-toast').textContent).toContain(TOAST_TITLE.replace('{full name}', MEMBER_B.name))
+
+    // t is now 2300ms; cross the first toast's stale 5900ms deadline while staying
+    // well inside the second toast's own fresh 5200ms budget (expires at 7500ms).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    expect(
+      screen.getByTestId('persona-toast').textContent,
+      "a restarted toast must survive the first toast's stale deadline",
+    ).toContain(TOAST_TITLE.replace('{full name}', MEMBER_B.name))
+  })
+
+  it("the return toast names the seat's access role with an empty roster", async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+    expect(capturedCtx!.members, 'sanity: no gateway is configured, so the roster never resolves').toEqual([])
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    expect(capturedCtx!.user.name, 'sanity: the stand-in did not take effect').toBe(MEMBER.name)
+
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('invoices', SEAT_AS_MEMBER)
+    })
+
+    expect(capturedCtx!.user.name, 'returning must land on the seat').toBe(SEAT_SESSION.persona.name)
+    expect(capturedCtx!.members, 'the roster must still be empty -- no gateway is configured').toEqual([])
+    expect(screen.getByTestId('persona-toast-meta').textContent).toBe(
+      TOAST_META.replace('{ROLE}', accessRoleLabel(SEAT_AS_MEMBER.role).toUpperCase()),
     )
   })
 })

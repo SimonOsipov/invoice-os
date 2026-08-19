@@ -25,7 +25,9 @@ function readBundle(): string {
 
 // String literals (unlike identifiers) survive minification -- the bundle carries 100
 // literal U+00B7 middle dots today, so a sentinel built from one is findable.
-const ABSENT_SENTINELS = ['DEMO ONLY · BECOME ANOTHER MEMBER', 'DEMO BUILD', 'Return to the signed-in seat', 'persona-trigger']
+// GUARD: green on write (the toast doesn't exist yet, so the string is absent either
+// way) -- fences the `DEMO_MODE &&` gate on App's new toast mount once it ships.
+const ABSENT_SENTINELS = ['DEMO ONLY · BECOME ANOTHER MEMBER', 'DEMO BUILD', 'Return to the signed-in seat', 'persona-trigger', 'You are now {full name}']
 
 describe('the built bundle carries no demo string', () => {
   // Control needle: if this fails, the read itself is wrong (empty/mis-resolved file),

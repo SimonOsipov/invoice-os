@@ -420,7 +420,10 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 				t.Fatalf("decode response: %v", err)
 			}
 			if tc.wantStatus == http.StatusOK {
-				if resp["token_type"] != "bearer" || resp["access_token"] == "" {
+				// resp is map[string]any: an absent access_token is a nil interface,
+				// and nil == "" is false — assert the type, not just the value.
+				token, minted := resp["access_token"].(string)
+				if resp["token_type"] != "bearer" || !minted || token == "" {
 					t.Fatalf("mint response = %+v, want bearer access_token", resp)
 				}
 				return

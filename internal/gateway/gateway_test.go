@@ -527,6 +527,31 @@ func seedRowFor(t *testing.T, rows []string, subject, tenant string) string {
 	return ""
 }
 
+// tenant, user, role, then display_name/email skipped, then status. The tail is
+// anchored so a column reorder fails to match instead of capturing the wrong field.
+var seedMembershipRowRe = regexp.MustCompile(
+	`'([0-9a-f-]{36})',\s*'([0-9a-f-]{36})',\s*'([a-z_]+)',.*'([a-z]+)'\),?$`)
+
+type seedMembership struct{ tenantID, userID, role, status string }
+
+// seedMemberships parses the memberships INSERT into fields. seedMembershipRows
+// hands back the block's comment lines too, so non-matching lines are skipped.
+func seedMemberships(t *testing.T) []seedMembership {
+	t.Helper()
+	var out []seedMembership
+	for _, row := range seedMembershipRows(t) {
+		m := seedMembershipRowRe.FindStringSubmatch(row)
+		if m == nil {
+			continue
+		}
+		out = append(out, seedMembership{tenantID: m[1], userID: m[2], role: m[3], status: m[4]})
+	}
+	if len(out) == 0 {
+		t.Fatal("extracted 0 memberships rows from db/seed.dev.sql — the extractor stopped matching, which reads exactly like an empty seed")
+	}
+	return out
+}
+
 // roleMemberSeedRowRe matches one role_member_seed VALUES tuple: tenant, role key, user.
 var roleMemberSeedRowRe = regexp.MustCompile(`'([0-9a-f-]{36})'::uuid,\s+'([a-z_]+)',\s+'([0-9a-f-]{36})'::uuid`)
 
@@ -597,13 +622,90 @@ func TestApproverPersonasHoldTheirWorkflowRoles(t *testing.T) {
 // whose every role-gated call then refuses. The seeded pairing alone cannot see it:
 // TestLoginPersonas_AllSeeded passes just as happily on a suspended row.
 func TestLoginPersonas_SeededActive(t *testing.T) {
-	rows := seedMembershipRows(t)
-	for _, p := range loginPersonas {
-		row := seedRowFor(t, rows, p.subject, p.tenantID)
-		if !strings.Contains(row, "'active'") || strings.Contains(row, "'suspended'") {
-			t.Errorf("persona %s is not seeded active:%s", p.subject, row)
+	rows := seedMemberships(t)
+	statusOf := map[string]string{}
+	var nonActive []string
+	for _, r := range rows {
+		key := r.tenantID + "/" + r.userID
+		statusOf[key] = r.status
+		if r.status != "active" {
+			nonActive = append(nonActive, key)
 		}
 	}
+
+	for _, p := range loginPersonas {
+		key := p.tenantID + "/" + p.subject
+		status, ok := statusOf[key]
+		if !ok {
+			t.Errorf("persona %s has no memberships row in db/seed.dev.sql", key)
+			continue
+		}
+		if status != "active" {
+			t.Errorf("persona %s is seeded %q, want \"active\"", key, status)
+		}
+	}
+
+	// Naming the excluded pair keeps the exclusion deliberate: reactivating one in
+	// the seed goes red here instead of silently widening the allowlist elsewhere.
+	wantNonActive := []string{
+		firmTenant + "/c0000000-0000-0000-0000-000000000007",
+		inhouseTenant + "/c0000000-0000-0000-0000-000000000012",
+	}
+	slices.Sort(nonActive)
+	slices.Sort(wantNonActive)
+	if !slices.Equal(nonActive, wantNonActive) {
+		t.Errorf("seed's non-active memberships = %v, want %v", nonActive, wantNonActive)
+	}
+}
+
+// TestSeedMembershipParserExtractsThirteenRows is the population floor under the
+// parity test: a regex that quietly stops matching rows would otherwise let a
+// shrinking seed read as agreement.
+func TestSeedMembershipParserExtractsThirteenRows(t *testing.T) {
+	rows := seedMemberships(t)
+	if len(rows) != 13 {
+		t.Fatalf("parsed %d memberships rows from db/seed.dev.sql, want 13", len(rows))
+	}
+	counts := map[string]int{}
+	for _, r := range rows {
+		counts[r.status]++
+	}
+	if counts["active"] != 11 || counts["suspended"] != 2 {
+		t.Errorf("parsed statuses = %v, want 11 active and 2 suspended", counts)
+	}
+}
+
+// TestLoginPersonasMatchEverySeededActiveMembership: loginPersonas is a literal, so
+// nothing keeps it in step with db/seed.dev.sql except this test. It compares as
+// SETS, failing in both directions.
+func TestLoginPersonasMatchEverySeededActiveMembership(t *testing.T) {
+	var seeded []string
+	for _, r := range seedMemberships(t) {
+		if r.status == "active" {
+			seeded = append(seeded, r.tenantID+"/"+r.userID)
+		}
+	}
+	var allowed []string
+	for _, p := range loginPersonas {
+		allowed = append(allowed, p.tenantID+"/"+p.subject)
+	}
+	slices.Sort(seeded)
+	slices.Sort(allowed)
+	if !slices.Equal(seeded, allowed) {
+		t.Fatalf("loginPersonas and db/seed.dev.sql's active memberships disagree — a member the seed creates and the allowlist omits is an unexplained 403 during a demo, and an allowlist entry the seed never creates is a subject nothing seeds\nseeded but not allowlisted: %v\nallowlisted but not seeded: %v\nseed.dev.sql active: %v\nloginPersonas:       %v",
+			missingFrom(seeded, allowed), missingFrom(allowed, seeded), seeded, allowed)
+	}
+}
+
+// missingFrom returns the members of a that b does not hold.
+func missingFrom(a, b []string) []string {
+	out := []string{}
+	for _, s := range a {
+		if !slices.Contains(b, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // The preparer is allowlisted so a refused submit is demonstrable on the hosted

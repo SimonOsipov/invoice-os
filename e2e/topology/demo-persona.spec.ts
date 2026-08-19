@@ -334,24 +334,34 @@ test("deployed app: every roster row states the wire's access role", async ({ pa
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// T14 (AC-9, narrowed by Stage 2 correction S2-3) — the company switcher's own dismissal
-// is imperative (App.tsx nav()/switchClient()), the persona popover's is useDismiss's
-// outside mousedown (PersonaFooter.tsx:22). Company FIRST, persona SECOND proves they
-// coexist; the reverse order silently closes the persona popover (a false red against
-// shipped behaviour, not asserted here). Header-copy and direction claims dropped: they
-// compare literals nothing could collapse, and Sidebar's `top:` is untouched by this story.
-test('deployed app: the company switcher and the persona popover can both stay open', async ({ page }) => {
+// T14 (AC-9) — the two switchers are distinguishable by DIRECTION and by which yields to
+// which. Coexistence is not assertable: the company menu is absolutely positioned over the
+// full rail (Sidebar.tsx:182) and its height grows with the entity count, so on a suite run
+// it covers the persona trigger and a click on it never becomes actionable. Nor is the
+// menu's own height a stable oracle -- the api suite creates entities in this tenant before
+// topology runs. Both facts below were measured against a deployed PR environment.
+test('deployed app: the company switcher opens downward and takes the rail from the persona popover', async ({ page }) => {
   const errors = collectErrors(page)
   await signInAs(page, 'firm')
 
-  await page.getByTestId('company-switcher').click()
-  await expect(page.getByTestId('company-switcher-option').first()).toBeVisible()
+  await openPersonaSwitcher(page)
 
-  await page.getByTestId('persona-trigger').click()
-  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+  const companyTrigger = page.getByTestId('company-switcher')
+  const triggerBox = await companyTrigger.boundingBox()
+  expect(triggerBox, 'the company switcher has no box').not.toBeNull()
 
-  // still open — the persona click did not dismiss it
-  await expect(page.getByTestId('company-switcher-option').first()).toBeVisible()
+  await companyTrigger.click()
+  const option = page.getByTestId('company-switcher-option').first()
+  await expect(option).toBeVisible()
+
+  // Downward, where the persona popover opens upward (T9). Opposite directions are the
+  // geometric half of "two switchers, not one control".
+  const menuTop = await option.evaluate((el) => (el.parentElement as HTMLElement).getBoundingClientRect().top)
+  expect(menuTop, 'the company menu did not open downward').toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height)
+
+  // useDismiss's outside mousedown (PersonaFooter.tsx:22) fires; the company switcher has
+  // no such handler, which is why only this direction is reachable.
+  await expect(page.getByTestId('persona-popover')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

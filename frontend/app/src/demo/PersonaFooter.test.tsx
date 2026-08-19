@@ -139,4 +139,17 @@ describe('PersonaFooter (flag on)', () => {
     expect(screen.getByTestId('persona-role').textContent).toBe('—')
     expect(screen.getByTestId('persona-dot').style.background).toBe('var(--status-green-text)')
   })
+
+  // QA: proves the hoisted const, not a lookalike -- Sidebar.tsx passes the same
+  // signOutButton element to both branches.
+  it('the flag-on footer renders the hoisted sign-out button and fires signOut', async () => {
+    const ctx = demoCtx()
+    await renderDemoSidebar(ctx)
+
+    const btn = screen.getByRole('button', { name: 'Sign out' })
+    expect(btn.className).toBe('pf-btn pf-signout')
+    expect(btn.getAttribute('title')).toBe('Sign out')
+    btn.click()
+    expect(ctx.signOut).toHaveBeenCalledTimes(1)
+  })
 })

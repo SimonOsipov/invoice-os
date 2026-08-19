@@ -145,7 +145,7 @@ async function findEntityById(token: string, id: string): Promise<Entity | undef
 }
 
 // Zainab Lawal: in-house `preparer`, active, staffed into the in-house `preparer` workflow
-// role (db/seed.dev.sql:54, :108). Admitted to the mint by DEMO-05; see IH-6.
+// role (db/seed.dev.sql:54, :108). Mintable via loginPersonas (TestLoginPersonasMatchEverySeededActiveMembership); see IH-6.
 const INHOUSE_PREPARER = 'c0000000-0000-0000-0000-000000000013'
 
 test.describe('the in-house tenant as a first-class API subject (API E2E, over the deployed gateway)', () => {

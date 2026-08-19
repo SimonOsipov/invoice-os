@@ -1003,7 +1003,7 @@ firm tenant's own seeded invoices from the UI. The gateway side is done — DEMO
 widened `loginPersonas` past APPR-14-01's …0004/…0005 to every seeded active member, so
 all eleven can mint. The missing half is now the demo persona switcher (DEMO-06): the SPA's
 `APP_PERSONAS` and sign-in screen deliberately stay at two personas, and the rest of each
-tenant's roster is reached through the switcher.
+tenant's roster will be reached through the switcher.
 
 **Do not delay this flip pending an unrelated copy decision.** The Workflows screen's
 intro currently states "Transmission is not held for approval yet," which is already false

@@ -13,7 +13,9 @@
 // a seeded row suspended with no reset before this file runs (Stage 2 correction S2-5).
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { login, memberships, PERSONAS } from '../api/client'
+import { login, memberships, PERSONAS, createEntity, createInvoice, validateInvoice } from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
+import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { WIDE_WIDTHS, overlapOf, rectsOverlap } from './layout'
 import { SEED_FIRM_MEMBERS } from './settingsFixtures'
@@ -379,6 +381,218 @@ test('deployed app: exactly one row carries the current-seat tick, and it is the
 
   expect(tickCount, `expected exactly one persona-row-tick, found ${tickCount}`).toBe(1)
   expect(tickRowName, `the ticked row's name should be the signed-in seat's ("${seatName}")`).toBe(seatName)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// selectEntity()/goToInvoices()/openInvoiceRow(): transcribed from
+// invoice-surfaces.spec.ts (not exported there -- AC-12 bans a cross-spec import).
+// Sidebar.tsx testids: company-switcher/company-switcher-option.
+async function selectEntity(page: Page, entityName: string): Promise<void> {
+  await page.getByTestId('company-switcher').click()
+  await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
+}
+
+// Scoped to the sidebar nav so the header's "New invoice" CTA can't collide.
+async function goToInvoices(page: Page): Promise<void> {
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+}
+
+// Scoped to invoices-list so a batch-submit results panel showing the same number
+// can't collide.
+async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
+  await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+}
+
+// A clean flat wire body -- mirrors invoice-surfaces.spec.ts's cleanInvoiceFields
+// (createInvoice's shape, not fixtures.ts's nested /v1/validate envelope).
+function validInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+// handlers.go's two approvalGate sentences, transcribed verbatim.
+const STAFFED_TO_STEP_REASON =
+  "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+const ADMIN_OR_REVIEWER_REASON = 'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.'
+
+// copy.ts templates, transcribed (e2e/ has no dependency on frontend/app/src).
+const TOAST_TITLE = 'You are now {full name}'
+const TOAST_META = '{ROLE} · APPROVAL QUEUE AND PERMISSIONS RELOADED'
+const BUSY_ROLE = 'RELOADING'
+
+type SwitchLatch = { spinnerSeen: boolean; roles: string[] }
+
+// Installed before the switch click: the busy commit (spinner + RELOADING) and the
+// completion commit are separated by an awaited >=700ms delay (App.tsx becomePersona),
+// so a MutationObserver callback firing at each commit's microtask checkpoint cannot
+// miss the busy beat batching away.
+async function installSwitchLatch(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const latch: SwitchLatch = { spinnerSeen: false, roles: [] }
+    ;(window as unknown as { __demoSwitchLatch: SwitchLatch }).__demoSwitchLatch = latch
+    const observer = new MutationObserver(() => {
+      if (document.querySelector('[data-testid="persona-spinner"]')) latch.spinnerSeen = true
+      const roleText = document.querySelector('[data-testid="persona-role"]')?.textContent
+      if (roleText) latch.roles.push(roleText)
+    })
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+  })
+}
+
+async function readSwitchLatch(page: Page): Promise<SwitchLatch | undefined> {
+  return page.evaluate(() => (window as unknown as { __demoSwitchLatch?: SwitchLatch }).__demoSwitchLatch)
+}
+
+// T16 (AC-2/3/4) -- the identity oracle: trigger name/role/dot, the toast, and the busy
+// beat. The dot is read only once persona-role has left RELOADING (awaited via
+// toHaveText('PREPARER') first) -- the busy beat paints the same amber
+// (PersonaFooter.tsx:158), so an unguarded read is a false green for standing-in.
+test('deployed app: switching identity changes who the app says you are', async ({ page }) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm')
+
+  const name = page.getByTestId('persona-name')
+  const role = page.getByTestId('persona-role')
+  const dot = page.getByTestId('persona-dot')
+
+  await expect(name).toHaveText('Chinedu Okafor')
+  await expect(role).toHaveText(ROLE_LABEL.admin.toUpperCase())
+  const dotBefore = await dot.getAttribute('style')
+  expect(dotBefore, `persona-dot style should carry --status-green-text before any switch, got: ${dotBefore}`).toContain(
+    '--status-green-text',
+  )
+
+  await installSwitchLatch(page)
+
+  await page.getByTestId('persona-trigger').click()
+  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+  await page.getByTestId('persona-row').filter({ hasText: 'Folake Adesina' }).click()
+
+  // Toast asserted first, before the dismiss click -- it is position:fixed over the
+  // lower-left of the register and stalls a later click on actionability otherwise.
+  await expect(page.getByTestId('persona-toast-title')).toHaveText(TOAST_TITLE.replace('{full name}', 'Folake Adesina'))
+  await expect(page.getByTestId('persona-toast-meta')).toHaveText(TOAST_META.replace('{ROLE}', ROLE_LABEL.preparer.toUpperCase()))
+  await page.getByTestId('persona-toast-dismiss').click()
+
+  await expect(name).toHaveText('Folake Adesina')
+  await expect(role).toHaveText(ROLE_LABEL.preparer.toUpperCase())
+  const dotAfter = await dot.getAttribute('style')
+  expect(dotAfter, `persona-dot style should carry --status-amber-text once standing in, got: ${dotAfter}`).toContain(
+    '--status-amber-text',
+  )
+
+  const latch = await readSwitchLatch(page)
+  expect(latch?.spinnerSeen, 'persona-spinner was never observed attached during the switch').toBe(true)
+  expect(latch?.roles, `persona-role was never observed reading "${BUSY_ROLE}" during the switch`).toContain(BUSY_ROLE)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T17 (AC-5/6/7) -- the story's claim: the server's own refusal reason changes across
+// the switch, on an invoice the admin seat could already see disabled with a reason.
+// ensureFirmPolicyActive is called here, not in a file-level beforeAll, so a throw
+// cannot preempt T6's flag-off diagnosis.
+test('deployed app: as a preparer, the server refuses the same approval it allowed the seat to see', async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+  await ensureFirmPolicyActive(token)
+
+  const entity = await createEntity(token, { name: `DEMO-06-09 ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-DEMO0609-${Date.now()}`
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...validInvoiceFields(invoiceNumber) })
+  await validateInvoice(token, invoice.id)
+
+  await signInAs(page, 'firm')
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  const approveReason = page.getByTestId('approve-blocked-reason')
+  await expect(approveReason).toHaveText(STAFFED_TO_STEP_REASON)
+  expect(
+    await page.getByTestId('persona-blocked-note').count(),
+    'persona-blocked-note should not render for the seat -- the access-role rung already passed',
+  ).toBe(0)
+
+  await page.getByTestId('persona-trigger').click()
+  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+  await page.getByTestId('persona-row').filter({ hasText: 'Folake Adesina' }).click()
+  await expect(page.getByTestId('persona-toast-title')).toHaveText(TOAST_TITLE.replace('{full name}', 'Folake Adesina'))
+  await page.getByTestId('persona-toast-dismiss').click()
+
+  // carryView collapses detail -> invoices and the remount resets activeEntityId to
+  // clients[0] (App.tsx:136,199) -- every locator taken above is against a now-stale
+  // page; re-select the entity BEFORE the row can be re-opened.
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  await expect(page.getByTestId('detail-approve')).toBeVisible()
+  await expect(page.getByTestId('detail-approve')).toBeDisabled()
+  await expect(approveReason).toHaveText(ADMIN_OR_REVIEWER_REASON)
+  await expect(page.getByTestId('persona-blocked-note')).toHaveText(
+    'Signed in as Folake Adesina — a Preparer. Switch to a Reviewer to act on this step.',
+  )
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T18 (AC-8/9) -- the YOU chip has no testid (bare <span>YOU</span>, MemberParts.tsx),
+// scoped to members-table and matched by exact text. member-row is read, never
+// clicked -- its onClick opens the member drawer.
+test('deployed app: the YOU chip follows the persona, and the return row restores the seat', async ({ page }) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm')
+
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
+
+  const membersTable = page.getByTestId('members-table')
+  await expect(membersTable).toBeVisible()
+  await expect(membersTable.getByText('YOU', { exact: true })).toHaveCount(1)
+  await expect(
+    page.getByTestId('member-row').filter({ hasText: 'Chinedu Okafor' }).getByText('YOU', { exact: true }),
+  ).toHaveCount(1)
+
+  await page.getByTestId('persona-trigger').click()
+  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+  await page.getByTestId('persona-row').filter({ hasText: 'Folake Adesina' }).click()
+  await expect(page.getByTestId('persona-toast-title')).toHaveText(TOAST_TITLE.replace('{full name}', 'Folake Adesina'))
+  await page.getByTestId('persona-toast-dismiss').click()
+
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
+  await expect(membersTable).toBeVisible()
+  await expect(membersTable.getByText('YOU', { exact: true })).toHaveCount(1)
+  await expect(
+    page.getByTestId('member-row').filter({ hasText: 'Folake Adesina' }).getByText('YOU', { exact: true }),
+  ).toHaveCount(1)
+
+  await page.getByTestId('persona-trigger').click()
+  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+  await page.getByTestId('persona-return-row').click()
+
+  await expect(page.getByTestId('persona-name')).toHaveText('Chinedu Okafor')
+  await expect(page.getByTestId('persona-role')).toHaveText(ROLE_LABEL.admin.toUpperCase())
+  const dotStyle = await page.getByTestId('persona-dot').getAttribute('style')
+  expect(dotStyle, `persona-dot should return to --status-green-text once the seat is restored, got: ${dotStyle}`).toContain(
+    '--status-green-text',
+  )
+  await expect(page.getByTestId('persona-toast-title')).toHaveText(TOAST_TITLE.replace('{full name}', 'Chinedu Okafor'))
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

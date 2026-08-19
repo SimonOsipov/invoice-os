@@ -67,8 +67,9 @@ import { assertErrorEnvelope } from './contract-helpers'
 const MEMBERSHIP_KEYS = ['display_name', 'email', 'role', 'status', 'user_id']
 
 // Seeded subjects (db/seed.dev.sql), never a tenant's sole admin. Every active
-// seeded member can sign in now, so a leaked suspension would also block a demo
-// login until the next deploy re-seeds.
+// seeded member can sign in now, and the mint allowlist is static, so a leaked
+// suspension does not block the login — it hands that persona a session whose
+// every role-gated call refuses, until the next deploy re-seeds.
 // …0006 is the PATCH target deliberately: it holds the firm's `preparer` seat
 // ALONGSIDE …0003, so even a failed restore leaves every role-derived string in
 // topology/roles.spec.ts byte-identical (preparer keeps an active holder, and it

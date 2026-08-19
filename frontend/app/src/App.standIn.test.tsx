@@ -411,10 +411,6 @@ describe('becomePersona / returnToSeat', () => {
       await capturedCtx!.becomePersona!(MEMBER, 'invoices')
     })
     expect(capturedCtx!.user.name, 'sanity: the stand-in did not take effect').toBe(MEMBER.name)
-    // Dismiss the sanity switch's own toast -- otherwise it lingers (signOut never
-    // clears `toast`) and would confound the leaked-toast assertion below.
-    fireEvent.click(screen.getByTestId('persona-toast-dismiss'))
-    expect(screen.queryByTestId('persona-toast')).toBeNull()
 
     vi.useFakeTimers()
     let call!: Promise<void>
@@ -444,6 +440,32 @@ describe('becomePersona / returnToSeat', () => {
       'a return that commits after sign-out must not announce a switch to the next sign-in',
     ).toBeNull()
     expect(capturedCtx!.view, 'a return that commits after sign-out must not carry its view into the next sign-in').toBe('dashboard')
+  })
+
+  it('signOut clears a mounted toast so the next sign-in does not see it (task-594, DEMO-06-06)', async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    expect(screen.getByTestId('persona-toast'), 'sanity: the switch toast did not mount').toBeTruthy()
+
+    await act(async () => {
+      capturedCtx!.signOut()
+    })
+
+    expect(screen.getByText('Choose an account'), 'the picker must render after sign-out').toBeTruthy()
+    const pickButton = screen.getByText(SEAT_SESSION.persona.name).closest('button')
+    expect(pickButton, 'the firm persona button was not found in the picker').toBeTruthy()
+    await act(async () => {
+      fireEvent.click(pickButton as HTMLButtonElement)
+    })
+
+    expect(
+      screen.queryByTestId('persona-toast'),
+      'signOut must clear the toast so it cannot reappear on the next sign-in',
+    ).toBeNull()
   })
 })
 

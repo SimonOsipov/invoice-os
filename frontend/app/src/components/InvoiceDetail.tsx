@@ -13,6 +13,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
+import { DEMO_MODE } from '../demo/flag'
+import { BlockedByRoleNote } from '../demo/BlockedByRoleNote'
 import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
 import {
@@ -346,6 +348,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const total = inv.total != null ? Number(inv.total) : null
     const verdict = verdictStatus(staleSinceEdit, inv)
     const failure = failureExplanation(inv.failure_kind)
+    // Demo-only. approvalGate's first rung is the access role (handlers.go:377), so a
+    // persona switch can only clear THIS refusal; rung 2 needs a validated invoice
+    // (handlers.go:381), which no switch changes.
+    const demoBlockedMember =
+      DEMO_MODE && !inv.can_approve && inv.status === 'validated'
+        ? (ctx.members.find((m) => m.isYou && m.role === 'preparer') ?? null)
+        : null
     // A live rejection leads the rail, matching failed-dead-end's position; a demoted/
     // historical one stays below Compliance so it doesn't overstate a resolved event.
     const rejectionLeadsRail = rejectionProvenance(inv.status) === 'current'
@@ -765,6 +774,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       {inv.approve_blocked_reason}
                     </div>
                   )}
+                  {demoBlockedMember != null && <BlockedByRoleNote member={demoBlockedMember} />}
                   {inv.reject_blocked_reason != null && inv.reject_blocked_reason !== inv.approve_blocked_reason && (
                     <div id={REJECT_REASON_ID} data-testid="reject-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {inv.reject_blocked_reason}

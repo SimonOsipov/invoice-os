@@ -1338,6 +1338,7 @@ export default function App() {
     setSeat(null)
     setStandIn(null)
     setCarriedView(null)
+    setToast(null)
     clearSession()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
@@ -1367,9 +1368,12 @@ export default function App() {
   // clicking your own row while already seated must not announce a switch nobody made.
   const returnToSeat = useCallback(
     async (view: View, seatMember: Member) => {
-      identityGen.current++
+      const gen = ++identityGen.current
       const wasStandingIn = standIn !== null
       await delay(BUSY_MS)
+      // Symmetric with becomePersona: a sign-out (or a newer switch) mid-floor
+      // invalidates this commit.
+      if (identityGen.current !== gen) return
       setCarriedView(carryView(view))
       setStandIn(null)
       if (wasStandingIn) {

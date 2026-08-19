@@ -54,20 +54,31 @@ or `pageerror` during a journey fails it).
 The suites run only on a pull request (`dev-env.yml`'s `e2e` job), against that PR's own
 ephemeral Railway environment. That environment's Postgres is a *fork* of the persistent
 environment's volume, so it is born holding everything that environment holds — and the
-gateway TRUNCATEs the tenant-data tables and re-seeds the curated demo state at boot, on
-every deploy (Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`). A run
+gateway TRUNCATEs the tenant-data tables, purges the demo tenants and re-seeds the curated
+demo state at boot, on every deploy (boot order: bootstrap → migrate → reset → purge →
+seed; Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`, and DEMO-04,
+`internal/platform/db/demopurge.go`). A run
 therefore starts from the seed, never from another run's leftovers, and the health-gate
 fails the run outright if that reset did not happen — it is armed by a hand-set Railway
-variable that otherwise fails closed and silent.
+variable that otherwise fails closed and silent. The purge needs no such variable: it is
+gated by `GATEWAY_DB_BOOTSTRAP` alone and so runs on every environment, PR fork or not.
 
 What a spec still cannot assume is an empty table:
 
 - smoke → api → topology run in that order against ONE deployment with **no reset between
   them**, and `api/perf.spec.ts` alone creates 500 invoices before topology reads a list;
 - a Playwright retry re-runs a failed test against everything its first attempt left behind;
-- the tables holding admin CRUD — `workflow_roles`, `workflow_role_members`, `memberships`,
-  the approval-policy tables — are deliberately **excluded** from the reset (`resetTables`'s
-  own EXCLUDED block says why), so writes there outlive the run that made them.
+- the tables holding admin CRUD split two ways since DEMO-04, and the difference matters
+  when you reason about what a spec inherits:
+  - `memberships` and the approval-policy tables are excluded from the reset
+    (`resetTables`'s own EXCLUDED block says why) **and** from the purge
+    (`purgeExcludedTables` in `demopurge.go`), so writes there still outlive the run that
+    made them;
+  - `workflow_roles` and `workflow_role_members` are excluded from the reset but ARE
+    purged, on the demo tenants only — `db.Seed` restores all 14 seeded roles and 13
+    seeded staffing rows in the same `Provision` call (Decision [include-workflow-roles]).
+    A role or staffing row a spec creates at runtime on a demo tenant does NOT survive the
+    next deploy; the seeded ones always come back.
 
 So the rule is unchanged, and `workers: 1` still holds: every spec creates per-run-unique
 data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and

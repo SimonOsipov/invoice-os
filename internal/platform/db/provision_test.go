@@ -1,5 +1,7 @@
 // [M4-21-04] Test-first (RED) suite for db.Provision (task-128): wiring
-// bootstrap→migrate→seed into the gateway boot path. Pre-authored BEFORE
+// bootstrap→migrate→seed into the gateway boot path (reset and the demo-tenant
+// purge joined the sequence later, covered in reset_test.go and
+// provision_purge_test.go). Pre-authored BEFORE
 // provision.go's real body exists (Test-first: yes) — the shipped stub always
 // returns a non-nil "not implemented" error, so every test below fails
 // immediately on that assertion, never on a missing symbol (Mode A, per this
@@ -36,11 +38,13 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3"
 
@@ -265,7 +269,7 @@ func TestProvisionBootstrapFailureShortCircuitsMigrateAndSeed(t *testing.T) {
 		t.Errorf("Provision error = %q, want Bootstrap's own RolePasswords validation error specifically", err.Error())
 	}
 	if strings.Contains(err.Error(), migrationPoisonDSN) {
-		t.Errorf("Provision error = %q, mentions the migration DSN marker — migrate must not run after bootstrap fails (boot order is bootstrap → migrate → seed, short-circuiting on the first error)", err.Error())
+		t.Errorf("Provision error = %q, mentions the migration DSN marker — migrate must not run after bootstrap fails (boot order is bootstrap → migrate → reset → purge → seed, short-circuiting on the first error)", err.Error())
 	}
 }
 
@@ -833,20 +837,38 @@ func TestProvisionConcurrentBootsSerializeCleanly(t *testing.T) {
 // reset-and-reseeded instead of idempotently upserting fixed rows) would wipe
 // it; this proves data safety directly rather than trusting "seed is
 // upsert-only" by inspection.
+//
+// The probe spans TWO tables on purpose: `tenants`, which no boot-time step
+// touches, and `business_entities`, which both Reset and the demo-tenant purge
+// do — so an unscoped purge is observable here and not only in demopurge_test.go.
 func TestProvisionRedeployDoesNotDestroyPreexistingData(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	ctx := context.Background()
 	pool := bootstrapSuperuserPool(t, superDSN)
 
 	const probeID = "9c9c9c9c-9c9c-9c9c-9c9c-9c9c9c9c9c9c"
+	if slices.Contains(db.DemoTenants, probeID) {
+		t.Fatalf("probe tenant %s is in db.DemoTenants — the purge is meant to spare it", probeID)
+	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm') ON CONFLICT (id) DO NOTHING`,
 		probeID, "QA redeploy-safety probe",
 	); err != nil {
 		t.Fatalf("insert probe tenant (precondition): %v", err)
 	}
+	probeTIN := "9c9c9c9c-" + uuid.NewString()[:4]
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3)`,
+		probeID, "QA redeploy-safety probe entity", probeTIN,
+	); err != nil {
+		t.Fatalf("insert probe business_entities row (precondition): %v", err)
+	}
 	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, probeID); err != nil {
+		bg := context.Background()
+		if _, err := pool.Exec(bg, `DELETE FROM business_entities WHERE tenant_id = $1`, probeID); err != nil {
+			t.Errorf("cleanup probe business_entities: %v", err)
+		}
+		if _, err := pool.Exec(bg, `DELETE FROM tenants WHERE id = $1`, probeID); err != nil {
 			t.Errorf("cleanup probe tenant: %v", err)
 		}
 	})
@@ -868,5 +890,9 @@ func TestProvisionRedeployDoesNotDestroyPreexistingData(t *testing.T) {
 	count := mustCount(t, pool, `SELECT count(*) FROM tenants WHERE id = $1`, probeID)
 	if count != 1 {
 		t.Fatalf("probe tenant: found %d row(s) after Provision, want exactly 1 — a redeploy must never destroy pre-existing data in the persistent development environment", count)
+	}
+	entities := mustCount(t, pool, `SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND tin = $2`, probeID, probeTIN)
+	if entities != 1 {
+		t.Fatalf("probe business_entities row (tin=%s): found %d row(s) after Provision, want exactly 1 — the demo-tenant purge must reach no tenant outside db.DemoTenants", probeTIN, entities)
 	}
 }

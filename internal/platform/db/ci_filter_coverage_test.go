@@ -177,11 +177,15 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 			"TestRLS",
 		}
 
-		// This test postdates the frozen pre-fix filters, so it can't be part of
-		// what they orphaned; the live check above already covers it separately.
+		// These postdate the frozen pre-fix filters, so they can't be part of
+		// what those filters orphaned; the live check above covers them already.
+		postdatesTheFrozenFilters := func(n string) bool {
+			return n == "TestCIRunFiltersReachEveryTestInThePackage" ||
+				strings.HasPrefix(n, "TestPurge")
+		}
 		var historical []string
 		for _, n := range names {
-			if n != "TestCIRunFiltersReachEveryTestInThePackage" {
+			if !postdatesTheFrozenFilters(n) {
 				historical = append(historical, n)
 			}
 		}

@@ -40,10 +40,11 @@ func main() {
 	}
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
-	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> seed
-	// (gated), all fatal on error and all complete before app.Run opens the
-	// listener, so a green /healthz continues to mean "fully provisioned"
-	// (task-128). The gateway remains the fleet's single in-network migrator
+	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
+	// (gated, every environment, DEMO-04) -> seed (gated), all complete before
+	// app.Run opens the listener, so a green /healthz continues to mean "fully
+	// provisioned" (task-128). Every step is fatal on error except the purge,
+	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator
 	// (docs/migrations.md §2): migrate is unconditional regardless of the
 	// guard below, exactly as before.
 	//
@@ -105,6 +106,9 @@ func main() {
 	// only symptom is tests that get harder to keep passing. dev-env.yml's
 	// health-gate asserts db_reset on every PR run.
 	platform.DBReset = strconv.FormatBool(provisionCfg.ResetWillRun())
+	// The purge is the one non-fatal step in Provision, so this field is the
+	// only thing that tells a green boot from a swallowed purge failure.
+	platform.DemoPurge = string(db.DemoPurgeOutcome)
 
 	verifier, err := auth.NewVerifier(auth.Config{
 		Issuer:  mustEnv("AUTH_ISSUER"),

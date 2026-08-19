@@ -382,7 +382,9 @@ GRANT USAGE ON SEQUENCE river_job_id_seq TO invoice_app;
 -- a tenant_isolation policy whose USING doubles as the INSERT WITH CHECK. The PRIMARY KEY
 -- (tenant_id, key) IS the UNIQUE dedupe constraint. Append-only/permanent (like audit_log,
 -- §3): invoice_app gets SELECT + INSERT only, never UPDATE/DELETE. Its real consumer
--- (result lookup / re-poll) is M3-01.
+-- (result lookup / re-poll) is M3-01. The four seeded demo tenants' keys are the one
+-- exception: the boot-time purge deletes them as superuser on every gated gateway boot
+-- (docs/demo-reset.md).
 -- ===========================================================================
 CREATE TABLE idempotency_keys (
     tenant_id  uuid        NOT NULL,

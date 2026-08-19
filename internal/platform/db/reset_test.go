@@ -709,6 +709,18 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 		t.Fatalf("seed residue business_entities (precondition): %v", err)
 	}
 
+	// A second residue row on a tenant the demo purge cannot reach: only
+	// Reset's global TRUNCATE removes it, so this test keeps proving Reset ran
+	// rather than passing on the purge's work.
+	probeTenant := newNonDemoProbeTenant(t, pool, "reset-wipe")
+	nonDemoTIN := "88888888-" + uuid.NewString()[:4]
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3)`,
+		probeTenant, "E2E test residue co (non-demo)", nonDemoTIN,
+	); err != nil {
+		t.Fatalf("seed non-demo residue business_entities (precondition): %v", err)
+	}
+
 	cfg := db.ProvisionConfig{
 		Environment:            "development", // ENVIRONMENT forks verbatim — see ResetEnabled doc comment
 		BootstrapFlag:          "true",
@@ -743,6 +755,9 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	if n := mustCount(t, pool, `SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND tin = $2`, demoTenantID, residueTIN); n != 0 {
 		t.Errorf("residue business_entities row (tin=%s) survived Provision's reset, want 0, got %d", residueTIN, n)
 	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND tin = $2`, probeTenant, nonDemoTIN); n != 0 {
+		t.Errorf("non-demo residue row (tin=%s) survived Provision, want 0, got %d — the purge cannot reach that tenant, so Reset did not fire", nonDemoTIN, n)
+	}
 }
 
 // ---- Provision-level negative gate coverage (the brief's stated priority) --
@@ -753,8 +768,41 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 // but a RailwayEnvironmentName that must NOT satisfy the gate, and asserts
 // the residue survives untouched.
 
+// newNonDemoProbeTenant creates a throwaway tenant and asserts it is outside
+// the demo purge's allowlist rather than assuming it. Reset's global TRUNCATE
+// still reaches the tenant's rows, so a probe planted here keeps its full
+// strength as a "Reset did not fire" oracle while the purge cannot confound it.
+func newNonDemoProbeTenant(t *testing.T, pool *pgxpool.Pool, label string) string {
+	t.Helper()
+	if len(db.DemoTenants) == 0 {
+		t.Fatal("db.DemoTenants is empty — the not-in-allowlist check below would prove nothing")
+	}
+	id := uuid.NewString()
+	if slices.Contains(db.DemoTenants, id) {
+		t.Fatalf("probe tenant %s is in db.DemoTenants — the purge would delete its rows", id)
+	}
+
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm') ON CONFLICT (id) DO NOTHING`,
+		id, "non-demo probe "+label,
+	); err != nil {
+		t.Fatalf("insert non-demo probe tenant (precondition): %v", err)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		if _, err := pool.Exec(ctx, `DELETE FROM business_entities WHERE tenant_id = $1`, id); err != nil {
+			t.Errorf("cleanup probe business_entities: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, id); err != nil {
+			t.Errorf("cleanup probe tenant: %v", err)
+		}
+	})
+	return id
+}
+
 // assertResidueSurvivesProvision seeds one throwaway business_entities row
-// under the demo tenant, runs Provision with cfg, and asserts the row is
+// under a non-demo tenant, runs Provision with cfg, and asserts the row is
 // still there afterward — proving Reset did NOT fire. Shared by every
 // negative gate case below.
 func assertResidueSurvivesProvision(t *testing.T, cfg db.ProvisionConfig, caseLabel string) {
@@ -762,23 +810,20 @@ func assertResidueSurvivesProvision(t *testing.T, cfg db.ProvisionConfig, caseLa
 	pool := bootstrapSuperuserPool(t, cfg.SuperuserDSN)
 	ctx := context.Background()
 
+	probeTenant := newNonDemoProbeTenant(t, pool, caseLabel)
 	residueTIN := "77777777-" + uuid.NewString()[:4]
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3)`,
-		demoTenantID, "gate-probe "+caseLabel, residueTIN,
+		probeTenant, "gate-probe "+caseLabel, residueTIN,
 	); err != nil {
 		t.Fatalf("seed gate-probe residue (precondition): %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(),
-			`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`, demoTenantID, residueTIN)
-	})
 
 	if err := db.Provision(ctx, cfg); err != nil {
 		t.Fatalf("Provision (%s): %v", caseLabel, err)
 	}
 
-	if n := mustCount(t, pool, `SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND tin = $2`, demoTenantID, residueTIN); n != 1 {
+	if n := mustCount(t, pool, `SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND tin = $2`, probeTenant, residueTIN); n != 1 {
 		t.Fatalf("%s: gate-probe residue row count after Provision = %d, want 1 (Reset must NOT have fired)", caseLabel, n)
 	}
 }

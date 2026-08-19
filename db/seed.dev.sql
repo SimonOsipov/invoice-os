@@ -17,6 +17,12 @@
 -- kind is named explicitly (not left to the tenants.kind DEFAULT 'firm' from M3-01) and
 -- the conflict clause is DO UPDATE so a local `make dev-db` re-run CORRECTS an
 -- already-seeded row's kind (DO NOTHING would leave a stale kind in place).
+-- WARNING: every tenant listed here is one a boot-time purge may wipe.
+-- db.PurgeDemoTenants keeps a literal copy of these four ids as its allowlist
+-- (internal/platform/db/demopurge.go); adding a fifth tenant here widens what a
+-- deploy is allowed to delete, and TestPurgeAllowlistMatchesSeedFileTenants goes
+-- red until a human decides that is intended. That purge deletes leaf-first while
+-- this file inserts parent-first, so the two must never run concurrently.
 INSERT INTO tenants (id, name, kind) VALUES
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)',    'firm'),
     ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)',    'firm'),
@@ -116,8 +122,14 @@ ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 -- task-162/M4-22-03: fold the former reset script's rule re-enable + curated
 -- demo portfolio into the boot-time seed ([demo-seed-shape]). No DELETE is
 -- ported here: a boot-time seed must stay destructive-statement-free
--- (TestSeedFileHasNoDestructiveStatements), and a fresh per-PR env has
--- nothing to clear anyway -- only CREATE, or REPAIR on a re-seed.
+-- (TestSeedFileHasNoDestructiveStatements) -- only CREATE, or REPAIR on a
+-- re-seed. Clearing is mostly no longer this file's problem: db.PurgeDemoTenants
+-- runs immediately before this seed on every gated boot and has already emptied
+-- 17 of the four demo tenants' tables, so those upserts land on a clean slate.
+-- Two caveats: the purge is non-fatal, so a failed one leaves the residue in
+-- place and the boot still reaches this seed; and it deliberately spares
+-- memberships and the three approval-policy tables, whose upserts below are what
+-- converge them (docs/demo-reset.md).
 --
 -- Rules are GLOBAL (no tenant_id, no RLS): restores any rule a prior demo
 -- kill-switched (e.g. vat-standard-rate). Safe under the M4-17

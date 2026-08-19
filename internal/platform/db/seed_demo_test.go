@@ -620,10 +620,10 @@ var destructiveStatementPattern = regexp.MustCompile(`(?i)\b(DELETE|TRUNCATE|DRO
 
 // TestSeedFileHasNoDestructiveStatements: Test Spec row 6 (task-162 AC-7).
 // Pins binding decision [demo-seed-shape] structurally: the embedded
-// db/seed.dev.sql must never contain DELETE, TRUNCATE, or DROP — a per-PR
-// env never accumulates rows, so the boot-time seed has nothing to clear,
-// and seed.dev.sql only UPSERTs the curated rows deliberately (never
-// deletes) so it can't clobber a tenant's own data.
+// db/seed.dev.sql must never contain DELETE, TRUNCATE, or DROP — clearing is
+// db.PurgeDemoTenants's job and it runs immediately before this seed on every
+// gated boot, so seed.dev.sql only UPSERTs the curated rows deliberately
+// (never deletes) and can't clobber a tenant's own data.
 func TestSeedFileHasNoDestructiveStatements(t *testing.T) {
 	b, err := fs.ReadFile(dbsql.FS, "seed.dev.sql")
 	if err != nil {

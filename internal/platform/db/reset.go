@@ -18,6 +18,12 @@
 // from the exact same boot-time seam Seed already runs from (Provision,
 // provision.go) — it is a narrowing of what M4-22-07 shut off, not a
 // reopening of it.
+//
+// The paragraph above still describes Reset exactly, but Reset is no longer the
+// only boot-time destruction here: DEMO-04's demo-tenant purge (demopurge.go)
+// runs from the same seam with NO environment gate, so it DOES reach the
+// persistent environment. It is narrowed by allowlist instead — only the four
+// tenants DemoTenants names, and db.Seed restores them in the same call.
 package db
 
 import (
@@ -288,7 +294,8 @@ RESTART IDENTITY`
 // Reset destructively empties every table in resetTables, in a single
 // transaction, then returns. It is the PR-environment-only counterpart to
 // Seed (bootstrap.go): Provision (provision.go) runs it AFTER MigrateUp and
-// BEFORE Seed, and ONLY when ResetEnabled(cfg.RailwayEnvironmentName,
+// BEFORE the demo-tenant purge and Seed, and ONLY when
+// ResetEnabled(cfg.RailwayEnvironmentName,
 // cfg.ResetFlag) is true — see that function's doc comment for the exact
 // (narrower-than-Seed, differently-sourced) gate.
 //

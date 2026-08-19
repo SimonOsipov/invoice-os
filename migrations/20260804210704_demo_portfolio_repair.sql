@@ -1,6 +1,11 @@
 -- Repairs already-deployed demo environments: withdraws the 17 clients
 -- db/seed.dev.sql stopped declaring, and clears the stale seeded source-document
 -- links so the demo-document seeder rebuilds them. An UPSERT-only seed can do neither.
+--
+-- MigrateUp runs BEFORE db.PurgeDemoTenants within a boot, so this still has work
+-- to do on the boot that first applies it. From the next gated boot on it is a
+-- no-op for the demo tenants, whose rows the purge deletes before every seed.
+-- Kept because migrations are forward-only.
 
 -- +goose Up
 

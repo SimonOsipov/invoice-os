@@ -42,8 +42,11 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 > That is a deliberately accepted, narrowed tradeoff, not an oversight: `db.Provision`
 > (`internal/platform/db/provision.go`) gates bootstrap/seed behind `BootstrapEnabled`'s
 > ALLOWLIST (exactly `development` or a Railway PR-environment name — never a blocklist,
-> never production, QA F1), and `Bootstrap`/`Seed` (`internal/platform/db/bootstrap.go`)
-> each open and close their **own** dedicated superuser connection — the DSN is read once
+> never production, QA F1), and `Bootstrap`/`Seed` (`internal/platform/db/bootstrap.go`),
+> `Reset` (`reset.go`) and `PurgeDemoTenants` (`demopurge.go`)
+> each open and close their **own** dedicated superuser connection, and since DEMO-04
+> `Provision` opens a fifth of its own for the advisory lock it holds across the
+> reset/purge/seed tail (`lockProvisionTail`) — the DSN is read once
 > per gated step and **never retained** past the call that used it (QA F3); it is not
 > stored, logged, or reachable from any request-serving code path
 > (`TestSuperuserDSNNotRetainedForRequestPath` proves the request pool comes from
@@ -171,7 +174,9 @@ distinction:
   cleanup-only `DELETE` on `river_notification`) — explicit and per-table, never a blanket
   `ALL`. The same migration's app-owned `idempotency_keys` (the outbox dedupe ledger) IS
   tenant data and copies the FORCE-RLS `tenants` template; being permanent/append-only it
-  gets `SELECT`/`INSERT` only, like `audit_log`.
+  gets `SELECT`/`INSERT` only, like `audit_log`. Both grants hold for every tenant. The
+  only rows either table ever loses are the four seeded demo tenants', deleted by the
+  gateway as superuser on every gated boot ([`docs/demo-reset.md`](demo-reset.md)).
 
 Least privilege is a per-object decision, so it lives in the per-object migration.
 
@@ -293,9 +298,10 @@ runs the same suite against the `make dev-db` Postgres.
 Since M4-23, each PR gets its **own** ephemeral Railway environment — including its **own**
 Postgres. That Postgres is a FORK of `development`'s live volume (M4-23-03's
 `reconcile-fork`), not an empty one — it inherits whatever data `development` currently
-holds — and is bootstrapped + migrated + reset + seeded fresh at gateway boot
+holds — and is bootstrapped + migrated + reset + purged + seeded fresh at gateway boot
 (`internal/platform/db.Provision`, M4-21-04; the reset step is persona-handoff-fix,
-Decision [pr-only-reset] — see docs/topology-e2e.md "Boot-time seed"). When the PR closes, merged or not,
+Decision [pr-only-reset] — see docs/topology-e2e.md "Boot-time seed"; the demo-tenant
+purge is DEMO-04 and, unlike the reset, is not PR-only). When the PR closes, merged or not,
 `dev-env-teardown.yml` deletes that whole environment — Postgres included — and the daily
 `dev-env-sweeper.yml` reaps any the close event missed (M4-23). Losing that ephemeral DB's
 state costs nothing; nothing else depends on it once the PR is gone.
@@ -303,6 +309,21 @@ state costs nothing; nothing else depends on it once the PR is gone.
 The **`development` environment's own Postgres is different: it is stateful, persistent,
 and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
 environment is created from, and the target of live demo calls.
+
+> **DEMO-04 narrows that persistence** ([`docs/demo-reset.md`](demo-reset.md) is the full
+> account; this is the migration-side summary).
+> "Never torn down" still holds for the volume, the service and every non-demo tenant.
+> It no longer holds row-for-row: `db.PurgeDemoTenants` runs inside `db.Provision` on
+> **every** gated boot, this environment included, and deletes those four tenants'
+> (`db.DemoTenants`) rows from every tenant-owned table before `db.Seed` restores their
+> curated state. Four tenant-owned tables are spared (`db.purgeExcludedTables`):
+> `memberships`, which has no runtime INSERT path, and the three approval-policy tables,
+> which `internal/demopolicy` rebuilds for two of the four tenants only — purging them
+> would leave the other two with no policy and nothing to restore it. The purge is gated
+> by `GATEWAY_DB_BOOTSTRAP` alone — it has no environment gate, deliberately, so the demo
+> resets itself on deploy with no manual step. Nothing outside those four tenant IDs is
+> reachable by it.
+
 Migrations against it are therefore forward-only/additive; the reversibility guarantee is
 enforced against the *ephemeral CI* Postgres (§6) instead, never against `development`'s.
 
@@ -469,7 +490,7 @@ persistent, always-on service (§7). It is a one-time / re-provision runbook, no
 run per-PR: a PR's ephemeral Postgres comes from the `environmentCreate` fork that
 `dev-env.yml`'s `prepare-env` job issues (the *service* is inherited from `development`;
 the fork carries no deployment, so `prepare-env` deploys it explicitly), and is then
-bootstrapped/migrated/reset/seeded by the gateway at boot
+bootstrapped/migrated/reset/purged/seeded by the gateway at boot
 (`db.Provision`, M4-21-04, `[superuser-dsn-on-gateway]` above) — no human runs the steps
 below for it.
 

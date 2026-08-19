@@ -193,6 +193,12 @@ function baseRulesFor(css: string, selector: string): CssRule[] {
   )
 }
 
+/** The px value declared for `prop` in a rule body, or null when it is absent or unitless. */
+function pxOf(body: string, prop: string): number | null {
+  const m = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*(-?[\\d.]+)px\\s*(?:;|$)`).exec(body)
+  return m ? Number(m[1]) : null
+}
+
 function readComponentSrc(): string {
   expect(existsSync(COMPONENT_PATH), `expected ${COMPONENT_PATH} to exist`).toBe(true)
   return readFileSync(COMPONENT_PATH, 'utf8')
@@ -420,10 +426,38 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     expect(consent).toContain('[data-consent^="acc"]')
   })
 
-  it('AC-8 / Core AC 5: the desktop spacer is zero-height, so mounting the card moves nothing', () => {
+  it('Core AC 5 (amended): the desktop spacer reserves more than the card\'s own bottom inset', () => {
+    // Right-anchored, the card's x band holds the footer's link column, so the spacer is
+    // the only thing keeping those links clickable and is no longer zero. Asserted as a
+    // relationship between the two declarations rather than a second copy of the literal:
+    // a hardcoded number passes on the bug it exists to catch. landing-consent.spec.ts C3
+    // and C4 re-derive the rendered band on the deployed build.
     const spacer = baseRulesFor(CSS_SRC, '.cn-spacer')
     expect(spacer.length, 'expected exactly one base .cn-spacer rule').toBe(1)
-    expect(spacer[0].body).toMatch(/height:\s*0\b/)
+    const card = baseRulesFor(CSS_SRC, '.cookie-note')
+    expect(card.length, 'expected exactly one base .cookie-note rule').toBe(1)
+
+    // Control: the extractor reads a planted value and refuses a unitless one.
+    expect(pxOf('height: 137px;', 'height'), 'control: the px extractor found nothing').toBe(137)
+    expect(pxOf('height: 0;', 'height'), 'control: the px extractor accepted a unitless value').toBeNull()
+
+    const reserved = pxOf(spacer[0].body, 'height')
+    const inset = pxOf(card[0].body, 'bottom')
+    expect(reserved, 'the desktop spacer declares no px height').not.toBeNull()
+    expect(inset, 'the card declares no px bottom inset').not.toBeNull()
+    expect(
+      reserved!,
+      `the desktop spacer reserves ${reserved}px against a ${inset}px inset — it cannot clear the card`,
+    ).toBeGreaterThan(inset!)
+  })
+
+  it('the card is anchored to the right edge on desktop', () => {
+    // The footer's link column lives in the card's x band only on this side; C4 is what
+    // proves those links stay clickable.
+    const card = baseRulesFor(CSS_SRC, '.cookie-note')
+    expect(card.length, 'expected exactly one base .cookie-note rule').toBe(1)
+    expect(propertiesOf(card[0].body), 'the base card rule must not declare left').not.toContain('left')
+    expect(pxOf(card[0].body, 'right'), 'the base card rule declares no px right inset').toBe(24)
   })
 
   it('the mobile form is one max-width: 640px query and keeps the 44px touch target', () => {

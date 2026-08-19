@@ -25,6 +25,19 @@ name: Dev Env (deploy full fleet + verify)
 # gating rationale, including why it deliberately does NOT reuse ENVIRONMENT/
 # GATEWAY_DB_BOOTSTRAP the way the existing seed gate does.
 #
+# DEMO-04 overrides the "PR forks only" property above for a SECOND destructive
+# step, and the paragraph above no longer covers everything Provision destroys.
+# The demo-tenant purge (internal/platform/db/demopurge.go) runs from the same
+# boot seam, between the reset and the seed, but has NO environment gate at all
+# — only GATEWAY_DB_BOOTSTRAP — so it DOES run against the persistent
+# environment on the push/workflow_dispatch path. It is narrowed by allowlist
+# instead of by environment: it reaches no tenant outside the four seeded demo
+# tenants (db.DemoTenants), spares four of their tables (db.purgeExcludedTables —
+# memberships and the three approval-policy tables, which nothing would restore),
+# and db.Seed restores their curated state in the same call. Anything an operator
+# created by hand on those four tenants — a pending invitation, a runtime-created
+# workflow role, a staffing edit — is gone on every deploy, production included.
+#
 # THE TARGET DISCRIMINATOR IS `github.event_name == 'pull_request'`, NOT
 # `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and
 # dispatch both target the persistent environment, whose variables and domains
@@ -576,7 +589,11 @@ jobs:
   #    fully migrated — this is what the context services, the SPAs, and the
   #    reset/seed all wait behind. Also now the SOLE Postgres liveness proof
   #    (M4-22-08 removed the pg_isready probe) — Provision() runs to
-  #    completion, fatal-on-error, before the gateway's listener opens.
+  #    completion before the gateway's listener opens. Every step of it is
+  #    fatal on error except the demo-tenant purge (DEMO-04), which logs at
+  #    ERROR and continues to the seed: it is one transaction that rolls back
+  #    whole, so a failed purge leaves the database exactly as it was, and
+  #    crash-looping the fleet over it would be worse than a stale demo.
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
     needs: [deploy-gateway, prepare-env]
@@ -598,6 +615,7 @@ jobs:
           ok=0
           seen=""
           reset=""
+          purge=""
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
@@ -620,7 +638,8 @@ jobs:
               # rolling deploy is still in progress, which is the whole reason
               # the build field exists.
               reset=$(printf '%s' "$body" | jq -r '.db_reset // empty' 2>/dev/null || echo '')
-              echo "  gateway healthy on $seen (schema migrated, seed complete; db_reset=${reset:-none})"
+              purge=$(printf '%s' "$body" | jq -r '.demo_purge // empty' 2>/dev/null || echo '')
+              echo "  gateway healthy on $seen (schema migrated, seed complete; db_reset=${reset:-none}, demo_purge=${purge:-none})"
               ok=1
               break
             fi
@@ -656,6 +675,31 @@ jobs:
             fi
           elif [ "$reset" = "true" ]; then
             echo "::error::gateway reports db_reset=true against the PERSISTENT environment. db.ResetEnabled is supposed to make that impossible by environment-name shape — its allowlist has been widened, or this run is not targeting the environment it thinks it is. The next boot TRUNCATEs live tenant data that has no fork underneath it."
+            exit 1
+          fi
+
+          # The purge barrier. NOT directional the way db_reset above is, and
+          # deliberately outside that if/elif: the purge's only gate is
+          # BootstrapEnabled (db/bootstrap.go), which is true on the persistent
+          # environment too, so "true" is the expected answer on all three
+          # triggers. Nesting this inside the IS_PR branch would disarm the
+          # production half and look identical in review
+          # (TestPurgeGateAssertionCoversBothPaths).
+          #
+          # The policy it encodes: every environment this workflow deploys to is
+          # expected to have deploy-time provisioning ON. Turning
+          # GATEWAY_DB_BOOTSTRAP off on the persistent environment is a red
+          # deploy, deliberately.
+          #
+          # What it does NOT prove, so do not read it as more than it is:
+          # "true" means one transaction committed — a purge narrowed to zero
+          # tables or zero tenants commits identically. It says nothing about
+          # whether the demo state a viewer sees is correct after purge+seed,
+          # nothing about a Railway-side restart no gate is watching, and
+          # nothing about the second service an operator still has to restart
+          # by hand.
+          if [ "$purge" != "true" ]; then
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}' — the boot-time demo purge did not run, so the seed's upserts landed on top of whatever residue was already there instead of on curated state. 'error' means PurgeDemoTenants failed and Provision swallowed it to keep the fleet up (the gateway logs it at ERROR: look for 'demo-tenant purge failed'). 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true is still set on the gateway service (it fails closed and is lost when a service is recreated) and that ENVIRONMENT is one db.provisionableEnvironment allowlists. 'none' means the gateway predates the /healthz demo_purge field, or cmd/gateway/main.go's assignment was deleted."
             exit 1
           fi
 

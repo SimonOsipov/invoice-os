@@ -47,10 +47,10 @@ export type Rect = { x: number; y: number; width: number; height: number }
 /**
  * Do two elements cover any of the same pixels?
  *
- * Both axes, never one — gaps()'s rule in two dimensions. The cookie notice shares an
- * x band with the closing CTA's copy at every width in WIDE_WIDTHS, so an x-only check
- * calls a correct page broken and the whole clearance claim lives on y. A shared edge,
- * and an element collapsed to zero on either axis, are clearance rather than contact.
+ * Both axes, never one — gaps()'s rule in two dimensions. A fixed card and the content
+ * it scrolls over can clear each other on x alone or on y alone, so a single-axis check
+ * calls a correct page broken. A shared edge, and an element collapsed to zero on either
+ * axis, are clearance rather than contact.
  */
 export function rectsOverlap(a: Rect, b: Rect): boolean {
   const o = overlapOf(a, b)

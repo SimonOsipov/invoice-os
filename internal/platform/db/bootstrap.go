@@ -24,11 +24,13 @@ type RolePasswords struct {
 
 // BootstrapAdvisoryLockKey is the fixed, project-scoped pg_advisory_lock key
 // Bootstrap holds for the entire db/bootstrap.sql execution (QA F7), so two
-// concurrent gateway boots serialize on CREATE ROLE rather than racing it. An
-// arbitrary fixed int64 — its value carries no meaning beyond "non-zero, and not
-// reused by any other advisory lock in this codebase". Exported so tests can
-// assert the lock is actually acquired/released without hardcoding the key a
-// second time.
+// concurrent gateway boots serialize on CREATE ROLE rather than racing it.
+// lockProvisionTail (provision.go) takes the SAME key, deliberately: the
+// reset/purge/seed tail must not run concurrently with a peer's Bootstrap
+// either, and one key makes that hold without a second lock to reason about.
+// An arbitrary fixed int64 — its value carries no meaning beyond "non-zero".
+// Exported so tests can assert the lock is actually acquired/released without
+// hardcoding the key a second time.
 const BootstrapAdvisoryLockKey int64 = 84210001
 
 // prEnvironmentPattern matches a Railway PR-environment name in either

@@ -4,7 +4,7 @@
 // dynamic import, same idiom as demo/flag.test.ts. No gateway is configured under
 // vitest, so signIn never hits the network by default (auth.ts) -- only the failed-
 // mint test needs to force a rejection.
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -399,6 +399,51 @@ describe('becomePersona / returnToSeat', () => {
 
     expect(container.querySelector('.pf-shell'), 'a late mint must not resurrect the workspace after sign-out').toBeNull()
     expect(localStorage.getItem(SESSION_KEY), 'sign-out must stay cleared').toBeNull()
+  })
+
+  it('a return that lands after sign-out commits nothing (task-594, DEMO-06-06, AC-6)', async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    // Real timers for the sanity switch (same idiom as the carryView describe below);
+    // fake timers only start once the race under test begins.
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    expect(capturedCtx!.user.name, 'sanity: the stand-in did not take effect').toBe(MEMBER.name)
+    // Dismiss the sanity switch's own toast -- otherwise it lingers (signOut never
+    // clears `toast`) and would confound the leaked-toast assertion below.
+    fireEvent.click(screen.getByTestId('persona-toast-dismiss'))
+    expect(screen.queryByTestId('persona-toast')).toBeNull()
+
+    vi.useFakeTimers()
+    let call!: Promise<void>
+    act(() => {
+      call = capturedCtx!.returnToSeat!('approvals', SEAT_AS_MEMBER)
+    })
+
+    await act(async () => {
+      capturedCtx!.signOut()
+    })
+    expect(localStorage.getItem(SESSION_KEY), 'sign-out must clear the persisted session immediately').toBeNull()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750)
+    })
+    await call
+
+    expect(screen.getByText('Choose an account'), 'the picker must render after sign-out').toBeTruthy()
+    const pickButton = screen.getByText(SEAT_SESSION.persona.name).closest('button')
+    expect(pickButton, 'the firm persona button was not found in the picker').toBeTruthy()
+    await act(async () => {
+      fireEvent.click(pickButton as HTMLButtonElement)
+    })
+
+    expect(
+      screen.queryByTestId('persona-toast'),
+      'a return that commits after sign-out must not announce a switch to the next sign-in',
+    ).toBeNull()
+    expect(capturedCtx!.view, 'a return that commits after sign-out must not carry its view into the next sign-in').toBe('dashboard')
   })
 })
 

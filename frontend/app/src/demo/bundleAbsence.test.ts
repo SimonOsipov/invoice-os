@@ -27,7 +27,15 @@ function readBundle(): string {
 // literal U+00B7 middle dots today, so a sentinel built from one is findable.
 // GUARD: green on write (the toast doesn't exist yet, so the string is absent either
 // way) -- fences the `DEMO_MODE &&` gate on App's new toast mount once it ships.
-const ABSENT_SENTINELS = ['DEMO ONLY · BECOME ANOTHER MEMBER', 'DEMO BUILD', 'Return to the signed-in seat', 'persona-trigger', 'You are now {full name}']
+const ABSENT_SENTINELS = [
+  'DEMO ONLY · BECOME ANOTHER MEMBER',
+  'DEMO BUILD',
+  'Return to the signed-in seat',
+  'persona-trigger',
+  'You are now {full name}',
+  // task-594, DEMO-06-06: the invoice-detail note naming the blocked preparer.
+  'Switch to a Reviewer to act on this step.',
+]
 
 describe('the built bundle carries no demo string', () => {
   // Control needle: if this fails, the read itself is wrong (empty/mis-resolved file),

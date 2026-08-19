@@ -12,6 +12,7 @@ export function PersonaPopover({
   membersError,
   seatSubject,
   standingIn,
+  rowError,
   onSelect,
   onReturn,
 }: {
@@ -20,6 +21,9 @@ export function PersonaPopover({
   membersError: ApiError | null
   seatSubject: string | undefined
   standingIn: boolean
+  // Optional: only PersonaFooter's live wiring sets this (DEMO-06-05); direct-render
+  // tests that predate the switch omit it.
+  rowError?: { memberId: string; message: string } | null
   onSelect: (member: Member) => void
   onReturn: () => void
 }) {
@@ -146,6 +150,11 @@ export function PersonaPopover({
                   {m.status === 'suspended' && (
                     <span data-testid="persona-row-reason" style={{ display: 'block', fontSize: 11, color: 'var(--fg-3)', lineHeight: 1.45, marginTop: 4 }}>
                       {SUSPENDED_REASON}
+                    </span>
+                  )}
+                  {rowError?.memberId === m.id && (
+                    <span data-testid="persona-row-error" style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)', marginTop: 4 }}>
+                      {rowError.message}
                     </span>
                   )}
                 </span>

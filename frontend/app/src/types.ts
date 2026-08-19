@@ -501,6 +501,6 @@ export type PlatformCtx = {
   // Demo-only (DEMO-06). App supplies these ONLY under DEMO_MODE, so they are
   // `undefined` in every customer build and nothing outside src/demo/ may read them.
   becomePersona?: (member: Member, view: View) => Promise<void>
-  returnToSeat?: (view: View) => void
+  returnToSeat?: (view: View, seat: Member) => Promise<void>
   seatSubject?: string
 }

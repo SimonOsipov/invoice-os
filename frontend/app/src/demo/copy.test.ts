@@ -1,5 +1,7 @@
-// Structural invariants DEMO-06-03's Object.values(copy) scan depends on: every export
-// is a non-empty string, never a function -- a template function would escape the scan.
+// Structural invariants DEMO-06-03's Object.values(copy) scan depends on: every STRING
+// export is a non-empty string, never a function -- a template function would escape the
+// scan. DEMO-06-05 adds BUSY_MS/TOAST_MS (numeric timing, not rendered copy) beside the
+// strings they time -- excluded from both scans below by type, not by name.
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import * as copy from './copy'
 
 describe('demo copy shape', () => {
-  const entries = Object.entries(copy)
+  const entries = Object.entries(copy).filter(([, value]) => typeof value === 'string')
 
   it('exports at least one string', () => {
     expect(entries.length).toBeGreaterThan(0)
@@ -40,7 +42,7 @@ describe('no switcher string uses account or session vocabulary (AC-8)', () => {
     expect(EXCLUDED.length).toBe(2)
   })
 
-  const scanned = Object.entries(copy).filter(([name]) => !EXCLUDED.includes(name))
+  const scanned = Object.entries(copy).filter(([name, value]) => !EXCLUDED.includes(name) && typeof value === 'string')
 
   it('scans at least 12 exports', () => {
     expect(scanned.length).toBeGreaterThanOrEqual(12)

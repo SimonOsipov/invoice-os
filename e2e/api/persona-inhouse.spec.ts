@@ -63,6 +63,7 @@ import { test, expect } from '@playwright/test'
 import {
   login,
   me,
+  rawFetch,
   createEntity,
   getEntity,
   listEntities,
@@ -76,6 +77,7 @@ import {
   type ValidateInvoiceResult,
 } from './client'
 import { canonicalTin, freshTin } from './fixtures'
+import { assertErrorEnvelope } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports between spec
 // files, stated at contract-invoice.spec.ts:43-48; four copies already exist), mirroring
@@ -141,6 +143,10 @@ async function findEntityById(token: string, id: string): Promise<Entity | undef
     if (offset >= pagination.total) return undefined
   }
 }
+
+// Zainab Lawal: in-house `preparer`, active, staffed into the in-house `preparer` workflow
+// role (db/seed.dev.sql:54, :108). Mintable via loginPersonas (TestLoginPersonasMatchEverySeededActiveMembership); see IH-6.
+const INHOUSE_PREPARER = 'c0000000-0000-0000-0000-000000000013'
 
 test.describe('the in-house tenant as a first-class API subject (API E2E, over the deployed gateway)', () => {
   let token: string
@@ -343,5 +349,41 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
       rowOne!.counts.validated,
       "entityOne's own validated count should include this test's fixtures",
     ).toBeGreaterThanOrEqual(validatedNumbers.length)
+  })
+
+  test('IH-6: a newly admitted in-house preparer holds a session and still cannot approve', async () => {
+    // A widened sign-in changes who may HOLD a session, never who may ACT. This subject is
+    // even staffed into a workflow role and is still refused: the approver predicate
+    // (admin || reviewer, internal/invoice/store.go:1487) is read before staffing is.
+    const preparerToken = await login({ ...PERSONAS.B, subject: INHOUSE_PREPARER })
+
+    // The refusal below needs an oracle for WHY: the role really is preparer, and it is
+    // resolved server-side from memberships, not from anything the login request sent.
+    const identity = await me(preparerToken)
+    expect(identity.tenant.id, 'the preparer token must resolve the in-house tenant').toBe(PERSONAS.B.tenantId)
+    expect(identity.user.role, 'the seeded access role, resolved from memberships').toBe('preparer')
+
+    // No armed run is needed, and none is created: requireApprover is decideTx's first
+    // statement, ahead of the invoice row read (internal/approval/decision.go:124-132), so
+    // a non-approver is refused whatever the id points at. It need only be a valid uuid.
+    const invoiceId = crypto.randomUUID()
+    const refused = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${preparerToken}` },
+      body: { decision: 'approved' },
+    })
+    assertErrorEnvelope(refused, 403, 'a newly admitted in-house preparer deciding an approval')
+    // Pinned literally, unlike the sibling decision-door specs: the sentence is what makes
+    // this provably AXIS 1 (not an approver) rather than AXIS 2 or an unrelated 403.
+    expect((refused.body as Record<string, unknown>).error).toBe('only an approver can decide an approval step')
+
+    // Control on the SAME id: an approver clears the gate and only then fails to find the
+    // run. So the 403 above is about who is asking, not about the invoice.
+    const approver = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { decision: 'approved' },
+    })
+    assertErrorEnvelope(approver, 404, 'the in-house admin clears the approver gate and finds no run')
   })
 })

@@ -12,7 +12,7 @@
 // Following contract-tenancy.spec.ts:
 //   - titles come from freshRoleTitle(), unique per run — here for identifiability in the
 //     cleanup sweep, not constraint safety: duplicate titles are legal;
-//   - staffing targets are SEED-ONLY subjects, never …0001/…0002 (the sign-in personas);
+//   - staffing targets are never …0001/…0002 (each tenant's sole admin);
 //   - no assertion depends on a key VALUE. The server suffixes a colliding key to -2, so a
 //     re-run cannot predict what it minted;
 //   - no assertion depends on the list's LENGTH or on which other roles exist. It is not
@@ -51,11 +51,11 @@ import { freshPolicyName, freshRoleTitle } from './fixtures'
 // the set stays four even when desc is "" and members is empty.
 const ROLE_KEYS = ['desc', 'key', 'members', 'title']
 
-// Seed-only staffing targets (db/seed.dev.sql). …0006 is a PREPARER — a legal target by
+// Seeded staffing targets (db/seed.dev.sql). …0006 is a PREPARER — a legal target by
 // design, asserted here on the deployed build rather than only in Go.
 const REVIEWER_TARGET = 'c0000000-0000-0000-0000-000000000004'
 const PREPARER_TARGET = 'c0000000-0000-0000-0000-000000000006'
-// The seeded preparer that can sign in — this suite's canonical 403 caller.
+// A seeded preparer, distinct from the staffing target above — this suite's canonical 403 caller.
 const PREPARER_CALLER = 'c0000000-0000-0000-0000-000000000003'
 
 // The shape all five routes answer. `members` is checked on the PARSED body, which is

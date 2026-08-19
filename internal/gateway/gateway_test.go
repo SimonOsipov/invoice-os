@@ -337,7 +337,14 @@ const (
 	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
 	finApproverSubject        = "c0000000-0000-0000-0000-000000000004" // firm-tenant reviewer staffed fin_mgr + fin_dir
 	complianceApproverSubject = "c0000000-0000-0000-0000-000000000005" // firm-tenant reviewer staffed compliance
-	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000006" // seed-only preparer, never a login identity
+	secondPreparerSubject     = "c0000000-0000-0000-0000-000000000006" // firm-tenant second preparer
+	inhouseReviewerSubject    = "c0000000-0000-0000-0000-000000000008" // in-house reviewer staffed fin_dir as the backup seat
+	inhouseLineMgrSubject     = "c0000000-0000-0000-0000-000000000009" // in-house reviewer staffed line_mgr
+	inhouseControllerSubject  = "c0000000-0000-0000-0000-000000000010" // in-house reviewer staffed controller
+	inhouseComplianceSubject  = "c0000000-0000-0000-0000-000000000011" // in-house reviewer staffed compliance
+	inhousePreparerSubject    = "c0000000-0000-0000-0000-000000000013" // in-house preparer
+	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000007" // firm reviewer, seeded suspended — the allowlist is not "any seeded membership"
+	inhouseSuspendedSubject   = "c0000000-0000-0000-0000-000000000012" // in-house reviewer, seeded suspended
 	unlistedTenant            = "99999999-9999-9999-9999-999999999999"
 	unlistedSubject           = "88888888-8888-8888-8888-888888888888"
 	personaRole               = "authenticated"
@@ -355,9 +362,15 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 	}{
 		{"firm persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, firmTenant, personaRole), http.StatusOK},
 		{"in-house persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house reviewer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, inhouseTenant, personaRole), http.StatusOK},
 		{"preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, firmTenant, personaRole), http.StatusOK},
 		{"fin approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusOK},
 		{"compliance approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, firmTenant, personaRole), http.StatusOK},
+		{"firm second preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, secondPreparerSubject, firmTenant, personaRole), http.StatusOK},
+		{"in-house line manager persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseLineMgrSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house controller persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseControllerSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house compliance persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseComplianceSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhousePreparerSubject, inhouseTenant, personaRole), http.StatusOK},
 		{"fin approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
 		{"compliance approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
 		// the seed's own memberships.role for both -- the substitution the persona table warns about.
@@ -372,8 +385,15 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 		{"unknown tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole), http.StatusForbidden},
 		{"mismatched pairing", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole), http.StatusForbidden},
 		{"unknown subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole), http.StatusForbidden},
-		// seeded but never allowlisted: distinguishes "allowlist" from "any seeded membership".
+		// seeded but suspended, one per tenant: a session either could obtain could act
+		// on nothing, so the allowlist is not "any seeded membership".
 		{"seeded, not allowlisted subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, seededNotAllowlisted, firmTenant, personaRole), http.StatusForbidden},
+		{"in-house suspended reviewer", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSuspendedSubject, inhouseTenant, personaRole), http.StatusForbidden},
+		// the widening added allowlist rows, not a per-tenant wildcard: the cross-tenant,
+		// domain-role and transposition shapes must still refuse a newly admitted persona.
+		{"in-house reviewer on the firm tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, firmTenant, personaRole), http.StatusForbidden},
+		{"in-house preparer with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"preparer"}`, inhousePreparerSubject, inhouseTenant), http.StatusForbidden},
+		{"in-house reviewer with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, personaRole, inhouseTenant), http.StatusForbidden},
 		{"escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, firmSubject, firmTenant), http.StatusForbidden},
 		{"preparer with an escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, preparerSubject, firmTenant), http.StatusForbidden},
 		// the seed's own memberships.role — the substitution the persona table warns about.
@@ -400,7 +420,10 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 				t.Fatalf("decode response: %v", err)
 			}
 			if tc.wantStatus == http.StatusOK {
-				if resp["token_type"] != "bearer" || resp["access_token"] == "" {
+				// resp is map[string]any: an absent access_token is a nil interface,
+				// and nil == "" is false — assert the type, not just the value.
+				token, minted := resp["access_token"].(string)
+				if resp["token_type"] != "bearer" || !minted || token == "" {
 					t.Fatalf("mint response = %+v, want bearer access_token", resp)
 				}
 				return
@@ -462,29 +485,52 @@ func TestMockLoginHostedApproverRoundTrip(t *testing.T) {
 	}
 }
 
-// TestLoginPersonas_AllSeeded checks the table itself, not the wire: every entry
-// must be a real seeded membership and carry the GoTrue role. loginPersona's
-// literals are unkeyed, so an entry written (subject, role, tenant) compiles —
-// it fails both halves here.
-func TestLoginPersonas_AllSeeded(t *testing.T) {
-	if len(loginPersonas) != 5 {
-		t.Errorf("len(loginPersonas) = %d, want 5 (firm admin, in-house admin, firm preparer, fin approver, compliance approver)", len(loginPersonas))
+// TestMockLoginHostedInhouseRoundTrip proves an in-house addition's minted claims
+// survive injectIdentity — the approver round-trip covers only the firm tenant.
+func TestMockLoginHostedInhouseRoundTrip(t *testing.T) {
+	tg := setupGateway(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
+	mux.Handle("/api/", tg.handler)
+
+	login := httptest.NewRecorder()
+	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, inhouseTenant, personaRole)
+	mux.ServeHTTP(login, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200", login.Code)
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if resp.TokenType != "bearer" || resp.AccessToken == "" {
+		t.Fatalf("login response = %+v, want a bearer access_token", resp)
 	}
 
-	rows := seedMembershipRows(t)
+	api := httptest.NewRecorder()
+	mux.ServeHTTP(api, request("GET", "/api/tenancy/v1/ping", resp.AccessToken))
+	if api.Code != http.StatusOK {
+		t.Fatalf("proxied request with minted token = %d, want 200", api.Code)
+	}
+	assertHeader(t, tg.caps["tenancy"].header, headerTenantID, inhouseTenant)
+	assertHeader(t, tg.caps["tenancy"].header, headerUserID, inhouseReviewerSubject)
+	assertHeader(t, tg.caps["tenancy"].header, headerUserRole, personaRole)
+}
+
+// TestLoginPersonas_AllSeeded pins the table's size and its role column, not the wire.
+// loginPersona's literals are unkeyed, so an entry written (subject, role, tenant)
+// compiles — the role check catches it. Membership in the seed is the parity test's job.
+func TestLoginPersonas_AllSeeded(t *testing.T) {
+	if len(loginPersonas) != 11 {
+		t.Errorf("len(loginPersonas) = %d, want 11 (every seeded active membership across both demo tenants)", len(loginPersonas))
+	}
+
 	for _, p := range loginPersonas {
 		if p.role != personaRole {
 			t.Errorf("persona %s role = %q, want %q", p.subject, p.role, personaRole)
-		}
-		seeded := false
-		for _, row := range rows {
-			if strings.Contains(row, "'"+p.subject+"'") && strings.Contains(row, "'"+p.tenantID+"'") {
-				seeded = true
-				break
-			}
-		}
-		if !seeded {
-			t.Errorf("persona (%s, %s) has no memberships row in db/seed.dev.sql", p.subject, p.tenantID)
 		}
 	}
 }
@@ -525,6 +571,31 @@ func seedRowFor(t *testing.T, rows []string, subject, tenant string) string {
 	}
 	t.Fatalf("no memberships row for (%s, %s)", subject, tenant)
 	return ""
+}
+
+// tenant, user, role, then display_name/email skipped, then status. The tail is
+// anchored so a column reorder fails to match instead of capturing the wrong field.
+var seedMembershipRowRe = regexp.MustCompile(
+	`'([0-9a-f-]{36})',\s*'([0-9a-f-]{36})',\s*'([a-z_]+)',.*'([a-z]+)'\),?$`)
+
+type seedMembership struct{ tenantID, userID, role, status string }
+
+// seedMemberships parses the memberships INSERT into fields. seedMembershipRows
+// hands back the block's comment lines too, so non-matching lines are skipped.
+func seedMemberships(t *testing.T) []seedMembership {
+	t.Helper()
+	var out []seedMembership
+	for _, row := range seedMembershipRows(t) {
+		m := seedMembershipRowRe.FindStringSubmatch(row)
+		if m == nil {
+			continue
+		}
+		out = append(out, seedMembership{tenantID: m[1], userID: m[2], role: m[3], status: m[4]})
+	}
+	if len(out) == 0 {
+		t.Fatal("extracted 0 memberships rows from db/seed.dev.sql — the extractor stopped matching, which reads exactly like an empty seed")
+	}
+	return out
 }
 
 // roleMemberSeedRowRe matches one role_member_seed VALUES tuple: tenant, role key, user.
@@ -597,12 +668,109 @@ func TestApproverPersonasHoldTheirWorkflowRoles(t *testing.T) {
 // whose every role-gated call then refuses. The seeded pairing alone cannot see it:
 // TestLoginPersonas_AllSeeded passes just as happily on a suspended row.
 func TestLoginPersonas_SeededActive(t *testing.T) {
-	rows := seedMembershipRows(t)
-	for _, p := range loginPersonas {
-		row := seedRowFor(t, rows, p.subject, p.tenantID)
-		if !strings.Contains(row, "'active'") || strings.Contains(row, "'suspended'") {
-			t.Errorf("persona %s is not seeded active:%s", p.subject, row)
+	rows := seedMemberships(t)
+	statusOf := map[string]string{}
+	var nonActive []string
+	for _, r := range rows {
+		key := r.tenantID + "/" + r.userID
+		statusOf[key] = r.status
+		if r.status != "active" {
+			nonActive = append(nonActive, key)
 		}
+	}
+
+	for _, p := range loginPersonas {
+		key := p.tenantID + "/" + p.subject
+		status, ok := statusOf[key]
+		if !ok {
+			t.Errorf("persona %s has no memberships row in db/seed.dev.sql", key)
+			continue
+		}
+		if status != "active" {
+			t.Errorf("persona %s is seeded %q, want \"active\"", key, status)
+		}
+	}
+
+	// Naming the excluded pair keeps the exclusion deliberate: reactivating one in
+	// the seed goes red here instead of silently widening the allowlist elsewhere.
+	wantNonActive := []string{
+		firmTenant + "/c0000000-0000-0000-0000-000000000007",
+		inhouseTenant + "/c0000000-0000-0000-0000-000000000012",
+	}
+	slices.Sort(nonActive)
+	slices.Sort(wantNonActive)
+	if !slices.Equal(nonActive, wantNonActive) {
+		t.Errorf("seed's non-active memberships = %v, want %v", nonActive, wantNonActive)
+	}
+}
+
+// TestSeedMembershipParserExtractsThirteenRows is the population floor under the
+// parity test: a regex that quietly stops matching rows would otherwise let a
+// shrinking seed read as agreement.
+func TestSeedMembershipParserExtractsThirteenRows(t *testing.T) {
+	rows := seedMemberships(t)
+	if len(rows) != 13 {
+		t.Fatalf("parsed %d memberships rows from db/seed.dev.sql, want 13", len(rows))
+	}
+	counts := map[string]int{}
+	for _, r := range rows {
+		counts[r.status]++
+	}
+	if counts["active"] != 11 || counts["suspended"] != 2 {
+		t.Errorf("parsed statuses = %v, want 11 active and 2 suspended", counts)
+	}
+	// Nothing else reads the parsed role, so only this pins group 3 to the role
+	// column: a column inserted ahead of it would slide the capture unnoticed.
+	for _, r := range rows {
+		if r.role != "admin" && r.role != "preparer" && r.role != "reviewer" {
+			t.Errorf("row %s/%s parsed role = %q, want one of roles(name): admin, preparer, reviewer", r.tenantID, r.userID, r.role)
+		}
+	}
+}
+
+// TestLoginPersonasMatchEverySeededActiveMembership: loginPersonas is a literal, so
+// nothing keeps it in step with db/seed.dev.sql except this test. It compares as
+// SETS, failing in both directions.
+func TestLoginPersonasMatchEverySeededActiveMembership(t *testing.T) {
+	var seeded []string
+	for _, r := range seedMemberships(t) {
+		if r.status == "active" {
+			seeded = append(seeded, r.tenantID+"/"+r.userID)
+		}
+	}
+	var allowed []string
+	for _, p := range loginPersonas {
+		allowed = append(allowed, p.tenantID+"/"+p.subject)
+	}
+	slices.Sort(seeded)
+	slices.Sort(allowed)
+	if !slices.Equal(seeded, allowed) {
+		t.Fatalf("loginPersonas and db/seed.dev.sql's active memberships disagree — a member the seed creates and the allowlist omits is an unexplained 403 during a demo, and an allowlist entry the seed never creates is a subject nothing seeds\nseeded but not allowlisted: %v\nallowlisted but not seeded: %v\nseed.dev.sql active: %v\nloginPersonas:       %v",
+			missingFrom(seeded, allowed), missingFrom(allowed, seeded), seeded, allowed)
+	}
+}
+
+// missingFrom returns the members of a that b does not hold.
+func missingFrom(a, b []string) []string {
+	out := []string{}
+	for _, s := range a {
+		if !slices.Contains(b, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// A duplicated entry fails the parity comparison above with BOTH of its difference
+// lists empty, which reads as no divergence at all. Name it here instead.
+func TestLoginPersonasHoldNoDuplicates(t *testing.T) {
+	seen := map[string]bool{}
+	for _, p := range loginPersonas {
+		key := p.tenantID + "/" + p.subject
+		if seen[key] {
+			t.Errorf("loginPersonas lists %s more than once", key)
+		}
+		seen[key] = true
 	}
 }
 

@@ -9,8 +9,8 @@
 // NO LONGER READ-ONLY. The PATCH matrix below writes to a shared environment, and
 // memberships is one of the tables the per-PR reset deliberately EXCLUDES (resetTables) --
 // a dirty status survives the run. So every write here obeys two rules:
-//   - the subject is SEED-ONLY (never …0001/…0002, the two sign-in personas —
-//     a tenant stranded at zero active admins needs a superuser to recover);
+//   - the subject is never …0001/…0002, each tenant's sole admin — a tenant
+//     stranded at zero active admins needs a superuser to recover;
 //   - the row is forced back to `active` on the way in AND on the way out, in a
 //     `finally`, so neither a mid-assertion failure nor a killed prior run can
 //     leave it dirty. The api job runs BEFORE test:topology in dev-env.yml
@@ -59,14 +59,17 @@
 //   - 409 invited-not-transitionable: no seeded row has status `invited` and
 //     nothing mints one.
 import { test, expect } from '@playwright/test'
-import { login, rawFetch, setMembershipStatus, PERSONAS, type Membership } from './client'
+import { login, memberships, rawFetch, setMembershipStatus, PERSONAS, type Membership } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 
 // The five keys internal/tenancy's Membership serializes, sorted — the exact-key-set
 // idiom the /me test below already uses, applied per row.
 const MEMBERSHIP_KEYS = ['display_name', 'email', 'role', 'status', 'user_id']
 
-// Seed-only subjects (db/seed.dev.sql), never the sign-in personas.
+// Seeded subjects (db/seed.dev.sql), never a tenant's sole admin. Every active
+// seeded member can sign in now, and the mint allowlist is static, so a leaked
+// suspension does not block the login — it hands that persona a session whose
+// every role-gated call refuses, until the next deploy re-seeds.
 // …0006 is the PATCH target deliberately: it holds the firm's `preparer` seat
 // ALONGSIDE …0003, so even a failed restore leaves every role-derived string in
 // topology/roles.spec.ts byte-identical (preparer keeps an active holder, and it
@@ -138,6 +141,73 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       // non-paginated list — unlike portfolio's list (M3-15-03), it must
       // NOT carry a pagination envelope.
       expect(body, 'memberships should have no pagination key').not.toHaveProperty('pagination')
+    })
+  })
+
+  // The persona switcher renders this list. A null display_name, an unseeded role, or a
+  // suspended row filtered out server-side would each leave it nothing usable to draw.
+  test.describe('roster identity, both tenants', () => {
+    const SEEDED_ROLES = ['admin', 'preparer', 'reviewer']
+    const SEEDED_STATUSES = ['active', 'suspended']
+    const INHOUSE_REVIEWER = 'c0000000-0000-0000-0000-000000000008'
+
+    let tokenB: string
+
+    test.beforeAll(async () => {
+      tokenB = await login(PERSONAS.B)
+    })
+
+    function assertRenderable(rows: Membership[], label: string) {
+      expect(rows.length, `${label}: the roster should not be empty`).toBeGreaterThan(0)
+      for (const m of rows) {
+        expect(
+          typeof m.display_name === 'string' && m.display_name.length > 0,
+          `${label}: ${m.user_id} has no display_name — the switcher would render a bare uuid`,
+        ).toBe(true)
+        expect(SEEDED_ROLES, `${label}: ${m.user_id} role`).toContain(m.role)
+        expect(SEEDED_STATUSES, `${label}: ${m.user_id} status`).toContain(m.status)
+      }
+      expect(
+        rows.some((m) => m.status === 'suspended'),
+        `${label}: no row reports status "suspended" — the switcher has nothing to render disabled`,
+      ).toBe(true)
+    }
+
+    test('every row carries a renderable identity, the suspended one included (persona A)', async () => {
+      const { memberships: rows } = await memberships(token)
+      assertRenderable(rows, 'firm')
+    })
+
+    test('every row carries a renderable identity, the suspended one included (persona B)', async () => {
+      const { memberships: rows } = await memberships(tokenB)
+      assertRenderable(rows, 'in-house')
+    })
+
+    test('no row carries tenant_id (persona B)', async () => {
+      const { memberships: rows } = await memberships(tokenB)
+      // Floor first: an empty list satisfies every per-row assertion below.
+      expect(rows.length, 'in-house: the roster should not be empty').toBeGreaterThan(0)
+      for (const m of rows) {
+        expect(
+          Object.keys(m).sort(),
+          `${m.user_id}: a switcher takes the tenant from GET /v1/me, never from a roster row`,
+        ).toEqual(MEMBERSHIP_KEYS)
+      }
+    })
+
+    test('a newly admitted in-house reviewer resolves its seeded access role', async () => {
+      // Proves ROLE RESOLUTION only, not the sign-in allowlist: the gate deploys a pr-<N>
+      // environment (PosturePreview), where the hosted allowlist is not consulted, so
+      // /auth/login is permissive here for any subject. The refusal proof is a Go test.
+      const reviewerToken = await login({ ...PERSONAS.B, subject: INHOUSE_REVIEWER })
+      const res = await rawFetch('/api/tenancy/v1/me', {
+        headers: { Authorization: `Bearer ${reviewerToken}` },
+      })
+      expect(res.status, '/me should return 200 for the in-house reviewer').toBe(200)
+
+      const body = res.body as { tenant: Record<string, unknown>; user: Record<string, unknown> }
+      expect(body.tenant.id, 'the in-house tenant').toBe(PERSONAS.B.tenantId)
+      expect(body.user.role, 'the seeded access role').toBe('reviewer')
     })
   })
 

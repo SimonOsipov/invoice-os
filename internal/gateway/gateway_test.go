@@ -337,8 +337,14 @@ const (
 	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
 	finApproverSubject        = "c0000000-0000-0000-0000-000000000004" // firm-tenant reviewer staffed fin_mgr + fin_dir
 	complianceApproverSubject = "c0000000-0000-0000-0000-000000000005" // firm-tenant reviewer staffed compliance
-	inhouseReviewerSubject    = "c0000000-0000-0000-0000-000000000008" // in-house reviewer; the only non-admin mint case on that tenant
+	secondPreparerSubject     = "c0000000-0000-0000-0000-000000000006" // firm-tenant second preparer
+	inhouseReviewerSubject    = "c0000000-0000-0000-0000-000000000008" // in-house reviewer staffed fin_dir as the backup seat
+	inhouseLineMgrSubject     = "c0000000-0000-0000-0000-000000000009" // in-house reviewer staffed line_mgr
+	inhouseControllerSubject  = "c0000000-0000-0000-0000-000000000010" // in-house reviewer staffed controller
+	inhouseComplianceSubject  = "c0000000-0000-0000-0000-000000000011" // in-house reviewer staffed compliance
+	inhousePreparerSubject    = "c0000000-0000-0000-0000-000000000013" // in-house preparer
 	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000007" // firm reviewer, seeded suspended — the allowlist is not "any seeded membership"
+	inhouseSuspendedSubject   = "c0000000-0000-0000-0000-000000000012" // in-house reviewer, seeded suspended
 	unlistedTenant            = "99999999-9999-9999-9999-999999999999"
 	unlistedSubject           = "88888888-8888-8888-8888-888888888888"
 	personaRole               = "authenticated"
@@ -360,6 +366,11 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 		{"preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, firmTenant, personaRole), http.StatusOK},
 		{"fin approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusOK},
 		{"compliance approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, firmTenant, personaRole), http.StatusOK},
+		{"firm second preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, secondPreparerSubject, firmTenant, personaRole), http.StatusOK},
+		{"in-house line manager persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseLineMgrSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house controller persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseControllerSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house compliance persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseComplianceSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhousePreparerSubject, inhouseTenant, personaRole), http.StatusOK},
 		{"fin approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
 		{"compliance approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
 		// the seed's own memberships.role for both -- the substitution the persona table warns about.
@@ -374,8 +385,15 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 		{"unknown tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole), http.StatusForbidden},
 		{"mismatched pairing", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole), http.StatusForbidden},
 		{"unknown subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole), http.StatusForbidden},
-		// seeded but never allowlisted: distinguishes "allowlist" from "any seeded membership".
+		// seeded but suspended, one per tenant: a session either could obtain could act
+		// on nothing, so the allowlist is not "any seeded membership".
 		{"seeded, not allowlisted subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, seededNotAllowlisted, firmTenant, personaRole), http.StatusForbidden},
+		{"in-house suspended reviewer", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSuspendedSubject, inhouseTenant, personaRole), http.StatusForbidden},
+		// the widening added allowlist rows, not a per-tenant wildcard: the cross-tenant,
+		// domain-role and transposition shapes must still refuse a newly admitted persona.
+		{"in-house reviewer on the firm tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, firmTenant, personaRole), http.StatusForbidden},
+		{"in-house preparer with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"preparer"}`, inhousePreparerSubject, inhouseTenant), http.StatusForbidden},
+		{"in-house reviewer with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, personaRole, inhouseTenant), http.StatusForbidden},
 		{"escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, firmSubject, firmTenant), http.StatusForbidden},
 		{"preparer with an escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, preparerSubject, firmTenant), http.StatusForbidden},
 		// the seed's own memberships.role — the substitution the persona table warns about.
@@ -462,6 +480,41 @@ func TestMockLoginHostedApproverRoundTrip(t *testing.T) {
 			assertHeader(t, tg.caps["tenancy"].header, headerUserRole, personaRole)
 		})
 	}
+}
+
+// TestMockLoginHostedInhouseRoundTrip proves an in-house addition's minted claims
+// survive injectIdentity — the approver round-trip covers only the firm tenant.
+func TestMockLoginHostedInhouseRoundTrip(t *testing.T) {
+	tg := setupGateway(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
+	mux.Handle("/api/", tg.handler)
+
+	login := httptest.NewRecorder()
+	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, inhouseTenant, personaRole)
+	mux.ServeHTTP(login, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200", login.Code)
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if resp.TokenType != "bearer" || resp.AccessToken == "" {
+		t.Fatalf("login response = %+v, want a bearer access_token", resp)
+	}
+
+	api := httptest.NewRecorder()
+	mux.ServeHTTP(api, request("GET", "/api/tenancy/v1/ping", resp.AccessToken))
+	if api.Code != http.StatusOK {
+		t.Fatalf("proxied request with minted token = %d, want 200", api.Code)
+	}
+	assertHeader(t, tg.caps["tenancy"].header, headerTenantID, inhouseTenant)
+	assertHeader(t, tg.caps["tenancy"].header, headerUserID, inhouseReviewerSubject)
+	assertHeader(t, tg.caps["tenancy"].header, headerUserRole, personaRole)
 }
 
 // TestLoginPersonas_AllSeeded pins the table's size and its role column, not the wire.

@@ -12,10 +12,13 @@ describe('DEMO_MODE', () => {
     expect(DEMO_MODE).toBe(false)
   })
 
-  it.each(['true', 'TRUE', '1', 'yes', ''])('is true only for the exact string "true" (got %j)', async (value) => {
-    vi.stubEnv('VITE_DEMO_MODE', value)
-    vi.resetModules()
-    const { DEMO_MODE } = await import('./flag')
-    expect(DEMO_MODE).toBe(value === 'true')
-  })
+  it.each(['true', 'TRUE', '1', 'yes', '', ' true', 'true '])(
+    'is true only for the exact string "true" (got %j)',
+    async (value) => {
+      vi.stubEnv('VITE_DEMO_MODE', value)
+      vi.resetModules()
+      const { DEMO_MODE } = await import('./flag')
+      expect(DEMO_MODE).toBe(value === 'true')
+    },
+  )
 })

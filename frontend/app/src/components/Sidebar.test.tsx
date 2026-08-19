@@ -274,3 +274,21 @@ describe('Sidebar nav badges, firm mode', () => {
     expect(switcherSubLabel(), 'only the overlay moved between these two renders').toBe('9 needing attention')
   })
 })
+
+// DEMO-06-01: green on write by construction (nothing demo-related exists yet, so
+// today's markup trivially equals itself). This pin carries no coverage now -- its whole
+// value is as a tripwire for DEMO-06-03..06: any persona markup, padding, gap, avatar or
+// dot change leaking into the flag-off footer fails it.
+describe('Sidebar footer, characterization pin', () => {
+  it("the flag-off footer renders exactly today's markup", async () => {
+    await renderSidebar(
+      rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }),
+      sidebarCtx({ user: { name: 'Chinedu Okafor', initials: 'CO', verified: true, tenantName: 'Okafor & Partners' } }),
+    )
+
+    const footer = document.querySelector('aside.pf-sidebar > div:last-of-type')!
+    expect(footer.outerHTML).toBe(
+      '<div style="flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line-1); display: flex; align-items: center; gap: 10px;"><span style="flex: 0 0 auto; width: 30px; height: 30px; border-radius: 99px; background: var(--slate-800); color: var(--text-on-dark); display: grid; place-items: center; font-size: 11px; font-weight: 600;">CO</span><div style="flex: 1 1 0%; min-width: 0;"><div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Chinedu Okafor</div><div class="mono" style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-3); white-space: nowrap; overflow: hidden;"><span style="flex: 0 0 auto; width: 5px; height: 5px; border-radius: 99px; background: var(--status-green-text);" title="Tenant verified via /v1/me"></span><span style="overflow: hidden; text-overflow: ellipsis;">OKAFOR &amp; PARTNERS</span></div></div><button class="pf-btn pf-signout" aria-label="Sign out" title="Sign out" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: var(--radius-sm); background: transparent; cursor: pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></button></div>',
+    )
+  })
+})

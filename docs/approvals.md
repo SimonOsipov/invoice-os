@@ -999,10 +999,11 @@ runs the one-tenant seeder until this branch merges and deploys:
 **Known limitation, out of scope here.** The demo firm persona (…0001 Chinedu Okafor)
 holds only `cfo` on the firm tenant and cannot approve the firm plan's two unconditional
 steps (`fin_mgr`, `compliance`) — he can neither approve nor, once this flips, submit the
-firm tenant's own seeded invoices from the UI. The gateway side is already done
-(APPR-14-01 admitted …0004/…0005 to `loginPersonas`); the missing half is the SPA's
-`APP_PERSONAS` and sign-in screen, which were never extended to those two accounts.
-Dependency: adding demo sign-ins for …0004/…0005, not "demo user-switching" generally.
+firm tenant's own seeded invoices from the UI. The gateway side is done — DEMO-05
+widened `loginPersonas` past APPR-14-01's …0004/…0005 to every seeded active member, so
+all eleven can mint. The missing half is now the demo persona switcher (DEMO-06): the SPA's
+`APP_PERSONAS` and sign-in screen deliberately stay at two personas, and the rest of each
+tenant's roster is reached through the switcher.
 
 **Do not delay this flip pending an unrelated copy decision.** The Workflows screen's
 intro currently states "Transmission is not held for approval yet," which is already false

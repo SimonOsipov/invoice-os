@@ -1,16 +1,21 @@
 // Demo-only footer: the DEMO BUILD marker over the identity row. The flag-off footer
 // stays in Sidebar.tsx and is never rendered from here.
-import { useState, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 
+import { useDismiss } from '../lib/useDismiss'
 import { accessRoleLabel } from '../lib/members'
 import type { PlatformCtx } from '../types'
 import { MARKER_LABEL, TRIGGER_TITLE } from './copy'
 import { demoChevronUpGlyph, demoFlaskGlyph } from './glyphs'
 import { isSeat } from './identity'
+import { PersonaPopover } from './PersonaPopover'
 
 export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformCtx; orgLabel: string; signOutButton: ReactNode }) {
   const { user } = ctx
   const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, close, wrapperRef)
 
   const current = ctx.members.find((m) => m.isYou) ?? null
   // Amber only when standing in is proven; an unresolved roster reads as the seat,
@@ -54,7 +59,7 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
 
       {/* identity row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        <div ref={wrapperRef} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           <button
             onClick={() => setOpen((o) => !o)}
             data-testid="persona-trigger"
@@ -108,6 +113,17 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
               {demoChevronUpGlyph}
             </span>
           </button>
+          {open && (
+            <PersonaPopover
+              members={ctx.members}
+              membersState={ctx.membersState}
+              membersError={ctx.membersError}
+              seatSubject={ctx.seatSubject}
+              standingIn={standingIn}
+              onSelect={close}
+              onReturn={close}
+            />
+          )}
         </div>
         {signOutButton}
       </div>

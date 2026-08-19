@@ -12,13 +12,15 @@ export const BUSY_NAME = 'Becoming {first name}…'
 export const POPOVER_HEADER = 'DEMO ONLY · BECOME ANOTHER MEMBER'
 export const POPOVER_NOTE =
   "The app reloads with that person's permissions. This is not account switching — no password, no email."
+export const POPOVER_LOADING = 'Loading members…'
+export const POPOVER_ERROR_TITLE = 'Something went wrong'
+export const POPOVER_EMPTY = 'No members to become — this workspace has one seat.'
 
 // Bare fragments: the meta line joins them with ' · ' at the call site, which is both the
 // design's own `bits.join(' · ')` and the app's idiom (SourceDocumentModal, MembersView, RolesView).
 // Sentence case, uppercased by CSS at the render site. e2e/envCopy.test.ts bans the all-caps
 // signing tag case-sensitively, and `-` is a word boundary, so the all-caps spelling hits it.
 export const SEAT_LABEL = 'Signed-in seat'
-export const BLOCKED_STATUS_LABEL = 'SUSPENDED'
 export const SUSPENDED_REASON = 'Suspended — sign-in is blocked, so this person cannot be used in the demo.'
 export const RETURN_ROW = 'Return to the signed-in seat · {name}'
 

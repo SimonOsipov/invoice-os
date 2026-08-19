@@ -184,6 +184,8 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
 
     test('no row carries tenant_id (persona B)', async () => {
       const { memberships: rows } = await memberships(tokenB)
+      // Floor first: an empty list satisfies every per-row assertion below.
+      expect(rows.length, 'in-house: the roster should not be empty').toBeGreaterThan(0)
       for (const m of rows) {
         expect(
           Object.keys(m).sort(),

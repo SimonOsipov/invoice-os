@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-// RED specs (task-594, DEMO-06-06, Mode A). The module does not exist yet, so both
-// tests fail on missing-module, not a rendering assertion.
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 

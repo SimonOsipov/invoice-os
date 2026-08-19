@@ -3495,9 +3495,6 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 })
 
-// RED/GUARD specs (task-594, DEMO-06-06, Mode A). BlockedByRoleNote does not exist yet, so
-// every row is either RED on a missing testid or vacuously GUARD-green at HEAD -- the
-// guard proof is a plant-and-revert exercise done alongside this commit, not in it.
 describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', () => {
   const ID = 'inv-blocked-by-role-1'
   const FOLAKE: Member = {

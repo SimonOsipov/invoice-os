@@ -33,7 +33,6 @@ const ABSENT_SENTINELS = [
   'Return to the signed-in seat',
   'persona-trigger',
   'You are now {full name}',
-  // task-594, DEMO-06-06: the invoice-detail note naming the blocked preparer.
   'Switch to a Reviewer to act on this step.',
 ]
 

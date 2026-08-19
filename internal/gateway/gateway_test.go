@@ -673,6 +673,13 @@ func TestSeedMembershipParserExtractsThirteenRows(t *testing.T) {
 	if counts["active"] != 11 || counts["suspended"] != 2 {
 		t.Errorf("parsed statuses = %v, want 11 active and 2 suspended", counts)
 	}
+	// Nothing else reads the parsed role, so only this pins group 3 to the role
+	// column: a column inserted ahead of it would slide the capture unnoticed.
+	for _, r := range rows {
+		if r.role != "admin" && r.role != "preparer" && r.role != "reviewer" {
+			t.Errorf("row %s/%s parsed role = %q, want one of roles(name): admin, preparer, reviewer", r.tenantID, r.userID, r.role)
+		}
+	}
 }
 
 // TestLoginPersonasMatchEverySeededActiveMembership: loginPersonas is a literal, so

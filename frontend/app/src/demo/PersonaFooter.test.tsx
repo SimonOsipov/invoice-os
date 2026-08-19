@@ -365,7 +365,9 @@ describe('PersonaFooter -- the switch (DEMO-06-05)', () => {
     })
 
     expect(returnToSeat).toHaveBeenCalledTimes(1)
-    expect(returnToSeat).toHaveBeenCalledWith('dashboard', SEAT)
+    // isYou reads false on the roster's seat row while standing in (Addendum D4) --
+    // the seat is found by isSeat, never by isYou, so returnToSeat gets that value unmodified.
+    expect(returnToSeat).toHaveBeenCalledWith('dashboard', { ...SEAT, isYou: false })
     expect(screen.getByTestId('persona-spinner')).not.toBeNull()
     expect(screen.queryByTestId('persona-popover')).toBeNull()
   })

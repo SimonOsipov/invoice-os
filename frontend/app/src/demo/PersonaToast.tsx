@@ -4,8 +4,9 @@
 import { useEffect } from 'react'
 
 import { accessRoleLabel, type AccessRole } from '../lib/members'
-import { TOAST_DISMISS, TOAST_META, TOAST_MS, TOAST_TITLE } from './copy'
+import { TOAST_DISMISS, TOAST_META, TOAST_TITLE } from './copy'
 import { demoCloseGlyph } from './glyphs'
+import { TOAST_MS } from './timing'
 
 export function PersonaToast({
   name,

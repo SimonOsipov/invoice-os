@@ -196,6 +196,24 @@ describe('becomePersona / returnToSeat', () => {
     warnSpy.mockRestore()
   })
 
+  // D5: "the floor is not held on failure" -- Promise.all rejects at round-trip
+  // time, not floor time. Fake timers with ZERO advancement: if the rejection needed
+  // the 700ms floor to elapse, this test would hang/timeout rather than settle.
+  it('a rejecting mint surfaces the error immediately, without waiting for the 700ms floor', async () => {
+    vi.useFakeTimers()
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    signInMock.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+
+    await expect(
+      act(async () => {
+        await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+      }),
+      'the rejection must settle without any timer advancement past the floor',
+    ).rejects.toThrow('forbidden')
+  })
+
   it('sign out clears both the seat and the stand-in', async () => {
     const { container } = await renderAppWithSeat(true)
     expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
@@ -234,6 +252,26 @@ describe('becomePersona / returnToSeat', () => {
       "the seat's own row must short-circuit back to the seat, not mint a same-subject stand-in",
     ).toBe(SEAT_SESSION.persona.name)
     expect(signInMock, 'the short-circuit must not call signIn a second time for the seat').toHaveBeenCalledTimes(1)
+  })
+
+  // The untested branch: the seat's own row is reachable and clickable even when
+  // NOT standing in (PersonaPopover renders it same as any other row). No prior
+  // subtask exercised this -- must be a true no-op, not just "no toast".
+  it("clicking the seat's own row while already seated is a no-op -- no toast, no remount, no mint", async () => {
+    const { container } = await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    const shellBefore = container.querySelector('.pf-shell')
+    expect(shellBefore, 'Workspace did not render -- no .pf-shell in the tree').not.toBeNull()
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(SEAT_AS_MEMBER, 'invoices')
+    })
+
+    expect(capturedCtx!.user.name, 'identity must be unchanged').toBe(SEAT_SESSION.persona.name)
+    expect(screen.queryByTestId('persona-toast'), 'no toast -- nothing was standing in to return from').toBeNull()
+    expect(container.querySelector('.pf-shell'), 'the workspace must not remount -- same subject, same key').toBe(shellBefore)
+    expect(signInMock, 'a same-subject click must never mint').not.toHaveBeenCalled()
   })
 
   it('an instant mint still holds the identity for 700ms', async () => {
@@ -285,6 +323,49 @@ describe('becomePersona / returnToSeat', () => {
     })
     expect(capturedCtx!.user.name, 'the round trip settled by 1501ms').toBe(MEMBER.name)
     await call
+  })
+
+  // Only the sign-out half of D7's race guard had a red-first test. This covers the
+  // other half: two overlapping becomePersona calls, with the earlier-started one's
+  // mint settling AFTER the later one has already committed.
+  it('the later of two overlapping switches wins even when the earlier mint resolves second', async () => {
+    vi.useFakeTimers()
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    let resolveA!: () => void
+    let resolveB!: () => void
+    signInMock.mockImplementationOnce(
+      (persona: Persona) => new Promise<Session>((resolve) => { resolveA = () => resolve({ persona, token: null, me: null, verified: false }) }),
+    )
+    signInMock.mockImplementationOnce(
+      (persona: Persona) => new Promise<Session>((resolve) => { resolveB = () => resolve({ persona, token: null, me: null, verified: false }) }),
+    )
+
+    let callA!: Promise<void>
+    let callB!: Promise<void>
+    act(() => {
+      callA = capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    act(() => {
+      callB = capturedCtx!.becomePersona!(MEMBER_B, 'invoices')
+    })
+
+    // B (started second, higher generation) settles first.
+    await act(async () => {
+      resolveB()
+      await vi.advanceTimersByTimeAsync(700)
+    })
+    await callB
+    expect(capturedCtx!.user.name, 'the later-started switch must commit').toBe(MEMBER_B.name)
+
+    // A (started first, now stale) settles after -- it must not resurrect MEMBER.
+    await act(async () => {
+      resolveA()
+      await vi.advanceTimersByTimeAsync(700)
+    })
+    await callA
+    expect(capturedCtx!.user.name, 'a stale earlier switch arriving late must not overwrite the later one').toBe(MEMBER_B.name)
   })
 
   it('a mint that lands after sign-out cannot resurrect the workspace', async () => {
@@ -476,6 +557,50 @@ describe('toast (DEMO-06-05)', () => {
       screen.getByTestId('persona-toast').textContent,
       "a restarted toast must survive the first toast's stale deadline",
     ).toContain(TOAST_TITLE.replace('{full name}', MEMBER_B.name))
+  })
+
+  // The remount-survival claim (App.tsx comment above <PersonaToast>) has no other
+  // oracle: DOM containment is the one check that would catch a future edit rendering
+  // the toast inside Workspace's own returned tree (`.pf-shell`) instead of beside it.
+  it('the toast sits outside the keyed .pf-shell root, not inside it', async () => {
+    const { container } = await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    expect(capturedCtx!.user.name, 'sanity: the stand-in did not take effect').toBe(MEMBER.name)
+
+    const shell = container.querySelector('.pf-shell')
+    const toastEl = screen.getByTestId('persona-toast')
+    expect(shell, 'Workspace did not render -- no .pf-shell in the tree').not.toBeNull()
+    expect(
+      shell!.contains(toastEl),
+      'the toast must not be a descendant of the keyed Workspace root -- a remount would destroy it there',
+    ).toBe(false)
+  })
+
+  // The "restart" claim above (D2: PersonaToast key={toast.seq}) turns out to be
+  // masked by onDismiss's own inline-closure identity, which ALSO changes every App
+  // render and would independently restart the effect's timer -- proven by reverting
+  // the key alone and finding the timer-restart test above still green. This checks
+  // the key's specific contribution: a second switch must produce a genuinely NEW
+  // toast DOM node (a remount), not an in-place prop update on the same node.
+  it('a second switch remounts the toast node, not just its props', async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'invoices')
+    })
+    const firstNode = screen.getByTestId('persona-toast')
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER_B, 'invoices')
+    })
+    const secondNode = screen.getByTestId('persona-toast')
+
+    expect(secondNode, 'a second switch must mount a fresh toast node, not patch the old one in place').not.toBe(firstNode)
   })
 
   it("the return toast names the seat's access role with an empty roster", async () => {

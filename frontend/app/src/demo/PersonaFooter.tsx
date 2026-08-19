@@ -52,9 +52,7 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
     setBusy(seatMember.name)
     setOpen(false)
     try {
-      // isYou is normalized here: the roster's seat row reads false while standing in
-      // (the stand-in is "you" until this resolves), but the member this call names IS you.
-      await ctx.returnToSeat(ctx.view, { ...seatMember, isYou: true })
+      await ctx.returnToSeat(ctx.view, seatMember)
     } finally {
       setBusy(null)
     }

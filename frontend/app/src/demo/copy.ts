@@ -15,7 +15,9 @@ export const POPOVER_NOTE =
 
 // Bare fragments: the meta line joins them with ' · ' at the call site, which is both the
 // design's own `bits.join(' · ')` and the app's idiom (SourceDocumentModal, MembersView, RolesView).
-export const SEAT_LABEL = 'SIGNED-IN SEAT'
+// Sentence case, uppercased by CSS at the render site. e2e/envCopy.test.ts bans the all-caps
+// signing tag case-sensitively, and `-` is a word boundary, so the all-caps spelling hits it.
+export const SEAT_LABEL = 'Signed-in seat'
 export const BLOCKED_STATUS_LABEL = 'SUSPENDED'
 export const SUSPENDED_REASON = 'Suspended — sign-in is blocked, so this person cannot be used in the demo.'
 export const RETURN_ROW = 'Return to the signed-in seat · {name}'

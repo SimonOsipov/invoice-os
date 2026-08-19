@@ -211,6 +211,33 @@ A large `audit_log_rows` therefore means the demo environment was used a lot bet
 deploys. It does not indicate that anything went wrong, and it is not comparable to the
 counts beside it in `by_table`.
 
+## Demo mode flag
+
+The purge above runs regardless of whether the demo persona switcher is visible — the two are
+independent. This section documents that switch: `VITE_DEMO_MODE`, the flag gating the demo
+persona-switcher UI (`frontend/app/src/demo/`) in the sidebar footer.
+
+`VITE_DEMO_MODE` is a Vite build-time flag, not a runtime one: `import.meta.env.VITE_DEMO_MODE
+=== 'true'` is folded into the bundle at `vite build` (`frontend/app/src/demo/flag.ts:3`), so an
+off build tree-shakes `src/demo/` out entirely rather than shipping the switcher hidden. It
+**defaults to off** — an unset build arg resolves to an empty string, which is not `'true'`.
+
+CI sets it on every non-draft PR environment, **app service only**. `reconcile_url_variables`
+in `scripts/ci/railway-env.sh` upserts and independently re-verifies `app.VITE_DEMO_MODE = true`
+(`:1242`, `:1252`) against `$RAILWAY_SVC_APP_ID`, the same `ARG`/`ENV` build-arg mechanism
+`frontend/app/Dockerfile` already uses for `VITE_GATEWAY_URL` and `VITE_LANDING_URL` (`:17-26`).
+It runs from the `Point the fork's URL variables at the fork` step
+(`.github/workflows/dev-env.yml:514-525`), gated `github.event_name == 'pull_request'` and, at
+the enclosing `prepare-env` job, on the PR being non-draft (`:229-239`) — so a draft PR's
+environment never gets the flag and never deploys at all.
+
+**Owed: production.** `VITE_DEMO_MODE` is not set on the persistent environment. Until an
+operator sets it on the `app` service and redeploys, the persona switcher is absent from
+`app.ascomply.com`. CI is refused write access to that environment by design —
+`reconcile_url_variables` exits 1 the moment `env_id` matches `$RAILWAY_DEV_ENVIRONMENT_ID`
+(`railway-env.sh:1227-1230`), the same refusal that protects every other URL variable this
+function reconciles.
+
 ## Related
 
 - [`docs/approvals.md`](approvals.md) — the approval-policy seeder's convergence contract,

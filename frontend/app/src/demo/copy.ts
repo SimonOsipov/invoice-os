@@ -18,8 +18,8 @@ export const POPOVER_EMPTY = 'No members to become — this workspace has one se
 
 // Bare fragments: the meta line joins them with ' · ' at the call site, which is both the
 // design's own `bits.join(' · ')` and the app's idiom (SourceDocumentModal, MembersView, RolesView).
-// Sentence case, uppercased by CSS at the render site. e2e/envCopy.test.ts bans the all-caps
-// signing tag case-sensitively, and `-` is a word boundary, so the all-caps spelling hits it.
+// Sentence case, uppercased by CSS at the render site. e2e/envCopy.test.ts's forbidden-phrase
+// scan is case-insensitive by construction (envCopy.test.ts:62-63), so this string is safe as-is.
 export const SEAT_LABEL = 'Signed-in seat'
 export const SUSPENDED_REASON = 'Suspended — sign-in is blocked, so this person cannot be used in the demo.'
 export const RETURN_ROW = 'Return to the signed-in seat · {name}'

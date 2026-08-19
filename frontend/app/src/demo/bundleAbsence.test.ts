@@ -25,8 +25,8 @@ function readBundle(): string {
 
 // String literals (unlike identifiers) survive minification -- the bundle carries 100
 // literal U+00B7 middle dots today, so a sentinel built from one is findable.
-// GUARD: green on write (the toast doesn't exist yet, so the string is absent either
-// way) -- fences the `DEMO_MODE &&` gate on App's new toast mount once it ships.
+// GUARD: PersonaToast shipped in DEMO-06-05 (App.tsx:1476, `DEMO_MODE && toast &&`) --
+// fences that gate: a flag-off build tree-shakes it, so the string stays absent.
 const ABSENT_SENTINELS = [
   'DEMO ONLY · BECOME ANOTHER MEMBER',
   'DEMO BUILD',

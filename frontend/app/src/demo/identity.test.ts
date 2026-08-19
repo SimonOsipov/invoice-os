@@ -39,6 +39,13 @@ describe('personaFromMember', () => {
     const suspended: Member = { ...ACTIVE_MEMBER, status: 'suspended' }
     expect(() => personaFromMember(suspended, SEAT)).toThrow(/suspended/i)
   })
+
+  // 'invited' is unreachable through the demo roster today (Stage 1 note 3), but the
+  // guard is `!== 'active'`, not a suspended-only check -- prove it holds for both.
+  it('refuses an invited member', () => {
+    const invited: Member = { ...ACTIVE_MEMBER, status: 'invited' }
+    expect(() => personaFromMember(invited, SEAT)).toThrow(/invited/i)
+  })
 })
 
 describe('isSeat', () => {

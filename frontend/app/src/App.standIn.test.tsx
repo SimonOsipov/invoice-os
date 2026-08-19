@@ -152,6 +152,12 @@ describe('becomePersona / returnToSeat', () => {
     const parsed = JSON.parse(stored!)
     expect(parsed.personaId, 'the persisted blob must still name the seat, not the stand-in').toBe(SEAT_SESSION.persona.id)
     expect(parsed.token, 'the persisted token must still be the seat token').toBe(SEAT_SESSION.token)
+    // personaId/token alone don't discriminate seat-vs-standIn here: personaFromMember keeps
+    // seat.id, and both sessions carry a null token under the no-gateway mock signIn. verified
+    // does discriminate -- the seat fixture is true, a mint's mock result is always false.
+    expect(parsed.verified, "the persisted verified flag must still be the seat's, not the mint's").toBe(
+      SEAT_SESSION.verified,
+    )
   })
 
   it('a failed mint keeps the current identity', async () => {
@@ -216,6 +222,31 @@ describe('becomePersona / returnToSeat', () => {
   })
 })
 
+describe('carryView: create/detail collapse to invoices, other views pass through', () => {
+  it('collapses across both becomePersona and returnToSeat, and leaves a non-collapsed view alone', async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    // Each call below changes the Workspace key (seat <-> stand-in subject), which is
+    // required to observe a new `initialView` -- `view` is a useState initializer read
+    // once per mount, so calling becomePersona twice on the SAME subject would not remount.
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'create')
+    })
+    expect(capturedCtx!.view, 'becomePersona must collapse create to invoices').toBe('invoices')
+
+    await act(async () => {
+      capturedCtx!.returnToSeat!('detail')
+    })
+    expect(capturedCtx!.view, 'returnToSeat must collapse detail to invoices').toBe('invoices')
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'approvals')
+    })
+    expect(capturedCtx!.view, 'a non-create/detail view must pass through unchanged').toBe('approvals')
+  })
+})
+
 describe('AC-5: reload while standing in', () => {
   it('returns to the seat', async () => {
     const { unmount } = await renderAppWithSeat(true)
@@ -235,5 +266,11 @@ describe('AC-5: reload while standing in', () => {
     expect(capturedCtx, 'Sidebar never rendered on reload').toBeDefined()
     expect(capturedCtx!.user.name, 'a reload must return to the seat, not the stand-in').toBe(SEAT_SESSION.persona.name)
     expect(capturedCtx!.seatSubject, 'seatSubject must still name the seat').toBe(SEAT_SESSION.persona.subject)
+    // personaId-only rehydration means user.name/seatSubject alone would read as the seat
+    // even if the WRONG session got persisted (personaFromMember keeps seat.id). verified
+    // is the one field that would expose a standIn (always false) having been the write.
+    expect(capturedCtx!.user.verified, "a reload must rehydrate the seat's verified flag, not a mint's").toBe(
+      SEAT_SESSION.verified,
+    )
   })
 })

@@ -1,5 +1,8 @@
 // Structural invariants DEMO-06-03's Object.values(copy) scan depends on: every export
 // is a non-empty string, never a function -- a template function would escape the scan.
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import * as copy from './copy'
@@ -45,5 +48,51 @@ describe('no switcher string uses account or session vocabulary (AC-8)', () => {
 
   it.each(scanned)('%s carries no account/session vocabulary', (_name, value) => {
     expect(value as string).not.toMatch(BANNED)
+  })
+})
+
+// Row 2 (AC-3, fence). No roster literal exists under src/demo at HEAD, so this cannot
+// go red today -- a regression fence, not a red-first oracle (row 1 in
+// PersonaPopover.test.tsx is AC-3's red-first coverage).
+describe('no roster literal lives under src/demo (AC-3 fence)', () => {
+  const DEMO_DIR = dirname(fileURLToPath(import.meta.url))
+  const SEEDED_NAMES = ['Chinedu Okafor', 'Musa Danjuma', 'Zainab Lawal', 'Halima Yusuf']
+
+  function nonTestSourceFiles(ext: RegExp): string[] {
+    return readdirSync(DEMO_DIR).filter((f) => ext.test(f) && !f.includes('.test.'))
+  }
+
+  const files = nonTestSourceFiles(/\.tsx?$/)
+
+  it('walks at least 5 source files', () => {
+    expect(files.length).toBeGreaterThanOrEqual(5)
+  })
+
+  it.each(files)('%s carries no seeded display name', (file) => {
+    const contents = readFileSync(join(DEMO_DIR, file), 'utf8')
+    for (const name of SEEDED_NAMES) {
+      expect(contents).not.toContain(name)
+    }
+  })
+})
+
+// Row 7 (AC-5, fence). Nothing under src/demo mentions 'invited' at HEAD -- a regression
+// fence; row 18 in PersonaPopover.test.tsx is the behavioural red-first half.
+describe('no invited branch exists (AC-5 fence)', () => {
+  const DEMO_DIR = dirname(fileURLToPath(import.meta.url))
+  const files = readdirSync(DEMO_DIR).filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+
+  it('walks at least 1 tsx source file', () => {
+    expect(files.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it.each(files)('%s contains no "invited" occurrence', (file) => {
+    const contents = readFileSync(join(DEMO_DIR, file), 'utf8')
+    expect(contents.toLowerCase()).not.toContain('invited')
+  })
+
+  it.each(files)("%s does not carry the design's invited reason text", (file) => {
+    const contents = readFileSync(join(DEMO_DIR, file), 'utf8')
+    expect(contents).not.toContain('Invitation not accepted')
   })
 })

@@ -3,12 +3,13 @@
 // vi.stubEnv + vi.resetModules() + a dynamic import of Sidebar, same idiom as
 // App.standIn.test.tsx. No VITE_GATEWAY_URL is stubbed, so gatewayBase() is null and
 // Sidebar's rollup fetch never fires (immediate: false) -- no fetch mock needed.
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { Member } from '../lib/members'
 import type { PlatformCtx } from '../types'
+import { POPOVER_HEADER } from './copy'
 
 afterEach(() => {
   cleanup()
@@ -151,5 +152,22 @@ describe('PersonaFooter (flag on)', () => {
     expect(btn.getAttribute('title')).toBe('Sign out')
     btn.click()
     expect(ctx.signOut).toHaveBeenCalledTimes(1)
+  })
+
+  // Row 8 (AC-9). Needs the <Sidebar/> harness (firm mode + one client) so both switchers
+  // render on the same aside. Red today: the popover header string is nowhere.
+  it("the two switchers' headers differ", async () => {
+    const ctx = demoCtx({
+      mode: 'firm',
+      clients: [{ entityId: 'e1', name: 'Acme Ltd', short: 'Acme', initials: 'AC' }],
+      entities: [{ id: 'e1', status: 'active' }],
+      switcherOpen: true,
+    })
+    await renderDemoSidebar(ctx)
+    fireEvent.click(screen.getByTestId('persona-trigger'))
+
+    const aside = document.querySelector<HTMLElement>('aside.pf-sidebar')!
+    expect(within(aside).getByText('Switch company')).not.toBeNull()
+    expect(within(aside).getByText(POPOVER_HEADER)).not.toBeNull()
   })
 })

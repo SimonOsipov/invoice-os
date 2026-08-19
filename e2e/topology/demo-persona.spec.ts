@@ -13,6 +13,7 @@
 // a seeded row suspended with no reset before this file runs (Stage 2 correction S2-5).
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
+import { login, memberships, PERSONAS } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { WIDE_WIDTHS, overlapOf, rectsOverlap } from './layout'
 import { SEED_FIRM_MEMBERS } from './settingsFixtures'
@@ -248,6 +249,136 @@ test('deployed app: the longest seeded name is not clipped in the roster (296px)
     targetWidth.scrollWidth,
     `"${target.name}" overflows its box: scrollWidth=${targetWidth.scrollWidth}, clientWidth=${targetWidth.clientWidth}`,
   ).toBeLessThanOrEqual(targetWidth.clientWidth)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T11 (AC-2) — the positive twin of bundleAbsence.test.ts:30-37's flag-off sentinels:
+// proves the demo copy actually SHIPS in a flag-on build, not just that a testid attaches
+// (that is T6's job). Copy transcribed, never imported (e2e/ has no dependency on
+// frontend/app/src).
+const MARKER_LABEL = 'DEMO BUILD'
+const POPOVER_HEADER = 'DEMO ONLY · BECOME ANOTHER MEMBER'
+const POPOVER_NOTE =
+  "The app reloads with that person's permissions. This is not account switching — no password, no email."
+
+test('deployed app: the flag-on rail carries the demo copy', async ({ page }) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm')
+
+  await expect(page.locator('aside.pf-sidebar').getByText(MARKER_LABEL, { exact: true })).toBeVisible()
+
+  await openPersonaSwitcher(page)
+  await expect(page.getByTestId('persona-popover-header')).toHaveText(POPOVER_HEADER)
+  await expect(page.getByTestId('persona-popover')).toContainText(POPOVER_NOTE)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T12 (AC-3, AC-5) — no hard-coded cast: the rendered roster is compared against a live
+// GET /v1/memberships read taken in the same test. Also proves no filter silently drops a
+// blocked row (unit tests stub props and cannot see that). The cross-tenant half of the
+// original plan is dropped: isolation.spec.ts:81-93 already proves it and the component
+// renders ctx.members unfiltered, so repeating it here would be decoration.
+test("deployed app: the roster is the tenant's live membership list", async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+  const wire = await memberships(token)
+  expect(wire.memberships.length, 'the live wire returned no memberships — the comparison below would be vacuous').toBeGreaterThanOrEqual(3)
+
+  await signInAs(page, 'firm')
+  await openPersonaSwitcher(page)
+
+  const rendered = await page.getByTestId('persona-row-name').allTextContents()
+  const expected = wire.memberships.map((m) => m.display_name ?? m.email ?? m.user_id)
+
+  expect(rendered.slice().sort(), `rendered persona-row-name set should equal the wire's display_name/email/user_id set`).toEqual(expected.slice().sort())
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T13 (AC-4) — kills the role vanishing from the meta line (it cannot catch a re-cased
+// `m.role`: ROLE_LABEL is byte-identical to naive re-casing, lib/members.ts:68-70).
+// startsWith, never the whole meta string — the tail carries status (AC-10). Sentence
+// case: the row meta uppercases in CSS, not JS, and textContent does not see text-transform.
+const ROLE_LABEL: Record<string, string> = { admin: 'Admin', preparer: 'Preparer', reviewer: 'Reviewer' }
+
+test("deployed app: every roster row states the wire's access role", async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+  const wire = await memberships(token)
+  expect(wire.memberships.length, 'the live wire returned no memberships — the loop below would be vacuous').toBeGreaterThanOrEqual(3)
+
+  await signInAs(page, 'firm')
+  const { rowList } = await openPersonaSwitcher(page)
+
+  const rows = await rowList.getByTestId('persona-row').all()
+  const rowMeta = new Map<string, string>()
+  for (const row of rows) {
+    const name = await row.getByTestId('persona-row-name').textContent()
+    const meta = await row.getByTestId('persona-row-meta').textContent()
+    if (name) rowMeta.set(name, meta ?? '')
+  }
+
+  for (const m of wire.memberships) {
+    const name = m.display_name ?? m.email ?? m.user_id
+    const meta = rowMeta.get(name)
+    if (meta === undefined) throw new Error(`no persona-row-name rendered "${name}" — rendered: ${[...rowMeta.keys()].join(', ')}`)
+    const label = ROLE_LABEL[m.role]
+    if (!label) throw new Error(`wire role "${m.role}" for "${name}" is not in the transcribed ROLE_LABEL map`)
+    expect(meta.startsWith(label), `"${name}"'s persona-row-meta ("${meta}") should start with "${label}" for wire role "${m.role}"`).toBe(true)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T14 (AC-9, narrowed by Stage 2 correction S2-3) — the company switcher's own dismissal
+// is imperative (App.tsx nav()/switchClient()), the persona popover's is useDismiss's
+// outside mousedown (PersonaFooter.tsx:22). Company FIRST, persona SECOND proves they
+// coexist; the reverse order silently closes the persona popover (a false red against
+// shipped behaviour, not asserted here). Header-copy and direction claims dropped: they
+// compare literals nothing could collapse, and Sidebar's `top:` is untouched by this story.
+test('deployed app: the company switcher and the persona popover can both stay open', async ({ page }) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm')
+
+  await page.getByTestId('company-switcher').click()
+  await expect(page.getByTestId('company-switcher-option').first()).toBeVisible()
+
+  await page.getByTestId('persona-trigger').click()
+  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+
+  // still open — the persona click did not dismiss it
+  await expect(page.getByTestId('company-switcher-option').first()).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// T15 (Stage 2 correction S2-5) — persona-row-tick is the one on-screen mark of "this is
+// you"; grep -rn persona-row-tick e2e/ was empty before this row. The seat is derived from
+// the live wire via PERSONAS.A.subject, never a hardcoded name. No status/lock/reason read.
+test('deployed app: exactly one row carries the current-seat tick, and it is the signed-in seat', async ({ page }) => {
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+  const wire = await memberships(token)
+  const seat = wire.memberships.find((m) => m.user_id === PERSONAS.A.subject)
+  if (!seat) throw new Error(`no membership row for the signed-in seat ${PERSONAS.A.subject}`)
+  const seatName = seat.display_name ?? seat.email ?? seat.user_id
+
+  await signInAs(page, 'firm')
+  const { rowList } = await openPersonaSwitcher(page)
+
+  const rows = await rowList.getByTestId('persona-row').all()
+  let tickCount = 0
+  let tickRowName: string | null = null
+  for (const row of rows) {
+    const n = await row.getByTestId('persona-row-tick').count()
+    tickCount += n
+    if (n > 0) tickRowName = await row.getByTestId('persona-row-name').textContent()
+  }
+
+  expect(tickCount, `expected exactly one persona-row-tick, found ${tickCount}`).toBe(1)
+  expect(tickRowName, `the ticked row's name should be the signed-in seat's ("${seatName}")`).toBe(seatName)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -11,7 +11,8 @@ import { resolveTarget } from './targets'
 // Each destination's own proof that it actually drew for a signed-in persona — not that the
 // shell HTML was served. All three are verified rendered:
 //   app     -> the green dot the sidebar's user card renders ONLY once /v1/me has resolved
-//              (Sidebar.tsx:259), i.e. the backend round trip completed, not just a mount.
+//              (Sidebar.tsx flag-off, PersonaFooter.tsx's marker row flag-on), i.e. the
+//              backend round trip completed, not just a mount.
 //              The same discriminator the four existing signInFirm copies already wait on.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
 //   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)

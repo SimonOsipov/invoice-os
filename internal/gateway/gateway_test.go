@@ -708,6 +708,19 @@ func missingFrom(a, b []string) []string {
 	return out
 }
 
+// A duplicated entry fails the parity comparison above with BOTH of its difference
+// lists empty, which reads as no divergence at all. Name it here instead.
+func TestLoginPersonasHoldNoDuplicates(t *testing.T) {
+	seen := map[string]bool{}
+	for _, p := range loginPersonas {
+		key := p.tenantID + "/" + p.subject
+		if seen[key] {
+			t.Errorf("loginPersonas lists %s more than once", key)
+		}
+		seen[key] = true
+	}
+}
+
 // The preparer is allowlisted so a refused submit is demonstrable on the hosted
 // build, which holds only while the seed still makes them a preparer. A seed edit to
 // an approver role retires that demonstration with every login case above still

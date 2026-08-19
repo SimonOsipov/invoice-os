@@ -337,6 +337,7 @@ const (
 	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
 	finApproverSubject        = "c0000000-0000-0000-0000-000000000004" // firm-tenant reviewer staffed fin_mgr + fin_dir
 	complianceApproverSubject = "c0000000-0000-0000-0000-000000000005" // firm-tenant reviewer staffed compliance
+	inhouseReviewerSubject    = "c0000000-0000-0000-0000-000000000008" // in-house reviewer; the only non-admin mint case on that tenant
 	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000007" // firm reviewer, seeded suspended — the allowlist is not "any seeded membership"
 	unlistedTenant            = "99999999-9999-9999-9999-999999999999"
 	unlistedSubject           = "88888888-8888-8888-8888-888888888888"
@@ -355,6 +356,7 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 	}{
 		{"firm persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, firmTenant, personaRole), http.StatusOK},
 		{"in-house persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"in-house reviewer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, inhouseTenant, personaRole), http.StatusOK},
 		{"preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, firmTenant, personaRole), http.StatusOK},
 		{"fin approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusOK},
 		{"compliance approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, firmTenant, personaRole), http.StatusOK},

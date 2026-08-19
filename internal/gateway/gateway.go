@@ -161,8 +161,8 @@ type loginPersona struct{ subject, tenantID, role string }
 
 // Every seeded active membership (db/seed.dev.sql). role is the GoTrue JWT role every
 // client sends, NOT that seed's memberships.role — that substitution locks the persona
-// out of the hosted demo. Suspended members are excluded: their session could act on
-// nothing. TestLoginPersonasMatchEverySeededActiveMembership holds the two in step.
+// out of the hosted demo. Suspended members are excluded: every role-gated call refuses
+// them anyway. TestLoginPersonasMatchEverySeededActiveMembership holds the two in step.
 var loginPersonas = []loginPersona{
 	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
 	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},

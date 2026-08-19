@@ -77,13 +77,15 @@ describe('no roster literal lives under src/demo (AC-3 fence)', () => {
 })
 
 // Row 7 (AC-5, fence). Nothing under src/demo mentions 'invited' at HEAD -- a regression
-// fence; row 18 in PersonaPopover.test.tsx is the behavioural red-first half.
+// fence; row 18 in PersonaPopover.test.tsx is the behavioural red-first half. Widened to
+// *.{ts,tsx}, matching row 2's sibling roster-literal fence -- *.tsx alone missed a plant
+// in a .ts file (flag.ts/copy.ts/identity.ts are half the directory).
 describe('no invited branch exists (AC-5 fence)', () => {
   const DEMO_DIR = dirname(fileURLToPath(import.meta.url))
-  const files = readdirSync(DEMO_DIR).filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+  const files = readdirSync(DEMO_DIR).filter((f) => /\.tsx?$/.test(f) && !f.includes('.test.'))
 
-  it('walks at least 1 tsx source file', () => {
-    expect(files.length).toBeGreaterThanOrEqual(1)
+  it('walks at least 5 source files', () => {
+    expect(files.length).toBeGreaterThanOrEqual(5)
   })
 
   it.each(files)('%s contains no "invited" occurrence', (file) => {

@@ -205,4 +205,27 @@ describe('PersonaPopover', () => {
     expect(within(row).getByTestId('persona-row-meta').textContent?.endsWith('invited')).toBe(true)
     expect(within(row).queryByTestId('persona-row-reason')).toBeNull()
   })
+
+  // QA: the return row sits outside the surface switch (implementation §5) so a failed
+  // roster still lets a presenter get back to the seat -- no Test Specs row covered this.
+  it('the return row survives a failed roster fetch', () => {
+    const error = new ApiError('http', 'gateway is down for maintenance', 503)
+    renderPopover({ membersState: 'error', membersError: error, members: [], standingIn: true })
+    expect(screen.getByTestId('persona-surface-error')).not.toBeNull()
+    expect(screen.getByTestId('persona-return-row')).not.toBeNull()
+  })
+
+  // QA: the return row is gated on standingIn alone -- absent otherwise, present when true.
+  it('the return row renders only while standing in', () => {
+    renderPopover({ members: FIRM_ROSTER, standingIn: false })
+    expect(screen.queryByTestId('persona-return-row')).toBeNull()
+
+    cleanup()
+    const onReturn = vi.fn()
+    renderPopover({ members: FIRM_ROSTER, standingIn: true, onReturn })
+    const returnRow = screen.getByTestId('persona-return-row')
+    expect(returnRow.textContent).toContain(SEAT.name)
+    fireEvent.click(returnRow)
+    expect(onReturn).toHaveBeenCalledTimes(1)
+  })
 })

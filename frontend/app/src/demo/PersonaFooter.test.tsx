@@ -170,4 +170,38 @@ describe('PersonaFooter (flag on)', () => {
     expect(within(aside).getByText('Switch company')).not.toBeNull()
     expect(within(aside).getByText(POPOVER_HEADER)).not.toBeNull()
   })
+
+  // AC-7. QA: was uncovered -- no row in the subtask's Test Specs exercised useDismiss.
+  it('an outside mousedown closes the open popover', async () => {
+    await renderDemoSidebar(demoCtx())
+    fireEvent.click(screen.getByTestId('persona-trigger'))
+    expect(screen.getByTestId('persona-popover')).not.toBeNull()
+
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('persona-popover')).toBeNull()
+  })
+
+  // AC-7. QA: was uncovered.
+  it('Escape closes the open popover', async () => {
+    await renderDemoSidebar(demoCtx())
+    fireEvent.click(screen.getByTestId('persona-trigger'))
+    expect(screen.getByTestId('persona-popover')).not.toBeNull()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByTestId('persona-popover')).toBeNull()
+  })
+
+  // QA: proves wrapperRef wraps the trigger, not just the popover. A ref scoped to the
+  // popover alone would let mousedown dismiss first and click reopen -- net effect stays
+  // open. Fires the two events separately (fireEvent.click alone never dispatches mousedown).
+  it('clicking the trigger while open closes it, and does not reopen it', async () => {
+    await renderDemoSidebar(demoCtx())
+    const trigger = screen.getByTestId('persona-trigger')
+    fireEvent.click(trigger)
+    expect(screen.getByTestId('persona-popover')).not.toBeNull()
+
+    fireEvent.mouseDown(trigger)
+    fireEvent.click(trigger)
+    expect(screen.queryByTestId('persona-popover')).toBeNull()
+  })
 })

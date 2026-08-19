@@ -159,10 +159,10 @@ func MockIssuerEnabled(environment, flag string) bool {
 // loginPersona is an identity the mock issuer will mint for under PostureHosted.
 type loginPersona struct{ subject, tenantID, role string }
 
-// subject and tenant are seeded (db/seed.dev.sql); role is the GoTrue JWT role every
-// client sends, NOT that seed's memberships.role (admin/preparer/reviewer) — changing
-// it to match the seed locks these personas out of the hosted demo. Every other
-// seeded membership is an assertion fixture: signing one in means adding it here.
+// Every seeded active membership (db/seed.dev.sql). role is the GoTrue JWT role every
+// client sends, NOT that seed's memberships.role — that substitution locks the persona
+// out of the hosted demo. Suspended members are excluded: their session could act on
+// nothing. TestLoginPersonasMatchEverySeededActiveMembership holds the two in step.
 var loginPersonas = []loginPersona{
 	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
 	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},
@@ -171,6 +171,14 @@ var loginPersonas = []loginPersona{
 	// Without them nobody on the hosted demo can close a firm run.
 	{"c0000000-0000-0000-0000-000000000004", "11111111-1111-1111-1111-111111111111", "authenticated"},
 	{"c0000000-0000-0000-0000-000000000005", "11111111-1111-1111-1111-111111111111", "authenticated"},
+	// firm — second preparer
+	{"c0000000-0000-0000-0000-000000000006", "11111111-1111-1111-1111-111111111111", "authenticated"},
+	// in-house — four reviewers and the preparer
+	{"c0000000-0000-0000-0000-000000000008", "22222222-2222-2222-2222-222222222222", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000009", "22222222-2222-2222-2222-222222222222", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000010", "22222222-2222-2222-2222-222222222222", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000011", "22222222-2222-2222-2222-222222222222", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000013", "22222222-2222-2222-2222-222222222222", "authenticated"},
 }
 
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is

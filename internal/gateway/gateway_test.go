@@ -337,7 +337,7 @@ const (
 	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
 	finApproverSubject        = "c0000000-0000-0000-0000-000000000004" // firm-tenant reviewer staffed fin_mgr + fin_dir
 	complianceApproverSubject = "c0000000-0000-0000-0000-000000000005" // firm-tenant reviewer staffed compliance
-	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000006" // seed-only preparer, never a login identity
+	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000007" // firm reviewer, seeded suspended — the allowlist is not "any seeded membership"
 	unlistedTenant            = "99999999-9999-9999-9999-999999999999"
 	unlistedSubject           = "88888888-8888-8888-8888-888888888888"
 	personaRole               = "authenticated"
@@ -462,29 +462,17 @@ func TestMockLoginHostedApproverRoundTrip(t *testing.T) {
 	}
 }
 
-// TestLoginPersonas_AllSeeded checks the table itself, not the wire: every entry
-// must be a real seeded membership and carry the GoTrue role. loginPersona's
-// literals are unkeyed, so an entry written (subject, role, tenant) compiles —
-// it fails both halves here.
+// TestLoginPersonas_AllSeeded pins the table's size and its role column, not the wire.
+// loginPersona's literals are unkeyed, so an entry written (subject, role, tenant)
+// compiles — the role check catches it. Membership in the seed is the parity test's job.
 func TestLoginPersonas_AllSeeded(t *testing.T) {
-	if len(loginPersonas) != 5 {
-		t.Errorf("len(loginPersonas) = %d, want 5 (firm admin, in-house admin, firm preparer, fin approver, compliance approver)", len(loginPersonas))
+	if len(loginPersonas) != 11 {
+		t.Errorf("len(loginPersonas) = %d, want 11 (every seeded active membership across both demo tenants)", len(loginPersonas))
 	}
 
-	rows := seedMembershipRows(t)
 	for _, p := range loginPersonas {
 		if p.role != personaRole {
 			t.Errorf("persona %s role = %q, want %q", p.subject, p.role, personaRole)
-		}
-		seeded := false
-		for _, row := range rows {
-			if strings.Contains(row, "'"+p.subject+"'") && strings.Contains(row, "'"+p.tenantID+"'") {
-				seeded = true
-				break
-			}
-		}
-		if !seeded {
-			t.Errorf("persona (%s, %s) has no memberships row in db/seed.dev.sql", p.subject, p.tenantID)
 		}
 	}
 }

@@ -68,6 +68,10 @@ import {
 } from './lib/policies'
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
+import { DEMO_MODE } from './demo/flag'
+import { personaFromMember } from './demo/identity'
+import { BUSY_MS } from './demo/timing'
+import { PersonaToast } from './demo/PersonaToast'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -127,11 +131,25 @@ export const ENV_BANNER = {
 // needs a session and a live entities fetch.
 export const SANDBOX_DEFAULT = true
 
+// A remounted workspace cannot resume a half-built draft or a selected invoice, so both
+// collapse to the list they came from.
+const carryView = (view: View): View => (view === 'create' || view === 'detail' ? 'invoices' : view)
+
+// The busy beat's floor: resolved after ms regardless of what else is happening.
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App): the persona picks the initial workspace mode.
-function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject }: {
+  session: Session
+  onSignOut: () => void
+  initialView?: View
+  becomePersona?: (member: Member, view: View) => Promise<void>
+  returnToSeat?: (view: View, seat: Member) => Promise<void>
+  seatSubject?: string
+}) {
   // Workspace type is a property of the authenticated identity, not a user-flippable
   // view: the firm persona gets the firm workspace, the in-house persona the in-house
   // workspace, and there is no in-app switch between them (that would require signing
@@ -234,7 +252,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // limitation: pasting a review hash into an already-open tab's address bar does not
   // navigate until reload.
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
-  const [view, setView] = useState<View>(bootBatchIds.length > 0 ? 'create' : 'dashboard')
+  const [view, setView] = useState<View>(initialView ?? (bootBatchIds.length > 0 ? 'create' : 'dashboard'))
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>(bootBatchIds.length > 0 ? 'review' : 'form')
   // Widened from a single `reviewBatchId` (BULK-01-05, task-308): a run's `review`
@@ -1214,6 +1232,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     staffRole,
     deleteRole,
     signOut: onSignOut,
+    becomePersona,
+    returnToSeat,
+    seatSubject,
   }
 
   return (
@@ -1280,14 +1301,25 @@ export default function App() {
   // round trip — and re-persist it via the mirror effect below — before swapping identity
   // under the user. Starting empty shows the loading splash for the persona actually being
   // signed in, and the same mirror effect clears the superseded session on that first pass.
-  const [session, setSession] = useState<Session | null>(() => (autoPersona ? null : resolveBootSession()))
+  const [seat, setSeat] = useState<Session | null>(() => (autoPersona ? null : resolveBootSession()))
+  // Demo-only stand-in, never persisted: `standIn === null` iff the active identity IS the seat.
+  const [standIn, setStandIn] = useState<Session | null>(null)
+  const [carriedView, setCarriedView] = useState<View | null>(null)
+  const activeSession = standIn ?? seat
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
+  // Demo-only. Bumped by every identity-changing verb so a commit that lands after a
+  // newer one (sign-out, or a later switch) can detect it is stale and no-op instead of
+  // resurrecting a dead Workspace.
+  const identityGen = useRef(0)
+  const toastSeq = useRef(0)
+  const [toast, setToast] = useState<{ name: string; initials: string; role: Member['role']; seq: number } | null>(null)
 
-  // Mirror the session to storage: persist while signed in, wipe on sign out / cleared session.
+  // Mirror the SEAT to storage: persist while signed in, wipe on sign out / cleared session.
+  // A stand-in is deliberately absent here, so a reload returns to the seat.
   useEffect(() => {
-    if (session) saveSession(session)
+    if (seat) saveSession(seat)
     else clearSession()
-  }, [session])
+  }, [seat])
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
   // door). Nulling React state alone would only swap in the app's own minimal
@@ -1297,12 +1329,16 @@ export default function App() {
   // it is stripped from the URL when consumed at boot, so no history entry behind this
   // navigation can auto-sign the same persona back in.
   const signOut = useCallback(() => {
+    identityGen.current++
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
     // localStorage, so without this the invalidated session stayed in React state and
     // Workspace kept rendering — which is exactly how a 401'd reload left the user parked
     // on a dead dashboard behind an "unauthorized / HTTP 401" card instead of signed out.
     // The old comment below claimed this fallback already happened; it did not.
-    setSession(null)
+    setSeat(null)
+    setStandIn(null)
+    setCarriedView(null)
+    setToast(null)
     clearSession()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
@@ -1315,16 +1351,62 @@ export default function App() {
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
     try {
-      setSession(await signIn(persona))
+      setSeat(await signIn(persona))
     } catch (err) {
       // A configured gateway that is unreachable: degrade to an unverified session so the
       // app still opens. console.warn (not error) keeps the Playwright smoke's no-error gate green.
       console.warn('[app] sign-in round trip failed; entering with unverified identity:', err)
-      setSession({ persona, token: null, me: null, verified: false })
+      setSeat({ persona, token: null, me: null, verified: false })
     } finally {
       setSigningIn(null)
     }
   }, [])
+
+  // Demo-only. The same two beats as becomePersona: a floor (no round trip to wait on,
+  // so no failure branch) then the commit. Toasts only when a stand-in was actually in
+  // force -- becomePersona's seat-row short-circuit below delegates here too, and
+  // clicking your own row while already seated must not announce a switch nobody made.
+  const returnToSeat = useCallback(
+    async (view: View, seatMember: Member) => {
+      const gen = ++identityGen.current
+      const wasStandingIn = standIn !== null
+      await delay(BUSY_MS)
+      // Symmetric with becomePersona: a sign-out (or a newer switch) mid-floor
+      // invalidates this commit.
+      if (identityGen.current !== gen) return
+      setCarriedView(carryView(view))
+      setStandIn(null)
+      if (wasStandingIn) {
+        setToast({ name: seatMember.name, initials: seatMember.initials, role: seatMember.role, seq: ++toastSeq.current })
+      }
+    },
+    [standIn],
+  )
+
+  // Demo-only. Unlike doSignIn above this NEVER degrades: every setter sits after the
+  // await, so a rejected mint leaves seat, standIn and carriedView untouched and signIn's
+  // own ApiError reaches the caller unreshaped. Painting a new name over the old token
+  // would make the footer claim an identity the requests do not hold.
+  const becomePersona = useCallback(
+    async (member: Member, view: View) => {
+      if (!seat) return
+      // The seat's own row returns to the seat rather than minting a same-subject
+      // stand-in, which would leave isSeat true while the return row still rendered.
+      if (member.id === seat.persona.subject) {
+        return returnToSeat(view, member)
+      }
+      identityGen.current++
+      const gen = identityGen.current
+      const [next] = await Promise.all([signIn(personaFromMember(member, seat.persona)), delay(BUSY_MS)])
+      // A sign-out (or a newer switch) mid-mint invalidates this commit -- the Workspace
+      // it would resurrect is already gone.
+      if (identityGen.current !== gen) return
+      setCarriedView(carryView(view))
+      setStandIn(next)
+      setToast({ name: member.name, initials: member.initials, role: member.role, seq: ++toastSeq.current })
+    },
+    [seat, returnToSeat],
+  )
 
   // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that
   // persona. autoPersona already encodes the shouldAutoSignIn guard (the param names a
@@ -1358,12 +1440,12 @@ export default function App() {
   // fresh token, so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (session || autoPersona) return
+    if (activeSession || autoPersona) return
     const dest = landingBase()
     if (dest) window.location.href = dest
-  }, [session, autoPersona])
+  }, [activeSession, autoPersona])
 
-  if (!session) {
+  if (!activeSession) {
     // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
     // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
     // mint → /me round trip resolves.
@@ -1378,5 +1460,22 @@ export default function App() {
     // a dead end. It is the ONLY path that still renders SignIn.
     return <SignIn signingIn={signingIn} onPick={doSignIn} />
   }
-  return <Workspace session={session} onSignOut={signOut} />
+  return (
+    <>
+      <Workspace
+        key={DEMO_MODE ? activeSession.persona.subject : undefined}
+        session={activeSession}
+        onSignOut={signOut}
+        initialView={DEMO_MODE ? (carriedView ?? undefined) : undefined}
+        becomePersona={DEMO_MODE ? becomePersona : undefined}
+        returnToSeat={DEMO_MODE ? returnToSeat : undefined}
+        seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
+      />
+      {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
+          remounts Workspace, which would destroy a toast mounted underneath it. */}
+      {DEMO_MODE && toast && (
+        <PersonaToast key={toast.seq} name={toast.name} initials={toast.initials} role={toast.role} onDismiss={() => setToast(null)} />
+      )}
+    </>
+  )
 }

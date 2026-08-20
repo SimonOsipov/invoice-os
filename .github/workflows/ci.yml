@@ -42,6 +42,7 @@ jobs:
               - 'tools/**'
               - 'migrations/**'
               - 'docs/**'
+              - 'scripts/ci/**'
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile'

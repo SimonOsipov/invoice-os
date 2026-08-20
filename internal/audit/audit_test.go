@@ -8,8 +8,9 @@
 // COMMITTED table (the M2-10 migration), not a runtime fixture, so the cases run directly
 // against the migrated schema. It needs DATABASE_URL (invoice_app — writes + the grant/RLS
 // attacks) and DATABASE_MIGRATION_URL (invoice_migrator — the owner-can't-mutate attack,
-// which grants alone cannot express), and SKIPS ITSELF when either is unset so a bare
-// `go test ./...` and the default CI `go` job stay green. It runs under the CI `audit` job
+// which grants alone cannot express). Its DB-backed cases SKIP THEMSELVES when either is
+// unset, so a bare `go test ./...` and the default CI `go` job stay green; the two
+// migrations.FS cases in audit_schema_test.go need no DB and always run. It runs under the CI `audit` job
 // or `make test-audit`. Tenants are random uuids per case (audit_log has no FK to tenants).
 package audit_test
 

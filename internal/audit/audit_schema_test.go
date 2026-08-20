@@ -183,6 +183,45 @@ func TestAudit_ReadIndexesExistWithExactDefinitions(t *testing.T) {
 	}
 }
 
+// AC-3, second half: the four read indexes cover every row and are not unique. A partial
+// or UNIQUE index keeps the exact column order the case above asserts, so that case alone
+// passes on one — and a partial index serves almost none of the reads these four exist for.
+//
+// audit_log_document_created_idx is the positive control: it IS partial, so it proves the
+// WHERE check can detect a predicate rather than never matching one.
+func TestAudit_ReadIndexesAreTotalAndNonUnique(t *testing.T) {
+	f := requireFixture(t)
+
+	defs := auditLogIndexDefs(t, f)
+
+	control, ok := defs["audit_log_document_created_idx"]
+	if !ok || !strings.Contains(control, " WHERE ") {
+		t.Fatalf("control: audit_log_document_created_idx indexdef = %q (present=%v), want a partial "+
+			"index — without it the WHERE assertions below cannot detect a predicate", control, ok)
+	}
+
+	for _, name := range []string{
+		"audit_log_tenant_created_idx",
+		"audit_log_tenant_event_created_idx",
+		"audit_log_tenant_actor_created_idx",
+		"audit_log_tenant_entity_created_idx",
+	} {
+		def, ok := defs[name]
+		if !ok {
+			t.Errorf("index %s: not present in pg_indexes for audit_log (have %v)", name, indexNames(defs))
+			continue
+		}
+		if strings.Contains(def, " WHERE ") {
+			t.Errorf("index %s indexdef = %q, want no WHERE clause — a partial index skips the rows "+
+				"the audit read paths filter on", name, def)
+		}
+		if !strings.HasPrefix(def, "CREATE INDEX ") {
+			t.Errorf("index %s indexdef = %q, want it to start with %q — UNIQUE would reject "+
+				"legitimate audit rows on an append-only table", name, def, "CREATE INDEX ")
+		}
+	}
+}
+
 // AC-5: the migration adds indexes and removes none.
 func TestAudit_PreExistingIndexesSurvive(t *testing.T) {
 	f := requireFixture(t)

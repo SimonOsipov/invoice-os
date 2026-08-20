@@ -218,6 +218,65 @@ func TestAudit_InsertTriggerToleratesAMalformedPayloadID(t *testing.T) {
 	assertTriggerEntityNull(t, triggerEntityIDs(t, f, fx.tenant), "invoice.created")
 }
 
+// AC-1, AC-15: uuid_in accepts more spellings than canonical form, and six live routes
+// echo the raw URL path segment into the payload without parsing it
+// (internal/invoice/handlers.go). A hyphenless or brace-wrapped id names the same invoice,
+// so it must resolve to the same entity -- NULL here reads as workspace-level and misfiles
+// a client action as firm-wide. The refused spellings are exactly the ones uuid_in itself
+// refuses; they must yield NULL without aborting the caller, which the companion
+// idempotency_keys row proves.
+func TestAudit_InsertTriggerResolvesEverySpellingUUIDInAccepts(t *testing.T) {
+	f := requireFixture(t)
+	requireInsertTrigger(t, f)
+	fx := seedTriggerFixture(t, f)
+	ctx := context.Background()
+
+	bare := strings.ReplaceAll(fx.invoice, "-", "")
+	if len(bare) != 32 || bare == fx.invoice {
+		t.Fatalf("hyphenless id %q is %d chars, want a 32-char restyling of %s", bare, len(bare), fx.invoice)
+	}
+
+	resolves := map[string]string{
+		"invoice.created":          fx.invoice,             // canonical, the positive control
+		"invoice.kept_as_is":       bare,                   // hyphenless
+		"invoice.unkept_as_is":     "{" + fx.invoice + "}", // brace-wrapped
+		"invoice.resolved_outside": "{" + bare + "}",
+		"invoice.validated":        strings.ToUpper(fx.invoice),
+	}
+	refuses := map[string]string{
+		"invoice.transitioned":       bare[:3] + "-" + bare[3:], // hyphen off the 4-hex boundary
+		"invoice.unresolved_outside": "{" + fx.invoice,          // unclosed brace
+		"invoice.updated":            "not-a-uuid",
+	}
+
+	key := uuid.NewString()
+	if err := db.WithinTenantTx(ctx, f.app, fx.tenant, func(tx pgx.Tx) error {
+		for _, batch := range []map[string]string{resolves, refuses} {
+			for event, id := range batch {
+				if e := audit.Record(ctx, tx, "spelling-fixture", event, map[string]any{"id": id}); e != nil {
+					return e
+				}
+			}
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO idempotency_keys (tenant_id, key) VALUES ($1, $2)`, fx.tenant, key)
+		return e
+	}); err != nil {
+		t.Fatalf("a spelling aborted the caller's transaction: %v", err)
+	}
+
+	if n := keyCount(t, f.app, fx.tenant, key); n != 1 {
+		t.Errorf("idempotency_keys rows after commit = %d, want 1 — the transaction did not commit", n)
+	}
+
+	got := triggerEntityIDs(t, f, fx.tenant)
+	for event := range resolves {
+		assertTriggerEntity(t, got, event, fx.entity)
+	}
+	for event := range refuses {
+		assertTriggerEntityNull(t, got, event)
+	}
+}
+
 // --- helpers -------------------------------------------------------------------------
 
 // requireInsertTrigger fails when the write-time trigger is absent. Every NULL assertion

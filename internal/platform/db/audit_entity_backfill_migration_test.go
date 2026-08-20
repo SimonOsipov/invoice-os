@@ -484,6 +484,48 @@ func TestRLS_AuditBackfillLeavesWorkspaceEventsNull(t *testing.T) {
 	assertAuditEntity(t, got, "invoice.created", f.entity)
 }
 
+// AC-1: the historical rows this one-shot sweeps carry whatever spelling their call site
+// wrote, and uuid_in accepts more than canonical form. Same acceptance line as the
+// write-time trigger, proved on the path that cannot be re-run.
+func TestRLS_AuditBackfillResolvesEverySpellingUUIDInAccepts(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	f := seedAuditEntityFixture(t)
+	bare := strings.ReplaceAll(f.invoice, "-", "")
+	if len(bare) != 32 || bare == f.invoice {
+		t.Fatalf("hyphenless id %q is %d chars, want a 32-char restyling of %s", bare, len(bare), f.invoice)
+	}
+
+	resolves := map[string]string{
+		"invoice.created":          f.invoice,             // canonical, the positive control
+		"invoice.kept_as_is":       bare,                  // hyphenless
+		"invoice.unkept_as_is":     "{" + f.invoice + "}", // brace-wrapped
+		"invoice.resolved_outside": "{" + bare + "}",
+		"invoice.validated":        strings.ToUpper(f.invoice),
+	}
+	refuses := map[string]string{
+		"invoice.transitioned":       bare[:3] + "-" + bare[3:], // hyphen off the 4-hex boundary
+		"invoice.unresolved_outside": "{" + f.invoice,           // unclosed brace
+		"invoice.updated":            "not-a-uuid",
+	}
+	for _, batch := range []map[string]string{resolves, refuses} {
+		for event, id := range batch {
+			seedAuditEntityRow(t, f.tenant, event, auditPayloadJSON("id", id))
+		}
+	}
+
+	// A body that cast a refused spelling would raise 22P02 here, inside auditEntityApplyUp.
+	tx := auditEntityApplyUp(t, ctx)
+	got := auditEntityIDsByEvent(t, ctx, tx, f.tenant)
+	for event := range resolves {
+		assertAuditEntity(t, got, event, f.entity)
+	}
+	for event := range refuses {
+		assertAuditEntityNull(t, got, event)
+	}
+}
+
 // AC-5: the backfill mutates rows although nothing sets app.current_tenant before it. A
 // body without its own per-tenant set_config reports UPDATE 0 and succeeds silently.
 func TestRLS_AuditBackfillMutatesRowsWithoutPreSetTenantContext(t *testing.T) {

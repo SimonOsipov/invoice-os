@@ -35,6 +35,7 @@ CREATE FUNCTION audit_log_entity_for(p_event text, p_payload jsonb)
     AS $fn$
 DECLARE
     v_raw    text;
+    v_norm   text;
     v_direct boolean := false;
 BEGIN
     -- Invoice-scoped, bare `id`.
@@ -58,16 +59,27 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- Shape-checked before the cast, so a malformed id yields NULL instead of aborting
-    -- the caller's transaction with 22P02.
-    IF v_raw IS NULL OR v_raw !~ '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$' THEN
+    -- The gate is uuid_in's own grammar, not canonical form: callers echo the raw URL
+    -- segment, and a canonical-only check reads a legal id as NULL -- which this column
+    -- spells "workspace-level", misfiling a client action as firm-wide. Casting the
+    -- hyphen-stripped 32 hex digits is what keeps the cast total, so no admitted spelling
+    -- raises 22P02. Fenced by TestAudit_InsertTriggerResolvesEverySpellingUUIDInAccepts.
+    IF v_raw IS NULL THEN
         RETURN NULL;
     END IF;
+    v_norm := lower(v_raw);
+    IF v_norm LIKE '{%}' THEN
+        v_norm := substring(v_norm FROM 2 FOR length(v_norm) - 2);
+    END IF;
+    IF v_norm !~ '^[0-9a-f]{4}(-?[0-9a-f]{4}){7}$' THEN
+        RETURN NULL;
+    END IF;
+    v_norm := replace(v_norm, '-', '');
 
     IF v_direct THEN
-        RETURN v_raw::uuid;
+        RETURN v_norm::uuid;
     END IF;
-    RETURN (SELECT i.entity_id FROM invoices i WHERE i.id = v_raw::uuid);
+    RETURN (SELECT i.entity_id FROM invoices i WHERE i.id = v_norm::uuid);
 END
 $fn$;
 -- +goose StatementEnd

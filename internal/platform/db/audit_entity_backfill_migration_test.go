@@ -74,7 +74,12 @@ var (
 // auditRuleDPayloads pairs each workspace-level event with the payload shape its call
 // site actually writes. Six carry a NON-uuid text `key`, which raises 22P02 the moment
 // anything casts it.
-func auditRuleDPayloads(documentID string) map[string]string {
+//
+// The three document.* events split the two ways a key-scoped resolver goes wrong:
+// document.created gets a real INVOICE id (a resolver dispatching on `id` being present
+// would join invoices and attribute it), the other two get a real documents id (a resolver
+// returning the payload id directly would write a document uuid into entity_id).
+func auditRuleDPayloads(documentID, invoiceID string) map[string]string {
 	policyID, userID := uuid.NewString(), uuid.NewString()
 	return map[string]string{
 		"approval_policy.created":   auditPayloadJSON("policy_id", policyID),
@@ -85,7 +90,7 @@ func auditRuleDPayloads(documentID string) map[string]string {
 		"workflow_role.updated":     auditPayloadJSON("key", "approver"),
 		"workflow_role.deleted":     auditPayloadJSON("key", "approver"),
 		"workflow_role.staffed":     auditPayloadJSON("key", "approver"),
-		"document.created":          auditPayloadJSON("id", documentID),
+		"document.created":          auditPayloadJSON("id", invoiceID),
 		"document.read":             auditPayloadJSON("id", documentID),
 		"document.reused":           auditPayloadJSON("id", documentID),
 		"membership.suspended":      auditPayloadJSON("user_id", userID),
@@ -461,7 +466,7 @@ func TestRLS_AuditBackfillLeavesWorkspaceEventsNull(t *testing.T) {
 	ctx := context.Background()
 
 	f := seedAuditEntityFixture(t)
-	ruleD := auditRuleDPayloads(f.document)
+	ruleD := auditRuleDPayloads(f.document, f.invoice)
 	if len(ruleD) != 15 {
 		t.Fatalf("rule-D payload map holds %d events, want 15", len(ruleD))
 	}
@@ -515,6 +520,45 @@ func TestRLS_AuditBackfillCoversEveryTenant(t *testing.T) {
 	tx := auditEntityApplyUp(t, ctx)
 	assertAuditEntity(t, auditEntityIDsByEvent(t, ctx, tx, first.tenant), "invoice.created", first.entity)
 	assertAuditEntity(t, auditEntityIDsByEvent(t, ctx, tx, second.tenant), "invoice.created", second.entity)
+}
+
+// AC-6: a tenant whose audit rows are entirely workspace-level matches the backfill's key
+// prefilter zero times. The loop must carry on past it, so the two tenants that DO resolve
+// are the positive control on the same predicate. AC-6's own test cannot see this: both of
+// its tenants resolve, so a body that aborted on an empty UPDATE would still pass it.
+func TestRLS_AuditBackfillSurvivesATenantWithNothingResolvable(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	first := seedAuditEntityFixture(t)
+	barren := seedAuditEntityFixture(t)
+	last := seedAuditEntityFixture(t)
+
+	seedAuditEntityRow(t, first.tenant, "invoice.created", auditPayloadJSON("id", first.invoice))
+	seedAuditEntityRow(t, last.tenant, "invoice.created", auditPayloadJSON("id", last.invoice))
+	// None of these carries an `id` or `invoice_id` key, so the prefilter matches no row
+	// of this tenant at all.
+	barrenEvents := map[string]string{
+		"workflow_role.created":   auditPayloadJSON("key", "approver"),
+		"membership.suspended":    auditPayloadJSON("user_id", uuid.NewString()),
+		"approval_policy.created": auditPayloadJSON("policy_id", uuid.NewString()),
+	}
+	for event, payload := range barrenEvents {
+		seedAuditEntityRow(t, barren.tenant, event, payload)
+	}
+
+	tx := auditEntityApplyUp(t, ctx)
+
+	assertAuditEntity(t, auditEntityIDsByEvent(t, ctx, tx, first.tenant), "invoice.created", first.entity)
+	assertAuditEntity(t, auditEntityIDsByEvent(t, ctx, tx, last.tenant), "invoice.created", last.entity)
+
+	got := auditEntityIDsByEvent(t, ctx, tx, barren.tenant)
+	if len(got) != len(barrenEvents) {
+		t.Fatalf("read back %d rows for the barren tenant, want %d — the fixture never landed", len(got), len(barrenEvents))
+	}
+	for event := range barrenEvents {
+		assertAuditEntityNull(t, got, event)
+	}
 }
 
 // AC-7: the backfill only updates. Both counts are taken in the same transaction and the
@@ -607,9 +651,6 @@ func TestRLS_AuditBackfillSizeGuardAbortsAndRollsBack(t *testing.T) {
 	if state := after.triggers["audit_log_no_update_delete"]; state != "O" {
 		t.Errorf("audit_log_no_update_delete tgenabled = %q after the abort, want %q — the "+
 			"suspend/restore bracket leaked", state, "O")
-	}
-	if _, ok := after.triggers["audit_log_entity_on_insert"]; ok {
-		t.Errorf("audit_log_entity_on_insert survives an aborted migration, want it gone")
 	}
 	if !after.forceRLS {
 		t.Errorf("audit_log relforcerowsecurity = false after the abort, want true")

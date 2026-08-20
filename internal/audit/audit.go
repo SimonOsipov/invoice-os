@@ -45,9 +45,10 @@ func Record(ctx context.Context, tx pgx.Tx, actor, event string, payload any) er
 		}
 		body = b
 	}
-	// id, tenant_id (from the GUC), and created_at are all filled by column defaults; the
-	// RLS WITH CHECK ties the row to the tx's tenant. payload is passed as a string so pgx
-	// sends it to the jsonb column as raw JSON.
+	// id, tenant_id (from the GUC), and created_at are all filled by column defaults, and
+	// entity_id by the audit_log_entity_on_insert trigger, which reads `id`/`invoice_id`
+	// out of payload for 20 of the event names; the RLS WITH CHECK ties the row to the tx's
+	// tenant. payload is passed as a string so pgx sends it to the jsonb column as raw JSON.
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO audit_log (actor, event, payload) VALUES ($1, $2, $3)`,
 		actor, event, string(body)); err != nil {

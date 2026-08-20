@@ -471,8 +471,9 @@ jobs:
   # commit/roll back atomically with the caller's transaction. Bootstraps roles and migrates
   # exactly like the `migrations`/`rls`/`queue` jobs (creating the committed audit_log table),
   # then runs ./internal/audit as invoice_app; the owner-immutability case also needs
-  # DATABASE_MIGRATION_URL (already set below) to attack as invoice_migrator. The suite SKIPS
-  # itself without both DATABASE_* URLs, so the `go` job and a bare `go test ./...` stay green.
+  # DATABASE_MIGRATION_URL (already set below) to attack as invoice_migrator. Its DB-backed cases
+  # skip without both DATABASE_* URLs (see the internal/audit package comment), so the `go` job
+  # and a bare `go test ./...` stay green.
   audit:
     name: Audit suite (append-only + atomicity)
     needs: changes

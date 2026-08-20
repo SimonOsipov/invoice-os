@@ -14,6 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
@@ -308,6 +312,131 @@ func auditLogIndexDefs(t *testing.T, f *fixture) map[string]string {
 func indexNames(defs map[string]string) []string {
 	names := make([]string, 0, len(defs))
 	for name := range defs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// --- restore-proof cases (DB) ----------------------------------------------------------
+
+// AC-1: the backfill bracket disables audit_log_no_update_delete and must re-enable it. A
+// left-disabled trigger silently ends append-only on an evidence table, and nothing else
+// observes it. Asserting the expected names AND scanning the whole non-internal set means a
+// trigger that vanished outright fails here too, instead of passing on an empty scan.
+func TestAudit_AppendOnlyTriggersAreEnabledAfterMigration(t *testing.T) {
+	f := requireFixture(t)
+
+	states := auditLogTriggerStates(t, f)
+
+	for _, name := range []string{
+		"audit_log_no_truncate",
+		"audit_log_no_update_delete",
+		"audit_log_entity_on_insert",
+	} {
+		if _, ok := states[name]; !ok {
+			t.Errorf("trigger %s: absent from pg_trigger for audit_log (have %v)",
+				name, triggerNames(states))
+		}
+	}
+
+	for _, name := range triggerNames(states) {
+		if states[name] != "O" {
+			t.Errorf("trigger %s tgenabled = %q, want %q — a disabled append-only trigger is a "+
+				"silent integrity loss with no other oracle", name, states[name], "O")
+		}
+	}
+}
+
+// AC-2: the backfill lifts FORCE ROW LEVEL SECURITY so the size guard and the tenant list
+// can survey every tenant at once. Left standing, NO FORCE means the table owner's reads
+// and writes stop being tenant-scoped.
+func TestAudit_ForceRowSecurityIsRestoredAfterMigration(t *testing.T) {
+	f := requireFixture(t)
+	ctx := context.Background()
+
+	var force, enabled bool
+	if err := f.mig.QueryRow(ctx,
+		`SELECT relforcerowsecurity, relrowsecurity FROM pg_class WHERE oid = 'public.audit_log'::regclass`,
+	).Scan(&force, &enabled); err != nil {
+		t.Fatalf("read audit_log row-security flags: %v", err)
+	}
+	if !enabled {
+		t.Errorf("audit_log relrowsecurity = false, want true — RLS is off entirely, so FORCE means nothing")
+	}
+	if !force {
+		t.Errorf("audit_log relforcerowsecurity = false, want true — the backfill's NO FORCE is still " +
+			"standing, so the table owner bypasses tenant isolation")
+	}
+}
+
+// AC-4: entity_id is a new column, and the append-only trigger must refuse a write to it
+// exactly as it refuses one to any older column. The owner holds full DML privilege, so
+// 42501 cannot fire — 23001 proves the trigger, not a missing grant, is what blocks it.
+func TestAudit_EntityIDUpdateRefusedForOwner(t *testing.T) {
+	f := requireFixture(t)
+	ctx := context.Background()
+	tenant, event := uuid.NewString(), uuid.NewString()
+	seedAudit(t, f.app, tenant, event)
+
+	err := db.WithinTenantTx(ctx, f.mig, tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE audit_log SET entity_id = $1 WHERE event = $2`,
+			uuid.NewString(), event)
+		return e
+	})
+	assertSQLState(t, err, "23001")
+
+	if n := auditCount(t, f.app, tenant, event); n != 1 {
+		t.Errorf("audit rows after the blocked owner UPDATE = %d, want 1", n)
+	}
+}
+
+// AC-4: for the app role the missing UPDATE grant refuses entity_id at 42501, before RLS or
+// the trigger is consulted — so no tenant context is needed.
+func TestAudit_EntityIDUpdateRefusedForApp(t *testing.T) {
+	f := requireFixture(t)
+	ctx := context.Background()
+
+	_, err := f.app.Exec(ctx, `UPDATE audit_log SET entity_id = $1`, uuid.NewString())
+	assertSQLState(t, err, "42501")
+}
+
+// auditLogTriggerStates maps tgname -> tgenabled for audit_log's non-internal triggers.
+// tgenabled is "char", which has no pgx codec, hence the ::text cast. Fails on an empty
+// result so a broken catalog query cannot make the loops above pass vacuously.
+func auditLogTriggerStates(t *testing.T, f *fixture) map[string]string {
+	t.Helper()
+	ctx := context.Background()
+
+	rows, err := f.mig.Query(ctx,
+		`SELECT tgname, tgenabled::text FROM pg_trigger
+		   WHERE tgrelid = 'public.audit_log'::regclass AND NOT tgisinternal`)
+	if err != nil {
+		t.Fatalf("query pg_trigger for audit_log: %v", err)
+	}
+	defer rows.Close()
+
+	states := map[string]string{}
+	for rows.Next() {
+		var name, enabled string
+		if err := rows.Scan(&name, &enabled); err != nil {
+			t.Fatalf("scan pg_trigger row: %v", err)
+		}
+		states[name] = enabled
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate pg_trigger rows: %v", err)
+	}
+	if len(states) == 0 {
+		t.Fatalf("pg_trigger returned no non-internal rows for audit_log — the append-only triggers " +
+			"are gone or the query is wrong, and every assertion over it would be vacuous")
+	}
+	return states
+}
+
+func triggerNames(states map[string]string) []string {
+	names := make([]string, 0, len(states))
+	for name := range states {
 		names = append(names, name)
 	}
 	sort.Strings(names)

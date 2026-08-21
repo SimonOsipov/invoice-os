@@ -96,8 +96,9 @@ func scanLineItem(row scanner, li *LineItem) error {
 	)
 }
 
-// historyColumns deliberately excludes id/tenant_id/invoice_id (AC #7) --
-// StatusChange surfaces only from_status/to_status/actor/changed_at.
+// historyColumns deliberately excludes id/tenant_id/invoice_id (AC #7). It is the
+// SELECT list, not the wire shape: StatusChange also carries ActorName/ActorKind,
+// which History populates after the scan and no column supplies.
 const historyColumns = `from_status, to_status, actor, changed_at`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {

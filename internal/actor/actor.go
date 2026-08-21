@@ -26,6 +26,16 @@ type Label struct {
 // holderName (read_model.go:421), which stops on a non-nil "" -- pinned by
 // TestHolderName_EmptyStringDisplayNameDoesNotFallThrough. Do not reconcile
 // the two; see TestActorName_DivergesFromHolderNameDeliberately.
+//
+// The subject is returned byte-for-byte: never parsed, normalised or
+// truncated. Classifying it (KindSystem, shape gates) belongs to Resolve.
 func Name(displayName, email *string, subject string) Label {
-	return Label{}
+	// "" falls through like nil (D-31): TestActorName_EmptyStringFallsThrough.
+	if displayName != nil && *displayName != "" {
+		return Label{Text: *displayName, Kind: KindPerson}
+	}
+	if email != nil && *email != "" {
+		return Label{Text: *email, Kind: KindPerson}
+	}
+	return Label{Text: subject, Kind: KindRaw}
 }

@@ -199,6 +199,23 @@ Go `Kind` has three values — `KindSystem`, `KindPerson` (a `memberships` row a
 **NULL** column, rendered "Not recorded" (`frontend/app/src/lib/actor.ts:3,24`). `absent` has
 no Go counterpart: `Resolve` is never handed a NULL.
 
+### Resolution is read-time, and batched once
+
+The name a row displays is the member's name **now**, not at the moment the event was
+recorded. Rename a member and every historical `audit_log` row they actored re-renders under
+the new name; **delete** the membership and those rows fall back to the raw subject, because
+no row answers. A suspended member still resolves
+(`TestActorResolve_SuspendedMemberStillResolves`), and a member of another tenant never does
+(`TestActorResolve_CrossTenantSubjectIsUnresolvable`). If a reader needs name-at-event-time it
+must store the name in the payload at write time; `internal/actor` cannot give it.
+
+Collect every subject on the page and call `Resolve` **once**, after the row scan — never once
+per row. The de-duplication is stronger than a caller can apply to raw strings, and the query
+count does not grow with the row count (`internal/invoice/store.go:565-575`,
+`TestHistory_IssuesOneResolveQueryForManyRows`). A per-row call on AUDIT-04's list endpoint
+would be N+1 against `memberships`; avoiding that is the caller's job, and the batch API is
+the whole reason `Resolve` takes a slice.
+
 ### `actor` stays raw on the wire
 
 The resolved fields are added **beside** the stored value, never in place of it:

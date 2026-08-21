@@ -531,7 +531,13 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					}
 					// Only reachable once Pending fired at least once, so the APP DID ack the
 					// submission -- it just never returned a verdict within the poll budget.
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailureAcknowledgedNoVerdict)
+					kind := FailureAcknowledgedNoVerdict
+					if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+						return err
+					}
+					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
+					// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
+					return recordFailureAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, kind)
 				})
 				if err != nil {
 					return err

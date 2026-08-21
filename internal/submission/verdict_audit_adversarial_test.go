@@ -281,10 +281,10 @@ func vaDirectCalls(body *ast.BlockStmt, want string) []*ast.CallExpr {
 // guarantee's reach; an early return placed after it could skip the row entirely on a path
 // that still lands the invoice in failed.
 //
-// The floor is >= 2, not == 2: SubmitWorker owns two failure sites today and PollWorker's is
-// wired next. The last-statement property below is asserted over EVERY matched closure, so
-// the floor costs the check no strength. Tightening it to an exact count belongs with the
-// subtask that finishes the set.
+// The floor is >= 2, not exact: PollWorker's failure site is wired too now, putting the real
+// count at three -- SubmitWorker's two plus PollWorker's one. The last-statement property
+// below is asserted over EVERY matched closure, so the floor costs the check no strength.
+// Tightening it to an exact count belongs with the subtask that finishes the set.
 func TestSubmissionAudit_FailureWriteIsLastInItsClosure(t *testing.T) {
 	files := vaScanSubmissionPackage(t)
 	vaRequirePopulation(t, files)
@@ -337,8 +337,8 @@ func TestSubmissionAudit_FailureWriteIsLastInItsClosure(t *testing.T) {
 			"so the counts below are vacuous", scanned, len(files))
 	}
 	if matched < 2 {
-		t.Fatalf("closures calling recordFailureAudit = %d, want >= 2 (found at %v) -- both of "+
-			"SubmitWorker's terminal-failure branches must write the event", matched, sites)
+		t.Fatalf("closures calling recordFailureAudit = %d, want >= 2 (found at %v) -- every "+
+			"terminal-failure branch, SubmitWorker's and PollWorker's alike, must write the event", matched, sites)
 	}
 	for _, loc := range sites {
 		if !strings.HasPrefix(loc, "worker.go:") {

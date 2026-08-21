@@ -416,7 +416,8 @@ type PollWorker struct {
 // writes. Pending OVERWRITES poll_ref/next_poll_at with the NEW ticket and enqueues the next hop at
 // Sequence+1, scheduled at the adapter's exact new PollAfter ([poll-ticket],
 // [unbounded-poll-chain] -- no hop ceiling). Retryable on the final attempt dead-letters the
-// job and moves the invoice submitted -> failed via the pre-existing edge; Retryable with
+// job, moves the invoice submitted -> failed via the pre-existing edge, and writes the
+// submission.failed audit row inside the same closure; Retryable with
 // budget remaining leaves the job 'pending' (not 'queued' -- there is no "back to queued" for
 // a poll, it is still waiting on the same deferred verdict) and advances attempts/last_error
 // OUTSIDE queue.OncePerJob, mirroring markJobRetry's own rationale exactly. Every terminal

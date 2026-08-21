@@ -595,9 +595,10 @@ func TestPollWorker_DeadLetterOnFinalAttemptViaExistingEdge(t *testing.T) {
 	}
 }
 
-// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385): worker.go:518,
-// the poll dead-letter site. Reaching here proves Pending{Ref} fired at least once -- the
-// APP took custody of the submission -- but no verdict was ever polled out of it.
+// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385): worker.go:522,
+// the poll dead-letter site (the final-attempt guard). Reaching here proves Pending{Ref}
+// fired at least once -- the APP took custody of the submission -- but no verdict was ever
+// polled out of it.
 func TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()

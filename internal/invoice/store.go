@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/actor"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -554,6 +555,25 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 
 		if len(result) == 0 {
 			return ErrNotFound
+		}
+
+		// Resolved once here, never inside the loop: whatever the row count this
+		// costs ONE extra statement, on History's own tx
+		// (TestHistory_IssuesOneResolveQueryForManyRows). Resolve de-duplicates the
+		// subjects itself, on the normalised uuid -- a stronger key than this
+		// caller could apply to the raw strings.
+		subjects := make([]string, 0, len(result))
+		for _, sc := range result {
+			subjects = append(subjects, sc.Actor)
+		}
+		labels, err := actor.Resolve(ctx, tx, subjects)
+		if err != nil {
+			return err
+		}
+		for i := range result {
+			label := labels[result[i].Actor]
+			result[i].ActorName = label.Text
+			result[i].ActorKind = string(label.Kind)
 		}
 		return nil
 	})

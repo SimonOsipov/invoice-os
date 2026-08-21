@@ -580,6 +580,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect('actor' in first, 'a history row should carry actor').toBe(true)
       expect('changed_at' in first, 'a history row should carry changed_at').toBe(true)
       expect('from_status' in first, 'a history row should carry from_status (nullable)').toBe(true)
+      expect('actor_name' in first, 'a history row should carry actor_name').toBe(true)
+      expect('actor_kind' in first, 'a history row should carry actor_kind').toBe(true)
+      expect(['person', 'system', 'raw'], 'actor_kind should be one of the three wire values').toContain(first.actor_kind)
     })
 
     test('history not-found (random UUID) -> 404 {error: string}', async () => {

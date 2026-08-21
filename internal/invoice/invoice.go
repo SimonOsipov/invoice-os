@@ -154,9 +154,8 @@ type Invoice struct {
 //
 // ActorName/ActorKind are the resolved display of Actor, populated by
 // Store.History after the row scan -- Actor itself stays the stored value,
-// verbatim. Both are plain non-pointer strings, so neither can marshal as JSON
-// null. Not yet populated: AUDIT-02-03's Resolve call is what fills them, pinned
-// by history_actor_test.go.
+// verbatim (TestHistory_ActorColumnIsUnchanged). Both are plain non-pointer
+// strings, so neither can marshal as JSON null.
 type StatusChange struct {
 	FromStatus *Status   `json:"from_status"`
 	ToStatus   Status    `json:"to_status"`

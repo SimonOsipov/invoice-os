@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"sort"
 	"strings"
 	"testing"
@@ -346,4 +348,188 @@ func TestSubmissionAudit_FailureWriteIsLastInItsClosure(t *testing.T) {
 				"branches are the only callers", loc)
 		}
 	}
+}
+
+// --- every recordFailureAudit kind argument resolves to a declared constant --------------
+
+// vaParseFixture parses src as a standalone file, giving the helpers below a synthetic
+// package to run over without touching worker.go.
+func vaParseFixture(t *testing.T, name, src string) vaFile {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	return vaFile{name: name, fset: fset, ast: f}
+}
+
+// vaFailureKindConstants collects every constant name declared with type FailureKind.
+// failure.go spells the type on EACH const spec (no iota carryover), so checking vs.Type
+// per spec, not the block header, is what finds all three.
+func vaFailureKindConstants(files []vaFile) map[string]bool {
+	out := map[string]bool{}
+	for _, f := range files {
+		for _, d := range f.ast.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				id, ok := vs.Type.(*ast.Ident)
+				if !ok || id.Name != "FailureKind" {
+					continue
+				}
+				for _, n := range vs.Names {
+					out[n.Name] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// vaDirectAssigns returns the RHS of every `name := ...` / `name = ...` assignment directly
+// in body, WITHOUT descending into a nested *ast.FuncLit -- mirrors vaDirectCalls's
+// closure-scoping rule above: an assignment belongs to its innermost closure.
+func vaDirectAssigns(body *ast.BlockStmt, name string) []ast.Expr {
+	var out []ast.Expr
+	visit := func(n ast.Node) bool {
+		if _, isLit := n.(*ast.FuncLit); isLit {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name == name {
+				out = append(out, as.Rhs[i])
+			}
+		}
+		return true
+	}
+	for _, st := range body.List {
+		ast.Inspect(st, visit)
+	}
+	return out
+}
+
+// vaFailureKindArg classifies one recordFailureAudit call's kind argument: a declared
+// constant, a local alias resolved through exactly one assignment to one, or a violation.
+// Anything not an *ast.Ident is flagged directly -- only a name can be locally reassigned.
+func vaFailureKindArg(body *ast.BlockStmt, arg ast.Expr, constSet map[string]bool) (ok bool, reason string) {
+	id, isIdent := arg.(*ast.Ident)
+	if !isIdent {
+		return false, fmt.Sprintf("%T argument, want a FailureKind constant or a local alias of one", arg)
+	}
+	if constSet[id.Name] {
+		return true, ""
+	}
+	assigns := vaDirectAssigns(body, id.Name)
+	if len(assigns) != 1 {
+		return false, fmt.Sprintf("%d assignment(s) to %q in this closure, want exactly 1 to resolve it", len(assigns), id.Name)
+	}
+	rhs, ok2 := assigns[0].(*ast.Ident)
+	if !ok2 || !constSet[rhs.Name] {
+		return false, fmt.Sprintf("%q resolves to %T, not a FailureKind constant", id.Name, assigns[0])
+	}
+	return true, ""
+}
+
+// vaFailureKindViolations walks f for closures calling recordFailureAudit and classifies
+// each call's kind argument (args[4]) against constSet. Shared by the production scan below
+// and its control-needle subtest, so both run the identical classifier.
+func vaFailureKindViolations(f vaFile, constSet map[string]bool) (violations []string, closures int) {
+	ast.Inspect(f.ast, func(n ast.Node) bool {
+		lit, isLit := n.(*ast.FuncLit)
+		if !isLit || lit.Body == nil {
+			return true
+		}
+		calls := vaDirectCalls(lit.Body, "recordFailureAudit")
+		if len(calls) == 0 {
+			return true
+		}
+		closures++
+		loc := fmt.Sprintf("%s:%d", f.name, f.fset.Position(lit.Pos()).Line)
+		for _, c := range calls {
+			if len(c.Args) < 5 {
+				violations = append(violations, fmt.Sprintf("%s: recordFailureAudit called with %d args, want >= 5", loc, len(c.Args)))
+				continue
+			}
+			if ok, reason := vaFailureKindArg(lit.Body, c.Args[4], constSet); !ok {
+				violations = append(violations, fmt.Sprintf("%s: %s", loc, reason))
+			}
+		}
+		return true
+	})
+	return violations, closures
+}
+
+// TestSubmissionAudit_FailureKindArgumentIsAConstant pins the failure_kind vocabulary shut:
+// every recordFailureAudit call must pass a declared FailureKind constant, directly or
+// through one local alias, never a literal, conversion, or computed expression that could
+// drift from invoices.failure_kind's CHECK IN-list.
+func TestSubmissionAudit_FailureKindArgumentIsAConstant(t *testing.T) {
+	files := vaScanSubmissionPackage(t)
+	vaRequirePopulation(t, files)
+
+	constSet := vaFailureKindConstants(files)
+	if len(constSet) != 3 {
+		t.Fatalf("FailureKind constants found = %d, want exactly 3 -- the const walk is broken, "+
+			"so the classification below is meaningless", len(constSet))
+	}
+
+	var violations []string
+	var closures int
+	for _, f := range files {
+		v, c := vaFailureKindViolations(f, constSet)
+		violations = append(violations, v...)
+		closures += c
+	}
+	if closures != 3 {
+		t.Fatalf("closures calling recordFailureAudit = %d, want exactly 3 -- the call-site set "+
+			"moved without updating this test's floor", closures)
+	}
+	for _, v := range violations {
+		t.Errorf("%s", v)
+	}
+
+	// Control: prove the classifier can actually flag a violation, not just clear real code.
+	// A raw string parsed by go/parser, never compiled into this package or written to
+	// disk, so vaScanSubmissionPackage's on-disk walk above can never pick it up itself.
+	t.Run("control_needle", func(t *testing.T) {
+		src := `package submission
+
+const FailurePayloadNotBuilt FailureKind = "payload_not_built"
+
+func fixture() {
+	_ = func() error {
+		kind := FailureKind(sourceKind)
+		return recordFailureAudit(ctx, tx, invoiceID, jobID, kind)
+	}
+	_ = func() error {
+		return recordFailureAudit(ctx, tx, invoiceID, jobID, FailureKind("payload_not_built"))
+	}
+	_ = func() error {
+		kind := FailurePayloadNotBuilt
+		return recordFailureAudit(ctx, tx, invoiceID, jobID, kind)
+	}
+}
+`
+		f := vaParseFixture(t, "fixture.go", src)
+		fixtureConsts := vaFailureKindConstants([]vaFile{f})
+		got, closures := vaFailureKindViolations(f, fixtureConsts)
+		if closures != 3 {
+			t.Fatalf("fixture matched %d closures, want exactly 3 -- the fixture itself is malformed", closures)
+		}
+		if len(got) != 2 {
+			t.Fatalf("fixture produced %d violations, want exactly 2 (FailureKind(sourceKind) and "+
+				"the bare literal) -- a checker that only ever clears catches nothing: %v", len(got), got)
+		}
+	})
 }

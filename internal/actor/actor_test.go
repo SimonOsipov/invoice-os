@@ -8,6 +8,7 @@
 package actor_test
 
 import (
+	"go/build"
 	"strings"
 	"testing"
 
@@ -156,5 +157,77 @@ func TestActorName_PassesUnicodeAndMaxLengthThrough(t *testing.T) {
 	want2 := actor.Label{Text: longSubject, Kind: actor.KindRaw}
 	if got2 != want2 {
 		t.Errorf("Name(nil, nil, 255-char subject) len = %d, want %d untruncated", len(got2.Text), len(want2.Text))
+	}
+}
+
+// Kind's zero value ("") must never collide with a defined constant, or a
+// zero-value Label{} would be mistakable for a resolved one.
+func TestActorName_KindZeroValueIsDistinguishable(t *testing.T) {
+	zero := actor.Kind("")
+	for _, k := range []actor.Kind{actor.KindSystem, actor.KindPerson, actor.KindRaw} {
+		if zero == k {
+			t.Errorf("zero-value Kind collides with %q", k)
+		}
+	}
+}
+
+// AC-3 fences its guarantee to non-empty subject: Name(nil, nil, "") is the
+// one input where Label.Text == "" is legitimate. Pin it so the fence stays
+// exercised, not just claimed.
+func TestActorName_EmptySubjectYieldsBlankTextAsAC3Permits(t *testing.T) {
+	got := actor.Name(nil, nil, "")
+	want := actor.Label{Text: "", Kind: actor.KindRaw}
+	if got != want {
+		t.Errorf("Name(nil, nil, \"\") = %+v, want %+v", got, want)
+	}
+}
+
+// FINDING (report only, do not fix here): a whitespace-only display_name is
+// NOT treated as absent -- it renders as KindPerson with a blank-looking Text.
+// D-31 settled "" as absent; whitespace was not asked. This pins today's
+// behaviour so a change is deliberate, not silent.
+func TestActorName_WhitespaceOnlyDisplayNameIsNotTreatedAsAbsent(t *testing.T) {
+	got := actor.Name(ptr(" "), ptr("f@x.ng"), uuid)
+	want := actor.Label{Text: " ", Kind: actor.KindPerson}
+	if got != want {
+		t.Errorf("Name(\" \", email, uuid) = %+v, want %+v (current behaviour, see QA finding)", got, want)
+	}
+}
+
+// Name claims byte-for-byte passthrough; prove it holds for RTL text, an
+// embedded newline and combining diacritics, not just plain ASCII/Latin.
+func TestActorName_PassesRTLAndControlCharsThrough(t *testing.T) {
+	rtl := "محمد" // Arabic "Muhammad"
+	got := actor.Name(ptr(rtl), nil, uuid)
+	want := actor.Label{Text: rtl, Kind: actor.KindPerson}
+	if got != want {
+		t.Errorf("Name(rtl, nil, uuid) = %+v, want %+v", got, want)
+	}
+
+	withNewline := "Folake\nAdesina"
+	got2 := actor.Name(ptr(withNewline), nil, uuid)
+	want2 := actor.Label{Text: withNewline, Kind: actor.KindPerson}
+	if got2 != want2 {
+		t.Errorf("Name(newline, nil, uuid) = %+v, want %+v", got2, want2)
+	}
+
+	combining := "é̀̂" // e + three combining marks
+	got3 := actor.Name(nil, nil, combining)
+	want3 := actor.Label{Text: combining, Kind: actor.KindRaw}
+	if got3 != want3 {
+		t.Errorf("Name(nil, nil, combining) = %+v, want %+v", got3, want3)
+	}
+}
+
+// Package doc claims "Stdlib only"; AC-4 requires it importable by
+// internal/audit, internal/invoice, internal/approval and internal/tenancy
+// without a cycle. Enforce both by requiring zero non-stdlib imports.
+func TestActorPackage_ImportsOnlyStdlib(t *testing.T) {
+	pkg, err := build.ImportDir(".", 0)
+	if err != nil {
+		t.Fatalf("build.ImportDir(.) failed: %v", err)
+	}
+	for _, imp := range pkg.Imports {
+		t.Errorf("internal/actor imports %q, want stdlib only", imp)
 	}
 }

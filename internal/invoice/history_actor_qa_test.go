@@ -38,6 +38,14 @@ func seedMembershipNamedWithStatus(t *testing.T, super *pgxpool.Pool, tenantID, 
 	})
 }
 
+// wireLabel is the pair these tests assert over. Deliberately not actor.Label:
+// ActorKind is a plain string on the wire, so a rename of actor.Kind's constants
+// must not silently move what is demanded here.
+type wireLabel struct {
+	Text string
+	Kind string
+}
+
 // TestHistory_MixedActorShapesResolveInOneCall: all four stored shapes in ONE
 // response -- a named member, "system", importer free text, and a uuid nothing
 // can name. Each carries its own label, and the whole mix still costs one
@@ -79,7 +87,7 @@ func TestHistory_MixedActorShapesResolveInOneCall(t *testing.T) {
 		t.Fatalf("History returned %d rows, want 4 (genesis + system + free text + stranger)", len(got))
 	}
 
-	want := map[string]Label{
+	want := map[string]wireLabel{
 		caller:                 {Text: callerName, Kind: kindPerson},
 		"system":               {Text: "System", Kind: kindSystem},
 		"backfill-source-rows": {Text: "backfill-source-rows", Kind: kindRaw},
@@ -108,14 +116,6 @@ func TestHistory_MixedActorShapesResolveInOneCall(t *testing.T) {
 	if n := len(rec.mentioning("memberships")); n != 1 {
 		t.Errorf("a four-shape history issued %d memberships statement(s), want exactly 1", n)
 	}
-}
-
-// Label is the wire pair this file asserts over. Deliberately NOT actor.Label:
-// ActorKind is a string on the wire, and a rename of actor.Kind's constants must
-// not silently move what these tests demand.
-type Label struct {
-	Text string
-	Kind string
 }
 
 // TestHistory_SuspendedMemberStillResolves (D-9): resolution reads no status

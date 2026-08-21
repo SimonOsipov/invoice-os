@@ -151,6 +151,9 @@ interface DetailFetchOptions {
   // returned `decideCalls`, win or lose. Defaults to a 200 carrying a plausible ApprovalRun
   // shaped by the posted decision.
   decideResponse?: MockResponse
+  // GET .../source-document. Defaults to the invoice record itself -- a body carrying no
+  // `document` key, which every pre-existing test reads as "no source document".
+  sourceDocumentResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -238,7 +241,9 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
       })
     }
     if (url.endsWith('/source-document')) {
-      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(detail) })
+      return Promise.resolve<MockResponse>(
+        opts.sourceDocumentResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) },
+      )
     }
     // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
     // like /ubl and /source-document above. `.endsWith('/approval')` is false for
@@ -1314,20 +1319,25 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 describe('InvoiceDetail status history: actor resolution ([actor-label-shared])', () => {
   it('AC2: the status history renders a person, not a subject uuid', async () => {
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person' },
     ]
     mockDetailFetch(detailRecord(), history)
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     await screen.findByTestId('status-history-row')
-    expect(document.body.textContent).toContain(`${APP_PERSONAS.firm.name} · ${APP_PERSONAS.firm.org}`)
+    // AUDIT-02-04: the wire's actor_name is the whole label now, and it carries no org --
+    // the ' · Okafor & Partners' suffix was APP_PERSONAS' contribution and must be gone.
+    expect(document.body.textContent).toContain(APP_PERSONAS.firm.name)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.org)
     expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.subject)
   })
 
   it('AC2: an unknown subject still renders raw, in mono', async () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
-    const history: StatusChange[] = [{ from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown }]
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown, actor_name: unknown, actor_kind: 'raw' },
+    ]
     mockDetailFetch(detailRecord(), history)
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1337,6 +1347,54 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
     // this element-boundary lookup fails until the actor gets its own span.
     const actorEl = within(row).getByText(unknown)
     expect(actorEl.className.split(' ')).toContain('mono')
+  })
+
+  // AUDIT-02-04 leak regression, at the render layer this time (Core AC-9's actual
+  // surface). ctx is firm-mode; the row is actored by the OTHER tenant's admin, which
+  // the RLS-scoped server could not name, so it answers 'raw' with the subject verbatim.
+  // APP_PERSONAS holds that subject anyway (auth.ts:47-60), so any fall-through prints
+  // Honeywell's admin and employer to an Okafor viewer. See actor.test.ts's
+  // actorLabel_neverConsultsPersonasWhenTheServerAnswered for the unit-level twin.
+  it('AC-9: a row the server could not name never borrows the other tenant\'s persona', async () => {
+    const honeywellAdmin = APP_PERSONAS.inhouse.subject
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: honeywellAdmin, actor_kind: 'raw' },
+    ]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const row = await screen.findByTestId('status-history-row')
+    // Positive control first: the subject IS on screen, in mono. Without it the two
+    // absence assertions below would pass on a card that rendered nothing at all.
+    const actorEl = within(row).getByText(honeywellAdmin)
+    expect(actorEl.className.split(' ')).toContain('mono')
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
+  })
+
+  // AUDIT-02-04 QA. AC-5's "never a blank cell" lives HERE, not in actor.test.ts's
+  // `.not.toBe('')` sweep -- a name of one space clears that sweep and still paints
+  // nothing. CHARACTERISATION of today's behaviour, reported not fixed: the '' guard is
+  // exact (actor.ts:28) and the server's ladder stops on ' ' for the same reason
+  // (internal/actor/actor.go:36), so a membership row with a whitespace display_name
+  // reaches this span. The security property still holds and is asserted alongside.
+  it('QA: a whitespace-only resolved name paints an empty actor cell, and still no persona', async () => {
+    const honeywellAdmin = APP_PERSONAS.inhouse.subject
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: ' ', actor_kind: 'person' },
+    ]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('status-history-row')
+    const actors = screen.getAllByTestId('status-history-actor')
+    expect(actors, 'the row must render an actor span at all').toHaveLength(1)
+    expect(actors[0].textContent, 'today the cell paints one space -- open finding, not a fix').toBe(' ')
+    expect(actors[0].className.split(' '), 'a person kind is never mono').not.toContain('mono')
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
 })
 
@@ -3251,8 +3309,8 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 
   it("AC-6: a rejection's demotion surfaces through the refetch", async () => {
-    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, changed_at: '2026-08-01T00:00:00Z' }
-    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, changed_at: '2026-08-02T00:00:00Z' }
+    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-01T00:00:00Z' }
+    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-02T00:00:00Z' }
     const afterReject = detailRecord({ id: ID, status: 'draft', can_edit: true, can_reject: false })
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }), [row1], {
       detailSequence: [afterReject],
@@ -3582,5 +3640,44 @@ describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', 
 
     await screen.findByTestId('detail-approve')
     expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
+  })
+})
+
+// AUDIT-02-04 Stage-4. The no-source canvas is actorLabel's sixth reader and the only one
+// that puts the actor mid-prose ("... was typed into ASComply by X on ..."), so it must
+// name a PERSON or say nobody. It reads the genesis history row, which every seeded
+// invoice actors 'system' (db/seed.dev.sql:628). Proves the whole chain: InvoiceDetail
+// -> SourceDocumentModal -> NoSourceCanvas passes the server's resolved pair.
+describe('InvoiceDetail no-source canvas: only a person is named ([actor-label-shared])', () => {
+  const NO_DOCUMENT: MockResponse = {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ document: null, source_rows: [] }),
+  }
+
+  async function openNoSourceCanvas(history: StatusChange[]): Promise<HTMLElement> {
+    mockDetailFetch(detailRecord(), history, { sourceDocumentResponse: NO_DOCUMENT })
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.click(await screen.findByTestId('why-no-source-document'))
+    return screen.findByTestId('source-document-no-source')
+  }
+
+  it('a system genesis actor omits the "by" clause instead of claiming System typed it in', async () => {
+    const canvas = await openNoSourceCanvas([
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: 'system', actor_name: 'System', actor_kind: 'system' },
+    ])
+
+    expect(canvas.textContent).not.toContain('by System')
+    expect(canvas.textContent).toContain('into ASComply on')
+  })
+
+  it("a person genesis actor is named from the server's pair, never from APP_PERSONAS", async () => {
+    const canvas = await openNoSourceCanvas([
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.inhouse.subject, actor_name: 'Adaeze Nwosu', actor_kind: 'person' },
+    ])
+
+    expect(canvas.textContent).toContain('by Adaeze Nwosu')
+    expect(canvas.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(canvas.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
 })

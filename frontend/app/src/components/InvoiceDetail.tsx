@@ -1332,7 +1332,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                          <span className={actorLabel(h.actor).mono ? 'mono' : undefined}>{actorLabel(h.actor).text}</span>
+                          {/* overflowWrap 'anywhere' (not 'break-word'): the server's email rung
+                              (internal/actor/actor.go:39-40) is one unbreakable token, and only
+                              'anywhere' shrinks min-content so the 220px rail cannot clip it
+                              behind the card's overflow:hidden. invoice-surfaces.spec.ts:2448. */}
+                          <span
+                            data-testid="status-history-actor"
+                            className={actorLabel(h.actor, { name: h.actor_name, kind: h.actor_kind }).mono ? 'mono' : undefined}
+                            style={{ overflowWrap: 'anywhere' }}
+                          >
+                            {actorLabel(h.actor, { name: h.actor_name, kind: h.actor_kind }).text}
+                          </span>
                           {' · '}
                           <span className="mono">{fmtDateTime(h.changed_at)}</span>
                         </div>
@@ -1354,6 +1364,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             invoiceNumber={inv.invoice_number}
             invoiceCreatedAt={inv.created_at}
             createdBy={history.data?.[0]?.actor ?? null}
+            createdByResolved={
+              history.data?.[0] ? { name: history.data[0].actor_name, kind: history.data[0].actor_kind } : undefined
+            }
             onClose={closePreview}
           />
         )}

@@ -480,6 +480,9 @@ export interface StatusChange {
   from_status: Invoice['status'] | null
   to_status: Invoice['status']
   actor: string
+  // AUDIT-02-03: the server-resolved display of actor. actor itself is unchanged.
+  actor_name: string
+  actor_kind: string
   changed_at: string
 }
 

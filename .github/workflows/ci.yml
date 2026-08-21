@@ -397,6 +397,17 @@ jobs:
         # approval_policy_* binds the table OWNER, not just RLS. Needs DATABASE_URL +
         # DATABASE_SUPERUSER_URL + DATABASE_MIGRATION_URL.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/approval/...
+      - name: Actor identity-resolution suite (RLS-scoped memberships batch read as invoice_app) + per-test visibility & skip gate
+        # AUDIT-02: proves actor.Resolve issues at most ONE memberships statement per
+        # call, filters `system` and free-text actors out of the uuid[] bind (a 22P02
+        # there aborts the caller's tx), de-duplicates on the normalised uuid while
+        # keying on the raw subject, and takes its tenant scope from the caller's tx
+        # alone — cross-tenant and unscoped-tx subjects resolve raw, never wrongly.
+        # Needs DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) + DATABASE_MIGRATION_URL
+        # (the package's skip gate reads all three) — all already in this job's env.
+        # Its TestMain applies db/seed.dev.sql, which re-anchors created_at and
+        # re-enables every rule, so this step must stay directly ahead of the seed step.
+        run: scripts/ci/rls-test-gate.sh -p 1 -count=1 ./internal/actor/...
       - name: Demo-seed suite + CI -run filter coverage (as superuser) + per-test visibility & skip gate
         # The 47 TestSeed* functions self-seed (db.Seed is the system under test); must run
         # last in the job since db.Seed re-anchors created_at and re-enables every rule.

@@ -53,6 +53,7 @@ export function SourceDocumentModal({
   invoiceNumber,
   invoiceCreatedAt,
   createdBy,
+  createdByResolved,
   onClose,
 }: {
   ctx: PlatformCtx
@@ -61,6 +62,8 @@ export function SourceDocumentModal({
   invoiceCreatedAt: string | null
   /** The invoice's first history actor — already fetched by the detail, so zero new network. */
   createdBy: string | null
+  /** That row's server-resolved actor pair, which outranks the client persona table. */
+  createdByResolved?: { name: string; kind: string }
   /** Must be STABLE — it is a `useDismiss` dependency (useDismiss.ts:39-55). */
   onClose: () => void
 }) {
@@ -128,7 +131,14 @@ export function SourceDocumentModal({
 
   let canvas: ReactNode = null
   if (state === 'no-source') {
-    canvas = <NoSourceCanvas invoiceNumber={invoiceNumber} createdAt={invoiceCreatedAt} createdBy={createdBy} />
+    canvas = (
+      <NoSourceCanvas
+        invoiceNumber={invoiceNumber}
+        createdAt={invoiceCreatedAt}
+        createdBy={createdBy}
+        createdByResolved={createdByResolved}
+      />
+    )
   } else if (state === 'loading') {
     canvas = <LoadingCanvas sizeBytes={record?.size_bytes ?? null} />
   } else if (state === 'failed') {

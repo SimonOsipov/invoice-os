@@ -43,3 +43,32 @@ describe('NoSourceCanvas actor resolution ([actor-label-shared])', () => {
     expect(canvas.textContent).not.toContain('Not recorded')
   })
 })
+
+// AUDIT-02-04 Stage-4. `system` actors the genesis row of every seeded invoice
+// (db/seed.dev.sql:628) and now resolves to a NAME, so the old `!creator.mono` gate wrote
+// "typed into ASComply by System" -- nobody typed it in. Only a person is ever named.
+describe('NoSourceCanvas names a person and nobody else ([actor-label-shared])', () => {
+  it('a system actor omits the "by" clause', () => {
+    render(<NoSourceCanvas invoiceNumber="DEMO-2026-1009" createdAt="2026-06-12T09:15:00Z" createdBy="system" />)
+
+    const canvas = screen.getByTestId('source-document-no-source')
+    expect(canvas.textContent).not.toContain('by System')
+    expect(canvas.textContent).toContain('into ASComply on')
+  })
+
+  it("the server's resolved pair decides the clause, not APP_PERSONAS", () => {
+    render(
+      <NoSourceCanvas
+        invoiceNumber="DEMO-2026-1009"
+        createdAt="2026-06-12T09:15:00Z"
+        createdBy={APP_PERSONAS.inhouse.subject}
+        createdByResolved={{ name: 'System', kind: 'system' }}
+      />,
+    )
+
+    const canvas = screen.getByTestId('source-document-no-source')
+    expect(canvas.textContent).not.toContain('by System')
+    expect(canvas.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(canvas.textContent).toContain('into ASComply on')
+  })
+})

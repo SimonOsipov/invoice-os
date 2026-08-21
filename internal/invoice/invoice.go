@@ -151,10 +151,17 @@ type Invoice struct {
 // already knows the invoice_id (it is the request path parameter), and the
 // row id/tenant_id are internal columns that never belong on the wire
 // (AC #7).
+//
+// ActorName/ActorKind are the resolved display of Actor, populated by
+// Store.History after the row scan -- Actor itself stays the stored value,
+// verbatim (TestHistory_ActorColumnIsUnchanged). Both are plain non-pointer
+// strings, so neither can marshal as JSON null.
 type StatusChange struct {
 	FromStatus *Status   `json:"from_status"`
 	ToStatus   Status    `json:"to_status"`
 	Actor      string    `json:"actor"`
+	ActorName  string    `json:"actor_name"`
+	ActorKind  string    `json:"actor_kind"`
 	ChangedAt  time.Time `json:"changed_at"`
 }
 

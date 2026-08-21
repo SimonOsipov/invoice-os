@@ -312,10 +312,15 @@ export interface InvoiceListResponse {
 
 // One invoice_status_history row (invoice.go:133-138, StatusChange). FromStatus is
 // nullable: the genesis row (NULL -> 'draft') has no predecessor state.
+// actor_name/actor_kind are the server-resolved display of actor (AUDIT-02-03);
+// actor itself still carries the stored value verbatim. Both are plain required
+// strings -- the server never emits null for either.
 export interface StatusChange {
   from_status: InvoiceStatus | null
   to_status: InvoiceStatus
   actor: string
+  actor_name: string
+  actor_kind: string
   changed_at: string
 }
 

@@ -473,3 +473,33 @@ func TestSubmissionAudit_EveryDrivenPathSpellsOneOfThreeEvents(t *testing.T) {
 		}
 	}
 }
+
+// --- COMMIT 8 ------------------------------------------------------------------------------
+
+// TestRLS_PollWorkerFailureAuditRowNotVisibleToAnotherTenant is the poll dead-letter path's
+// own RLS case for the submission.failed row -- worker_poll_adversarial_test.go's own
+// TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant covers invoices.status /
+// failure_kind after a poll dead-letter, but says explicitly that the dead-letter's audit row
+// "still has no RLS case of its own". The submit path already has one
+// (TestRLS_SubmitWorkerFailureAuditRowNotVisibleToAnotherTenant); audit_log's own
+// tenant_isolation policy is table-wide, so this is second-write-path coverage, not a novel
+// RLS proof. Its mutation oracle is not runnable in CI without a migration -- none is claimed
+// here.
+func TestRLS_PollWorkerFailureAuditRowNotVisibleToAnotherTenant(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantA, invoiceA, cleanupA := seedQueuedInvoice(t, f)
+	defer cleanupA()
+	tenantB := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantB)
+
+	workPollExhaustion(t, f, tenantA, invoiceA, 52, 53)
+
+	if n := auditCount(t, f, tenantA, "submission.failed"); n != 1 {
+		t.Fatalf("tenant A's own submission.failed audit rows = %d, want 1 -- "+
+			"precondition for the isolation check below", n)
+	}
+	if n := auditCount(t, f, tenantB, "submission.failed"); n != 0 {
+		t.Errorf("tenant B's view of submission.failed audit rows = %d, want 0 -- "+
+			"RLS must hide tenant A's poll dead-letter row from tenant B", n)
+	}
+}

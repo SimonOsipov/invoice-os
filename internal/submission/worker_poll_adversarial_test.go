@@ -1001,7 +1001,7 @@ func TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 
 // TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant: QA adversarial addition
 // (task-385). No existing case exercised RLS isolation specifically on the poll dead-letter
-// path (worker.go:522) -- the existing poll RLS cases (this file's #13, poll_ref_db_test.go)
+// path (worker.go:523) -- the existing poll RLS cases (this file's #13, poll_ref_db_test.go)
 // cover the Pending/Accepted/Rejected audit rows and poll_ref. This case covers
 // invoices.status/failure_kind after a dead-letter; the dead-letter's own audit row (wired
 // since) still has no RLS case of its own.

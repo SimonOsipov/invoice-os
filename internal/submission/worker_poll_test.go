@@ -220,7 +220,7 @@ func workPollExhaustion(t *testing.T, f *effectsFixture, tenantID, invoiceID str
 }
 
 // Poll-budget exhaustion is a terminal failure and must say so once, with the kind
-// worker.go:534 already hands InvoicePort.MarkFailed.
+// worker.go:536 already hands InvoicePort.MarkFailed.
 func TestPollWorker_PollExhaustionWritesSubmissionFailed(t *testing.T) {
 	f := requireExchangeDB(t)
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
@@ -595,7 +595,7 @@ func TestPollWorker_DeadLetterOnFinalAttemptViaExistingEdge(t *testing.T) {
 	}
 }
 
-// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385): worker.go:522,
+// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385): worker.go:523,
 // the poll dead-letter site (the final-attempt guard). Reaching here proves Pending{Ref}
 // fired at least once -- the APP took custody of the submission -- but no verdict was ever
 // polled out of it.

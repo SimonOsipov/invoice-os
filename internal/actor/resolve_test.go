@@ -989,3 +989,53 @@ func TestActorResolve_FortyActorsInMixedSpellingsBindFortyInOneQuery(t *testing.
 		}
 	}
 }
+
+// Kills a chunked bind loop at resolve.go:75-96 —
+// `for i := 0; i < len(bind); i += 100 { tx.Query(ctx, ..., bind[i:min(i+100, len(bind))]) }`
+// — which every other test in this suite survives, because it still issues one
+// statement at N=40 and only splits at N=500. The pinned number is a statement
+// count within ONE Resolve call, not a per-process budget.
+//
+// AC-7's own scale (100 events over 40 actors, mixed spellings) is already pinned
+// by TestActorResolve_FortyActorsInMixedSpellingsBindFortyInOneQuery, and the
+// Store-layer bound by TestHistory_IssuesOneResolveQueryForManyRows
+// (internal/invoice/history_actor_test.go:358). Neither is duplicated here: this
+// test adds only the rung that proves the bound is CONSTANT in N.
+func TestActorResolve_QueryCountIsConstantInN(t *testing.T) {
+	_, _ = dbTestPools(t)
+
+	sizes := []int{1, 40, 500}
+	if len(sizes) == 0 {
+		t.Fatal("empty table — this test would pass vacuously")
+	}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
+			// okaforAdmin leads every rung as the live positive control: without a
+			// subject that actually resolves, the count below would stay green
+			// against a Resolve that names nothing.
+			subjects := []string{okaforAdmin}
+			for i := 1; i < n; i++ {
+				subjects = append(subjects, fmt.Sprintf("a0000000-0000-4000-8000-%012d", i))
+			}
+			if len(subjects) != n {
+				t.Fatalf("built %d subjects, want exactly %d", len(subjects), n)
+			}
+
+			traced, rec := tracedAppPool(t)
+			tx := scopedTx(t, traced, rec, okaforTenantID)
+
+			got := mustResolve(t, tx, subjects)
+
+			if len(got) != n {
+				t.Errorf("Resolve returned %d entries for %d subjects, want %d — a key was dropped at scale", len(got), n, n)
+			}
+			assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+
+			s := membershipsStmts(t, rec, 1)[0]
+			if bound := boundArrayLen(t, s); bound != n {
+				t.Errorf("bound array holds %d element(s), want %d — every subject must ride the ONE statement", bound, n)
+			}
+		})
+	}
+}

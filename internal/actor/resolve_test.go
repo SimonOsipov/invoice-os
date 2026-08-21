@@ -1,7 +1,7 @@
 package actor_test
 
-// resolve_test.go: AUDIT-02-02 (task-607) RED specs (QA Mode A) for actor.Resolve,
-// against a real Postgres as invoice_app, per the RLS testing convention.
+// resolve_test.go: actor.Resolve against a real Postgres as invoice_app, per the
+// RLS testing convention. Acceptance specs first, then the adversarial set.
 //
 // Every DB-backed test here self-skips without DATABASE_URL +
 // DATABASE_SUPERUSER_URL + DATABASE_MIGRATION_URL. Run locally with
@@ -692,5 +692,300 @@ func TestActorResolve_UnscopedTxResolvesNothingRatherThanWrongly(t *testing.T) {
 	s := membershipsStmts(t, rec, 1)[0]
 	if n := boundArrayLen(t, s); n != len(subjects) {
 		t.Errorf("bound array holds %d element(s), want %d", n, len(subjects))
+	}
+
+	// Live positive control: the SAME subjects on a SCOPED tx from the same pool
+	// do resolve. Without it every assertion above would stay green against a
+	// database whose memberships table is empty.
+	ctrl := mustResolve(t, scopedTx(t, traced, rec, okaforTenantID), subjects)
+	assertLabel(t, ctrl, okaforAdmin, person("Chinedu Okafor"))
+	assertLabel(t, ctrl, okaforSuspended, person("Halima Yusuf"))
+	assertLabel(t, ctrl, honeywellAdmin, raw(honeywellAdmin))
+}
+
+// --- QA Mode B: adversarial coverage ---------------------------------------
+// Added after the AC specs above went green. Each test below kills a mutation the
+// AC set survived; the mutation is named in the comment that opens it.
+
+// blankMembershipCols writes name/email onto a membership row and restores the
+// originals at test end. It fails if the row already looks blank, so the caller's
+// fall-through assertion cannot pass on a fixture that never changed.
+func blankMembershipCols(t *testing.T, super *pgxpool.Pool, userID, name, email string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var origName, origEmail *string
+	if err := super.QueryRow(ctx,
+		`SELECT display_name, email FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		okaforTenantID, userID).Scan(&origName, &origEmail); err != nil {
+		t.Fatalf("read the fixture row %s (did db/seed.dev.sql run?): %v", userID, err)
+	}
+	if origName == nil || *origName == "" || origEmail == nil || *origEmail == "" {
+		t.Fatalf("fixture row %s starts with display_name=%v email=%v; the change below would not be observable", userID, origName, origEmail)
+	}
+	restoreName, restoreEmail := *origName, *origEmail
+	t.Cleanup(func() {
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET display_name = $1, email = $2 WHERE tenant_id = $3 AND user_id = $4`,
+			restoreName, restoreEmail, okaforTenantID, userID); err != nil {
+			t.Errorf("restore the fixture row %s: %v", userID, err)
+		}
+	})
+
+	if _, err := super.Exec(ctx,
+		`UPDATE memberships SET display_name = $1, email = $2 WHERE tenant_id = $3 AND user_id = $4`,
+		name, email, okaforTenantID, userID); err != nil {
+		t.Fatalf("write the fixture columns: %v", err)
+	}
+	var took bool
+	if err := super.QueryRow(ctx,
+		`SELECT display_name IS NOT DISTINCT FROM $1 AND email IS NOT DISTINCT FROM $2
+		   FROM memberships WHERE tenant_id = $3 AND user_id = $4`,
+		name, email, okaforTenantID, userID).Scan(&took); err != nil {
+		t.Fatalf("read back the fixture columns: %v", err)
+	}
+	if !took {
+		t.Fatalf("fixture row %s did not take display_name=%q email=%q", userID, name, email)
+	}
+}
+
+// Kills `subject == systemActor` -> strings.EqualFold. The contract is the exact
+// byte string (§2 table, "case-sensitive"): "System" is a person who named
+// themselves that, and must render as raw text, not as the system pseudo-actor.
+// Kind is the only thing separating the two, since both carry Text "System".
+func TestActorResolve_SystemMatchIsExactAndCaseSensitive(t *testing.T) {
+	_, _ = dbTestPools(t)
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	nearMisses := []string{"System", "SYSTEM", "sYsTeM", " system", "system ", "systems", "system\n"}
+	if len(nearMisses) == 0 {
+		t.Fatal("empty near-miss corpus — this test would pass vacuously")
+	}
+
+	got := mustResolve(t, tx, append([]string{"system"}, nearMisses...))
+
+	// Positive control: the exact literal still classifies, so a blanket
+	// "everything is raw" implementation cannot satisfy this test.
+	assertLabel(t, got, "system", actor.Label{Text: "System", Kind: actor.KindSystem})
+	for _, s := range nearMisses {
+		assertLabel(t, got, s, raw(s))
+	}
+	if n := len(rec.mentioning("memberships")); n != 0 {
+		t.Errorf("Resolve issued %d memberships statement(s) for system and its near misses, want 0; statements: %q", n, rec.all())
+	}
+}
+
+// Kills Name(displayName, email, subject) -> Name(..., userID). The last rung must
+// echo the caller's subject byte for byte (actor.go's "never parsed, normalised or
+// truncated"), NOT the canonical user_id Postgres scanned back. Only a spelling
+// that differs from the stored text can tell the two apart, so the seeded
+// canonical subjects every other test uses are blind to this.
+func TestActorResolve_RawFallbackEchoesTheSubjectNotTheStoredID(t *testing.T) {
+	super, _ := dbTestPools(t)
+	braced := "{" + strings.ToUpper(okaforBlankable) + "}"
+
+	t.Run("a resolvable row names a non-canonical spelling", func(t *testing.T) {
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+
+		got := mustResolve(t, tx, []string{braced})
+		assertLabel(t, got, braced, person("Chiamaka Nwosu"))
+	})
+
+	t.Run("an unnameable row echoes that same spelling verbatim", func(t *testing.T) {
+		blankMembershipCols(t, super, okaforBlankable, "", "")
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+
+		got := mustResolve(t, tx, []string{braced, okaforAdmin})
+
+		// Live positive control: this tx does resolve, so the fall-through below
+		// is the blanked columns and not an empty result set.
+		assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+		assertLabel(t, got, braced, raw(braced))
+		if got[braced].Text == okaforBlankable {
+			t.Errorf("raw fallback returned the stored user_id %q instead of the subject %q", okaforBlankable, braced)
+		}
+		s := membershipsStmts(t, rec, 1)[0]
+		if n := boundArrayLen(t, s); n != 2 {
+			t.Errorf("bound array holds %d element(s), want 2 — the braced spelling must be bound, not filtered", n)
+		}
+	})
+}
+
+// Kills Label{Text: subject} -> a truncated subject. audit_actor_length
+// (migrations/20260708062657_audit_log.sql:60) admits actors up to 255 characters,
+// and every other subject in this suite is under 40 — so nothing else here would
+// notice a length cap. uuid_in is the oracle for the gate's verdict.
+func TestActorResolve_NearUUIDAtTheActorLengthCeiling(t *testing.T) {
+	super, _ := dbTestPools(t)
+
+	// Right character class, right case, wrong length: 255 lowercase hex digits.
+	longHex := strings.Repeat("abcd", 63) + "abc"
+	// A matched brace pair at the ceiling: strips to 253 hex digits, still no uuid.
+	bracedLong := "{" + strings.Repeat("abcd", 63) + "a}"
+
+	subjects := []string{longHex, bracedLong}
+	for _, s := range subjects {
+		if len(s) != 255 {
+			t.Fatalf("subject is %d bytes, want exactly the 255-character audit_actor_length ceiling", len(s))
+		}
+		if _, accepted := uuidIn(t, super, s); accepted {
+			t.Fatalf("uuid_in ACCEPTS %d-byte subject %q — the corpus is wrong, not the gate", len(s), s)
+		}
+	}
+
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	got := mustResolve(t, tx, append(subjects, okaforAdmin))
+
+	// Live positive control: the query still ran for the real uuid beside them.
+	assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+	for _, s := range subjects {
+		assertLabel(t, got, s, raw(s))
+		if len(got[s].Text) != 255 {
+			t.Errorf("Resolve[255-byte subject].Text is %d bytes — the subject was truncated, not echoed", len(got[s].Text))
+		}
+	}
+	s := membershipsStmts(t, rec, 1)[0]
+	if n := boundArrayLen(t, s); n != 1 {
+		t.Errorf("bound array holds %d element(s), want 1 — neither 255-byte near-uuid may be bound", n)
+	}
+}
+
+// Kills the A5 brace-strip length guard a second time, and pins the degenerate
+// inputs no caller should produce. audit_actor_length forbids a stored "" outright,
+// so this is defensive: Resolve must key it, not panic on it and not bind it.
+func TestActorResolve_NilEmptyAndBlankSubjects(t *testing.T) {
+	_, _ = dbTestPools(t)
+
+	t.Run("nil slice", func(t *testing.T) {
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+
+		got, err := actor.Resolve(context.Background(), tx, nil)
+		if err != nil {
+			t.Fatalf("Resolve(nil) = error %v", err)
+		}
+		if got == nil {
+			t.Error("Resolve(nil) returned a nil map; callers index it without a nil check")
+		}
+		if len(got) != 0 {
+			t.Errorf("Resolve(nil) returned %d entries, want 0", len(got))
+		}
+		if n := len(rec.mentioning("memberships")); n != 0 {
+			t.Errorf("Resolve(nil) issued %d memberships statement(s), want 0", n)
+		}
+	})
+
+	t.Run("empty slice", func(t *testing.T) {
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+
+		got, err := actor.Resolve(context.Background(), tx, []string{})
+		if err != nil {
+			t.Fatalf("Resolve([]) = error %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("Resolve([]) returned %d entries, want 0", len(got))
+		}
+		if n := len(rec.mentioning("memberships")); n != 0 {
+			t.Errorf("Resolve([]) issued %d memberships statement(s), want 0", n)
+		}
+	})
+
+	t.Run("an empty subject beside a real one", func(t *testing.T) {
+		traced, rec := tracedAppPool(t)
+		tx := scopedTx(t, traced, rec, okaforTenantID)
+
+		got := mustResolve(t, tx, []string{"", okaforAdmin})
+
+		// Live positive control: "" must not poison the bind for its neighbour.
+		assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+		assertLabel(t, got, "", actor.Label{Text: "", Kind: actor.KindRaw})
+		s := membershipsStmts(t, rec, 1)[0]
+		if n := boundArrayLen(t, s); n != 1 {
+			t.Errorf("bound array holds %d element(s), want 1 — \"\" must never be bound", n)
+		}
+	})
+}
+
+// Pins CURRENT behaviour, deliberately: a whitespace-only display_name is not ""
+// to Name's ladder, so it renders as a blank cell with Kind person. That is
+// AUDIT-02-01's open finding and NOT this subtask's to change — D-31 settled the
+// "" case only. If a later story trims, this test is the one that must be edited,
+// which is the point of pinning it.
+func TestActorResolve_WhitespaceOnlyDisplayNameIsNotTreatedAsBlank(t *testing.T) {
+	super, _ := dbTestPools(t)
+	blankMembershipCols(t, super, okaforBlankable, "   ", "c.nwosu@okafor.ng")
+
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	got := mustResolve(t, tx, []string{okaforBlankable, okaforAdmin})
+
+	// Live positive control: the query resolved a neighbour, so the label below
+	// came from the row and not from a miss.
+	assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+	assertLabel(t, got, okaforBlankable, person("   "))
+	if strings.TrimSpace(got[okaforBlankable].Text) != "" {
+		t.Errorf("Resolve[%s].Text = %q; this test pins the UNTRIMMED behaviour — if trimming shipped, change this test deliberately",
+			okaforBlankable, got[okaforBlankable].Text)
+	}
+}
+
+// Kills the `if _, seen := subjectsOf[norm]; !seen` de-duplication on its own.
+// TestActorResolve_DuplicateSubjectsBindOnce repeats one raw spelling, which the
+// raw-subject short-circuit collapses before the normalised de-duplication is ever
+// reached — so that test survives dropping it. AC-7's real page mixes spellings:
+// 40 actors over 100 events, every raw subject distinct, still one query.
+func TestActorResolve_FortyActorsInMixedSpellingsBindFortyInOneQuery(t *testing.T) {
+	_, _ = dbTestPools(t)
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	actors := []string{okaforAdmin, okaforPreparer, okaforBlankable, okaforSuspended}
+	for i := len(actors); i < 40; i++ {
+		actors = append(actors, fmt.Sprintf("a0000000-0000-4000-8000-%012d", i))
+	}
+	spell := []func(string) string{
+		func(s string) string { return s },
+		strings.ToUpper,
+		func(s string) string { return "{" + s + "}" },
+	}
+
+	var subjects []string
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		s := spell[i/40](actors[i%40])
+		if seen[s] {
+			t.Fatalf("spelling %q repeats; this test needs 100 DISTINCT raw subjects so the raw short-circuit cannot do the de-duplication", s)
+		}
+		seen[s] = true
+		subjects = append(subjects, s)
+	}
+	if len(subjects) != 100 || len(actors) != 40 {
+		t.Fatalf("built %d subjects over %d actors, want 100 over 40", len(subjects), len(actors))
+	}
+
+	got := mustResolve(t, tx, subjects)
+
+	if len(got) != 100 {
+		t.Errorf("Resolve returned %d entries for 100 distinct spellings, want 100", len(got))
+	}
+	s := membershipsStmts(t, rec, 1)[0]
+	if n := boundArrayLen(t, s); n != 40 {
+		t.Errorf("bound array holds %d element(s), want 40 — 100 spellings of 40 actors must bind each actor once", n)
+	}
+	// Live positive control across all three spellings of one seeded actor.
+	for _, f := range spell {
+		assertLabel(t, got, f(okaforAdmin), person("Chinedu Okafor"))
+	}
+	for _, sub := range subjects {
+		if got[sub].Text == "" {
+			t.Errorf("Resolve[%q].Text is empty — a blank cell, not a fallback", sub)
+		}
 	}
 }

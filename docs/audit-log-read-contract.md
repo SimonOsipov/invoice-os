@@ -107,6 +107,13 @@ Verified by differential fuzz against `uuid_in`: 180,000 spellings, zero disagre
 zero cast failures. Fenced by
 `TestAudit_InsertTriggerResolvesEverySpellingUUIDInAccepts`.
 
+This grammar now has **two** implementations that must not drift: the trigger's
+(`migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql`) and `actor.Resolve`'s
+Go copy (`internal/actor/resolve.go`), which applies it before binding a `uuid[]` — an
+unfiltered subject there raises 22P02 and aborts the reader's transaction. The Go copy is
+fenced against Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change one, change
+both.
+
 ## 7. Two predicates no index here serves
 
 **Do not assert "no Seq Scan" and call a plan proven.** Both queries below read the whole

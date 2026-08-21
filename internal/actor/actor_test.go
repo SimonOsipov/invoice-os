@@ -1,5 +1,4 @@
-// actor_test.go: AUDIT-02-01 (task-606) RED specs (QA Mode A) for internal/actor
-// -- transcribed from the Test Specs table before actor.go has a body.
+// actor_test.go: the Name ladder and the package's import fence.
 //
 // package actor_test (external), per [test-package-follows-the-symbol]: Name,
 // Kind and Label are the whole surface.

@@ -568,6 +568,22 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
   await expect(page.getByTestId('status-history-row').last()).toContainText('draft → validated')
 
+  // AUDIT-02-07 (AC-1/AC-4): both rows carry the SAME subject -- createInvoice's
+  // login(PERSONAS.A) and this page's firm persona are both c0000000-...-0001
+  // (targets.ts:27, frontend/app/src/auth.ts:44), whom db/seed.dev.sql:41 names. Count
+  // first: an empty locator satisfies every assertion after it.
+  const validationActors = page.getByTestId('status-history-actor')
+  await expect(validationActors).toHaveCount(2)
+  // EXACT, never toContainText: the APP_PERSONAS fall-through renders 'Chinedu Okafor ·
+  // Okafor & Partners' (lib/actor.ts), which a substring match accepts. This is what proves
+  // on the deployed stack that the server's resolved pair wins, across BOTH writers
+  // (Store.Create's genesis row and transitionTx's promotion).
+  await expect(validationActors.nth(0)).toHaveText('Chinedu Okafor')
+  await expect(validationActors.nth(1)).toHaveText('Chinedu Okafor')
+  // Absences, after the positive control so neither can pass on an unrendered card.
+  await expect(page.getByTestId('status-history')).not.toContainText('c0000000-0000-0000-0000-000000000001')
+  await expect(validationActors.nth(0)).not.toHaveClass(/mono/)
+
   // 6. INVED-01-07/08: the OLD 409-on-Re-validate dead end is gone. On an untouched
   //    VALIDATED invoice, Re-validate is DISABLED with a visible reason
   //    ([revalidate-visibility]/[revalidate-reason-from-backend]) -- Edit stays enabled
@@ -1461,6 +1477,15 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   // shouldRefreshHistory -> history.run(), never a user action (none happened between the
   // two badge assertions above).
   await expect(historyRows).toHaveCount(5)
+
+  // AUDIT-02-07 (AC-3): the worker writes actor 'system' itself (internal/invoice/actor.go
+  // SystemActor), so this run's OWN submitted->accepted row is the oracle -- no seeded row,
+  // no extra navigation. toHaveText is case-sensitive, so the raw rung's lowercase 'system'
+  // cannot pass it; the class check is the AC's "in mono" half, which the text alone cannot
+  // see (lib/actor.ts narrows an unknown actor_kind to raw, keeping the text and adding mono).
+  const systemActor = page.getByTestId('status-history-actor').last()
+  await expect(systemActor).toHaveText('System')
+  await expect(systemActor).not.toHaveClass(/mono/)
 
   await assertFiscalRecord(page, invoiceNumber)
 

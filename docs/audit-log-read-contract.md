@@ -140,3 +140,111 @@ per-*company* feed can use `entity_id` (§4); its per-*invoice* feed cannot.
   table is small.
 - **Company deletion.** If a delete handler is ever specced, that story decides whether to
   null the pointers, keep them dangling, or block the delete. Until then, §5 is the rule.
+
+## 9. Actor resolution: `internal/actor`
+
+Every stored subject — `audit_log.actor`, `invoice_status_history.actor`, and the columns
+listed under "Still raw" below — renders through one ladder: `display_name` → `email` → the
+raw subject. `internal/actor` is that ladder, and it is the one the AUDIT epic reads through.
+It imports stdlib and pgx only (`TestActorPackage_ImportsOnlyStdlib`), so `internal/audit`,
+`internal/invoice`, `internal/approval` and `internal/tenancy` can all import it without a
+cycle.
+
+**`Name(displayName, email *string, subject string) Label`** applies the ladder to one row's
+columns. **`Resolve(ctx, tx, subjects) (map[string]Label, error)`** does the lookup: it
+classifies the literal `system` in Go before any query, drops every subject that fails §6's
+UUID gate, de-duplicates the rest on the normalised uuid while keying the result on the raw
+subject, and issues at most one statement —
+
+```sql
+SELECT user_id, display_name, email FROM memberships WHERE user_id = ANY($1::uuid[])
+```
+
+— or none at all when nothing binds. The gate is not optional: binding
+`backfill-source-rows` into a `uuid[]` raises SQLSTATE 22P02 and aborts the reader's whole
+transaction. Every input subject is a key in the result, and `Label.Text` is never empty for a
+non-empty subject. Fenced by `TestActorResolve_EmptyFilteredSetIssuesNoQuery`,
+`TestActorResolve_QueryCountIsConstantInN`, `TestActorResolve_EveryInputSubjectIsAKey`,
+`TestActorResolve_TwoSpellingsOfOneIDBindOnceAndKeyTwice` and
+`TestActorName_NeverReturnsEmptyText` (`internal/actor/`).
+
+### Scope is the caller's, and only the caller's
+
+**`Resolve` opens no transaction, sets no GUC and writes no `tenant_id` predicate**
+(`internal/actor/resolve.go:40-43`). RLS on the transaction you hand it is the only filter.
+A transaction with no `app.current_tenant` resolves **nothing**, and it fails **silently** —
+every actor falls back to its raw subject instead of raising. A superuser or background
+transaction resolves **across tenants**. Correct usage: call `Resolve` inside
+`db.WithinTenantTx` or `db.WithinRequestTenantTx` on the app role, on the same transaction
+that read the rows (`internal/invoice/store.go:570` is the shipped example). AUDIT-05's Go ZIP
+writer is exposed to both halves: an export job running outside a tenant-scoped transaction
+either loses every name or crosses tenants, and neither failure surfaces as an error.
+Fenced by `TestActorResolve_UnscopedTxResolvesNothingRatherThanWrongly` and
+`TestActorResolve_CrossTenantSubjectIsUnresolvable`.
+
+### The three shapes, and the four Kinds
+
+A stored actor is one of exactly three things, and all three are returned **verbatim** —
+`Resolve` never fabricates, truncates or normalises a display value:
+
+1. the literal `system`, written by workers and triggers, short-circuited in Go to
+   `Label{"System", KindSystem}` before the UUID gate;
+2. a GoTrue subject UUID, in any spelling §6 accepts — resolved against `memberships`;
+3. free text: `backfill-source-rows` (`internal/importer/backfill.go:18`) and
+   `revalidate-rule-set` (`internal/invoice/actor.go:54`), plus `approval_policy.published`'s
+   caller subject, which can be an email (see `docs/approvals.md` §b). These never bind.
+
+Go `Kind` has three values — `KindSystem`, `KindPerson` (a `memberships` row answered),
+`KindRaw` (free text, or a uuid nothing can name). The client adds a fourth, `absent`, for a
+**NULL** column, rendered "Not recorded" (`frontend/app/src/lib/actor.ts:3,24`). `absent` has
+no Go counterpart: `Resolve` is never handed a NULL.
+
+### `actor` stays raw on the wire
+
+The resolved fields are added **beside** the stored value, never in place of it:
+`StatusChange` carries `actor`, `actor_name` and `actor_kind`
+(`internal/invoice/invoice.go:159-166`), and `actor` is byte-identical to the column
+(`TestHistory_ActorColumnIsUnchanged`). AUDIT-04's actor facet and actor filter therefore
+operate on the stored value, not on a name. Both resolved fields are non-pointer strings, so
+neither can marshal as JSON `null`; the client reads an empty `actor_name` as "the server did
+not answer" and falls back to the subject.
+
+### Empty string is absent — D-31, a user decision
+
+`Name` treats a non-nil pointer to `""` as **absent** and falls through at every rung, exactly
+like `nil`. `internal/approval`'s `holderName` (`read_model.go:421`) does the opposite: it
+stops on a non-nil `""`, mirroring TypeScript `??`.
+
+**This divergence is deliberate. The user answered it at a gate on 2026-08-21 (D-31): fall
+through, and do not absorb `holderName`.** The accepted cost is two Go ladder copies.
+`TestHolderName_EmptyStringDisplayNameDoesNotFallThrough` pins the old behaviour on purpose
+and `TestActorName_DivergesFromHolderNameDeliberately` pins this one. Do not consolidate them;
+a future reader who "aligns" the two is reversing a decision, not fixing a bug.
+
+### Open finding: whitespace
+
+A `display_name` of `" "` is **not** empty, so it wins the first rung and renders as a
+visually blank cell with kind `person` — at the Go layer and again at the TS layer. Nothing
+constrains `memberships.display_name` to be non-blank, so this is reachable in production.
+D-31 settled `""` only; whitespace was never asked. The behaviour is **pinned, not changed**,
+by `TestActorName_WhitespaceOnlyDisplayNameIsNotTreatedAsAbsent`,
+`TestActorResolve_WhitespaceOnlyDisplayNameIsNotTreatedAsBlank` and
+`frontend/app/src/lib/actor.test.ts:186` (which sweeps space, tab, LF and NBSP). Trimming is a
+deliberate change with a red test, not a silent cleanup.
+
+### Still raw: the client fall-through
+
+`actorLabel` called with **one** argument has no server answer to prefer, so it falls through
+to `APP_PERSONAS` (`frontend/app/src/auth.ts:34-61`) — a table that is unscoped and holds both
+tenants' subjects, so a colliding subject renders the **other tenant's** person by name. Four
+call sites are still one-argument; they are inventoried per surface in sysmap (features 271,
+252, 259, 256), and `frontend/app/src/lib/actor.test.ts:308-338` asserts the arity so the set
+cannot grow silently. Those columns are not `audit_log` columns and no AUDIT story owns them.
+
+### Who reads this
+
+**AUDIT-04** (facets and filters — on the raw `actor`), **AUDIT-05** (ZIP export — read the
+RLS paragraph first), **AUDIT-06** and **AUDIT-09**. One correction for AUDIT-05: its Core AC
+carries an escape hatch reading "if not merged, this story's own resolution must produce the
+same result". That clause is **dead** — the ladder is merged and importable. Import
+`internal/actor`; do not build a second copy.

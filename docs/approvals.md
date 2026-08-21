@@ -434,6 +434,10 @@ caller's subject. `created_at` equals the version's `published_at` — both are 
 transaction's `now()` — which is how you tie an audit row to the version it sealed when
 a policy has several.
 
+That `actor` is stored raw and is not always a uuid — `ops@example.com` above is free
+text. Resolving one for display is `internal/actor`; see `docs/audit-log-read-contract.md`
+§9, whose RLS-scoping rule applies to any reader that renders it.
+
 The other three events on the same policy carry the same two payload keys:
 `approval_policy.created`, `approval_policy.updated`, `approval_policy.deleted`.
 

@@ -1,12 +1,14 @@
 // Test-first (RED) suite for the audit_log entity_id backfill: the shared resolver, the
 // per-tenant bracket, the size guard, and where the write-time trigger sits in the body.
 //
-// Every DB case executes the migration's own Down body then Up body — read out of
+// A backfill DB case executes that migration's own Down body then Up body — read out of
 // migrations.FS — on one invoice_migrator connection with NO app.current_tenant pre-set,
-// inside a single rolled-back transaction. Both go out as argument-less Execs, which pgx
-// sends over the simple protocol, so multi-statement bodies and $fn$ quoting survive and
-// goose's directives stay ordinary comments. demoRepairStatements cannot be reused: it
-// fails loudly on a function body, and this migration carries three.
+// inside a single rolled-back transaction. TestRLS_AuditResolverReplacementIsReversible is
+// the exception: the REPLACEMENT migration's Up then Down, under a tenant it sets itself.
+// Bodies go out as argument-less Execs, which pgx sends over the simple protocol, so
+// multi-statement bodies and $fn$ quoting survive and goose's directives stay ordinary
+// comments. demoRepairStatements cannot be reused: it fails loudly on a function body,
+// and the backfill migration carries three.
 //
 // The Down drops entity_id, so a fixture row the write-time trigger already attributed
 // starts the Up as NULL and the backfill is the only thing that can fill it. Running as
@@ -150,8 +152,11 @@ func auditEntitySectionOf(t *testing.T, name, section string) string {
 // pinned filename. auditEntityMigrationName stays pinned; it answers a different question.
 const auditResolverMigrationGlob = "*.sql"
 
+// The parameter list terminates the identifier -- CREATE FUNCTION always has one -- so a
+// renamed audit_log_entity_forZZ no longer counts as a definer and the zero-definers fatal
+// below can fire. Fenced by TestRLS_AuditResolverDefinerIsTheLatestMigration.
 var auditResolverDefRE = regexp.MustCompile(
-	`(?is)CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+audit_log_entity_for`)
+	`(?is)CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_$]*\s*\.\s*)?audit_log_entity_for\s*\(`)
 
 // auditResolverDefinerName returns the LAST migration whose Up section defines
 // audit_log_entity_for. Filenames lead with the goose timestamp, so lexical order is apply
@@ -810,16 +815,15 @@ func TestRLS_AuditBackfillGuardMessageNamesCountAndRemedy(t *testing.T) {
 	}
 }
 
-// AC-12: the four attribution rules live in exactly one place. Every attributable event
-// name must occur inside the resolver's own dollar-quoted body and nowhere else. The scan
-// runs against whichever migration currently defines the resolver, so it reads the rules
-// that are live in the database. The wiring half is
+// AC-12: inside the migration that currently defines the resolver, every attributable event
+// name occurs exactly once and inside the resolver's own dollar-quoted body. Superseded
+// copies — earlier migrations, and this definer's own Down — are out of the scan by design:
+// only the last definer is live. The wiring half is
 // TestRLS_AuditResolverWiringStillReadsTheBackfillMigration.
 func TestRLS_AuditResolverIsDefinedOnceAndCalledByBoth(t *testing.T) {
 	body := auditEntityStripComments(auditEntitySectionOf(t, auditResolverDefinerName(t), "Up"))
 
-	defs := regexp.MustCompile(`(?is)CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+audit_log_entity_for`).
-		FindAllString(body, -1)
+	defs := auditResolverDefRE.FindAllString(body, -1)
 	if len(defs) != 1 {
 		t.Fatalf("the Up body defines audit_log_entity_for %d times, want exactly 1", len(defs))
 	}

@@ -18,8 +18,9 @@ SET LOCAL lock_timeout = '15s';
 
 ALTER TABLE audit_log ADD COLUMN entity_id uuid;
 
--- The attribution rules live here and nowhere else -- the backfill below and the
--- write-time trigger at the foot of this file both call this one function.
+-- One function, two callers: the backfill below and the write-time trigger at the foot of
+-- this file. A later migration may replace its body; the live definition is whichever
+-- migration replaces it last -- TestRLS_AuditResolverDefinerIsTheLatestMigration finds it.
 --
 -- Dispatch is on the event NAME, never on which payload key is present: three
 -- workspace-level events carry a bare `id` that is a documents id, and six carry a

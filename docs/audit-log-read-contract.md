@@ -4,9 +4,13 @@
 AUDIT-05 (bundle), AUDIT-07 (CSV) and AUDIT-09 (activity feed). AUDIT-01 shipped the
 schema and stopped there. This page is the contract those readers inherit: what the
 indexes serve, what a value in `entity_id` means, and the two predicates no index can
-help. Everything here was measured on PG 18.6 in migration
-`20260820150810_audit_log_entity_id_and_read_indexes.sql`; the reasoning behind each
-choice is in that story's `## Decisions`.
+help. Everything here was measured on PG 18.6 against AUDIT-01's migration
+`20260820150810_audit_log_entity_id_and_read_indexes.sql`, which added the column, the four
+indexes and the first `audit_log_entity_for` body; the reasoning behind each choice is in
+that story's `## Decisions`. That first body has since been replaced. **The live definition
+is whichever migration replaces `audit_log_entity_for` last** —
+`TestRLS_AuditResolverDefinerIsTheLatestMigration` finds it. Read the attribution rules
+there, not from the migration named above.
 
 ---
 
@@ -107,13 +111,14 @@ Verified by differential fuzz against `uuid_in`: 180,000 spellings, zero disagre
 zero cast failures. Fenced by
 `TestAudit_InsertTriggerResolvesEverySpellingUUIDInAccepts`.
 
-This grammar now has **two** implementations that must not drift: the trigger's
-(`migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql`, superseded as the
-resolver's definition by the migration that currently defines `audit_log_entity_for`) and
-`actor.Resolve`'s Go copy (`internal/actor/resolve.go`), which applies it before binding a
-`uuid[]` — an unfiltered subject there raises 22P02 and aborts the reader's transaction. The
-Go copy is fenced against Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change
-one, change both.
+This grammar now has **four** copies that must not drift. Three are SQL: AUDIT-01's
+superseded body in `migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql`, and
+both the Up and the Down body of the migration that currently defines
+`audit_log_entity_for` — a Down carrying a different grammar would change the resolver on
+rollback rather than restore it. The fourth is `actor.Resolve`'s Go copy
+(`internal/actor/resolve.go`), which applies it before binding a `uuid[]` — an unfiltered
+subject there raises 22P02 and aborts the reader's transaction. The Go copy is fenced against
+Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change one, change all four.
 
 ## 7. Two predicates no index here serves
 

@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"go/ast"
 	"sort"
 	"strings"
 	"testing"
@@ -248,4 +250,100 @@ func TestSubmissionAudit_ActorAndEventFitTheAuditLogChecks(t *testing.T) {
 		}
 		return errVARollback
 	}))
+}
+
+// --- the failure audit write is its closure's last statement ----------------------------
+
+// vaDirectCalls returns every CallExpr under body whose callee spells want, WITHOUT
+// descending into a nested *ast.FuncLit -- a call belongs to its innermost closure. Naive
+// containment would also attribute the OncePerJob closure's call to the WithinTenantTx
+// closure wrapping it, whose own last statement is a plain `return err`.
+func vaDirectCalls(body *ast.BlockStmt, want string) []*ast.CallExpr {
+	var out []*ast.CallExpr
+	visit := func(n ast.Node) bool {
+		if _, isLit := n.(*ast.FuncLit); isLit {
+			return false
+		}
+		if c, ok := n.(*ast.CallExpr); ok && vaCalleeName(c.Fun) == want {
+			out = append(out, c)
+		}
+		return true
+	}
+	for _, st := range body.List {
+		ast.Inspect(st, visit)
+	}
+	return out
+}
+
+// The audit row must be written by the LAST statement of the closure that writes it, so
+// queue.OncePerJob's exactly-once guarantee covers the row exactly as it covers the job
+// state and the invoice transition. A statement placed after it would commit outside that
+// guarantee's reach; an early return placed after it could skip the row entirely on a path
+// that still lands the invoice in failed.
+//
+// The floor is >= 2, not == 2: SubmitWorker owns two failure sites today and PollWorker's is
+// wired next. The last-statement property below is asserted over EVERY matched closure, so
+// the floor costs the check no strength. Tightening it to an exact count belongs with the
+// subtask that finishes the set.
+func TestSubmissionAudit_FailureWriteIsLastInItsClosure(t *testing.T) {
+	files := vaScanSubmissionPackage(t)
+	vaRequirePopulation(t, files)
+
+	var scanned, matched int
+	var sites []string
+	for _, f := range files {
+		ast.Inspect(f.ast, func(n ast.Node) bool {
+			lit, ok := n.(*ast.FuncLit)
+			if !ok || lit.Body == nil {
+				return true
+			}
+			scanned++
+			calls := vaDirectCalls(lit.Body, "recordFailureAudit")
+			if len(calls) == 0 {
+				return true
+			}
+			matched++
+			loc := fmt.Sprintf("%s:%d", f.name, f.fset.Position(lit.Pos()).Line)
+			sites = append(sites, loc)
+			if len(calls) != 1 {
+				t.Errorf("closure at %s calls recordFailureAudit %d times, want exactly 1 -- "+
+					"one terminal failure is one event", loc, len(calls))
+				return true
+			}
+			if len(lit.Body.List) == 0 {
+				t.Errorf("closure at %s has an empty body yet matched a call -- the walk is wrong", loc)
+				return true
+			}
+			last := lit.Body.List[len(lit.Body.List)-1]
+			ret, isReturn := last.(*ast.ReturnStmt)
+			if !isReturn {
+				t.Errorf("closure at %s ends in %T, want its recordFailureAudit call to be the "+
+					"final return -- anything after it commits outside OncePerJob's reach", loc, last)
+				return true
+			}
+			if len(ret.Results) != 1 || ret.Results[0] != calls[0] {
+				t.Errorf("closure at %s ends in a return that is not its recordFailureAudit call "+
+					"(returns %d expression(s)) -- the audit write must be the last statement",
+					loc, len(ret.Results))
+			}
+			return true
+		})
+	}
+
+	// Control: a broken walk would find no closures at all and report every claim above as
+	// vacuously satisfied. 15 function literals in the package today.
+	if scanned < 10 {
+		t.Fatalf("walked %d function literals across %d files, want >= 10 -- the walk is broken, "+
+			"so the counts below are vacuous", scanned, len(files))
+	}
+	if matched < 2 {
+		t.Fatalf("closures calling recordFailureAudit = %d, want >= 2 (found at %v) -- both of "+
+			"SubmitWorker's terminal-failure branches must write the event", matched, sites)
+	}
+	for _, loc := range sites {
+		if !strings.HasPrefix(loc, "worker.go:") {
+			t.Errorf("recordFailureAudit is called from %s, want worker.go only -- the terminal "+
+				"branches are the only callers", loc)
+		}
+	}
 }

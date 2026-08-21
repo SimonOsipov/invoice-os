@@ -1,7 +1,10 @@
 // Plain node test for actorLabel, the shared GoTrue-subject formatter (task-392,
 // BUG-03-03). Moved verbatim from SourceDocumentRail.test.ts's uploaderLabel describe
-// block, plus the 'system' case demo data masks the original defect with.
+// block, plus the 'system' case -- which AUDIT-02-04 inverted (note at the second describe).
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { APP_PERSONAS } from '../auth'
 import { actorLabel } from './actor'
@@ -151,5 +154,183 @@ describe('actorLabel with the server-resolved pair (Core AC-3/AC-5/AC-9)', () =>
       kind: 'person',
     })
     expect(actorLabel(UNKNOWN)).toEqual({ text: UNKNOWN, mono: true, kind: 'raw' })
+  })
+})
+
+// AUDIT-02-04 QA (Mode B). Coverage the AC-derived specs above do not reach. The theme is
+// one property: once the server has answered, APP_PERSONAS -- which holds BOTH tenants'
+// subjects unscoped (auth.ts:43, :56) -- must stay unread on EVERY input shape, not just
+// the well-formed ones the wire promises.
+describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
+  const UNKNOWN = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
+  const FIRM = APP_PERSONAS.firm.subject
+  const INHOUSE = APP_PERSONAS.inhouse.subject
+  const LEAKS = [
+    APP_PERSONAS.firm.name,
+    APP_PERSONAS.firm.org,
+    APP_PERSONAS.inhouse.name,
+    APP_PERSONAS.inhouse.org,
+  ]
+
+  function expectNoPersonaLeak(text: string, why: string) {
+    for (const needle of LEAKS) expect(text, `${why}: leaked ${needle}`).not.toContain(needle)
+  }
+
+  // CHARACTERISATION, not an endorsement. The '' guard is exact, so a name of one space
+  // is an ANSWER and renders as one space -- a visually blank cell that AC-5's
+  // `.not.toBe('')` sweep cannot see. Reachable end to end: actor.go:36 stops on a
+  // display_name of ' ' for the same reason (it is not ''), so a membership row with a
+  // whitespace display_name puts a blank actor on the card. D-31 settled '' by decision;
+  // whitespace is the open finding from AUDIT-02-01 and is NOT settled here. Pinned so a
+  // future fix is a deliberate change with a red test, not a silent drift.
+  it('a whitespace-only name is honoured verbatim and still never consults the personas', () => {
+    // TAB, LF and NBSP as codepoints: a literal one in the source is invisible to review.
+    const cases = [' ', '  ', String.fromCharCode(9), String.fromCharCode(10), String.fromCharCode(160)]
+    expect(cases.length).toBeGreaterThan(0)
+
+    for (const name of cases) {
+      for (const subject of [FIRM, INHOUSE, UNKNOWN]) {
+        const label = actorLabel(subject, { name, kind: 'person' })
+        expect(label, `whitespace name ${JSON.stringify(name)} for ${subject}`).toEqual({
+          text: name,
+          mono: false,
+          kind: 'person',
+        })
+        expectNoPersonaLeak(label.text, `whitespace name ${JSON.stringify(name)}`)
+      }
+    }
+
+    // The security half holds where it matters most: whitespace does NOT reopen the
+    // fall-through, so a whitespace answer for the other tenant's admin stays blank
+    // rather than becoming "Ngozi Balogun BULLET Honeywell Group".
+    expect(actorLabel(INHOUSE, { name: ' ', kind: 'raw' })).toEqual({ text: ' ', mono: true, kind: 'raw' })
+  })
+
+  // The narrowing at actor.ts:30 is the ONLY thing standing between a wire that widens
+  // actor_kind to `string` (invoices.ts:323, e2e/api/client.ts:485) and an ActorKind that
+  // callers switch on. Every value outside system|person must land on 'raw' -- mono, with
+  // the name verbatim -- and none may fall through to the persona table.
+  it('an unexpected kind narrows to raw, in mono, and never reaches APP_PERSONAS', () => {
+    const kinds = ['Person', 'PERSON', 'person ', ' person', 'System', 'SYSTEM', '', 'absent', 'raw ', 'null', 'undefined', '__proto__', '{}']
+    expect(kinds.length).toBeGreaterThan(0)
+
+    for (const kind of kinds) {
+      for (const subject of [FIRM, INHOUSE, UNKNOWN]) {
+        const label = actorLabel(subject, { name: 'Folake Adesina', kind })
+        expect(label, `kind ${JSON.stringify(kind)} for ${subject}`).toEqual({
+          text: 'Folake Adesina',
+          mono: true,
+          kind: 'raw',
+        })
+        expectNoPersonaLeak(label.text, `kind ${JSON.stringify(kind)}`)
+      }
+    }
+
+    // 'absent' is reserved for a null subject and must never come back for a real one.
+    expect(actorLabel(FIRM, { name: 'Folake Adesina', kind: 'absent' }).kind).not.toBe('absent')
+  })
+
+  // The two kinds the narrowing DOES accept, on a subject the persona table also holds,
+  // with a name that disagrees with the table's. Proof the table was not consulted rather
+  // than proof it happened to agree -- the existing 'C. Okafor (server)' case covers
+  // 'person'; this covers 'system' and the other tenant's subject too.
+  it('a resolved pair beats APP_PERSONAS for both accepted kinds, on both tenants', () => {
+    const combos = [
+      { subject: FIRM, name: 'Someone Else', kind: 'person', mono: false },
+      { subject: INHOUSE, name: 'Someone Else', kind: 'person', mono: false },
+      { subject: FIRM, name: 'Automated rule', kind: 'system', mono: false },
+      { subject: INHOUSE, name: 'Automated rule', kind: 'system', mono: false },
+    ]
+    expect(combos).toHaveLength(4)
+
+    for (const c of combos) {
+      const label = actorLabel(c.subject, { name: c.name, kind: c.kind })
+      expect(label, `${c.kind} for ${c.subject}`).toEqual({ text: c.name, mono: c.mono, kind: c.kind })
+      expectNoPersonaLeak(label.text, `${c.kind} for ${c.subject}`)
+    }
+  })
+
+  // The literal 'system' subject is special-cased ONLY on the unresolved path. A member
+  // literally named System, or any server answer at all, still wins -- the special case
+  // is a fallback for the five pairless callers, never an override of the server.
+  it('the literal system subject does not override a server answer', () => {
+    expect(actorLabel('system', { name: 'System Adeyemi', kind: 'person' })).toEqual({
+      text: 'System Adeyemi',
+      mono: false,
+      kind: 'person',
+    })
+    expect(actorLabel('system', { name: 'system', kind: 'raw' })).toEqual({
+      text: 'system',
+      mono: true,
+      kind: 'raw',
+    })
+    // And unresolved, it is still the friendly literal.
+    expect(actorLabel('system')).toEqual({ text: 'System', mono: false, kind: 'system' })
+  })
+
+  // CHARACTERISATION of two shapes the type system forbids but a wire can still deliver.
+  // Neither is a live defect today -- reported, not fixed, because fixing implementation
+  // is not QA's to do:
+  //   1. subject '' -- kept off the history card by a DB CHECK, not by this function
+  //      (migrations/20260714111246_invoice_status_history.sql:53,
+  //      `CHECK (char_length(actor) > 0)`). actorLabel itself returns an empty label.
+  //   2. a missing wire field -- `{name: undefined}` is not '', so the guard passes it
+  //      through and the cell renders nothing. Only reachable under API/SPA version skew,
+  //      where a new bundle reads an old server's history rows.
+  // Both stay non-leaking, which is the property that actually matters.
+  it('pins the two blank-label shapes the wire contract forbids', () => {
+    expect(actorLabel('')).toEqual({ text: '', mono: true, kind: 'raw' })
+    expect(actorLabel('', { name: '', kind: 'raw' })).toEqual({ text: '', mono: true, kind: 'raw' })
+
+    const skewed = actorLabel(FIRM, { name: undefined as unknown as string, kind: undefined as unknown as string })
+    expect(skewed.text, 'a missing actor_name renders nothing rather than a persona').toBeUndefined()
+    expect(skewed).toEqual({ text: undefined, mono: true, kind: 'raw' })
+  })
+
+  // AC #6's mechanism, asserted directly: the parameter is OPTIONAL, so passing nothing
+  // and passing undefined are the same call, and the five pairless callers keep compiling.
+  it('omitting the pair and passing undefined are the same call', () => {
+    const subjects = [FIRM, INHOUSE, 'system', UNKNOWN, 'not-a-uuid', '']
+    expect(subjects.length).toBeGreaterThan(0)
+    for (const subject of subjects) {
+      expect(actorLabel(subject, undefined), `undefined pair for ${subject}`).toEqual(actorLabel(subject))
+    }
+    expect(actorLabel(null, undefined)).toEqual(actorLabel(null))
+    // NOT actorLabel.length -- a TS optional parameter still counts toward it (it is 2),
+    // so that reads as a required parameter. tsc is the real optionality oracle; the
+    // source scan below is the arity one.
+  })
+
+  // AC #6 (D-23/D-24), mechanically: exactly ONE surface passes the resolved pair. A
+  // second call site acquiring one silently would be a behaviour change on a screen this
+  // story never touched, and no render test elsewhere would notice.
+  it('only the status history row passes a resolved pair; the five legacy callers pass one argument', () => {
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    const files = {
+      'components/InvoiceDetail.tsx': { one: 2, two: 2 },
+      'components/SourceDocumentStates.tsx': { one: 1, two: 0 },
+      'components/SourceDocumentRail.tsx': { one: 1, two: 0 },
+      'lib/approvals.ts': { one: 1, two: 0 },
+    }
+    const here = dirname(fileURLToPath(import.meta.url))
+
+    let totalOne = 0
+    let totalTwo = 0
+    for (const [rel, expected] of Object.entries(files)) {
+      const src = strip(readFileSync(join(here, '..', rel), 'utf8'))
+      const calls = [...src.matchAll(/actorLabel\(([^)]*)\)/g)].map((m) => m[1])
+      expect(calls.length, `no actorLabel call found in ${rel}`).toBeGreaterThan(0)
+
+      const two = calls.filter((a) => a.includes(','))
+      const one = calls.filter((a) => !a.includes(','))
+      expect(one.length, `one-argument actorLabel calls in ${rel}`).toBe(expected.one)
+      expect(two.length, `two-argument actorLabel calls in ${rel}`).toBe(expected.two)
+      // Every pair-passing call reads the wire, never a locally built object.
+      for (const args of two) expect(args, `resolved pair in ${rel}`).toContain('h.actor_name')
+      totalOne += one.length
+      totalTwo += two.length
+    }
+    expect(totalOne, 'the five pairless callers').toBe(5)
+    expect(totalTwo, 'the status history className + text calls, and nothing else').toBe(2)
   })
 })

@@ -1367,6 +1367,30 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
     expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
     expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
+
+  // AUDIT-02-04 QA. AC-5's "never a blank cell" lives HERE, not in actor.test.ts's
+  // `.not.toBe('')` sweep -- a name of one space clears that sweep and still paints
+  // nothing. CHARACTERISATION of today's behaviour, reported not fixed: the '' guard is
+  // exact (actor.ts:28) and the server's ladder stops on ' ' for the same reason
+  // (internal/actor/actor.go:36), so a membership row with a whitespace display_name
+  // reaches this span. The security property still holds and is asserted alongside.
+  it('QA: a whitespace-only resolved name paints an empty actor cell, and still no persona', async () => {
+    const honeywellAdmin = APP_PERSONAS.inhouse.subject
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: ' ', actor_kind: 'person' },
+    ]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('status-history-row')
+    const actors = screen.getAllByTestId('status-history-actor')
+    expect(actors, 'the row must render an actor span at all').toHaveLength(1)
+    expect(actors[0].textContent, 'today the cell paints one space -- open finding, not a fix').toBe(' ')
+    expect(actors[0].className.split(' '), 'a person kind is never mono').not.toContain('mono')
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
+  })
 })
 
 // RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture nulls kept_as_is_*, so

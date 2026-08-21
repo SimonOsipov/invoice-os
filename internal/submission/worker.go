@@ -411,9 +411,9 @@ type PollWorker struct {
 // tx2 records the outcome. Accepted/Rejected (M5-05-05 (task-241)) drive the invoice
 // submitted->accepted / submitted->rejected via InvoicePort.MarkAccepted/MarkRejected plus
 // the same recordVerdictAudit helper SubmitWorker's own synchronous verdicts use
-// (M5-05-04 (task-240), System Design §6) -- one submission.accepted/rejected audit row per
-// terminal poll hop, inside the same OncePerJob(job.ID) closure as the exchange/job-state
-// writes. Pending OVERWRITES poll_ref/next_poll_at with the NEW ticket and enqueues the next hop at
+// (M5-05-04 (task-240), System Design §6) -- one submission.accepted/rejected/failed audit
+// row per terminal poll hop, inside the same OncePerJob(job.ID) closure as the exchange/job-
+// state writes. Pending OVERWRITES poll_ref/next_poll_at with the NEW ticket and enqueues the next hop at
 // Sequence+1, scheduled at the adapter's exact new PollAfter ([poll-ticket],
 // [unbounded-poll-chain] -- no hop ceiling). Retryable on the final attempt dead-letters the
 // job, moves the invoice submitted -> failed via the pre-existing edge, and writes the

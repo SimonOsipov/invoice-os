@@ -1,6 +1,8 @@
 // Package actor resolves an audit_log actor into a display Label. Consumed by
-// AUDIT-04, AUDIT-05 and the history endpoint. Stdlib only -- internal/audit,
-// internal/invoice, internal/approval and internal/tenancy all import it.
+// AUDIT-04, AUDIT-05 and the history endpoint. Stdlib plus github.com/jackc/pgx/v5
+// only (Resolve takes the caller's pgx.Tx) -- internal/audit, internal/invoice,
+// internal/approval and internal/tenancy all import it, so it must import none of
+// them. Fenced by TestActorPackage_ImportsOnlyStdlib.
 package actor
 
 // Kind classifies how a Label's Text was produced.

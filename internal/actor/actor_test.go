@@ -9,6 +9,7 @@ package actor_test
 
 import (
 	"go/build"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -219,15 +220,52 @@ func TestActorName_PassesRTLAndControlCharsThrough(t *testing.T) {
 	}
 }
 
-// Package doc claims "Stdlib only"; AC-4 requires it importable by
-// internal/audit, internal/invoice, internal/approval and internal/tenancy
-// without a cycle. Enforce both by requiring zero non-stdlib imports.
+// AC-4 requires this package importable by internal/audit, internal/invoice,
+// internal/approval and internal/tenancy without a cycle. resolve.go takes the
+// caller's pgx.Tx, so github.com/jackc/pgx/v5 is admitted by name -- it is a leaf
+// that imports none of those four. The allowlist is exactly one entry; widening it
+// is a story-level call, not a convenience.
 func TestActorPackage_ImportsOnlyStdlib(t *testing.T) {
+	allowed := map[string]bool{"github.com/jackc/pgx/v5": true}
+
 	pkg, err := build.ImportDir(".", 0)
 	if err != nil {
 		t.Fatalf("build.ImportDir(.) failed: %v", err)
 	}
+	// build.Package.Imports covers the non-test files only, which is the graph
+	// AC-4 is about. Empty means resolve.go stopped importing pgx and every
+	// assertion below would pass vacuously.
+	if len(pkg.Imports) == 0 {
+		t.Fatal("internal/actor imports nothing at all -- resolve.go must import pgx; the allowlist assertions would pass vacuously")
+	}
 	for _, imp := range pkg.Imports {
-		t.Errorf("internal/actor imports %q, want stdlib only", imp)
+		if allowed[imp] {
+			continue
+		}
+		// Stdlib import paths carry no dot in their first segment.
+		if first, _, _ := strings.Cut(imp, "/"); !strings.Contains(first, ".") {
+			continue
+		}
+		t.Errorf("internal/actor imports %q, want stdlib or github.com/jackc/pgx/v5 only", imp)
+	}
+
+	// The property the allowlist exists to protect, checked TRANSITIVELY rather
+	// than on direct imports: pgx could not reach these, but a future edit could.
+	// "." not "./internal/actor": the test's CWD is this package's directory.
+	out, err := exec.CommandContext(t.Context(), "go", "list", "-deps", ".").Output()
+	if err != nil {
+		t.Fatalf("go list -deps .: %v", err)
+	}
+	deps := strings.Split(string(out), "\n")
+	if len(deps) < 2 {
+		t.Fatalf("go list -deps returned %d lines; the cycle assertions below would pass vacuously", len(deps))
+	}
+	for _, forbidden := range []string{"audit", "invoice", "approval", "tenancy"} {
+		path := "github.com/SimonOsipov/invoice-os/internal/" + forbidden
+		for _, dep := range deps {
+			if strings.TrimSpace(dep) == path {
+				t.Errorf("internal/actor depends on %s -- all four of its consumers would cycle", path)
+			}
+		}
 	}
 }

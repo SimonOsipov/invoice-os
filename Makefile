@@ -45,7 +45,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -138,6 +138,12 @@ test-approvals: ## Run the workflow-roles + staffing suite against the local dev
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 ./internal/approval/...
+
+test-actor: ## Run the AUDIT-02 actor-resolution suite against the local dev DB (run `make dev-db` first)
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	go test -p 1 -count=1 ./internal/actor/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

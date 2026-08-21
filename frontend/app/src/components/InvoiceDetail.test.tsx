@@ -1314,7 +1314,7 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 describe('InvoiceDetail status history: actor resolution ([actor-label-shared])', () => {
   it('AC2: the status history renders a person, not a subject uuid', async () => {
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person' },
     ]
     mockDetailFetch(detailRecord(), history)
 
@@ -1327,7 +1327,9 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 
   it('AC2: an unknown subject still renders raw, in mono', async () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
-    const history: StatusChange[] = [{ from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown }]
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown, actor_name: unknown, actor_kind: 'raw' },
+    ]
     mockDetailFetch(detailRecord(), history)
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -3251,8 +3253,8 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 
   it("AC-6: a rejection's demotion surfaces through the refetch", async () => {
-    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, changed_at: '2026-08-01T00:00:00Z' }
-    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, changed_at: '2026-08-02T00:00:00Z' }
+    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-01T00:00:00Z' }
+    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-02T00:00:00Z' }
     const afterReject = detailRecord({ id: ID, status: 'draft', can_edit: true, can_reject: false })
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }), [row1], {
       detailSequence: [afterReject],

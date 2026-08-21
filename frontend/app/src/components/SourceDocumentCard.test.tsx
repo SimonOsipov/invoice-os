@@ -63,7 +63,7 @@ function detailRecord(): InvoiceDetailRecord {
 }
 
 const HISTORY: StatusChange[] = [
-  { from_status: null, to_status: 'draft', actor: 'c0000000-0000-0000-0000-000000000001', changed_at: '2026-06-12T09:15:00Z' },
+  { from_status: null, to_status: 'draft', actor: 'c0000000-0000-0000-0000-000000000001', actor_name: 'Chinedu Okafor', actor_kind: 'person', changed_at: '2026-06-12T09:15:00Z' },
 ]
 
 function sourceRecord(over: Partial<SourceDocumentRecord> = {}): SourceDocumentRecord {

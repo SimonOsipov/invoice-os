@@ -1906,8 +1906,8 @@ describe('getInvoiceUbl (task-400, BUG-04-04)', () => {
 describe('getInvoiceHistory', () => {
   it('I10: the bare StatusChange[] array passes through unchanged; GET .../invoices/{id}/history', async () => {
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', actor: 'system', changed_at: '2026-07-01T00:00:00Z' },
-      { from_status: 'draft', to_status: 'validated', actor: 'user:u1', changed_at: '2026-07-02T00:00:00Z' },
+      { from_status: null, to_status: 'draft', actor: 'system', actor_name: 'System', actor_kind: 'system', changed_at: '2026-07-01T00:00:00Z' },
+      { from_status: 'draft', to_status: 'validated', actor: 'user:u1', actor_name: 'user:u1', actor_kind: 'raw', changed_at: '2026-07-02T00:00:00Z' },
     ]
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(history) })
     const af = createAuthedFetch(() => 'tok', vi.fn())

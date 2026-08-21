@@ -1760,7 +1760,10 @@ func workRetryExhaustion(t *testing.T, f *effectsFixture, tenantID, invoiceID st
 		evidence: submission.Evidence{ReachedWire: true},
 	})
 	w := newTestWorker(f.app, adapter)
-	job := newSubmitJob(1, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	// River job id 2, not 1: OncePerJob's marker is "job:<river id>" per TENANT, so sharing
+	// id 1 with workTransformFailure silently skips this whole closure when a caller drives
+	// both paths in one tenant.
+	job := newSubmitJob(2, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
 	if err := w.Work(context.Background(), job); err == nil {
 		t.Fatal("Work on a Retryable final attempt returned nil, want a non-nil error so River discards the job")
 	}

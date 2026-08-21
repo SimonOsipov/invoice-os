@@ -483,7 +483,7 @@ func TestPollWorker_DeadLetterWhenInvoiceAlreadyFailedIsIdempotent(t *testing.T)
 // TestPollWorker_ReplayedDeadLetterKeepsFirstKind (BUG-06-03, task-385): a River redelivery
 // of the SAME already-dead-lettered poll job (identical job.ID/Attempt/MaxAttempts) must not
 // rewrite the stored failure_kind or add a second history row. tx1's own state != "pending"
-// gate (worker.go:427-430) is what stops the second delivery -- the job is already
+// gate (worker.go:443 [state != "pending"]) is what stops the second delivery -- the job is already
 // dead_lettered, not pending -- so it never even reaches adapter.Poll a second time; this is
 // a different guard from queue.OncePerJob (case 3/10 above), which never gets a chance to
 // fire here because tx1 returns first.
@@ -1001,7 +1001,8 @@ func TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 
 // TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant: QA adversarial addition
 // (task-385). No existing case exercised RLS isolation specifically on the poll dead-letter
-// path (worker.go:523) -- the existing poll RLS cases (this file's #13, poll_ref_db_test.go)
+// path (worker.go:523 [job.Attempt >= job.MaxAttempts]) -- the existing poll RLS cases
+// (this file's #13, poll_ref_db_test.go)
 // cover the Pending/Accepted/Rejected audit rows and poll_ref. This case covers
 // invoices.status/failure_kind after a dead-letter; the dead-letter's own audit row (wired
 // since) still has no RLS case of its own.

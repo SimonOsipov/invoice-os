@@ -1459,11 +1459,15 @@ func TestSubmitWorker_AdapterNotCalledUnderTransaction(t *testing.T) {
 
 // --- BUG-06-03 (task-385): per-site failure kinds ---------------------------------------
 //
-// Three MarkFailed call sites (worker.go:220, :309, :518) currently ALL pass the same
-// placeholder FailurePayloadNotBuilt. These specs pin each site to its own distinct,
-// provable kind -- see task-385's Implementation Plan for the site-by-site justification.
+// Three MarkFailed call sites currently ALL pass the same placeholder FailurePayloadNotBuilt:
+// worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)],
+// worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)], and
+// worker.go:536 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]. These specs pin
+// each site to its own distinct, provable kind -- see task-385's Implementation Plan for the
+// site-by-site justification.
 
-// TestSubmitWorker_TransformFailureStampsPayloadNotBuilt: worker.go:220 is the one site
+// TestSubmitWorker_TransformFailureStampsPayloadNotBuilt:
+// worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)] is the one site
 // whose kind does NOT change (a transform failure genuinely never built a wire). Pins the
 // invariant so a future edit accidentally moving this site off payload_not_built is caught.
 func TestSubmitWorker_TransformFailureStampsPayloadNotBuilt(t *testing.T) {
@@ -1525,9 +1529,10 @@ func TestSubmitWorker_TransformFailureRecordsLastError(t *testing.T) {
 	}
 }
 
-// TestSubmitWorker_DeadLetterStampsNeverAcknowledged: worker.go:309, the submit dead-letter
-// site. Retryable covers 5xx/timeout/unparseable body too (result.go:39-44), so this site
-// can only prove "never acknowledged", never "never delivered".
+// TestSubmitWorker_DeadLetterStampsNeverAcknowledged:
+// worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)], the submit
+// dead-letter site. Retryable covers 5xx/timeout/unparseable body too (result.go:39-44), so
+// this site can only prove "never acknowledged", never "never delivered".
 func TestSubmitWorker_DeadLetterStampsNeverAcknowledged(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
@@ -1561,7 +1566,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 
-	// Path 1: transform failure (worker.go:220).
+	// Path 1: transform failure (worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]).
 	tenantID1, invoiceID1, cleanup1 := seedQueuedInvoice(t, f)
 	defer cleanup1()
 	idemKey1 := "req-" + uuid.NewString() + ":" + invoiceID1
@@ -1573,7 +1578,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	}
 	kind1 := wiRead(t, f, tenantID1, invoiceID1).failureKind
 
-	// Path 2: submit dead-letter (worker.go:309).
+	// Path 2: submit dead-letter (worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]).
 	tenantID2, invoiceID2, cleanup2 := seedQueuedInvoice(t, f)
 	defer cleanup2()
 	idemKey2 := "req-" + uuid.NewString() + ":" + invoiceID2
@@ -1587,7 +1592,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	}
 	kind2 := wiRead(t, f, tenantID2, invoiceID2).failureKind
 
-	// Path 3: submit to Pending, then poll dead-letter (worker.go:518).
+	// Path 3: submit to Pending, then poll dead-letter (worker.go:523 [job.Attempt >= job.MaxAttempts]).
 	tenantID3, invoiceID3, cleanup3 := seedQueuedInvoice(t, f)
 	defer cleanup3()
 	future := time.Now().Add(time.Hour)
@@ -1624,7 +1629,8 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 }
 
 // TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError: QA adversarial
-// addition (task-385). Transform reruns on EVERY attempt (worker.go:220's own comment), so a
+// addition (task-385). Transform reruns on EVERY attempt
+// (worker.go:220 [Transform reruns every attempt]'s own comment), so a
 // job that survives a mid-budget Retryable (attempt 1, last_error = the Retryable's text) and
 // THEN fails at Transform on attempt 2 must overwrite last_error with attempt 2's text, not
 // leave attempt 1's stale value sitting under state='failed'. markJobTransformFailed's

@@ -148,10 +148,14 @@ test-actor: ## Run the AUDIT-02 actor-resolution suite against the local dev DB 
 # CI runs this package through the rls job's gate (.github/workflows/ci.yml, the
 # rls-test-gate.sh step), which fails on any SKIP. `make test-rls` covers only
 # ./internal/platform/db/..., so nothing local ran it before this target.
+# DATABASE_READER_URL is in the rls job's env, so CI runs
+# TestRevalidateAllTenants_CoversEveryEnumeratedTenant; without it here the
+# target skips a test the gate would fail on.
 test-invoice: ## Run the internal/invoice DB-backed suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
 	go test -p 1 -count=1 ./internal/invoice/...
 
 .PHONY: guard-migration-url

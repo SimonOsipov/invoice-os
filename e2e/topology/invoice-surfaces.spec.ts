@@ -2428,3 +2428,79 @@ test('detail surface: the armed decision block and trail card, plus their layout
   // leg above, the only site left where a detail page's approval GET still 404s.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// AUDIT-02-04. One page, two facts the unit tests cannot reach:
+//
+// 1. LEAK. APP_PERSONAS (frontend/app/src/auth.ts:34-61) holds BOTH tenants' admin
+//    subjects, unscoped. The genesis row below is actored by Honeywell's admin inside the
+//    FIRM tenant, so the RLS-scoped server finds no membership and answers kind 'raw'.
+//    Any client-side fall-through to that table prints "Ngozi Balogun · Honeywell Group"
+//    to an Okafor viewer.
+// 2. CLIPPING. The rail is `1fr minmax(220px, 25%)` above 1180 (platform.css:233) and the
+//    card sets overflow:hidden (InvoiceDetail.tsx:1315), so an unbreakable actor is
+//    clipped SILENTLY -- no page-level overflow, no console line. A uuid breaks at its
+//    hyphens; the ladder's email rung (internal/actor/actor.go:39-40) does not, and
+//    db/seed.dev.sql:45 already holds a 44-char one. The second actor below is that shape.
+//
+// Both tokens are minted for subjects that hold no membership in the firm tenant --
+// allowed on Preview posture, which is what the deploy gate runs (gateway.go:199).
+// Needs `data-testid="status-history-actor"` on the actor span (InvoiceDetail.tsx:1335).
+test('detail surface: a history actor the server cannot name renders verbatim and stays inside its rail', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const otherTenantAdmin = 'c0000000-0000-0000-0000-000000000002'
+  const unbreakableActor = 'o.adebanjo-ogunleye@okaforandpartners.com.ng'
+
+  const creatorToken = await login({ ...PERSONAS.A, subject: otherTenantAdmin })
+  const validatorToken = await login({ ...PERSONAS.A, subject: unbreakableActor })
+  const entity = await createEntity(creatorToken, { name: `AUDIT-02-04 actor ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-AUDIT0204-${Date.now()}`
+  const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  await validateInvoice(validatorToken, invoice.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  // Positive control before either absence assertion: both rows render, in changed_at
+  // order, each carrying its stored actor byte for byte and flagged mono.
+  const actors = page.getByTestId('status-history-actor')
+  await expect(actors).toHaveCount(2)
+  await expect(actors.nth(0)).toHaveText(otherTenantAdmin)
+  await expect(actors.nth(1)).toHaveText(unbreakableActor)
+  await expect(actors.nth(0)).toHaveClass(/mono/)
+  await expect(actors.nth(1)).toHaveClass(/mono/)
+
+  const card = page.getByTestId('status-history')
+  await expect(card).not.toContainText('Ngozi Balogun')
+  await expect(card).not.toContainText('Honeywell Group')
+
+  // Containment, never a width: a dimension bound passes on the very clipping it should
+  // catch (BUG-03-05, e2e/topology/layout.ts:4-8). getBoundingClientRect reports LAYOUT
+  // geometry, so the card's overflow:hidden hides the defect from the eye but not from
+  // gaps(). 1px, matching the trail-card check at :2416-2423, not assertFillsColumn's
+  // 24px: this cell is legitimately narrower than its card, so only overflow is a defect.
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const cardBox = await card.boundingBox()
+      expect(cardBox, `the status history card must render at ${width}px`).toBeTruthy()
+
+      const boxes = await Promise.all((await actors.all()).map((a) => a.boundingBox()))
+      expect(boxes, `both actor cells must render at ${width}px`).toHaveLength(2)
+      for (const [i, box] of boxes.entries()) {
+        expect(box, `actor cell ${i} must render at ${width}px`).toBeTruthy()
+        const g = gaps(box!, cardBox!)
+        expect(g.left, `actor cell ${i} must not start left of the status history card at ${width}px`).toBeGreaterThanOrEqual(-1)
+        expect(g.right, `actor cell ${i} must not extend right of the status history card at ${width}px`).toBeGreaterThanOrEqual(-1)
+      }
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

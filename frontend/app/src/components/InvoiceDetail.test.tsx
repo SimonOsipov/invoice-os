@@ -1321,7 +1321,10 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     await screen.findByTestId('status-history-row')
-    expect(document.body.textContent).toContain(`${APP_PERSONAS.firm.name} · ${APP_PERSONAS.firm.org}`)
+    // AUDIT-02-04: the wire's actor_name is the whole label now, and it carries no org --
+    // the ' · Okafor & Partners' suffix was APP_PERSONAS' contribution and must be gone.
+    expect(document.body.textContent).toContain(APP_PERSONAS.firm.name)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.org)
     expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.subject)
   })
 
@@ -1339,6 +1342,30 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
     // this element-boundary lookup fails until the actor gets its own span.
     const actorEl = within(row).getByText(unknown)
     expect(actorEl.className.split(' ')).toContain('mono')
+  })
+
+  // AUDIT-02-04 leak regression, at the render layer this time (Core AC-9's actual
+  // surface). ctx is firm-mode; the row is actored by the OTHER tenant's admin, which
+  // the RLS-scoped server could not name, so it answers 'raw' with the subject verbatim.
+  // APP_PERSONAS holds that subject anyway (auth.ts:47-60), so any fall-through prints
+  // Honeywell's admin and employer to an Okafor viewer. See actor.test.ts's
+  // actorLabel_neverConsultsPersonasWhenTheServerAnswered for the unit-level twin.
+  it('AC-9: a row the server could not name never borrows the other tenant\'s persona', async () => {
+    const honeywellAdmin = APP_PERSONAS.inhouse.subject
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: honeywellAdmin, actor_kind: 'raw' },
+    ]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const row = await screen.findByTestId('status-history-row')
+    // Positive control first: the subject IS on screen, in mono. Without it the two
+    // absence assertions below would pass on a card that rendered nothing at all.
+    const actorEl = within(row).getByText(honeywellAdmin)
+    expect(actorEl.className.split(' ')).toContain('mono')
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
 })
 

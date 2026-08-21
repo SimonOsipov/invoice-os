@@ -151,6 +151,9 @@ interface DetailFetchOptions {
   // returned `decideCalls`, win or lose. Defaults to a 200 carrying a plausible ApprovalRun
   // shaped by the posted decision.
   decideResponse?: MockResponse
+  // GET .../source-document. Defaults to the invoice record itself -- a body carrying no
+  // `document` key, which every pre-existing test reads as "no source document".
+  sourceDocumentResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -238,7 +241,9 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
       })
     }
     if (url.endsWith('/source-document')) {
-      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(detail) })
+      return Promise.resolve<MockResponse>(
+        opts.sourceDocumentResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) },
+      )
     }
     // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
     // like /ubl and /source-document above. `.endsWith('/approval')` is false for
@@ -3635,5 +3640,44 @@ describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', 
 
     await screen.findByTestId('detail-approve')
     expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
+  })
+})
+
+// AUDIT-02-04 Stage-4. The no-source canvas is actorLabel's sixth reader and the only one
+// that puts the actor mid-prose ("... was typed into ASComply by X on ..."), so it must
+// name a PERSON or say nobody. It reads the genesis history row, which every seeded
+// invoice actors 'system' (db/seed.dev.sql:628). Proves the whole chain: InvoiceDetail
+// -> SourceDocumentModal -> NoSourceCanvas passes the server's resolved pair.
+describe('InvoiceDetail no-source canvas: only a person is named ([actor-label-shared])', () => {
+  const NO_DOCUMENT: MockResponse = {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ document: null, source_rows: [] }),
+  }
+
+  async function openNoSourceCanvas(history: StatusChange[]): Promise<HTMLElement> {
+    mockDetailFetch(detailRecord(), history, { sourceDocumentResponse: NO_DOCUMENT })
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.click(await screen.findByTestId('why-no-source-document'))
+    return screen.findByTestId('source-document-no-source')
+  }
+
+  it('a system genesis actor omits the "by" clause instead of claiming System typed it in', async () => {
+    const canvas = await openNoSourceCanvas([
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: 'system', actor_name: 'System', actor_kind: 'system' },
+    ])
+
+    expect(canvas.textContent).not.toContain('by System')
+    expect(canvas.textContent).toContain('into ASComply on')
+  })
+
+  it("a person genesis actor is named from the server's pair, never from APP_PERSONAS", async () => {
+    const canvas = await openNoSourceCanvas([
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.inhouse.subject, actor_name: 'Adaeze Nwosu', actor_kind: 'person' },
+    ])
+
+    expect(canvas.textContent).toContain('by Adaeze Nwosu')
+    expect(canvas.textContent).not.toContain(APP_PERSONAS.inhouse.name)
+    expect(canvas.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
 })

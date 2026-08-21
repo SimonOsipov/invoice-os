@@ -87,14 +87,18 @@ export function NoSourceCanvas({
   invoiceNumber,
   createdAt,
   createdBy,
+  createdByResolved,
 }: {
   invoiceNumber: string
   createdAt: string | null
   createdBy: string | null
+  /** The server's resolved pair for `createdBy` (actor.ts), when the caller's wire carries one. */
+  createdByResolved?: { name: string; kind: string }
 }) {
-  // A raw uuid never appears mid-prose: the clause renders only for a resolved persona.
-  const creator = actorLabel(createdBy)
-  const by = !creator.mono && creator.text !== 'Not recorded' ? ` by ${creator.text}` : ''
+  // The clause names a PERSON or nobody: 'system' typed nothing in, and a raw uuid never
+  // appears mid-prose (SourceDocumentStates.test.tsx, "names a person and nobody else").
+  const creator = actorLabel(createdBy, createdByResolved)
+  const by = creator.kind === 'person' ? ` by ${creator.text}` : ''
   return (
     <div data-testid="source-document-no-source" style={CANVAS}>
       <div style={HEADING}>There is no source document</div>

@@ -1327,7 +1327,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--fg-3)', marginTop: 4 }} />
                         <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: i === arr.length - 1 ? '0px' : '20px' }} />
                       </div>
-                      <div style={{ paddingBottom: 16, minWidth: 0 }}>
+                      <div style={{ paddingBottom: 16 }}>
                         <div style={{ fontSize: 13, fontWeight: 500 }}>
                           {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
                         </div>
@@ -1364,6 +1364,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             invoiceNumber={inv.invoice_number}
             invoiceCreatedAt={inv.created_at}
             createdBy={history.data?.[0]?.actor ?? null}
+            createdByResolved={
+              history.data?.[0] ? { name: history.data[0].actor_name, kind: history.data[0].actor_kind } : undefined
+            }
             onClose={closePreview}
           />
         )}

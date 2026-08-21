@@ -18,7 +18,7 @@ var wlrRefPattern = regexp.MustCompile(`worker\.go:(\d+) \[([^\]]+)\]`)
 // wlrBarePattern matches a worker.go:NNN citation with no anchor at all.
 var wlrBarePattern = regexp.MustCompile(`worker\.go:\d+\b`)
 
-// wlrMinMatches is the population floor: 13 anchored citations exist across the package
+// wlrMinMatches is the population floor: 17 anchored citations exist across the package
 // today. Below this, every check below would be checking nothing.
 const wlrMinMatches = 11
 

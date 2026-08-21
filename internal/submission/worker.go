@@ -219,7 +219,13 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				// Submit was never called from this branch -- nothing reached the wire.
 				// Reflects this attempt only: Transform reruns every attempt, so a prior
 				// attempt's Retryable (wire contact, in app_exchange) isn't consulted here.
-				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailurePayloadNotBuilt)
+				kind := FailurePayloadNotBuilt
+				if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+					return err
+				}
+				// Last statement, like the verdict branches: OncePerJob's guarantee then covers
+				// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
+				return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind)
 			})
 			return err
 		})
@@ -309,7 +315,13 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					}
 					// Retry budget exhausted on Retryable: an ack was never observed, but a 5xx
 					// means bytes may have reached the wire -- non-delivery isn't provable here.
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailureNeverAcknowledged)
+					kind := FailureNeverAcknowledged
+					if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+						return err
+					}
+					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
+					// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
+					return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind)
 				})
 				if err != nil {
 					return err

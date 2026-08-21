@@ -466,7 +466,7 @@ func TestActorResolve_SuspendedMemberStillResolves(t *testing.T) {
 }
 
 // D-31 against REAL columns: Name's ladder treats a non-nil "" as absent, and the
-// only way to prove Resolve carries that through is to write ” into the database
+// only way to prove Resolve carries that through is to write "" into the database
 // and read it back. The seed has no such row, so this test makes and restores one.
 func TestActorResolve_StoredEmptyStringFallsThrough(t *testing.T) {
 	super, _ := dbTestPools(t)

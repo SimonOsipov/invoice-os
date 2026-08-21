@@ -283,10 +283,9 @@ func vaDirectCalls(body *ast.BlockStmt, want string) []*ast.CallExpr {
 // guarantee's reach; an early return placed after it could skip the row entirely on a path
 // that still lands the invoice in failed.
 //
-// The floor is >= 2, not exact: PollWorker's failure site is wired too now, putting the real
-// count at three -- SubmitWorker's two plus PollWorker's one. The last-statement property
-// below is asserted over EVERY matched closure, so the floor costs the check no strength.
-// Tightening it to an exact count belongs with the subtask that finishes the set.
+// The set is closed at exactly three: SubmitWorker's two failure sites plus PollWorker's
+// one. A fourth call site is a deliberate decision -- a new terminal-failure branch -- not
+// an accident this test should wave through.
 func TestSubmissionAudit_FailureWriteIsLastInItsClosure(t *testing.T) {
 	files := vaScanSubmissionPackage(t)
 	vaRequirePopulation(t, files)
@@ -338,9 +337,10 @@ func TestSubmissionAudit_FailureWriteIsLastInItsClosure(t *testing.T) {
 		t.Fatalf("walked %d function literals across %d files, want >= 10 -- the walk is broken, "+
 			"so the counts below are vacuous", scanned, len(files))
 	}
-	if matched < 2 {
-		t.Fatalf("closures calling recordFailureAudit = %d, want >= 2 (found at %v) -- every "+
-			"terminal-failure branch, SubmitWorker's and PollWorker's alike, must write the event", matched, sites)
+	if matched != 3 {
+		t.Fatalf("closures calling recordFailureAudit = %d, want exactly 3 (found at %v) -- the "+
+			"set is closed; a fourth site is a deliberate decision, not an accident this test "+
+			"should wave through", matched, sites)
 	}
 	for _, loc := range sites {
 		if !strings.HasPrefix(loc, "worker.go:") {

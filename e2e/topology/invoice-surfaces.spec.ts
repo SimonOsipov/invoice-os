@@ -2457,25 +2457,39 @@ test('detail surface: the armed decision block and trail card, plus their layout
 // AUDIT-02-04. One page, two facts the unit tests cannot reach:
 //
 // 1. LEAK. APP_PERSONAS (frontend/app/src/auth.ts:34-61) holds BOTH tenants' admin
-//    subjects, unscoped. The genesis row below is actored by Honeywell's admin inside the
-//    FIRM tenant, so the RLS-scoped server finds no membership and answers kind 'raw'.
-//    Any client-side fall-through to that table prints "Ngozi Balogun · Honeywell Group"
-//    to an Okafor viewer.
+//    subjects, unscoped. Both rows below are actored by Honeywell's admin id inside the
+//    FIRM tenant, so the RLS-scoped memberships query (internal/actor/resolve.go:75-78)
+//    finds no row and answers kind 'raw'. Any client-side fall-through to that table
+//    prints "Ngozi Balogun · Honeywell Group" to an Okafor viewer.
 // 2. CLIPPING. The rail is `1fr minmax(220px, 25%)` above 1180 (platform.css:233) and the
 //    card sets overflow:hidden (InvoiceDetail.tsx:1315), so an unbreakable actor is
-//    clipped SILENTLY -- no page-level overflow, no console line. A uuid breaks at its
-//    hyphens; the ladder's email rung (internal/actor/actor.go:39-40) does not, and
-//    db/seed.dev.sql:45 already holds a 44-char one. The second actor below is that shape.
+//    clipped SILENTLY -- no page-level overflow, no console line. A hyphenated uuid breaks
+//    at its hyphens under plain `overflow-wrap: normal`, so only a token with no hyphen at
+//    all can prove the `anywhere` on that span is load-bearing.
 //
-// Both tokens are minted for subjects that hold no membership in the firm tenant --
-// allowed on Preview posture, which is what the deploy gate runs (gateway.go:199).
+// The two rows spell the SAME uuid two ways, which is what makes both facts testable from
+// one page. The verifier requires uuid.Parse to accept the JWT subject
+// (internal/platform/auth/verify.go:145), and uuid.Parse takes exactly four lengths: 32
+// bare hex, 36 hyphenated, 38 braced-hyphenated, 45 urn. Row 0 is the 36-char canonical
+// form -- byte-identical to the APP_PERSONAS key, so it is the leak oracle. Row 1 is the
+// 32-char bare-hex form, the one admitted spelling with no hyphen, so it is the clipping
+// oracle. actor.normalizeUUID (resolve.go:19) admits both, so both are really bound and
+// really queried under firm RLS: an absence here is the server's scoping as much as the
+// client's.
+//
+// The mock issuer mints for any subject on Preview posture (gateway.go:199), which is
+// what an earlier draft of this test read as permission to use the seeded 44-char email
+// (db/seed.dev.sql:45) as a subject. Minting is not admission: verify.go rejects every
+// non-uuid subject at the middleware, so that token 401'd on first use. Nor is that email
+// reachable as an actor by any other route -- actor.Name only falls to its email rung
+// when display_name is null, and all 13 seeded memberships fill it.
 // Needs `data-testid="status-history-actor"` on the actor span (InvoiceDetail.tsx:1335).
 test('detail surface: a history actor the server cannot name renders verbatim and stays inside its rail', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
   const otherTenantAdmin = 'c0000000-0000-0000-0000-000000000002'
-  const unbreakableActor = 'o.adebanjo-ogunleye@okaforandpartners.com.ng'
+  const unbreakableActor = 'c0000000000000000000000000000002'
 
   const creatorToken = await login({ ...PERSONAS.A, subject: otherTenantAdmin })
   const validatorToken = await login({ ...PERSONAS.A, subject: unbreakableActor })
@@ -2490,7 +2504,10 @@ test('detail surface: a history actor the server cannot name renders verbatim an
   await openInvoiceRow(page, invoiceNumber)
 
   // Positive control before either absence assertion: both rows render, in changed_at
-  // order, each carrying its stored actor byte for byte and flagged mono.
+  // order, each carrying its stored actor byte for byte and flagged mono. Byte-for-byte
+  // matters twice over here -- it is also what stops the sweep below passing vacuously on
+  // a short name, which is what a client that re-normalised row 1 into APP_PERSONAS would
+  // render.
   const actors = page.getByTestId('status-history-actor')
   await expect(actors).toHaveCount(2)
   await expect(actors.nth(0)).toHaveText(otherTenantAdmin)
@@ -2507,9 +2524,19 @@ test('detail surface: a history actor the server cannot name renders verbatim an
   // geometry, so the card's overflow:hidden hides the defect from the eye but not from
   // gaps(). 1px, matching the trail-card check at :2416-2423, not assertFillsColumn's
   // 24px: this cell is legitimately narrower than its card, so only overflow is a defect.
+  //
+  // 1180 is swept after WIDE_WIDTHS (widest first, layout.ts:22) because it is the rail's
+  // 220px floor -- the narrowest the rail is allowed to be, and so the rung where 32 mono
+  // characters have the least room. WIDE_WIDTHS alone would leave this oracle resting on
+  // 1280 by a couple of characters.
   const entryViewport = page.viewportSize()
+  // How many line boxes the unbreakable cell occupied, per width. An inline element
+  // reports one rect per line, so >1 is the browser's own proof that the string did not
+  // fit and `overflow-wrap: anywhere` is what kept it in -- the non-vacuity control for
+  // the gaps() bound below, measured rather than computed from a font advance.
+  const wrapped: Array<{ width: number; lines: number }> = []
   try {
-    for (const width of WIDE_WIDTHS) {
+    for (const width of [...WIDE_WIDTHS, 1180]) {
       await page.setViewportSize({ width, height: 1080 })
       const cardBox = await card.boundingBox()
       expect(cardBox, `the status history card must render at ${width}px`).toBeTruthy()
@@ -2522,10 +2549,19 @@ test('detail surface: a history actor the server cannot name renders verbatim an
         expect(g.left, `actor cell ${i} must not start left of the status history card at ${width}px`).toBeGreaterThanOrEqual(-1)
         expect(g.right, `actor cell ${i} must not extend right of the status history card at ${width}px`).toBeGreaterThanOrEqual(-1)
       }
+      wrapped.push({ width, lines: await actors.nth(1).evaluate((el) => el.getClientRects().length) })
     }
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
   }
+
+  // Red here means the bound above went vacuous, not that the page regressed: the rail
+  // grew, or the actor shrank, until the longest subject the auth verifier admits fits
+  // every swept width uncut. Widen the sweep or lengthen the actor -- do not delete this.
+  expect(
+    wrapped.filter((w) => w.lines > 1),
+    `the unbreakable actor must overflow its cell at some swept width, or nothing here can catch a lost overflow-wrap:\n${JSON.stringify(wrapped)}`,
+  ).not.toHaveLength(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

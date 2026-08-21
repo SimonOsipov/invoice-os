@@ -1753,7 +1753,13 @@ func workTransformFailure(t *testing.T, f *effectsFixture, tenantID, invoiceID s
 	if err := w.Work(context.Background(), job); err == nil {
 		t.Fatal("Work on a transform failure returned nil, want river.JobCancel")
 	}
-	return wjRequire(t, f, tenantID, idemKey)
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "failed" {
+		t.Fatalf("submission_jobs.state = %q, want %q -- a silently-skipped OncePerJob closure "+
+			"(a River job id already used in this tenant) would leave the wrong state here",
+			wj.state, "failed")
+	}
+	return wj
 }
 
 // workRetryExhaustion drives one invoice through the dead-letter branch (job.Attempt ==
@@ -1773,7 +1779,13 @@ func workRetryExhaustion(t *testing.T, f *effectsFixture, tenantID, invoiceID st
 	if err := w.Work(context.Background(), job); err == nil {
 		t.Fatal("Work on a Retryable final attempt returned nil, want a non-nil error so River discards the job")
 	}
-	return wjRequire(t, f, tenantID, idemKey)
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "dead_lettered" {
+		t.Fatalf("submission_jobs.state = %q, want %q -- a silently-skipped OncePerJob closure "+
+			"(a River job id already used in this tenant) would leave the wrong state here",
+			wj.state, "dead_lettered")
+	}
+	return wj
 }
 
 // A Transform failure is a terminal failure and must say so once, with the kind the same

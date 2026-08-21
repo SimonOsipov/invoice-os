@@ -216,7 +216,13 @@ func workPollExhaustion(t *testing.T, f *effectsFixture, tenantID, invoiceID str
 	if err := pw.Work(ctx, job); err == nil {
 		t.Fatal("PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error so River discards the job")
 	}
-	return wjRequire(t, f, tenantID, idemKey)
+	wj = wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "dead_lettered" {
+		t.Fatalf("submission_jobs.state = %q, want %q -- a silently-skipped OncePerJob closure "+
+			"(a River job id already used in this tenant) would leave the wrong state here",
+			wj.state, "dead_lettered")
+	}
+	return wj
 }
 
 // Poll-budget exhaustion is a terminal failure and must say so once, with the kind

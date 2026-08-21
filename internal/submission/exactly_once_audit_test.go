@@ -100,6 +100,33 @@ func twoPartyRendezvous(t *testing.T) func() {
 	}
 }
 
+// distinctSubmissionEvents runs the vacuous-pass floor a distinct-set claim needs ruled out
+// (an empty result trivially "satisfies" set equality otherwise).
+func distinctSubmissionEvents(t *testing.T, f *effectsFixture, tenantID string) []string {
+	t.Helper()
+	ctx := context.Background()
+	var events []string
+	err := db.WithinTenantTx(ctx, f.app, tenantID, func(tx pgx.Tx) error {
+		rows, e := tx.Query(ctx, `SELECT DISTINCT event FROM audit_log WHERE event LIKE 'submission.%'`)
+		if e != nil {
+			return e
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ev string
+			if e := rows.Scan(&ev); e != nil {
+				return e
+			}
+			events = append(events, ev)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("select distinct submission.* events (tenant=%s): %v", tenantID, err)
+	}
+	return events
+}
+
 // --- COMMIT 4 ------------------------------------------------------------------------------
 
 // A River redelivery of the identical job (same id, same attempt) must not double the audit
@@ -314,5 +341,135 @@ func TestSubmissionAudit_ConcurrentRedeliveryOfOneJobWritesOneRow(t *testing.T) 
 	}
 	if wj.attempts != 1 {
 		t.Errorf("submission_jobs.attempts = %d, want 1 -- the loser must never have incremented it", wj.attempts)
+	}
+}
+
+// --- COMMIT 7 ------------------------------------------------------------------------------
+
+// Every driven path in one tenant, across the whole vocabulary this seam can produce, must
+// resolve to exactly one of the three declared events. A DISTINCT-set assertion alone is
+// satisfied vacuously by an empty result, so three layers back it: exact per-event counts
+// (not a floor), the marker census as an independent control on which closures ran, and two
+// non-audit oracles for the two paths that deliberately write no audit row at all.
+func TestSubmissionAudit_EveryDrivenPathSpellsOneOfThreeEvents(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantID)
+	entityID := seedEntity(t, f, tenantID)
+
+	// Accepted (id 46).
+	invAccepted := seedInvoice(t, f, tenantID, entityID)
+	idemAccepted := "req-" + uuid.NewString() + ":" + invAccepted
+	adapterAccepted := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Accepted{IRN: "IRN-EVT-46", CSID: "CSID-46", QRPayload: "QR-46"},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	if err := newTestWorker(f.app, adapterAccepted).Work(ctx,
+		newSubmitJob(46, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invAccepted, IdempotencyKey: idemAccepted})); err != nil {
+		t.Fatalf("accepted path: %v", err)
+	}
+
+	// Rejected (id 47).
+	invRejected := seedInvoice(t, f, tenantID, entityID)
+	idemRejected := "req-" + uuid.NewString() + ":" + invRejected
+	adapterRejected := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Rejected{Reasons: []submission.Reason{{Code: "E1", Message: "evt-47 rejection"}}},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	if err := newTestWorker(f.app, adapterRejected).Work(ctx,
+		newSubmitJob(47, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invRejected, IdempotencyKey: idemRejected})); err != nil {
+		t.Fatalf("rejected path: %v", err)
+	}
+
+	// Pending (id 48).
+	invPending := seedInvoice(t, f, tenantID, entityID)
+	idemPending := "req-" + uuid.NewString() + ":" + invPending
+	adapterPending := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r-evt-48", PollAfter: time.Now().Add(time.Hour)},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	if err := newTestWorker(f.app, adapterPending).Work(ctx,
+		newSubmitJob(48, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invPending, IdempotencyKey: idemPending})); err != nil {
+		t.Fatalf("pending path: %v", err)
+	}
+	wjPending := wjRequire(t, f, tenantID, idemPending)
+
+	// Mid-budget Retryable (id 49) -- deliberately outside OncePerJob (see commit 5).
+	invMidBudget := seedInvoice(t, f, tenantID, entityID)
+	idemMidBudget := "req-" + uuid.NewString() + ":" + invMidBudget
+	adapterMidBudget := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: errors.New("wsub: transient, evt-49")},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	if err := newTestWorker(f.app, adapterMidBudget).Work(ctx,
+		newSubmitJob(49, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invMidBudget, IdempotencyKey: idemMidBudget})); err == nil {
+		t.Fatal("mid-budget path returned nil, want the original error so River retries")
+	}
+
+	// Transform-failed (workTransformFailure hardcodes River id 1).
+	invTransform := seedInvoice(t, f, tenantID, entityID)
+	workTransformFailure(t, f, tenantID, invTransform)
+
+	// Submit-exhausted (workRetryExhaustion hardcodes River id 2).
+	invSubmitExhausted := seedInvoice(t, f, tenantID, entityID)
+	workRetryExhaustion(t, f, tenantID, invSubmitExhausted)
+
+	// Poll-exhausted (submit id 50 -> Pending, poll id 51 -> dead-letter).
+	invPollExhausted := seedInvoice(t, f, tenantID, entityID)
+	workPollExhaustion(t, f, tenantID, invPollExhausted, 50, 51)
+
+	// Layer 1: exact counts, not a floor.
+	if n := auditFamilyCount(t, f, tenantID); n != 5 {
+		t.Fatalf("submission.* audit rows = %d, want exactly 5", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted rows = %d, want 1", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != 1 {
+		t.Errorf("submission.rejected rows = %d, want 1", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 3 {
+		t.Errorf("submission.failed rows = %d, want 3", n)
+	}
+
+	// Layer 2: the marker census. Six closures ran (accepted, rejected, pending,
+	// transform-failed, submit-exhausted, poll's own submit-Pending and dead-letter) and no
+	// eighth did; id 49's mid-budget marker is deliberately absent (layer 3a below).
+	assertJobMarkers(t, f, tenantID, 1, 2, 46, 47, 48, 50, 51)
+
+	// Layer 3a: the mid-budget path ran, proven without the audit table or the marker
+	// census -- job:49 is absent from the census above precisely because this branch sits
+	// outside queue.OncePerJob.
+	wjMid := wjRequire(t, f, tenantID, idemMidBudget)
+	if wjMid.state != "queued" {
+		t.Errorf("mid-budget job state = %q, want \"queued\"", wjMid.state)
+	}
+	if wjMid.attempts != 1 {
+		t.Errorf("mid-budget job attempts = %d, want 1", wjMid.attempts)
+	}
+	if wjMid.lastError == nil {
+		t.Error("mid-budget job last_error = nil, want non-nil")
+	}
+
+	// Layer 3b: the Pending path ran, proven via its own state plus the poll hop it enqueued
+	// in the same OncePerJob closure that wrote its job:48 marker.
+	if wjPending.state != "pending" {
+		t.Errorf("pending job state = %q, want \"pending\"", wjPending.state)
+	}
+	if n := countKeys(t, f.app, tenantID, "poll:"+wjPending.id+":1"); n != 1 {
+		t.Errorf("poll outbox key count for job %s = %d, want 1", wjPending.id, n)
+	}
+
+	// The claim this whole test exists to raise above vacuous.
+	events := distinctSubmissionEvents(t, f, tenantID)
+	want := map[string]bool{"submission.accepted": true, "submission.rejected": true, "submission.failed": true}
+	if len(events) != len(want) {
+		t.Fatalf("distinct submission.* events = %v, want exactly %v", events, want)
+	}
+	for _, e := range events {
+		if !want[e] {
+			t.Errorf("unexpected distinct event %q", e)
+		}
 	}
 }

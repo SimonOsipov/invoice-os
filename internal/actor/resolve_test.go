@@ -710,7 +710,12 @@ func TestActorResolve_UnscopedTxResolvesNothingRatherThanWrongly(t *testing.T) {
 // blankMembershipCols writes name/email onto a membership row and restores the
 // originals at test end. It fails if the row already looks blank, so the caller's
 // fall-through assertion cannot pass on a fixture that never changed.
-func blankMembershipCols(t *testing.T, super *pgxpool.Pool, userID, name, email string) {
+//
+// name/email are *string so a caller can write true SQL NULL and not only "":
+// both columns are bare nullable text
+// (migrations/20260808140706_memberships_status_and_identity.sql:7-8), and
+// TestActorResolve_NullColumnsFallThroughToTheSubject needs that rung.
+func blankMembershipCols(t *testing.T, super *pgxpool.Pool, userID string, name, email *string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -745,8 +750,17 @@ func blankMembershipCols(t *testing.T, super *pgxpool.Pool, userID, name, email 
 		t.Fatalf("read back the fixture columns: %v", err)
 	}
 	if !took {
-		t.Fatalf("fixture row %s did not take display_name=%q email=%q", userID, name, email)
+		t.Fatalf("fixture row %s did not take display_name=%s email=%s", userID, showCol(name), showCol(email))
 	}
+}
+
+// showCol renders a nullable column for a failure message: %q on a *string prints
+// an address, and NULL must be distinguishable from "".
+func showCol(p *string) string {
+	if p == nil {
+		return "NULL"
+	}
+	return fmt.Sprintf("%q", *p)
 }
 
 // Kills `subject == systemActor` -> strings.EqualFold. The contract is the exact
@@ -794,7 +808,7 @@ func TestActorResolve_RawFallbackEchoesTheSubjectNotTheStoredID(t *testing.T) {
 	})
 
 	t.Run("an unnameable row echoes that same spelling verbatim", func(t *testing.T) {
-		blankMembershipCols(t, super, okaforBlankable, "", "")
+		blankMembershipCols(t, super, okaforBlankable, ptr(""), ptr(""))
 		traced, rec := tracedAppPool(t)
 		tx := scopedTx(t, traced, rec, okaforTenantID)
 
@@ -919,7 +933,7 @@ func TestActorResolve_NilEmptyAndBlankSubjects(t *testing.T) {
 // which is the point of pinning it.
 func TestActorResolve_WhitespaceOnlyDisplayNameIsNotTreatedAsBlank(t *testing.T) {
 	super, _ := dbTestPools(t)
-	blankMembershipCols(t, super, okaforBlankable, "   ", "c.nwosu@okafor.ng")
+	blankMembershipCols(t, super, okaforBlankable, ptr("   "), ptr("c.nwosu@okafor.ng"))
 
 	traced, rec := tracedAppPool(t)
 	tx := scopedTx(t, traced, rec, okaforTenantID)
@@ -1037,5 +1051,66 @@ func TestActorResolve_QueryCountIsConstantInN(t *testing.T) {
 				t.Errorf("bound array holds %d element(s), want %d — every subject must ride the ONE statement", bound, n)
 			}
 		})
+	}
+}
+
+// Kills resolve.go:85 `var displayName, email *string` -> non-pointer string: pgx
+// cannot scan NULL into it ("cannot scan NULL into *string"), so Resolve returns
+// an error. Nothing else here reaches that mutant, because every other DB-backed
+// fall-through in this suite writes "" and never SQL NULL.
+//
+// It also kills actor.go:36 `if displayName != nil && *displayName != ""` -> `if
+// *displayName != ""` (nil deref), but does not do so alone: TestActorName_
+// FallsBackToEmail already panics on that one at the pure layer.
+//
+// Both columns are bare nullable text with no NOT NULL and no CHECK
+// (migrations/20260808140706_memberships_status_and_identity.sql:7-8), so a row
+// with both NULL is a legal state APPR-15's PATCH surface can produce. The row
+// EXISTS, so Resolve overwrites its raw placeholder with Name(...) — which makes
+// this AC-5's worst-shaped no-fabrication case and not the departed member of
+// TestActorResolve_RawFallbackEchoesTheSubjectNotTheStoredID.
+//
+// memberships cross-tenant isolation is proven at
+// internal/platform/db/memberships_rls_test.go:607 and e2e/api/isolation.spec.ts
+// (AC2); neither is duplicated here.
+func TestActorResolve_NullColumnsFallThroughToTheSubject(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	blankMembershipCols(t, super, okaforBlankable, nil, nil)
+
+	// The columns must be NULL and not "", or this test silently re-runs D-31's
+	// TestActorResolve_StoredEmptyStringFallsThrough; and the row must be PRESENT,
+	// or the fall-through below is the departed-member path instead.
+	var present int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM memberships
+		  WHERE tenant_id = $1 AND user_id = $2
+		    AND display_name IS NULL AND email IS NULL`,
+		okaforTenantID, okaforBlankable).Scan(&present); err != nil {
+		t.Fatalf("read back the NULLed columns: %v", err)
+	}
+	if present != 1 {
+		t.Fatalf("%d membership row(s) for %s have display_name IS NULL AND email IS NULL, want exactly 1", present, okaforBlankable)
+	}
+
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	got := mustResolve(t, tx, []string{okaforBlankable, okaforAdmin})
+
+	// Live positive control in the SAME call: this tx does resolve names, so the
+	// fall-through is the NULL columns and not an empty result set.
+	assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+	assertLabel(t, got, okaforBlankable, raw(okaforBlankable))
+	if got[okaforBlankable].Text == "" {
+		t.Errorf("Resolve[%s].Text is empty — a NULL row falls through to the subject, never to a blank cell (AC-5)", okaforBlankable)
+	}
+
+	// The NULL row must be BOUND and returned, not skipped: a Resolve that never
+	// queried it would reach the same raw label by the wrong mechanism.
+	s := membershipsStmts(t, rec, 1)[0]
+	if n := boundArrayLen(t, s); n != 2 {
+		t.Errorf("bound array holds %d element(s), want 2 — the NULL row must be bound", n)
 	}
 }

@@ -503,3 +503,101 @@ func TestRLS_PollWorkerFailureAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 			"RLS must hide tenant A's poll dead-letter row from tenant B", n)
 	}
 }
+
+// --- COMMIT 10 -----------------------------------------------------------------------------
+
+// TestSubmissionAudit_TwoRiverJobsOnOneInvoiceWriteTwoRows characterizes what actually guards
+// (and does not guard) two River jobs touching one invoice: queue.OncePerJob's key is
+// per-(tenant, River job id); ensureSubmissionJob's FOR UPDATE releases when tx1 commits;
+// markJobTransformFailed/markJobDeadLettered update WHERE id = $1 with no state guard; and
+// app_exchange/audit_log carry no unique constraint. Nothing in this package stops a second
+// job from writing a second row for the same invoice -- these two subtests assert what is
+// TRUE, not what sounds tidy.
+func TestSubmissionAudit_TwoRiverJobsOnOneInvoiceWriteTwoRows(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+
+	// Two different idempotency keys (a resubmission, M5-01) on the SAME invoice, sequential.
+	// Two rows is CORRECT here, not a bug -- asserting "exactly one" would assert a wrong
+	// invariant.
+	t.Run("resubmission-writes-one-row-each", func(t *testing.T) {
+		tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+		defer cleanup()
+
+		idemKey1 := "req-" + uuid.NewString() + ":" + invoiceID
+		adapter1 := newScriptedAdapter(scriptedOutcome{
+			result:   submission.Retryable{Err: errors.New("wsub: upstream 503, resubmission 1")},
+			evidence: submission.Evidence{ReachedWire: true},
+		})
+		job1 := newSubmitJob(56, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey1})
+		if err := newTestWorker(f.app, adapter1).Work(ctx, job1); err == nil {
+			t.Fatal("resubmission 1 returned nil, want the dead-letter error")
+		}
+
+		idemKey2 := "req-" + uuid.NewString() + ":" + invoiceID
+		adapter2 := newScriptedAdapter(scriptedOutcome{
+			result:   submission.Retryable{Err: errors.New("wsub: upstream 503, resubmission 2")},
+			evidence: submission.Evidence{ReachedWire: true},
+		})
+		job2 := newSubmitJob(57, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey2})
+		if err := newTestWorker(f.app, adapter2).Work(ctx, job2); err == nil {
+			t.Fatal("resubmission 2 returned nil, want the dead-letter error")
+		}
+
+		if n := auditCount(t, f, tenantID, "submission.failed"); n != 2 {
+			t.Errorf("submission.failed audit rows = %d, want 2 -- one per resubmission", n)
+		}
+		assertJobMarkers(t, f, tenantID, 56, 57)
+
+		wj1 := wjRequire(t, f, tenantID, idemKey1)
+		wj2 := wjRequire(t, f, tenantID, idemKey2)
+		if wj1.id == wj2.id {
+			t.Fatalf("both resubmissions share submission_jobs.id %s, want two distinct rows", wj1.id)
+		}
+
+		// The operator-facing invariant: the invoice column holds exactly one CURRENT value
+		// regardless of how many submission_jobs rows fed it.
+		inv := wiRead(t, f, tenantID, invoiceID)
+		if inv.failureKind == nil {
+			t.Error("invoice failure_kind = nil after two failed resubmissions, want non-nil")
+		}
+	})
+
+	// Two DIFFERENT River job ids sharing ONE idempotency key -- outside OncePerJob's
+	// guarantee, which is per-(tenant, River job id), not per-invoice. Not reachable in
+	// production: queue.EnqueueTx skips the River insert on a duplicate business key
+	// (queue.go:130-132, `if ct.RowsAffected() == 0`), so nothing in internal/submission
+	// closes this -- the outbox does. Tighten this test to want 1 if a per-invoice guard is
+	// ever added.
+	t.Run("same-key-two-river-jobs-is-outside-the-guarantee", func(t *testing.T) {
+		tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+		defer cleanup()
+
+		idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+		adapter := newScriptedAdapter(scriptedOutcome{
+			result:   submission.Retryable{Err: errors.New("wsub: upstream 503, same-key two jobs")},
+			evidence: submission.Evidence{ReachedWire: true},
+		})
+		adapter.onSubmit = twoPartyRendezvous(t)
+		w := newTestWorker(f.app, adapter)
+
+		job54 := newSubmitJob(54, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+		job55 := newSubmitJob(55, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		wg.Add(2)
+		go func() { defer wg.Done(); errs[0] = w.Work(ctx, job54) }()
+		go func() { defer wg.Done(); errs[1] = w.Work(ctx, job55) }()
+		wg.Wait()
+
+		if errs[0] == nil || errs[1] == nil {
+			t.Fatalf("Work() returned (%v, %v), want BOTH non-nil", errs[0], errs[1])
+		}
+
+		if n := auditCount(t, f, tenantID, "submission.failed"); n != 2 {
+			t.Errorf("submission.failed audit rows = %d, want 2", n)
+		}
+		assertJobMarkers(t, f, tenantID, 54, 55)
+	})
+}

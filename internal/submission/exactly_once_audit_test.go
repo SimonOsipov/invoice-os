@@ -172,3 +172,51 @@ func TestSubmissionAudit_RedeliveredTerminalFailureWritesOneRow(t *testing.T) {
 		}
 	})
 }
+
+// --- COMMIT 5 ------------------------------------------------------------------------------
+
+// The executable form of markJobRetry's doc comment: the mid-budget branch is deliberately
+// outside queue.OncePerJob, so a second attempt on the SAME River job id, after budget was
+// left on the first, still runs its closure and writes exactly the accepted row -- never a
+// failed one from attempt 1.
+func TestSubmissionAudit_MidBudgetRetryThenSuccessWritesOnlyAccepted(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(
+		scriptedOutcome{result: submission.Retryable{Err: errors.New("wsub: transient, attempt 1")}, evidence: submission.Evidence{ReachedWire: true}},
+		scriptedOutcome{result: submission.Accepted{IRN: "IRN-AC2", CSID: "CSID-AC2", QRPayload: "QR-AC2"}, evidence: submission.Evidence{ReachedWire: true}},
+	)
+	w := newTestWorker(f.app, adapter)
+
+	job1 := newSubmitJob(44, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(ctx, job1); err == nil {
+		t.Fatal("attempt 1 (mid-budget Retryable) returned nil, want the original error so River retries")
+	}
+	if n := auditFamilyCount(t, f, tenantID); n != 0 {
+		t.Fatalf("submission.* audit rows after attempt 1 = %d, want 0 -- precondition for attempt 2 below", n)
+	}
+
+	// SAME River job id 44.
+	job2 := newSubmitJob(44, 2, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(ctx, job2); err != nil {
+		t.Fatalf("attempt 2 (Accepted) returned %v, want nil", err)
+	}
+
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted audit rows = %d, want 1", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 0 {
+		t.Errorf("submission.failed audit rows = %d, want 0", n)
+	}
+	if n := auditFamilyCount(t, f, tenantID); n != 1 {
+		t.Errorf("submission.* audit rows = %d, want 1", n)
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "accepted" {
+		t.Errorf("invoice status = %q, want \"accepted\"", inv.status)
+	}
+}

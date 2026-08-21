@@ -1,6 +1,6 @@
 // verdict_audit.go: this package's only 08 audit writes -- one row per terminal submission
-// outcome, inside the caller's job transaction. SubmitWorker and PollWorker both route their
-// Accepted/Rejected verdicts through recordVerdictAudit (System Design §6).
+// outcome, inside the caller's job transaction (System Design §6). Verdicts go through
+// recordVerdictAudit, failures through recordFailureAudit, both via recordSubmissionAudit.
 package submission
 
 import (
@@ -43,11 +43,12 @@ func recordVerdictAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID, outcom
 	return recordSubmissionAudit(ctx, tx, outcome, payload)
 }
 
-// recordFailureAudit writes the row for a terminal failure -- the dead-letter branches that leave
-// the invoice in status='failed'. The reason travels as the FailureKind enum, never
-// submission_jobs.last_error: that column is adapter-shaped free text that can carry wire detail,
-// which [audit-payloads] forbids and submission_jobs already holds. Pinned by
-// TestRecordFailureAudit_PayloadIsExactlyFourKeys and TestRecordFailureAudit_CarriesNoWireDetail.
+// recordFailureAudit writes the row for a terminal failure -- every branch that leaves the
+// invoice in status='failed' with no further attempt, whichever submission_jobs state it sets.
+// The reason travels as the FailureKind enum, never submission_jobs.last_error: that column is
+// adapter-shaped free text that can carry wire detail, which [audit-payloads] forbids and
+// submission_jobs already holds. Pinned by TestRecordFailureAudit_PayloadIsExactlyFourKeys and
+// TestRecordFailureAudit_CarriesNoWireDetail.
 func recordFailureAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID string, kind FailureKind) error {
 	return recordSubmissionAudit(ctx, tx, "failed", map[string]any{
 		"invoice_id":        invoiceID,

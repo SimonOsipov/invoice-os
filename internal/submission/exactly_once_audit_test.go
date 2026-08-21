@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,6 +68,35 @@ func assertJobMarkers(t *testing.T, f *effectsFixture, tenantID string, want ...
 	}
 	if !same {
 		t.Errorf("job marker census (tenant=%s) = %v, want exactly %v", tenantID, got, wantKeys)
+	}
+}
+
+// twoPartyRendezvous returns an onSubmit-shaped hook that blocks its first caller until a
+// second arrives, then releases both -- an explicit counter under a mutex plus sync.Once,
+// not len() on a channel (which races). A 10s timeout t.Errors rather than hanging: a
+// rendezvous bug must fail the test, not deadlock it.
+func twoPartyRendezvous(t *testing.T) func() {
+	t.Helper()
+	var (
+		mu      sync.Mutex
+		arrived int
+		once    sync.Once
+	)
+	release := make(chan struct{})
+	return func() {
+		mu.Lock()
+		arrived++
+		n := arrived
+		mu.Unlock()
+		if n == 2 {
+			once.Do(func() { close(release) })
+			return
+		}
+		select {
+		case <-release:
+		case <-time.After(10 * time.Second):
+			t.Error("the second goroutine never reached Submit")
+		}
 	}
 }
 
@@ -218,5 +248,71 @@ func TestSubmissionAudit_MidBudgetRetryThenSuccessWritesOnlyAccepted(t *testing.
 	inv := wiRead(t, f, tenantID, invoiceID)
 	if inv.status != "accepted" {
 		t.Errorf("invoice status = %q, want \"accepted\"", inv.status)
+	}
+}
+
+// --- COMMIT 6 ------------------------------------------------------------------------------
+
+// Two goroutines redeliver the SAME River job (one id, one idempotency key) concurrently,
+// rendezvousing inside scriptedAdapter.Submit so BOTH clear tx1 (and so both would call the
+// adapter) before either proceeds to tx2 -- without the barrier this degrades into the
+// sequential redelivery case above, since the loser's tx1 would already see a terminal state
+// and short-circuit before ever reaching Submit. queue.OncePerJob is the ONLY guard here: it
+// is per-(tenant, River job id), and both goroutines share both.
+func TestSubmissionAudit_ConcurrentRedeliveryOfOneJobWritesOneRow(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: errors.New("wsub: upstream 503, final attempt (concurrent redelivery)")},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	adapter.onSubmit = twoPartyRendezvous(t)
+
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(45, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = w.Work(ctx, job) }()
+	go func() { defer wg.Done(); errs[1] = w.Work(ctx, job) }()
+	wg.Wait()
+
+	// Control: a tx1 short-circuit returns nil (worker.go:192 [case tx1Terminal, tx1AlreadyCleared]);
+	// worker.go:350 [return submitErr] returns a non-nil error on BOTH the applied and skipped
+	// OncePerJob paths. Both non-nil proves both goroutines independently reached tx2.
+	if errs[0] == nil || errs[1] == nil {
+		t.Fatalf("Work() returned (%v, %v), want BOTH non-nil", errs[0], errs[1])
+	}
+
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+		t.Errorf("submission.failed audit rows = %d, want exactly 1", n)
+	}
+	if n := auditFamilyCount(t, f, tenantID); n != 1 {
+		t.Errorf("submission.* audit rows = %d, want exactly 1", n)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if n := exCountRows(t, f, tenantID, wj.id); n != 1 {
+		t.Errorf("app_exchange rows for the job = %d, want exactly 1 -- RecordExchange is the "+
+			"closure's first statement, so this proves the loser's closure was skipped in its entirety", n)
+	}
+	assertJobMarkers(t, f, tenantID, 45)
+
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "failed" {
+		t.Errorf("invoice status = %q, want \"failed\"", inv.status)
+	}
+	if inv.failureKind == nil {
+		t.Error("invoice failure_kind = nil, want non-nil")
+	}
+	if wj.state != "dead_lettered" {
+		t.Errorf("submission_jobs.state = %q, want \"dead_lettered\"", wj.state)
+	}
+	if wj.attempts != 1 {
+		t.Errorf("submission_jobs.attempts = %d, want 1 -- the loser must never have incremented it", wj.attempts)
 	}
 }

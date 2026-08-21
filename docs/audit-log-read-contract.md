@@ -54,7 +54,7 @@ the row says.
 
 The resolver dispatches on the **event name**, never on which payload key happens to be
 present, because three workspace-level events carry a bare `id` that is not an invoice id
-and six invoice events spell it `invoice_id`. See §5 for the consequence.
+and seven invoice events spell it `invoice_id`. See §5 for the consequence.
 
 ## 4. The company filter is a three-way partition
 
@@ -108,11 +108,12 @@ zero cast failures. Fenced by
 `TestAudit_InsertTriggerResolvesEverySpellingUUIDInAccepts`.
 
 This grammar now has **two** implementations that must not drift: the trigger's
-(`migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql`) and `actor.Resolve`'s
-Go copy (`internal/actor/resolve.go`), which applies it before binding a `uuid[]` — an
-unfiltered subject there raises 22P02 and aborts the reader's transaction. The Go copy is
-fenced against Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change one, change
-both.
+(`migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql`, superseded as the
+resolver's definition by the migration that currently defines `audit_log_entity_for`) and
+`actor.Resolve`'s Go copy (`internal/actor/resolve.go`), which applies it before binding a
+`uuid[]` — an unfiltered subject there raises 22P02 and aborts the reader's transaction. The
+Go copy is fenced against Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change
+one, change both.
 
 ## 7. Two predicates no index here serves
 

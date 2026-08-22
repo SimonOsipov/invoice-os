@@ -516,6 +516,63 @@ func TestAuditSearch_MatchesEventPayloadActorNameAndCompanyName(t *testing.T) {
 	}
 }
 
+// TestAuditSearch_DoesNotMatchAPayloadKeyName is R-A's reversal, pinned: search matches
+// payload VALUES via jsonb_each_text, not payload::text, which was measured to also
+// render key names (50,000/50,000 false positives on q="id"). Nothing else in this file
+// distinguishes the two: every other search term here is also a value elsewhere in its
+// row, so a revert to payload::text would leave the rest of the suite green.
+func TestAuditSearch_DoesNotMatchAPayloadKeyName(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	const keyOnly = "zzzkeyonlyneedlezzz"
+	payload := fmt.Sprintf(`{%q:"unrelated-value"}`, keyOnly)
+	filtInsert(t, f, p, []filtRow{
+		{event: "validation.rule.enabled", actor: uuid.NewString(), payload: payload, ageSeconds: 10},
+	})
+
+	got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: keyOnly})
+	if len(got.Events) != 0 {
+		t.Errorf("q=%q, present only as a payload KEY and never a value, matched %d rows, want 0 — "+
+			"search must match payload contents, not key names (R-A)", keyOnly, len(got.Events))
+	}
+	if got.Total != 0 {
+		t.Errorf("q=%q reported total %d, want 0", keyOnly, got.Total)
+	}
+}
+
+// TestAuditSearch_PercentIsALiteralNotAWildcard pins escapeLike, copied from
+// internal/invoice/store.go because that package imports this one. A literal "%" in q
+// must not become an ILIKE wildcard: unescaped, q="%" would match every row in the
+// tenant (internal/invoice's own TestStoreList_QueryMatchesNumberOrBuyer proves the same
+// hazard there). The positive half proves escaping does not also break a genuine literal
+// "%" in stored data.
+func TestAuditSearch_PercentIsALiteralNotAWildcard(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "validation.rule.enabled", actor: uuid.NewString(), payload: `{"note":"fifty percent"}`, ageSeconds: 20},
+		{event: "membership.suspended", actor: uuid.NewString(), payload: `{"note":"50% off"}`, ageSeconds: 10},
+	})
+
+	// Unescaped, "%" is a wildcard matching everything; escaped, it must match only the
+	// row whose payload holds a literal "%".
+	got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: "%"})
+	want := []int64{rows[1].id}
+	if ids := pageIDs(t, got); !pageEqualIDs(ids, want) {
+		t.Errorf("q=\"%%\" matched %v, want exactly %v (the row with a literal %% in its payload) — "+
+			"an unescaped q would match every row in the tenant", ids, want)
+	}
+
+	// The fuller literal, to rule out an escape that neutralises "%" into matching
+	// nothing at all rather than matching it literally.
+	got = pageQuery(t, f, p, audit.Filter{Limit: 20, Q: "50%"})
+	if ids := pageIDs(t, got); !pageEqualIDs(ids, want) {
+		t.Errorf("q=\"50%%\" matched %v, want exactly %v", ids, want)
+	}
+}
+
 func TestAuditSearch_CannotMatchAnInvoiceNumberBecauseNoneIsRecorded(t *testing.T) {
 	f := requireFixture(t)
 	p := pageSeedTenant(t, f)

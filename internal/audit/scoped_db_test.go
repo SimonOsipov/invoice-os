@@ -218,3 +218,59 @@ func TestAuditScoped_MatchesAnUppercaseOrBraceWrappedPayloadID(t *testing.T) {
 		t.Errorf("total = %d, want 3", got.Total)
 	}
 }
+
+// --- facet scoping ------------------------------------------------------------------------
+
+// invFacetCount looks up value in a bucket list. GROUP BY only emits a bucket for a value
+// present in the scoped set, so absence — not a zero count — is what proves scoping.
+func invFacetCount(buckets []audit.Facet, value string) (count int, found bool) {
+	for _, b := range buckets {
+		if b.Value != nil && *b.Value == value {
+			return b.Count, true
+		}
+	}
+	return 0, false
+}
+
+// TestAuditScoped_FacetsAreScopedByTheInvoice closes a gap AC #4's own composition test
+// cannot see: the page and the count share filterPredicates directly, but each facet
+// builds its OWN copy of f in facetStatements, clearing only its own dimension. Nothing
+// before this asserted that copy still carries InvoiceID — a facet that dropped it would
+// show workspace-wide counts on a per-invoice view, a plausible-looking wrong answer.
+func TestAuditScoped_FacetsAreScopedByTheInvoice(t *testing.T) {
+	f := requireFixture(t)
+	fx := invSeed(t, f)
+	otherEntity := pageSeedEntity(t, f, fx.p, "Other Ltd")
+	other := pageSeedInvoice(t, f, fx.p, otherEntity)
+
+	filtInsert(t, f, fx.p, []filtRow{
+		{event: "invoice.created", actor: "system", payload: invIDPayload(fx.invoice), ageSeconds: 10},
+		{event: "invoice.created", actor: "system", payload: invIDPayload(fx.invoice), ageSeconds: 5},
+	})
+	filtInsert(t, f, fx.p, []filtRow{
+		{event: "invoice.updated", actor: "someone-else", payload: invIDPayload(other), ageSeconds: 30},
+		{event: "invoice.updated", actor: "someone-else", payload: invIDPayload(other), ageSeconds: 20},
+		{event: "invoice.updated", actor: "someone-else", payload: invIDPayload(other), ageSeconds: 15},
+	})
+
+	got := pageQuery(t, f, fx.p, audit.Filter{Limit: 10, InvoiceID: fx.invoice})
+
+	if c, found := invFacetCount(got.Facets.Event, "invoice.created"); !found || c != 2 {
+		t.Errorf("event facet invoice.created = (count %d, found %v), want (2, true)", c, found)
+	}
+	if _, found := invFacetCount(got.Facets.Event, "invoice.updated"); found {
+		t.Errorf("event facet contains invoice.updated, which belongs to a different invoice — " +
+			"the event facet is not scoped by invoice_id")
+	}
+	if _, found := invFacetCount(got.Facets.Actor, "someone-else"); found {
+		t.Errorf("actor facet contains someone-else, who only acted on a different invoice — " +
+			"the actor facet is not scoped by invoice_id")
+	}
+	if _, found := invFacetCount(got.Facets.Company, otherEntity); found {
+		t.Errorf("company facet contains %s (Other Ltd), which belongs to a different invoice — "+
+			"the company facet is not scoped by invoice_id", otherEntity)
+	}
+	if c, found := invFacetCount(got.Facets.Company, fx.entity); !found || c != 2 {
+		t.Errorf("company facet %s (Scoped Ltd) = (count %d, found %v), want (2, true)", fx.entity, c, found)
+	}
+}

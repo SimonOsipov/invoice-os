@@ -187,6 +187,42 @@ because a leaky operator could reveal, through an error message or a timing diff
 contents of a row the RLS policy would have hidden. This is the single most reusable fact
 AUDIT-04 produced: it decides, before you design a query, whether an index can help at all.
 
+**The control.** RLS is the variable, not the operator. Measured on a 20,000-row scratch table
+built for this — 20 tenants, an index on `(tenant_id, (payload->>'id'))`, one policy, the whole
+thing inside a rolled-back transaction — the SAME table and the SAME index behave differently
+depending on nothing but `FORCE`:
+
+    A. FORCE ROW LEVEL SECURITY on (the owner is subject to it)
+       Bitmap Heap Scan on leak_ctl (actual rows=0)
+         Recheck Cond: (tenant_id = current_setting('app.current_tenant')::uuid)
+         Filter: ((payload ->> 'id') = 'k4001')
+         Rows Removed by Filter: 1000
+         Heap Blocks: exact=187
+         ->  Bitmap Index Scan on leak_ctl_tenant_pid_idx (actual rows=1000)
+               Index Cond: (tenant_id = current_setting('app.current_tenant')::uuid)
+
+    B. same table, same index, NO FORCE
+       Index Scan using leak_ctl_tenant_pid_idx on leak_ctl (actual rows=1)
+         Index Cond: ((payload ->> 'id') = 'k4001')
+
+One row versus a thousand sifted through 187 heap blocks. The index was never the problem, and
+building a *better* index would not have helped: Postgres declines to evaluate a leaky operator
+before the RLS qual has excluded the row.
+
+`pg_proc` says which operators this reaches:
+
+| `proname` | `proleakproof` |
+|---|---|
+| `jsonb_object_field_text` | `false` |
+| `texticlike` (`ILIKE`) | `false` |
+| `ts_match_vq` (`@@`) | `false` |
+| `texteq` (`=` on text) | **`true`** |
+| `uuid_eq` (`=` on uuid) | **`true`** |
+
+The bottom two rows are the escape hatch, and they are why AUDIT-04-11 worked: move the value
+out of the jsonb into a real typed column and the comparison becomes leakproof, so it can be an
+Index Cond again.
+
 Two consequences follow, and only one of them is still a limit.
 
 **Per-invoice scope is no longer on this list.** AUDIT-01 wrote it as

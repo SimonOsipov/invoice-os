@@ -101,25 +101,24 @@ Seven items. None of them is dischargeable by CI, and the first is load-bearing.
    sites against `App.tsx` as *text*, `analytics.dom.test.ts` calls `trackDemoOpen` directly rather
    than through `book`, and no CI run loads the tag, so the e2e suite sees no payload. DebugView is
    the only oracle that exists for it.
-6. **Optional — re-prove the hostname gate on a live PR environment.** The e2e biconditional in
-   `e2e/smoke/landing-demo.spec.ts` asserts that `gtag.js` is requested **iff** the target is
-   `www.ascomply.com`; on every PR both sides are false. To watch it go red, mutate **data, not
-   logic**, in one push:
-   - set a throwaway `VITE_GA_MEASUREMENT_ID=G-TESTONLY0` on the **PR** environment's `landing`
-     service (never the real id — the fulfilling route absorbs the request, and the real property
-     is never named);
-   - append that PR's own `landing-pr-<n>-<suffix>.up.railway.app` host to `PRODUCTION_HOSTNAMES`
-     (`frontend/landing/src/hubspot.ts:9`).
+6. **Re-prove the hostname gate against production.** Item 1 puts the id on
+   `www.ascomply.com`, so the e2e biconditional in `e2e/smoke/landing-demo.spec.ts` can be run
+   there directly, from a local checkout, instead of rigged on a PR environment:
 
-   Both changes together open the gate on the preview host, and all seven tests in the file go red.
-   Then revert both.
+   ```
+   cd e2e && LANDING_URL=https://www.ascomply.com \
+     OPS_CONSOLE_URL=https://ops.example \
+     APP_URL=https://app.example \
+     SUPPORT_CONSOLE_URL=https://support.example \
+     npx playwright test -g "reading the whole page requests gtag.js only on the live host"
+   ```
 
-   Two things that look simpler and do **not** work. Weakening `isProductionHost` to
-   `endsWith`/`includes` turns `hubspot.test.ts`'s impostor-hostname test red, so `await-ci`
-   refuses to deploy and the e2e job never runs. Setting the variable alone proves nothing either:
-   `ensureTag` returns at its `!id` check before the host gate is consulted, so with no variable
-   there is no request either way. Every existing unit test survives the allowlist mutation — their
-   pinned hostnames all differ from a live PR host. Budget two extra full 11-service rebuilds.
+   To falsify: temporarily make `isGoogleAnalyticsHost` `return false`, re-run the same command —
+   it must fail with `expected gtag.js to be requested; recorded 0` — then revert.
+
+   This replaces the old PR-environment recipe: no Railway write, no rebuild, no ephemeral
+   environment, and it observes the biconditional's **true** arm, which no CI run ever can — every
+   CI run targets a preview host, where the expected answer is always "no tag."
 
 7. **Turn GA4 enhanced measurement off** (Admin → Data streams → the web stream → Enhanced
    measurement). **OPEN — nobody has done this.** Scroll, outbound click, file download, form

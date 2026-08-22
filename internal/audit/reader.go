@@ -1,16 +1,19 @@
-// reader.go: the pure-Go type layer for the audit-log reader (AUDIT-04), plus the
-// keyset cursor codec and CompanyScope classification. Query/Facets/the store/the
-// handler are later subtasks. No DB, no HTTP; audit.go's "free of internal/platform/db"
-// claim stays true.
+// reader.go: the audit-log reader (AUDIT-04) — the wire types, the keyset cursor codec,
+// the CompanyScope classification and Query, the page read. Facets, the store and the
+// handler are later subtasks. Like Record, Query takes pgx.Tx and never
+// internal/platform/db, so audit.go's "no import cycle" claim stays true. No HTTP here.
 package audit
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Cursor is the decoded keyset position (System Design §3): the (created_at, id) tuple
@@ -223,4 +226,15 @@ type Filter struct {
 	Company   CompanyFilter
 	Q         string
 	InvoiceID string
+}
+
+// Query reads one page of tx's tenant's audit log, newest first. It issues no tenant_id
+// predicate: audit_log and business_entities are both FORCE RLS on the same
+// app.current_tenant GUC that db.WithinTenantTx set on tx, so isolation is structural.
+//
+// This subtask (AUDIT-04-02) honours only Limit and Cursor; the other Filter fields are
+// composed in AUDIT-04-03. Response.LogIsEmpty is left at the zero value — the separate
+// empty-probe belongs to the store (AUDIT-04-07).
+func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
+	return Response{}, nil
 }

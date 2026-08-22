@@ -1148,3 +1148,194 @@ func TestSelectExchange_BodyAtAndOverMaxBodyBytesStreamsUnmodified(t *testing.T)
 		t.Errorf("over-cap body length = %d, want %d unmodified bytes -- selectExchange must not re-clip on read", len(gotOver), submission.MaxBodyBytes+1)
 	}
 }
+
+// =====================================================================================
+// D-6/D-20 gap closure: body-file cell shape and streamed-not-accumulated ordering.
+// =====================================================================================
+
+// Gap 1 (D-6): request_body_file/response_body_file must hold the FILENAME the body
+// was archived under, never the body bytes. Every existing test only checks
+// bw.bodies, which a mutant that ALSO inlines the raw body into the CSV cell (while
+// still calling bw.WriteBody correctly) would still satisfy -- these assertions read
+// the cell itself.
+func TestSelectExchange_BodyFileCellsHoldFilenamesNotBodyBytes(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-exchange-body-file-cells")
+	entity := mustCreateEntity(t, tx, tenant, "Body File Cells Co", "60000020-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-BODYCELL-01"})
+	jobID := mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invID})
+	reqBody := `{"line_items":[{"sku":"A1","qty":3}]}`
+	respBody := `{"status":"ACCEPTED","code":"200","data":{"irn":"IRN-BODYCELL-01"}}`
+	exID := mustCreateExchange(t, tx, exchangeFixture{
+		tenantID: tenant, submissionJobID: jobID, invoiceID: invID,
+		requestBody: &reqBody, responseBody: &respBody,
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	bw := newFakeBodyWriter()
+	if err := selectExchange(context.Background(), tx, []string{invID}, w, bw); err != nil {
+		t.Fatalf("selectExchange: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	row := exchangeRowByInvoice(t, buf.Bytes(), invID)
+	wantReqFile := "bodies/" + exID + ".request"
+	wantRespFile := "bodies/" + exID + ".response"
+
+	gotReqCell := row[colIndex(t, wantExchangeHeader, "request_body_file")]
+	if gotReqCell != wantReqFile {
+		t.Errorf("request_body_file = %q, want %q", gotReqCell, wantReqFile)
+	}
+	if gotReqCell == reqBody {
+		t.Errorf("request_body_file cell holds the body bytes, not a filename -- D-6 violation")
+	}
+
+	gotRespCell := row[colIndex(t, wantExchangeHeader, "response_body_file")]
+	if gotRespCell != wantRespFile {
+		t.Errorf("response_body_file = %q, want %q", gotRespCell, wantRespFile)
+	}
+	if gotRespCell == respBody {
+		t.Errorf("response_body_file cell holds the body bytes, not a filename -- D-6 violation")
+	}
+
+	gotReqBody, ok := bw.bodies[wantReqFile]
+	if !ok {
+		t.Fatalf("bodyWriter never received %s", wantReqFile)
+	}
+	if string(gotReqBody) != reqBody {
+		t.Errorf("archived request body = %q, want %q", gotReqBody, reqBody)
+	}
+
+	gotRespBody, ok := bw.bodies[wantRespFile]
+	if !ok {
+		t.Fatalf("bodyWriter never received %s", wantRespFile)
+	}
+	if string(gotRespBody) != respBody {
+		t.Errorf("archived response body = %q, want %q", gotRespBody, respBody)
+	}
+}
+
+// interleaveEvent is one entry in the log recordingCSVWriter and recordingBodyWriter
+// both append to below, in true call order.
+type interleaveEvent struct {
+	kind string // "row" or "body"
+	id   string // exchange_id for "row"; body name for "body"
+}
+
+// interleaveLog is shared by both fakes so events land in the real call sequence
+// regardless of which fake fired.
+type interleaveLog struct {
+	events []interleaveEvent
+}
+
+func (l *interleaveLog) record(kind, id string) {
+	l.events = append(l.events, interleaveEvent{kind: kind, id: id})
+}
+
+func (l *interleaveLog) indexOf(t *testing.T, kind, id string) int {
+	t.Helper()
+	for i, e := range l.events {
+		if e.kind == kind && e.id == id {
+			return i
+		}
+	}
+	t.Fatalf("event log has no %s event for %q -- got %+v", kind, id, l.events)
+	return -1
+}
+
+// recordingCSVWriter delegates to a real csv.Writer, so CSV content assertions still
+// work, and logs every DATA row (never the header) keyed by exchange_id.
+type recordingCSVWriter struct {
+	w           *csv.Writer
+	log         *interleaveLog
+	exIDCol     int
+	wroteHeader bool
+}
+
+func (w *recordingCSVWriter) Write(record []string) error {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		return w.w.Write(record)
+	}
+	w.log.record("row", record[w.exIDCol])
+	return w.w.Write(record)
+}
+
+// recordingBodyWriter wraps fakeBodyWriter, logging every WriteBody call to the same
+// shared log so body and row events land in one true-order sequence.
+type recordingBodyWriter struct {
+	*fakeBodyWriter
+	log *interleaveLog
+}
+
+func (w *recordingBodyWriter) WriteBody(name string, body []byte) error {
+	w.log.record("body", name)
+	return w.fakeBodyWriter.WriteBody(name, body)
+}
+
+// Gap 2 (D-20): bodies must stream out one row at a time, never accumulated and
+// flushed after the row loop (the 823 MB memory risk the streaming design exists to
+// prevent). A buffered implementation produces a correct exchange.csv and correct
+// bw.bodies contents -- only the CALL ORDER exposes it, so this test proves each
+// row's bodies land before that row's CSV record, and that record before the next
+// row's bodies.
+func TestSelectExchange_BodiesStreamPerRowNotAccumulated(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-exchange-streamed-not-accumulated")
+	entity := mustCreateEntity(t, tx, tenant, "Streamed Not Accumulated Co", "60000019-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-STREAM-01"})
+	jobID := mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invID})
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	var exIDs []string
+	for i := 0; i < 3; i++ {
+		req := "request-body-" + strconv.Itoa(i)
+		resp := "response-body-" + strconv.Itoa(i)
+		exID := mustCreateExchange(t, tx, exchangeFixture{
+			tenantID: tenant, submissionJobID: jobID, invoiceID: invID,
+			requestBody: &req, responseBody: &resp,
+			occurredAt: base.Add(time.Duration(i) * time.Minute),
+		})
+		exIDs = append(exIDs, exID)
+	}
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	log := &interleaveLog{}
+	rc := &recordingCSVWriter{w: csv.NewWriter(&buf), log: log, exIDCol: colIndex(t, wantExchangeHeader, "exchange_id")}
+	rbw := &recordingBodyWriter{fakeBodyWriter: newFakeBodyWriter(), log: log}
+	if err := selectExchange(context.Background(), tx, []string{invID}, rc, rbw); err != nil {
+		t.Fatalf("selectExchange: unexpected error: %v", err)
+	}
+	rc.w.Flush()
+
+	if len(log.events) == 0 {
+		t.Fatalf("event log is empty -- fakes never recorded a call")
+	}
+	if want := len(exIDs) * 3; len(log.events) != want {
+		t.Fatalf("event log has %d events, want %d (2 bodies + 1 row per exchange)", len(log.events), want)
+	}
+
+	for i, exID := range exIDs {
+		reqIdx := log.indexOf(t, "body", "bodies/"+exID+".request")
+		respIdx := log.indexOf(t, "body", "bodies/"+exID+".response")
+		rowIdx := log.indexOf(t, "row", exID)
+		if reqIdx > rowIdx || respIdx > rowIdx {
+			t.Errorf("exchange %s: body events at %d/%d, row event at %d -- bodies must precede their own row (D-20)",
+				exID, reqIdx, respIdx, rowIdx)
+		}
+		if i+1 < len(exIDs) {
+			nextID := exIDs[i+1]
+			nextReqIdx := log.indexOf(t, "body", "bodies/"+nextID+".request")
+			nextRespIdx := log.indexOf(t, "body", "bodies/"+nextID+".response")
+			if rowIdx > nextReqIdx || rowIdx > nextRespIdx {
+				t.Errorf("exchange %s row event at %d fires after next row %s's body events (%d/%d) -- proves accumulation, not streaming",
+					exID, rowIdx, nextID, nextReqIdx, nextRespIdx)
+			}
+		}
+	}
+}

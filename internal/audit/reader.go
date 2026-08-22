@@ -1,10 +1,15 @@
-// reader.go: the pure-Go type layer for the audit-log reader (AUDIT-04). Every function
-// body here is a stubbed zero-value return — Query/Facets/the store/the handler are later
-// subtasks. No DB, no HTTP; audit.go's "free of internal/platform/db" claim stays true.
+// reader.go: the pure-Go type layer for the audit-log reader (AUDIT-04), plus the
+// keyset cursor codec and CompanyScope classification. Query/Facets/the store/the
+// handler are later subtasks. No DB, no HTTP; audit.go's "free of internal/platform/db"
+// claim stays true.
 package audit
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,7 +26,8 @@ type Cursor struct {
 // data:image/png;base64, URI needs padded standard base64) — a data-URI payload,
 // not an opaque identifier, so it does not apply here.
 func EncodeCursor(createdAt time.Time, id int64) string {
-	return ""
+	raw := createdAt.Format(time.RFC3339Nano) + "|" + strconv.FormatInt(id, 10)
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 // DecodeCursor is EncodeCursor's inverse. It returns a non-nil error, never a zero
@@ -30,7 +36,26 @@ func EncodeCursor(createdAt time.Time, id int64) string {
 // id. A cursor minted in another tenant decodes fine — RLS in Query (subtask 02) is what
 // bounds it, not this codec (D-24).
 func DecodeCursor(s string) (Cursor, error) {
-	return Cursor{}, nil
+	if s == "" {
+		return Cursor{}, fmt.Errorf("audit: empty cursor")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return Cursor{}, fmt.Errorf("audit: decode cursor: %w", err)
+	}
+	parts := strings.Split(string(raw), "|")
+	if len(parts) != 2 {
+		return Cursor{}, fmt.Errorf("audit: cursor has %d fields, want 2", len(parts))
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return Cursor{}, fmt.Errorf("audit: parse cursor timestamp: %w", err)
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return Cursor{}, fmt.Errorf("audit: parse cursor id: %w", err)
+	}
+	return Cursor{CreatedAt: createdAt, ID: id}, nil
 }
 
 // CompanyMode is CompanyFilter's three states — see CompanyFilter.
@@ -55,14 +80,14 @@ type CompanyFilter struct {
 }
 
 // AllCompanies is the no-predicate state: every company plus workspace-level rows.
-func AllCompanies() CompanyFilter { return CompanyFilter{} }
+func AllCompanies() CompanyFilter { return CompanyFilter{mode: ModeAllCompanies} }
 
 // NamedCompany scopes to entity_id = id.
-func NamedCompany(id string) CompanyFilter { return CompanyFilter{} }
+func NamedCompany(id string) CompanyFilter { return CompanyFilter{mode: ModeNamedCompany, id: id} }
 
 // WorkspaceOnly scopes to entity_id IS NULL — never entity_id = $1 OR entity_id IS
 // NULL (contract §4's swallowing predicate, made unrepresentable by this type).
-func WorkspaceOnly() CompanyFilter { return CompanyFilter{} }
+func WorkspaceOnly() CompanyFilter { return CompanyFilter{mode: ModeWorkspaceOnly} }
 
 // Mode reports which of the three states f is in.
 func (f CompanyFilter) Mode() CompanyMode { return f.mode }
@@ -105,7 +130,13 @@ var firmWideEvents = map[string]struct{}{
 // "this was firm-wide" (D-28) — it also catches the three document.* events and an
 // invoice-scoped event whose invoice is gone or invisible. Pure Go, no DB.
 func ScopeOf(event string, entityID *string) CompanyScope {
-	return ""
+	if entityID != nil {
+		return ScopeCompany
+	}
+	if _, ok := firmWideEvents[event]; ok {
+		return ScopeWorkspace
+	}
+	return ScopeUnattributed
 }
 
 // Event is one row of the page (System Design §2). ActorName and ActorKind are plain
@@ -176,8 +207,10 @@ type Response struct {
 type Filter struct {
 	Limit  int
 	Cursor *Cursor
-	From   *time.Time
-	To     *time.Time
+	// From, To: zero value (IsZero) means unfiltered, matching the repo's filter
+	// convention (portfolio.ListFilter.Q, invoice.ListFilter.Query) rather than *time.Time.
+	From   time.Time
+	To     time.Time
 	Events []string
 	Actors []string
 	// ActorKind is the §4.3/D-16 class filter: "" (unfiltered), "system"

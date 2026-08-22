@@ -233,8 +233,83 @@ type Filter struct {
 // app.current_tenant GUC that db.WithinTenantTx set on tx, so isolation is structural.
 //
 // This subtask (AUDIT-04-02) honours only Limit and Cursor; the other Filter fields are
-// composed in AUDIT-04-03. Response.LogIsEmpty is left at the zero value — the separate
-// empty-probe belongs to the store (AUDIT-04-07).
+// composed in AUDIT-04-03. ActorName/ActorKind stay empty until AUDIT-04-04 resolves them,
+// and LogIsEmpty stays false until the store runs the empty-probe (AUDIT-04-07).
+//
+// The plans are pinned by TestAuditPlan_* in audit_plan_test.go: both the first page and
+// a cursor page are an Index Scan on audit_log_tenant_created_idx with no Sort node, and
+// the total is an index-only scan.
 func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
-	return Response{}, nil
+	// The handler validates and clamps limit (AUDIT-04-07). Query only refuses a value it
+	// could not build a LIMIT for, rather than over-fetching limit+1 = 1 and trimming to
+	// an empty page it would then read a cursor off.
+	if f.Limit <= 0 {
+		return Response{}, fmt.Errorf("audit: limit must be positive, got %d", f.Limit)
+	}
+
+	out := Response{
+		Events: make([]Event, 0, f.Limit),
+		Page:   PageInfo{Limit: f.Limit},
+		Facets: Facets{
+			Event:   make([]Facet, 0),
+			Actor:   make([]Facet, 0),
+			Company: make([]Facet, 0),
+		},
+	}
+
+	// Built as two statements rather than one with an "$1 IS NULL OR ..." guard: the
+	// row-value comparison only folds into the index condition when it is the sole
+	// predicate, and a guarded form degrades the cursor page to a filter.
+	sql := `SELECT a.id, a.created_at, a.event, a.actor, a.entity_id, be.name, a.payload
+	          FROM audit_log a
+	          LEFT JOIN business_entities be ON be.id = a.entity_id`
+	args := make([]any, 0, 3)
+	if f.Cursor != nil {
+		args = append(args, f.Cursor.CreatedAt, f.Cursor.ID)
+		sql += "\n	         WHERE (a.created_at, a.id) < ($1, $2)"
+	}
+	args = append(args, f.Limit+1)
+	sql += "\n	         ORDER BY a.created_at DESC, a.id DESC\n	         LIMIT $" + strconv.Itoa(len(args))
+
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return Response{}, fmt.Errorf("audit: query page: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]int64, 0, f.Limit+1)
+	for rows.Next() {
+		var (
+			id int64
+			e  Event
+		)
+		if err := rows.Scan(&id, &e.CreatedAt, &e.Event, &e.Actor,
+			&e.EntityID, &e.CompanyName, &e.Payload); err != nil {
+			return Response{}, fmt.Errorf("audit: scan page row: %w", err)
+		}
+		e.ID = strconv.FormatInt(id, 10)
+		e.CompanyScope = ScopeOf(e.Event, e.EntityID)
+		ids = append(ids, id)
+		out.Events = append(out.Events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return Response{}, fmt.Errorf("audit: read page: %w", err)
+	}
+
+	// The over-fetched row is the whole evidence for has_more: LIMIT n+1 over a total
+	// order returns min(n+1, available), so a surplus row exists iff a further page does.
+	if len(out.Events) > f.Limit {
+		out.Events = out.Events[:f.Limit]
+		last := out.Events[len(out.Events)-1]
+		cursor := EncodeCursor(last.CreatedAt, ids[f.Limit-1])
+		out.Page.HasMore = true
+		out.Page.NextCursor = &cursor
+	}
+
+	// The cursor is a position, not a filter, so it is absent here: total answers "how
+	// many rows match", which must not shrink as the caller pages.
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&out.Total); err != nil {
+		return Response{}, fmt.Errorf("audit: count matching rows: %w", err)
+	}
+	return out, nil
 }

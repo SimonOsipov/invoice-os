@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/actor"
 )
 
 // Cursor is the decoded keyset position (System Design §3): the (created_at, id) tuple
@@ -328,6 +330,25 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 		cursor := EncodeCursor(last.CreatedAt, ids[f.Limit-1])
 		out.Page.HasMore = true
 		out.Page.NextCursor = &cursor
+	}
+
+	// One resolve for the whole page, after the trim so the discarded surplus row does not
+	// widen the batch. actor.Resolve classifies "system" and anything failing its uuid
+	// gate in Go, so a free-text subject never reaches uuid_in and cannot abort this
+	// transaction with 22P02; it also pre-seeds every subject as its own raw label, which
+	// is how a departed member's rows stay renderable.
+	subjects := make([]string, 0, len(out.Events))
+	for _, e := range out.Events {
+		subjects = append(subjects, e.Actor)
+	}
+	labels, err := actor.Resolve(ctx, tx, subjects)
+	if err != nil {
+		return Response{}, fmt.Errorf("audit: resolve actors: %w", err)
+	}
+	for i := range out.Events {
+		l := labels[out.Events[i].Actor]
+		out.Events[i].ActorName = l.Text
+		out.Events[i].ActorKind = string(l.Kind)
 	}
 
 	// The same where/args as the page, minus the cursor: a cursor is a position, not a

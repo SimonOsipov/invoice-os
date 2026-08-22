@@ -376,6 +376,81 @@ func TestAuditRead_CursorReplayedUnderADifferentFilterSetIsWellDefined(t *testin
 	}
 }
 
+// TestAuditRead_HasMoreIsFalseWhenExactlyLimitRowsExist is the boundary the over-fetch
+// trim must get right: available rows == limit exactly, so the over-fetch (limit+1)
+// returns no surplus row. A `>=` trim condition (instead of `>`) reports has_more=true
+// here even though nothing further exists.
+func TestAuditRead_HasMoreIsFalseWhenExactlyLimitRowsExist(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	pageInsert(t, f, p, pageSeries("invoice.created", 5, 50))
+
+	got := pageQuery(t, f, p, audit.Filter{Limit: 5})
+	if len(got.Events) != 5 {
+		t.Fatalf("page has %d rows, want 5", len(got.Events))
+	}
+	if got.Page.HasMore {
+		t.Errorf("has_more = true, want false — exactly 5 rows exist and the page holds all of them")
+	}
+	if got.Page.NextCursor != nil {
+		t.Errorf("next_cursor = %q, want nil when has_more is false", *got.Page.NextCursor)
+	}
+}
+
+// TestAuditRead_KeysetTiebreaksOnIDWhenTimestampsCollide is the case the file header's
+// own seeding rule (see top of file) otherwise never exercises: rows sharing one
+// created_at. now() is frozen per transaction, so 3 rows inserted in one pageInsert call
+// share an identical created_at; ids still increase in insertion order, so ORDER BY
+// created_at DESC, id DESC breaks the tie deterministically. This is the only case that
+// distinguishes ids[f.Limit-1] (the correct boundary row) from the untrimmed surplus row.
+func TestAuditRead_KeysetTiebreaksOnIDWhenTimestampsCollide(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	tied := pageInsert(t, f, p, []pageRow{
+		{event: "invoice.created", payload: "{}", ageSeconds: 10},
+		{event: "invoice.updated", payload: "{}", ageSeconds: 10},
+		{event: "invoice.submitted", payload: "{}", ageSeconds: 10},
+	})
+	older := pageInsert(t, f, p, []pageRow{
+		{event: "invoice.rejected", payload: "{}", ageSeconds: 20},
+	})
+
+	first := pageQuery(t, f, p, audit.Filter{Limit: 2})
+	if want := []int64{tied[2], tied[1]}; !pageEqualIDs(pageIDs(t, first), want) {
+		t.Fatalf("page 1 ids = %v, want %v (id DESC breaks the created_at tie)", pageIDs(t, first), want)
+	}
+	if !first.Page.HasMore {
+		t.Fatalf("has_more = false, want true — 2 more rows remain")
+	}
+
+	second := pageQuery(t, f, p, audit.Filter{Limit: 2, Cursor: pageCursorOf(t, first)})
+	if want := []int64{tied[0], older[0]}; !pageEqualIDs(pageIDs(t, second), want) {
+		t.Errorf("page 2 ids = %v, want %v — a cursor built from the untrimmed surplus row "+
+			"silently skips tied[0] here", pageIDs(t, second), want)
+	}
+}
+
+// TestAuditRead_LimitMustBePositive: no AC covers this guard directly, but removing it
+// panics (index out of range) once the over-fetch trims to an empty slice, rather than
+// failing gracefully — confirmed by mutation during QA. The handler (AUDIT-04-07) is
+// expected to clamp/validate limit before calling Query; this guard is Query's own
+// last line of defense.
+func TestAuditRead_LimitMustBePositive(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	ctx := context.Background()
+
+	for _, limit := range []int{0, -1} {
+		err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+			_, err := audit.Query(ctx, tx, audit.Filter{Limit: limit})
+			return err
+		})
+		if err == nil {
+			t.Errorf("limit %d: Query returned no error, want one", limit)
+		}
+	}
+}
+
 // --- AC #4/#5: the four company states -------------------------------------------------
 
 func TestAuditRead_CompanyColumnDistinguishesAllFourStates(t *testing.T) {
@@ -454,20 +529,42 @@ func TestAuditRead_CompanyColumnDistinguishesWorkspaceFromDeletedCompany(t *test
 	}
 	byEvent := pageByEvent(t, got)
 
-	if e := byEvent["workflow_role.created"]; e.EntityID != nil || e.CompanyName != nil {
+	e, ok := byEvent["workflow_role.created"]
+	if !ok {
+		t.Fatalf("workflow_role.created is missing from the page")
+	}
+	if e.EntityID != nil || e.CompanyName != nil {
 		t.Errorf("workspace-level row: (entity_id, company_name) = (%s, %s), want (null, null)",
 			pageShow(e.EntityID), pageShow(e.CompanyName))
 	}
-	if e := byEvent["portfolio.entity.created"]; e.EntityID == nil || *e.EntityID != live ||
-		e.CompanyName == nil || *e.CompanyName != "Still Here Ltd" {
+	if e.CompanyScope != audit.ScopeWorkspace {
+		t.Errorf("workspace-level row: company_scope = %q, want %q", e.CompanyScope, audit.ScopeWorkspace)
+	}
+
+	e, ok = byEvent["portfolio.entity.created"]
+	if !ok {
+		t.Fatalf("portfolio.entity.created is missing from the page")
+	}
+	if e.EntityID == nil || *e.EntityID != live || e.CompanyName == nil || *e.CompanyName != "Still Here Ltd" {
 		t.Errorf("live-company row: (entity_id, company_name) = (%s, %s), want (%s, Still Here Ltd)",
 			pageShow(e.EntityID), pageShow(e.CompanyName), live)
 	}
+	if e.CompanyScope != audit.ScopeCompany {
+		t.Errorf("live-company row: company_scope = %q, want %q", e.CompanyScope, audit.ScopeCompany)
+	}
+
 	// The distinguishing pair: entity_id survives the company, company_name does not.
-	if e := byEvent["portfolio.entity.updated"]; e.EntityID == nil || *e.EntityID != gone || e.CompanyName != nil {
+	e, ok = byEvent["portfolio.entity.updated"]
+	if !ok {
+		t.Fatalf("portfolio.entity.updated is missing from the page")
+	}
+	if e.EntityID == nil || *e.EntityID != gone || e.CompanyName != nil {
 		t.Errorf("deleted-company row: (entity_id, company_name) = (%s, %s), want (%s, null) — "+
 			"a deleted company must stay distinguishable from a workspace-level row",
 			pageShow(e.EntityID), pageShow(e.CompanyName), gone)
+	}
+	if e.CompanyScope != audit.ScopeCompany {
+		t.Errorf("deleted-company row: company_scope = %q, want %q", e.CompanyScope, audit.ScopeCompany)
 	}
 }
 

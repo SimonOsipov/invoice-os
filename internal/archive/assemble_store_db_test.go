@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -194,5 +195,40 @@ func TestAssemble_OneSnapshotSurvivesAConcurrentCommit(t *testing.T) {
 	raw := mustReadZipEntry(t, zr, "exchange.csv")
 	if strings.Contains(string(raw), concurrentExchangeID) {
 		t.Errorf("exchange.csv contains the concurrently-committed exchange id %s -- the REPEATABLE READ snapshot leaked a post-begin commit", concurrentExchangeID)
+	}
+}
+
+// TestStoreAssemble_UsesStoreLevelCap (D-34): every other cap spec drives assembleOpts
+// directly, never Store.maxInvoices itself -- a Store.Assemble that silently ignored
+// its own field and fell back to maxBundleInvoices would pass every one of them. Built
+// directly (not NewStore, which always wires 10000) so a lowered cap is observable.
+func TestStoreAssemble_UsesStoreLevelCap(t *testing.T) {
+	super := dbSuperPool(t)
+	app, _ := dbAppPoolTraced(t)
+
+	var entityID string
+	tenantID := mustCommitFixture(t, super, func(tx pgx.Tx) string {
+		tid := mustCreateTenant(t, tx, "archive-store-cap")
+		entityID = mustCreateEntity(t, tx, tid, "Store Cap Co", "80000013-0001")
+		for i := 0; i < 3; i++ {
+			mustCreateInvoice(t, tx, invoiceFixture{tenantID: tid, entityID: entityID, invoiceNumber: fmt.Sprintf("INV-STORECAP-%d", i)})
+		}
+		return tid
+	})
+
+	s := &Store{pool: app, maxInvoices: 2}
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: tenantID})
+	var cw countingWriter
+	err := s.Assemble(ctx, Request{EntityID: entityID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour)}, &cw)
+
+	var tooMany *TooManyInvoicesError
+	if !errors.As(err, &tooMany) {
+		t.Fatalf("Store.Assemble(3 invoices, Store.maxInvoices=2) error = %v, want *TooManyInvoicesError", err)
+	}
+	if tooMany.Count != 3 || tooMany.Limit != 2 {
+		t.Errorf("TooManyInvoicesError = %+v, want Count=3 Limit=2 -- Store.maxInvoices did not reach the cap check", tooMany)
+	}
+	if cw.n != 0 {
+		t.Errorf("Store.Assemble(over Store-level cap) wrote %d bytes, want 0", cw.n)
 	}
 }

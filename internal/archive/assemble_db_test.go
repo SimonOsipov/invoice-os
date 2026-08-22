@@ -15,12 +15,15 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // countingWriter counts bytes written and discards them -- AC-2/AC-3 need "zero
@@ -467,5 +470,66 @@ func TestAssemble_PeakAllocDoesNotScaleWithBodySize(t *testing.T) {
 	}
 	if largeDelta >= bound {
 		t.Errorf("large-body live-heap delta = %d, want < %d (small delta %d + 6x one body) -- peak scaled with TOTAL body size, not the largest single body", largeDelta, bound, smallDelta)
+	}
+}
+
+// --- AC-7 (DB-level): a mid-stream DB failure also leaves no central directory -----
+
+// cancelingTracer cancels ctx the instant a query matching match starts. The writer-
+// error test above cannot catch a deferred bw.Close(): archive/zip's bufio caches the
+// first write error, so a later Close() fails too either way. A DB-level failure has no
+// such cache -- only an un-deferred Close stops it from producing a valid-looking but
+// truncated archive.
+type cancelingTracer struct {
+	match  string
+	cancel context.CancelFunc
+}
+
+func (tr *cancelingTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(d.SQL, tr.match) {
+		tr.cancel()
+	}
+	return ctx
+}
+
+func (tr *cancelingTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestAssemble_DBErrorMidStreamLeavesNoCentralDirectory(t *testing.T) {
+	if os.Getenv("DATABASE_URL") == "" || os.Getenv("DATABASE_SUPERUSER_URL") == "" {
+		t.Skip("archive db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-archive`)")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	tr := &cancelingTracer{match: "invoice_status_history", cancel: cancel}
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_SUPERUSER_URL"))
+	if err != nil {
+		t.Fatalf("parse DATABASE_SUPERUSER_URL: %v", err)
+	}
+	cfg.ConnConfig.Tracer = tr
+	super, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect traced superuser pool: %v", err)
+	}
+	t.Cleanup(super.Close)
+
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-assemble-db-error-midstream")
+	entity := mustCreateEntity(t, tx, tenant, "DB Error Co", "80000009-0001")
+	from := time.Date(2027, 10, 1, 0, 0, 0, 0, time.UTC)
+	mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-DBERR-01", createdAt: from})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	err = assemble(ctx, tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, &buf,
+		assembleOpts{tenantID: tenant, subject: "system", maxInvoices: maxBundleInvoices, now: time.Now()})
+	if err == nil {
+		t.Fatal("assemble: want an error from the canceled status_history query, got nil")
+	}
+	if buf.Len() == 0 {
+		t.Fatal("zero bytes reached the buffer -- the assertion below would pass on an implementation that wrote nothing")
+	}
+	if _, zerr := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len())); zerr == nil {
+		t.Error("zip.NewReader over the abandoned bytes succeeded, want an error (no central directory written) -- a DB-level mid-stream failure must not leave a valid-looking archive")
+	} else if !errors.Is(zerr, zip.ErrFormat) {
+		t.Errorf("zip.NewReader error = %v, want errors.Is(_, zip.ErrFormat)", zerr)
 	}
 }

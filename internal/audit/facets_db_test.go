@@ -607,12 +607,12 @@ func TestAuditFacets_ActorFacetKindsComeFromResolution(t *testing.T) {
 	}
 }
 
-// TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueNull pins AC #4's wire claim
-// directly. CompanyFacetCarriesTheWorkspaceBucketAndSumsToTotal only checks the Go
-// *string is nil; it does not mint the workspace bucket to JSON. Measured, adding
-// `omitempty` to Facet.Value (dropping the "value" key instead of emitting null) left
-// `make test-audit` green.
-func TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueNull(t *testing.T) {
+// TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueAndNameNull pins AC #4's wire
+// claim directly. CompanyFacetCarriesTheWorkspaceBucketAndSumsToTotal only checks the Go
+// *string fields are nil; it does not mint the workspace bucket to JSON. Measured, adding
+// `omitempty` to either Facet.Value or Facet.Name (dropping the key instead of emitting
+// null) left `make test-audit` green.
+func TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueAndNameNull(t *testing.T) {
 	f := requireFixture(t)
 	c := filtBuildCorpus(t, f)
 
@@ -626,7 +626,11 @@ func TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueNull(t *testing.T) 
 	if workspace == nil {
 		t.Fatalf("no workspace bucket in the company facet %v", got.Facets.Company)
 	}
-	if j := fctJSON(t, *workspace); !strings.Contains(j, `"value":null`) {
+	j := fctJSON(t, *workspace)
+	if !strings.Contains(j, `"value":null`) {
 		t.Errorf("the workspace bucket marshals to %s, want a literal \"value\":null key", j)
+	}
+	if !strings.Contains(j, `"name":null`) {
+		t.Errorf("the workspace bucket marshals to %s, want a literal \"name\":null key", j)
 	}
 }

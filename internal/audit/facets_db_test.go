@@ -12,6 +12,7 @@ package audit_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -504,5 +505,128 @@ func TestAuditFacets_BucketOrderIsCountThenValue(t *testing.T) {
 	again := pageQuery(t, f, c.p, audit.Filter{Limit: 5})
 	if a, b := fctJSON(t, again.Facets), fctJSON(t, tied.Facets); a != b {
 		t.Errorf("two identical requests returned different facets\n first: %s\nsecond: %s", b, a)
+	}
+}
+
+// --- QA closes: three coverage gaps found by mutation-verify -----------------------------
+
+// TestAuditFacets_EventAndActorBucketValuesAreDistinct closes a gap: hoisting
+// facetScanColumn's `value` variable out of its scan loop aliases every bucket's Value
+// pointer to one address, so every bucket ends up showing the LAST row's value while its
+// own Count stays correct. Measured, CountsShiftWithEveryOtherFilter and
+// EventFacetIgnoresTheEventFilterItself both stayed green under that mutation: an absent
+// map key reads as 0, and two independently-corrupted calls collapse to the same (wrong)
+// shape. This checks the bucket values against the corpus's known set instead of folding
+// through a map keyed by those same (possibly-corrupted) values.
+func TestAuditFacets_EventAndActorBucketValuesAreDistinct(t *testing.T) {
+	f := requireFixture(t)
+	c := filtBuildCorpus(t, f)
+
+	got := pageQuery(t, f, c.p, audit.Filter{Limit: 5})
+	fctRequireNonEmpty(t, "event", got.Facets.Event)
+	fctRequireNonEmpty(t, "actor", got.Facets.Actor)
+
+	events := map[string]bool{}
+	for _, b := range got.Facets.Event {
+		if b.Value == nil {
+			t.Fatalf("an event facet bucket has a nil value")
+		}
+		if events[*b.Value] {
+			t.Errorf("the event facet has a duplicate value %q; every bucket must keep its own "+
+				"scanned value, not the last row's", *b.Value)
+		}
+		events[*b.Value] = true
+	}
+	if len(events) != len(c.events) {
+		t.Errorf("the event facet has %d distinct values, want the corpus's %d: %v",
+			len(events), len(c.events), events)
+	}
+
+	actors := map[string]bool{}
+	for _, b := range got.Facets.Actor {
+		if b.Value == nil {
+			t.Fatalf("an actor facet bucket has a nil value")
+		}
+		if actors[*b.Value] {
+			t.Errorf("the actor facet has a duplicate value %q; every bucket must keep its own "+
+				"scanned value, not the last row's", *b.Value)
+		}
+		actors[*b.Value] = true
+	}
+	if len(actors) != len(c.actors) {
+		t.Errorf("the actor facet has %d distinct values, want the corpus's %d: %v",
+			len(actors), len(c.actors), actors)
+	}
+}
+
+// TestAuditFacets_ActorFacetKindsComeFromResolution closes a gap: nothing pinned that a
+// LIVE member's actor-facet bucket resolves to kind "person" (or the literal "system"
+// actor to "system") — the only test that checks Kind is the departed-member one, and it
+// expects "raw", so hardcoding every bucket's Kind to "raw" left the whole package green.
+func TestAuditFacets_ActorFacetKindsComeFromResolution(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	member := uuid.NewString()
+	filtSeedMembership(t, f, p, member, "Resolved Person")
+	filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: member, payload: "{}", ageSeconds: 20},
+		{event: "invoice.created", actor: "system", payload: "{}", ageSeconds: 10},
+	})
+
+	got := pageQuery(t, f, p, audit.Filter{Limit: 10})
+	fctRequireNonEmpty(t, "actor", got.Facets.Actor)
+
+	var memberBucket, systemBucket *audit.Facet
+	for i := range got.Facets.Actor {
+		b := &got.Facets.Actor[i]
+		if b.Value == nil {
+			continue
+		}
+		switch *b.Value {
+		case member:
+			memberBucket = b
+		case "system":
+			systemBucket = b
+		}
+	}
+	if memberBucket == nil {
+		t.Fatalf("the seeded member is absent from the actor facet %v", got.Facets.Actor)
+	}
+	if memberBucket.Kind != "person" {
+		t.Errorf("a live member's facet kind = %q, want \"person\"", memberBucket.Kind)
+	}
+	if memberBucket.Name == nil || *memberBucket.Name != "Resolved Person" {
+		t.Errorf("a live member's facet name = %v, want \"Resolved Person\"", memberBucket.Name)
+	}
+	if systemBucket == nil {
+		t.Fatalf("the system actor is absent from the actor facet %v", got.Facets.Actor)
+	}
+	if systemBucket.Kind != "system" {
+		t.Errorf("the system actor's facet kind = %q, want \"system\"", systemBucket.Kind)
+	}
+}
+
+// TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueNull pins AC #4's wire claim
+// directly. CompanyFacetCarriesTheWorkspaceBucketAndSumsToTotal only checks the Go
+// *string is nil; it does not mint the workspace bucket to JSON. Measured, adding
+// `omitempty` to Facet.Value (dropping the "value" key instead of emitting null) left
+// `make test-audit` green.
+func TestAuditFacets_CompanyFacetWorkspaceBucketMarshalsValueNull(t *testing.T) {
+	f := requireFixture(t)
+	c := filtBuildCorpus(t, f)
+
+	got := pageQuery(t, f, c.p, audit.Filter{Limit: 5})
+	var workspace *audit.Facet
+	for i := range got.Facets.Company {
+		if got.Facets.Company[i].Value == nil {
+			workspace = &got.Facets.Company[i]
+		}
+	}
+	if workspace == nil {
+		t.Fatalf("no workspace bucket in the company facet %v", got.Facets.Company)
+	}
+	if j := fctJSON(t, *workspace); !strings.Contains(j, `"value":null`) {
+		t.Errorf("the workspace bucket marshals to %s, want a literal \"value\":null key", j)
 	}
 }

@@ -331,6 +331,44 @@ func TestAudit_DateRangeUsesTenantCreatedIndex(t *testing.T) {
 		[]string{"created_at"}, sql, time.Now().Add(-planDateWindow))
 }
 
+// TestAudit_DateRangeBoundaryIsInclusive is a mutation-verify gap closed during AUDIT-04-09
+// QA: filter.go renders From as `a.created_at >= `, but nothing in the package exercised the
+// operator against a real boundary through the actual Query path — TestAudit_DateRangeUsesTenantCreatedIndex
+// above pins a hand-written `>=` literal, not filterPredicates' own. Measured, changing that
+// `>=` to `>` left every other TestAudit_ case green (`go test -run TestAudit_ ./internal/audit/`, 46/46).
+func TestAudit_DateRangeBoundaryIsInclusive(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+
+	// The tenant's own newest row: LIMIT 1 with From set to its own created_at returns it
+	// under >=, and returns nothing under a strict > (there is no fresher row to fall back to).
+	var boundary time.Time
+	var wantID string
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		var id int64
+		if e := tx.QueryRow(ctx, `SELECT created_at, id FROM audit_log
+			WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, p.tenant).
+			Scan(&boundary, &id); e != nil {
+			return e
+		}
+		wantID = strconv.FormatInt(id, 10)
+		return nil
+	}); err != nil {
+		t.Fatalf("find the tenant's newest row: %v", err)
+	}
+
+	resp := planQuery(t, f, p.tenant, audit.Filter{Limit: 1, From: boundary})
+
+	if len(resp.Events) != 1 || resp.Events[0].ID != wantID {
+		got := "no rows"
+		if len(resp.Events) > 0 {
+			got = resp.Events[0].ID
+		}
+		t.Errorf("From=%s (the row's own created_at) returned %s, want row %s — the bound "+
+			"must be >=, not >", boundary, got, wantID)
+	}
+}
+
 // Bracketed at 1% and 30% of the corpus: an index that only wins on the rarest event is
 // not an index the reader can rely on.
 func TestAudit_SelectiveEventFilterUsesEventIndex(t *testing.T) {
@@ -902,34 +940,50 @@ func planRowsExamined(t *testing.T, f *fixture, tenant string, st planStmt) int 
 			return err
 		}
 		defer rows.Close()
-		onAuditLog := false
+		var lines []string
 		for rows.Next() {
 			var line string
 			if err := rows.Scan(&line); err != nil {
 				return err
 			}
-			if target, ok := scanTarget(line); ok {
-				onAuditLog = strings.HasPrefix(target, "audit_log")
-			}
-			if !onAuditLog {
-				continue
-			}
-			if m := planActualRows.FindStringSubmatch(line); m != nil {
-				n, _ := strconv.Atoi(m[1])
-				loops := 1
-				if l := planActualLoops.FindStringSubmatch(line); l != nil {
-					loops, _ = strconv.Atoi(l[1])
-				}
-				total += n * loops
-			}
-			if m := planRemovedByFilter.FindStringSubmatch(line); m != nil {
-				n, _ := strconv.Atoi(m[1])
-				total += n
-			}
+			lines = append(lines, line)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		total = planSumRows(strings.Join(lines, "\n"))
+		return nil
 	}); err != nil {
 		t.Fatalf("EXPLAIN ANALYZE: %v", err)
+	}
+	return total
+}
+
+// planSumRows is planRowsExamined's arithmetic, split out so it can be proven against a
+// synthetic plan text (TestAudit_RowsExaminedCountsBothSurvivedAndRemovedRows) rather than
+// only ever running against whatever the live corpus happens to produce.
+func planSumRows(plan string) int {
+	var total int
+	onAuditLog := false
+	for _, line := range strings.Split(plan, "\n") {
+		if target, ok := scanTarget(line); ok {
+			onAuditLog = strings.HasPrefix(target, "audit_log")
+		}
+		if !onAuditLog {
+			continue
+		}
+		if m := planActualRows.FindStringSubmatch(line); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			loops := 1
+			if l := planActualLoops.FindStringSubmatch(line); l != nil {
+				loops, _ = strconv.Atoi(l[1])
+			}
+			total += n * loops
+		}
+		if m := planRemovedByFilter.FindStringSubmatch(line); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			total += n
+		}
 	}
 	return total
 }
@@ -967,5 +1021,48 @@ func TestAudit_IndexCondIgnoresTheJoinedTable(t *testing.T) {
 	}
 	if !strings.Contains(got, "event = 'x'") {
 		t.Errorf("indexCond lost audit_log's own Index Cond: %s", got)
+	}
+}
+
+// TestAudit_SeqScanLeavesNoIndexCondToSatisfy closes a mutation-verify gap found during
+// AUDIT-04-09 QA: assertServedByIndex's explicit "must not Seq Scan" check is the ONLY guard
+// disabled for an empty index argument (""), and on the pinned corpus none of the empty-index
+// cases (the composed page, the filtered facets) ever Seq Scan, so disabling that one check
+// left all 46 TestAudit_ cases green.
+//
+// The reason that survives anyway: a Seq Scan node emits Filter lines, never Index Cond, so
+// indexCond() returns "" for one — and every case, empty index or not, still requires
+// tenant_id inside that string. Synthetic, because a live Seq Scan is not reproducible on
+// demand against the pinned corpus.
+func TestAudit_SeqScanLeavesNoIndexCondToSatisfy(t *testing.T) {
+	const plan = `Limit
+  ->  Seq Scan on audit_log a
+        Filter: ((tenant_id = 'deadbeef'::uuid) AND (event = 'x'::text))`
+
+	if got := indexCond(plan); got != "" {
+		t.Errorf("indexCond(%q) = %q, want empty — a Seq Scan node has no Index Cond line, so "+
+			"a query that degrades to one fails the tenant_id-in-cond requirement on its own",
+			plan, got)
+	}
+}
+
+// TestAudit_RowsExaminedCountsBothSurvivedAndRemovedRows closes a mutation-verify gap found
+// during AUDIT-04-09 QA: dropping the Rows Removed by Filter term left
+// TestAudit_SearchScanIsBoundedByTheDateRange green (measured: wide 2000->1820, narrow
+// 154->78 rows examined — narrow stayed below wide either way, because this corpus's search
+// term matches at a roughly uniform rate across the date axis, so matched-row counts alone
+// already scale with window size on THIS corpus). Synthetic, so the arithmetic is proven
+// without depending on that corpus property holding.
+func TestAudit_RowsExaminedCountsBothSurvivedAndRemovedRows(t *testing.T) {
+	const plan = `Limit
+  ->  Bitmap Heap Scan on audit_log a (actual rows=7 loops=3)
+        Rows Removed by Filter: 5
+        ->  Bitmap Index Scan on audit_log_tenant_created_idx (actual rows=4 loops=1)`
+
+	// (7 actual rows * 3 loops) + 5 removed by the heap filter + (4 actual rows * 1 loop) on
+	// the index sub-node = 30.
+	if got, want := planSumRows(plan), 30; got != want {
+		t.Errorf("planSumRows = %d, want %d — actual rows*loops plus Rows Removed by Filter, "+
+			"summed across every line the audit_log node attributes to itself", got, want)
 	}
 }

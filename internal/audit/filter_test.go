@@ -193,6 +193,44 @@ func TestAuditFilter_EmptyFilterEmitsNoPredicate(t *testing.T) {
 	}
 }
 
+// TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression is AUDIT-04-06 AC #2. The two
+// payload spellings live in audit_log.invoice_id now (a STORED generated column), so the
+// reader compares a column instead of reaching into jsonb.
+//
+// Q is deliberately unset: the SEARCH fragment contains jsonb_each_text(a.payload) by
+// design, so a filter setting both would fail this assertion for a legitimate reason. The
+// claim is about the SCOPED predicate alone — do not weaken it to accommodate search.
+func TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression(t *testing.T) {
+	invoice := uuid.NewString()
+	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, InvoiceID: invoice}, nil, nil)
+	if err != nil {
+		t.Fatalf("FilterSQLForTest: %v", err)
+	}
+
+	if !strings.Contains(where, "a.invoice_id = $") {
+		t.Errorf("where = %q, want the scoped predicate to compare a.invoice_id to a bound "+
+			"parameter", where)
+	}
+	for _, forbidden := range []string{"payload", "->>", "jsonb_each_text"} {
+		if strings.Contains(where, forbidden) {
+			t.Errorf("the scoped predicate %q contains %q; the generated column already resolved "+
+				"both spellings, so the reader must not read the payload", where, forbidden)
+		}
+	}
+	if strings.Contains(where, invoice) {
+		t.Errorf("the invoice id is inlined in %q, want it bound as a parameter", where)
+	}
+	found := false
+	for _, a := range args {
+		if s, ok := a.(string); ok && s == invoice {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("args = %v, want the invoice id %s among them", args, invoice)
+	}
+}
+
 // TestAuditFilter_CursorIsNeverPartOfThePredicates keeps the cursor out of the shared
 // predicate set. It is a position, not a filter: total is built from these predicates and
 // must not shrink as the caller pages.

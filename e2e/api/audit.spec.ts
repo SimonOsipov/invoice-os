@@ -25,9 +25,18 @@ import type { Persona } from './client'
 // payload {"id": <invoice id>}, and that event is on the list audit_log.invoice_id's generated
 // column dispatches on — so the row it writes is addressable by ?invoice_id= rather than only
 // findable by scanning the page.
+//
+// The name must sort AFTER both tenants' own names. GET /v1/entities is `ORDER BY name ASC`
+// (internal/portfolio/store.go:115) and the SPA's resolveActiveClient falls back to
+// clients[0], so an entity this suite leaves behind that sorts first silently becomes the
+// DEFAULT ACTIVE ENTITY for the topology suite that runs after it — and
+// topology/persona-surfaces.spec.ts asserts the Workflows subtitle names the tenant.
+// "Audit E2E …" sorted before "Honeywell Group" and broke exactly that. The two other
+// specs that seed tenant B ("M3-14-02 isolation B", "M4-07-05 tenant-B") clear it only by
+// luck of the alphabet.
 async function causeAnInvoiceCreatedRow(persona: Persona): Promise<{ token: string; invoiceId: string }> {
   const token = await login(persona)
-  const entity = await createEntity(token, { name: `Audit E2E ${freshTin()}`, tin: freshTin() })
+  const entity = await createEntity(token, { name: `Zz AUDIT-04 ${freshTin()}`, tin: freshTin() })
   const invoice = await createInvoice(token, {
     entity_id: entity.id,
     invoice_number: `INV-AUDIT-${freshTin()}`,

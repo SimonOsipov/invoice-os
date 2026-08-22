@@ -150,14 +150,28 @@ func TestBundleFilename_TruncatesLongNameTo48Bytes(t *testing.T) {
 
 // TestArchivePackage_ImportsOnlyStdlibAndUUID guards AC-1: internal/archive must never
 // gain a dependency on another internal package (the D-1 cycle risk with internal/audit /
-// internal/submission) or any third-party module beyond github.com/google/uuid. Modeled on
-// internal/actor/actor_test.go:227 (TestActorPackage_ImportsOnlyStdlib).
+// internal/submission) or any third-party module beyond github.com/google/uuid and
+// github.com/jackc/pgx/v5 (AUDIT-05-03 adds the tx-scoped DB reads; pgx's own
+// transitive closure -- pgpassfile, pgservicefile, ~11 golang.org/x/text/* subpackages,
+// pgx's internal/pgconn/pgproto3/pgtype subpackages -- needs prefix matching, an exact
+// map can't cover ~15 subpaths). Modeled on internal/actor/actor_test.go:227
+// (TestActorPackage_ImportsOnlyStdlib).
 func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 	const selfPath = "github.com/SimonOsipov/invoice-os/internal/archive"
-	allowed := map[string]bool{"github.com/google/uuid": true}
+	allowedExact := map[string]bool{
+		"github.com/google/uuid":         true,
+		"github.com/jackc/pgpassfile":    true,
+		"github.com/jackc/pgservicefile": true,
+	}
+	allowedPrefixes := []string{"github.com/jackc/pgx/v5", "golang.org/x/text"}
 	isStdlibOrAllowed := func(imp string) bool {
-		if allowed[imp] || imp == selfPath {
+		if allowedExact[imp] || imp == selfPath {
 			return true
+		}
+		for _, p := range allowedPrefixes {
+			if imp == p || strings.HasPrefix(imp, p+"/") {
+				return true
+			}
 		}
 		first, _, _ := strings.Cut(imp, "/")
 		return !strings.Contains(first, ".")

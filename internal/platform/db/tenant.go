@@ -19,9 +19,15 @@ import (
 // worker has no request identity and calls WithinTenantTx directly with the job's
 // tenant_id (the worker-role pattern, docs/migrations.md).
 func WithinRequestTenantTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	return WithinRequestTenantTxOpts(ctx, pool, pgx.TxOptions{}, fn)
+}
+
+// WithinRequestTenantTxOpts is WithinRequestTenantTx with caller-chosen transaction
+// options, passed straight through to WithinTenantTxOpts (D-33, AUDIT-05-07).
+func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx.TxOptions, fn func(pgx.Tx) error) error {
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
 		return ErrNoTenant
 	}
-	return WithinTenantTx(ctx, pool, id.TenantID, fn)
+	return WithinTenantTxOpts(ctx, pool, id.TenantID, opts, fn)
 }

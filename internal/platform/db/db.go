@@ -47,11 +47,19 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 // malformed id returns ErrNoTenant and issues no statement (fail-closed). A non-nil
 // return from fn — or a panic — rolls the transaction back; nil commits.
 func WithinTenantTx(ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(pgx.Tx) error) error {
+	return WithinTenantTxOpts(ctx, pool, tenantID, pgx.TxOptions{}, fn)
+}
+
+// WithinTenantTxOpts is WithinTenantTx with caller-chosen transaction options
+// (isolation level, access mode). The zero pgx.TxOptions renders as a bare "begin",
+// identical to pool.Begin — so WithinTenantTx's every existing caller is
+// byte-identical (D-33, AUDIT-05-07).
+func WithinTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, tenantID string, opts pgx.TxOptions, fn func(pgx.Tx) error) error {
 	if _, err := uuid.Parse(tenantID); err != nil {
 		return ErrNoTenant
 	}
 
-	tx, err := pool.Begin(ctx)
+	tx, err := pool.BeginTx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("db: begin tx: %w", err)
 	}

@@ -397,6 +397,11 @@ jobs:
         # approval_policy_* binds the table OWNER, not just RLS. Needs DATABASE_URL +
         # DATABASE_SUPERUSER_URL + DATABASE_MIGRATION_URL.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/approval/...
+      - name: Evidence bundle assembler suite (RLS-scoped entity/invoice/history/exchange reads as invoice_app) + per-test visibility & skip gate
+        # AUDIT-05: proves the evidence-bundle assembler's DB-backed reads resolve to
+        # exactly the caller's tenant under RLS. Needs DATABASE_URL (app) +
+        # DATABASE_SUPERUSER_URL (seed + subtask 05's ANALYZE) — both already in this job's env.
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/archive/...
       - name: Actor identity-resolution suite (RLS-scoped memberships batch read as invoice_app) + per-test visibility & skip gate
         # AUDIT-02: proves actor.Resolve issues at most ONE memberships statement per
         # call, filters `system` and free-text actors out of the uuid[] bind (a 22P02

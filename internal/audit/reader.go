@@ -253,11 +253,6 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 	out := Response{
 		Events: make([]Event, 0, f.Limit),
 		Page:   PageInfo{Limit: f.Limit},
-		Facets: Facets{
-			Event:   make([]Facet, 0),
-			Actor:   make([]Facet, 0),
-			Company: make([]Facet, 0),
-		},
 	}
 
 	targets, err := resolveSearchTargets(ctx, tx, f.Q)
@@ -332,14 +327,27 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 		out.Page.NextCursor = &cursor
 	}
 
-	// One resolve for the whole page, after the trim so the discarded surplus row does not
-	// widen the batch. actor.Resolve classifies "system" and anything failing its uuid
+	// The facets are counted before the resolve so their subjects can join the page's in
+	// ONE actor.Resolve call (System Design §7). facetCounts leaves the actor buckets
+	// unlabelled for exactly that reason.
+	out.Facets, err = facetCounts(ctx, tx, f, targets)
+	if err != nil {
+		return Response{}, err
+	}
+
+	// One resolve for the whole request, after the trim so the discarded surplus row does
+	// not widen the batch. actor.Resolve classifies "system" and anything failing its uuid
 	// gate in Go, so a free-text subject never reaches uuid_in and cannot abort this
 	// transaction with 22P02; it also pre-seeds every subject as its own raw label, which
 	// is how a departed member's rows stay renderable.
-	subjects := make([]string, 0, len(out.Events))
+	subjects := make([]string, 0, len(out.Events)+len(out.Facets.Actor))
 	for _, e := range out.Events {
 		subjects = append(subjects, e.Actor)
+	}
+	for _, b := range out.Facets.Actor {
+		if b.Value != nil {
+			subjects = append(subjects, *b.Value)
+		}
 	}
 	labels, err := actor.Resolve(ctx, tx, subjects)
 	if err != nil {
@@ -349,6 +357,16 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 		l := labels[out.Events[i].Actor]
 		out.Events[i].ActorName = l.Text
 		out.Events[i].ActorKind = string(l.Kind)
+	}
+	for i := range out.Facets.Actor {
+		b := &out.Facets.Actor[i]
+		if b.Value == nil {
+			continue
+		}
+		l := labels[*b.Value]
+		name := l.Text
+		b.Name = &name
+		b.Kind = string(l.Kind)
 	}
 
 	// The same where/args as the page, minus the cursor: a cursor is a position, not a

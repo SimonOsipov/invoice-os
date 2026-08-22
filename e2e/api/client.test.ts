@@ -18,6 +18,8 @@
 // touching the four pre-existing listInvoices assertions.
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ApprovalRun } from './client'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const requested: string[] = []
 // calls: url + method, additive to `requested` -- lets AC-7/AC-8 tell a GET /approval
@@ -333,5 +335,114 @@ describe('firmApproverTokens', () => {
       fin_mgr: 'token-for-c0000000-0000-0000-0000-000000000004',
       compliance: 'token-for-c0000000-0000-0000-0000-000000000005',
     })
+  })
+})
+
+// --- AUDIT-04-08 (task-627, AC #5): the audit reader's wire mirror, Go
+// internal/audit/reader.go <-> e2e/api/client.ts. Two-way, not three (D-10): there is no SPA
+// mirror, because the endpoint has no UI yet.
+//
+// The three helpers below are copied from frontend/app/src/lib/approvals.test.ts:867-902 --
+// this package cannot import from frontend/app/src.
+
+const AUDIT_GO_PATH = fileURLToPath(new URL('../../internal/audit/reader.go', import.meta.url))
+const AUDIT_TS_PATH = fileURLToPath(new URL('./client.ts', import.meta.url))
+
+// Struct-scoped, so a file-wide tag regex cannot fold one struct's keys into another's count.
+function goStructKeys(source: string, structName: string): string[] {
+  const body = new RegExp(`type\\s+${structName}\\s+struct\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const keys: string[] = []
+  for (const m of body.matchAll(/`json:"([^"]+)"`/g)) {
+    const key = m[1].split(',')[0]
+    if (key !== '-') keys.push(key)
+  }
+  return keys
+}
+
+function tsInterfaceKeys(source: string, interfaceName: string): string[] {
+  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const keys: string[] = []
+  for (const rawSeg of body.split(/[\n;]/)) {
+    const seg = rawSeg.trim()
+    if (!seg || seg.startsWith('//')) continue
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(seg)
+    if (m) keys.push(m[1])
+  }
+  return keys
+}
+
+function keySetDiff(a: string[], b: string[]): string[] {
+  const setA = new Set(a)
+  const setB = new Set(b)
+  const diff = new Set<string>()
+  for (const k of a) if (!setB.has(k)) diff.add(k)
+  for (const k of b) if (!setA.has(k)) diff.add(k)
+  return [...diff]
+}
+
+// Floors are the CURRENT key counts, so a side that LOSES a key, or an extractor that breaks
+// and returns [], trips here before equality can compare two empty sets. A key ADDED to one
+// side only raises that side's count, so equality is what catches drift in that direction --
+// measured, not assumed. Facet's Go tag is `kind,omitempty`, which extracts as `kind`, so the
+// TS side must declare it.
+const AUDIT_WIRE_STRUCTS = [
+  { go: 'Event', ts: 'AuditEvent', floor: 10 },
+  { go: 'PageInfo', ts: 'AuditPageInfo', floor: 3 },
+  { go: 'Facet', ts: 'AuditFacet', floor: 4 },
+  { go: 'Facets', ts: 'AuditFacets', floor: 3 },
+  { go: 'Response', ts: 'AuditResponse', floor: 5 },
+] as const
+
+describe('wire mirror: Go internal/audit/reader.go <-> e2e/api/client.ts (AUDIT-04-08 AC #5)', () => {
+  // Needle and floor run BEFORE equality: a broken regex yields [] on both sides and the
+  // symmetric difference of two empty sets is empty, so equality alone passes vacuously.
+  it('control needle: both source files were really read, and are the files we meant', () => {
+    const goSource = readFileSync(AUDIT_GO_PATH, 'utf8')
+    const tsSource = readFileSync(AUDIT_TS_PATH, 'utf8')
+
+    expect(goSource.length).toBeGreaterThan(0)
+    expect(goSource, 'lost anchor on internal/audit/reader.go').toContain('type Response struct')
+
+    expect(tsSource.length).toBeGreaterThan(0)
+    expect(tsSource, 'lost anchor on e2e/api/client.ts').toContain('getAuditLog')
+  })
+
+  it('population FLOOR: every struct and interface yielded at least its current key count', () => {
+    const goSource = readFileSync(AUDIT_GO_PATH, 'utf8')
+    const tsSource = readFileSync(AUDIT_TS_PATH, 'utf8')
+
+    for (const { go, ts, floor } of AUDIT_WIRE_STRUCTS) {
+      expect(goStructKeys(goSource, go).length, `Go ${go} must clear its floor of ${floor}`).toBeGreaterThanOrEqual(
+        floor,
+      )
+      expect(
+        tsInterfaceKeys(tsSource, ts).length,
+        `client.ts ${ts} must clear its floor of ${floor}`,
+      ).toBeGreaterThanOrEqual(floor)
+    }
+  })
+
+  it('equality: every key set agrees across both sources (meaningful only because the floor row above ran)', () => {
+    const goSource = readFileSync(AUDIT_GO_PATH, 'utf8')
+    const tsSource = readFileSync(AUDIT_TS_PATH, 'utf8')
+
+    for (const { go, ts } of AUDIT_WIRE_STRUCTS) {
+      expect(
+        keySetDiff(goStructKeys(goSource, go), tsInterfaceKeys(tsSource, ts)),
+        `${ts}: Go ${go} vs client.ts`,
+      ).toEqual([])
+    }
+  })
+
+  // The ONLY row that catches a vacuous comparator: with the real files already in agreement, a
+  // keySetDiff stubbed to `return []` passes the equality row too. Measured.
+  it('planted-positive: the comparator can report a real mismatch, not merely agree', () => {
+    // Synthetic, in memory: 'b' is on the Go side and deliberately absent from the TS side.
+    const goFixture = 'type Fixture struct {\n\tA string `json:"a"`\n\tB string `json:"b"`\n}'
+    const tsFixtureMissingB = 'export interface Fixture {\n  a: string\n}'
+
+    expect(goStructKeys(goFixture, 'Fixture')).toEqual(['a', 'b'])
+    expect(tsInterfaceKeys(tsFixtureMissingB, 'Fixture')).toEqual(['a'])
+    expect(keySetDiff(goStructKeys(goFixture, 'Fixture'), tsInterfaceKeys(tsFixtureMissingB, 'Fixture'))).toEqual(['b'])
   })
 })

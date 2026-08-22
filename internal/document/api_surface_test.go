@@ -142,9 +142,14 @@ func TestDocument_ImportsNoRepoPackage(t *testing.T) {
 	}
 	// The store methods need db.WithinRequestTenantTx, auth.IdentityFromContext and
 	// audit.Record; none of those three reaches internal/importer or back here.
+	//
+	// internal/actor arrives transitively, because AUDIT-04 gave internal/audit a reader
+	// that resolves actor names. It imports nothing from this module — pinned by
+	// TestActorPackage_ImportsOnlyStdlib — so it cannot close a cycle.
 	allowed := func(dep string) bool {
 		return dep == module+"/internal/document" ||
 			dep == module+"/internal/audit" ||
+			dep == module+"/internal/actor" ||
 			strings.HasPrefix(dep, module+"/internal/platform/")
 	}
 	for _, line := range lines {

@@ -278,8 +278,13 @@ func TestRLS_AuditEntityMigrationUpRestoresWhatDownDropped(t *testing.T) {
 	after := auditDownReadCatalog(t, ctx, tx)
 
 	auditDownAssertUpApplied(t, after)
-	if !slices.Equal(after.columns, before.columns) {
-		t.Errorf("columns after the Down/Up round-trip = %v, want %v", after.columns, before.columns)
+	// Set comparison, not ordered: ordinal_position is attnum, which Postgres never
+	// reuses, so a re-added column lands after every burned slot, not where it started.
+	afterCols, beforeCols := slices.Clone(after.columns), slices.Clone(before.columns)
+	sort.Strings(afterCols)
+	sort.Strings(beforeCols)
+	if !slices.Equal(afterCols, beforeCols) {
+		t.Errorf("columns after the Down/Up round-trip = %v, want the same set as %v", after.columns, before.columns)
 	}
 	if got, want := auditDownSortedKeys(after.indexes), auditDownSortedKeys(before.indexes); !slices.Equal(got, want) {
 		t.Errorf("indexes after the Down/Up round-trip = %v, want %v", got, want)

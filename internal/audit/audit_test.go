@@ -308,6 +308,46 @@ func TestAudit_FailClosedWithoutTenantContext(t *testing.T) {
 	assertSQLState(t, recErr, "42501")
 }
 
+// AUDIT-04-11 AC-7: the write path is untouched. Record still inserts the same explicit
+// column list, and the invoice_id generated column populates on its own — Record never
+// names it.
+func TestAudit_RecordStillWritesTheSameColumns(t *testing.T) {
+	f := requireFixture(t)
+	ctx := context.Background()
+
+	var present bool
+	if err := f.app.QueryRow(ctx,
+		`SELECT count(*) = 1 FROM information_schema.columns
+		   WHERE table_schema = 'public' AND table_name = 'audit_log' AND column_name = 'invoice_id'`,
+	).Scan(&present); err != nil {
+		t.Fatalf("check audit_log.invoice_id presence: %v", err)
+	}
+	if !present {
+		t.Fatalf("column invoice_id does not exist yet")
+	}
+
+	tenant := uuid.NewString()
+	invoiceID := uuid.NewString()
+	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		return audit.Record(ctx, tx, "actor", "invoice.created", map[string]any{"id": invoiceID})
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var got *string
+	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT invoice_id FROM audit_log WHERE event = 'invoice.created'`).Scan(&got)
+	}); err != nil {
+		t.Fatalf("read back invoice_id: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("invoice_id IS NULL, want it populated from the payload — Record names no invoice_id column itself")
+	}
+	if *got != invoiceID {
+		t.Errorf("invoice_id = %s, want %s", *got, invoiceID)
+	}
+}
+
 // --- helpers -------------------------------------------------------------------------
 
 // seedAudit writes one committed audit row for tenant+event as the app role.

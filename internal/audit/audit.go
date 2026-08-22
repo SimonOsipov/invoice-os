@@ -1,9 +1,10 @@
 // Package audit is the 08 Audit context: an in-process module (explicitly NOT a
 // network service — locked call 1, 2026-07-03) that every ASComply service calls
-// to leave an immutable trail. Its single entry point is Record, which writes one
-// audit_log row inside the CALLER'S transaction, so an audit row commits or rolls back
-// atomically with the domain change it records — there is no second store to get out of
-// sync with (the same in-tx-outbox idea as internal/platform/queue.EnqueueTx).
+// to leave an immutable trail. Record is the only WRITER: it writes one audit_log row
+// inside the CALLER'S transaction, so an audit row commits or rolls back atomically with
+// the domain change it records — there is no second store to get out of sync with (the
+// same in-tx-outbox idea as internal/platform/queue.EnqueueTx). AUDIT-04 added the read
+// side alongside it: Query, the facets and the HTTP handler.
 //
 // audit_log is tenant-scoped under FORCE RLS and append-only (SELECT/INSERT grants only,
 // plus an owner-proof trigger); see migrations/20260708062657_audit_log.sql. tenant_id is
@@ -26,9 +27,10 @@ import (
 
 // Record appends one audit event to audit_log on tx — the caller's tenant-scoped
 // transaction (db.WithinTenantTx), so the audit row shares that transaction's fate. It
-// takes only pgx.Tx, keeping this package free of any dependency on internal/platform/db
-// (no import cycle); the tenant is carried implicitly by tx's app.current_tenant GUC and
-// filled by the audit_log.tenant_id DEFAULT.
+// takes only pgx.Tx, so RECORD depends on nothing in internal/platform/db (no import
+// cycle). That is a claim about Record, not about the package: store.go imports it for
+// WithinRequestTenantTx and handlers.go for ErrNoTenant. The tenant is carried implicitly
+// by tx's app.current_tenant GUC and filled by the audit_log.tenant_id DEFAULT.
 //
 // actor is who performed the action (the HTTP path passes the verified auth.Identity
 // Subject; a worker or system path passes a stable label like "system"), kept an explicit

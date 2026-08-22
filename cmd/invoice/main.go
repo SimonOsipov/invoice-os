@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/approval"
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
 	"github.com/SimonOsipov/invoice-os/internal/demopolicy"
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -87,6 +88,12 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/source-document", invoice.SourceDocumentHandler(store.SourceDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/ubl", invoice.UBLHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, store.RowFacts, app.Logger))
+
+	// GET /v1/audit-log -- the workspace audit reader (AUDIT-04). Mounts here rather
+	// than on a new service: the gateway routes on the first segment under /api/, so
+	// this is reached as /api/invoice/v1/audit-log with no gateway change. authorize()
+	// requires only a tenant, so every member of the workspace can read it.
+	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(audit.NewStore(pool).List, app.Logger))
 	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
 	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the
 	// rail is derived from the whole batch instead of the 50 rows on the

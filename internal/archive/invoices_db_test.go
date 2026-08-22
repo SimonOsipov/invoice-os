@@ -45,6 +45,7 @@ type invoiceFixture struct {
 	tenantID, entityID, invoiceNumber string
 	status                            string
 	createdAt                         time.Time
+	issueDate                         string // "" = NULL, else "YYYY-MM-DD"
 	irn, csid, qrPayload              *string
 	rejectionReasons                  string
 }
@@ -67,10 +68,14 @@ func mustCreateInvoice(t *testing.T, tx pgx.Tx, f invoiceFixture) string {
 	if rejectionReasons == "" {
 		rejectionReasons = "[]"
 	}
+	var issueDateArg any
+	if f.issueDate != "" {
+		issueDateArg = f.issueDate
+	}
 	_, err := tx.Exec(context.Background(), `
-		INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, status, created_at, irn, csid, qr_payload, rejection_reasons)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
-		id, f.tenantID, f.entityID, f.invoiceNumber, status, createdAt, f.irn, f.csid, f.qrPayload, rejectionReasons)
+		INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, status, created_at, issue_date, irn, csid, qr_payload, rejection_reasons)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
+		id, f.tenantID, f.entityID, f.invoiceNumber, status, createdAt, issueDateArg, f.irn, f.csid, f.qrPayload, rejectionReasons)
 	if err != nil {
 		t.Fatalf("insert invoices fixture: %v", err)
 	}
@@ -414,6 +419,236 @@ func TestSelectInvoices_PopulatedRejectionReasonsHasNoInsignificantWhitespace(t 
 	}
 	if !reflect.DeepEqual(want, got) {
 		t.Errorf("csv rejection_reasons parses to %#v, want %#v (same value, just compact)", got, want)
+	}
+}
+
+func TestRLS_SelectInvoicesWithoutTenantGUCReturnsNoRowsNoError(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-no-guc")
+	entity := mustCreateEntity(t, tx, tenant, "No GUC Invoices Co", "30000002-0001")
+	from := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2027, 1, 31, 0, 0, 0, 0, time.UTC)
+	mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-NO-GUC-01", createdAt: from.Add(time.Hour)})
+	mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-NO-GUC-02", createdAt: from.Add(2 * time.Hour)})
+
+	// Control needle (superuser, pre-role-switch): the fixture really planted 2 rows.
+	var planted int
+	if err := tx.QueryRow(context.Background(), `SELECT count(*) FROM invoices WHERE entity_id = $1`, entity).Scan(&planted); err != nil {
+		t.Fatalf("control-needle count: %v", err)
+	}
+	if planted != 2 {
+		t.Fatalf("control needle: planted %d invoices, want 2 -- fixture setup is broken", planted)
+	}
+
+	actingAsRoleOnly(t, tx)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	ids, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: to}, w)
+	if err != nil {
+		t.Errorf("selectInvoices(GUC never set) error = %v, want nil (RLS must fail closed silently)", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("selectInvoices(GUC never set) ids = %v, want none", ids)
+	}
+}
+
+// D-4 boundary: from == to exactly, matching an invoice created at that precise instant.
+func TestSelectInvoices_FromEqualsToMatchesInvoiceAtThatInstant(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-instant")
+	entity := mustCreateEntity(t, tx, tenant, "Instant Co", "40000001-0001")
+
+	instant := time.Date(2027, 2, 15, 10, 30, 0, 0, time.UTC)
+	idAt := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-AT-INSTANT", createdAt: instant})
+	mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-BEFORE-INSTANT", createdAt: instant.Add(-time.Microsecond)})
+	mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-AFTER-INSTANT", createdAt: instant.Add(time.Microsecond)})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	ids, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: instant, To: instant}, w)
+	if err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	if len(ids) == 0 {
+		t.Fatal("selectInvoices returned no ids -- want the invoice created at the exact from==to instant")
+	}
+	if len(ids) != 1 || ids[0] != idAt {
+		t.Errorf("selectInvoices(from==to==instant) ids = %v, want exactly [%s]", ids, idAt)
+	}
+}
+
+// AC-1/AC-9 distinguishability: an entity that exists with zero invoices in the period
+// must still produce a header-only CSV and no error -- structurally different from
+// selectEntity's ErrEntityNotFound for an entity that does not exist at all.
+func TestSelectInvoices_ZeroInvoicesInPeriodWritesHeaderOnlyCSV(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-zero")
+	entity := mustCreateEntity(t, tx, tenant, "Zero Invoices Co", "40000002-0001")
+	from := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2027, 3, 31, 0, 0, 0, 0, time.UTC)
+	// No invoices created for this entity at all.
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	ids, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: to}, w)
+	if err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("selectInvoices(entity with zero invoices) ids = %v, want none", ids)
+	}
+	w.Flush()
+	rows, err := csv.NewReader(bytes.NewReader(buf.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("parse csv: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("csv has %d rows, want exactly 1 (header only)", len(rows))
+	}
+	if !reflect.DeepEqual(rows[0], invoicesCSVHeader) {
+		t.Errorf("csv header row = %v, want %v", rows[0], invoicesCSVHeader)
+	}
+}
+
+// AC-8 adversarial: a rejection_reasons value containing a comma, a double quote and a
+// newline must still round-trip through the CSV (correct column count, correct value).
+func TestSelectInvoices_RejectionReasonsWithCommaQuoteNewlineRoundTrips(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-special-chars")
+	entity := mustCreateEntity(t, tx, tenant, "Special Chars Co", "40000003-0001")
+	from := time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC)
+	stored := `[{"code":"a,b","message":"She said \"hi\"\nline two"}]`
+	invID := mustCreateInvoice(t, tx, invoiceFixture{
+		tenantID: tenant, entityID: entity, invoiceNumber: "INV-SPECIAL-01", createdAt: from,
+		rejectionReasons: stored,
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	_, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, w)
+	if err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	rows, err := csv.NewReader(bytes.NewReader(buf.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("csv with comma/quote/newline in a cell failed to parse: %v", err)
+	}
+	if len(rows) < 2 {
+		t.Fatalf("csv has %d rows, want a header plus at least one data row", len(rows))
+	}
+	idIdx := headerIndex(t, "invoice_id")
+	reasonsIdx := headerIndex(t, "rejection_reasons")
+	var cell string
+	found := false
+	for _, row := range rows[1:] {
+		if len(row) != len(invoicesCSVHeader) {
+			t.Fatalf("csv row has %d columns, want %d (declared header) -- misaligned by the embedded comma/newline: %v",
+				len(row), len(invoicesCSVHeader), row)
+		}
+		if row[idIdx] == invID {
+			cell = row[reasonsIdx]
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("csv has no row for invoice %s", invID)
+	}
+	var want, got any
+	if err := json.Unmarshal([]byte(stored), &want); err != nil {
+		t.Fatalf("test setup: unmarshal stored json: %v", err)
+	}
+	if err := json.Unmarshal([]byte(cell), &got); err != nil {
+		t.Fatalf("csv rejection_reasons = %q is not valid json: %v", cell, err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("csv rejection_reasons parses to %#v, want %#v", got, want)
+	}
+}
+
+// issue_date is nullable with no CHECK (D-3); NULL must become a bare empty cell, never
+// the Go zero-date string "0001-01-01".
+func TestSelectInvoices_IssueDateNullWritesEmptyCell(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-issuedate-null")
+	entity := mustCreateEntity(t, tx, tenant, "Issue Date Null Co", "40000004-0001")
+	from := time.Date(2027, 5, 1, 0, 0, 0, 0, time.UTC)
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-NO-ISSUE-DATE", createdAt: from})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	_, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, w)
+	if err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	w.Flush()
+	record := findCSVRow(t, buf.Bytes(), invID)
+	if got := record[headerIndex(t, "issue_date")]; got != "" {
+		t.Errorf("csv issue_date = %q, want empty (NULL must never become 0001-01-01)", got)
+	}
+}
+
+// Counterpart to the NULL case above: a real issue_date must survive the ::text cast
+// byte for byte. This is what the cast on issue_date in selectInvoicesSQL exists for --
+// a NULL issue_date scans fine even without the cast, so only a non-NULL value exercises it.
+func TestSelectInvoices_IssueDateNonNullWritesExactDate(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-issuedate-set")
+	entity := mustCreateEntity(t, tx, tenant, "Issue Date Set Co", "40000005-0001")
+	from := time.Date(2027, 6, 1, 0, 0, 0, 0, time.UTC)
+	invID := mustCreateInvoice(t, tx, invoiceFixture{
+		tenantID: tenant, entityID: entity, invoiceNumber: "INV-WITH-ISSUE-DATE", createdAt: from, issueDate: "2027-06-15",
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	_, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, w)
+	if err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	w.Flush()
+	record := findCSVRow(t, buf.Bytes(), invID)
+	if got := record[headerIndex(t, "issue_date")]; got != "2027-06-15" {
+		t.Errorf("csv issue_date = %q, want %q", got, "2027-06-15")
+	}
+}
+
+// A very long qr_payload (payloads carry base64/binary QR data) must survive intact,
+// not be truncated by any fixed-size buffer along the read path.
+func TestSelectInvoices_VeryLongQRPayloadRoundTrips(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-long-qr")
+	entity := mustCreateEntity(t, tx, tenant, "Long QR Co", "40000006-0001")
+	from := time.Date(2027, 7, 1, 0, 0, 0, 0, time.UTC)
+	longQR := strings.Repeat("A", 50_000)
+	invID := mustCreateInvoice(t, tx, invoiceFixture{
+		tenantID: tenant, entityID: entity, invoiceNumber: "INV-LONG-QR", status: "accepted", createdAt: from, qrPayload: &longQR,
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	_, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, w)
+	if err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	w.Flush()
+	record := findCSVRow(t, buf.Bytes(), invID)
+	if got := record[headerIndex(t, "qr_payload")]; got != longQR {
+		t.Errorf("csv qr_payload length = %d, want %d (truncated or corrupted)", len(got), len(longQR))
 	}
 }
 

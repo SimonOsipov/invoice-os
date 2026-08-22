@@ -61,6 +61,17 @@ func actingAs(t *testing.T, tx pgx.Tx, tenantID string) {
 	}
 }
 
+// actingAsRoleOnly switches to invoice_app WITHOUT setting app.current_tenant --
+// simulates a caller that forgot the GUC. RLS's NULLIF(current_setting,empty)::uuid
+// makes tenant_id = NULL, so every row must be invisible (fail closed), never
+// fail open onto every tenant's rows.
+func actingAsRoleOnly(t *testing.T, tx pgx.Tx) {
+	t.Helper()
+	if _, err := tx.Exec(context.Background(), `SET LOCAL ROLE invoice_app`); err != nil {
+		t.Fatalf("SET LOCAL ROLE invoice_app: %v", err)
+	}
+}
+
 // mustCreateTenant inserts as superuser -- invoice_app holds SELECT-only on tenants,
 // so even a same-tenant fixture can't mint its own tenant row.
 func mustCreateTenant(t *testing.T, tx pgx.Tx, name string) string {
@@ -143,5 +154,29 @@ func TestSelectEntity_URNFormEntityIDReachesTheEntity(t *testing.T) {
 	}
 	if got.ID != entityID {
 		t.Errorf("selectEntity(%q).ID = %q, want %q", urnForm, got.ID, entityID)
+	}
+}
+
+// Real risk this guards: if application code ever forgets to set app.current_tenant,
+// RLS must fail closed (nothing visible), never fail open (every tenant's rows).
+func TestRLS_SelectEntityWithoutTenantGUCReturnsNotFound(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-entity-no-guc")
+	entityID := mustCreateEntity(t, tx, tenant, "No GUC Co", "30000001-0001")
+
+	// Control needle (superuser, pre-role-switch): the fixture really planted the row.
+	var planted int
+	if err := tx.QueryRow(context.Background(), `SELECT count(*) FROM business_entities WHERE id = $1`, entityID).Scan(&planted); err != nil {
+		t.Fatalf("control-needle count: %v", err)
+	}
+	if planted != 1 {
+		t.Fatalf("control needle: entity row count = %d, want 1 -- fixture setup is broken", planted)
+	}
+
+	actingAsRoleOnly(t, tx)
+	_, err := selectEntity(context.Background(), tx, entityID)
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("selectEntity(GUC never set) error = %v, want ErrEntityNotFound (RLS must fail closed)", err)
 	}
 }

@@ -1,12 +1,12 @@
 # The `audit_log` Read Contract
 
-**Audience:** anyone building a reader over `audit_log` — **AUDIT-04** first, then
-AUDIT-05 (bundle), AUDIT-07 (CSV) and AUDIT-09 (activity feed). AUDIT-01 shipped the
-schema and stopped there. This page is the contract those readers inherit: what the
-indexes serve, what a value in `entity_id` means, and the two predicates no index can
-help. Everything here was measured on PG 18.6 against AUDIT-01's migration
-`20260820150810_audit_log_entity_id_and_read_indexes.sql`, which added the column, the four
-indexes and the first `audit_log_entity_for` body; the reasoning behind each choice is in
+**Audience:** anyone building a reader over `audit_log` — AUDIT-05 (bundle), AUDIT-07 (CSV)
+and AUDIT-09 (activity feed). AUDIT-01 shipped the schema; **AUDIT-04 shipped the first
+reader**, and §10 records what that cost. This page is the contract those readers inherit: what
+the indexes serve, what a value in `entity_id` means, and the one predicate no index can help.
+Everything here was measured on PG 18.6 against AUDIT-01's migration
+`20260820150810_audit_log_entity_id_and_read_indexes.sql`, which added the column, four of the
+five indexes and the first `audit_log_entity_for` body; the reasoning behind each choice is in
 that story's `## Decisions`. That first body has since been replaced. **The live definition
 is whichever migration replaces `audit_log_entity_for` last** —
 `TestRLS_AuditResolverDefinerIsTheLatestMigration` finds it. Read the attribution rules
@@ -14,18 +14,23 @@ there, not from the migration named above.
 
 ---
 
-## 1. `internal/audit` is write-only, and stays that way until a reader ships
+## 1. `internal/audit` writes and, since AUDIT-04, reads
 
-`audit.Record(ctx, tx, actor, event, payload)` (`internal/audit/audit.go:39`) is the only
-production writer. There is exactly one production **read** of `audit_log` in the tree —
-`internal/invoice/source_document.go:78`, the uploader lookup. AUDIT-04 owns the second.
-AUDIT-01 added no Go code at all.
+`audit.Record(ctx, tx, actor, event, payload)` (`internal/audit/audit.go`) is still the only
+production **writer**. It is no longer the only thing in the package: AUDIT-04 shipped the
+reader, so `internal/audit` now also holds `Query` (the keyset page and the count), the three
+facet statements, the empty probe, the HTTP handler and the store.
+
+Earlier versions of this page said the package was write-only "until a reader ships". It has
+shipped. Reads of `audit_log` in the tree are now: the five statements `Query` issues,
+`logIsEmpty`'s probe, and `internal/invoice/source_document.go`'s uploader lookup.
 
 `Record` takes no entity argument and does not need one: a `BEFORE INSERT` trigger
 (`audit_log_entity_on_insert`) fills `entity_id` from the event name and payload. Callers
-neither set it nor can override it.
+neither set it nor can override it. `invoice_id` is filled the same way but by a different
+mechanism — a STORED generated column, not a trigger (§6).
 
-## 2. The four indexes and the predicates they serve
+## 2. The five indexes and the predicates they serve
 
 Every index leads with `tenant_id` so the RLS qual becomes an Index Cond rather than a
 heap Filter, and every one ends `created_at DESC, id DESC` so a keyset page is a pure
@@ -36,18 +41,45 @@ index read with no sort.
 | `audit_log_tenant_created_idx` `(tenant_id, created_at DESC, id DESC)` | first page `ORDER BY created_at DESC, id DESC LIMIT n`; cursor page `WHERE (created_at, id) < ($1, $2)`; date range `WHERE created_at >= $1` |
 | `audit_log_tenant_event_created_idx` `(tenant_id, event, created_at DESC, id DESC)` | `WHERE event = $1`; the event facet `SELECT event, count(*) … GROUP BY event` as an Index Only Scan |
 | `audit_log_tenant_actor_created_idx` `(tenant_id, actor, created_at DESC, id DESC)` | `WHERE actor = $1` |
-| `audit_log_tenant_entity_created_idx` `(tenant_id, entity_id, created_at DESC, id DESC)` | `WHERE entity_id = $1`; `WHERE entity_id IS NULL`; the company facet `GROUP BY entity_id` as an Index Only Scan |
+| `audit_log_tenant_entity_created_idx` `(tenant_id, entity_id, created_at DESC, id DESC)` | `WHERE entity_id = $1`; `WHERE entity_id IS NULL` (**corpus-dependent — see below**); the company facet `GROUP BY entity_id` as an Index Only Scan |
+| `audit_log_tenant_invoice_created_idx` `(tenant_id, invoice_id, created_at DESC, id DESC)` | `WHERE invoice_id = $1`, the per-invoice scoped read (§6). Added by AUDIT-04-11 alongside the generated column |
 
-Pinned by `internal/audit/audit_plan_test.go` — seven tests over a 20-tenant corpus. The
-event filter is bracketed at **1% and 30%** selectivity, so the pin is not knife-edge.
-Each test asserts the index **name** and that `tenant_id` is in the Index Cond, never the
-node type: a Bitmap plan over the right index is still the right index.
+Pinned by `internal/audit/audit_plan_test.go` over a 20-tenant corpus. The event filter is
+bracketed at **1% and 30%** selectivity, so the pin is not knife-edge. No test asserts a node
+type: a Bitmap plan over the right index is still the right index.
+
+**An index NAME is asserted only where one index can serve the predicate.** AUDIT-04's
+composed cases assert the shape instead, because measured, the planner picks whichever
+tenant-leading index carries the most selective **equality** predicate present and heap-Filters
+the rest: date alone takes the created index, adding a named company takes the entity index,
+`actor = 'system'` takes the actor index. Pinning a name there would fail on a filter change
+that broke nothing.
+
+**`entity_id IS NULL` is the one cell here that changes with the corpus.** D-15 measured it on a
+single 200,000-row tenant and recorded it as a post-scan Filter, not an Index Cond — the entity
+index scanned, the NULLs sifted out afterwards. Measured again on the 20-tenant x 1,000-row
+corpus `requirePlanCorpus` builds, the planner does the opposite:
+
+    Sort  (Sort Key: a.created_at DESC, a.id DESC)
+      ->  Index Scan using audit_log_tenant_entity_created_idx on audit_log a
+            Index Cond: ((tenant_id = ...) AND (entity_id IS NULL))
+
+Both measurements are real. `TestAudit_WorkspaceLevelPageIsPinnedToTheMeasuredPlan` pins the
+second, including the Sort, and says so in its failure message. Read §10.7 before you quote
+either as a fact.
+
+**Scope an Index Cond assertion to the `audit_log` node.** The page and the company facet
+`LEFT JOIN business_entities`, and measured, that node emits its own
+`Index Cond: (tenant_id = ...)` on `business_entities_tenant_id_id_uq`. A check that
+concatenates every node's Index Cond line can therefore be satisfied by the joined table alone
+while `audit_log` has lost its tenant lead entirely — which is the exact regression such a
+check exists to catch. `TestAudit_IndexCondIgnoresTheJoinedTable` holds the scoping.
 
 Use these column orders. A reader that sorts on anything but `created_at DESC, id DESC`,
 or filters on a column that does not lead one of these indexes, falls back to reading the
 whole tenant partition.
 
-## 3. `entity_id IS NULL` means workspace-level — never "unknown"
+## 3. `entity_id IS NULL` is never "unknown" — but it is not all workspace-level either
 
 This is the load-bearing semantic of the whole column.
 
@@ -59,6 +91,33 @@ the row says.
 The resolver dispatches on the **event name**, never on which payload key happens to be
 present, because three workspace-level events carry a bare `id` that is not an invoice id
 and seven invoice events spell it `invoice_id`. See §5 for the consequence.
+
+**But `entity_id IS NULL` is not the same set as "firm-wide", and a UI that labels it that way
+will be wrong on nearly half the rows.** Measured, `document.*` events are ~43% of the NULL
+bucket, and a document upload is not a firm-wide act — it simply has no company to attribute
+it to. So the NULL bucket is really *workspace-level* ∪ *unattributed*.
+
+AUDIT-04 resolves this in Go, not in SQL, with `ScopeOf` and the `company_scope` field on
+every row of the wire (`internal/audit/reader.go`). It is a three-value closed set:
+
+| `company_scope` | When |
+|---|---|
+| `company` | `entity_id` is non-NULL |
+| `workspace` | `entity_id` is NULL **and** the event is one of the twelve genuinely firm-wide names |
+| `unattributed` | everything else — the fallback |
+
+The twelve firm-wide names are the whole of the Policies (4), Roles (4), Memberships (2) and
+Validation-rule (2) domains. They are **hand-maintained in Go** (`firmWideEvents`); nothing
+derives them from the SQL resolver, so adding a firm-wide event means editing that map too.
+
+**The fallback direction is deliberate and must not be flipped.** An unclassified event fails
+safe as "we do not know" rather than falsely claiming "this was firm-wide". Rendering an
+unattributed row as *Workspace* asserts something about the row that is not true.
+
+Note the asymmetry this creates with §4: the company filter's `workspace` value emits
+`entity_id IS NULL`, which selects **both** `workspace` and `unattributed` rows. A user who
+filters to "Workspace" and sees rows labelled "Unattributed" is looking at correct behaviour
+that reads as a bug. A reader that offers the filter should say so in the empty/heading copy.
 
 ## 4. The company filter is a three-way partition
 
@@ -120,32 +179,69 @@ rollback rather than restore it. The fourth is `actor.Resolve`'s Go copy
 subject there raises 22P02 and aborts the reader's transaction. The Go copy is fenced against
 Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change one, change all four.
 
-## 7. Two predicates no index here serves
+## 7. The one predicate no index here serves — and the rule behind it
 
-**Do not assert "no Seq Scan" and call a plan proven.** Both queries below read the whole
-tenant partition as an Index Scan with a heap Filter, so a Seq-Scan assertion passes green
-on them.
+**The rule is not "payload predicates are heap Filters". It is: under `FORCE ROW LEVEL
+SECURITY`, no non-`LEAKPROOF` operator can be pushed into an Index Cond.** Postgres refuses
+because a leaky operator could reveal, through an error message or a timing difference, the
+contents of a row the RLS policy would have hidden. This is the single most reusable fact
+AUDIT-04 produced: it decides, before you design a query, whether an index can help at all.
 
-1. **Per-invoice scope**, `payload->>'id' = $1 OR payload->>'invoice_id' = $1`.
-   `jsonb_object_field_text` is not `LEAKPROOF`, so under RLS the payload match can only
-   ever be a heap Filter, never an Index Cond — the rule the 2026-08-03 partial-index
-   migration already states. AUDIT-01 measured 20.2 ms against a 50,000-row tenant
-   partition (P8).
-2. **Free-text search**, `event ILIKE '%…%'`. Same shape, 16.6 ms on the same corpus.
+Two consequences follow, and only one of them is still a limit.
 
-A reader that needs either at scale needs a new index — an expression index on the payload
-keys, or a trigram index on `event` — and that is nobody's story yet. AUDIT-09's
-per-*company* feed can use `entity_id` (§4); its per-*invoice* feed cannot.
+**Per-invoice scope is no longer on this list.** AUDIT-01 wrote it as
+`payload->>'id' = $1 OR payload->>'invoice_id' = $1`, and that could only ever be a heap
+Filter, because `jsonb_object_field_text` is not `LEAKPROOF`. AUDIT-04-11 replaced it with
+`audit_log.invoice_id`, a **STORED generated column**, so the predicate is now a plain column
+comparison. Measured:
 
-## 8. What AUDIT-01 did not settle
+    scoped page   -> Index Scan using audit_log_tenant_invoice_created_idx
+                     Index Cond: (tenant_id = ...) AND (invoice_id = ...)
+    scoped count  -> Index Only Scan, same index, same Index Cond
 
-- **The production `audit_log` row count has never been probed.** Every number in this
-  page comes from a synthetic local corpus.
-- **No retention or partitioning policy.** `db.PurgeDemoTenants` bounds demo-tenant rows
-  only (`internal/platform/db/demopurge.go:161-163`); it is not a reason to assume the
-  table is small.
-- **Company deletion.** If a delete handler is ever specced, that story decides whether to
-  null the pointers, keep them dangling, or block the delete. Until then, §5 is the rule.
+D-19 ("the scoped predicate is a heap Filter by design; a no-Seq-Scan assertion is vacuous on
+it") described the old form and no longer holds. `TestAudit_ScopedInvoiceReadUsesTheInvoiceIndex`
+pins the new one strictly and asserts the plan never touches `payload`.
+
+**Free-text search is the one that remains.** `texticlike` and `ts_match_vq` both report
+`proleakproof = false` in `pg_proc`, so no index can serve the match under RLS. A generated
+column cannot rescue this one the way it rescued the scoped read: the search term is supplied
+per request, not derivable from the row.
+
+Do not, however, write its plan test as a "no Seq Scan" assertion. Measured, that assertion
+**passes** — the page is an ordinary Index Scan on `audit_log_tenant_created_idx`, because the
+`ORDER BY` still rides the index and only the text match falls to the heap. It is therefore
+vacuous, not merely weak. The falsifiable claims are that the `ILIKE` appears as a **Filter**
+and never in the Index Cond, and that `proleakproof` is still false —
+`TestAudit_SearchIsTheOnlyPredicateNoIndexCanServe` asserts both, so if either operator ever
+becomes leakproof the test fails and the exception should be revisited.
+
+**What bounds search instead: the date range, and nothing else.**
+`TestAudit_SearchScanIsBoundedByTheDateRange` measures it, and it compares rows **examined**
+(rows returned plus `Rows Removed by Filter`), not `actual rows` — the latter counts what
+survived the filter, so a search matching nothing reports zero however much of the table it
+read.
+
+`pg_trgm` is not available to the migrator role, so no later story should propose a trigram
+index without re-checking the grant first.
+
+## 8. Still unsettled, and who owns it
+
+Carried forward from AUDIT-01. AUDIT-04 closed none of these; it did narrow the last one.
+
+- **The production `audit_log` row count has never been probed.** Every number on this page
+  comes from a synthetic local corpus. No owner.
+- **No retention or partitioning policy.** `db.PurgeDemoTenants` bounds demo-tenant rows only
+  (`internal/platform/db/demopurge.go`); it is not a reason to assume the table is small. No
+  owner. This is the one that decides whether §10's plan pins still hold in two years.
+- **Company deletion.** If a delete handler is ever specced, that story decides whether to null
+  the pointers, keep them dangling, or block the delete. Until then, §5 is the rule.
+- **Search cost at scale.** §7 establishes that no index can serve it under RLS and that the
+  date range is the only bound. D-18 measured the ceiling at roughly **half a second** on the
+  200,000-row single-tenant corpus and accepted it. What nobody owns is a decision about what
+  happens when a workspace's log is large enough for that to matter — a mandatory date range,
+  a lower cap, or accepting it at whatever it then costs. Re-measure before assuming 0.5 s
+  still describes it.
 
 ## 9. Actor resolution: `internal/actor`
 
@@ -271,3 +367,160 @@ RLS paragraph first), **AUDIT-06** and **AUDIT-09**. One correction for AUDIT-05
 carries an escape hatch reading "if not merged, this story's own resolution must produce the
 same result". That clause is **dead** — the ladder is merged and importable. Import
 `internal/actor`; do not build a second copy.
+
+---
+
+## 10. The reader's contract (AUDIT-04)
+
+Everything below was measured while building the first reader. AUDIT-05, AUDIT-07 and
+AUDIT-09 inherit it.
+
+### 10.1 The statement budget is a range, not a constant
+
+One request, all inside **one** `db.WithinRequestTenantTx`:
+
+| Statements | When |
+|---|---|
+| 5 | always — the page, the three facet `GROUP BY`s, the count |
+| +1 | `actor.Resolve`, and only when some subject passes its uuid gate. It short-circuits `system` and any non-uuid subject in Go, so a page whose actors are all free text issues no `memberships` query at all |
+| +2 | free-text search only — the `memberships` and `business_entities` fold-ins |
+| +1 | the empty probe, and only when `total == 0` |
+
+So 5 to 9. Older drafts of this page said "six statements", which is the populated common case
+with resolvable actors, not a constant.
+
+**One transaction is the load-bearing claim, not the count.** Split across transactions the
+page, the count and the facets would each see a different snapshot, so a row inserted
+mid-request could be counted but not shown — a total that disagrees with the page it labels.
+
+### 10.2 `filterPredicates` now has four consumers
+
+The page, the count and the three facet statements all build their `WHERE` from the same
+builder. **A predicate proven correct on the page is therefore not proven on the facets.** The
+facets deliberately differ: each clears its *own* dimension so a facet list does not collapse
+to the value already selected.
+
+This is not theoretical. Adding `InvoiceID = ""` to the block that clears `Events`, `Actors`
+and `Company` — the natural-looking edit — left the entire package green while silently
+unscoping every facet. Test the facets separately from the page, always.
+
+### 10.3 Some things only SQL text can assert
+
+Deleting **every** facet `ORDER BY` left the whole DB-backed suite green. Postgres returns a
+small `GROUP BY` in a stable order whether or not one is written, and only reshuffles when the
+plan flips to a hash aggregate — so a behavioural test cannot see the loss, and a byte-identical
+comparison would begin *flaking in CI* rather than failing locally.
+
+The fix is to split *building* a statement from *executing* it, and assert the built text.
+`facetStatements` and `FacetSQLForTest` exist for this and nothing else.
+
+### 10.4 The keyset survives composition
+
+Measured, a page filtered on date + event + actor + named company **and** carrying a cursor
+produces ONE Index Scan whose Index Cond holds `tenant_id`, `entity_id`, `created_at >=` and
+`ROW(created_at, id) < ROW(...)` together, with event and actor as heap Filters and **no Sort
+node**. Extra `AND` terms do not demote the cursor.
+
+What *does* demote it is guarding the cursor as `$n IS NULL OR (created_at, id) < ($n, $m)`.
+Append the clause as SQL text when a cursor is present; do not parameterise its presence.
+
+### 10.5 Exactly two shapes carry a Sort
+
+`company=workspace` (`entity_id IS NULL`) and free-text search. Every other measured shape has
+none. Any "no Sort node" assertion must exempt those two — and every **facet** plan sorts
+unavoidably, because its `ORDER BY` is on `count(*)`, which no index can supply.
+
+### 10.6 A filtered facet loses its Index Only Scan, and earlier than expected
+
+One date filter is already enough. Unfiltered, all three facets are Index Only Scans on their
+own dimension index. With a date bound the event facet keeps Index Only (the date rides that
+index's trailing `created_at`) while the actor and company facets fall to a Bitmap Heap Scan.
+Pin `Index Only Scan` for the unfiltered case and index-*served* for the filtered one.
+
+### 10.7 Plan claims are only true of the corpus they were measured on
+
+D-15 said `entity_id IS NULL` is a post-scan Filter, not an Index Cond. That was measured on a
+single 200,000-row tenant. On the 20-tenant × 1,000-row corpus the plan tests actually run
+against, the planner instead puts it **in** the Index Cond and adds a Sort. Both measurements
+are real. The claim was stated as though it were corpus-independent, and it is not.
+
+State the corpus with the claim. This page's earlier unqualified plan assertions are the
+failure mode this note exists to prevent.
+
+### 10.8 Free-text search matches payload VALUES, not raw payload text
+
+Searching `payload::text` matches JSON **key names**: measured, `q=id` matched 50,000 of 50,000
+rows, because `id` / `policy_id` / `invoice_id` / `user_id` / `run_id` are keys on nearly every
+row. The same holds for `from`, `to`, `version`, `reason`, `key`, `name` and `steps`.
+
+The shipped form walks `jsonb_each_text` and matches values only. One residual leak remains: the
+three keys carrying nested structure (`fields`, `steps`, `members`) render as JSON text *inside*
+their value, so their inner key names stay matchable — 3 of 27 keys.
+
+The values-only form also keeps the keyset short-circuit: the ordered index scan streams and
+`LIMIT` stops it early. The rejected `payload::text ILIKE` shape added a Sort over the whole
+candidate set first.
+
+`q` is exactly four OR-ed arms (`searchFragment`, `internal/audit/filter.go`): the event text,
+the payload **values**, and two fold-ins that resolve a name to ids first. What that covers:
+
+| A user types | Matched? | By which arm |
+|---|---|---|
+| an event name or fragment — `accepted`, `invoice.` | yes | `a.event ILIKE` |
+| a person's **display name** | yes | `memberships.display_name` fold-in -> `a.actor = ANY(...)` |
+| a person's **email** | **no** | the fold-in reads `display_name` only. An actor whom `actor.Resolve` renders by email is not reachable by the name shown |
+| a company name | yes | `business_entities.name` fold-in -> `a.entity_id = ANY(...)` |
+| a uuid that appears as a payload value — invoice id, document id, policy id | yes | `jsonb_each_text` values |
+| an **actor uuid**, typed in full | **no** | there is no `a.actor ILIKE` arm. It matches only if that same uuid also sits in a payload value |
+| a JSON **key** name — `invoice_id`, `reason`, `version` | **no, by design** | values-only. Residual leak: `fields`, `steps`, `members` render nested JSON inside their value, so their inner keys stay matchable — 3 of 27 keys |
+| an invoice **number** — `INV-2026-0042` | **no** | nothing to match: see §10.12 |
+| `system`, to find system-actored rows | no | use `actor_kind=system`, which is a column predicate |
+
+The two text arms are always emitted and the two fold-in arms are dropped when their lookup
+found nothing, so the OR-group can never collapse to empty and silently widen to the
+unfiltered set.
+
+### 10.9 The cursor is opaque, not tamper-evident
+
+`DecodeCursor` is pure syntax and accepts a cursor minted in another tenant by design. RLS is
+what bounds the result, so a foreign cursor yields **the caller's own** rows from that position
+— not an error, and not the other tenant's rows.
+
+That means **isolation is structural but emptiness is not**. A test asserting that a foreign
+cursor produces an empty page is asserting a property of its fixture, and will pass for the
+wrong reason if the fixture changes. Assert isolation.
+
+Replaying a cursor under a *changed* filter set is well-defined but semantically odd: the
+position is a `(created_at, id)` tuple, so it still means "older than this", even though the
+row it came from may not be in the new result set at all. Left as-is; a reader that cares should
+mint a fresh cursor when the filters change.
+
+### 10.10 The empty probe, and the D-20 correction
+
+`log_is_empty` answers a question `total` cannot: is this workspace's log genuinely empty, or
+did the filters empty it? So the probe applies **no filter** — a filtered probe would just
+re-answer `total`.
+
+It runs only when `total == 0`. On a populated request it is dead work, and skipping it is what
+keeps the common path at five statements (§10.1).
+
+    SELECT 1 FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 1
+
+**D-20 said `EXISTS` defeats the index here. Re-measured, that is false**: the unordered form
+and `SELECT EXISTS` are both index-served too. The `ORDER BY` form is a choice — it is the one
+shape whose index use is obvious from reading it — not the only fast one. Do not cite D-20.
+
+The probe runs **inside the page's transaction**, not a new one, so it reports on the same
+snapshot the empty page was drawn from. `TestAuditStore_EmptyProbeSharesThePageTransaction`
+counts one `begin` and one `commit` across the whole request and holds that.
+
+### 10.11 `id` is a string on the wire
+
+`audit_log.id` is a `bigint`. A JSON number above 2^53 loses precision in every JavaScript
+client, so `Query` formats it with `strconv.FormatInt`. Do not "fix" it to a number.
+
+### 10.12 No writer records an invoice NUMBER
+
+Free-text search can match an invoice's *id*, because that is what payloads carry. It cannot
+match `INV-2026-0042`, because no writer puts the human-facing number in an audit payload. A
+reader that offers a search box should not promise otherwise.

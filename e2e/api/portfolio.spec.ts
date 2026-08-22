@@ -5,10 +5,13 @@
 //
 // Audit note (Decision A2): portfolio.entity.created/updated/offboarded/onboarded audit
 // rows are written in-tx by the backend and are asserted IN-PROCESS by M3-10
-// (internal/portfolio/cross_tenant_integration_test.go). There is no audit read endpoint
-// on the gateway or any service (verified — see A2), so those side-effects are NOT
-// observable over the wire. This spec therefore asserts the HTTP-observable lifecycle
-// results only; the audit-in-tx guarantee remains M3-10's in-process proof.
+// (internal/portfolio/cross_tenant_integration_test.go). This spec asserts the
+// HTTP-observable lifecycle results only; the audit-in-tx guarantee remains M3-10's
+// in-process proof.
+//
+// AUDIT-04 superseded A2's premise: there IS an audit read endpoint now,
+// GET /api/invoice/v1/audit-log, exercised by audit.spec.ts. Widening this spec to assert
+// its own audit side-effects over the wire is possible and nobody has scoped it.
 import { test, expect } from '@playwright/test'
 import {
   login,
@@ -40,12 +43,12 @@ test.describe('portfolio CRUD lifecycle (API E2E, over the deployed gateway)', (
     // Audit note (A2): see the top-of-file comment — audit side-effects for every
     // lifecycle stage below (created/updated/offboarded/onboarded) are written in-tx
     // and are asserted IN-PROCESS by M3-10 (internal/portfolio/cross_tenant_integration_test.go).
-    // There is no audit read endpoint (no wire-observable audit trail), so this whole
-    // spec asserts HTTP-observable lifecycle results only.
+    // This spec asserts HTTP-observable lifecycle results only; since AUDIT-04 they COULD
+    // also be read over the wire, and nobody has scoped widening this spec to do so.
     test.info().annotations.push({
       type: 'audit-note',
       description:
-        'Audit side-effects (portfolio.entity.created/updated/offboarded/onboarded) are written in-tx and asserted IN-PROCESS by M3-10 (internal/portfolio/cross_tenant_integration_test.go); they are NOT observable over the wire (no audit read endpoint — decision A2), so this spec asserts the HTTP-observable lifecycle results only.',
+        'Audit side-effects (portfolio.entity.created/updated/offboarded/onboarded) are written in-tx and asserted IN-PROCESS by M3-10 (internal/portfolio/cross_tenant_integration_test.go). This spec asserts the HTTP-observable lifecycle results only. Since AUDIT-04 an audit read endpoint exists (GET /api/invoice/v1/audit-log, see audit.spec.ts), so asserting these side-effects over the wire is now possible but unscoped.',
     })
 
     const tin = freshTin()

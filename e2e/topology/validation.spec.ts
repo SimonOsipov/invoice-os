@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
-// Folded from e2e/demo/day30.spec.ts (M4-14-01 demo retirement) — AC-7 (parked until
-// M7): the kill-switch writes a real audit_log row (event validation.rule.disabled,
-// payload.key = vat-standard-rate) but audit has no HTTP read surface (write-only —
-// internal/audit/audit.go — no gateway route reads it), so this can't be asserted
-// without direct DB access (M4-22 [db-op-resolution] removed DB access from the E2E
-// suites entirely). This is its own bare `test(...)` — NOT a describe-scope
+// Folded from e2e/demo/day30.spec.ts (M4-14-01 demo retirement) — AC-7, still parked.
+// The kill-switch writes a real audit_log row (event validation.rule.disabled,
+// payload.key = vat-standard-rate). The original reason for parking — audit had no HTTP
+// read surface — no longer holds: AUDIT-04 shipped GET /api/invoice/v1/audit-log, and
+// that row is now readable over the wire. Unparking is a scoping decision nobody has
+// taken; it was NOT in AUDIT-04's scope. This is its own bare `test(...)` — NOT a describe-scope
 // `test.skip(true, ...)`, which would skip the whole file instead of just this AC
 // (M4-22 [loud-park]) — declared first so it always runs to completion and reports
 // Playwright's "skipped" bucket, never the declared-after-a-failure "did not run"

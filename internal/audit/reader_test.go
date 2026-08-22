@@ -5,6 +5,7 @@ package audit_test
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -324,5 +325,149 @@ func TestAuditResponse_SliceFieldsHaveNoOmitempty(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("scanned no slice fields on Response/Facets — the test found nothing to assert over")
+	}
+}
+
+// --- QA (Stage 4) adversarial coverage --------------------------------------------------
+
+// readerPtr returns a pointer to v — avoids taking the address of a literal.
+func readerPtr[T any](v T) *T { return &v }
+
+// AC #1: extends the round-trip table with cases the original three didn't cover — a
+// far-future and far-past timestamp, the zero time, a non-UTC location and a negative
+// id. A non-UTC location round-trips the instant correctly but not the named zone (RFC
+// 3339 only carries a numeric offset), which is fine: ordering only needs the instant.
+func TestAuditCursor_RoundTripsFarBoundaryTimesAndNonUTCLocation(t *testing.T) {
+	cases := []struct {
+		name      string
+		createdAt time.Time
+		id        int64
+	}{
+		{"far future", time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC), 1},
+		{"far past, year 1", time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), 2},
+		{"zero time", time.Time{}, 0},
+		{"non-UTC fixed zone", time.Date(2026, 8, 22, 9, 14, 3, 221041987, time.FixedZone("EST", -5*3600)), 3},
+		{"negative id", time.Date(2026, 8, 22, 9, 14, 3, 0, time.UTC), -12345},
+	}
+	if len(cases) == 0 {
+		t.Fatal("test table is empty")
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enc := audit.EncodeCursor(tc.createdAt, tc.id)
+			got, err := audit.DecodeCursor(enc)
+			if err != nil {
+				t.Fatalf("DecodeCursor(%q) returned error %v, want nil", enc, err)
+			}
+			if got.ID != tc.id {
+				t.Errorf("id = %d, want %d", got.ID, tc.id)
+			}
+			wantTS := tc.createdAt.Format(time.RFC3339Nano)
+			gotTS := got.CreatedAt.Format(time.RFC3339Nano)
+			if gotTS != wantTS {
+				t.Errorf("created_at = %s, want %s", gotTS, wantTS)
+			}
+		})
+	}
+}
+
+// AC #4: exact-match only. A name that is a superstring of a firm-wide name, or one that
+// differs only in casing, must classify unattributed like any other unknown event — the
+// control needle (the real firm-wide name) proves the lookup itself still matches.
+func TestAuditScopeOf_PrefixCasingAndEmptyEventDoNotMatchFirmWide(t *testing.T) {
+	cases := []struct {
+		name  string
+		event string
+		want  audit.CompanyScope
+	}{
+		{"empty event string", "", audit.ScopeUnattributed},
+		{"superstring of a firm-wide name", "approval_policy.createdX", audit.ScopeUnattributed},
+		{"different casing of a firm-wide name", "Approval_Policy.Created", audit.ScopeUnattributed},
+		{"control needle: the real firm-wide name matches", "approval_policy.created", audit.ScopeWorkspace},
+	}
+	if len(cases) == 0 {
+		t.Fatal("test table is empty")
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := audit.ScopeOf(c.event, nil); got != c.want {
+				t.Errorf("ScopeOf(%q, nil) = %q, want %q", c.event, got, c.want)
+			}
+		})
+	}
+}
+
+// AC #4 boundary: ScopeOf only checks entityID's nilness, not its value — a pointer to
+// an empty string counts as "set" and returns company, the same as a real id would. This
+// pins current behavior, not a guarantee: Event.EntityID is always populated from a
+// nullable uuid DB column by the store subtask (never a pointer-to-empty-string), so this
+// can't fire from real data, but ScopeOf itself does not defend against it.
+func TestAuditScopeOf_PointerToEmptyStringEntityIDCountsAsSet(t *testing.T) {
+	got := audit.ScopeOf("workflow_role.created", readerPtr(""))
+	if got != audit.ScopeCompany {
+		t.Errorf(`ScopeOf(firm-wide event, ptr to "") = %q, want %q`, got, audit.ScopeCompany)
+	}
+}
+
+// AC #3: json.Unmarshal cannot reach CompanyFilter's unexported fields — a second
+// construction path beyond a struct literal, which the compiler already refuses at
+// build time from outside the package. Pins the closed-construction claim; if mode/id
+// are ever exported, this test stops guarding and should be revisited.
+func TestAuditCompanyFilter_JSONUnmarshalCannotSetUnexportedFields(t *testing.T) {
+	var f audit.CompanyFilter
+	if err := json.Unmarshal([]byte(`{"mode":1,"id":"evil-injected-id"}`), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if f.Mode() != audit.ModeAllCompanies || f.ID() != "" {
+		t.Errorf("json.Unmarshal reached unexported fields: mode=%v id=%q", f.Mode(), f.ID())
+	}
+}
+
+// AC #5 companion: the reflection-based tag test proves no omitempty on Kind's siblings;
+// this proves the actual wire shape. Kind must vanish for a facet that doesn't set it
+// (event/company facets) and appear for one that does (the actor facet).
+func TestAuditFacet_KindOmittedUnlessSet(t *testing.T) {
+	eventFacet, err := json.Marshal(audit.Facet{Count: 5})
+	if err != nil {
+		t.Fatalf("marshal event facet: %v", err)
+	}
+	if strings.Contains(string(eventFacet), `"kind"`) {
+		t.Errorf("event/company facet marshaled a kind field: %s", eventFacet)
+	}
+
+	actorFacet, err := json.Marshal(audit.Facet{Kind: "person", Count: 3})
+	if err != nil {
+		t.Fatalf("marshal actor facet: %v", err)
+	}
+	if !strings.Contains(string(actorFacet), `"kind":"person"`) {
+		t.Errorf("actor facet did not marshal kind: %s", actorFacet)
+	}
+}
+
+// AC #5 boundary, D-9: no omitempty (already pinned) does not by itself make a nil Go
+// slice marshal as []. A bare zero-value Response still marshals nil slices as null —
+// the store's make(…, 0, n) coercion, not this type layer, is what guarantees [] on the
+// wire. Pins that boundary so the type layer alone is never mistaken for satisfying D-9.
+func TestAuditResponse_NilSliceStillMarshalsNullWithoutStoreCoercion(t *testing.T) {
+	b, err := json.Marshal(audit.Response{})
+	if err != nil {
+		t.Fatalf("marshal zero Response: %v", err)
+	}
+	if !strings.Contains(string(b), `"events":null`) {
+		t.Errorf("expected a bare zero Response to marshal events as null (store not involved), got %s", b)
+	}
+
+	populated := audit.Response{
+		Events: []audit.Event{},
+		Facets: audit.Facets{Event: []audit.Facet{}, Actor: []audit.Facet{}, Company: []audit.Facet{}},
+	}
+	b2, err := json.Marshal(populated)
+	if err != nil {
+		t.Fatalf("marshal populated Response: %v", err)
+	}
+	if !strings.Contains(string(b2), `"events":[]`) {
+		t.Errorf("expected an explicitly-empty slice to marshal as [], got %s", b2)
 	}
 }

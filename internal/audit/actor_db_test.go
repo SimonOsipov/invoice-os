@@ -290,3 +290,35 @@ func TestAuditRead_ActorNameAndKindAreNeverNull(t *testing.T) {
 		}
 	}
 }
+
+// --- interaction with AUDIT-04-03's search fold-in -----------------------------------------
+
+// resolveSearchTargets (search fold-in) and actor.Resolve (this subtask) both query
+// memberships, on separate statements, for unrelated reasons: one turns a display-name
+// match into a subject predicate, the other turns every page subject into a label. A page
+// row that only exists because Q matched its actor's display name must still carry that
+// same name in actor_name — the two lookups share a table, not a result.
+func TestAuditRead_SearchMatchStillResolvesActorName(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	member := uuid.NewString()
+	filtSeedMembership(t, f, p, member, "Ada Search Target")
+	filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: member, payload: "{}", ageSeconds: 10},
+		{event: "invoice.updated", actor: "system", payload: "{}", ageSeconds: 20},
+	})
+
+	got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: "Ada Search"})
+	if len(got.Events) != 1 {
+		t.Fatalf("page has %d rows, want 1 (the fold-in should match only the member's row)", len(got.Events))
+	}
+	e := got.Events[0]
+	if e.Actor != member {
+		t.Fatalf("matched row's actor = %q, want %q", e.Actor, member)
+	}
+	if e.ActorName != "Ada Search Target" || e.ActorKind != "person" {
+		t.Errorf("actor matched by search resolved to (%q, %q), want (\"Ada Search Target\", \"person\")",
+			e.ActorName, e.ActorKind)
+	}
+}

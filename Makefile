@@ -45,7 +45,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -157,6 +157,12 @@ test-invoice: ## Run the internal/invoice DB-backed suite against the local dev 
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
 	go test -p 1 -count=1 ./internal/invoice/...
+
+# No DATABASE_MIGRATION_URL: internal/archive adds no migrations of its own.
+test-archive: ## Run the AUDIT-05 evidence-bundle suite against the local dev DB (run `make dev-db` first)
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	go test -p 1 -count=1 ./internal/archive/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

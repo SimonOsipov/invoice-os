@@ -762,13 +762,14 @@ func TestSelectExchange_AcceptsConnectionFailedOutcome(t *testing.T) {
 }
 
 // =====================================================================================
-// AC-8: index-served in both plan-cache modes, at the corrected fixture scale (Stage 1
-// measured 1,000/100 seq-scans; the flip point is ~4,000 invoices). Both cases are
+// AC-8: index-served in both plan-cache modes. Servedness is a function of selectivity,
+// not volume or body size: 507 targets among 6,000 invoices (8.44%) still Seq Scans
+// correctly, and 30,000 invoices (1.69%) is where the margin is clean. Both cases are
 // rollback-wrapped (BEGIN fixture...EXPLAIN...ROLLBACK), never commit-and-leave-behind.
 // =====================================================================================
 
 const (
-	planInvoiceCount       = 6000
+	planInvoiceCount       = 30000
 	planExchangeRowsPerJob = 3
 	planTargetInvoiceCount = 507
 	planExchangeTotalRows  = planInvoiceCount * planExchangeRowsPerJob
@@ -776,10 +777,9 @@ const (
 	planExchangeJobIdx     = "app_exchange_tenant_job_idx"
 )
 
-// buildExchangePlanCorpus plants AUDIT-05-05's corrected fixture (Stage 1 architecture,
-// not the story's original 1,000/100 -- that size Seq Scans under the custom plan):
-// 6,000 invoices, one submission_jobs row and 3 app_exchange rows each. Bulk INSERT...
-// SELECT, not a 24,000-call Go loop.
+// buildExchangePlanCorpus plants a fixture sized for a realistic selectivity: 30,000
+// invoices, one submission_jobs row and 3 app_exchange rows each, against 507 targets
+// (1.69%). Bulk INSERT...SELECT, not a per-row Go loop.
 func buildExchangePlanCorpus(t *testing.T, tx pgx.Tx, tenantID, entityID string) {
 	t.Helper()
 	ctx := context.Background()

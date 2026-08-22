@@ -219,7 +219,13 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				// Submit was never called from this branch -- nothing reached the wire.
 				// Reflects this attempt only: Transform reruns every attempt, so a prior
 				// attempt's Retryable (wire contact, in app_exchange) isn't consulted here.
-				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailurePayloadNotBuilt)
+				kind := FailurePayloadNotBuilt
+				if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+					return err
+				}
+				// Last statement, like the verdict branches: OncePerJob's guarantee then covers
+				// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
+				return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind)
 			})
 			return err
 		})
@@ -309,7 +315,13 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					}
 					// Retry budget exhausted on Retryable: an ack was never observed, but a 5xx
 					// means bytes may have reached the wire -- non-delivery isn't provable here.
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailureNeverAcknowledged)
+					kind := FailureNeverAcknowledged
+					if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+						return err
+					}
+					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
+					// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
+					return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind)
 				})
 				if err != nil {
 					return err
@@ -399,12 +411,13 @@ type PollWorker struct {
 // tx2 records the outcome. Accepted/Rejected (M5-05-05 (task-241)) drive the invoice
 // submitted->accepted / submitted->rejected via InvoicePort.MarkAccepted/MarkRejected plus
 // the same recordVerdictAudit helper SubmitWorker's own synchronous verdicts use
-// (M5-05-04 (task-240), System Design §6) -- one submission.accepted/rejected audit row per
-// terminal poll hop, inside the same OncePerJob(job.ID) closure as the exchange/job-state
-// writes. Pending OVERWRITES poll_ref/next_poll_at with the NEW ticket and enqueues the next hop at
+// (M5-05-04 (task-240), System Design §6) -- one submission.accepted/rejected/failed audit
+// row per terminal poll hop, inside the same OncePerJob(job.ID) closure as the exchange/job-
+// state writes. Pending OVERWRITES poll_ref/next_poll_at with the NEW ticket and enqueues the next hop at
 // Sequence+1, scheduled at the adapter's exact new PollAfter ([poll-ticket],
 // [unbounded-poll-chain] -- no hop ceiling). Retryable on the final attempt dead-letters the
-// job and moves the invoice submitted -> failed via the pre-existing edge; Retryable with
+// job, moves the invoice submitted -> failed via the pre-existing edge, and writes the
+// submission.failed audit row inside the same closure; Retryable with
 // budget remaining leaves the job 'pending' (not 'queued' -- there is no "back to queued" for
 // a poll, it is still waiting on the same deferred verdict) and advances attempts/last_error
 // OUTSIDE queue.OncePerJob, mirroring markJobRetry's own rationale exactly. Every terminal
@@ -519,7 +532,13 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					}
 					// Only reachable once Pending fired at least once, so the APP DID ack the
 					// submission -- it just never returned a verdict within the poll budget.
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailureAcknowledgedNoVerdict)
+					kind := FailureAcknowledgedNoVerdict
+					if err := w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind); err != nil {
+						return err
+					}
+					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
+					// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
+					return recordFailureAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, kind)
 				})
 				if err != nil {
 					return err

@@ -1,12 +1,14 @@
 // Test-first (RED) suite for the audit_log entity_id backfill: the shared resolver, the
 // per-tenant bracket, the size guard, and where the write-time trigger sits in the body.
 //
-// Every DB case executes the migration's own Down body then Up body — read out of
+// A backfill DB case executes that migration's own Down body then Up body — read out of
 // migrations.FS — on one invoice_migrator connection with NO app.current_tenant pre-set,
-// inside a single rolled-back transaction. Both go out as argument-less Execs, which pgx
-// sends over the simple protocol, so multi-statement bodies and $fn$ quoting survive and
-// goose's directives stay ordinary comments. demoRepairStatements cannot be reused: it
-// fails loudly on a function body, and this migration carries three.
+// inside a single rolled-back transaction. TestRLS_AuditResolverReplacementIsReversible is
+// the exception: the REPLACEMENT migration's Up then Down, under a tenant it sets itself.
+// Bodies go out as argument-less Execs, which pgx sends over the simple protocol, so
+// multi-statement bodies and $fn$ quoting survive and goose's directives stay ordinary
+// comments. demoRepairStatements cannot be reused: it fails loudly on a function body,
+// and the backfill migration carries three.
 //
 // The Down drops entity_id, so a fixture row the write-time trigger already attributed
 // starts the Up as NULL and the backfill is the only thing that can fill it. Running as
@@ -25,6 +27,7 @@ import (
 	"io/fs"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,7 +43,7 @@ import (
 
 const auditEntityMigrationGlob = "*_audit_log_entity_id_and_read_indexes.sql"
 
-// The 35 audit events, split by attribution rule. Rules A-C are the 20 attributable
+// The 36 audit events, split by attribution rule. Rules A-C are the 21 attributable
 // ones; rule D is workspace-level and always resolves NULL.
 var (
 	auditRuleAEvents = []string{ // bare `id`, looked up through invoices
@@ -60,6 +63,7 @@ var (
 		"invoice.approval_rejected",
 		"submission.accepted",
 		"submission.rejected",
+		"submission.failed",
 		"reconciliation.drift_detected",
 		"reconciliation.auto_fixed",
 	}
@@ -115,6 +119,76 @@ func auditEntityMigrationName(t *testing.T) string {
 	return matches[0]
 }
 
+// auditEntityUpOf returns a file's goose Up section, ok=false when the markers are absent
+// or out of order. Callers that require the section fatal themselves.
+func auditEntityUpOf(raw string) (string, bool) {
+	up := strings.Index(raw, gooseUp)
+	down := strings.Index(raw, gooseDown)
+	if up < 0 || down < 0 || down < up {
+		return "", false
+	}
+	return raw[up+len(gooseUp) : down], true
+}
+
+// auditEntitySectionOf returns one goose section of a named migration in migrations.FS.
+func auditEntitySectionOf(t *testing.T, name, section string) string {
+	t.Helper()
+	b, err := fs.ReadFile(migrations.FS, name)
+	if err != nil {
+		t.Fatalf("read %s from migrations.FS: %v", name, err)
+	}
+	raw := string(b)
+	up, ok := auditEntityUpOf(raw)
+	if !ok {
+		t.Fatalf("%s: want both %q and %q, in that order", name, gooseUp, gooseDown)
+	}
+	if section == "Up" {
+		return up
+	}
+	return raw[strings.Index(raw, gooseDown)+len(gooseDown):]
+}
+
+// Every migration, so the resolver's CURRENT definition is found by CONTENT, not by a
+// pinned filename. auditEntityMigrationName stays pinned; it answers a different question.
+const auditResolverMigrationGlob = "*.sql"
+
+// The parameter list terminates the identifier -- CREATE FUNCTION always has one -- so a
+// renamed audit_log_entity_forZZ no longer counts as a definer and the zero-definers fatal
+// below can fire. Fenced by TestRLS_AuditResolverDefinerIsTheLatestMigration.
+var auditResolverDefRE = regexp.MustCompile(
+	`(?is)CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_$]*\s*\.\s*)?audit_log_entity_for\s*\(`)
+
+// auditResolverDefinerName returns the LAST migration whose Up section defines
+// audit_log_entity_for. Filenames lead with the goose timestamp, so lexical order is apply
+// order and the last definer is the definition live in the database. More than one definer
+// is expected after this story; zero is not.
+func auditResolverDefinerName(t *testing.T) string {
+	t.Helper()
+	matches, err := fs.Glob(migrations.FS, auditResolverMigrationGlob)
+	if err != nil {
+		t.Fatalf("glob %s in migrations.FS: %v", auditResolverMigrationGlob, err)
+	}
+	sort.Strings(matches)
+	var definers []string
+	for _, name := range matches {
+		b, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read %s from migrations.FS: %v", name, err)
+		}
+		up, ok := auditEntityUpOf(string(b))
+		if !ok {
+			continue // no goose markers: not a migration body we can read
+		}
+		if auditResolverDefRE.MatchString(auditEntityStripComments(up)) {
+			definers = append(definers, name)
+		}
+	}
+	if len(definers) == 0 {
+		t.Fatalf("no migration in migrations.FS defines audit_log_entity_for")
+	}
+	return definers[len(definers)-1]
+}
+
 // auditEntitySection returns one goose section of the story migration, verbatim.
 func auditEntitySection(t *testing.T, section string) string {
 	t.Helper()
@@ -132,7 +206,8 @@ func auditEntitySection(t *testing.T, section string) string {
 	}
 	switch section {
 	case "Up":
-		return raw[up+len(gooseUp) : down]
+		body, _ := auditEntityUpOf(raw)
+		return body
 	case "Down":
 		return raw[down+len(gooseDown):]
 	default:
@@ -409,21 +484,28 @@ func TestRLS_AuditBackfillResolvesBareIDInvoiceEvents(t *testing.T) {
 	}
 }
 
-// AC-2: the 6 `invoice_id`-spelled events resolve the same way. Both reconciliation
-// events are asserted by name — the basic story lists only four of the six.
+// AC-2: the `invoice_id`-spelled events the one-time backfill can attribute resolve the
+// same way. Both reconciliation events are asserted by name — the basic story lists only
+// four of them.
 func TestRLS_AuditBackfillResolvesInvoiceIDSpelledEvents(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
-	requireEventList(t, "auditRuleBEvents", auditRuleBEvents, 6)
+	requireEventList(t, "auditRuleBEvents", auditRuleBEvents, 7)
+	// This test replays the one-time backfill, which ran before submission.failed joined
+	// rule B and so can never attribute a stored row of it. The write-time trigger does;
+	// TestAudit_InsertTriggerResolvesSubmissionFailed is where that is asserted.
+	backfilled := slices.DeleteFunc(slices.Clone(auditRuleBEvents),
+		func(e string) bool { return e == "submission.failed" })
+	requireEventList(t, "auditRuleBEvents minus submission.failed", backfilled, 6)
 
 	f := seedAuditEntityFixture(t)
-	for _, event := range auditRuleBEvents {
+	for _, event := range backfilled {
 		seedAuditEntityRow(t, f.tenant, event, auditPayloadJSON("invoice_id", f.invoice))
 	}
 
 	tx := auditEntityApplyUp(t, ctx)
 	got := auditEntityIDsByEvent(t, ctx, tx, f.tenant)
-	for _, event := range auditRuleBEvents {
+	for _, event := range backfilled {
 		assertAuditEntity(t, got, event, f.entity)
 	}
 	assertAuditEntity(t, got, "reconciliation.drift_detected", f.entity)
@@ -733,22 +815,23 @@ func TestRLS_AuditBackfillGuardMessageNamesCountAndRemedy(t *testing.T) {
 	}
 }
 
-// AC-12: the four attribution rules live in exactly one place. Every attributable event
-// name must occur inside the resolver's own dollar-quoted body and nowhere else, and both
-// the backfill and the trigger function must call it.
+// AC-12: inside the migration that currently defines the resolver, every attributable event
+// name occurs exactly once and inside the resolver's own dollar-quoted body. Superseded
+// copies — earlier migrations, and this definer's own Down — are out of the scan by design:
+// only the last definer is live. The wiring half is
+// TestRLS_AuditResolverWiringStillReadsTheBackfillMigration.
 func TestRLS_AuditResolverIsDefinedOnceAndCalledByBoth(t *testing.T) {
-	body := auditEntityStripComments(auditEntitySection(t, "Up"))
+	body := auditEntityStripComments(auditEntitySectionOf(t, auditResolverDefinerName(t), "Up"))
 
-	defs := regexp.MustCompile(`(?is)CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+audit_log_entity_for`).
-		FindAllString(body, -1)
+	defs := auditResolverDefRE.FindAllString(body, -1)
 	if len(defs) != 1 {
 		t.Fatalf("the Up body defines audit_log_entity_for %d times, want exactly 1", len(defs))
 	}
 
 	start, end := auditEntityFunctionSpan(t, body, "audit_log_entity_for")
 	attributable := append(append(append([]string{}, auditRuleAEvents...), auditRuleBEvents...), auditRuleCEvents...)
-	if len(attributable) != 20 {
-		t.Fatalf("attributable event names = %d, want 20", len(attributable))
+	if len(attributable) != 21 {
+		t.Fatalf("attributable event names = %d, want 21", len(attributable))
 	}
 	for _, event := range attributable {
 		found := 0
@@ -769,6 +852,14 @@ func TestRLS_AuditResolverIsDefinedOnceAndCalledByBoth(t *testing.T) {
 		}
 	}
 
+}
+
+// AC-12: the two callers stay wired to the shared resolver. Both live in the backfill
+// migration, which auditEntitySection reads through its pinned glob — the "exactly 1"
+// fatal in auditEntityMigrationName is what this test keeps exercising.
+func TestRLS_AuditResolverWiringStillReadsTheBackfillMigration(t *testing.T) {
+	body := auditEntityStripComments(auditEntitySection(t, "Up"))
+
 	setStart, setEnd := auditEntityFunctionSpan(t, body, "audit_log_set_entity")
 	if !strings.Contains(body[setStart:setEnd], "audit_log_entity_for(") {
 		t.Errorf("audit_log_set_entity does not call audit_log_entity_for — the trigger has its own rules")
@@ -780,6 +871,74 @@ func TestRLS_AuditResolverIsDefinedOnceAndCalledByBoth(t *testing.T) {
 	}
 	if !strings.Contains(upd[1], "audit_log_entity_for(") {
 		t.Errorf("the backfill UPDATE assigns %q, want it to call audit_log_entity_for", strings.TrimSpace(upd[1]))
+	}
+}
+
+// AC-12: the definition the inventory scan reads is the one goose applies last. Filenames
+// lead with the goose timestamp, so a replacement that sorted before the backfill would
+// never reach the database.
+func TestRLS_AuditResolverDefinerIsTheLatestMigration(t *testing.T) {
+	definer, backfill := auditResolverDefinerName(t), auditEntityMigrationName(t)
+	if definer == backfill {
+		t.Fatalf("audit_log_entity_for is still defined only by %s — no migration replaces it", backfill)
+	}
+	if definer < backfill {
+		t.Errorf("the resolver definer %s sorts before %s, so goose applies it first and the "+
+			"replacement never takes effect", definer, backfill)
+	}
+}
+
+// AC-2: the replacement is reversible. Its Down restores the shipped body instead of
+// dropping the function, which the write-time trigger calls on every insert. Executed as
+// the migrator in a rolled-back transaction.
+func TestRLS_AuditResolverReplacementIsReversible(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	definer, backfill := auditResolverDefinerName(t), auditEntityMigrationName(t)
+	if definer == backfill {
+		t.Fatalf("no replacement migration exists: audit_log_entity_for is still defined by %s", backfill)
+	}
+
+	f := seedAuditEntityFixture(t)
+	tx := migratorTx(t, ctx)
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, f.tenant); err != nil {
+		t.Fatalf("set tenant context: %v", err)
+	}
+	payload := auditPayloadJSON("invoice_id", f.invoice)
+	resolve := func(event, stage string) *string {
+		t.Helper()
+		var got *string
+		if err := tx.QueryRow(ctx,
+			`SELECT audit_log_entity_for($1, $2::jsonb)::text`, event, payload).Scan(&got); err != nil {
+			t.Fatalf("resolve %s after the %s body: %v", event, stage, err)
+		}
+		return got
+	}
+
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, "Up")); err != nil {
+		t.Fatalf("Up body of %s failed: %v", definer, err)
+	}
+	switch got := resolve("submission.failed", "Up"); {
+	case got == nil:
+		t.Fatalf("after the Up body, submission.failed resolves to NULL, want %s", f.entity)
+	case *got != f.entity:
+		t.Fatalf("after the Up body, submission.failed resolves to %s, want %s", *got, f.entity)
+	}
+
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, "Down")); err != nil {
+		t.Fatalf("Down body of %s failed: %v", definer, err)
+	}
+	if got := resolve("submission.failed", "Down"); got != nil {
+		t.Errorf("after the Down body, submission.failed resolves to %s, want NULL", *got)
+	}
+	// The control the Down cannot fake: a dropped resolver would error here, and a Down
+	// that reverted the wrong line would return NULL.
+	switch got := resolve("submission.accepted", "Down"); {
+	case got == nil:
+		t.Errorf("after the Down body, submission.accepted resolves to NULL, want %s", f.entity)
+	case *got != f.entity:
+		t.Errorf("after the Down body, submission.accepted resolves to %s, want %s", *got, f.entity)
 	}
 }
 

@@ -465,6 +465,23 @@ func auditPayloadMap(t *testing.T, f *effectsFixture, tenantID, event string) ma
 	return m
 }
 
+// auditEntityID returns entity_id::text from the MOST RECENT audit_log row for
+// tenantID+event -- nil when the insert trigger resolved it to NULL, which the read
+// contract spells as a firm-wide claim rather than an unattributed row.
+func auditEntityID(t *testing.T, f *effectsFixture, tenantID, event string) *string {
+	t.Helper()
+	ctx := context.Background()
+	var entityID *string
+	if err := db.WithinTenantTx(ctx, f.app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT entity_id::text FROM audit_log WHERE event = $1 ORDER BY created_at DESC LIMIT 1`, event,
+		).Scan(&entityID)
+	}); err != nil {
+		t.Fatalf("read audit_log entity_id (tenant=%s event=%s): %v", tenantID, event, err)
+	}
+	return entityID
+}
+
 // --- scripted adapter (thin wrapper around refAdapter) --------------------------------
 
 // scriptedOutcome is one Submit call's programmed (Result, Evidence) pair.
@@ -1442,11 +1459,15 @@ func TestSubmitWorker_AdapterNotCalledUnderTransaction(t *testing.T) {
 
 // --- BUG-06-03 (task-385): per-site failure kinds ---------------------------------------
 //
-// Three MarkFailed call sites (worker.go:220, :309, :518) currently ALL pass the same
-// placeholder FailurePayloadNotBuilt. These specs pin each site to its own distinct,
-// provable kind -- see task-385's Implementation Plan for the site-by-site justification.
+// Three MarkFailed call sites currently ALL pass the same placeholder FailurePayloadNotBuilt:
+// worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)],
+// worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)], and
+// worker.go:536 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]. These specs pin
+// each site to its own distinct, provable kind -- see task-385's Implementation Plan for the
+// site-by-site justification.
 
-// TestSubmitWorker_TransformFailureStampsPayloadNotBuilt: worker.go:220 is the one site
+// TestSubmitWorker_TransformFailureStampsPayloadNotBuilt:
+// worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)] is the one site
 // whose kind does NOT change (a transform failure genuinely never built a wire). Pins the
 // invariant so a future edit accidentally moving this site off payload_not_built is caught.
 func TestSubmitWorker_TransformFailureStampsPayloadNotBuilt(t *testing.T) {
@@ -1508,9 +1529,10 @@ func TestSubmitWorker_TransformFailureRecordsLastError(t *testing.T) {
 	}
 }
 
-// TestSubmitWorker_DeadLetterStampsNeverAcknowledged: worker.go:309, the submit dead-letter
-// site. Retryable covers 5xx/timeout/unparseable body too (result.go:39-44), so this site
-// can only prove "never acknowledged", never "never delivered".
+// TestSubmitWorker_DeadLetterStampsNeverAcknowledged:
+// worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)], the submit
+// dead-letter site. Retryable covers 5xx/timeout/unparseable body too (result.go:39-44), so
+// this site can only prove "never acknowledged", never "never delivered".
 func TestSubmitWorker_DeadLetterStampsNeverAcknowledged(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
@@ -1544,7 +1566,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 
-	// Path 1: transform failure (worker.go:220).
+	// Path 1: transform failure (worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]).
 	tenantID1, invoiceID1, cleanup1 := seedQueuedInvoice(t, f)
 	defer cleanup1()
 	idemKey1 := "req-" + uuid.NewString() + ":" + invoiceID1
@@ -1556,7 +1578,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	}
 	kind1 := wiRead(t, f, tenantID1, invoiceID1).failureKind
 
-	// Path 2: submit dead-letter (worker.go:309).
+	// Path 2: submit dead-letter (worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]).
 	tenantID2, invoiceID2, cleanup2 := seedQueuedInvoice(t, f)
 	defer cleanup2()
 	idemKey2 := "req-" + uuid.NewString() + ":" + invoiceID2
@@ -1570,7 +1592,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	}
 	kind2 := wiRead(t, f, tenantID2, invoiceID2).failureKind
 
-	// Path 3: submit to Pending, then poll dead-letter (worker.go:518).
+	// Path 3: submit to Pending, then poll dead-letter (worker.go:523 [job.Attempt >= job.MaxAttempts]).
 	tenantID3, invoiceID3, cleanup3 := seedQueuedInvoice(t, f)
 	defer cleanup3()
 	future := time.Now().Add(time.Hour)
@@ -1607,7 +1629,8 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 }
 
 // TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError: QA adversarial
-// addition (task-385). Transform reruns on EVERY attempt (worker.go:220's own comment), so a
+// addition (task-385). Transform reruns on EVERY attempt
+// (worker.go:220 [Transform reruns every attempt]'s own comment), so a
 // job that survives a mid-budget Retryable (attempt 1, last_error = the Retryable's text) and
 // THEN fails at Transform on attempt 2 must overwrite last_error with attempt 2's text, not
 // leave attempt 1's stale value sitting under state='failed'. markJobTransformFailed's
@@ -1657,5 +1680,215 @@ func TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError(t *tes
 	if wj2.lastError == nil || *wj2.lastError != transformErr.Error() {
 		t.Errorf("attempt 2: job last_error = %v, want %q (the CURRENT attempt's error), "+
 			"not attempt 1's stale %q", strOrNil(wj2.lastError), transformErr.Error(), retryErr.Error())
+	}
+}
+
+// --- the terminal-failure audit event, SubmitWorker's two sites -------------------------
+//
+// Authored RED, before worker.go calls recordFailureAudit at all. Each case below fails on
+// its own audit-row assertion, never on a compile error or a fixture failure: the seam
+// (recordFailureAudit, verdict_audit.go) already ships and is already covered by its own
+// whitebox specs -- what is missing is the CALL from each terminal branch.
+
+// failureAuditWantKeys is the strict summary key set recordFailureAudit writes. Shared by
+// the two payload cases so a key added at one site but not the other cannot pass.
+var failureAuditWantKeys = map[string]bool{
+	"invoice_id": true, "submission_job_id": true, "outcome": true, "failure_kind": true,
+}
+
+// assertFailureAuditPayload checks the one submission.failed row's payload is exactly the
+// four summary keys, carries the wanted kind, and names the job's OWN submission_jobs.id --
+// not River's int64 job id, and not some other job's uuid.
+func assertFailureAuditPayload(t *testing.T, f *effectsFixture, tenantID, invoiceID, jobID, wantKind string) {
+	t.Helper()
+	payload := auditPayloadMap(t, f, tenantID, "submission.failed")
+	if len(payload) == 0 {
+		t.Fatalf("submission.failed payload decoded to %d keys -- an empty payload makes every check below vacuous", len(payload))
+	}
+	if len(payload) != len(failureAuditWantKeys) {
+		t.Errorf("submission.failed payload has %d keys (%v), want exactly the 4 in %v -- "+
+			"last_error or any wire detail would show up as an extra key here", len(payload), payload, failureAuditWantKeys)
+	}
+	for k := range payload {
+		if !failureAuditWantKeys[k] {
+			t.Errorf("submission.failed payload has unexpected key %q (full payload %v)", k, payload)
+		}
+	}
+	if payload["failure_kind"] != wantKind {
+		t.Errorf("submission.failed payload failure_kind = %v, want %q", payload["failure_kind"], wantKind)
+	}
+	if payload["outcome"] != "failed" {
+		t.Errorf("submission.failed payload outcome = %v, want \"failed\"", payload["outcome"])
+	}
+	if payload["invoice_id"] != invoiceID {
+		t.Errorf("submission.failed payload invoice_id = %v, want %q", payload["invoice_id"], invoiceID)
+	}
+	if payload["submission_job_id"] != jobID {
+		t.Errorf("submission.failed payload submission_job_id = %v, want the job's own "+
+			"submission_jobs.id %q", payload["submission_job_id"], jobID)
+	}
+}
+
+// assertNoVerdictAuditRows fences the failure event against the verdict vocabulary: a
+// terminal failure is neither an acceptance nor a rejection.
+func assertNoVerdictAuditRows(t *testing.T, f *effectsFixture, tenantID string) {
+	t.Helper()
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 0 {
+		t.Errorf("submission.accepted audit rows on a failure path = %d, want 0", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != 0 {
+		t.Errorf("submission.rejected audit rows on a failure path = %d, want 0", n)
+	}
+}
+
+// workTransformFailure drives one invoice through the Transform-failure branch and returns
+// the job row the worker wrote.
+func workTransformFailure(t *testing.T, f *effectsFixture, tenantID, invoiceID string) wjState {
+	t.Helper()
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter() // empty queue: Submit must never fire
+	adapter.transformErr = errors.New("wsub: cannot build wire from this invoice")
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(context.Background(), job); err == nil {
+		t.Fatal("Work on a transform failure returned nil, want river.JobCancel")
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "failed" {
+		t.Fatalf("submission_jobs.state = %q, want %q -- a silently-skipped OncePerJob closure "+
+			"(a River job id already used in this tenant) would leave the wrong state here",
+			wj.state, "failed")
+	}
+	return wj
+}
+
+// workRetryExhaustion drives one invoice through the dead-letter branch (job.Attempt ==
+// MaxAttempts on a Retryable) and returns the job row the worker wrote.
+func workRetryExhaustion(t *testing.T, f *effectsFixture, tenantID, invoiceID string) wjState {
+	t.Helper()
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: errors.New("wsub: upstream 503, final attempt")},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	// River job id 2, not 1: OncePerJob's marker is "job:<river id>" per TENANT, so sharing
+	// id 1 with workTransformFailure silently skips this whole closure when a caller drives
+	// both paths in one tenant.
+	job := newSubmitJob(2, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(context.Background(), job); err == nil {
+		t.Fatal("Work on a Retryable final attempt returned nil, want a non-nil error so River discards the job")
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "dead_lettered" {
+		t.Fatalf("submission_jobs.state = %q, want %q -- a silently-skipped OncePerJob closure "+
+			"(a River job id already used in this tenant) would leave the wrong state here",
+			wj.state, "dead_lettered")
+	}
+	return wj
+}
+
+// A Transform failure is a terminal failure and must say so once, with the kind the same
+// branch already hands InvoicePort.MarkFailed.
+func TestSubmitWorker_TransformFailureWritesSubmissionFailed(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	wj := workTransformFailure(t, f, tenantID, invoiceID)
+
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+		t.Fatalf("submission.failed audit rows = %d, want 1", n)
+	}
+	assertFailureAuditPayload(t, f, tenantID, invoiceID, wj.id, string(submission.FailurePayloadNotBuilt))
+	assertNoVerdictAuditRows(t, f, tenantID)
+}
+
+// Retry-budget exhaustion is the other terminal failure, and carries its own distinct kind.
+func TestSubmitWorker_RetryExhaustionWritesSubmissionFailed(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	wj := workRetryExhaustion(t, f, tenantID, invoiceID)
+
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+		t.Fatalf("submission.failed audit rows = %d, want 1", n)
+	}
+	assertFailureAuditPayload(t, f, tenantID, invoiceID, wj.id, string(submission.FailureNeverAcknowledged))
+	assertNoVerdictAuditRows(t, f, tenantID)
+}
+
+// Both failure rows must resolve to the invoice's own business entity. A NULL entity_id is
+// not a missing value in this column -- it is a positive firm-wide claim, so a client's
+// failure landing as NULL misfiles it rather than merely losing detail. The entity is seeded
+// here (not via seedQueuedInvoice) so the test HOLDS the id it compares against.
+func TestSubmitWorker_FailureRowIsAttributedToTheCompany(t *testing.T) {
+	f := requireExchangeDB(t)
+
+	for _, tc := range []struct {
+		name string
+		work func(t *testing.T, f *effectsFixture, tenantID, invoiceID string) wjState
+	}{
+		{"transform-failure", workTransformFailure},
+		{"retry-exhaustion", workRetryExhaustion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID := seedTenant(t, f)
+			defer cleanupTenant(t, f, tenantID)
+			entityID := seedEntity(t, f, tenantID)
+			invoiceID := seedInvoice(t, f, tenantID, entityID)
+
+			tc.work(t, f, tenantID, invoiceID)
+
+			if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+				t.Fatalf("submission.failed audit rows = %d, want 1", n)
+			}
+			got := auditEntityID(t, f, tenantID, "submission.failed")
+			if got == nil {
+				t.Fatalf("submission.failed entity_id is NULL, want the invoice's entity %q -- "+
+					"NULL claims the event was firm-wide, which a client's failure never is", entityID)
+			}
+			if *got != entityID {
+				t.Errorf("submission.failed entity_id = %q, want %q", *got, entityID)
+			}
+		})
+	}
+}
+
+// The dead-letter half of "the job bookkeeping is byte-identical". state and failure_kind
+// are already pinned elsewhere; attempts and last_error were not pinned at this site at all,
+// which left the no-change claim unprovable here. Green before the audit wiring and after --
+// it exists to catch a change, not to drive one.
+func TestSubmitWorker_DeadLetterRecordsAttemptsAndLastError(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	retryErr := errors.New("wsub: upstream 503, final attempt (dead-letter bookkeeping)")
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: retryErr},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err == nil {
+		t.Fatal("Work on a Retryable final attempt returned nil, want a non-nil error so River discards the job")
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "dead_lettered" {
+		t.Errorf("job state = %q, want \"dead_lettered\"", wj.state)
+	}
+	if wj.attempts != 1 {
+		t.Errorf("job attempts = %d, want 1 -- the dead-lettering attempt itself reached the wire "+
+			"and must be counted", wj.attempts)
+	}
+	if wj.lastError == nil || *wj.lastError != retryErr.Error() {
+		t.Errorf("job last_error = %q, want %q -- markJobDeadLettered must record the final "+
+			"attempt's error text", strOrNil(wj.lastError), retryErr.Error())
 	}
 }

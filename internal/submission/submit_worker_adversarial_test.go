@@ -157,8 +157,8 @@ func TestSubmitWorker_PendingSetsPollRefAndMovesInvoiceToSubmitted(t *testing.T)
 		t.Errorf("app_exchange rows = %+v, want exactly one 'sent' row", exchanges)
 	}
 
-	// M5-05-04 (task-240): the 08 audit event is only written on a TERMINAL (Accepted/
-	// Rejected) verdict -- Pending defers the verdict, so neither row exists yet.
+	// A verdict row needs a terminal Accepted/Rejected. Pending defers the verdict, so
+	// neither exists yet. The failure branches write their own event, not these two.
 	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 0 {
 		t.Errorf("submission.accepted audit rows after a Pending outcome = %d, want 0", n)
 	}
@@ -755,5 +755,270 @@ func TestRLS_SubmitWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 	if n := auditCount(t, f, tenantB, "submission.accepted"); n != 0 {
 		t.Errorf("tenant B's view of submission.accepted audit rows = %d, want 0 -- "+
 			"RLS must hide tenant A's row from tenant B", n)
+	}
+}
+
+// --- the terminal-failure audit event, adversarial half ---------------------------------
+
+// A terminal failure must not be spelled as a verdict. Both failure branches run against the
+// SAME tenant here, which the two per-path cases in submit_worker_test.go cannot do: a leak
+// at either site shows up in one shared count. Green before the audit wiring and after --
+// this is a no-leak fence, not a driver.
+func TestSubmitWorker_FailureWritesNoVerdictRow(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantID := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantID)
+	entityID := seedEntity(t, f, tenantID)
+
+	workTransformFailure(t, f, tenantID, seedInvoice(t, f, tenantID, entityID))
+	workRetryExhaustion(t, f, tenantID, seedInvoice(t, f, tenantID, entityID))
+
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 0 {
+		t.Errorf("submission.accepted audit rows after two terminal failures = %d, want 0", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != 0 {
+		t.Errorf("submission.rejected audit rows after two terminal failures = %d, want 0", n)
+	}
+}
+
+// badKindInvoicePort wraps testInvoicePort and, after the real transition, stamps an
+// out-of-vocabulary failure_kind straight onto the row -- tripping the CHECK on
+// invoices.failure_kind. It mirrors rawIRNInvoicePort's shape: a real constraint violation
+// from a real write, not a hand-rolled error, and it fires at the LAST statement before the
+// audit write in both failure closures. Delegating first is what makes the rollback
+// assertions bite: the job state, the exchange row, the invoice status and its history row
+// have all genuinely been written inside the transaction by the time the CHECK aborts it.
+type badKindInvoicePort struct {
+	testInvoicePort
+}
+
+func (p badKindInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, kind submission.FailureKind) error {
+	if err := p.testInvoicePort.MarkFailed(ctx, tx, invoiceID, tenantID, kind); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE invoices SET failure_kind = 'not-a-kind' WHERE id = $1`, invoiceID)
+	return err
+}
+
+// What this proves and what it does NOT.
+//
+// PROVES: the failure closure is atomic. An abort at the last statement before the audit
+// write leaves the job state, the exchange row and the invoice transition exactly as they
+// were, and no submission.failed row behind.
+//
+// DOES NOT PROVE: that an already-written audit row was undone. No seam exists to abort
+// strictly after the audit write -- OncePerJob inserts its marker before the closure body
+// and WithinTenantTx commits the instant the body returns, so once the audit write is the
+// closure's last statement the only thing following it is COMMIT itself. Manufacturing that
+// seam would mean adding fault injection to production code. The accepted-branch case above
+// (TestSubmitWorker_BlankIRNChecksViolationRollsBackTx2Whole) concedes the same limit; this
+// is the failure-branch mirror of it, not a stronger claim.
+//
+// Before the audit wiring the SQLSTATE half is a genuine RED (the injection is new), while
+// the submission.failed count passes vacuously at zero. Said plainly rather than counted as
+// coverage it does not yet have.
+func TestSubmitWorker_FailureAuditRollsBackWithTheTx(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		adapter func() *scriptedAdapter
+		attempt int
+	}{
+		{
+			name: "transform-failure",
+			adapter: func() *scriptedAdapter {
+				a := newScriptedAdapter() // empty queue: Submit must never fire
+				a.transformErr = errors.New("wsub: cannot build wire from this invoice (rollback)")
+				return a
+			},
+			attempt: 1,
+		},
+		{
+			name: "retry-exhaustion",
+			adapter: func() *scriptedAdapter {
+				return newScriptedAdapter(scriptedOutcome{
+					result:   submission.Retryable{Err: errors.New("wsub: upstream 503, final attempt (rollback)")},
+					evidence: submission.Evidence{ReachedWire: true},
+				})
+			},
+			attempt: 8, // == MaxAttempts, so the dead-letter branch fires
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+			defer cleanup()
+
+			idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+			w := &submission.SubmitWorker{
+				Pool:        f.app,
+				Adapter:     tc.adapter(),
+				InvoicePort: badKindInvoicePort{},
+				Limiter:     submission.NewRateLimiter(),
+				RateLimit:   60,
+				Queue:       newQueueClient(f.app),
+			}
+			job := newSubmitJob(1, tc.attempt, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+			err := w.Work(ctx, job)
+			if err == nil {
+				t.Fatal("Work with an out-of-vocabulary failure_kind returned nil, want the CHECK violation surfaced")
+			}
+			if code := exPgCode(err); code != "23514" {
+				t.Errorf("Work error SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+			}
+
+			wj := wjRequire(t, f, tenantID, idemKey)
+			if wj.state != "submitting" {
+				t.Errorf("job state after the aborted failure closure = %q, want unchanged \"submitting\" -- "+
+					"the whole transaction, including the OncePerJob marker, must have rolled back", wj.state)
+			}
+			if n := exCountRows(t, f, tenantID, wj.id); n != 0 {
+				t.Errorf("app_exchange rows after the aborted failure closure = %d, want 0", n)
+			}
+			inv := wiRead(t, f, tenantID, invoiceID)
+			if inv.status != "queued" {
+				t.Errorf("invoice status after the aborted failure closure = %q, want unchanged \"queued\"", inv.status)
+			}
+			if n := auditCount(t, f, tenantID, "submission.failed"); n != 0 {
+				t.Errorf("submission.failed audit rows after the aborted failure closure = %d, want 0", n)
+			}
+		})
+	}
+}
+
+// --- what the failure event must NOT do -------------------------------------------------
+
+// auditFamilyCount counts every submission.* audit_log row for tenantID, not one named
+// event -- a silence claim needs the whole family, since a new event name would slip past
+// auditCount's exact match.
+func auditFamilyCount(t *testing.T, f *effectsFixture, tenantID string) int {
+	t.Helper()
+	ctx := context.Background()
+	var n int
+	if err := db.WithinTenantTx(ctx, f.app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE event LIKE 'submission.%'`).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count submission.* audit_log rows (tenant=%s): %v", tenantID, err)
+	}
+	return n
+}
+
+// A retry with budget left is not a terminal state, so it must say nothing at all. The
+// branch sits outside queue.OncePerJob, where the marker key is constant across retries, so
+// an audit write placed there would also no-op on the next attempt. The second half of the
+// test drives a terminal failure in the SAME tenant so the zero above cannot pass vacuously
+// on a helper that sees nothing.
+func TestSubmitWorker_MidBudgetRetryWritesNoSubmissionAudit(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantID)
+	entityID := seedEntity(t, f, tenantID)
+	invoiceID := seedInvoice(t, f, tenantID, entityID)
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	retryErr := errors.New("wsub: upstream 503, budget remaining")
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: retryErr},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	// River job id 3 so the control below, which uses id 1, cannot be short-circuited by a
+	// marker this drive left behind.
+	job := newSubmitJob(3, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err == nil {
+		t.Fatal("Work on a mid-budget Retryable returned nil, want the original error so River retries")
+	}
+
+	if n := auditFamilyCount(t, f, tenantID); n != 0 {
+		t.Errorf("submission.* audit rows after a mid-budget Retryable = %d, want 0 -- "+
+			"a job that retries and then succeeds must produce one accepted row, not two events", n)
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "queued" {
+		t.Errorf("job state = %q, want \"queued\" -- the job must stay retryable", wj.state)
+	}
+	if wj.attempts != 1 {
+		t.Errorf("job attempts = %d, want 1", wj.attempts)
+	}
+	if wj.lastError == nil || *wj.lastError != retryErr.Error() {
+		t.Errorf("job last_error = %q, want %q", strOrNil(wj.lastError), retryErr.Error())
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "queued" {
+		t.Errorf("invoice status = %q, want unchanged \"queued\"", inv.status)
+	}
+
+	// Control: the same helper, same tenant, on a path that DOES write.
+	workTransformFailure(t, f, tenantID, seedInvoice(t, f, tenantID, entityID))
+	if n := auditFamilyCount(t, f, tenantID); n != 1 {
+		t.Fatalf("submission.* audit rows after adding one terminal failure = %d, want 1 -- "+
+			"the helper cannot see this family, so the zero above proved nothing", n)
+	}
+}
+
+// A failure row written by the worker is scoped by the same tenant_isolation policy as the
+// verdict rows. Covers the worker path; the direct-call path is covered in this package's
+// whitebox specs.
+func TestRLS_SubmitWorkerFailureAuditRowNotVisibleToAnotherTenant(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantA, invoiceA, cleanupA := seedQueuedInvoice(t, f)
+	defer cleanupA()
+	tenantB := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantB)
+
+	workTransformFailure(t, f, tenantA, invoiceA)
+
+	if n := auditCount(t, f, tenantA, "submission.failed"); n != 1 {
+		t.Fatalf("tenant A's own submission.failed audit rows = %d, want 1 -- "+
+			"precondition for the isolation check below", n)
+	}
+	if n := auditCount(t, f, tenantB, "submission.failed"); n != 0 {
+		t.Errorf("tenant B's view of submission.failed audit rows = %d, want 0 -- "+
+			"RLS must hide tenant A's row from tenant B", n)
+	}
+}
+
+// entity_id must come from the failing invoice's own row, not from whichever company the
+// tenant happens to own. Two entities are seeded and the invoice is attached to the SECOND,
+// so a resolver that picked any company for the tenant would land on the decoy.
+func TestSubmitWorker_FailureRowNamesTheInvoicesOwnEntity(t *testing.T) {
+	f := requireExchangeDB(t)
+
+	for _, tc := range []struct {
+		name string
+		work func(t *testing.T, f *effectsFixture, tenantID, invoiceID string) wjState
+	}{
+		{"transform-failure", workTransformFailure},
+		{"retry-exhaustion", workRetryExhaustion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID := seedTenant(t, f)
+			defer cleanupTenant(t, f, tenantID)
+			decoyID := seedEntity(t, f, tenantID)
+			entityID := seedEntity(t, f, tenantID)
+			if decoyID == entityID {
+				t.Fatalf("both seeded entities have id %s -- the decoy is not distinct", entityID)
+			}
+			invoiceID := seedInvoice(t, f, tenantID, entityID)
+
+			tc.work(t, f, tenantID, invoiceID)
+
+			got := auditEntityID(t, f, tenantID, "submission.failed")
+			if got == nil {
+				t.Fatalf("submission.failed entity_id is NULL, want the invoice's entity %q", entityID)
+			}
+			if *got == decoyID {
+				t.Fatalf("submission.failed entity_id = %q, the DECOY company -- the row is "+
+					"attributed to a company the invoice does not belong to", *got)
+			}
+			if *got != entityID {
+				t.Errorf("submission.failed entity_id = %q, want the invoice's own entity %q", *got, entityID)
+			}
+		})
 	}
 }

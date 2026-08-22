@@ -11,10 +11,10 @@ import (
 // systemActor is the stored subject for an action no person took.
 const systemActor = "system"
 
-// uuidShape is the audit trigger's own gate, byte for byte
-// (migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql:70-75), so
-// the Go copy accepts exactly what uuid_in accepts. Stricter would be a silent
-// wrong answer, not an error: a subject the trigger indexed would render raw.
+// uuidShape is the audit resolver's own gate, byte for byte, so the Go copy
+// accepts exactly what uuid_in accepts. Stricter would be a silent wrong answer,
+// not an error: a subject the trigger indexed would render raw. The SQL side
+// lives in whichever migration defines audit_log_entity_for last.
 // Fenced by TestActorResolve_UUIDGateMatchesUUIDIn.
 var uuidShape = regexp.MustCompile(`^[0-9a-f]{4}(-?[0-9a-f]{4}){7}$`)
 

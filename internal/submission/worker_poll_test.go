@@ -185,6 +185,95 @@ func pjNextPollAt(t *testing.T, f *effectsFixture, tenantID, idemKey string) tim
 	return got
 }
 
+// --- AUDIT-03-04: PollWorker's own terminal-failure audit site (worker.go's poll-exhaustion
+// branch) -------------------------------------------------------------------------------
+
+// workPollExhaustion drives one invoice through submit-to-Pending then a final-attempt
+// Retryable poll, and returns the job row PollWorker left behind. submitID/pollID are
+// PARAMETERS (not constants) because queue.OncePerJob's marker is "job:<id>" per TENANT
+// shared across SubmitWorker and PollWorker alike -- a caller driving two closures in one
+// tenant must pass distinct ids or the second silently no-ops.
+func workPollExhaustion(t *testing.T, f *effectsFixture, tenantID, invoiceID string, submitID, pollID int64) wjState {
+	t.Helper()
+	ctx := context.Background()
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(submitID, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (AUDIT-03-04)")}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	job := newPollJob(pollID, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1})
+	if err := pw.Work(ctx, job); err == nil {
+		t.Fatal("PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error so River discards the job")
+	}
+	wj = wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "dead_lettered" {
+		t.Fatalf("submission_jobs.state = %q, want %q -- a silently-skipped OncePerJob closure "+
+			"(a River job id already used in this tenant) would leave the wrong state here",
+			wj.state, "dead_lettered")
+	}
+	return wj
+}
+
+// Poll-budget exhaustion is a terminal failure and must say so once, with the kind
+// worker.go:536 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)] already hands
+// InvoicePort.MarkFailed.
+func TestPollWorker_PollExhaustionWritesSubmissionFailed(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	wj := workPollExhaustion(t, f, tenantID, invoiceID, 1, 20)
+
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+		t.Fatalf("submission.failed audit rows = %d, want 1", n)
+	}
+	assertFailureAuditPayload(t, f, tenantID, invoiceID, wj.id, string(submission.FailureAcknowledgedNoVerdict))
+	assertNoVerdictAuditRows(t, f, tenantID)
+}
+
+// The failure row must resolve to the invoice's own business entity, not merely any company
+// the tenant owns. A decoy entity is seeded FIRST so a resolver that picked "the tenant's
+// entity" rather than the invoice's own would land on it.
+func TestPollWorker_FailureRowIsAttributedToTheCompany(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantID := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantID)
+	decoyID := seedEntity(t, f, tenantID)
+	entityID := seedEntity(t, f, tenantID)
+	if decoyID == entityID {
+		t.Fatalf("both seeded entities have id %s -- the decoy is not distinct", entityID)
+	}
+	invoiceID := seedInvoice(t, f, tenantID, entityID)
+
+	workPollExhaustion(t, f, tenantID, invoiceID, 1, 20)
+
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+		t.Fatalf("submission.failed audit rows = %d, want 1", n)
+	}
+	got := auditEntityID(t, f, tenantID, "submission.failed")
+	if got == nil {
+		t.Fatalf("submission.failed entity_id is NULL, want the invoice's entity %q", entityID)
+	}
+	if *got == decoyID {
+		t.Fatalf("submission.failed entity_id = %q, the DECOY company -- the row is "+
+			"attributed to a company the invoice does not belong to", *got)
+	}
+	if *got != entityID {
+		t.Errorf("submission.failed entity_id = %q, want the invoice's own entity %q", *got, entityID)
+	}
+}
+
 // --- T06-1 -------------------------------------------------------------------------------
 
 // TestPollWorker_ScheduleHonoursPollAfterExactly (AC-1's own "one scheduled River job" half):
@@ -513,9 +602,11 @@ func TestPollWorker_DeadLetterOnFinalAttemptViaExistingEdge(t *testing.T) {
 	}
 }
 
-// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385): worker.go:518,
-// the poll dead-letter site. Reaching here proves Pending{Ref} fired at least once -- the
-// APP took custody of the submission -- but no verdict was ever polled out of it.
+// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385):
+// worker.go:523 [job.Attempt >= job.MaxAttempts], the poll dead-letter site (the
+// final-attempt guard). Reaching here proves Pending{Ref}
+// fired at least once -- the APP took custody of the submission -- but no verdict was ever
+// polled out of it.
 func TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()

@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The 20 attributable events, by rule, plus the 15 workspace-level ones.
+// The 21 attributable events, by rule, plus the 15 workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -43,6 +43,7 @@ var (
 		"invoice.approval_rejected",
 		"submission.accepted",
 		"submission.rejected",
+		"submission.failed",
 		"reconciliation.drift_detected",
 		"reconciliation.auto_fixed",
 	}
@@ -87,8 +88,8 @@ func TestAudit_InsertTriggerResolvesInvoiceScopedEvents(t *testing.T) {
 	requireInsertTrigger(t, f)
 	fx := seedTriggerFixture(t, f)
 
-	if len(triggerRuleAEvents) != 10 || len(triggerRuleBEvents) != 6 {
-		t.Fatalf("rule A/B hold %d/%d events, want 10/6", len(triggerRuleAEvents), len(triggerRuleBEvents))
+	if len(triggerRuleAEvents) != 10 || len(triggerRuleBEvents) != 7 {
+		t.Fatalf("rule A/B hold %d/%d events, want 10/7", len(triggerRuleAEvents), len(triggerRuleBEvents))
 	}
 	for _, event := range triggerRuleAEvents {
 		recordAudit(t, f, fx.tenant, event, map[string]any{"id": fx.invoice})
@@ -101,6 +102,24 @@ func TestAudit_InsertTriggerResolvesInvoiceScopedEvents(t *testing.T) {
 	for _, event := range append(append([]string{}, triggerRuleAEvents...), triggerRuleBEvents...) {
 		assertTriggerEntity(t, got, event, fx.entity)
 	}
+}
+
+// The transmission failure is attributed from its very first row. A NULL entity_id is a
+// positive firm-wide claim (docs/audit-log-read-contract.md §3), so an unresolved row of
+// this event would be false, not merely thin.
+func TestAudit_InsertTriggerResolvesSubmissionFailed(t *testing.T) {
+	f := requireFixture(t)
+	requireInsertTrigger(t, f)
+	fx := seedTriggerFixture(t, f)
+
+	recordAudit(t, f, fx.tenant, "submission.failed", map[string]any{"invoice_id": fx.invoice})
+	recordAudit(t, f, fx.tenant, "submission.accepted", map[string]any{"invoice_id": fx.invoice})
+
+	got := triggerEntityIDs(t, f, fx.tenant)
+	assertTriggerEntity(t, got, "submission.failed", fx.entity)
+	// Its already-attributed sibling is the positive control: it rules out a broken
+	// fixture reading as a missing rule.
+	assertTriggerEntity(t, got, "submission.accepted", fx.entity)
 }
 
 // AC-13: portfolio.entity.* carries the entity id itself, so it resolves with no join.

@@ -483,7 +483,7 @@ func TestPollWorker_DeadLetterWhenInvoiceAlreadyFailedIsIdempotent(t *testing.T)
 // TestPollWorker_ReplayedDeadLetterKeepsFirstKind (BUG-06-03, task-385): a River redelivery
 // of the SAME already-dead-lettered poll job (identical job.ID/Attempt/MaxAttempts) must not
 // rewrite the stored failure_kind or add a second history row. tx1's own state != "pending"
-// gate (worker.go:427-430) is what stops the second delivery -- the job is already
+// gate (worker.go:443 [state != "pending"]) is what stops the second delivery -- the job is already
 // dead_lettered, not pending -- so it never even reaches adapter.Poll a second time; this is
 // a different guard from queue.OncePerJob (case 3/10 above), which never gets a chance to
 // fire here because tx1 returns first.
@@ -1001,8 +1001,11 @@ func TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 
 // TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant: QA adversarial addition
 // (task-385). No existing case exercised RLS isolation specifically on the poll dead-letter
-// path (worker.go:518) -- the existing poll RLS cases (this file's #13, poll_ref_db_test.go)
-// cover the audit row and poll_ref, not invoices.status/failure_kind after a dead-letter.
+// path (worker.go:523 [job.Attempt >= job.MaxAttempts]) -- the existing poll RLS cases
+// (this file's #13, poll_ref_db_test.go)
+// cover the Pending/Accepted/Rejected audit rows and poll_ref. This case covers
+// invoices.status/failure_kind after a dead-letter; the dead-letter's own audit row (wired
+// since) still has no RLS case of its own.
 // Mirrors poll_ref_db_test.go's TestRLS_PollRefNotVisibleAcrossTenants pattern: tenant B's
 // scoped SELECT of tenant A's invoice must return zero rows, never the dead-lettered status
 // or the unsanitised failure_kind value.
@@ -1242,5 +1245,215 @@ func TestPollWorker_BlankIRNChecksViolationRollsBackTx2Whole(t *testing.T) {
 		t.Errorf("submission.accepted audit rows after the failed poll MarkAccepted = %d, want unchanged %d -- "+
 			"the audit write must roll back with everything else, since it never even runs "+
 			"(recordVerdictAudit sits after MarkAccepted in the same OncePerJob closure)", n, beforeAccepted)
+	}
+}
+
+// --- AUDIT-03-04: PollWorker's own terminal-failure audit site, adversarial half ---------
+
+// A failure row must name the job's OWN submission_jobs.id (a uuid), never River's int64 job
+// id -- River job id 424242 is chosen far from any uuid shape so fmt.Sprint(job.ID) fails
+// loudly rather than by coincidence.
+func TestPollWorker_FailureRowCarriesTheSubmissionJobIdNotTheRiverJobId(t *testing.T) {
+	f := requireExchangeDB(t)
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	wj := workPollExhaustion(t, f, tenantID, invoiceID, 1, 424242)
+
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 1 {
+		t.Fatalf("submission.failed audit rows = %d, want 1", n)
+	}
+	payload := auditPayloadMap(t, f, tenantID, "submission.failed")
+	got, _ := payload["submission_job_id"].(string)
+	if got != wj.id {
+		t.Errorf("submission.failed payload submission_job_id = %v, want the job's own "+
+			"submission_jobs.id %q (read back from the DB, not the PollArgs the test built)",
+			payload["submission_job_id"], wj.id)
+	}
+	if got == "424242" {
+		t.Error("submission.failed payload submission_job_id is the River job id, want the submission_jobs uuid")
+	}
+	if got == invoiceID {
+		t.Error("submission.failed payload submission_job_id is the invoice id, want the submission_jobs uuid")
+	}
+}
+
+// A poll Retryable with budget remaining is not terminal and must write nothing -- the zero
+// half already holds today (mid-budget writes nothing either way). Only the control below,
+// which drives the SAME job to exhaustion, is what actually goes RED.
+func TestPollWorker_MidBudgetRetryWritesNoSubmissionAudit(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	retryErr := errors.New("wsub: poll upstream 503, mid-budget (AUDIT-03-04)")
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: retryErr}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	// job id 21: distinct from the submit's own 1 and the exhaustion control's 20 below --
+	// OncePerJob's marker is "job:<id>" per tenant, shared across both worker types.
+	job := newPollJob(21, 1, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1})
+	if err := pw.Work(ctx, job); err == nil {
+		t.Error("PollWorker.Work on a mid-budget Retryable returned nil, want the original error so River retries")
+	}
+
+	if n := auditFamilyCount(t, f, tenantID); n != 0 {
+		t.Errorf("submission.* audit rows after a mid-budget poll Retryable = %d, want 0", n)
+	}
+	wj2 := wjRequire(t, f, tenantID, idemKey)
+	if wj2.state != "pending" {
+		t.Errorf("job state after a mid-budget poll Retryable = %q, want unchanged \"pending\"", wj2.state)
+	}
+	if wj2.attempts != 2 {
+		t.Errorf("job attempts after a mid-budget poll Retryable = %d, want 2", wj2.attempts)
+	}
+	if wj2.lastError == nil || *wj2.lastError != retryErr.Error() {
+		t.Errorf("job last_error = %q, want %q", strOrNil(wj2.lastError), retryErr.Error())
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "submitted" {
+		t.Errorf("invoice status = %q, want unchanged \"submitted\"", inv.status)
+	}
+
+	// Control: the SAME job, driven to exhaustion -- this half is the actual RED.
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (AUDIT-03-04 control)")}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	finalJob := newPollJob(20, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 2})
+	if err := pw.Work(ctx, finalJob); err == nil {
+		t.Error("PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error")
+	}
+	if n := auditFamilyCount(t, f, tenantID); n != 1 {
+		t.Fatalf("submission.* audit rows after adding the exhaustion control = %d, want 1 -- "+
+			"the mid-budget zero above proved nothing on its own", n)
+	}
+}
+
+// A poll hop still Pending is not terminal and must write nothing -- the zero half already
+// holds today (TestPollWorker_PendingHopWritesNoVerdictAudit covers the accepted/rejected
+// pair; this is auditFamilyCount's wider net, still green either way). Only the control
+// below, which drives the SAME job to exhaustion, is what actually goes RED.
+func TestPollWorker_PendingHopWritesNoSubmissionAudit(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Pending{Ref: "r2", PollAfter: future.Add(time.Hour)}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	if err := pw.Work(ctx, newPollJob(10, 1, 8, submission.PollArgs{
+		TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1,
+	})); err != nil {
+		t.Fatalf("poll hop still Pending: %v", err)
+	}
+
+	if n := auditFamilyCount(t, f, tenantID); n != 0 {
+		t.Errorf("submission.* audit rows after a still-Pending poll hop = %d, want 0", n)
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "submitted" {
+		t.Errorf("invoice status after a still-Pending poll hop = %q, want unchanged \"submitted\"", inv.status)
+	}
+
+	// Control: the SAME job, driven to exhaustion -- this half is the actual RED.
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (AUDIT-03-04 control)")}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	finalJob := newPollJob(20, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 2})
+	if err := pw.Work(ctx, finalJob); err == nil {
+		t.Error("PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error")
+	}
+	if n := auditFamilyCount(t, f, tenantID); n != 1 {
+		t.Fatalf("submission.* audit rows after adding the exhaustion control = %d, want 1 -- "+
+			"the Pending-hop zero above proved nothing on its own", n)
+	}
+}
+
+// Regression backstop, not a driver of this subtask's wiring: badKindInvoicePort's CHECK
+// violation aborts tx2 regardless of whether recordFailureAudit is ever called, since it
+// trips inside MarkFailed itself, before any later statement could run. Green before and
+// after -- see submit_worker_adversarial_test.go's own TestSubmitWorker_FailureAuditRollsBackWithTheTx
+// for the submit-side original this mirrors.
+func TestPollWorker_FailureAuditRollsBackWithTheTx(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	beforeExchangeRows := exCountRows(t, f, tenantID, wj.id) // 1: the submit hop's own row
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (rollback)")}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := &submission.PollWorker{
+		Pool:        f.app,
+		Adapter:     adapter,
+		InvoicePort: badKindInvoicePort{},
+		Queue:       newQueueClient(f.app),
+	}
+	job := newPollJob(20, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1})
+
+	err := pw.Work(ctx, job)
+	if err == nil {
+		t.Fatal("Work with an out-of-vocabulary failure_kind returned nil, want the CHECK violation surfaced")
+	}
+	if code := exPgCode(err); code != "23514" {
+		t.Errorf("Work error SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	wj2 := wjRequire(t, f, tenantID, idemKey)
+	if wj2.state != "pending" {
+		t.Errorf("job state after the aborted failure closure = %q, want unchanged \"pending\" -- "+
+			"the whole tx2, including the OncePerJob marker, must have rolled back", wj2.state)
+	}
+	if n := exCountRows(t, f, tenantID, wj.id); n != beforeExchangeRows {
+		t.Errorf("app_exchange rows after the aborted failure closure = %d, want unchanged %d "+
+			"(only the submit hop's own row -- the poll's own row must have rolled back too)", n, beforeExchangeRows)
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "submitted" {
+		t.Errorf("invoice status after the aborted failure closure = %q, want unchanged \"submitted\"", inv.status)
+	}
+	if n := auditCount(t, f, tenantID, "submission.failed"); n != 0 {
+		t.Errorf("submission.failed audit rows after the aborted failure closure = %d, want 0", n)
 	}
 }

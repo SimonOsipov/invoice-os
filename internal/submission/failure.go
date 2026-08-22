@@ -2,9 +2,9 @@ package submission
 
 // FailureKind is the reason a submission landed the invoice in status='failed'.
 // A plain scalar, not a Result variant: it does not describe an attempt's
-// outcome (Result's job) but WHY the queued->failed dead-letter edge fired,
-// so it travels as MarkFailed's own argument instead of widening the sealed
-// union.
+// outcome (Result's job) but WHY the queued->failed dead-letter edge fired, so
+// it travels as an explicit argument -- MarkFailed's and recordFailureAudit's --
+// instead of widening the sealed union.
 type FailureKind string
 
 const (

@@ -243,10 +243,10 @@ func TestRLS_AuditInvoiceIDAcceptsEverySpellingUUIDInAccepts(t *testing.T) {
 		bare[16:20] + "-" + bare[20:24] + "-" + bare[24:28] + "-" + bare[28:32]
 
 	resolves := map[string]string{
-		"invoice.created":          base,              // canonical, the positive control
-		"invoice.kept_as_is":       bare,               // hyphenless
-		"invoice.unkept_as_is":     "{" + base + "}",   // brace-wrapped canonical
-		"invoice.resolved_outside": "{" + bare + "}",   // brace-wrapped hyphenless
+		"invoice.created":          base,             // canonical, the positive control
+		"invoice.kept_as_is":       bare,             // hyphenless
+		"invoice.unkept_as_is":     "{" + base + "}", // brace-wrapped canonical
+		"invoice.resolved_outside": "{" + bare + "}", // brace-wrapped hyphenless
 		"invoice.validated":        strings.ToUpper(base),
 		"invoice.approval_armed":   nonCanonical,
 	}

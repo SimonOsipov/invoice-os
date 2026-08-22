@@ -10,8 +10,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -55,13 +61,151 @@ func statusForErr(err error) (status int, msg string) {
 	}
 }
 
-// ListHandler returns GET /v1/audit-log.
+// ListHandler returns GET /v1/audit-log. Identity is checked FIRST, before any parameter
+// is read, so an unauthenticated caller cannot learn which parameters exist by watching
+// 400s (TestAuditListHandler_UnauthenticatedIs401BeforeParsing).
+//
+// Two rules run through every parameter below, carried from
+// internal/invoice/handlers.go:572-582. EMPTY IS ABSENT, not a 400: `?event=` applies no
+// filter. A MALFORMED value is always a 400 raised BEFORE the store is called — silently
+// dropping a narrowing filter renders a wrong page with a plausible total instead of an
+// honest error.
 func ListHandler(list func(ctx context.Context, f Filter) (Response, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		_ = auth.IdentityFromContext
-		writeJSON(w, http.StatusOK, Response{})
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		f, msg := parseFilter(r.URL.Query())
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+
+		out, err := list(r.Context(), f)
+		if err != nil {
+			status, body := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "audit: list", slog.Any("err", err))
+			}
+			writeError(w, status, body)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, out)
 	}
+}
+
+// parseFilter turns the querystring into a Filter, or returns the message for a 400. It
+// returns a message rather than an error because every failure here is a 400 with a
+// caller-facing string; nothing it produces is ever a 500.
+func parseFilter(query url.Values) (Filter, string) {
+	f := Filter{Limit: defaultLimit}
+
+	if raw := query.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return Filter{}, "limit must be an integer"
+		}
+		// Above the cap clamps, below 1 is refused: a caller asking for zero rows has made
+		// a mistake, and quietly serving 25 hides it.
+		if n < 1 {
+			return Filter{}, "limit must be >= 1"
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		f.Limit = n
+	}
+
+	if raw := query.Get("cursor"); raw != "" {
+		c, err := DecodeCursor(raw)
+		if err != nil {
+			return Filter{}, "cursor is malformed"
+		}
+		f.Cursor = &c
+	}
+
+	for _, tc := range []struct {
+		name string
+		dst  *time.Time
+	}{{"from", &f.From}, {"to", &f.To}} {
+		raw := query.Get(tc.name)
+		if raw == "" {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return Filter{}, tc.name + " must be an RFC3339 timestamp"
+		}
+		*tc.dst = when
+	}
+
+	// Repeated params: read every value (query.Get returns only the first) and skip ""
+	// per value, so `?event=` alone still applies no filter. The cap is checked over
+	// USABLE values only, so empty ones can never buy unbounded work.
+	var msg string
+	if f.Events, msg = repeatedValues(query["event"], "event"); msg != "" {
+		return Filter{}, msg
+	}
+	if f.Actors, msg = repeatedValues(query["actor"], "actor"); msg != "" {
+		return Filter{}, msg
+	}
+
+	f.ActorKind = query.Get("actor_kind")
+	switch f.ActorKind {
+	case "", "people", "system":
+	default:
+		return Filter{}, `actor_kind must be "people" or "system"`
+	}
+	// The two answer the same question two ways, so a request setting both has no single
+	// meaning; refusing is honest where picking one silently is not.
+	if len(f.Actors) > 0 && f.ActorKind != "" {
+		return Filter{}, "actor and actor_kind cannot be combined"
+	}
+
+	switch raw := query.Get("company"); raw {
+	case "":
+		f.Company = AllCompanies()
+	case companyWorkspace:
+		f.Company = WorkspaceOnly()
+	default:
+		if _, err := uuid.Parse(raw); err != nil {
+			return Filter{}, `company must be a well-formed uuid or the literal "workspace"`
+		}
+		f.Company = NamedCompany(raw)
+	}
+
+	if f.Q = query.Get("q"); len(f.Q) > maxFilterTextLen {
+		return Filter{}, "q is too long"
+	}
+
+	if f.InvoiceID = query.Get("invoice_id"); f.InvoiceID != "" {
+		if _, err := uuid.Parse(f.InvoiceID); err != nil {
+			return Filter{}, "invoice_id must be a well-formed uuid"
+		}
+	}
+
+	return f, ""
+}
+
+// companyWorkspace is the one non-uuid value the company param accepts (A-5).
+const companyWorkspace = "workspace"
+
+// repeatedValues collects a repeated param's non-empty values and enforces the cap.
+func repeatedValues(raw []string, name string) ([]string, string) {
+	var out []string
+	for _, v := range raw {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) > maxFilterValues {
+		return nil, fmt.Sprintf("%s accepts at most %d values", name, maxFilterValues)
+	}
+	return out, ""
 }

@@ -94,12 +94,32 @@ func TestAuditStore_AllStatementsShareOneTransaction(t *testing.T) {
 	if n := tr.count("commit"); n != 1 {
 		t.Errorf("the request issued %d COMMITs, want exactly 1 (statements: %v)", n, tr.sqls)
 	}
-	// The floor: a request that issued only the transaction pair would satisfy both counts
-	// above while doing nothing.
-	if n := len(tr.sqls); n < 6 {
-		t.Errorf("the request issued %d statements in total, want at least 6 (begin, page, three "+
-			"facets, count): %v", n, tr.sqls)
+	// The floor: a request issuing only the transaction pair would satisfy both counts
+	// above while doing nothing. Five statements read audit_log on a populated request —
+	// the page, the three facets and the count. actor.Resolve adds a memberships query
+	// only when a subject passes its uuid gate (these rows' actor does not), search adds
+	// two fold-ins, and the empty probe runs only when nothing matched.
+	if n := stAuditLogCount(tr); n != 5 {
+		t.Errorf("the request issued %d statements against audit_log, want 5 (page, three facets, "+
+			"count): %v", n, tr.sqls)
 	}
+	if n := stProbeCount(tr); n != 0 {
+		t.Errorf("a populated request ran the empty probe %d times, want 0", n)
+	}
+}
+
+// stAuditLogCount counts the statements reading audit_log, so the per-request budget is
+// asserted rather than assumed.
+func stAuditLogCount(tr *stTracer) int {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	n := 0
+	for _, s := range tr.sqls {
+		if strings.Contains(s, "audit_log") {
+			n++
+		}
+	}
+	return n
 }
 
 // TestAuditStore_SkipsTheEmptyProbeWhenRowsMatched pins the probe as conditional. log_is_empty

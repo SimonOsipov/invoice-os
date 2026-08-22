@@ -985,3 +985,166 @@ func TestSelectExchange_NeverSubmittedInvoicesYieldHeaderOnly(t *testing.T) {
 		t.Errorf("bodyWriter received %d bodies, want 0 (AC-9: no further work)", len(bw.bodies))
 	}
 }
+
+// =====================================================================================
+// QA adversarial coverage (AUDIT-05-05 Stage 4): case-insensitivity, NULL/boundary
+// combinations not exercised by the Mode A red specs above.
+// =====================================================================================
+
+// AC-8 "anywhere": ScrubHeaders matches case-insensitively via canonicalisation. A
+// credential planted in ANY case must still drop, and an allowlisted name planted in a
+// non-canonical case must still survive under its canonical spelling.
+func TestSelectExchange_HeaderScrubbingIsCaseInsensitiveRegardlessOfPlantedCase(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-exchange-case-insensitive")
+	entity := mustCreateEntity(t, tx, tenant, "Case Insensitive Co", "60000015-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-CASE-01"})
+	jobID := mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invID})
+	mustCreateExchange(t, tx, exchangeFixture{
+		tenantID: tenant, submissionJobID: jobID, invoiceID: invID,
+		requestHeaders: mustMarshalHeaders(t, http.Header{
+			"AUTHORIZATION":     {"Bearer upper-case-cred"},
+			"authorization":     {"Bearer lower-case-cred"},
+			"x-ratelimit-limit": {"100"},
+		}),
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	bw := newFakeBodyWriter()
+	if err := selectExchange(context.Background(), tx, []string{invID}, w, bw); err != nil {
+		t.Fatalf("selectExchange: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	row := exchangeRowByInvoice(t, buf.Bytes(), invID)
+	cell := row[colIndex(t, wantExchangeHeader, "request_headers")]
+	if strings.Contains(strings.ToLower(cell), "authorization") {
+		t.Errorf("request_headers = %q, must not contain Authorization in any case", cell)
+	}
+	if strings.Contains(cell, "upper-case-cred") || strings.Contains(cell, "lower-case-cred") {
+		t.Errorf("request_headers = %q, must not contain either planted credential", cell)
+	}
+	h := mustUnmarshalHeaders(t, cell)
+	if got := h.Get("X-Ratelimit-Limit"); got != "100" {
+		t.Errorf("request_headers = %q, want X-Ratelimit-Limit=100 to survive under its canonical spelling (planted as x-ratelimit-limit)", cell)
+	}
+}
+
+// AC-2 boundary: nothing enforces a relationship between truncated and body presence at
+// the schema level -- a row planted with truncated=true and a NULL body is representable,
+// and must round-trip the flag without inventing a body file that doesn't exist.
+func TestSelectExchange_TruncatedTrueWithNullBodyRoundTrips(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-exchange-truncated-null-body")
+	entity := mustCreateEntity(t, tx, tenant, "Truncated Null Body Co", "60000016-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-TRUNCNULL-01"})
+	jobID := mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invID})
+	mustCreateExchange(t, tx, exchangeFixture{
+		tenantID: tenant, submissionJobID: jobID, invoiceID: invID,
+		outcome: "connection_failed", truncated: true,
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	bw := newFakeBodyWriter()
+	if err := selectExchange(context.Background(), tx, []string{invID}, w, bw); err != nil {
+		t.Fatalf("selectExchange: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	row := exchangeRowByInvoice(t, buf.Bytes(), invID)
+	if got := row[colIndex(t, wantExchangeHeader, "truncated")]; got != "true" {
+		t.Errorf("truncated = %q, want %q (independent of body presence)", got, "true")
+	}
+	if got := row[colIndex(t, wantExchangeHeader, "request_body_file")]; got != "" {
+		t.Errorf("request_body_file = %q, want empty -- no body was ever planted", got)
+	}
+	if got := row[colIndex(t, wantExchangeHeader, "response_body_file")]; got != "" {
+		t.Errorf("response_body_file = %q, want empty -- no body was ever planted", got)
+	}
+	if len(bw.bodies) != 0 {
+		t.Errorf("bodyWriter received %d bodies, want 0 -- truncated=true must not invent a body file", len(bw.bodies))
+	}
+}
+
+// AC-1 adversarial: the seeded timeout shape is attempt > 1 with http_status still NULL
+// (a later retry that also never got a response), not just the first attempt.
+func TestSelectExchange_AttemptGreaterThanOneWithNullHTTPStatusRoundTrips(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-exchange-attempt-null-status")
+	entity := mustCreateEntity(t, tx, tenant, "Attempt Null Status Co", "60000017-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-ATTEMPT-01"})
+	jobID := mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invID})
+	mustCreateExchange(t, tx, exchangeFixture{
+		tenantID: tenant, submissionJobID: jobID, invoiceID: invID,
+		outcome: "connection_failed", attempt: 3,
+	})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	bw := newFakeBodyWriter()
+	if err := selectExchange(context.Background(), tx, []string{invID}, w, bw); err != nil {
+		t.Fatalf("selectExchange: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	row := exchangeRowByInvoice(t, buf.Bytes(), invID)
+	if got := row[colIndex(t, wantExchangeHeader, "attempt")]; got != "3" {
+		t.Errorf("attempt = %q, want %q", got, "3")
+	}
+	if got := row[colIndex(t, wantExchangeHeader, "http_status")]; got != "" {
+		t.Errorf("http_status = %q, want empty even at attempt 3", got)
+	}
+	if got := row[colIndex(t, wantExchangeHeader, "latency_ms")]; got != "" {
+		t.Errorf("latency_ms = %q, want empty even at attempt 3", got)
+	}
+}
+
+// D-6/D-20 boundary: MaxBodyBytes is enforced by submission.SafeBody at WRITE time only
+// -- selectExchange applies no cap of its own on read, so a row at exactly the cap and one
+// byte over it (planted directly, bypassing SafeBody, like the AC-4 credential fixtures)
+// must both stream out byte-for-byte, unmodified.
+func TestSelectExchange_BodyAtAndOverMaxBodyBytesStreamsUnmodified(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-exchange-max-body-bytes")
+	entity := mustCreateEntity(t, tx, tenant, "Max Body Bytes Co", "60000018-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-MAXBODY-01"})
+	jobID := mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invID})
+
+	atCap := strings.Repeat("a", submission.MaxBodyBytes)
+	overCap := strings.Repeat("b", submission.MaxBodyBytes+1)
+	exAt := mustCreateExchange(t, tx, exchangeFixture{tenantID: tenant, submissionJobID: jobID, invoiceID: invID, attempt: 1, requestBody: &atCap})
+	exOver := mustCreateExchange(t, tx, exchangeFixture{tenantID: tenant, submissionJobID: jobID, invoiceID: invID, attempt: 2, requestBody: &overCap})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	bw := newFakeBodyWriter()
+	if err := selectExchange(context.Background(), tx, []string{invID}, w, bw); err != nil {
+		t.Fatalf("selectExchange: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	gotAt, ok := bw.bodies["bodies/"+exAt+".request"]
+	if !ok {
+		t.Fatalf("bodyWriter never received bodies/%s.request", exAt)
+	}
+	if len(gotAt) != submission.MaxBodyBytes || string(gotAt) != atCap {
+		t.Errorf("at-cap body length = %d, want %d unmodified bytes", len(gotAt), submission.MaxBodyBytes)
+	}
+	gotOver, ok := bw.bodies["bodies/"+exOver+".request"]
+	if !ok {
+		t.Fatalf("bodyWriter never received bodies/%s.request", exOver)
+	}
+	if len(gotOver) != submission.MaxBodyBytes+1 || string(gotOver) != overCap {
+		t.Errorf("over-cap body length = %d, want %d unmodified bytes -- selectExchange must not re-clip on read", len(gotOver), submission.MaxBodyBytes+1)
+	}
+}

@@ -281,6 +281,74 @@ func TestRLS_AuditInvoiceIDAcceptsEverySpellingUUIDInAccepts(t *testing.T) {
 	assertAuditInvoiceIDNull(t, got, absentKeyEvent)
 }
 
+// Row 13 (new): an event carrying BOTH `id` and `invoice_id` keys, with DIFFERENT
+// uuids, resolves to the key its dispatch branch names -- not whichever key happens to
+// be present. The existing fixtures never populate both keys on the same row.
+func TestRLS_AuditInvoiceIDDispatchUsesTheBranchNamedKeyNotWhicheverIsPresent(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	requireInvoiceIDColumn(t, ctx)
+
+	tenant := uuid.NewString()
+	ruleAWant, ruleAOther := uuid.NewString(), uuid.NewString()
+	ruleBWant, ruleBOther := uuid.NewString(), uuid.NewString()
+	recordInvoiceIDRow(t, ctx, tenant, "invoice.created",
+		map[string]any{"id": ruleAWant, "invoice_id": ruleAOther})
+	recordInvoiceIDRow(t, ctx, tenant, "submission.accepted",
+		map[string]any{"id": ruleBOther, "invoice_id": ruleBWant})
+
+	got := auditInvoiceIDsByEvent(t, ctx, tenant)
+	if len(got) != 2 {
+		t.Fatalf("read back %d rows, want 2 — the fixture never landed", len(got))
+	}
+	assertAuditInvoiceID(t, got, "invoice.created", ruleAWant)
+	assertAuditInvoiceID(t, got, "submission.accepted", ruleBWant)
+}
+
+// Row 14 (new): reject shapes beyond TestRLS_AuditInvoiceIDAcceptsEverySpellingUUIDInAccepts's
+// three (malformed, unclosed brace, off-boundary hyphen) -- a nested JSON value, an
+// unmatched-close-only brace, a doubled close brace, degenerate brace pairs, a brace in
+// the interior, an empty string, a JSON null, and off-by-one lengths. None may raise
+// 22P02 on the ALTER's table-wide rewrite; all must resolve NULL.
+func TestRLS_AuditInvoiceIDRejectsAdversarialBraceAndLengthShapes(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	requireInvoiceIDColumn(t, ctx)
+
+	tenant := uuid.NewString()
+	base := uuid.NewString()
+	bare := strings.ReplaceAll(base, "-", "")
+	rejects := map[string]any{
+		"invoice.transitioned":       map[string]any{"inner": base}, // nested object under the key
+		"invoice.unresolved_outside": "",                            // empty string
+		"invoice.updated":            nil,                           // JSON null
+		"invoice.validated":          bare + "xxx",                  // 35 chars
+		"invoice.kept_as_is":         bare + "xxxxx",                // 37 chars
+		"invoice.unkept_as_is":       "{" + bare + "}extra}",        // doubled close brace ('{abc}def}' shape)
+		"invoice.resolved_outside":   "{}",                          // brace pair, no content
+		"invoice.approval_armed":     "{",                           // open-brace-only
+		"invoice.approval_cancelled": "}",                           // close-brace-only
+	}
+	const controlEvent = "invoice.created"
+	if got, want := len(rejects)+1, len(auditRuleAEvents); got != want {
+		t.Fatalf("reject-shape table covers %d events (incl. the control), want %d (auditRuleAEvents)", got, want)
+	}
+	for event, payload := range rejects {
+		recordInvoiceIDRow(t, ctx, tenant, event, map[string]any{"id": payload})
+	}
+	controlID := uuid.NewString()
+	recordInvoiceIDRow(t, ctx, tenant, controlEvent, map[string]any{"id": controlID})
+
+	got := auditInvoiceIDsByEvent(t, ctx, tenant)
+	if want := len(rejects) + 1; len(got) != want {
+		t.Fatalf("read back %d rows, want %d — the fixture never landed", len(got), want)
+	}
+	for event := range rejects {
+		assertAuditInvoiceIDNull(t, got, event)
+	}
+	assertAuditInvoiceID(t, got, controlEvent, controlID)
+}
+
 // --- AC-4: the row-count ceiling guard, executed, not read --------------------------
 
 // auditInvoiceIDLoweredGuard returns the Up body with the size guard's threshold rewritten
@@ -423,5 +491,64 @@ func TestRLS_AuditInvoiceIDIsGeneratedAndCannotBeForged(t *testing.T) {
 	}
 	if pgErr.Code != "428C9" {
 		t.Fatalf("forged INSERT raised SQLSTATE %s (%s), want 428C9 (generated column)", pgErr.Code, pgErr.Message)
+	}
+}
+
+// --- AC-3: index column order, not merely presence ---------------------------------
+
+// Row 11 (new) / AC-3: the index's column order and sort directions. Row 6
+// (TestRLS_AuditInvoiceIDMigrationIsReversible) checks the index NAME only -- a QA
+// mutation confirmed a wrongly-ordered index (invoice_id trailing instead of second)
+// still passes that test. This row closes the gap.
+func TestRLS_AuditInvoiceIDIndexColumnOrderMatchesTheSiblings(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	requireInvoiceIDColumn(t, ctx)
+
+	var def string
+	if err := h.super.QueryRow(ctx, `SELECT pg_get_indexdef($1::regclass)`, auditInvoiceIDIndex).Scan(&def); err != nil {
+		t.Fatalf("read indexdef for %s: %v", auditInvoiceIDIndex, err)
+	}
+	const want = "(tenant_id, invoice_id, created_at DESC, id DESC)"
+	if !strings.HasSuffix(def, want) {
+		t.Errorf("indexdef = %q, want it to end with %q -- tenant-leading, invoice_id second, "+
+			"created_at DESC/id DESC trailing so a keyset page needs no Sort", def, want)
+	}
+}
+
+// --- cross-tenant leak guard: invoice_id is not a new leak vector -------------------
+
+// invoiceIDCountForTenant counts audit_log rows visible to invoice_app for one
+// invoice_id, scoped to one tenant's RLS context.
+func invoiceIDCountForTenant(t *testing.T, ctx context.Context, tenant, invoiceID string) int {
+	t.Helper()
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin app tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, tenant); err != nil {
+		t.Fatalf("set tenant context: %v", err)
+	}
+	return mustCount(t, tx, `SELECT count(*) FROM audit_log WHERE invoice_id = $1`, invoiceID)
+}
+
+// Row 12 (new): a row is invisible to another tenant even when queried by its exact
+// invoice_id -- RLS scopes by tenant_id regardless of which column the WHERE names.
+func TestRLS_AuditInvoiceIDCrossTenantRowIsInvisibleByInvoiceID(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	requireInvoiceIDColumn(t, ctx)
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	invoiceID := uuid.NewString()
+	recordInvoiceIDRow(t, ctx, tenantA, "invoice.created", map[string]any{"id": invoiceID})
+
+	if n := invoiceIDCountForTenant(t, ctx, tenantB, invoiceID); n != 0 {
+		t.Errorf("tenant B sees %d rows for tenant A's invoice_id, want 0", n)
+	}
+	// Non-vacuous: tenant A sees its own row by the same invoice_id.
+	if n := invoiceIDCountForTenant(t, ctx, tenantA, invoiceID); n != 1 {
+		t.Errorf("tenant A sees %d of its own rows by invoice_id, want 1", n)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -195,5 +196,156 @@ func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 		if !isStdlibOrAllowed(dep) {
 			t.Errorf("internal/archive transitively depends on %q, want stdlib or github.com/google/uuid only", dep)
 		}
+	}
+}
+
+// AC-3 adversarial: from/to must compare by instant, not by clock digits or offset
+// string. +01:00 (WAT, Africa/Lagos's fixed offset -- Lagos observes no DST) is one
+// hour ahead of Z, so "01:00+01:00" and "00:00Z" name the same instant.
+func TestParseRequest_NonUTCOffsetsCompareByInstant(t *testing.T) {
+	query := url.Values{
+		"entity_id": {validEntityID},
+		"from":      {"2026-01-01T01:00:00+01:00"},
+		"to":        {"2026-01-01T00:00:00Z"},
+	}
+	r, msg := parseRequest(query)
+	if msg != "" {
+		t.Fatalf("parseRequest(equal instants, different offsets) message = %q, want accepted (equal, inclusive)", msg)
+	}
+	if !r.From.Equal(r.To) {
+		t.Errorf("r.From = %v, r.To = %v, want equal instants", r.From, r.To)
+	}
+}
+
+// A clock reading with a larger hour digit can still name an EARLIER instant once its
+// offset is applied. If the code compared strings or local clock fields instead of
+// instants, this would be wrongly refused as "from after to".
+func TestParseRequest_LaterClockDigitsButEarlierInstantIsAccepted(t *testing.T) {
+	query := url.Values{
+		"entity_id": {validEntityID},
+		"from":      {"2026-01-01T00:59:00+01:00"}, // = 2025-12-31T23:59:00Z
+		"to":        {"2026-01-01T00:00:00Z"},
+	}
+	_, msg := parseRequest(query)
+	if msg != "" {
+		t.Errorf("parseRequest(from clock-later but instant-earlier) message = %q, want accepted", msg)
+	}
+}
+
+// AC-4 adversarial: bundleFilename dates the file by the UTC calendar day, which can
+// differ from the offset's local calendar day near midnight.
+func TestBundleFilename_UsesUTCDateNotLocalOffset(t *testing.T) {
+	from := mustParseRFC3339(t, "2026-01-01T00:30:00+01:00") // = 2025-12-31T23:30:00Z
+	r := Request{EntityID: validEntityID, From: from, To: mustParseRFC3339(t, validTo)}
+	got := bundleFilename("Honeywell Group", r)
+	want := "ASComply_evidence_Honeywell-Group_20251231_20260331.zip"
+	if got != want {
+		t.Errorf("bundleFilename(local-midnight-crossing from) = %q, want %q (UTC date, not local)", got, want)
+	}
+}
+
+// AC-2 adversarial: uuid.Parse is permissive of non-canonical spellings, and
+// Request.EntityID deliberately keeps the caller's raw string (see request.go) rather
+// than uuid.Parse's normalized form. Confirms that deliberate choice holds for every
+// form uuid.Parse accepts, so a later DB-layer subtask inherits the exact string, not a
+// silently-normalized one.
+func TestParseRequest_NonCanonicalUUIDFormsAcceptedRaw(t *testing.T) {
+	cases := []string{
+		"A1B2C3D4-A1B2-C3D4-A1B2-C3D4A1B2C3D4",          // uppercase
+		"{a1b2c3d4-a1b2-c3d4-a1b2-c3d4a1b2c3d4}",        // braced
+		"urn:uuid:a1b2c3d4-a1b2-c3d4-a1b2-c3d4a1b2c3d4", // urn prefix
+		"a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",              // no hyphens
+	}
+	if len(cases) == 0 {
+		t.Fatal("test setup: no cases")
+	}
+	for _, raw := range cases {
+		query := url.Values{"entity_id": {raw}, "from": {validFrom}, "to": {validTo}}
+		r, msg := parseRequest(query)
+		if msg != "" {
+			t.Errorf("parseRequest(entity_id=%q) message = %q, want accepted", raw, msg)
+			continue
+		}
+		if r.EntityID != raw {
+			t.Errorf("parseRequest(entity_id=%q).EntityID = %q, want unchanged raw string", raw, r.EntityID)
+		}
+	}
+}
+
+// AC-2 adversarial: url.Values.Get silently takes the first value of a repeated
+// parameter. Documents that a duplicate entity_id resolves to the FIRST value, not the
+// last or an error.
+func TestParseRequest_DuplicateEntityIDTakesFirstValue(t *testing.T) {
+	second := "b2c3d4a1-b2c3-d4a1-b2c3-d4a1b2c3d4a1"
+	query := url.Values{"entity_id": {validEntityID, second}, "from": {validFrom}, "to": {validTo}}
+	r, msg := parseRequest(query)
+	if msg != "" {
+		t.Fatalf("parseRequest(duplicate entity_id) message = %q, want accepted", msg)
+	}
+	if r.EntityID != validEntityID {
+		t.Errorf("parseRequest(duplicate entity_id).EntityID = %q, want first value %q", r.EntityID, validEntityID)
+	}
+}
+
+// AC-4 adversarial: pure ASCII punctuation (the regex's actual declared class), as
+// opposed to the existing em-dash case which is non-ASCII.
+func TestBundleFilename_ASCIIPunctuationOnlyFallsBackToUUID(t *testing.T) {
+	r := Request{EntityID: validEntityID, From: mustParseRFC3339(t, validFrom), To: mustParseRFC3339(t, validTo)}
+	got := bundleFilename("!!!@@@###", r)
+	want := "ASComply_evidence_" + validEntityID + "_20260101_20260331.zip"
+	if got != want {
+		t.Errorf("bundleFilename(ASCII punctuation only) = %q, want %q (fallback to entity uuid)", got, want)
+	}
+}
+
+// AC-4 boundary: a slug exactly 48 bytes must NOT be truncated (the check is
+// len(slug) > maxSlugBytes, not >=).
+func TestBundleFilename_ExactlyMaxSlugBytesIsNotTruncated(t *testing.T) {
+	name := strings.Repeat("B", maxSlugBytes)
+	r := Request{EntityID: validEntityID, From: mustParseRFC3339(t, validFrom), To: mustParseRFC3339(t, validTo)}
+	got := bundleFilename(name, r)
+	want := "ASComply_evidence_" + name + "_20260101_20260331.zip"
+	if got != want {
+		t.Errorf("bundleFilename(exactly %d-byte name) = %q, want %q (untruncated)", maxSlugBytes, got, want)
+	}
+}
+
+// AC-4 adversarial: multi-byte runes (CJK, combining marks) must never survive into the
+// slug -- the regex replaces every non-ASCII-alnum rune with '-' before truncation, so
+// byte-slicing at maxSlugBytes can never land mid-rune. This guards that invariant: if a
+// future edit widened the regex to admit Unicode letters, this test would catch the
+// resulting invalid UTF-8 from a mid-rune byte cut.
+func TestBundleFilename_MultiByteNameTruncatesWithoutCorruptingUTF8(t *testing.T) {
+	name := "北京公司" + strings.Repeat("C", 60) + "é̀̂" // CJK + combining marks around the cut
+	r := Request{EntityID: validEntityID, From: mustParseRFC3339(t, validFrom), To: mustParseRFC3339(t, validTo)}
+	got := bundleFilename(name, r)
+	if !utf8.ValidString(got) {
+		t.Fatalf("bundleFilename(multi-byte name) = %q, produced invalid UTF-8", got)
+	}
+	wantPrefix := "ASComply_evidence_" + strings.Repeat("C", maxSlugBytes) + "_"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Errorf("bundleFilename(multi-byte name) = %q, want prefix %q (multi-byte runes stripped, then truncated to %d bytes)", got, wantPrefix, maxSlugBytes)
+	}
+}
+
+// AC-2 adversarial: an absurdly long malformed entity_id must be refused cleanly, not
+// panic or hang uuid.Parse.
+func TestParseRequest_ExtremelyLongEntityIDIsRefused(t *testing.T) {
+	query := url.Values{"entity_id": {strings.Repeat("a", 100000)}, "from": {validFrom}, "to": {validTo}}
+	_, msg := parseRequest(query)
+	if want := "entity_id must be a well-formed uuid"; msg != want {
+		t.Errorf("parseRequest(100000-char entity_id) message = %q, want %q", msg, want)
+	}
+}
+
+// AC-4 adversarial: an absurdly long entity name must still truncate to maxSlugBytes,
+// not panic or produce an unbounded filename.
+func TestBundleFilename_ExtremelyLongNameIsCappedAtMaxSlugBytes(t *testing.T) {
+	name := strings.Repeat("D", 1_000_000)
+	r := Request{EntityID: validEntityID, From: mustParseRFC3339(t, validFrom), To: mustParseRFC3339(t, validTo)}
+	got := bundleFilename(name, r)
+	want := "ASComply_evidence_" + strings.Repeat("D", maxSlugBytes) + "_20260101_20260331.zip"
+	if got != want {
+		t.Errorf("bundleFilename(1,000,000-char name) length = %d, want capped result %q", len(got), want)
 	}
 }

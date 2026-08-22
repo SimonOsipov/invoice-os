@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/csv"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -497,6 +498,262 @@ func TestSelectHistory_ResolvesOncePerChunkNotPerRow(t *testing.T) {
 	}
 	if n := len(rec.mentioning("invoice_status_history")); n != 1 {
 		t.Errorf("selectHistory issued %d invoice_status_history statement(s), want exactly 1 -- resolution must not re-read the rows", n)
+	}
+}
+
+// TestSelectHistory_NoInvoiceStraddlesAChunkBoundary verifies the claim chunk()
+// partitions invoice IDs (never history rows), so an invoice's transitions can
+// never be split across two `= ANY` queries. Uses 501 ids (2 chunks: 500 + 1)
+// with real invoices planted at BOTH sides of the boundary -- the 500 filler ids
+// are syntactically valid uuids with no matching invoices row (invoiceNumbers
+// and the history query both tolerate that: no FK, `= ANY` just returns nothing
+// for them), so this costs 2 inserted invoices, not 501.
+func TestSelectHistory_NoInvoiceStraddlesAChunkBoundary(t *testing.T) {
+	super, rec := dbSuperPoolTraced(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-chunk-boundary")
+	entity := mustCreateEntity(t, tx, tenant, "Chunk Boundary Co", "40000012-0001")
+
+	invLast := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-BOUND-LAST"})
+	invFirst := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-BOUND-FIRST"})
+
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	draft, validated := "draft", "validated"
+	for _, inv := range []string{invLast, invFirst} {
+		mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: inv, toStatus: "draft", actor: "system", changedAt: base})
+		mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: inv, fromStatus: &draft, toStatus: "validated", actor: "system", changedAt: base.Add(time.Hour)})
+		mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: inv, fromStatus: &validated, toStatus: "queued", actor: "system", changedAt: base.Add(2 * time.Hour)})
+	}
+
+	ids := make([]string, 501)
+	for i := 0; i < 499; i++ {
+		ids[i] = uuid.NewString() // filler: no matching invoice or history row
+	}
+	ids[499] = invLast  // last element of chunk 1 (indices 0..499)
+	ids[500] = invFirst // sole element of chunk 2 (index 500)
+
+	actingAs(t, tx, tenant)
+	rec.reset()
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, ids, w); err != nil {
+		t.Fatalf("selectHistory: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	// Control needle: confirm chunk() really produced 2 invoice_status_history
+	// statements here -- otherwise the assertions below would pass vacuously
+	// against a single-chunk run.
+	if n := len(rec.mentioning("invoice_status_history")); n != 2 {
+		t.Fatalf("selectHistory over 501 ids issued %d invoice_status_history statement(s), want exactly 2 (500+1 chunks) -- "+
+			"the boundary assertions below are meaningless if this isn't 2", n)
+	}
+	if n := len(rec.mentioning("FROM invoices WHERE")); n != 1 {
+		t.Errorf("invoiceNumbers issued %d statement(s) over 501 ids, want exactly 1 (called once, outside the chunk loop)", n)
+	}
+
+	toIdx := historyColIndex(t, "to_status")
+	seqIdx := historyColIndex(t, "seq")
+	for _, tc := range []struct {
+		name string
+		inv  string
+	}{{"last element of chunk 1", invLast}, {"sole element of chunk 2", invFirst}} {
+		rows := historyRowsFor(t, buf.Bytes(), tc.inv)
+		if len(rows) != 3 {
+			t.Fatalf("%s (%s): selectHistory wrote %d rows, want 3 -- rows duplicated or lost across the chunk boundary", tc.name, tc.inv, len(rows))
+		}
+		wantOrder := []string{"draft", "validated", "queued"}
+		for i, want := range wantOrder {
+			if rows[i][toIdx] != want {
+				t.Errorf("%s: row %d to_status = %q, want %q", tc.name, i, rows[i][toIdx], want)
+			}
+			if want := strconv.Itoa(i + 1); rows[i][seqIdx] != want {
+				t.Errorf("%s: row %d seq = %q, want %q -- seq must restart at 1 for this invoice regardless of which chunk it landed in", tc.name, i, rows[i][seqIdx], want)
+			}
+		}
+	}
+}
+
+// --- Adversarial: zero-history invoice mixed with siblings that have rows --------
+
+func TestSelectHistory_ZeroHistoryInvoiceDoesNotDisturbSiblings(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-zero-mixed")
+	entity := mustCreateEntity(t, tx, tenant, "Zero Mixed Co", "40000013-0001")
+	invWithRows := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-ZERO-A"})
+	invZero := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-ZERO-B"})
+	invOther := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-ZERO-C"})
+
+	base := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	draft := "draft"
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invWithRows, toStatus: "draft", actor: "system", changedAt: base})
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invWithRows, fromStatus: &draft, toStatus: "validated", actor: "system", changedAt: base.Add(time.Hour)})
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invOther, toStatus: "draft", actor: "system", changedAt: base.Add(30 * time.Minute)})
+	// invZero gets no history rows at all -- genuinely zero, not a fixture bug.
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, []string{invWithRows, invZero, invOther}, w); err != nil {
+		t.Fatalf("selectHistory: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	if rows := historyRowsFor(t, buf.Bytes(), invZero); len(rows) != 0 {
+		t.Errorf("zero-history invoice got %d rows, want 0", len(rows))
+	}
+	seqIdx := historyColIndex(t, "seq")
+	rowsA := historyRowsFor(t, buf.Bytes(), invWithRows)
+	if len(rowsA) != 2 {
+		t.Fatalf("selectHistory wrote %d rows for %s, want 2 -- must not be swallowed by the zero-history sibling in the same ids slice", len(rowsA), invWithRows)
+	}
+	for i, want := range []string{"1", "2"} {
+		if rowsA[i][seqIdx] != want {
+			t.Errorf("invWithRows row %d seq = %q, want %q", i, rowsA[i][seqIdx], want)
+		}
+	}
+	if rowsC := historyRowsFor(t, buf.Bytes(), invOther); len(rowsC) != 1 || rowsC[0][seqIdx] != "1" {
+		t.Errorf("invOther rows = %v, want exactly 1 row with seq=1", rowsC)
+	}
+}
+
+// --- Adversarial: actor ladder edge cases ------------------------------------------
+
+// A membership row EXISTS for the subject but names nothing (D-31's ladder
+// exhausted, not absent) -- must still fall to raw with the subject verbatim,
+// never an empty actor_name.
+func TestSelectHistory_MembershipWithNoNameFallsToRaw(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-no-name-membership")
+	entity := mustCreateEntity(t, tx, tenant, "No Name Co", "40000014-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-NONAME-01"})
+	userID := uuid.NewString()
+	mustCreateMembership(t, tx, tenant, userID, nil, nil)
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invID, toStatus: "validated", actor: userID, changedAt: time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, []string{invID}, w); err != nil {
+		t.Fatalf("selectHistory: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	rows := historyRowsFor(t, buf.Bytes(), invID)
+	if len(rows) != 1 {
+		t.Fatalf("selectHistory wrote %d rows, want 1", len(rows))
+	}
+	nameIdx, kindIdx := historyColIndex(t, "actor_name"), historyColIndex(t, "actor_kind")
+	if rows[0][nameIdx] == "" {
+		t.Fatalf("actor_name is empty -- a membership row with no name must still render the subject verbatim, never an empty name")
+	}
+	if rows[0][nameIdx] != userID || rows[0][kindIdx] != "raw" {
+		t.Errorf("actor_name/actor_kind = %q/%q, want %q/raw (membership row exists but names nothing)", rows[0][nameIdx], rows[0][kindIdx], userID)
+	}
+}
+
+// D-31: a non-nil pointer to "" is absent at every rung, exactly like nil. Proves
+// the archive path inherits internal/actor's ladder rather than re-checking
+// displayName != nil on its own (which would wrongly stop at "").
+func TestSelectHistory_EmptyStringDisplayNameFallsThroughToEmail(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-empty-display-name")
+	entity := mustCreateEntity(t, tx, tenant, "Empty Name Co", "40000015-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-EMPTYNAME-01"})
+	userID := uuid.NewString()
+	empty := ""
+	email := "empty-display-name@example.com"
+	mustCreateMembership(t, tx, tenant, userID, &empty, &email)
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invID, toStatus: "validated", actor: userID, changedAt: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, []string{invID}, w); err != nil {
+		t.Fatalf("selectHistory: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	rows := historyRowsFor(t, buf.Bytes(), invID)
+	if len(rows) != 1 {
+		t.Fatalf("selectHistory wrote %d rows, want 1", len(rows))
+	}
+	nameIdx, kindIdx := historyColIndex(t, "actor_name"), historyColIndex(t, "actor_kind")
+	if rows[0][nameIdx] != email || rows[0][kindIdx] != "person" {
+		t.Errorf("actor_name/actor_kind = %q/%q, want %q/person (D-31: empty-string display_name is absent, falls to email)", rows[0][nameIdx], rows[0][kindIdx], email)
+	}
+}
+
+// Cross-tenant name leak (AUDIT-02's own memory records one closed elsewhere):
+// a membership row for the SAME subject uuid exists only under tenant B. Acting
+// as tenant A, Resolve's memberships query is scoped by RLS alone -- it must not
+// see tenant B's row.
+func TestRLS_SelectHistoryDoesNotLeakAnotherTenantsMembershipName(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenantA := mustCreateTenant(t, tx, "archive-history-leak-a")
+	tenantB := mustCreateTenant(t, tx, "archive-history-leak-b")
+	entityA := mustCreateEntity(t, tx, tenantA, "Leak Co A", "40000016-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenantA, entityID: entityA, invoiceNumber: "INV-LEAK-01"})
+
+	sharedUserID := uuid.NewString()
+	wrongName := "Wrong Tenant Person"
+	mustCreateMembership(t, tx, tenantB, sharedUserID, &wrongName, nil)
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenantA, invoiceID: invID, toStatus: "validated", actor: sharedUserID, changedAt: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)})
+
+	actingAs(t, tx, tenantA)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, []string{invID}, w); err != nil {
+		t.Fatalf("selectHistory: unexpected error: %v", err)
+	}
+	w.Flush()
+
+	rows := historyRowsFor(t, buf.Bytes(), invID)
+	if len(rows) != 1 {
+		t.Fatalf("selectHistory wrote %d rows, want 1", len(rows))
+	}
+	nameIdx, kindIdx := historyColIndex(t, "actor_name"), historyColIndex(t, "actor_kind")
+	if rows[0][nameIdx] == wrongName {
+		t.Fatalf("CROSS-TENANT LEAK: actor_name = %q -- tenant B's membership name leaked into tenant A's bundle", wrongName)
+	}
+	if rows[0][nameIdx] != sharedUserID || rows[0][kindIdx] != "raw" {
+		t.Errorf("actor_name/actor_kind = %q/%q, want %q/raw (RLS must hide the other tenant's membership row)", rows[0][nameIdx], rows[0][kindIdx], sharedUserID)
+	}
+}
+
+// invoice_status_history.actor is `text` with only char_length > 0 (no upper
+// bound) -- unlike audit_log.actor's `audit_actor_length` CHECK (<= 255,
+// migrations/20260708062657_audit_log.sql:60). 300 bytes on purpose: past that
+// OTHER column's cap, to prove this one truly has none and selectHistory never
+// truncates a long raw actor.
+func TestSelectHistory_LongRawActorSurvivesVerbatim(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-long-actor")
+	entity := mustCreateEntity(t, tx, tenant, "Long Actor Co", "40000017-0001")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-LONGACTOR-01"})
+	longActor := strings.Repeat("backfill-source-row-", 15) // 300 bytes
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invID, toStatus: "validated", actor: longActor, changedAt: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, []string{invID}, w); err != nil {
+		t.Fatalf("selectHistory: unexpected error: %v (a long free-text actor must never error)", err)
+	}
+	w.Flush()
+
+	rows := historyRowsFor(t, buf.Bytes(), invID)
+	if len(rows) != 1 {
+		t.Fatalf("selectHistory wrote %d rows, want 1", len(rows))
+	}
+	nameIdx, kindIdx := historyColIndex(t, "actor_name"), historyColIndex(t, "actor_kind")
+	if rows[0][nameIdx] != longActor || rows[0][kindIdx] != "raw" {
+		t.Errorf("actor_name len=%d/actor_kind=%q, want the full %d-byte string verbatim/raw (no truncation)", len(rows[0][nameIdx]), rows[0][kindIdx], len(longActor))
 	}
 }
 

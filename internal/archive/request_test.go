@@ -155,13 +155,16 @@ func TestBundleFilename_TruncatesLongNameTo48Bytes(t *testing.T) {
 // transitive closure -- pgpassfile, pgservicefile, ~11 golang.org/x/text/* subpackages,
 // pgx's internal/pgconn/pgproto3/pgtype subpackages -- needs prefix matching, an exact
 // map can't cover ~15 subpaths). Modeled on internal/actor/actor_test.go:227
-// (TestActorPackage_ImportsOnlyStdlib).
+// (TestActorPackage_ImportsOnlyStdlib). internal/actor is the one internal exception
+// (AUDIT-05-04 needs actor.Resolve); it imports only stdlib + pgx itself, so no prefix
+// change is needed alongside it.
 func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 	const selfPath = "github.com/SimonOsipov/invoice-os/internal/archive"
 	allowedExact := map[string]bool{
-		"github.com/google/uuid":         true,
-		"github.com/jackc/pgpassfile":    true,
-		"github.com/jackc/pgservicefile": true,
+		"github.com/google/uuid":                           true,
+		"github.com/jackc/pgpassfile":                      true,
+		"github.com/jackc/pgservicefile":                   true,
+		"github.com/SimonOsipov/invoice-os/internal/actor": true,
 	}
 	allowedPrefixes := []string{"github.com/jackc/pgx/v5", "golang.org/x/text"}
 	isStdlibOrAllowed := func(imp string) bool {

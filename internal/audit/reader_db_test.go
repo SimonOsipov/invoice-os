@@ -700,14 +700,18 @@ func TestAuditRead_TotalMatchesAnIndependentCount(t *testing.T) {
 		t.Errorf("total = %d, want 40 (every matching row, not the page)", got.Total)
 	}
 
+	// The oracle is the hardcoded 40 above, not this: the statement below is the same
+	// SQL text Query runs, in the same RLS-scoped transaction, so it cannot diverge
+	// without 40 diverging too. It is kept because the Test Specs table asks for it, and
+	// it does still catch Total being read off the wrong column or left at zero.
 	var direct int
 	if err := db.WithinTenantTx(context.Background(), f.app, p.tenant, func(tx pgx.Tx) error {
 		return tx.QueryRow(context.Background(), `SELECT count(*) FROM audit_log`).Scan(&direct)
 	}); err != nil {
-		t.Fatalf("independent count: %v", err)
+		t.Fatalf("count audit_log directly: %v", err)
 	}
 	if got.Total != direct {
-		t.Errorf("total = %d, independent count(*) = %d", got.Total, direct)
+		t.Errorf("total = %d, direct count(*) = %d", got.Total, direct)
 	}
 
 	// A cursor is a position, not a filter: total must not shrink as the caller pages.

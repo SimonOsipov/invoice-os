@@ -511,6 +511,153 @@ func TestManifest_EntriesNeverMarshalsNull(t *testing.T) {
 	}
 }
 
+// --- AC-3: manifest row counts, gap found in QA -- untested until now ---------------
+
+// TestManifest_CSVRowCountsMatchDataRows guards Rows against a doubled- or
+// dropped-row bug: mutating e.rows++ to e.rows+=2 in csvEntry.Write passed
+// every test in this file before this one existed.
+func TestManifest_CSVRowCountsMatchDataRows(t *testing.T) {
+	fb := buildFixtureBundle(t)
+	doc := readManifest(t, mustReadZip(t, fb.zipBytes))
+
+	checked := 0
+	for _, name := range []string{"invoices.csv", "status_history.csv", "submissions.csv", "exchange.csv"} {
+		var found *manifestEntry
+		for i := range doc.Entries {
+			if doc.Entries[i].Name == name {
+				found = &doc.Entries[i]
+			}
+		}
+		if found == nil {
+			t.Fatalf("manifest has no entry %q", name)
+		}
+		if found.Rows == nil {
+			t.Fatalf("%s: Rows is nil, want a non-nil pointer to 1 (fixture writes 1 data row)", name)
+		}
+		if *found.Rows != 1 {
+			t.Errorf("%s: Rows = %d, want 1 (fixture writes exactly 1 data row)", name, *found.Rows)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no CSV entries checked -- nothing to assert on")
+	}
+}
+
+// TestManifest_ZeroRowCSVStillGetsANonNilRowsPointer guards the documented
+// "non-nil pointer even to 0" contract (manifest.go:40) for a header-only CSV.
+func TestManifest_ZeroRowCSVStillGetsANonNilRowsPointer(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+
+	e := bw.newCSVEntry("invoices.csv")
+	if err := e.Write(invoicesCSVHeader); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if err := bw.finalizeCSV(e); err != nil {
+		t.Fatalf("finalizeCSV: %v", err)
+	}
+	if err := bw.writeManifest(testManifestParams()); err != nil {
+		t.Fatalf("writeManifest: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	raw := readEntry(t, mustReadZip(t, buf.Bytes()), "manifest.json")
+	if !bytes.Contains(raw, []byte(`"rows":0`)) {
+		t.Errorf(`manifest.json for a header-only CSV does not contain "rows":0 (want the field present, not omitted): %s`, raw)
+	}
+
+	doc := readManifest(t, mustReadZip(t, buf.Bytes()))
+	if len(doc.Entries) == 0 {
+		t.Fatal("manifest has no entries -- nothing to assert on")
+	}
+	if doc.Entries[0].Rows == nil {
+		t.Fatal("Rows is nil for a header-only CSV, want a non-nil pointer to 0")
+	}
+	if *doc.Entries[0].Rows != 0 {
+		t.Errorf("Rows = %d, want 0", *doc.Entries[0].Rows)
+	}
+}
+
+// TestManifest_BodyEntryRowsIsNil guards the other half of the manifest.go:40
+// contract: mutating WriteBody to attach a Rows pointer to a body file passed
+// every test in this file before this one existed.
+func TestManifest_BodyEntryRowsIsNil(t *testing.T) {
+	fb := buildFixtureBundle(t)
+	doc := readManifest(t, mustReadZip(t, fb.zipBytes))
+
+	checked := 0
+	for _, e := range doc.Entries {
+		if !strings.HasPrefix(e.Name, "bodies/") {
+			continue
+		}
+		if e.Rows != nil {
+			t.Errorf("%s: Rows = %d, want nil (a body file has no row count)", e.Name, *e.Rows)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no body entries checked -- nothing to assert on")
+	}
+}
+
+// TestManifest_CountsMatchTheEntriesTheyAreDerivedFrom guards manifestCounts:
+// zeroing entryCount's return value, or bodyFileCount's, passed every other
+// test in this file before this one existed.
+func TestManifest_CountsMatchTheEntriesTheyAreDerivedFrom(t *testing.T) {
+	fb := buildFixtureBundle(t)
+	doc := readManifest(t, mustReadZip(t, fb.zipBytes))
+
+	want := manifestCounts{
+		Invoices:          1,
+		StatusTransitions: 1,
+		Submissions:       1,
+		ExchangeAttempts:  1,
+		BodyFiles:         2,
+	}
+	if doc.Counts != want {
+		t.Errorf("Counts = %+v, want %+v", doc.Counts, want)
+	}
+}
+
+// TestManifest_TopLevelFieldsRoundTripFromParams guards writeManifest's field wiring:
+// swapping TenantID for p.Request.EntityID (both valid UUIDs in the fixture, so a
+// weaker check on shape alone would miss it) passed every other test in this file
+// before this one existed.
+func TestManifest_TopLevelFieldsRoundTripFromParams(t *testing.T) {
+	fb := buildFixtureBundle(t)
+	doc := readManifest(t, mustReadZip(t, fb.zipBytes))
+	params := testManifestParams()
+
+	if doc.Format != manifestFormat {
+		t.Errorf("Format = %q, want %q", doc.Format, manifestFormat)
+	}
+	if want := params.Now.UTC().Format(time.RFC3339); doc.GeneratedAt != want {
+		t.Errorf("GeneratedAt = %q, want %q", doc.GeneratedAt, want)
+	}
+	if doc.GeneratedBy != params.GeneratedBy {
+		t.Errorf("GeneratedBy = %+v, want %+v", doc.GeneratedBy, params.GeneratedBy)
+	}
+	if doc.TenantID != params.TenantID {
+		t.Errorf("TenantID = %q, want %q", doc.TenantID, params.TenantID)
+	}
+	wantEntity := manifestEntity{ID: params.Entity.ID, Name: params.Entity.Name, TIN: params.Entity.TIN}
+	if doc.Entity != wantEntity {
+		t.Errorf("Entity = %+v, want %+v", doc.Entity, wantEntity)
+	}
+	wantPeriod := manifestPeriod{
+		From:   params.Request.From.UTC().Format(time.RFC3339),
+		To:     params.Request.To.UTC().Format(time.RFC3339),
+		Bounds: "inclusive",
+		Basis:  "invoices.created_at",
+	}
+	if doc.Period != wantPeriod {
+		t.Errorf("Period = %+v, want %+v", doc.Period, wantPeriod)
+	}
+}
+
 // --- AC-4: manifest digests are live, not decorative --------------------------------
 
 func TestBundle_ManifestDigestsMatchTheBytes(t *testing.T) {

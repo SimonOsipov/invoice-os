@@ -149,24 +149,47 @@ func TestBundleFilename_TruncatesLongNameTo48Bytes(t *testing.T) {
 }
 
 // TestArchivePackage_ImportsOnlyStdlibAndUUID guards AC-1: internal/archive must never
-// gain a dependency on another internal package (the D-1 cycle risk with internal/audit /
-// internal/submission) or any third-party module beyond github.com/google/uuid and
-// github.com/jackc/pgx/v5 (AUDIT-05-03 adds the tx-scoped DB reads; pgx's own
+// gain a dependency on another internal package or third-party module beyond an
+// explicit, narrow allowlist (AUDIT-05-03 adds the tx-scoped DB reads; pgx's own
 // transitive closure -- pgpassfile, pgservicefile, ~11 golang.org/x/text/* subpackages,
 // pgx's internal/pgconn/pgproto3/pgtype subpackages -- needs prefix matching, an exact
 // map can't cover ~15 subpaths). Modeled on internal/actor/actor_test.go:227
-// (TestActorPackage_ImportsOnlyStdlib). internal/actor is the one internal exception
-// (AUDIT-05-04 needs actor.Resolve); it imports only stdlib + pgx itself, so no prefix
-// change is needed alongside it.
+// (TestActorPackage_ImportsOnlyStdlib). internal/actor is one internal exception
+// (AUDIT-05-04 needs actor.Resolve); it imports only stdlib + pgx itself.
+//
+// AUDIT-05-05 widens this deliberately: selectExchange must call the REAL
+// submission.ScrubHeaders (AC 3/8 forbid a copied allowlist; a re-scrub on the way out
+// is what makes AC 8 hold regardless of what write time stored, D-7). That pulls
+// internal/submission's own transitive graph -- internal/audit,
+// internal/platform/{auth,db,queue}, river, goose, jwt, testify and friends (measured:
+// `go list -deps ./internal/submission`, 312 packages total). No import cycle exists
+// today. A cleaner alternative -- extracting ScrubHeaders into a dependency-free leaf
+// package internal/submission re-exports, so archive imports the leaf instead of the
+// whole graph -- is deliberately NOT done here; flag it as a follow-up if the isolation
+// is wanted back.
 func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 	const selfPath = "github.com/SimonOsipov/invoice-os/internal/archive"
 	allowedExact := map[string]bool{
-		"github.com/google/uuid":                           true,
-		"github.com/jackc/pgpassfile":                      true,
-		"github.com/jackc/pgservicefile":                   true,
-		"github.com/SimonOsipov/invoice-os/internal/actor": true,
+		"github.com/google/uuid":                                    true,
+		"github.com/jackc/pgpassfile":                               true,
+		"github.com/jackc/pgservicefile":                            true,
+		"github.com/SimonOsipov/invoice-os/internal/actor":          true,
+		"github.com/SimonOsipov/invoice-os/internal/submission":     true,
+		"github.com/SimonOsipov/invoice-os/internal/audit":          true,
+		"github.com/SimonOsipov/invoice-os/internal/platform/auth":  true,
+		"github.com/SimonOsipov/invoice-os/internal/platform/db":    true,
+		"github.com/SimonOsipov/invoice-os/internal/platform/queue": true,
 	}
-	allowedPrefixes := []string{"github.com/jackc/pgx/v5", "golang.org/x/text"}
+	allowedPrefixes := []string{
+		"github.com/jackc/pgx/v5", "golang.org/x/text",
+		"github.com/riverqueue/river", "github.com/pressly/goose/v3",
+		"github.com/jackc/puddle/v2", "github.com/golang-jwt/jwt",
+		"github.com/tidwall", "github.com/stretchr/testify",
+		"github.com/davecgh/go-spew", "github.com/pmezard/go-difflib",
+		"github.com/sethvargo/go-retry", "github.com/mfridman/interpolate",
+		"go.uber.org/goleak", "go.uber.org/multierr",
+		"golang.org/x/sync", "gopkg.in/yaml.v3",
+	}
 	isStdlibOrAllowed := func(imp string) bool {
 		if allowedExact[imp] || imp == selfPath {
 			return true

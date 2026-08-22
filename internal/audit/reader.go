@@ -1,6 +1,6 @@
 // reader.go: the audit-log reader (AUDIT-04) — the wire types, the keyset cursor codec,
 // the CompanyScope classification and Query, the page read. Facets, the store and the
-// handler are later subtasks. Like Record, Query takes pgx.Tx and never
+// handler live in facets.go, store.go and handlers.go. Like Record, Query takes pgx.Tx and never
 // internal/platform/db, so audit.go's "no import cycle" claim stays true. No HTTP here.
 package audit
 

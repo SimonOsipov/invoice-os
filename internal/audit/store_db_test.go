@@ -222,3 +222,64 @@ func TestAuditStore_ListIsScopedToTheCallersTenant(t *testing.T) {
 		t.Errorf("tenant A's read returned nothing; the isolation claim above would be vacuous")
 	}
 }
+
+// TestAuditStore_ListPreservesCompanyScopeFromQuery is AC #1's company_scope claim,
+// closing a gap the existing suite leaves open: reader_db_test.go proves the VALUE against
+// Query directly, and the handler's envelope test proves the JSON KEY against a spy-built
+// Response, but nothing calls the real List with a company-scoped row and reads
+// company_scope back off it. A line between Query and the returned Response that dropped
+// or blanked the field would still pass every other case in this package.
+func TestAuditStore_ListPreservesCompanyScopeFromQuery(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Scope Survives Ltd")
+	pageInsert(t, f, p, []pageRow{
+		{event: "portfolio.entity.created", payload: `{"id":"` + entity + `"}`, ageSeconds: 10},
+	})
+
+	store, _ := stTracedStore(t)
+	got := empList(t, store, p.tenant, audit.Filter{Limit: 10})
+
+	if len(got.Events) != 1 {
+		t.Fatalf("List returned %d rows, want 1", len(got.Events))
+	}
+	if got.Events[0].CompanyScope != audit.ScopeCompany {
+		t.Errorf("List's row has company_scope = %q, want %q — Query computed it correctly, "+
+			"List must not lose it on the way out", got.Events[0].CompanyScope, audit.ScopeCompany)
+	}
+}
+
+// TestAuditStore_EmptyProbeSharesThePageTransaction closes a gap
+// TestAuditStore_AllStatementsShareOneTransaction cannot see: that test's tenant is
+// populated, so the probe never runs and its BEGIN/COMMIT count says nothing about the
+// probe's own transaction. Here the filter matches nothing, forcing the probe to run, and
+// BEGIN must still be 1 — a probe split into its own db.WithinRequestTenantTx call would
+// still pass every other case in this file.
+func TestAuditStore_EmptyProbeSharesThePageTransaction(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	pageInsert(t, f, p, pageSeries("invoice.created", 2, 20))
+
+	store, tr := stTracedStore(t)
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{TenantID: p.tenant})
+
+	got, err := store.List(ctx, audit.Filter{Limit: 10, Events: []string{"no.such.event"}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got.Total != 0 {
+		t.Fatalf("the excluding filter matched %d rows, want 0 — this case cannot make its claim",
+			got.Total)
+	}
+	if n := stProbeCount(tr); n != 1 {
+		t.Fatalf("the empty probe ran %d times, want 1 — this case cannot make its claim", n)
+	}
+	if n := tr.count("begin"); n != 1 {
+		t.Errorf("a request whose page AND probe both ran issued %d BEGINs, want exactly 1 — the "+
+			"probe must share the page's transaction, not open its own (statements: %v)", n, tr.sqls)
+	}
+	if n := tr.count("commit"); n != 1 {
+		t.Errorf("a request whose page AND probe both ran issued %d COMMITs, want exactly 1 "+
+			"(statements: %v)", n, tr.sqls)
+	}
+}

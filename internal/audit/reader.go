@@ -233,12 +233,13 @@ type Filter struct {
 // app.current_tenant GUC that db.WithinTenantTx set on tx, so isolation is structural.
 //
 // This subtask (AUDIT-04-02) honours only Limit and Cursor; the other Filter fields are
-// composed in AUDIT-04-03. ActorName/ActorKind stay empty until AUDIT-04-04 resolves them,
-// and LogIsEmpty stays false until the store runs the empty-probe (AUDIT-04-07).
+// composed by filterPredicates. ActorName/ActorKind stay empty until AUDIT-04-04 resolves
+// them, and LogIsEmpty stays false until the store runs the empty-probe (AUDIT-04-07).
 //
-// The plans are pinned by TestAuditPlan_* in audit_plan_test.go: both the first page and
-// a cursor page are an Index Scan on audit_log_tenant_created_idx with no Sort node, and
-// the total is an index-only scan.
+// The plans are pinned by the TestAudit_*Plan cases in audit_plan_test.go. Measured, a
+// composed page keeps tenant_id and the cursor's row-value comparison together in one
+// Index Cond with no Sort node; which index the planner picks varies with the filter set,
+// so no test asserts an index name.
 func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 	// The handler validates and clamps limit (AUDIT-04-07). Query only refuses a value it
 	// could not build a LIMIT for, rather than over-fetching limit+1 = 1 and trimming to
@@ -257,21 +258,44 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 		},
 	}
 
-	// Built as two statements rather than one with an "$1 IS NULL OR ..." guard: the
-	// row-value comparison only folds into the index condition when it is the sole
-	// predicate, and a guarded form degrades the cursor page to a filter.
+	targets, err := resolveSearchTargets(ctx, tx, f.Q)
+	if err != nil {
+		return Response{}, err
+	}
+	// Built ONCE and used by both statements below. There is no second call site to keep
+	// in sync, which is what stops a filter reaching the page but not the count.
+	where, args, err := filterPredicates(f, targets)
+	if err != nil {
+		return Response{}, err
+	}
+	if where != "" {
+		where = " WHERE " + where
+	}
+
+	// The cursor is appended as SQL text rather than guarded with "$n IS NULL OR ...":
+	// measured, the guarded form stops the row-value comparison folding into the Index
+	// Cond and demotes the cursor page to a post-scan filter. Extra AND terms do not.
+	pageArgs := append([]any(nil), args...)
+	pageWhere := where
+	if f.Cursor != nil {
+		pageArgs = append(pageArgs, f.Cursor.CreatedAt, f.Cursor.ID)
+		clause := fmt.Sprintf("(a.created_at, a.id) < ($%d, $%d)", len(pageArgs)-1, len(pageArgs))
+		if pageWhere == "" {
+			pageWhere = " WHERE " + clause
+		} else {
+			pageWhere += " AND " + clause
+		}
+	}
+	pageArgs = append(pageArgs, f.Limit+1)
+
 	sql := `SELECT a.id, a.created_at, a.event, a.actor, a.entity_id, be.name, a.payload
 	          FROM audit_log a
-	          LEFT JOIN business_entities be ON be.id = a.entity_id`
-	args := make([]any, 0, 3)
-	if f.Cursor != nil {
-		args = append(args, f.Cursor.CreatedAt, f.Cursor.ID)
-		sql += "\n	         WHERE (a.created_at, a.id) < ($1, $2)"
-	}
-	args = append(args, f.Limit+1)
-	sql += "\n	         ORDER BY a.created_at DESC, a.id DESC\n	         LIMIT $" + strconv.Itoa(len(args))
+	          LEFT JOIN business_entities be ON be.id = a.entity_id` +
+		pageWhere +
+		"\n	         ORDER BY a.created_at DESC, a.id DESC" +
+		"\n	         LIMIT $" + strconv.Itoa(len(pageArgs))
 
-	rows, err := tx.Query(ctx, sql, args...)
+	rows, err := tx.Query(ctx, sql, pageArgs...)
 	if err != nil {
 		return Response{}, fmt.Errorf("audit: query page: %w", err)
 	}
@@ -306,9 +330,11 @@ func Query(ctx context.Context, tx pgx.Tx, f Filter) (Response, error) {
 		out.Page.NextCursor = &cursor
 	}
 
-	// The cursor is a position, not a filter, so it is absent here: total answers "how
-	// many rows match", which must not shrink as the caller pages.
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&out.Total); err != nil {
+	// The same where/args as the page, minus the cursor: a cursor is a position, not a
+	// filter, so total must not shrink as the caller pages. audit_log is aliased `a` and
+	// there is NO join here, which is why every fragment has to be a.-qualified and the
+	// company-name search route folds to entity ids instead of reaching for be.name.
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM audit_log a`+where, args...).Scan(&out.Total); err != nil {
 		return Response{}, fmt.Errorf("audit: count matching rows: %w", err)
 	}
 	return out, nil

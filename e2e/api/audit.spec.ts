@@ -5,7 +5,9 @@
 //   1. THE ROUTE ITSELF. cmd/invoice/main.go registers `GET /v1/audit-log` on app.Mux, and
 //      nothing in the Go tree reads that pattern — the handler tests call audit.ListHandler
 //      directly against a synthetic httptest request. Changing GET to POST, or misspelling the
-//      path, leaves go build, go vet and the whole internal/audit suite green. This spec 404s.
+//      path, leaves go build, go vet and the whole internal/audit suite green. Here it fails:
+//      measured, ServeMux answers a wrong METHOD on a matching path with 405 and an
+//      unregistered PATH with 404, and apiFetch throws ApiError on either.
 //   2. JWT -> tenant -> RLS end to end. The Go RLS tests set app.current_tenant themselves;
 //      here the tenant comes from a real token through the real gateway.
 //

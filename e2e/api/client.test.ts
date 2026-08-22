@@ -380,9 +380,11 @@ function keySetDiff(a: string[], b: string[]): string[] {
   return [...diff]
 }
 
-// Floors are the CURRENT key counts, so adding a field on one side alone trips the floor
-// before the equality row runs. Facet's Go tag is `kind,omitempty`, which extracts as `kind` --
-// the TS side must declare it.
+// Floors are the CURRENT key counts, so a side that LOSES a key, or an extractor that breaks
+// and returns [], trips here before equality can compare two empty sets. A key ADDED to one
+// side only raises that side's count, so equality is what catches drift in that direction --
+// measured, not assumed. Facet's Go tag is `kind,omitempty`, which extracts as `kind`, so the
+// TS side must declare it.
 const AUDIT_WIRE_STRUCTS = [
   { go: 'Event', ts: 'AuditEvent', floor: 10 },
   { go: 'PageInfo', ts: 'AuditPageInfo', floor: 3 },
@@ -432,6 +434,8 @@ describe('wire mirror: Go internal/audit/reader.go <-> e2e/api/client.ts (AUDIT-
     }
   })
 
+  // The ONLY row that catches a vacuous comparator: with the real files already in agreement, a
+  // keySetDiff stubbed to `return []` passes the equality row too. Measured.
   it('planted-positive: the comparator can report a real mismatch, not merely agree', () => {
     // Synthetic, in memory: 'b' is on the Go side and deliberately absent from the TS side.
     const goFixture = 'type Fixture struct {\n\tA string `json:"a"`\n\tB string `json:"b"`\n}'

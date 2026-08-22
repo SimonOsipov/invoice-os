@@ -125,6 +125,14 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 		return "", nil, fmt.Errorf("audit: unknown company mode %d", f.Company.Mode())
 	}
 
+	// Both payload spellings live in audit_log.invoice_id, a STORED generated column that
+	// dispatches on the event name (AUDIT-04-11), so the reader compares a column and never
+	// reaches into jsonb — that is the whole of §6 now.
+	// TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression holds it.
+	if f.InvoiceID != "" {
+		conditions = append(conditions, "a.invoice_id = "+bind(f.InvoiceID)+"::uuid")
+	}
+
 	if f.Q != "" {
 		conditions = append(conditions, searchFragment(f.Q, s, bind))
 	}

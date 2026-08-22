@@ -72,18 +72,21 @@ func TestArchive_CIJobRunsThisPackage(t *testing.T) {
 
 	gate, seed := -1, -1
 	for i, line := range block {
-		if !strings.Contains(line, "scripts/ci/rls-test-gate.sh") {
+		trimmed := strings.TrimSpace(line)
+		// A commented-out `#  run: ...` line is inert in real YAML; matching it
+		// would let a disabled step read as a live one.
+		if !strings.HasPrefix(trimmed, "run:") || !strings.Contains(trimmed, "scripts/ci/rls-test-gate.sh") {
 			continue
 		}
 		switch {
-		case strings.Contains(line, "./internal/archive/..."):
+		case strings.Contains(trimmed, "./internal/archive/..."):
 			gate = i
 			// A filter would re-open the silent-skip hole for whatever it does not match.
-			if strings.Contains(line, "-run") {
+			if strings.Contains(trimmed, "-run") {
 				t.Errorf("the archive gate step carries a -run filter, so any test it does not match would "+
-					"still SKIP into a green build: %s", strings.TrimSpace(line))
+					"still SKIP into a green build: %s", trimmed)
 			}
-		case strings.Contains(line, "TestSeed|TestCIRunFilters"):
+		case strings.Contains(trimmed, "TestSeed|TestCIRunFilters"):
 			seed = i
 		}
 	}
@@ -108,16 +111,18 @@ func TestArchive_CIGateScriptIsTheRunner(t *testing.T) {
 
 	var line string
 	for _, l := range block {
-		if strings.Contains(l, "./internal/archive/...") {
-			line = l
+		trimmed := strings.TrimSpace(l)
+		// A comment mentioning the package (not a live `run:` line) must not count.
+		if strings.HasPrefix(trimmed, "run:") && strings.Contains(trimmed, "./internal/archive/...") {
+			line = trimmed
 			break
 		}
 	}
 	if line == "" {
-		t.Fatal("no step in the rls block runs ./internal/archive/... — cannot check its runner")
+		t.Fatal("no `run:` step in the rls block runs ./internal/archive/... — cannot check its runner")
 	}
 	if !strings.Contains(line, "scripts/ci/rls-test-gate.sh") {
-		t.Errorf("the ./internal/archive/... step does not go through scripts/ci/rls-test-gate.sh: %s", strings.TrimSpace(line))
+		t.Errorf("the ./internal/archive/... step does not go through scripts/ci/rls-test-gate.sh: %s", line)
 	}
 }
 
@@ -125,7 +130,12 @@ func TestArchive_CIGateScriptIsTheRunner(t *testing.T) {
 // answers with a WARNING, not an error, so the test would pass having proved nothing.
 func TestArchive_CIJobExportsTheSuperuserDSN(t *testing.T) {
 	block := rlsJobBlock(t)
-	if !strings.Contains(strings.Join(block, "\n"), "DATABASE_SUPERUSER_URL") {
-		t.Error("the rls job env does not export DATABASE_SUPERUSER_URL")
+	// A comment line mentioning the name (many step comments do) must not count —
+	// only an actual `KEY: value` env line does.
+	for _, line := range block {
+		if strings.HasPrefix(strings.TrimSpace(line), "DATABASE_SUPERUSER_URL:") {
+			return
+		}
 	}
+	t.Error("the rls job env does not export DATABASE_SUPERUSER_URL")
 }

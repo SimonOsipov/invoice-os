@@ -82,7 +82,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice }: Audit
         onClick={onToggle}
         data-testid="audit-row"
         aria-expanded={expanded}
-        className="pf-row pf-list-row"
+        className="pf-row"
         style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, gap: AUDIT_GRID_GAP, minWidth: AUDIT_TABLE_MIN_WIDTH, padding: '12px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
       >
         <ActorCell actor={event.actor} actor_name={event.actor_name} actor_kind={event.actor_kind} />

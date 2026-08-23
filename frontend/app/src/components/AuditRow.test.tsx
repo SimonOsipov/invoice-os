@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { AuditEvent } from '../lib/audit'
 
 import { AuditRow } from './AuditRow'
+import { AuditTable } from './AuditTable'
 
 afterEach(cleanup)
 
@@ -120,5 +121,34 @@ describe('AuditRow evidence affordance', () => {
     // that does not exist.
     render(<AuditRow event={ev({ event: 'approval_policy.updated', payload: { id: 'pol-1' } })} expanded onToggle={() => {}} />)
     expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
+  })
+})
+
+describe('AuditRow degrades by scrolling, not by collapsing', () => {
+  it('auditRow_takesNoClassThatCollapsesTheGrid', () => {
+    // platform.css:306-319 forces `grid-template-columns: minmax(0,1fr) !important` on
+    // .pf-list-row and .pf-list-head at <=480px. On a min-width table that produces a
+    // single 868px column, not a narrow table -- the opposite of the Core AC, which says
+    // this table degrades by SCROLLING. MembersTable.tsx avoids both classes for exactly
+    // this reason and takes .pf-row alone, for the hover highlight.
+    render(<AuditRow event={ev()} expanded={false} onToggle={() => {}} />)
+    const row = screen.getByTestId('audit-row')
+    expect(row.className).toContain('pf-row')
+    expect(row.className, 'pf-list-row collapses this grid at <=480px').not.toContain('pf-list-row')
+
+    // Control needle: the scan can see a class it is looking for, so its silence above is
+    // evidence rather than an empty string.
+    expect(row.className.length).toBeGreaterThan(0)
+
+    // The header half of the same rule. Rendered, not scanned: AuditTable.tsx NAMES
+    // pf-list-head in the comment explaining why it does not use it, so a source scan
+    // would fail on the explanation.
+    cleanup()
+    render(
+      <AuditTable>
+        <AuditRow event={ev()} expanded={false} onToggle={() => {}} />
+      </AuditTable>,
+    )
+    expect(screen.getByTestId('audit-table-head').className).not.toContain('pf-list-head')
   })
 })

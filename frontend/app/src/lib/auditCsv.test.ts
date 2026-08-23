@@ -171,4 +171,13 @@ describe('auditExportToastCopy', () => {
       expect(lower, `toast copy contains forbidden phrase "${phrase}"`).not.toContain(phrase.toLowerCase())
     }
   })
+
+  it('auditToast_oneRowExport: a one-row export names the count 1 and keeps the exclusion sentence intact', () => {
+    const copy = auditExportToastCopy({ rows: 1, bytes: 900, filename: 'one.csv', truncated: false, cap: 2000 })
+
+    expect(copy.length, 'auditExportToastCopy produced an empty string').toBeGreaterThan(0)
+    expect(copy, 'the row count must appear as the standalone token "1"').toMatch(/\b1\b/)
+    expect(copy, 'a one-row export must never report 0 rows').not.toMatch(/\b0\b/)
+    expect(copy, 'must still carry the exclusion sentence at the one-row boundary').toContain('No attachments, no payloads, no invoices.')
+  })
 })

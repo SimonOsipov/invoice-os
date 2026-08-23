@@ -6,12 +6,12 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
-import { auditCsv } from '../lib/auditCsv'
-import { AUDIT_COPY } from '../lib/auditView'
+import { auditCsv, auditExportToastCopy } from '../lib/auditCsv'
+import { AUDIT_COPY, AUDIT_EXPORT_CAP } from '../lib/auditView'
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { PlatformCtx } from '../types'
 
@@ -1070,6 +1070,34 @@ describe('AuditView export control (AUDIT-07-10)', () => {
     dl.restore()
   })
 
+  it('auditExport_secondClickNeverIssuesASecondExportRequest: the disabled control never reaches the handler a second time, so no second network call fires', async () => {
+    const exportCalls: string[] = []
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) => {
+      if (!isExportPageUrl(url)) return Promise.resolve(logResponse())
+      exportCalls.push(url)
+      return new Promise<MockResponse>((res) => (release = res))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    const btn = screen.getByTestId('audit-export') as HTMLButtonElement
+    fireEvent.click(btn)
+    await waitFor(() => expect(exportCalls.length, 'the first click must issue exactly one export request').toBe(1))
+    await waitFor(() => expect(btn.disabled, 'the button must disable as soon as the export starts').toBe(true))
+
+    fireEvent.click(btn)
+
+    expect(exportCalls.length, 'a second click while exporting must never issue a second export request').toBe(1)
+
+    release!(logResponse({ events: [auditEvent()], total: 1, page: { limit: 100, has_more: false, next_cursor: null } }))
+    await waitFor(() => expect(dl.clicks.length, 'the single run must complete').toBe(1))
+
+    dl.restore()
+  })
+
   it('auditExport_disabledAtZeroRows', async () => {
     const calls: string[] = []
     const fetchMock = vi.fn((url: string) => {
@@ -1170,5 +1198,148 @@ describe('AuditView export control (AUDIT-07-10)', () => {
     await waitFor(() => expect(screen.getByTestId('audit-new-workspace'), 'control needle: the new-workspace state must land').toBeTruthy())
 
     expect(screen.queryByTestId('audit-export'), 'export must be entirely absent on a new workspace, not merely disabled').toBeNull()
+  })
+
+  it('auditExport_toastTextIsTheLibFunctionsOutput: the rendered toast text equals auditExportToastCopy\'s own output for the same inputs', async () => {
+    const rows = [auditEvent({ id: 'evt-pin', actor_name: 'Pin Actor' })]
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url)
+        ? Promise.resolve(logResponse({ events: rows, total: 1, page: { limit: 100, has_more: false, next_cursor: null } }))
+        : Promise.resolve(logResponse({ events: rows, total: 1 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+    await waitFor(() => expect(screen.getByTestId('audit-export-toast'), 'a completion toast must render').toBeTruthy())
+
+    const filename = dl.clicks[0]?.download ?? ''
+    expect(filename, 'positive floor: the anchor must actually carry a download filename').toBeTruthy()
+    const expected = auditExportToastCopy({
+      rows: rows.length,
+      bytes: (dl.blob as Blob).size,
+      filename,
+      truncated: false,
+      cap: AUDIT_EXPORT_CAP,
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('audit-export-toast').textContent,
+        "the rendered toast text must be the lib function's own output, not a hand-written copy of it",
+      ).toBe(expected)
+    })
+
+    dl.restore()
+  })
+
+  it('auditExport_capWiringStopsAt2000AndNamesItInTheToast: an endless stream stops at 2000 and the toast states it in the same sentence as the count', async () => {
+    let n = 0
+    const fetchMock = vi.fn((url: string) => {
+      if (!isExportPageUrl(url)) return Promise.resolve(logResponse())
+      n += 1
+      return Promise.resolve(
+        logResponse({
+          events: Array.from({ length: 100 }, (_, i) => auditEvent({ id: `evt-cap-${n}-${i}` })),
+          total: 100_000,
+          page: { limit: 100, has_more: true, next_cursor: `cursor-${n}` },
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+
+    await waitFor(
+      () => {
+        expect(dl.clicks.length, 'an endless stream must still complete, stopped by the cap').toBe(1)
+        expect(screen.getByTestId('audit-export-toast'), 'a completion toast must render').toBeTruthy()
+      },
+      { timeout: 3000 },
+    )
+
+    const bytes = await blobBytes(dl.blob as Blob)
+    const dataLines = new TextDecoder('utf-8')
+      .decode(bytes.slice(3))
+      .split('\n')
+      .filter((l) => l.length > 0)
+      .slice(1)
+    // Hardcoded 2000, not AUDIT_EXPORT_CAP: this must catch AuditView wiring in a different cap.
+    expect(dataLines.length, 'the written file must hold exactly 2000 data rows').toBe(2000)
+
+    await waitFor(() => {
+      const toastText = screen.getByTestId('audit-export-toast').textContent ?? ''
+      const sentences = toastText.split(/\.\s+/).filter((s) => s.length > 0)
+      const capSentence = sentences.find((s) => s.includes('2000'))
+      expect(capSentence, 'no sentence in the toast names the 2000-row count').toBeDefined()
+      expect(capSentence, 'the sentence naming the count must also state the cap').toMatch(/cap|capped|limit|maximum|most/i)
+    })
+
+    dl.restore()
+  })
+
+  it('auditExport_exactlyAtCapWithNoMoreIsNotTruncated: landing on 2000 via a real has_more:false never claims a cap that never bit', async () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => auditEvent({ id: `evt-exact-${i}` }))
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url)
+        ? Promise.resolve(logResponse({ events: rows, total: 2000, page: { limit: 100, has_more: false, next_cursor: null } }))
+        : Promise.resolve(logResponse({ events: [rows[0]], total: 2000 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+
+    await waitFor(() => {
+      expect(dl.clicks.length, 'export must complete').toBe(1)
+      expect(screen.getByTestId('audit-export-toast'), 'a completion toast must render').toBeTruthy()
+    })
+
+    await waitFor(() => {
+      const toastText = screen.getByTestId('audit-export-toast').textContent ?? ''
+      expect(toastText, 'must still name the 2000 rows actually exported').toMatch(/\b2000\b/)
+      expect(toastText, 'a clean has_more:false stop must never claim a cap, even landing exactly on the cap number').not.toMatch(/cap/i)
+    })
+
+    dl.restore()
+  })
+
+  it('auditExport_unmountMidExportSurfacesNoWarningOrUnhandledRejection', async () => {
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url) ? new Promise<MockResponse>((res) => (release = res)) : Promise.resolve(logResponse()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rejections: unknown[] = []
+    const onRejection = (e: PromiseRejectionEvent) => rejections.push(e.reason)
+    window.addEventListener('unhandledrejection', onRejection)
+
+    const { unmount } = render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+    await waitFor(() => expect(release, 'the export request must actually be pending').not.toBeNull())
+
+    unmount()
+    release!(logResponse({ events: [auditEvent()], total: 1, page: { limit: 100, has_more: false, next_cursor: null } }))
+    await act(async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    })
+
+    expect(consoleError, 'resolving an export after unmount must not log a console error').not.toHaveBeenCalled()
+    expect(rejections, 'resolving an export after unmount must not surface as an unhandled rejection').toEqual([])
+
+    window.removeEventListener('unhandledrejection', onRejection)
+    consoleError.mockRestore()
+    dl.restore()
   })
 })

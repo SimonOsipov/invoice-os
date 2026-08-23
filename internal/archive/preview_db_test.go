@@ -119,9 +119,14 @@ func TestPreview_CountsMatchTheDownloadedBundle(t *testing.T) {
 		}))
 	}
 
-	var jobIDs []string
+	// jobInvoice[i] is the invoice jobIDs[i] actually belongs to -- the exchange loop
+	// below must derive invoiceID from the chosen job, never from its own independent
+	// modulus, or it violates app_exchange_job_fk's (tenant_id, id, invoice_id) triple.
+	var jobIDs, jobInvoice []string
 	for i := 0; i < 3; i++ {
-		jobIDs = append(jobIDs, mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: invIDs[i%2]}))
+		inv := invIDs[i%2]
+		jobInvoice = append(jobInvoice, inv)
+		jobIDs = append(jobIDs, mustCreateSubmissionJob(t, tx, submissionJobFixture{tenantID: tenant, invoiceID: inv}))
 	}
 
 	for i := 0; i < 4; i++ {
@@ -130,7 +135,8 @@ func TestPreview_CountsMatchTheDownloadedBundle(t *testing.T) {
 
 	body := "x"
 	for i := 0; i < 5; i++ {
-		f := exchangeFixture{tenantID: tenant, submissionJobID: jobIDs[i%3], invoiceID: invIDs[i%2], requestBody: &body}
+		jobIdx := i % 3
+		f := exchangeFixture{tenantID: tenant, submissionJobID: jobIDs[jobIdx], invoiceID: jobInvoice[jobIdx], requestBody: &body}
 		if i == 0 {
 			f.responseBody = &body // the one row carrying both bodies
 		}
@@ -238,7 +244,7 @@ type filenameProbe struct{ served, preview string }
 func servedAndPreviewFilenames(t *testing.T, tx pgx.Tx, r Request) filenameProbe {
 	t.Helper()
 	assembleFn := func(ctx context.Context, req Request, w io.Writer, onStart func(string)) error {
-		return assemble(ctx, tx, req, w, assembleOpts{tenantID: "irrelevant", subject: "system", maxInvoices: 10, now: time.Now()})
+		return assemble(ctx, tx, req, w, assembleOpts{tenantID: "irrelevant", subject: "system", maxInvoices: 10, now: time.Now(), onStart: onStart})
 	}
 	dh := DownloadHandler(assembleFn, slog.Default())
 	dRec := httptest.NewRecorder()
@@ -314,6 +320,45 @@ func TestPreview_FilenameMatchesTheDownloadDisposition(t *testing.T) {
 			t.Errorf("preview.Filename = %q, want %q", got.preview, wantFilename)
 		}
 	})
+}
+
+// --- AC-6: NULL tin, through the real DB path (not just a hand-built Preview) --------
+
+// TestPreview_NullTinEntityRendersAsJSONNullOverTheWire (AC-6, D-49): closes a gap left
+// by TestPreview_NullTinMarshalsAsNullNotEmptyString, which hand-builds a Preview and
+// never exercises selectEntity's scan or bundleEntity -- the real path a NULL tin
+// column travels before it reaches JSON.
+func TestPreview_NullTinEntityRendersAsJSONNullOverTheWire(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-preview-null-tin")
+	entity := mustCreateEntity(t, tx, tenant, "No Tin Co", "") // "" -> NULL column (mustCreateEntity)
+	actingAs(t, tx, tenant)
+
+	r := Request{EntityID: entity, From: mustParseRFC3339(t, validFrom), To: mustParseRFC3339(t, validTo)}
+	got, err := preview(context.Background(), tx, r, previewOpts{maxInvoices: 10})
+	if err != nil {
+		t.Fatalf("preview: unexpected error: %v", err)
+	}
+	if got.Entity.TIN != nil {
+		t.Fatalf("preview.Entity.TIN = %q, want nil (business_entities.tin is NULL)", *got.Entity.TIN)
+	}
+
+	previewFn := func(ctx context.Context, req Request) (Preview, error) {
+		return preview(ctx, tx, req, previewOpts{maxInvoices: 10})
+	}
+	ph := PreviewHandler(previewFn, slog.Default())
+	rec := httptest.NewRecorder()
+	ph.ServeHTTP(rec, newTestRequest(t, previewQuery(r), true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"tin":null`) {
+		t.Errorf("served body = %s, want it to contain \"tin\":null", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"tin":""`) {
+		t.Errorf("served body = %s, must not contain an empty-string tin", rec.Body.String())
+	}
 }
 
 // --- AC-3: empty period is a real result, never a 404 in disguise --------------------

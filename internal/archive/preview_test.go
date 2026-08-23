@@ -112,8 +112,11 @@ func TestPreview_JSONShapeIsExactlyTheContract(t *testing.T) {
 }
 
 // TestPreviewSQL_ScopeConstantsAppearExactlyOnceInSource (D-47): a second hand-written
-// copy of a scope constant is exactly the drift AC-1 forbids. Both 0 (the refactor
-// hasn't landed) and 2 (a duplicate) fail. nonTestGoSource is assemble_test.go's helper.
+// copy of a scope constant is exactly the drift AC-1 forbids. Counts the constant's
+// VALUE (the SQL text a hand-written duplicate would reproduce), not its identifier --
+// each constant's own name is also its consumers' identifier, so counting the name
+// necessarily exceeds 1. Both 0 (the refactor hasn't landed) and 2 (a duplicate) fail.
+// nonTestGoSource is assemble_test.go's helper.
 func TestPreviewSQL_ScopeConstantsAppearExactlyOnceInSource(t *testing.T) {
 	src := nonTestGoSource(t)
 	if src == "" {
@@ -122,9 +125,14 @@ func TestPreviewSQL_ScopeConstantsAppearExactlyOnceInSource(t *testing.T) {
 	if !strings.Contains(src, "tx.Query(") {
 		t.Fatal("scanned source never mentions tx.Query( -- the scan is broken (control needle absent), so the assertions below prove nothing")
 	}
-	for _, name := range []string{"invoicesScope", "historyScope", "submissionsScope", "exchangeScope"} {
-		if n := strings.Count(src, name); n != 1 {
-			t.Errorf("%s appears %d times in non-test source, want exactly 1", name, n)
+	for _, tc := range []struct{ name, value string }{
+		{"invoicesScope", invoicesScope},
+		{"historyScope", historyScope},
+		{"submissionsScope", submissionsScope},
+		{"exchangeScope", exchangeScope},
+	} {
+		if n := strings.Count(src, tc.value); n != 1 {
+			t.Errorf("%s's value appears %d times in non-test source, want exactly 1", tc.name, n)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 // The audit filter card's five popover triggers + pills row (AUDIT-07). AUDIT-07-02 wired
-// search + date-range, AUDIT-07-04 added event type; this subtask (AUDIT-07-05) adds actor.
-// Company lands in AUDIT-07-06, the pills row in AUDIT-07-07.
+// search + date-range, AUDIT-07-04 added event type, AUDIT-07-05 added actor and AUDIT-07-06
+// added company. The pills row lands in AUDIT-07-07.
 
 import { useCallback, useState } from 'react'
 

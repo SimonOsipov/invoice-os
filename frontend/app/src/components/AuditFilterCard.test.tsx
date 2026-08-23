@@ -1003,3 +1003,97 @@ describe('AuditFilterCard: company', () => {
     expect(state.company, 'state resets to the all mode').toEqual({ mode: 'all' })
   })
 })
+
+// AUDIT-07-06 QA (task-658): adversarial coverage over the company control.
+describe('AuditFilterCard: company adversarial (AUDIT-07-06 QA)', () => {
+  it('auditCompanyFilter_emptyFacetRendersAllAndWorkspaceOnlyNoNamedRowsNoCrash', () => {
+    const f = facets() // company: []
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openCompanyPopover()
+
+    const kindRows = screen.getAllByTestId(/^audit-company-kind-/)
+    expect(kindRows.length, 'All + Workspace-level only still render with no facet data').toBe(2)
+    expect(screen.queryAllByTestId(/^audit-company-row-/).length, 'no named rows when facets.company is empty').toBe(0)
+    expect(
+      screen.getByTestId('audit-company-count-workspace').textContent,
+      'workspace count falls back to 0, not a crash, when there is no null bucket at all',
+    ).toBe('0')
+  })
+
+  it('auditCompanyFilter_nullValueWorkspaceBucketNeverCollapsesWithANamedDeletedCompany', () => {
+    const f = facets()
+    f.company = [
+      { value: null, name: null, count: 4 }, // workspace/unattributed bucket
+      { value: 'co-deleted', name: null, count: 3 }, // named bucket, id present, name null
+    ]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openCompanyPopover()
+
+    // Population floor -- exactly one named row; the null-value bucket must not become a second one.
+    const namedRows = screen.getAllByTestId(/^audit-company-row-/)
+    expect(namedRows.length, 'the null-value bucket is not a named row').toBe(1)
+
+    const workspaceCount = screen.getByTestId('audit-company-count-workspace').textContent
+    const deletedCount = screen.getByTestId('audit-company-count-co-deleted').textContent
+    expect(workspaceCount, "workspace shows the null-VALUE bucket's own count").toBe('4')
+    expect(deletedCount, "the deleted company shows its own count, distinct from workspace's").toBe('3')
+    // Control needle -- the two counts must actually differ, or this test cannot tell the buckets apart.
+    expect(workspaceCount, 'a null value and a null name are different things').not.toBe(deletedCount)
+
+    expect(
+      screen.getByTestId('audit-company-label-co-deleted').textContent,
+      'a null NAME with a non-null id renders the deleted-company copy, not the workspace label',
+    ).toBe('A company that no longer exists')
+  })
+
+  it('auditCompanyFilter_sequentialSwitchWorkspaceNamedAllLeavesNoResidueAtAnyStep', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const f = companyFacets()
+    const { rerender } = render(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    sync()
+    expect(state.company, 'workspace step carries no id/name residue').toEqual({ mode: 'workspace' })
+    expect(auditFilterQuery(state).company).toBe('workspace')
+
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-row-co-acme'))
+    sync()
+    expect(state.company, 'named step fully replaces the workspace mode').toEqual({
+      mode: 'named',
+      id: 'co-acme',
+      name: 'Acme Ltd',
+    })
+    const namedQuery = auditFilterQuery(state)
+    expect(namedQuery.company).toBe('co-acme')
+    expect(namedQuery.company, 'no leftover workspace literal').not.toBe('workspace')
+
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-kind-all'))
+    sync()
+    expect(state.company, 'all step drops id/name entirely, not just the mode tag').toEqual({ mode: 'all' })
+    expect('company' in auditFilterQuery(state), 'no company param at all after returning to All').toBe(false)
+  })
+
+  it('auditCompanyFilter_veryLongCompanyNameRendersInFullNoTruncation', () => {
+    const longName = 'A'.repeat(180) + ' Very Long Trading Name (Nigeria) Unlimited by Shares'
+    const f = facets()
+    f.company = [{ value: 'co-long', name: longName, count: 9 }]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openCompanyPopover()
+
+    const label = screen.getByTestId('audit-company-label-co-long')
+    expect(label.textContent, 'the full name renders -- this is a popover row, not the collapsing table').toBe(longName)
+    expect(label.textContent?.includes('…'), 'no ellipsis truncation is applied').toBe(false)
+  })
+
+  it('auditCompanyFilter_busyDisablesTheCompanyTrigger', () => {
+    render(<AuditFilterCard state={AUDIT_FILTER_DEFAULT} facets={companyFacets()} busy={true} onChange={vi.fn()} />)
+    expect(screen.getByTestId('audit-company-trigger')).toHaveProperty('disabled', true)
+  })
+})

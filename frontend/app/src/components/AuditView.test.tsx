@@ -557,3 +557,39 @@ describe('AuditView actor control (AUDIT-07-05 QA)', () => {
     ).toBeTruthy()
   })
 })
+
+// AC#7 (task-658): the Test Specs table names this case for AuditView.test.tsx, following the
+// actor-facet-vanishes pattern above; it was not present in the shipped commit -- QA gap-fill.
+describe('AuditView company control (AUDIT-07-06 QA)', () => {
+  it('auditCompanyFilter_pillKeepsTheNameAfterTheBucketVanishes', async () => {
+    const withCompany = logResponse({
+      facets: { event: [], actor: [], company: [{ value: 'co-acme', name: 'Acme Ltd', count: 12 }] },
+    })
+    const withoutCompany = logResponse({ facets: { event: [], actor: [], company: [] } })
+    let calls = 0
+    const fetchMock = vi.fn(() => {
+      calls += 1
+      return Promise.resolve(calls === 1 ? withCompany : withoutCompany)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    fireEvent.click(screen.getByTestId('audit-company-row-co-acme'))
+
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2))
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('audit-company-trigger').textContent,
+        'the facet dropped the bucket -- the pill must keep the name captured at selection time',
+      ).toContain('Acme Ltd'),
+    )
+    // Control needle -- the row really is gone from the facet-driven list, so the pill above
+    // survives via captured state and not because the source row is still rendering it.
+    expect(
+      screen.queryByTestId('audit-company-row-co-acme'),
+      'control needle: the bucket really vanished from the popover row list',
+    ).toBeNull()
+  })
+})

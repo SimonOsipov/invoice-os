@@ -8,7 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { AuditFacets } from './audit'
+import { getAuditLog, type AuditFacets } from './audit'
 import {
   AUDIT_FILTER_DEFAULT,
   auditFilterPills,
@@ -374,5 +374,37 @@ describe('clearAllFilters', () => {
     const query = auditFilterQuery(cleared)
     expect(query.from).toBeDefined()
     expect('to' in query).toBe(false)
+  })
+})
+
+// AUDIT-07-06 QA (task-658): cross-checks the no-swallow rule end to end, through the real
+// wire-building code (getAuditLog), not just the query object companyParam returns.
+describe('company no-swallow, end to end at the client layer', () => {
+  it('auditCompanyFilter_namedSelectionReachesTheWireAsExactlyOneCompanyParam', async () => {
+    const state: AuditFilterState = {
+      ...AUDIT_FILTER_DEFAULT,
+      company: { mode: 'named', id: '22222222-2222-2222-2222-222222222222', name: 'Acme' },
+    }
+    const query = auditFilterQuery(state)
+    const authedFetch = vi.fn().mockResolvedValue({
+      events: [],
+      page: { limit: 25, has_more: false, next_cursor: null },
+      total: 0,
+      log_is_empty: true,
+      facets: EMPTY_FACETS,
+    })
+
+    await getAuditLog(authedFetch, 'https://api.test', query)
+
+    const url = String(authedFetch.mock.calls[0][0])
+    const params = new URL(url).searchParams
+    expect(params.getAll('company'), 'exactly one company param on the wire, never two').toEqual([
+      '22222222-2222-2222-2222-222222222222',
+    ])
+    expect(
+      url.split('company=').length - 1,
+      'the raw url carries a single company= occurrence, never an additive pair',
+    ).toBe(1)
+    expect(url, 'no workspace literal riding alongside a named selection').not.toContain('workspace')
   })
 })

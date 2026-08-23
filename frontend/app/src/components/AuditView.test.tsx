@@ -75,6 +75,9 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  // A failing assertion skips the explicit dl.restore(), leaking the download spies into
+  // the next case and turning one real failure into several false ones.
+  vi.restoreAllMocks()
 })
 
 // Applies the screen's only filter in this story: the row expansion's invoice affordance.

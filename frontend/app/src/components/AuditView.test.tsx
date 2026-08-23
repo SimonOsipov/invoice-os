@@ -594,9 +594,8 @@ describe('AuditView company control (AUDIT-07-06 QA)', () => {
   })
 })
 
-// AUDIT-07-07 (task-659) RED specs: the pills row moves into AuditFilterCard as its second
-// row. Testids are keyed on pill.key -- audit-pill-${key} -- plus audit-clear-all. Do not
-// implement here; these fail until the executor lands the move + auditFilterIsDefault gate.
+// AUDIT-07-07 (task-659): the pills row lives in AuditFilterCard as its second row.
+// Testids are keyed on pill.key -- audit-pill-${key} -- plus audit-clear-all.
 describe('AuditView pills row (AUDIT-07-07)', () => {
   it('auditPills_defaultShowsTheThirtyDayPill', async () => {
     mockFetchSequence([logResponse()])
@@ -725,7 +724,34 @@ describe('AuditView pills row (AUDIT-07-07)', () => {
 
     const last = calls[calls.length - 1]
     const params = new URL(last).searchParams
-    expect(Array.from(params.keys()), 'Clear all must leave only the 30-day default on the wire').toEqual(['from'])
+    // Exclude pagination keys (limit/cursor) -- they're attached unconditionally by AuditView,
+    // outside filterQuery (AuditView.tsx), so they're not part of what Clear all controls.
+    // The filter-only params must be exactly the 30-day default, nothing else surviving.
+    const filterKeys = Array.from(params.keys()).filter((k) => k !== 'limit' && k !== 'cursor')
+    expect(filterKeys, 'Clear all must leave only the 30-day default on the wire').toEqual(['from'])
+  })
+
+  // AUDIT-07-07 QA (task-659): AC#4's "exactly one refetch" claim for Clear all was untested --
+  // auditPills_clearAllReturnsToDefault only inspects the last URL, never the call-count delta.
+  it('auditPills_clearAllFiresExactlyOneRefetch', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    const callsBefore = calls.length
+    fireEvent.click(screen.getByTestId('audit-clear-all'))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore))
+    expect(calls.length - callsBefore, 'Clear all must fire exactly one refetch').toBe(1)
   })
 
   it('auditPills_clearAllAbsentAtDefault', async () => {

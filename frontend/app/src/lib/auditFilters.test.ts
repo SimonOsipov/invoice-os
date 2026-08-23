@@ -409,10 +409,10 @@ describe('company no-swallow, end to end at the client layer', () => {
   })
 })
 
-// AUDIT-07-07 (task-659) RED spec: pins the fix for the bug 07-04's architecture pass left
-// standing -- the server never resolves Name for the event facet (internal/audit/facets.go /
-// reader.go), so a label built from facets.event[i].name falls through to the raw id. Facets
-// below carry name: null, the real server shape; the fix must read auditEventView(id).label.
+// AUDIT-07-07 (task-659): pins the fix for the bug 07-04's architecture pass left standing --
+// the server never resolves Name for the event facet (internal/audit/facets.go / reader.go),
+// so a label built from facets.event[i].name falls through to the raw id. Facets below carry
+// name: null, the real server shape; the fix reads auditEventView(id).label.
 describe('auditFilterPills event label (AUDIT-07-07)', () => {
   it('auditFilters_eventPillUsesVocabularyLabelNotRawId', () => {
     const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: ['invoice.kept_as_is'] }
@@ -425,5 +425,25 @@ describe('auditFilterPills event label (AUDIT-07-07)', () => {
     // AUDIT_EVENTS['invoice.kept_as_is'].label in lib/auditVocabulary.ts -- checked verbatim, not quoted from memory.
     expect(eventPill?.label, 'must be the vocabulary label, never the raw id').toBe('Kept as is')
     expect(eventPill?.label).not.toBe('invoice.kept_as_is')
+  })
+})
+
+// AUDIT-07-07 QA (task-659): the actor pill's mono flag was never asserted at either layer.
+describe('auditFilterPills actor mono fallback (AUDIT-07-07 QA)', () => {
+  it('auditFilters_actorPillMonoOnlyWhenFacetNameIsMissing', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actors: ['u-raw', 'u-resolved'] }
+    const facets: AuditFacets = {
+      ...EMPTY_FACETS,
+      actor: [{ value: 'u-resolved', name: 'Musa Danjuma', kind: 'people', count: 2 }],
+    }
+
+    const pills = auditFilterPills(state, facets)
+
+    const raw = pills.find((p) => p.key === 'actor:u-raw')
+    const resolved = pills.find((p) => p.key === 'actor:u-resolved')
+    expect(raw, 'population floor').toBeDefined()
+    expect(resolved, 'population floor').toBeDefined()
+    expect(raw?.mono, 'no facet entry at all -- falls back to the raw id, mono').toBe(true)
+    expect(resolved?.mono, 'control needle: a resolved name must not be flagged mono').toBeFalsy()
   })
 })

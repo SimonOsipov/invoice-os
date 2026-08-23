@@ -1097,3 +1097,75 @@ describe('AuditFilterCard: company adversarial (AUDIT-07-06 QA)', () => {
     expect(screen.getByTestId('audit-company-trigger')).toHaveProperty('disabled', true)
   })
 })
+
+// AUDIT-07-07 QA (task-659): adversarial coverage for the pills row and Clear all, beyond
+// the RED specs pinned in AuditView.test.tsx / auditFilters.test.ts.
+describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => {
+  it('auditPills_tenEventPillsDoNotWidenTheCard', () => {
+    renderCard(AUDIT_FILTER_DEFAULT)
+    const widthAtDefault = screen.getByTestId('audit-filter-card').style.width
+    cleanup()
+
+    const ids = Object.keys(AUDIT_EVENTS).slice(0, 10)
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: ids }
+    renderCard(state)
+    const pills = screen.getAllByTestId(/^audit-pill-event:/)
+    expect(pills.length, 'population floor: ten selected events must render ten event pills').toBe(10)
+
+    const card = screen.getByTestId('audit-filter-card')
+    // The card carries no content-driven width -- growth is absorbed by the pills row
+    // wrapping, never by the card widening (task-659 layout note; px sweep is AUDIT-07-11's).
+    expect(card.style.width, 'card width is not a function of pill count').toBe(widthAtDefault)
+    const pillsRow = card.children[1] as HTMLElement
+    expect(pillsRow.style.flexWrap, 'pills wrap onto new lines instead of growing the row').toBe('wrap')
+  })
+
+  it('auditPills_unknownEventIdIsHumanisedNeverTheBareId', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: ['custom.mystery_type'] }
+    renderCard(state)
+
+    const pill = screen.getByTestId('audit-pill-event:custom.mystery_type')
+    expect(pill.textContent, 'never the bare id').not.toContain('custom.mystery_type')
+    expect(pill.textContent, 'humanised tail, matching auditVocabulary.ts humanise()').toContain('Mystery type')
+  })
+
+  it('auditPills_clearAllDisappearsExactlyWhenTheLastNonDefaultPillIsGone', () => {
+    const onChange = vi.fn()
+    const stateWithQ: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, q: 'kept' }
+    const { rerender } = render(<AuditFilterCard state={stateWithQ} facets={facets()} busy={false} onChange={onChange} />)
+    expect(screen.getByTestId('audit-clear-all'), 'Clear all present with one non-default filter applied').toBeTruthy()
+
+    rerender(<AuditFilterCard state={AUDIT_FILTER_DEFAULT} facets={facets()} busy={false} onChange={onChange} />)
+    expect(screen.queryByTestId('audit-clear-all'), 'Clear all vanishes the instant state returns to default').toBeNull()
+  })
+
+  it('auditPills_pillAndClearAllStayClickableWhileBusy', () => {
+    // Matches the shipped precedent (auditEventFilter_rowsStayInteractiveIfBusyArrivesWhileThePanelIsAlreadyOpen):
+    // `busy` only gates the five FilterPopover triggers, never an already-rendered row or pill.
+    const onChange = vi.fn()
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, q: 'kept' }
+    render(<AuditFilterCard state={state} facets={facets()} busy={true} onChange={onChange} />)
+
+    const pill = screen.getByTestId('audit-pill-q') as HTMLButtonElement
+    const clearAll = screen.getByTestId('audit-clear-all') as HTMLButtonElement
+    expect(pill.disabled, 'pill removal is not gated by busy').toBe(false)
+    expect(clearAll.disabled, 'Clear all is not gated by busy').toBe(false)
+
+    fireEvent.click(pill)
+    fireEvent.click(clearAll)
+    expect(onChange, 'both remain genuinely clickable while busy').toHaveBeenCalledTimes(2)
+  })
+
+  it('auditPills_actorPillMonoFallbackHasAControlNeedle', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actors: ['u-raw', 'u-resolved'] }
+    const f: AuditFacets = { ...facets(), actor: [{ value: 'u-resolved', name: 'Musa Danjuma', kind: 'people', count: 2 }] }
+    renderCard(state, f)
+
+    const rawPill = screen.getByTestId('audit-pill-actor:u-raw')
+    const resolvedPill = screen.getByTestId('audit-pill-actor:u-resolved')
+    expect(rawPill.style.fontFamily, 'unresolved actor pill falls back to mono').toContain('font-mono')
+    expect(resolvedPill.style.fontFamily, 'control needle: a resolved actor pill must not be mono').not.toContain(
+      'font-mono',
+    )
+  })
+})

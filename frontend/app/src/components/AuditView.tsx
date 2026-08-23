@@ -108,7 +108,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           {AUDIT_COPY.eyebrow}
         </div>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{AUDIT_COPY.h1}</h1>
-        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+        <p data-testid="audit-subtitle" style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
           {ctx.user.tenantName ?? AUDIT_COPY.tenantFallback} · {AUDIT_COPY.subtitle}
         </p>
       </div>

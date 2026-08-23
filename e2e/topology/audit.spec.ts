@@ -48,9 +48,9 @@ test.describe('Audit screen', () => {
     for (const p of [FIRM_PERSONA, INHOUSE_PERSONA]) {
       await signInAs(page, p.param)
       await openAudit(page)
-      // The subtitle names the workspace whose log this is -- the strongest available
-      // proof that the screen drew for THIS persona and not a leftover session.
-      await expect(page.getByText(p.tenantName, { exact: false }).first()).toBeVisible()
+      // The SUBTITLE, not a bare name match: the tenant name also sits in the header and
+      // the switcher, so `getByText(tenantName)` would pass without this screen drawing.
+      await expect(page.getByTestId('audit-subtitle')).toContainText(p.tenantName)
       // The immutability strip is unconditional -- it states a database guarantee, which
       // holds on an empty workspace exactly as it does on a full one.
       await expect(page.getByTestId('audit-immutability-strip')).toBeVisible()

@@ -95,7 +95,7 @@ func TestAssemble_UsesRepeatableReadReadOnly(t *testing.T) {
 	s := NewStore(app)
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: uuid.NewString()})
 
-	err := s.Assemble(ctx, Request{EntityID: uuid.NewString(), From: time.Now(), To: time.Now()}, io.Discard)
+	err := s.Assemble(ctx, Request{EntityID: uuid.NewString(), From: time.Now(), To: time.Now()}, io.Discard, nil)
 	if !errors.Is(err, ErrEntityNotFound) {
 		t.Fatalf("Store.Assemble(unknown entity): error = %v, want ErrEntityNotFound", err)
 	}
@@ -116,7 +116,7 @@ func TestAssemble_ErrorRollsBackTheTransaction(t *testing.T) {
 	s := NewStore(app)
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: uuid.NewString()})
 
-	err := s.Assemble(ctx, Request{EntityID: uuid.NewString(), From: time.Now(), To: time.Now()}, io.Discard)
+	err := s.Assemble(ctx, Request{EntityID: uuid.NewString(), From: time.Now(), To: time.Now()}, io.Discard, nil)
 	if err == nil {
 		t.Fatal("Store.Assemble: want an error, got nil")
 	}
@@ -180,7 +180,7 @@ func TestAssemble_OneSnapshotSurvivesAConcurrentCommit(t *testing.T) {
 	s := NewStore(app)
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: tenantID})
 	from := time.Now().Add(-time.Hour)
-	err := s.Assemble(ctx, Request{EntityID: entityID, From: from, To: from.Add(2 * time.Hour)}, sink)
+	err := s.Assemble(ctx, Request{EntityID: entityID, From: from, To: from.Add(2 * time.Hour)}, sink, nil)
 	if err != nil {
 		t.Fatalf("Store.Assemble: unexpected error: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestStoreAssemble_UsesStoreLevelCap(t *testing.T) {
 	s := &Store{pool: app, maxInvoices: 2}
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: tenantID})
 	var cw countingWriter
-	err := s.Assemble(ctx, Request{EntityID: entityID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour)}, &cw)
+	err := s.Assemble(ctx, Request{EntityID: entityID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour)}, &cw, nil)
 
 	var tooMany *TooManyInvoicesError
 	if !errors.As(err, &tooMany) {

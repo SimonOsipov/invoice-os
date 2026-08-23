@@ -23,6 +23,11 @@ type assembleOpts struct {
 	subject     string
 	maxInvoices int
 	now         time.Time
+	// onStart, when non-nil, fires once with the bundle filename immediately
+	// before the first byte reaches w (D-41) -- after selectEntity, the cap
+	// check and resolveGeneratedBy, so the caller never arms response headers
+	// before those can still fail. Nil is a no-op.
+	onStart func(filename string)
 }
 
 // TooManyInvoicesError refuses a bundle before the first byte (D-35). A struct,
@@ -62,6 +67,10 @@ func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assemble
 	generatedBy, err := resolveGeneratedBy(ctx, tx, o.subject)
 	if err != nil {
 		return err
+	}
+
+	if o.onStart != nil {
+		o.onStart(bundleFilename(entity.Name, r))
 	}
 
 	bw := newBundleWriter(w)

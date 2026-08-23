@@ -27,8 +27,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // Assemble streams one evidence bundle to w. Nothing reaches w until the entity
-// resolves and the invoice count clears the cap (D-33, D-37).
-func (s *Store) Assemble(ctx context.Context, r Request, w io.Writer) error {
+// resolves and the invoice count clears the cap (D-33, D-37). onStart, when
+// non-nil, fires once with the bundle filename before the first byte (D-41);
+// a nil onStart is a no-op.
+func (s *Store) Assemble(ctx context.Context, r Request, w io.Writer, onStart func(filename string)) error {
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
 		return db.ErrNoTenant
@@ -39,6 +41,7 @@ func (s *Store) Assemble(ctx context.Context, r Request, w io.Writer) error {
 			subject:     id.Subject,
 			maxInvoices: s.maxInvoices,
 			now:         time.Now(),
+			onStart:     onStart,
 		})
 	})
 }

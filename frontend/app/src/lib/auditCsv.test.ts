@@ -178,6 +178,7 @@ describe('auditExportToastCopy', () => {
     expect(copy.length, 'auditExportToastCopy produced an empty string').toBeGreaterThan(0)
     expect(copy, 'the row count must appear as the standalone token "1"').toMatch(/\b1\b/)
     expect(copy, 'a one-row export must never report 0 rows').not.toMatch(/\b0\b/)
+    expect(copy, 'a one-row export must read "1 row", matching auditView.ts\'s pluralisation').toContain('Exported 1 row to')
     expect(copy, 'must still carry the exclusion sentence at the one-row boundary').toContain('No attachments, no payloads, no invoices.')
   })
 })

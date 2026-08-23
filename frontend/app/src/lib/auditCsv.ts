@@ -59,5 +59,5 @@ export interface AuditExportToastInput {
 export function auditExportToastCopy({ rows, bytes, filename, truncated, cap }: AuditExportToastInput): string {
   // Row/cap counts stay raw digits (no thousands separator) -- callers match on the bare number.
   const capNote = truncated ? `, capped at ${cap} rows` : ''
-  return `Exported ${rows} rows to ${filename} (${formatBytes(bytes)})${capNote}. No attachments, no payloads, no invoices.`
+  return `Exported ${rows} ${rows === 1 ? 'row' : 'rows'} to ${filename} (${formatBytes(bytes)})${capNote}. No attachments, no payloads, no invoices.`
 }

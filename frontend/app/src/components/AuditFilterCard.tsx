@@ -1,12 +1,13 @@
-// The audit filter card's five popover triggers + pills row (AUDIT-07). This subtask
-// (AUDIT-07-02) wires only search + date-range; events/actor/company land in
-// AUDIT-07-04..06, the pills row in AUDIT-07-07.
+// The audit filter card's five popover triggers + pills row (AUDIT-07). AUDIT-07-02 wired
+// search + date-range; this subtask (AUDIT-07-04) adds event type. Actor/company land in
+// AUDIT-07-05..06, the pills row in AUDIT-07-07.
 
 import { useCallback, useState } from 'react'
 
 import type { AuditFacets } from '../lib/audit'
 import { AUDIT_COPY } from '../lib/auditView'
 import { auditRangeIsValid, type AuditFilterState, type AuditRange, type AuditRangePreset } from '../lib/auditFilters'
+import { AUDIT_EVENTS, auditEventView, type AuditDomain } from '../lib/auditVocabulary'
 
 import { FilterPopover } from './FilterPopover'
 
@@ -24,6 +25,48 @@ const DATE_PRESETS: { id: AuditRangePreset; label: string }[] = [
   { id: 'custom', label: 'Custom range' },
 ]
 
+// Fixed group order + display headings (D-4). Row lists come from AUDIT_EVENTS, never
+// hand-typed, so auditVocabulary.test.ts's 36-identifier pin is the only place that count lives.
+const DOMAIN_ORDER: AuditDomain[] = [
+  'invoices',
+  'approvals',
+  'policies',
+  'roles',
+  'companies',
+  'documents',
+  'memberships',
+  'validation',
+  'submissions',
+  'reconciliation',
+]
+
+const DOMAIN_LABELS: Record<AuditDomain, string> = {
+  invoices: 'Invoices',
+  approvals: 'Approvals',
+  policies: 'Policies',
+  roles: 'Roles',
+  companies: 'Companies',
+  documents: 'Documents',
+  memberships: 'Memberships',
+  validation: 'Validation rules',
+  submissions: 'Submissions',
+  reconciliation: 'Reconciliation',
+}
+
+interface EventGroup {
+  domain: AuditDomain
+  label: string
+  ids: string[]
+}
+
+const EVENT_GROUPS: EventGroup[] = DOMAIN_ORDER.map((domain) => ({
+  domain,
+  label: DOMAIN_LABELS[domain],
+  ids: Object.entries(AUDIT_EVENTS)
+    .filter(([, def]) => def.domain === domain)
+    .map(([id]) => id),
+}))
+
 // The pinned obligation (task-653 QA): preset==='custom' with no from/to is what removing
 // the date pill produces (auditFilters.ts REMOVE_RANGE) -- it renders as no date filter
 // selected, never as Custom highlighted with two blank inputs.
@@ -39,9 +82,14 @@ function dateSummary(range: AuditRange): string | undefined {
   return undefined
 }
 
-export function AuditFilterCard({ state, facets: _facets, busy, onChange }: AuditFilterCardProps) {
-  // _facets: wired in AUDIT-07-04..06 (event/actor/company counts). Unused here.
-  const [openPopover, setOpenPopover] = useState<'search' | 'date' | null>(null)
+// Never tallies the loaded page (Core AC 4) -- facets.event is server-computed with every
+// OTHER active filter applied (internal/audit/facets.go); the client only looks it up.
+function eventCount(facets: AuditFacets, id: string): number {
+  return facets.event.find((f) => f.value === id)?.count ?? 0
+}
+
+export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCardProps) {
+  const [openPopover, setOpenPopover] = useState<'search' | 'date' | 'event' | null>(null)
   const closePopover = useCallback(() => setOpenPopover(null), [])
 
   const [searchDraft, setSearchDraft] = useState(state.q)
@@ -72,6 +120,23 @@ export function AuditFilterCard({ state, facets: _facets, busy, onChange }: Audi
   const applyCustom = () => {
     onChange({ ...state, range: draftRange })
     closePopover()
+  }
+
+  const openEvent = useCallback(() => setOpenPopover('event'), [])
+  // Every event control applies immediately -- there's no draft/Apply step like date range's
+  // custom range, so each handler below is a direct onChange call.
+  const toggleEvent = (id: string) => {
+    const events = state.events.includes(id) ? state.events.filter((e) => e !== id) : [...state.events, id]
+    onChange({ ...state, events })
+  }
+  const selectGroupAll = (ids: string[]) => {
+    onChange({ ...state, events: Array.from(new Set([...state.events, ...ids])) })
+  }
+  const clearGroup = (ids: string[]) => {
+    onChange({ ...state, events: state.events.filter((id) => !ids.includes(id)) })
+  }
+  const clearAllEvents = () => {
+    onChange({ ...state, events: [] })
   }
 
   return (
@@ -191,6 +256,115 @@ export function AuditFilterCard({ state, facets: _facets, busy, onChange }: Audi
               </button>
             </div>
           )}
+        </div>
+      </FilterPopover>
+
+      <FilterPopover
+        testId="audit-event"
+        label="Event type"
+        summary={state.events.length > 0 ? `${state.events.length} selected` : undefined}
+        open={openPopover === 'event'}
+        onOpen={openEvent}
+        onClose={closePopover}
+        disabled={busy}
+      >
+        <div style={{ width: 300, maxHeight: 420, overflowY: 'auto' }}>
+          <div
+            style={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '9px 12px',
+              background: 'var(--bg-2)',
+              borderBottom: '1px solid var(--line-2)',
+            }}
+          >
+            <span style={{ fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>Event type</span>
+            <button
+              type="button"
+              data-testid="audit-event-clear-all"
+              onClick={clearAllEvents}
+              className="pf-btn"
+              style={{ border: 0, background: 'transparent', color: 'var(--action)', fontSize: 12, cursor: 'pointer' }}
+            >
+              Clear all
+            </button>
+          </div>
+          {EVENT_GROUPS.map((group) => (
+            <div key={group.domain}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px 2px' }}>
+                <span
+                  data-testid={`audit-event-group-${group.domain}-heading`}
+                  style={{
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: 'var(--fg-3)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.03em',
+                  }}
+                >
+                  {group.label}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    data-testid={`audit-event-group-${group.domain}-all`}
+                    onClick={() => selectGroupAll(group.ids)}
+                    className="pf-btn"
+                    style={{ border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 11, cursor: 'pointer' }}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`audit-event-group-${group.domain}-clear`}
+                    onClick={() => clearGroup(group.ids)}
+                    className="pf-btn"
+                    style={{ border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 11, cursor: 'pointer' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              {group.ids.map((id) => {
+                const selected = state.events.includes(id)
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    data-testid={`audit-event-row-${id}`}
+                    aria-pressed={selected}
+                    onClick={() => toggleEvent(id)}
+                    className="pf-menu-item"
+                    style={{
+                      display: 'flex',
+                      width: '100%',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      border: 0,
+                      background: selected ? 'var(--bg-3)' : 'transparent',
+                      padding: '7px 12px',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 13,
+                      color: selected ? 'var(--action)' : 'var(--fg-1)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span data-testid={`audit-event-label-${id}`}>{auditEventView(id).label}</span>
+                    <span data-testid={`audit-event-count-${id}`} style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
+                      {eventCount(facets, id)}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </FilterPopover>
     </div>

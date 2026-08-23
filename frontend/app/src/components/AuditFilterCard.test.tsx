@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// Search, date-range, event-type and actor controls. Company lands in AUDIT-07-06.
+// Search, date-range, event-type, actor and company controls.
 
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -818,3 +818,188 @@ describe('AuditFilterCard: actor', () => {
   })
 })
 
+
+// AUDIT-07-06 (task-658): company control -- All / Workspace-level only / one row per named
+// bucket from facets.company. Wire encoding (companyParam) already shipped and green in
+// lib/auditFilters.test.ts; this block covers only the popover UI over it.
+function companyFacets(): AuditFacets {
+  const f = facets()
+  f.company = [
+    { value: null, name: null, count: 4 }, // the workspace/unattributed bucket
+    { value: 'co-acme', name: 'Acme Ltd', count: 40 },
+    { value: 'co-deleted', name: null, count: 3 }, // non-null id, deleted company
+  ]
+  return f
+}
+
+function openCompanyPopover() {
+  fireEvent.click(screen.getByTestId('audit-company-trigger'))
+}
+
+function ensureCompanyPopoverOpen() {
+  if (!screen.queryByTestId('audit-company-panel')) openCompanyPopover()
+}
+
+describe('AuditFilterCard: company', () => {
+  it('auditCompanyFilter_threeChoicesRenderAndEachEmitsTheRightWireValue', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const f = companyFacets()
+    const { rerender } = render(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+
+    ensureCompanyPopoverOpen()
+    // Population floor -- guards every lookup below against an empty/collapsed panel.
+    const kindRows = screen.getAllByTestId(/^audit-company-kind-/)
+    expect(kindRows.length, 'population floor: All + Workspace-level only').toBe(2)
+    const namedRows = screen.getAllByTestId(/^audit-company-row-/)
+    expect(namedRows.length, 'population floor: one row per named facet bucket (AC#2)').toBe(2)
+
+    // Workspace-level only -> the literal 'workspace', never a uuid, never absent.
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    sync()
+    expect(auditFilterQuery(state).company, "workspace row emits the 'workspace' literal").toBe('workspace')
+
+    // Named company -> its uuid verbatim, and the workspace literal must be gone.
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-row-co-acme'))
+    sync()
+    let query = auditFilterQuery(state)
+    expect(query.company, 'named row emits the uuid verbatim').toBe('co-acme')
+    expect(query.company, "must not still carry the 'workspace' literal").not.toBe('workspace')
+
+    // All -> no company param at all, not an empty string and not 'all'.
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-kind-all'))
+    sync()
+    query = auditFilterQuery(state)
+    expect('company' in query, 'All emits no company param').toBe(false)
+
+    // Control needle -- the sequence above genuinely drove three distinct changes, not a no-op run.
+    expect(onChange.mock.calls.length, 'three selections must have fired three changes').toBeGreaterThanOrEqual(3)
+  })
+
+  it('auditCompanyFilter_workspaceCaveatIsVisibleTextNotTitleOnly', () => {
+    renderCard(AUDIT_FILTER_DEFAULT, companyFacets())
+    openCompanyPopover()
+
+    const caveat = screen.getByTestId('audit-company-workspace-caveat')
+    expect(
+      caveat.textContent?.trim(),
+      'the D-7 honesty line (contract §3) must render as real text content, not rely on title=',
+    ).toBe('Also includes events with no company to attribute them to.')
+    expect(
+      caveat.getAttribute('title'),
+      'the caveat element itself must not carry the line ONLY via a title= attribute',
+    ).not.toBe('Also includes events with no company to attribute them to.')
+    expect(
+      screen.getByTestId('audit-company-kind-workspace').getAttribute('title'),
+      'the honesty line must not be hidden behind a title= on the row button either',
+    ).not.toBe('Also includes events with no company to attribute them to.')
+  })
+
+  it('auditCompanyFilter_namedCountsAndTheWorkspaceCountComeFromTheFacetNotAnyOtherDerivation', () => {
+    const f = facets()
+    f.company = [
+      { value: null, name: null, count: 777 }, // workspace/unattributed bucket
+      { value: 'co-acme', name: 'Acme Ltd', count: 999 },
+      { value: 'co-deleted', name: null, count: 5 },
+    ]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openCompanyPopover()
+
+    const workspaceCount = screen.getByTestId('audit-company-count-workspace')
+    expect(
+      workspaceCount.textContent,
+      'control needle: Workspace-level only shows the value===null bucket count (AC#3)',
+    ).toBe('777')
+    expect(workspaceCount.textContent, 'must not be the sum of every bucket').not.toBe('1781')
+    expect(workspaceCount.textContent, 'must not be the number of named buckets').not.toBe('2')
+
+    const acmeCount = screen.getByTestId('audit-company-count-co-acme')
+    expect(acmeCount.textContent, 'control needle: the real facet count must render').toBe('999')
+    expect(acmeCount.textContent, "must not be the OTHER named bucket's count").not.toBe('5')
+    expect(acmeCount.textContent, 'must not be the workspace bucket count').not.toBe('777')
+
+    const deletedCount = screen.getByTestId('audit-company-count-co-deleted')
+    expect(deletedCount.textContent, "a second bucket must show its own count, not the first row's").toBe('5')
+  })
+
+  it('auditCompanyFilter_namedRowsNeverFetchThePortfolioEntityList', () => {
+    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      // Control needle -- prove the mock is genuinely wired and would record a call.
+      void fetch('https://gw.test/v1/audit-log?limit=25')
+      renderCard(AUDIT_FILTER_DEFAULT, companyFacets())
+      openCompanyPopover()
+
+      const urls = fetchMock.mock.calls.map((c) => String(c[0]))
+      expect(urls.some((u) => u.includes('/v1/audit-log')), 'control needle recorded').toBe(true)
+      expect(
+        urls.some((u) => u.includes('/portfolio/v1/entities')),
+        'named company rows must come from facets.company, never a fetched portfolio entity list',
+      ).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('auditCompanyFilter_labelUsesFacetsResolvedNameFallsBackToDeletedCopyWhenNameIsNull', () => {
+    const f = facets()
+    f.company = [
+      { value: null, name: null, count: 1 },
+      { value: 'co-acme', name: 'Acme Ltd', count: 10 },
+      { value: 'co-deleted', name: null, count: 2 },
+    ]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openCompanyPopover()
+
+    // Population floor -- guards the two label checks below against an empty/collapsed panel.
+    const namedRows = screen.getAllByTestId(/^audit-company-row-/)
+    expect(namedRows.length, 'population floor: two named buckets').toBe(2)
+
+    expect(screen.getByTestId('audit-company-label-co-acme').textContent, "uses the facet's resolved Name").toBe(
+      'Acme Ltd',
+    )
+
+    const deletedLabel = screen.getByTestId('audit-company-label-co-deleted')
+    expect(
+      deletedLabel.textContent,
+      'a null Name (deleted company, non-null id) renders the §5 copy, never blank and never Workspace (AC#6)',
+    ).toBe('A company that no longer exists')
+    expect(deletedLabel.textContent, 'must never render blank').not.toBe('')
+    expect(deletedLabel.textContent, 'must never be mislabelled as the Workspace row').not.toBe('Workspace-level only')
+  })
+
+  it('auditCompanyFilter_namedThenAllClearsTheParamEntirely', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const f = companyFacets()
+    const { rerender } = render(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-row-co-acme'))
+    sync()
+    expect(auditFilterQuery(state).company, 'named selection lands on the wire first').toBe('co-acme')
+    expect(state.company, 'state captures the name at selection time (AC#7)').toEqual({
+      mode: 'named',
+      id: 'co-acme',
+      name: 'Acme Ltd',
+    })
+
+    ensureCompanyPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-company-kind-all'))
+    sync()
+    const query = auditFilterQuery(state)
+    expect('company' in query, 'switching back to All clears the param entirely').toBe(false)
+    expect(query.company, 'no stale company value survives the switch').toBeUndefined()
+    expect(state.company, 'state resets to the all mode').toEqual({ mode: 'all' })
+  })
+})

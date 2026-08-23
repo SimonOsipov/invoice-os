@@ -18,7 +18,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import { signInAs } from '../personaSession'
-import { gaps, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, gaps, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // Mirrors frontend/app/src/components/AuditRow.tsx's AUDIT_TABLE_MIN_WIDTH. Hand-kept:
@@ -39,6 +39,27 @@ async function openAudit(page: Page): Promise<void> {
 // silently retarget this at the page.
 function scrollContainer(page: Page): Locator {
   return page.getByTestId('audit-table').locator('xpath=..')
+}
+
+// Picks the first event-type row in the (already open) event popover whose facet count
+// is nonzero -- every persona tenant has recorded something within the default 30-day
+// window by the time this suite runs (same assumption as audit_tableDrawsRowsAndARowExpands),
+// so a filter applied from this row narrows the table rather than emptying it, which is
+// what keeps "every visible row" below from passing vacuously.
+async function pickCountedEvent(page: Page): Promise<{ id: string; label: string }> {
+  const rows = page.getByTestId('audit-event-panel').locator('[data-testid^="audit-event-row-"]')
+  const total = await rows.count()
+  expect(total, 'the event popover listed nothing').toBeGreaterThan(0)
+  for (let i = 0; i < total; i++) {
+    const testId = await rows.nth(i).getAttribute('data-testid')
+    const id = (testId ?? '').replace('audit-event-row-', '')
+    const countText = await page.getByTestId(`audit-event-count-${id}`).textContent()
+    if (Number(countText) > 0) {
+      const label = await page.getByTestId(`audit-event-label-${id}`).textContent()
+      return { id, label: label ?? '' }
+    }
+  }
+  throw new Error('no event type in the popover carries a nonzero count')
 }
 
 test.describe('Audit screen', () => {
@@ -218,5 +239,228 @@ test.describe('Audit screen', () => {
     }
     expect(measured.length, 'the gutter sweep measured nothing').toBe(WIDE_WIDTHS.length)
     await test.info().attach('audit-gutters', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  })
+
+  test('audit_eventFilterNarrowsTheServerRequest', async ({ page }) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
+
+    const requests: string[] = []
+    page.on('request', (r) => {
+      if (r.url().includes('/v1/audit-log')) requests.push(r.url())
+    })
+
+    await page.getByTestId('audit-event-trigger').click({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-event-panel')).toBeVisible({ timeout: 15_000 })
+    const picked = await pickCountedEvent(page)
+    await page.getByTestId(`audit-event-row-${picked.id}`).click({ timeout: 15_000 })
+    await page.keyboard.press('Escape')
+
+    await expect
+      .poll(() => requests.some((u) => new URL(u).searchParams.getAll('event').includes(picked.id)), {
+        message: 'the event filter must reach the wire as event=',
+        timeout: 15_000,
+      })
+      .toBe(true)
+
+    await expect(page.getByTestId('audit-row').first(), 'the filtered table must draw at least one row').toBeVisible({ timeout: 15_000 })
+    const whats = page.getByTestId('audit-what')
+    const shown = await whats.count()
+    expect(shown, 'the filtered table drew nothing').toBeGreaterThan(0)
+    for (let i = 0; i < shown; i++) {
+      await expect(whats.nth(i)).toHaveText(picked.label)
+    }
+  })
+
+  test('audit_filterCardSurvivesAFilterChange', async ({ page }) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    const card = page.getByTestId('audit-filter-card')
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
+
+    await page.getByTestId('audit-date-trigger').click({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-date-panel')).toBeVisible({ timeout: 15_000 })
+
+    // Bounds the sampling window on the response the click itself causes, not a fixed
+    // sleep -- a fixed sleep would either miss a fast flight or waste the run on a slow one.
+    const responseDone = page.waitForResponse((res) => res.url().includes('/v1/audit-log'), { timeout: 15_000 })
+    const clickDone = page.getByTestId('audit-date-preset-7d').click({ timeout: 15_000 })
+
+    let settled = false
+    void responseDone.then(() => {
+      settled = true
+    })
+    const samples: boolean[] = []
+    while (!settled) {
+      samples.push(await card.isVisible())
+    }
+    await clickDone
+
+    expect(samples.length, 'the poll never sampled during the in-flight window').toBeGreaterThan(0)
+    expect(samples.every(Boolean), 'the filter card must stay visible through a filter change').toBe(true)
+  })
+
+  test('audit_pillRemovalDropsTheParam', async ({ page }) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
+
+    const requests: string[] = []
+    page.on('request', (r) => {
+      if (r.url().includes('/v1/audit-log')) requests.push(r.url())
+    })
+
+    await page.getByTestId('audit-event-trigger').click({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-event-panel')).toBeVisible({ timeout: 15_000 })
+    const picked = await pickCountedEvent(page)
+    await page.getByTestId(`audit-event-row-${picked.id}`).click({ timeout: 15_000 })
+    await page.keyboard.press('Escape')
+
+    // Instrument floor: an absence reading below is worthless if the recorder never saw a
+    // live request, so prove it caught the filter reaching the wire before trusting it.
+    await expect
+      .poll(() => requests.some((u) => u.includes('/v1/audit-log') && u.includes('event=')), {
+        message: 'the request recorder never observed an event= request -- the floor did not hold',
+        timeout: 15_000,
+      })
+      .toBe(true)
+
+    const pill = page.getByTestId(`audit-pill-event:${picked.id}`)
+    await expect(pill).toBeVisible({ timeout: 15_000 })
+    requests.length = 0
+    await pill.click({ timeout: 15_000 })
+
+    await expect
+      .poll(() => requests.length > 0, { message: 'removing the pill must fire a new request', timeout: 15_000 })
+      .toBe(true)
+    expect(requests.every((u) => !u.includes('event='))).toBe(true)
+  })
+
+  test('audit_exportDownloadsADatedCsv', async ({ page }) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
+
+    const exportButton = page.getByTestId('audit-export')
+    await expect(exportButton).toBeEnabled({ timeout: 15_000 })
+
+    const downloadEvent = page.waitForEvent('download', { timeout: 15_000 })
+    await exportButton.click({ timeout: 15_000 })
+    const download = await downloadEvent
+
+    expect(await download.failure(), 'the export download must complete').toBeNull()
+    expect(download.suggestedFilename()).toMatch(/^audit-log-\d{4}-\d{2}-\d{2}\.csv$/)
+  })
+
+  test('audit_exportIsDisabledWhenNothingMatches', async ({ page }) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
+
+    // A fresh random string cannot appear in any event, payload value, actor name or
+    // company name -- searchFragment's four routes are all substring matches on real data.
+    const nonce = crypto.randomUUID()
+    await page.getByTestId('audit-search-trigger').click({ timeout: 15_000 })
+    const input = page.getByTestId('audit-search-input')
+    await input.fill(nonce, { timeout: 15_000 })
+    await input.press('Enter', { timeout: 15_000 })
+    await page.keyboard.press('Escape')
+
+    await expect(page.getByTestId('audit-empty-by-filter'), 'a nonce search must match nothing').toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-export')).toBeDisabled({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-export-reason')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-export-reason')).toContainText('No rows match')
+  })
+
+  test('audit_filterCardFillsTheContentColumn', async ({ page }) => {
+    test.setTimeout(180_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    const card = page.getByTestId('audit-filter-card')
+    await expect(card).toBeVisible({ timeout: 15_000 })
+
+    // Compared against the table's own scroll container, not the window: at every width in
+    // WIDE_WIDTHS the table sits well above its 868px floor (see the file header), so that
+    // container's edges are the content column's real edges here.
+    const fit = await assertFillsColumn(page, card, scrollContainer(page), 'audit-filter-card')
+    expect(fit.length, 'the fill sweep measured nothing').toBe(WIDE_WIDTHS.length)
+
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await test.info().attach(`audit-filter-card-fill-${width}`, { body: await page.screenshot(), contentType: 'image/png' })
+    }
+    await test.info().attach('audit-filter-card-fit', { body: JSON.stringify(fit, null, 2), contentType: 'application/json' })
+  })
+
+  test('audit_exportControlIsRightAlignedToTheCard', async ({ page }) => {
+    test.setTimeout(180_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    const card = page.getByTestId('audit-filter-card')
+    const button = page.getByTestId('audit-export')
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    await expect(button).toBeVisible({ timeout: 15_000 })
+
+    // 2px: both elements are flush against the same content-column edge (the card is
+    // full-width, the button's row is a space-between flex whose last item abuts the same
+    // edge), so this is sub-pixel rounding across two independent boundingBox() reads, not
+    // a scrollbar gutter -- assertFillsColumn's 24px default budgets for that gutter, which
+    // does not apply to a same-edge comparison like this one.
+    const SLACK_PX = 2
+
+    const measured: Array<{ width: number; drift: number }> = []
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const [cardBox, buttonBox] = await Promise.all([card.boundingBox(), button.boundingBox()])
+      if (!cardBox || !buttonBox) continue
+      const drift = Math.abs(cardBox.x + cardBox.width - (buttonBox.x + buttonBox.width))
+      measured.push({ width, drift })
+      expect(drift, `export control must align with the filter card's right edge at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+    }
+    expect(measured.length, 'the alignment sweep measured nothing').toBe(WIDE_WIDTHS.length)
+    await test.info().attach('audit-export-alignment', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  })
+
+  test('audit_cardAndStripNeverOverlap', async ({ page }) => {
+    test.setTimeout(180_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    const strip = page.getByTestId('audit-immutability-strip')
+    const card = page.getByTestId('audit-filter-card')
+    await expect(strip).toBeVisible({ timeout: 15_000 })
+    await expect(card).toBeVisible({ timeout: 15_000 })
+
+    const measured: Array<{ width: number; overlap: boolean }> = []
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const [stripBox, cardBox] = await Promise.all([strip.boundingBox(), card.boundingBox()])
+      if (!stripBox || !cardBox) continue
+      const overlap = rectsOverlap(stripBox, cardBox)
+      measured.push({ width, overlap })
+      expect(overlap, `the strip and the filter card must not overlap at ${width}px`).toBe(false)
+    }
+    expect(measured.length, 'the overlap sweep measured nothing').toBe(WIDE_WIDTHS.length)
+    await test.info().attach('audit-strip-card-overlap', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  })
+
+  test('audit_openPopoverDoesNotScrollTheBody', async ({ page }) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await page.setViewportSize({ width: 1280, height: 1080 })
+    await expect(page.getByTestId('audit-filter-card')).toBeVisible({ timeout: 15_000 })
+
+    await page.getByTestId('audit-company-trigger').click({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-company-panel')).toBeVisible({ timeout: 15_000 })
+
+    const bodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    expect(bodyOverflow, 'an open popover must not widen the page past its own scrollbar').toBeLessThanOrEqual(1)
   })
 })

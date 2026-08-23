@@ -13,10 +13,22 @@ import { useEffect, useState } from 'react'
 import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
 
 import { getAuditLog, type AuditResponse } from '../lib/audit'
-import { auditScreenState, AUDIT_COPY, emptyByFilterCopy, invoiceFilterPillLabel } from '../lib/auditView'
+import {
+  auditPageNext,
+  auditPagePrev,
+  auditPageResize,
+  auditRangeLabel,
+  auditScreenState,
+  AUDIT_COPY,
+  AUDIT_PAGE_INITIAL,
+  emptyByFilterCopy,
+  invoiceFilterPillLabel,
+  type AuditPageState,
+} from '../lib/auditView'
 import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
+import { AuditPager } from './AuditPager'
 import { AuditRow } from './AuditRow'
 import { AuditSkeleton } from './AuditSkeleton'
 import { AuditTable } from './AuditTable'
@@ -30,6 +42,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [invoiceFilter, setInvoiceFilter] = useState<InvoiceFilter | null>(null)
+  const [page, setPage] = useState<AuditPageState>(AUDIT_PAGE_INITIAL)
   // Only ever written from an unfiltered response (see the effect below), so the
   // empty-by-filter copy can never pass a filtered `total` off as the size of the log.
   const [lifetimeTotal, setLifetimeTotal] = useState<number | null>(null)
@@ -38,9 +51,13 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const log = useAsync<AuditResponse>(
     () =>
       base
-        ? getAuditLog(ctx.authedFetch, base, invoiceFilter ? { invoice_id: invoiceFilter.id } : {})
+        ? getAuditLog(ctx.authedFetch, base, {
+            limit: page.limit,
+            ...(page.cursor != null ? { cursor: page.cursor } : {}),
+            ...(invoiceFilter ? { invoice_id: invoiceFilter.id } : {}),
+          })
         : Promise.reject(new Error('no gateway configured')),
-    { isEmpty: () => false, immediate: shouldFetchInvoices(base), deps: [invoiceFilter?.id] },
+    { isEmpty: () => false, immediate: shouldFetchInvoices(base), deps: [invoiceFilter?.id, page.limit, page.cursor] },
   )
   const status = invoicesViewState(base, log)
   const state = auditScreenState(status, log.data, filtered)
@@ -52,8 +69,17 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     if (log.data != null && !filtered && log.data.total > 0) setLifetimeTotal(log.data.total)
   }, [log.data, filtered])
 
+  // Every filter change restarts pagination: a cursor addresses a row boundary inside one
+  // filtered stream and means nothing in another.
+  const applyInvoiceFilter = (id: string, number: string | null) => {
+    setInvoiceFilter({ id, number })
+    setPage(auditPageResize(page.limit))
+    setExpandedId(null)
+  }
+
   const clearFilter = () => {
     setInvoiceFilter(null)
+    setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
 
@@ -114,17 +140,29 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {(state === 'loaded' || state === 'filtered') && (
-        <AuditTable>
-          {events.map((e) => (
-            <AuditRow
-              key={e.id}
-              event={e}
-              expanded={expandedId === e.id}
-              onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
-              onFilterToInvoice={filtered ? undefined : (id, number) => setInvoiceFilter({ id, number })}
-            />
-          ))}
-        </AuditTable>
+        <>
+          <AuditTable>
+            {events.map((e) => (
+              <AuditRow
+                key={e.id}
+                event={e}
+                expanded={expandedId === e.id}
+                onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                onFilterToInvoice={filtered ? undefined : applyInvoiceFilter}
+              />
+            ))}
+          </AuditTable>
+          <AuditPager
+            range={auditRangeLabel(page, events.length, log.data?.total ?? 0)}
+            limit={page.limit}
+            canPrev={page.stack.length > 0}
+            canNext={log.data?.page.has_more === true}
+            busy={status === 'loading'}
+            onPrev={() => setPage(auditPagePrev(page))}
+            onNext={() => setPage(auditPageNext(page, log.data?.page.next_cursor ?? null))}
+            onLimit={(limit) => setPage(auditPageResize(limit))}
+          />
+        </>
       )}
     </div>
   )

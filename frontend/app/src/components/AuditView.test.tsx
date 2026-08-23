@@ -126,3 +126,65 @@ describe('AuditView states', () => {
     expect(screen.queryByTestId('audit-new-workspace')).toBeNull()
   })
 })
+
+describe('AuditView pagination', () => {
+  // Every call's URL, so a cursor can be checked as the exact string the server minted.
+  function recordingFetch(body: (url: string) => MockResponse) {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(body(url))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return calls
+  }
+
+  it('auditPager_nextSendsTheReturnedCursor', async () => {
+    // Opaque on purpose: the reader mints it and the screen must not parse, decode or
+    // rebuild it.
+    const CURSOR = 'eyJ0IjoiMjAyNi0wOC0yMFQwOToxNTowMFoiLCJpIjoiZXZ0LTEifQ=='
+    const calls = recordingFetch((url) =>
+      url.includes('cursor=')
+        ? logResponse({ page: { limit: 25, has_more: false, next_cursor: null }, total: 2 })
+        : logResponse({ page: { limit: 25, has_more: true, next_cursor: CURSOR }, total: 2 }),
+    )
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+
+    await waitFor(() => expect(calls.some((u) => u.includes('cursor='))).toBe(true))
+    const sent = new URL(calls.find((u) => u.includes('cursor='))!).searchParams.get('cursor')
+    expect(sent).toBe(CURSOR)
+    // Forward-only reader: an offset would be a silent fallback to a different pagination.
+    expect(calls.every((u) => !u.includes('offset='))).toBe(true)
+  })
+
+  it('auditPager_disabledAtEndOfLog', async () => {
+    recordingFetch(() => logResponse({ page: { limit: 25, has_more: false, next_cursor: null } }))
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toBeTruthy())
+    expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', true)
+    expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', true)
+  })
+
+  it('auditPager_pageSizeChangeResetsCursor', async () => {
+    const CURSOR = 'cursor-minted-at-limit-25'
+    const calls = recordingFetch((url) =>
+      url.includes('cursor=')
+        ? logResponse({ page: { limit: 25, has_more: true, next_cursor: 'second' }, total: 200 })
+        : logResponse({ page: { limit: 25, has_more: true, next_cursor: CURSOR }, total: 200 }),
+    )
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+    await waitFor(() => expect(calls.some((u) => u.includes('cursor='))).toBe(true))
+
+    fireEvent.change(screen.getByTestId('audit-page-size'), { target: { value: '100' } })
+    await waitFor(() => expect(calls.some((u) => u.includes('limit=100'))).toBe(true))
+    // A cursor minted at limit=25 addresses a different page boundary; carrying it into a
+    // limit=100 request would skip or repeat rows.
+    const resized = calls.filter((u) => u.includes('limit=100'))
+    expect(resized.length).toBeGreaterThan(0)
+    for (const u of resized) expect(u).not.toContain('cursor=')
+  })
+})

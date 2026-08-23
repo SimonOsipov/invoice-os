@@ -35,7 +35,7 @@ describe('AuditFilterCard: search', () => {
     const input = screen.getByTestId('audit-search-input')
     await user.type(input, 'hello')
     // Control needle: prove typing actually reached the input before asserting the negative.
-    expect(input, 'typing must reach the input').toHaveValue('hello')
+    expect((input as HTMLInputElement).value, 'typing must reach the input').toBe('hello')
     expect(onChange, 'no change per keystroke').not.toHaveBeenCalled()
 
     await user.type(input, '{Enter}')

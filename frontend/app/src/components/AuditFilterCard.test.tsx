@@ -3,6 +3,10 @@
 //
 // Search, date-range, event-type and actor controls. Company lands in AUDIT-07-06.
 
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -714,4 +718,103 @@ describe('AuditFilterCard: actor', () => {
     ).toEqual(expect.arrayContaining(['user-a', 'user-b']))
     expect(query.actor?.length, 'no extra or dropped ids').toBe(2)
   })
+  it('auditActorFilter_issuesNoMembershipRequest', () => {
+    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      // Control needle -- prove the mock is genuinely wired and would record a call.
+      void fetch('https://gw.test/v1/audit-log?limit=25')
+      const { onChange } = renderCard(AUDIT_FILTER_DEFAULT, actorFacets())
+      openActorPopover()
+      fireEvent.click(screen.getByTestId('audit-actor-row-user-a'))
+      expect(onChange).toHaveBeenCalledTimes(1)
+
+      const urls = fetchMock.mock.calls.map((c) => String(c[0]))
+      expect(urls.some((u) => u.includes('/v1/audit-log')), 'control needle recorded').toBe(true)
+      expect(urls.some((u) => u.includes('/v1/memberships')), 'the actor control must never fetch memberships').toBe(
+        false,
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AuditFilterCard.tsx'), 'utf8')
+    expect(src.length).toBeGreaterThan(0)
+    expect(src, 'the scan must be reading the real component').toContain('facets.actor')
+    expect(src, 'the actor control must import nothing from lib/members').not.toMatch(/from ['"].*lib\/members['"]/)
+  })
+
+  it('auditActorFilter_emptyFacetRendersKindRowsButNoNamedSection', () => {
+    renderCard(AUDIT_FILTER_DEFAULT, facets())
+    openActorPopover()
+
+    const kindRows = screen.getAllByTestId(/^audit-actor-kind-/)
+    expect(kindRows.length, 'kind rows render regardless of the facet').toBe(3)
+    expect(screen.queryAllByTestId(/^audit-actor-row-/).length, 'no named rows with an empty facet').toBe(0)
+  })
+
+  it('auditActorFilter_nilNameFallsBackToTheRawSubjectNotBlank', () => {
+    const f = facets()
+    f.actor = [{ value: 'raw-subject-id', name: null, kind: 'person', count: 1 }]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openActorPopover()
+
+    const rows = screen.getAllByTestId(/^audit-actor-row-/)
+    expect(rows.length, 'population floor').toBe(1)
+
+    const label = screen.getByTestId('audit-actor-label-raw-subject-id')
+    expect(label.textContent, 'a nil name falls back to the raw subject, never blank').toBe('raw-subject-id')
+    expect(label.style.fontFamily, 'the fallback renders mono, same as any other raw shape').toContain('font-mono')
+  })
+
+  it('auditActorFilter_personThenAnyoneThenKindEndsCleanAtEveryStep', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const f = actorFacets()
+    const { rerender } = render(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-row-user-a'))
+    sync()
+    expect(state.actors, 'person selected').toEqual(['user-a'])
+    expect(state.actorKind, 'no kind alongside the person').toBe('')
+
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-anyone'))
+    sync()
+    expect(state.actors, 'Anyone clears the person').toEqual([])
+    expect(state.actorKind, 'Anyone clears the kind too').toBe('')
+
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-system'))
+    sync()
+    expect(state.actorKind, 'kind lands cleanly after Anyone').toBe('system')
+    expect(state.actors, 'no stale person resurfaces').toEqual([])
+  })
+
+  it('auditActorFilter_largeActorListRendersEveryRow', () => {
+    const f = facets()
+    f.actor = Array.from({ length: 250 }, (_, i) => ({
+      value: `user-${i}`,
+      name: `Person ${i}`,
+      kind: 'person',
+      count: i,
+    }))
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openActorPopover()
+
+    const rows = screen.getAllByTestId(/^audit-actor-row-/)
+    expect(rows.length, 'every facet actor renders, none silently dropped').toBe(250)
+    expect(screen.getByTestId('audit-actor-label-user-0').textContent).toBe('Person 0')
+    expect(screen.getByTestId('audit-actor-label-user-249').textContent).toBe('Person 249')
+  })
+
+  it('auditActorFilter_busyDisablesTheActorTrigger', () => {
+    render(<AuditFilterCard state={AUDIT_FILTER_DEFAULT} facets={actorFacets()} busy={true} onChange={vi.fn()} />)
+    expect(screen.getByTestId('audit-actor-trigger')).toHaveProperty('disabled', true)
+  })
 })
+

@@ -524,3 +524,38 @@ describe('AuditView filter card adversarial coverage (AUDIT-07-03 QA)', () => {
     expect(secondFrom, 'the date window must not drift across a page change').toBe(firstFrom)
   })
 })
+
+// QA gap-fill (task-657, AC#7): FAILS today -- the actor popover renders strictly from
+// facets.actor with no synthesis for a selected id the facet no longer lists, so this row
+// never appears. Left red to document the unmet AC; not this agent's fix to make.
+describe('AuditView actor control (AUDIT-07-05 QA)', () => {
+  it('auditActorFilter_selectedActorMissingFromFacetKeepsItsPill', async () => {
+    const withActor = logResponse({
+      facets: { event: [], actor: [{ value: 'u1', name: 'Amara Chen', kind: 'person', count: 3 }], company: [] },
+    })
+    const withoutActor = logResponse({ facets: { event: [], actor: [], company: [] } })
+    let calls = 0
+    const fetchMock = vi.fn(() => {
+      calls += 1
+      return Promise.resolve(calls === 1 ? withActor : withoutActor)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-actor-trigger'))
+    fireEvent.click(screen.getByTestId('audit-actor-row-u1'))
+
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2))
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('audit-actor-count-u1').textContent,
+        'the facet dropped the actor -- the selected row must synthesize count 0',
+      ).toBe('0'),
+    )
+    expect(
+      screen.getByTestId('audit-actor-row-u1'),
+      'a selected actor must not vanish from its own control when the facet no longer lists it',
+    ).toBeTruthy()
+  })
+})

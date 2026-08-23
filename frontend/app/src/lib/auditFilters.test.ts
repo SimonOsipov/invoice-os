@@ -99,6 +99,29 @@ describe('auditFilterQuery', () => {
     expect(query.company).toBe('workspace')
   })
 
+  it('auditActorFilter_neverEmitsBothAcrossRandomInterleavings', () => {
+    // Property-style sweep, deterministic seed. 20 random kind/name interleavings,
+    // asserting after every step that the mutual exclusion holds -- broader than the
+    // four hand-picked sequences above.
+    let seed = 42
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      return seed / 0x7fffffff
+    }
+    const ids = ['u1', 'u2', 'u3']
+    const kinds: ('people' | 'system')[] = ['people', 'system']
+
+    let state = AUDIT_FILTER_DEFAULT
+    let sawBoth = false
+    for (let i = 0; i < 20; i++) {
+      state = rand() < 0.5 ? selectActor(state, ids[Math.floor(rand() * ids.length)]) : selectKind(state, kinds[Math.floor(rand() * kinds.length)])
+      const query = auditFilterQuery(state)
+      if (query.actor !== undefined && query.actor_kind !== undefined) sawBoth = true
+    }
+
+    expect(sawBoth, 'no interleaving of selectActor/selectKind may ever produce both keys').toBe(false)
+  })
+
   it('auditFilters_customToIsEndOfDay', () => {
     const state: AuditFilterState = {
       ...AUDIT_FILTER_DEFAULT,

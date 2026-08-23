@@ -354,3 +354,172 @@ describe('AuditView filter card (AUDIT-07-03)', () => {
     expect(screen.queryByTestId('audit-filter-card'), 'card must be hidden on new-workspace').toBeNull()
   })
 })
+
+// QA (task-655): the plan's Test Specs table names 8 cases; only 4 were authored RED. These
+// close the rest, plus mutation-driven gaps found while verifying: `survivesARefetch` passes
+// even with the card nested inside the loaded/filtered block, because `landed` keeps `state`
+// at 'loaded'/'filtered' through a same-shape refetch -- only error/empty-by-filter actually
+// exercise the mount boundary behaviourally.
+describe('AuditView filter card adversarial coverage (AUDIT-07-03 QA)', () => {
+  it('auditFilterCard_presentOnEmptyByFilter', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(url.includes('q=narrowed') ? logResponse({ events: [], total: 0, log_is_empty: false }) : logResponse()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'narrowed' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(screen.getByTestId('audit-filter-card'), 'card must stay mounted in empty-by-filter').toBeTruthy()
+  })
+
+  it('auditFilterCard_presentOnError', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      url.includes('q=broken') ? Promise.reject(new Error('boom')) : Promise.resolve(logResponse()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'broken' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByText('Something went wrong')).toBeTruthy())
+    expect(screen.getByTestId('audit-filter-card'), 'card must stay mounted in the error rung').toBeTruthy()
+  })
+
+  it('auditFilter_facetsPropComesFromTheResponseObject', () => {
+    // Rendering facet counts is AUDIT-07-04..06's; nothing draws them yet, so a rendered
+    // check cannot see this AC. Source-level, same idiom as isNotInsideTheLoadedRung.
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AuditView.tsx'), 'utf8')
+    expect(src.length).toBeGreaterThan(0)
+    expect(src, 'the scan must be reading the real mount').toContain('<AuditFilterCard')
+    expect(src, 'facets must be sourced from the response object').toContain('facets={shown?.res.facets')
+    expect(src, 'facets must never be a client-side tally').not.toMatch(/facets=\{[^}]*events\.length/)
+  })
+
+  it('auditFilter_busyDisablesTheControls', async () => {
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('q=narrowed')) {
+        return new Promise<MockResponse>((res) => {
+          release = res
+        })
+      }
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'narrowed' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+
+    await waitFor(() => expect(release, 'the refetch must actually be pending').not.toBeNull())
+    expect(screen.getByTestId('audit-search-trigger')).toHaveProperty('disabled', true)
+    expect(screen.getByTestId('audit-date-trigger')).toHaveProperty('disabled', true)
+
+    release!(logResponse({ total: 4 }))
+    await waitFor(() => expect(screen.getByTestId('audit-search-trigger')).toHaveProperty('disabled', false))
+  })
+
+  it('auditFilter_rapidChangesEachResetTheCursorAndLastWins', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'first' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=first'))).toBe(true))
+
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'second' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=second'))).toBe(true))
+
+    const filterCalls = calls.filter((u) => u.includes('q=first') || u.includes('q=second'))
+    expect(filterCalls.length).toBe(2)
+    for (const u of filterCalls) expect(u, 'every filter change must reset the cursor').not.toContain('cursor=')
+    expect(calls[calls.length - 1], 'the network must see the last filter, not an intermediate one').toContain('q=second')
+  })
+
+  it('auditFilter_lateInFlightResponseIsDiscardedByALaterFilterChange', async () => {
+    let releaseFirst: ((v: MockResponse) => void) | null = null
+    let releaseSecond: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('q=first')) return new Promise<MockResponse>((res) => (releaseFirst = res))
+      if (url.includes('q=second')) return new Promise<MockResponse>((res) => (releaseSecond = res))
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'first' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(releaseFirst, 'the first request must be in flight').not.toBeNull())
+
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'second' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(releaseSecond, 'the second request must be in flight').not.toBeNull())
+
+    // Resolve out of order: the stale "first" response lands after "second".
+    releaseSecond!(logResponse({ total: 22 }))
+    await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('22'))
+    releaseFirst!(logResponse({ total: 999 }))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.getByTestId('audit-immutability-strip').textContent, 'a late stale response must not clobber the current one').toContain('22')
+    expect(screen.getByTestId('audit-immutability-strip').textContent).not.toContain('999')
+  })
+
+  it('auditFilter_dateWindowFrozenAcrossUnrelatedRerenders', async () => {
+    // Pins the useMemo deviation: without it, an unrelated re-render (row expansion here)
+    // recomputes `now`, changes the deps string and refetches -- confirmed empirically to
+    // spiral into a "Maximum update depth exceeded" loop (102 fetches in 300ms) when tried.
+    const fetchMock = vi.fn(() => Promise.resolve(logResponse()))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+    const callsAfterLoad = fetchMock.mock.calls.length
+
+    fireEvent.click(screen.getAllByTestId('audit-row')[0])
+    await new Promise((r) => setTimeout(r, 50))
+    expect(fetchMock.mock.calls.length, 'an unrelated re-render must not trigger a refetch').toBe(callsAfterLoad)
+  })
+
+  it('auditFilter_dateWindowStableAcrossPageChange', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(
+        url.includes('cursor=')
+          ? logResponse({ page: { limit: 25, has_more: false, next_cursor: null } })
+          : logResponse({ page: { limit: 25, has_more: true, next_cursor: 'p2' } }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
+    const firstFrom = new URL(calls[0]).searchParams.get('from')
+    expect(firstFrom, 'the 30-day default must carry a from= param').toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+    await waitFor(() => expect(calls.some((u) => u.includes('cursor='))).toBe(true))
+    const secondFrom = new URL(calls.find((u) => u.includes('cursor='))!).searchParams.get('from')
+    // A drifting `from` between page 1 and page 2 would shift the query window under a
+    // cursor minted against the earlier one -- the memo exists to prevent exactly this.
+    expect(secondFrom, 'the date window must not drift across a page change').toBe(firstFrom)
+  })
+})

@@ -5,8 +5,10 @@
 // plain object as empty anyway, and this screen must take the empty/new-workspace
 // distinction from the server's `log_is_empty` flag alone, never from a shape guess.
 //
-// The filter CARD is AUDIT-07's. The one filter this story can set is the row expansion's
-// invoice affordance, which is what makes the empty-by-filter state reachable at all.
+// The filter card (AUDIT-07) is mounted below with search/date-range wired; events/actor/
+// company land in 07-04..06. The row expansion's invoice affordance writes into the same
+// filter state via a separate entry point -- together they're what makes empty-by-filter
+// reachable today.
 
 import { useEffect, useMemo, useState } from 'react'
 
@@ -149,9 +151,10 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         )}
       </div>
 
-      {/* useAsync nulls `data` on every 'start', never `landed` -- mounting here (not inside
-          the loaded/filtered rung below) is what keeps the control the user just touched in
-          the DOM through the refetch it triggers. */}
+      {/* Mounted outside the loaded/filtered rung so the card also survives a refetch that
+          lands on error or empty-by-filter -- `landed`'s cache already keeps `state` at
+          loaded/filtered through a same-shape refetch, so the mount point only matters for
+          the states outside that block. */}
       {landed != null && state !== 'new-workspace' && (
         <AuditFilterCard
           state={filterState}

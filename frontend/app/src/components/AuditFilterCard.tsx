@@ -1,12 +1,20 @@
 // The audit filter card's five popover triggers + pills row (AUDIT-07). AUDIT-07-02 wired
-// search + date-range; this subtask (AUDIT-07-04) adds event type. Actor/company land in
-// AUDIT-07-05..06, the pills row in AUDIT-07-07.
+// search + date-range, AUDIT-07-04 added event type; this subtask (AUDIT-07-05) adds actor.
+// Company lands in AUDIT-07-06, the pills row in AUDIT-07-07.
 
 import { useCallback, useState } from 'react'
 
 import type { AuditFacets } from '../lib/audit'
+import { actorLabel } from '../lib/actor'
 import { AUDIT_COPY } from '../lib/auditView'
-import { auditRangeIsValid, type AuditFilterState, type AuditRange, type AuditRangePreset } from '../lib/auditFilters'
+import {
+  auditRangeIsValid,
+  selectActor,
+  selectKind,
+  type AuditFilterState,
+  type AuditRange,
+  type AuditRangePreset,
+} from '../lib/auditFilters'
 import { AUDIT_EVENTS, auditEventView, type AuditDomain } from '../lib/auditVocabulary'
 
 import { FilterPopover } from './FilterPopover'
@@ -88,8 +96,19 @@ function eventCount(facets: AuditFacets, id: string): number {
   return facets.event.find((f) => f.value === id)?.count ?? 0
 }
 
+function actorSummary(state: AuditFilterState, facets: AuditFacets): string | undefined {
+  if (state.actorKind === 'people') return 'People only'
+  if (state.actorKind === 'system') return 'System only'
+  if (state.actors.length === 1) {
+    const f = facets.actor.find((a) => a.value === state.actors[0])
+    return f?.name ?? state.actors[0]
+  }
+  if (state.actors.length > 1) return `${state.actors.length} selected`
+  return undefined
+}
+
 export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCardProps) {
-  const [openPopover, setOpenPopover] = useState<'search' | 'date' | 'event' | null>(null)
+  const [openPopover, setOpenPopover] = useState<'search' | 'date' | 'event' | 'actor' | null>(null)
   const closePopover = useCallback(() => setOpenPopover(null), [])
 
   const [searchDraft, setSearchDraft] = useState(state.q)
@@ -138,6 +157,14 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
   const clearAllEvents = () => {
     onChange({ ...state, events: [] })
   }
+
+  const openActor = useCallback(() => setOpenPopover('actor'), [])
+  // Selecting a kind or a named actor always goes through selectKind/selectActor (auditFilters.ts) --
+  // both mutators clear the other field, so the server's actor+actor_kind 400 is unreachable here.
+  const selectKindRow = (kind: 'people' | 'system') => onChange(selectKind(state, kind))
+  const selectActorRow = (id: string) => onChange(selectActor(state, id))
+  // Anyone is a reset, not a selection -- selectKind's type only takes 'people' | 'system'.
+  const selectAnyone = () => onChange({ ...state, actorKind: '', actors: [] })
 
   return (
     <div
@@ -365,6 +392,97 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
               })}
             </div>
           ))}
+        </div>
+      </FilterPopover>
+
+      <FilterPopover
+        testId="audit-actor"
+        label="Actor"
+        summary={actorSummary(state, facets)}
+        open={openPopover === 'actor'}
+        onOpen={openActor}
+        onClose={closePopover}
+        disabled={busy}
+      >
+        <div style={{ width: 260, maxHeight: 380, overflowY: 'auto' }}>
+          <div style={{ padding: 6 }}>
+            {(
+              [
+                { id: 'anyone', label: 'Anyone', pressed: state.actorKind === '' && state.actors.length === 0, onClick: selectAnyone },
+                { id: 'people', label: 'People only', pressed: state.actorKind === 'people', onClick: () => selectKindRow('people') },
+                { id: 'system', label: 'System only', pressed: state.actorKind === 'system', onClick: () => selectKindRow('system') },
+              ] as const
+            ).map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                data-testid={`audit-actor-kind-${row.id}`}
+                aria-pressed={row.pressed}
+                onClick={row.onClick}
+                className="pf-menu-item"
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  border: 0,
+                  background: row.pressed ? 'var(--bg-3)' : 'transparent',
+                  padding: '9px 12px',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 13,
+                  color: row.pressed ? 'var(--action)' : 'var(--fg-1)',
+                  cursor: 'pointer',
+                }}
+              >
+                {row.label}
+              </button>
+            ))}
+          </div>
+          {facets.actor.length > 0 && (
+            <div style={{ padding: '6px 0', borderTop: '1px solid var(--line-1)' }}>
+              {facets.actor
+                .filter((f) => f.value != null)
+                .map((f) => {
+                  const id = f.value as string
+                  const label = actorLabel(f.value, { name: f.name ?? '', kind: f.kind ?? '' })
+                  const selected = state.actors.includes(id)
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      data-testid={`audit-actor-row-${id}`}
+                      aria-pressed={selected}
+                      onClick={() => selectActorRow(id)}
+                      className="pf-menu-item"
+                      style={{
+                        display: 'flex',
+                        width: '100%',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        border: 0,
+                        background: selected ? 'var(--bg-3)' : 'transparent',
+                        padding: '7px 12px',
+                        fontFamily: 'var(--font-sans)',
+                        fontSize: 13,
+                        color: selected ? 'var(--action)' : 'var(--fg-1)',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span
+                        data-testid={`audit-actor-label-${id}`}
+                        style={{ fontFamily: label.mono ? 'var(--font-mono)' : 'var(--font-sans)' }}
+                      >
+                        {label.text}
+                      </span>
+                      <span data-testid={`audit-actor-count-${id}`} style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
+                        {f.count}
+                      </span>
+                    </button>
+                  )
+                })}
+            </div>
+          )}
         </div>
       </FilterPopover>
     </div>

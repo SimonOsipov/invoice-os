@@ -15,15 +15,18 @@ import { fmtDateTime } from '../lib/format'
 
 import { ActorCell } from './ActorCell'
 
-// MembersTable.tsx's shape: two flexible columns, two fixed, a 44px chevron rail. The
-// min-width is restated on every row -- that restatement is what stops a row collapsing
+// MembersTable.tsx's shape: two flexible columns, two fixed, a 44px chevron rail.
+//
+//   190 who floor + 220 what floor + 374 fixed (160+170+44) + 4 gaps x 12 + 36 padding = 868
+//
+// The min-width is restated on every row -- that restatement is what stops a row collapsing
 // inside the scroll container (e2e/topology/audit.spec.ts asserts it on the rendered page).
 export const AUDIT_COLS = 'minmax(190px,1fr) minmax(220px,1.4fr) 160px 170px 44px'
-export const AUDIT_TABLE_MIN_WIDTH = 784
+export const AUDIT_TABLE_MIN_WIDTH = 868
 export const AUDIT_GRID_GAP = 12
 
 const EVIDENCE_REASON_ID = 'audit-evidence-blocked-reason'
-const EVIDENCE_REASON = 'The signed evidence bundle is not reachable from this screen yet.'
+const EVIDENCE_REASON = 'The evidence bundle is not reachable from this screen yet.'
 
 const TONE_TEXT: Record<string, string> = {
   green: 'var(--status-green-text)',

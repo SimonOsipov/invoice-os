@@ -47,10 +47,6 @@ const LEGAL_GRADES: Grade[] = ['drives', 'nav-only']
 // leaving it here while a firm spec drives the surface would be a false coverage claim.
 const EXPECTED_NAV_ONLY = new Set<string>([
   'firm:NAV_RULES', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
-  // Both Audit cells: the roster test pins the item is present, nothing opens the screen
-  // yet. Both leave this set when audit.spec.ts lands and drives them.
-  'firm:NAV_AUDIT',
-  'inhouse:NAV_AUDIT',
 ])
 
 // The 8 in-house cells (Core AC 2, including inhouse:NAV_APPROVALS -> Core AC 3 and
@@ -706,7 +702,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
 
   it('row 16 (G6b) -- the nav-only set equals EXPECTED_NAV_ONLY exactly', () => {
     // 3 = firm:NAV_RULES plus both Audit cells. Drops back to 1 when audit.spec.ts drives them.
-    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(3)
+    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(1)
 
     const actualNavOnly = new Set<string>()
     for (const id of PERSONA_IDS) {
@@ -790,7 +786,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
 
   it('A05-3 -- nav-only did not grow: the new firm cell is graded drives, not nav-only (green-before guard)', () => {
     // 3 = firm:NAV_RULES plus both Audit cells. Drops back to 1 when audit.spec.ts drives them.
-    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(3)
+    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(1)
     expect(EXPECTED_NAV_ONLY.has('firm:NAV_APPROVALS'), 'firm:NAV_APPROVALS must never enter the nav-only set').toBe(false)
 
     const cell = (PERSONAS.firm.coverage ?? []).find((c) => c.navConst === 'NAV_APPROVALS')

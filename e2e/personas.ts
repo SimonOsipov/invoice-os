@@ -132,7 +132,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       { navConst: 'NAV_RULES', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       // nav-only until audit.spec.ts drives it: the roster test pins that Audit is present
       // for this persona, in this same commit, but nothing opens the screen yet.
-      { navConst: 'NAV_AUDIT', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_AUDIT', grade: 'drives', coveredBy: 'e2e/topology/audit.spec.ts' },
       { navConst: 'NAV_REPORTS', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       // roles.spec.ts signs in as the firm persona, opens Settings and asserts the Roles
       // tab's rendered content plus the Members tab's roster column -- what `drives` means.
@@ -168,7 +168,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_REPORTS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       // nav-only until audit.spec.ts drives it -- same reasoning as the firm cell above.
-      { navConst: 'NAV_AUDIT', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_AUDIT', grade: 'drives', coveredBy: 'e2e/topology/audit.spec.ts' },
       { navConst: 'NAV_SETTINGS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
     ],
   },

@@ -4,7 +4,7 @@
 
 import { useCallback, useState } from 'react'
 
-import type { AuditFacets } from '../lib/audit'
+import type { AuditFacet, AuditFacets } from '../lib/audit'
 import { actorLabel } from '../lib/actor'
 import { AUDIT_COPY } from '../lib/auditView'
 import {
@@ -165,6 +165,14 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
   const selectActorRow = (id: string) => onChange(selectActor(state, id))
   // Anyone is a reset, not a selection -- selectKind's type only takes 'people' | 'system'.
   const selectAnyone = () => onChange({ ...state, actorKind: '', actors: [] })
+  // AC#7: a refetch can drop a selected actor from facets.actor; synthesize its row at count 0
+  // so an applied filter never goes invisible (auditActorFilter_selectedActorMissingFromFacetKeepsItsPill).
+  const actorRows: AuditFacet[] = [
+    ...facets.actor.filter((f) => f.value != null),
+    ...state.actors
+      .filter((id) => !facets.actor.some((f) => f.value === id))
+      .map((id): AuditFacet => ({ value: id, name: null, kind: undefined, count: 0 })),
+  ]
 
   return (
     <div
@@ -437,10 +445,9 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
               </button>
             ))}
           </div>
-          {facets.actor.length > 0 && (
+          {actorRows.length > 0 && (
             <div style={{ padding: '6px 0', borderTop: '1px solid var(--line-1)' }}>
-              {facets.actor
-                .filter((f) => f.value != null)
+              {actorRows
                 .map((f) => {
                   const id = f.value as string
                   const label = actorLabel(f.value, { name: f.name ?? '', kind: f.kind ?? '' })

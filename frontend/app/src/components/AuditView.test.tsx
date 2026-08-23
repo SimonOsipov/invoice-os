@@ -525,9 +525,7 @@ describe('AuditView filter card adversarial coverage (AUDIT-07-03 QA)', () => {
   })
 })
 
-// QA gap-fill (task-657, AC#7): FAILS today -- the actor popover renders strictly from
-// facets.actor with no synthesis for a selected id the facet no longer lists, so this row
-// never appears. Left red to document the unmet AC; not this agent's fix to make.
+// AC#7: a selected actor must keep its row/pill at count 0 when facets.actor drops it.
 describe('AuditView actor control (AUDIT-07-05 QA)', () => {
   it('auditActorFilter_selectedActorMissingFromFacetKeepsItsPill', async () => {
     const withActor = logResponse({

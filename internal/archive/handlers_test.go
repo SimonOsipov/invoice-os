@@ -150,6 +150,30 @@ func TestBundleHandler_SetsZipContentTypeAndDisposition(t *testing.T) {
 	}
 }
 
+// TestContentDisposition_QuotesWhenTheFallbackFilenameContainsAColon (D-44): the
+// unquoted assertion above is contentDisposition's only coverage otherwise.
+// bundleFilename falls back to Request.EntityID when the entity name has no
+// alphanumeric character, and TestParseRequest_NonCanonicalUUIDFormsAcceptedRaw proves
+// parseRequest keeps a urn:uuid: EntityID raw -- so the fallback filename can contain
+// ':', a tspecial mime.FormatMediaType quotes.
+func TestContentDisposition_QuotesWhenTheFallbackFilenameContainsAColon(t *testing.T) {
+	r := Request{
+		EntityID: "urn:uuid:a1b2c3d4-a1b2-c3d4-a1b2-c3d4a1b2c3d4",
+		From:     mustParseRFC3339(t, validFrom),
+		To:       mustParseRFC3339(t, validTo),
+	}
+	filename := bundleFilename("———", r) // no alphanumeric char: falls back to r.EntityID
+	if !strings.Contains(filename, ":") {
+		t.Fatalf("test setup: bundleFilename(non-alnum name) = %q, want it to contain ':' (the urn:uuid: fallback)", filename)
+	}
+
+	got := contentDisposition(filename)
+	want := `attachment; filename="` + filename + `"`
+	if got != want {
+		t.Errorf("contentDisposition(%q) = %q, want %q (quoted -- a tspecial forces mime.FormatMediaType to quote, D-44)", filename, got, want)
+	}
+}
+
 // --- AC-4: no Content-Length, framed by net/http instead -----------------------------
 
 // TestBundleHandler_DeclaresNoContentLengthAndStillWrites replaces the story's vacuous

@@ -402,6 +402,20 @@ describe('AuditView filter card adversarial coverage (AUDIT-07-03 QA)', () => {
     expect(screen.getByTestId('audit-filter-card'), 'card must stay mounted in the error rung').toBeTruthy()
   })
 
+  // Gating the card on `landed` hid it forever here: the effect that sets `landed` only runs
+  // on a response, so a first load that never lands one left nothing to clear the filter with.
+  it('auditFilterCard_presentWhenTheFirstLoadItselfFails', async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new Error('boom')))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+
+    await waitFor(() => expect(screen.getByText('Something went wrong'), 'control needle: the error rung must land').toBeTruthy())
+    expect(
+      screen.getByTestId('audit-filter-card'),
+      'the card must be present even when no response ever landed',
+    ).toBeTruthy()
+  })
+
   it('auditFilter_facetsPropComesFromTheResponseObject', () => {
     // AuditFilterCard draws event-facet counts as of AUDIT-07-04; actor/company are still
     // AUDIT-07-05..06's. AuditView itself never renders a count, so a rendered check on

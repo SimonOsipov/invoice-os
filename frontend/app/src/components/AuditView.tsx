@@ -227,11 +227,10 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         )}
       </div>
 
-      {/* Mounted outside the loaded/filtered rung so the card also survives a refetch that
-          lands on error or empty-by-filter -- `landed`'s cache already keeps `state` at
-          loaded/filtered through a same-shape refetch, so the mount point only matters for
-          the states outside that block. */}
-      {landed != null && state !== 'new-workspace' && (
+      {/* Gated on `state`, not `landed`: on a first load landing directly on
+          empty-by-filter, `landed`'s effect hasn't committed yet on the render where `state`
+          already reads it (same lag fixed on the export control above). */}
+      {(state === 'loaded' || state === 'filtered' || state === 'empty-by-filter' || state === 'error') && (
         <AuditFilterCard
           state={filterState}
           facets={shown?.res.facets ?? { event: [], actor: [], company: [] }}

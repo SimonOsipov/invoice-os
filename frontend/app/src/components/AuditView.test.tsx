@@ -10,6 +10,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
+import { AUDIT_COPY } from '../lib/auditView'
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { PlatformCtx } from '../types'
 
@@ -77,6 +78,13 @@ afterEach(() => {
 
 // Applies the screen's only filter in this story: the row expansion's invoice affordance.
 // The filter card itself is AUDIT-07's.
+// Distinguishes the lifetime probe from the main request by an exact param, never call order:
+// the probe carries limit=1 and no date window; nothing else does.
+function isProbeUrl(url: string): boolean {
+  const params = new URL(url).searchParams
+  return params.get('limit') === '1' && !params.has('from')
+}
+
 async function applyInvoiceFilter() {
   await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
   fireEvent.click(screen.getAllByTestId('audit-row')[0])
@@ -778,5 +786,105 @@ describe('AuditView pills row (AUDIT-07-07)', () => {
     await applyInvoiceFilter()
     await waitFor(() => expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy())
     expect(screen.getByTestId('audit-pill-invoice').textContent).toContain('One invoice')
+  })
+})
+
+// AUDIT-07-08 (task-660): the default 30-day window makes the main request's `total` a
+// windowed count, not a lifetime one. The strip's N now comes from a dedicated, unfiltered
+// limit=1 probe fired once per mount -- these specs pin that the probe fires, carries no
+// filter params, and is the only source `lifetimeTotal` is ever read from.
+describe('AuditView lifetime-count probe (AUDIT-07-08)', () => {
+  it('auditProbe_oneUnfilteredRequestPerMount', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+
+    // Vacuity floor: without this, the probe assertions below could pass on a recorder
+    // that only ever saw the main request.
+    await waitFor(() => expect(calls.length, 'mount must fire both the probe and the main request').toBeGreaterThanOrEqual(2))
+
+    const probeUrls = calls.filter(isProbeUrl)
+    expect(probeUrls.length, 'exactly one unfiltered limit=1 probe must fire per mount').toBe(1)
+    const probeParams = new URL(probeUrls[0]).searchParams
+    for (const key of ['from', 'to', 'event', 'company', 'q', 'actor', 'actor_kind']) {
+      expect(probeParams.has(key), `the probe must not carry ${key}`).toBe(false)
+    }
+  })
+
+  it('auditProbe_stripCountComesFromTheProbe', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(isProbeUrl(url) ? logResponse({ total: 248113 }) : logResponse({ total: 1204 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+
+    await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('248,113'))
+    const copy = screen.getByTestId('audit-immutability-strip').textContent ?? ''
+    expect(copy, 'the strip must never read the main (windowed) total').not.toContain('1,204')
+  })
+
+  it('auditProbe_mainRequestStillCarriesTheThirtyDayWindow', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length, 'control needle: the main request must resolve').toBeGreaterThan(0))
+
+    const mainUrl = calls.find((u) => !isProbeUrl(u))
+    expect(mainUrl, 'a non-probe request must exist').toBeTruthy()
+    expect(new URL(mainUrl!).searchParams.has('from'), 'the main request must keep the 30-day default').toBe(true)
+  })
+
+  it('auditProbe_emptyByFilterUsesTheLifetimeNumber', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(isProbeUrl(url) ? logResponse({ total: 7 }) : logResponse({ events: [], total: 0, log_is_empty: false })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    const copy = screen.getByTestId('audit-empty-by-filter').textContent ?? ''
+    expect(copy, 'the probe-sourced lifetime figure must be named, not the bare fallback').not.toBe(AUDIT_COPY.emptyByFilterBare)
+    expect(copy, "the number named must be the probe's 7").toContain('7')
+  })
+
+  it('auditProbe_failureDegradesSilently', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      isProbeUrl(url) ? Promise.reject(new Error('probe boom')) : Promise.resolve(logResponse({ total: 340 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length, 'the table must render despite the probe failing').toBeGreaterThan(0))
+    // Let the rejected probe settle before asserting on its (lack of) effect.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.queryByText('Something went wrong'), 'a failed probe must not raise the error rung').toBeNull()
+    const stripCopy = screen.getByTestId('audit-immutability-strip').textContent ?? ''
+    expect(/\d/.test(stripCopy), 'with no lifetime figure available, the strip must show no number').toBe(false)
+  })
+
+  it('auditProbe_onlyTotalIsReadFromTheProbe', () => {
+    // Source scan: a rendered check can't see which field an effect reads.
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AuditView.tsx'), 'utf8')
+    expect(src.length, 'vacuity floor: AuditView.tsx must be non-empty').toBeGreaterThan(0)
+    expect(src, "vacuity floor: the probe's own call literal must exist").toContain('limit: 1')
+
+    const effectRe = /useEffect\(\s*\(\)\s*=>\s*\{([\s\S]*?)\},\s*\[[^\]]*\]\s*\)/g
+    const bodies = Array.from(src.matchAll(effectRe), (m) => m[1])
+    expect(bodies.length, 'control needle: at least one useEffect block must be found').toBeGreaterThan(0)
+
+    const probeBody = bodies.find((b) => b.includes('setLifetimeTotal('))
+    expect(probeBody, "the probe's own effect (the one setting lifetimeTotal) must exist").toBeTruthy()
+    expect(probeBody, "the probe's effect must read total").toContain('total')
+    for (const field of ['.events', '.facets', '.page', 'log_is_empty']) {
+      expect(probeBody, `the probe's effect must not read ${field}`).not.toContain(field)
+    }
   })
 })

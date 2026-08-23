@@ -82,3 +82,18 @@ export function auditRangeLabel(s: AuditPageState, rowsOnPage: number, total: nu
   const first = s.stack.length * s.limit + 1
   return `${first.toLocaleString('en-NG')}–${(first + rowsOnPage - 1).toLocaleString('en-NG')} of ${total.toLocaleString('en-NG')}`
 }
+
+// The append-only guarantee, stated as fact because it IS one: audit_log carries GRANT
+// SELECT, INSERT only, plus triggers raising restrict_violation on UPDATE, DELETE and
+// TRUNCATE (pinned by TestAudit_NoTruncate). Hedging it would understate the database.
+export const AUDIT_IMMUTABILITY_CLAIM =
+  'This log is append-only. Entries cannot be edited or deleted, by anyone, including us — the database accepts inserts and reads and rejects every update, delete and truncate.'
+
+// Only an unfiltered `total` is a lifetime figure (Option A, user decision 2026-08-23).
+// The reader exposes no first-row date, so the strip states none. If a later story gives
+// this screen a default filter, this sentence stops being true and must change with it.
+export function auditStripCount(lifetimeTotal: number | null): string | null {
+  if (lifetimeTotal == null || lifetimeTotal <= 0) return null
+  const n = lifetimeTotal.toLocaleString('en-NG')
+  return lifetimeTotal === 1 ? '1 event recorded' : `${n} events recorded`
+}

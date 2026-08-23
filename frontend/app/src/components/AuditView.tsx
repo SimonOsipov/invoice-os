@@ -19,7 +19,9 @@ import {
   auditPageResize,
   auditRangeLabel,
   auditScreenState,
+  auditStripCount,
   AUDIT_COPY,
+  AUDIT_IMMUTABILITY_CLAIM,
   AUDIT_PAGE_INITIAL,
   emptyByFilterCopy,
   invoiceFilterPillLabel,
@@ -109,6 +111,20 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
           {ctx.user.tenantName ?? AUDIT_COPY.tenantFallback} · {AUDIT_COPY.subtitle}
         </p>
+      </div>
+
+      {/* Stated as fact, and rendered whatever the rung below resolves to: the guarantee
+          holds on an empty workspace exactly as it does on a full one. */}
+      <div
+        data-testid="audit-immutability-strip"
+        style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 16, padding: '10px 14px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)', fontSize: 12.5, color: 'var(--fg-2)', lineHeight: 1.6 }}
+      >
+        <span>{AUDIT_IMMUTABILITY_CLAIM}</span>
+        {auditStripCount(lifetimeTotal) != null && (
+          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em', marginLeft: 'auto' }}>
+            {auditStripCount(lifetimeTotal)}
+          </span>
+        )}
       </div>
 
       {pills}

@@ -188,3 +188,43 @@ describe('AuditView pagination', () => {
     for (const u of resized) expect(u).not.toContain('cursor=')
   })
 })
+
+describe('AuditView immutability strip', () => {
+  it('auditStrip_statesTheGuaranteeAsFact', async () => {
+    mockFetchSequence([logResponse({ total: 1248 })])
+    render(<AuditView ctx={auditCtx()} />)
+    // The strip paints before the fetch settles; the count only appears once it does.
+    await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('1,248'))
+    const copy = (screen.getByTestId('audit-immutability-strip').textContent ?? '').toLowerCase()
+
+    // The claim is literally true: GRANT SELECT, INSERT only, plus triggers raising
+    // restrict_violation on UPDATE/DELETE/TRUNCATE (pinned by TestAudit_NoTruncate).
+    // Softening it into marketing language would understate what the database enforces.
+    for (const hedge of ['designed to', 'aims to', 'intended to', 'strives', 'should not', 'we try']) {
+      expect(copy, `the strip hedges: "${hedge}"`).not.toContain(hedge)
+    }
+    expect(copy).toContain('append-only')
+    expect(copy).toContain('1,248')
+    // Option A (user decision, 2026-08-23): the reader exposes no first-row date, so none
+    // is rendered or approximated.
+    expect(copy).not.toContain('since')
+    expect(copy).not.toContain('first')
+  })
+
+  it('auditStrip_countIsNeverAFilteredTotal', async () => {
+    // The unfiltered page reports 7 lifetime events; the filtered one reports 999, which
+    // is not a lifetime figure and must never reach the strip.
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(url.includes('invoice_id=') ? logResponse({ total: 999 }) : logResponse({ total: 7 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('7'))
+    await applyInvoiceFilter()
+
+    await waitFor(() => expect(screen.getByTestId('audit-filter-pill')).toBeTruthy())
+    const copy = screen.getByTestId('audit-immutability-strip').textContent ?? ''
+    expect(copy).not.toContain('999')
+    expect(copy).toContain('7')
+  })
+})

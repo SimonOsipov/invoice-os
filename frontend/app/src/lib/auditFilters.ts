@@ -4,6 +4,7 @@
 
 import type { AuditFacets, AuditLogQuery } from './audit'
 import { invoiceFilterPillLabel } from './auditView'
+import { auditEventView } from './auditVocabulary'
 
 export type AuditRangePreset = '24h' | '7d' | '30d' | 'custom'
 
@@ -43,6 +44,9 @@ export const AUDIT_FILTER_DEFAULT: AuditFilterState = {
 export interface AuditFilterPill {
   key: string
   label: string
+  // Q6 ladder (display_name -> email -> raw subject in mono): set when the label falls
+  // back to a raw, unresolved identifier, so the pill renders in the mono face.
+  mono?: boolean
   onRemove: (state: AuditFilterState) => AuditFilterState
 }
 
@@ -144,7 +148,9 @@ export function auditFilterPills(state: AuditFilterState, facets: AuditFacets): 
   for (const id of state.events) {
     pills.push({
       key: `event:${id}`,
-      label: facets.event.find((f) => f.value === id)?.name ?? id,
+      // The server never resolves Name for the event facet (facets.go/reader.go), so this
+      // reads the same vocabulary the event-type control trusts, never facets.event[i].name.
+      label: auditEventView(id).label,
       onRemove: (s) => ({ ...s, events: s.events.filter((e) => e !== id) }),
     })
   }
@@ -158,9 +164,13 @@ export function auditFilterPills(state: AuditFilterState, facets: AuditFacets): 
   }
 
   for (const id of state.actors) {
+    const facetActor = facets.actor.find((f) => f.value === id)
     pills.push({
       key: `actor:${id}`,
-      label: facets.actor.find((f) => f.value === id)?.name ?? id,
+      label: facetActor?.name ?? id,
+      // Q6: no resolvable name is the designed raw-subject fallback, not a bug -- render it
+      // mono, matching lib/actor.ts's presentation of an unresolved subject.
+      mono: facetActor?.name == null,
       onRemove: (s) => ({ ...s, actors: s.actors.filter((a) => a !== id) }),
     })
   }
@@ -182,6 +192,21 @@ export function auditFilterPills(state: AuditFilterState, facets: AuditFacets): 
   }
 
   return pills
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  const aKeys = Object.keys(a as Record<string, unknown>)
+  const bKeys = Object.keys(b as Record<string, unknown>)
+  if (aKeys.length !== bKeys.length) return false
+  return aKeys.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+}
+
+// Gates Clear all's absence (AC#5) on the real state, not on pills.length <= 1, which
+// breaks the moment an always-present pill other than range is added.
+export function auditFilterIsDefault(state: AuditFilterState): boolean {
+  return deepEqual(state, AUDIT_FILTER_DEFAULT)
 }
 
 export function clearAllFilters(): AuditFilterState {

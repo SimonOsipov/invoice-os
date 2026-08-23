@@ -18,7 +18,6 @@ export const AUDIT_COPY = {
   emptyMessage: 'Actions appear here as soon as anyone creates, validates, approves or transmits an invoice.',
   // No count to state: the only unfiltered response this screen saw reported none.
   emptyByFilterBare: 'The log is not empty. These filters exclude every event in it.',
-  clearFilter: 'Clear filter',
   // D-8: five of the seven design-named search targets are reachable; invoice number and an
   // email-only-resolved actor name are not. Placeholder stays neutral for the same reason.
   searchPlaceholder: 'Search event details',

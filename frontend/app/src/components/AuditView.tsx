@@ -27,7 +27,6 @@ import {
   AUDIT_IMMUTABILITY_CLAIM,
   AUDIT_PAGE_INITIAL,
   emptyByFilterCopy,
-  invoiceFilterPillLabel,
   type AuditPageState,
 } from '../lib/auditView'
 import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
@@ -97,33 +96,11 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     setExpandedId(null)
   }
 
-  const clearFilter = () => {
-    setFilterState((s) => ({ ...s, invoiceId: null, invoiceNumber: null }))
-    setPage(auditPageResize(page.limit))
-    setExpandedId(null)
-  }
-
   const handleFilterChange = (next: AuditFilterState) => {
     setFilterState(next)
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
-
-  const pills = filtered && (
-    <div data-testid="audit-filter-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
-      <button
-        type="button"
-        data-testid="audit-filter-pill"
-        className="pf-chip pf-btn"
-        onClick={clearFilter}
-        aria-label={AUDIT_COPY.clearFilter}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-      >
-        {invoiceFilterPillLabel(filterState.invoiceNumber)}
-        <span aria-hidden style={{ color: 'var(--fg-3)' }}>×</span>
-      </button>
-    </div>
-  )
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
@@ -163,8 +140,6 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           onChange={handleFilterChange}
         />
       )}
-
-      {pills}
 
       {/* The real chrome plus shimmer rows, never a spinner: the layout must not move
           when data lands. */}

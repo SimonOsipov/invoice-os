@@ -16,7 +16,7 @@ export interface FilterPopoverProps {
   /** Prefixes every data-testid this component renders. */
   testId: string
   label: string
-  summary?: string
+  summary?: ReactNode
   open: boolean
   onOpen: () => void
   onClose: () => void

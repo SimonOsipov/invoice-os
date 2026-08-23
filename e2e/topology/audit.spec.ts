@@ -178,6 +178,12 @@ test.describe('Audit screen', () => {
         .toBeGreaterThanOrEqual(TABLE_MIN_WIDTH)
       const [rowBox, headBox] = await Promise.all([row.boundingBox(), head.boundingBox()])
       if (rowBox && headBox) measured.push({ width, row: rowBox.width, head: headBox.width })
+
+      // Attached, never compared to a baseline -- visual regression is banned here
+      // (docs/e2e-convention.md). This is the rendered half of
+      // [layout-needs-rendered-verification]: BUG-03-05 shipped 32% dead space with its
+      // numeric assertion passing, and a human eye on the render is what caught it.
+      await test.info().attach(`audit-${width}`, { body: await page.screenshot(), contentType: 'image/png' })
     }
 
     // The sweep is only evidence if it ran: an empty collection would pass every loop

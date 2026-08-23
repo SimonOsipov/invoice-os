@@ -22,6 +22,9 @@ export const AUDIT_COLS = 'minmax(190px,1fr) minmax(220px,1.4fr) 160px 170px 44p
 export const AUDIT_TABLE_MIN_WIDTH = 784
 export const AUDIT_GRID_GAP = 12
 
+const EVIDENCE_REASON_ID = 'audit-evidence-blocked-reason'
+const EVIDENCE_REASON = 'The signed evidence bundle is not reachable from this screen yet.'
+
 const TONE_TEXT: Record<string, string> = {
   green: 'var(--status-green-text)',
   red: 'var(--status-red-text)',
@@ -119,6 +122,26 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice }: Audit
             >
               {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
             </button>
+          )}
+          {/* AUDIT-08 owns the evidence drawer. Disabled with a VISIBLE reason rather than
+              hidden (InvoiceDetail.tsx's idiom) -- a title= on a disabled button never
+              fires in Chromium, so the reason has to be text. */}
+          {view.domain === 'submissions' && inv != null && (
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                data-testid="audit-evidence-affordance"
+                disabled
+                aria-describedby={EVIDENCE_REASON_ID}
+                className="pf-btn"
+                style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--fg-4)', fontSize: 12.5, fontWeight: 500, cursor: 'not-allowed' }}
+              >
+                View transmission evidence →
+              </button>
+              <div id={EVIDENCE_REASON_ID} data-testid="audit-evidence-blocked-reason" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--fg-3)' }}>
+                {EVIDENCE_REASON}
+              </div>
+            </div>
           )}
           {/* The row shows the human label; the footer keeps the identifier that label was
               derived from, so a support conversation can name the exact event. */}

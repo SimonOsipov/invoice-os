@@ -103,3 +103,22 @@ describe('AuditRow', () => {
     expect(src).not.toContain('PlatformCtx')
   })
 })
+
+describe('AuditRow evidence affordance', () => {
+  it('auditRow_evidenceAffordanceIsInertNotFaked', () => {
+    // AUDIT-08 owns the drawer. The story permits the button in a disabled state and
+    // forbids faking the drawer, so the button carries a VISIBLE reason: a title= on a
+    // disabled button never fires in Chromium.
+    render(<AuditRow event={ev({ event: 'submission.accepted', payload: { id: 'inv-1', irn: 'NG-1' } })} expanded onToggle={() => {}} />)
+    const btn = screen.getByTestId('audit-evidence-affordance')
+    expect(btn).toHaveProperty('disabled', true)
+    expect(screen.getByTestId('audit-evidence-blocked-reason').textContent).toBeTruthy()
+  })
+
+  it('auditRow_evidenceAffordanceOnlyWhereEvidenceExists', () => {
+    // A policy edit has no transmission behind it; offering the link would claim a record
+    // that does not exist.
+    render(<AuditRow event={ev({ event: 'approval_policy.updated', payload: { id: 'pol-1' } })} expanded onToggle={() => {}} />)
+    expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
+  })
+})

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// Search, date-range and event-type controls. Actor and company land in AUDIT-07-05..06.
+// Search, date-range, event-type and actor controls. Company lands in AUDIT-07-06.
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -511,5 +511,207 @@ describe('AuditFilterCard: event type', () => {
     expect(screen.getByTestId('audit-event-trigger').textContent, 'many selections read "3 selected"').toContain(
       '3 selected',
     )
+  })
+})
+
+// AUDIT-07-05 (task-657): actor control -- kind (Anyone/People only/System only) and named
+// actors from facets.actor, mutually exclusive with kind (the server 400s on both).
+function actorFacets(): AuditFacets {
+  const f = facets()
+  f.actor = [
+    { value: 'user-a', name: 'Amara Chen', kind: 'person', count: 4 },
+    { value: 'user-b', name: 'Femi Okoro', kind: 'person', count: 2 },
+    { value: 'system', name: 'System', kind: 'system', count: 9 },
+    { value: 'backfill-source-rows', name: 'backfill-source-rows', kind: 'raw', count: 1 },
+  ]
+  return f
+}
+
+function openActorPopover() {
+  fireEvent.click(screen.getByTestId('audit-actor-trigger'))
+}
+
+// Row clicks may or may not close the panel (event rows don't, date presets do) -- this
+// re-opens only if it's actually closed, so a multi-click sequence never mistakenly toggles
+// an already-open panel shut.
+function ensureActorPopoverOpen() {
+  if (!screen.queryByTestId('audit-actor-panel')) openActorPopover()
+}
+
+describe('AuditFilterCard: actor', () => {
+  it('auditActorFilter_neverEmitsBothActorAndActorKind', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const f = actorFacets()
+    const { rerender } = render(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+
+    function assertNeverBoth() {
+      const query = auditFilterQuery(state)
+      expect(
+        query.actor !== undefined && query.actor_kind !== undefined,
+        'the pair the server 400s on must never both be present',
+      ).toBe(false)
+    }
+
+    // Kind then person -- selecting a person after a kind must clear the kind.
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-people'))
+    sync()
+    assertNeverBoth()
+    expect(auditFilterQuery(state).actor_kind, 'kind selection lands on the wire').toBe('people')
+
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-row-user-a'))
+    sync()
+    assertNeverBoth()
+    expect(auditFilterQuery(state).actor, 'the person landed on the wire').toEqual(['user-a'])
+    expect(auditFilterQuery(state).actor_kind, 'selecting a person must clear the active kind').toBeUndefined()
+
+    // Person then kind -- selecting a kind after a person must clear the person.
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-system'))
+    sync()
+    assertNeverBoth()
+    expect(auditFilterQuery(state).actor_kind, 'the new kind landed on the wire').toBe('system')
+    expect(auditFilterQuery(state).actor, 'selecting a kind must clear the previously selected person').toBeUndefined()
+
+    // Several people -- multi-select must not resurrect the kind.
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-row-user-a'))
+    sync()
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-row-user-b'))
+    sync()
+    assertNeverBoth()
+    expect([...state.actors].sort(), 'both people are selected').toEqual(['user-a', 'user-b'])
+    expect(auditFilterQuery(state).actor_kind, 'no kind reappears from selecting people').toBeUndefined()
+
+    // Then clear -- Anyone lands on neither.
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-anyone'))
+    sync()
+    assertNeverBoth()
+    const finalQuery = auditFilterQuery(state)
+    expect(finalQuery.actor, 'Anyone clears actor').toBeUndefined()
+    expect(finalQuery.actor_kind, 'Anyone clears actor_kind').toBeUndefined()
+
+    // Control needle: prove the sequence above genuinely drove the control, not a no-op run.
+    expect(onChange.mock.calls.length, 'the sequence above must have emitted several changes').toBeGreaterThanOrEqual(5)
+  })
+
+  it('auditActorFilter_namedListIsNotTheMemberList', () => {
+    const f = facets()
+    f.actor = [{ value: 'ex-employee-77', name: 'Departed User', kind: 'person', count: 3 }]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openActorPopover()
+
+    // Population floor -- guards the "renders" check below against an empty popover.
+    const rows = screen.getAllByTestId(/^audit-actor-row-/)
+    expect(rows.length, 'population floor: the one facet actor produces one row').toBe(1)
+
+    expect(
+      screen.getByTestId('audit-actor-row-ex-employee-77'),
+      'a departed member with no active membership still comes from facets.actor -- no memberships join (D-3)',
+    ).toBeTruthy()
+    expect(screen.getByTestId('audit-actor-label-ex-employee-77').textContent).toBe('Departed User')
+  })
+
+  it('auditActorFilter_allThreeShapesRenderWithoutMislabeling', () => {
+    renderCard(AUDIT_FILTER_DEFAULT, actorFacets())
+    openActorPopover()
+
+    // Population floor -- three of the four seeded facet actors are the three shapes under
+    // test (a fourth, user-b, exists only for the multi-select test below).
+    const rows = screen.getAllByTestId(/^audit-actor-row-/)
+    expect(rows.length, 'population floor: all four facet actors render').toBe(4)
+
+    expect(screen.getByTestId('audit-actor-label-user-a').textContent, 'resolved person').toBe('Amara Chen')
+    expect(screen.getByTestId('audit-actor-label-system').textContent, 'system').toBe('System')
+    expect(
+      screen.getByTestId('audit-actor-label-backfill-source-rows').textContent,
+      'free-text raw actor',
+    ).toBe('backfill-source-rows')
+
+    // actorLabel's raw rung alone is mono (lib/actor.ts) -- this is the concrete "not
+    // mislabelled as a person" check, not a taste call.
+    const rawLabel = screen.getByTestId('audit-actor-label-backfill-source-rows')
+    expect(rawLabel.style.fontFamily, 'raw kind renders in the mono face').toContain('font-mono')
+    const personLabel = screen.getByTestId('audit-actor-label-user-a')
+    expect(personLabel.style.fontFamily, 'a resolved person must not render in the raw mono face').not.toContain(
+      'font-mono',
+    )
+  })
+
+  it('auditActorFilter_threeKindRowsRenderAndAnyoneHasNoActorKind', () => {
+    renderCard(AUDIT_FILTER_DEFAULT, actorFacets())
+    openActorPopover()
+    const kindRows = screen.getAllByTestId(/^audit-actor-kind-/)
+    expect(kindRows.length, 'population floor: Anyone, People only, System only (AC#2)').toBe(3)
+  })
+
+  it('auditActorFilter_peopleOnlyEmitsActorKindPeople', () => {
+    const { onChange } = renderCard(AUDIT_FILTER_DEFAULT, actorFacets())
+    openActorPopover()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-people'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    const query = auditFilterQuery(next)
+    expect(query.actor_kind, 'People only emits actor_kind=people').toBe('people')
+    expect(query.actor, 'People only emits no actor').toBeUndefined()
+  })
+
+  it('auditActorFilter_systemOnlyEmitsActorKindSystem', () => {
+    const { onChange } = renderCard(AUDIT_FILTER_DEFAULT, actorFacets())
+    openActorPopover()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-system'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    const query = auditFilterQuery(next)
+    expect(query.actor_kind, 'System only emits actor_kind=system').toBe('system')
+    expect(query.actor, 'System only emits no actor').toBeUndefined()
+  })
+
+  it('auditActorFilter_anyoneEmitsNeitherActorNorActorKind', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actorKind: 'system' }
+    const { onChange } = renderCard(state, actorFacets())
+    openActorPopover()
+    fireEvent.click(screen.getByTestId('audit-actor-kind-anyone'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    const query = auditFilterQuery(next)
+    expect(query.actor_kind, 'Anyone emits no actor_kind').toBeUndefined()
+    expect(query.actor, 'Anyone emits no actor').toBeUndefined()
+  })
+
+  it('auditActorFilter_multiSelectOfNamedPeopleCarriesAllAsRepeatedQueryParams', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const f = actorFacets()
+    const { rerender } = render(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={f} busy={false} onChange={onChange} />)
+
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-row-user-a'))
+    sync()
+    ensureActorPopoverOpen()
+    fireEvent.click(screen.getByTestId('audit-actor-row-user-b'))
+    sync()
+
+    expect([...state.actors].sort(), 'both selections land in actors').toEqual(['user-a', 'user-b'])
+
+    const query = auditFilterQuery(state)
+    expect(
+      query.actor,
+      'the query carries both selected ids as one array the URL layer repeats as actor= params',
+    ).toEqual(expect.arrayContaining(['user-a', 'user-b']))
+    expect(query.actor?.length, 'no extra or dropped ids').toBe(2)
   })
 })

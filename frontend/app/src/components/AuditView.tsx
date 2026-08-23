@@ -8,11 +8,12 @@
 // The filter CARD is AUDIT-07's. The one filter this story can set is the row expansion's
 // invoice affordance, which is what makes the empty-by-filter state reachable at all.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
 
 import { getAuditLog, type AuditResponse } from '../lib/audit'
+import { AUDIT_FILTER_DEFAULT, auditFilterQuery, type AuditFilterState } from '../lib/auditFilters'
 import {
   auditPageNext,
   auditPagePrev,
@@ -30,20 +31,16 @@ import {
 import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
+import { AuditFilterCard } from './AuditFilterCard'
 import { AuditPager } from './AuditPager'
 import { AuditRow } from './AuditRow'
 import { AuditSkeleton } from './AuditSkeleton'
 import { AuditTable } from './AuditTable'
 
-interface InvoiceFilter {
-  id: string
-  number: string | null
-}
-
 export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [invoiceFilter, setInvoiceFilter] = useState<InvoiceFilter | null>(null)
+  const [filterState, setFilterState] = useState<AuditFilterState>(AUDIT_FILTER_DEFAULT)
   const [page, setPage] = useState<AuditPageState>(AUDIT_PAGE_INITIAL)
   // Only ever written from an unfiltered response (see the effect below), so the
   // empty-by-filter copy can never pass a filtered `total` off as the size of the log.
@@ -54,7 +51,12 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // skeleton exists to prevent. Pairing the response with its page state also keeps the
   // range readout describing the rows actually on screen, never the page being fetched.
   const [landed, setLanded] = useState<{ res: AuditResponse; page: AuditPageState } | null>(null)
-  const filtered = invoiceFilter != null
+  const filtered = filterState.invoiceId != null
+
+  // Recomputed only when the filter state itself changes, not on every render -- the date
+  // range resolves relative to `now`, and re-deriving it on unrelated re-renders (a page
+  // change, a landed response) would drift the `from` timestamp and refetch forever.
+  const filterQuery = useMemo(() => auditFilterQuery(filterState), [filterState])
 
   const log = useAsync<AuditResponse>(
     () =>
@@ -62,10 +64,10 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         ? getAuditLog(ctx.authedFetch, base, {
             limit: page.limit,
             ...(page.cursor != null ? { cursor: page.cursor } : {}),
-            ...(invoiceFilter ? { invoice_id: invoiceFilter.id } : {}),
+            ...filterQuery,
           })
         : Promise.reject(new Error('no gateway configured')),
-    { isEmpty: () => false, immediate: shouldFetchInvoices(base), deps: [invoiceFilter?.id, page.limit, page.cursor] },
+    { isEmpty: () => false, immediate: shouldFetchInvoices(base), deps: [JSON.stringify(filterQuery), page.limit, page.cursor] },
   )
   const status = invoicesViewState(base, log)
   // First load has nothing to hold on to, so it takes the skeleton. Every load after it
@@ -88,13 +90,19 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
   // filtered stream and means nothing in another.
   const applyInvoiceFilter = (id: string, number: string | null) => {
-    setInvoiceFilter({ id, number })
+    setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: number }))
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
 
   const clearFilter = () => {
-    setInvoiceFilter(null)
+    setFilterState((s) => ({ ...s, invoiceId: null, invoiceNumber: null }))
+    setPage(auditPageResize(page.limit))
+    setExpandedId(null)
+  }
+
+  const handleFilterChange = (next: AuditFilterState) => {
+    setFilterState(next)
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
@@ -109,7 +117,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         aria-label={AUDIT_COPY.clearFilter}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
       >
-        {invoiceFilterPillLabel(invoiceFilter?.number ?? null)}
+        {invoiceFilterPillLabel(filterState.invoiceNumber)}
         <span aria-hidden style={{ color: 'var(--fg-3)' }}>×</span>
       </button>
     </div>
@@ -140,6 +148,18 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           </span>
         )}
       </div>
+
+      {/* useAsync nulls `data` on every 'start', never `landed` -- mounting here (not inside
+          the loaded/filtered rung below) is what keeps the control the user just touched in
+          the DOM through the refetch it triggers. */}
+      {landed != null && state !== 'new-workspace' && (
+        <AuditFilterCard
+          state={filterState}
+          facets={shown?.res.facets ?? { event: [], actor: [], company: [] }}
+          busy={status === 'loading'}
+          onChange={handleFilterChange}
+        />
+      )}
 
       {pills}
 

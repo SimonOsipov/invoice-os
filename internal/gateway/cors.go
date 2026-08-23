@@ -56,6 +56,10 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Add("Vary", "Origin") // the grant depends on Origin; caches must key on it
+				// Lets browser JS read Content-Disposition off a cross-origin response
+				// (evidence-bundle download, AUDIT-05-08); grants no access, leaks
+				// nothing (D-43).
+				h.Set("Access-Control-Expose-Headers", "Content-Disposition")
 			}
 
 			// Preflight: an OPTIONS carrying an Origin. Answer it here so it never falls

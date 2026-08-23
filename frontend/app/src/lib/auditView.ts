@@ -28,6 +28,9 @@ export const AUDIT_COPY = {
   companyWorkspaceCaveat: 'Also includes events with no company to attribute them to.',
   // Contract §5: a non-null entity_id whose company was deleted, distinct from the workspace bucket.
   companyDeletedLabel: 'A company that no longer exists',
+  // AUDIT-07-10: the export control's caption and its zero-rows disabled reason.
+  exportCaption: 'CSV · THE ROWS ON SCREEN',
+  exportDisabledReason: 'No rows match the current filters — nothing to export.',
 } as const
 
 export type AuditScreenState = 'loading' | 'error' | 'new-workspace' | 'empty-by-filter' | 'filtered' | 'loaded'
@@ -56,6 +59,10 @@ export function invoiceFilterPillLabel(invoiceNumber: string | null): string {
 }
 
 export const AUDIT_PAGE_SIZES = [25, 50, 100] as const
+
+// AUDIT-07-10: the keyset export loop's row ceiling (collectExportRows's `cap` param) --
+// 2000 rows at 100/page is 20 requests, the story's stated bound.
+export const AUDIT_EXPORT_CAP = 2000
 
 // The reader is forward-only: it mints a cursor for the NEXT page and never one for the
 // previous. Prev therefore has to be a client-held stack of the cursors already used --

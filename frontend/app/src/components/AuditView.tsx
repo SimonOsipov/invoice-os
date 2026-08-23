@@ -14,7 +14,10 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
 
+import { downloadGlyph } from '../glyphs'
 import { getAuditLog, type AuditResponse } from '../lib/audit'
+import { auditCsv, auditCsvFilename, auditExportToastCopy } from '../lib/auditCsv'
+import { collectExportRows, type AuditExportFetchPage } from '../lib/auditExport'
 import { AUDIT_FILTER_DEFAULT, auditFilterQuery, type AuditFilterState } from '../lib/auditFilters'
 import {
   auditPageNext,
@@ -24,6 +27,7 @@ import {
   auditScreenState,
   auditStripCount,
   AUDIT_COPY,
+  AUDIT_EXPORT_CAP,
   AUDIT_IMMUTABILITY_CLAIM,
   AUDIT_PAGE_INITIAL,
   emptyByFilterCopy,
@@ -32,11 +36,26 @@ import {
 import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
+import { AuditExportToast } from './AuditExportToast'
 import { AuditFilterCard } from './AuditFilterCard'
 import { AuditPager } from './AuditPager'
 import { AuditRow } from './AuditRow'
 import { AuditSkeleton } from './AuditSkeleton'
 import { AuditTable } from './AuditTable'
+
+// The one DOM step in the export: mirrors ReviewUnreadableTab.tsx's downloadCsv. The BOM
+// is what makes Excel read non-ASCII names as UTF-8 rather than the local codepage.
+// Returns the Blob so the caller can read its byte size for the toast copy.
+function downloadAuditCsv(csv: string, filename: string): Blob {
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+  return blob
+}
 
 export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
@@ -52,6 +71,8 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // skeleton exists to prevent. Pairing the response with its page state also keeps the
   // range readout describing the rows actually on screen, never the page being fetched.
   const [landed, setLanded] = useState<{ res: AuditResponse; page: AuditPageState } | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const filtered = filterState.invoiceId != null
 
   // Recomputed only when the filter state itself changes, not on every render -- the date
@@ -76,6 +97,8 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const shown = log.data != null ? { res: log.data, page } : landed
   const state = auditScreenState(status, landed == null ? log.data : shown?.res ?? null, filtered)
   const events = shown?.res.events ?? []
+  const zeroRows = events.length === 0
+  const exportDisabled = zeroRows || exporting
 
   // A lifetime figure can only come from an unfiltered `total`; internal/audit exposes no
   // other source. Empty deps fires this once per mount, immune to filter/page changes.
@@ -116,16 +139,78 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     setExpandedId(null)
   }
 
+  // filterQuery is memoized on filterState; snapshotting it here means a filter change made
+  // after this click can never reach the in-flight loop, the file, or the toast.
+  const handleExport = async () => {
+    if (exporting || zeroRows || base == null) return
+    setExporting(true)
+    const startQuery = { ...filterQuery }
+    try {
+      const fetchPage: AuditExportFetchPage = (query) => getAuditLog(ctx.authedFetch, base, query)
+      const { rows, truncated } = await collectExportRows(fetchPage, startQuery, AUDIT_EXPORT_CAP)
+      const filename = auditCsvFilename(new Date())
+      const blob = downloadAuditCsv(auditCsv(rows), filename)
+      setExportToast({
+        kind: 'success',
+        text: auditExportToastCopy({ rows: rows.length, bytes: blob.size, filename, truncated, cap: AUDIT_EXPORT_CAP }),
+      })
+    } catch (err) {
+      // collectExportRows throws on every abort (reject, bad limit echo, stalled cursor,
+      // unfollowable has_more) -- nothing here writes a file on that path.
+      const reason = err instanceof Error ? err.message : String(err)
+      setExportToast({ kind: 'error', text: `Export stopped: ${reason}. No file was written.` })
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ marginBottom: 22 }}>
-        <div className="eyebrow" style={{ marginBottom: 10 }}>
-          {AUDIT_COPY.eyebrow}
+      {/* Two-column row: the title stack on the left, the export control on the right --
+          absent on a new workspace, same as the filter card below. */}
+      <div style={{ marginBottom: 22, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20 }}>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
+            {AUDIT_COPY.eyebrow}
+          </div>
+          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{AUDIT_COPY.h1}</h1>
+          <p data-testid="audit-subtitle" style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+            {ctx.user.tenantName ?? AUDIT_COPY.tenantFallback} · {AUDIT_COPY.subtitle}
+          </p>
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{AUDIT_COPY.h1}</h1>
-        <p data-testid="audit-subtitle" style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
-          {ctx.user.tenantName ?? AUDIT_COPY.tenantFallback} · {AUDIT_COPY.subtitle}
-        </p>
+        {/* Gated on `state` alone, not `landed`: `state` already reads `log.data` directly
+            on the very first load (see its own computation above), so an initial fetch
+            that lands on empty-by-filter would otherwise render this a render-tick behind
+            audit-empty-by-filter, racing `landed`'s effect-driven update. */}
+        {(state === 'loaded' || state === 'filtered' || state === 'empty-by-filter') && (
+          <div style={{ textAlign: 'right', flex: 'none' }}>
+            <button
+              type="button"
+              data-testid="audit-export"
+              className="v2-btn v2-btn-ghost pf-btn"
+              disabled={exportDisabled}
+              onClick={zeroRows ? undefined : handleExport}
+              aria-describedby={zeroRows ? 'audit-export-reason' : undefined}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                height: 36,
+                padding: '0 14px',
+                fontSize: 13,
+                ...(exportDisabled ? { opacity: 0.4, cursor: 'not-allowed', background: 'transparent' } : {}),
+              }}
+            >
+              <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span>
+              <span className="mono">{AUDIT_COPY.exportCaption}</span>
+            </button>
+            {zeroRows && (
+              <div id="audit-export-reason" data-testid="audit-export-reason" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 6 }}>
+                {AUDIT_COPY.exportDisabledReason}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stated as fact, and rendered whatever the rung below resolves to: the guarantee
@@ -208,6 +293,10 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
             onLimit={(limit) => setPage(auditPageResize(limit))}
           />
         </>
+      )}
+
+      {exportToast && (
+        <AuditExportToast kind={exportToast.kind} text={exportToast.text} onDismiss={() => setExportToast(null)} />
       )}
     </div>
   )

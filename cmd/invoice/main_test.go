@@ -173,6 +173,62 @@ func TestInvoiceMain_WiresTheApprovalsEnforcedFlag(t *testing.T) {
 	}
 }
 
+// TestInvoiceMain_RegistersTheEvidenceBundleRoute (AUDIT-05-08, AC-3): GET
+// /v1/evidence-bundle must be mounted beside GET /v1/audit-log and dispatch to
+// archive.DownloadHandler(...). AST, not a byte scan, so gofmt cannot break the anchor
+// (part (c) of TestInvoiceMain_WiresTheApprovalsEnforcedFlag's idiom). The
+// GET /v1/audit-log needle is a control: it proves the walk finds a real, already-
+// shipped registration before trusting a negative result for the new one.
+func TestInvoiceMain_RegistersTheEvidenceBundleRoute(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+
+	var foundAuditLog, foundBundle bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		switch strings.Trim(lit.Value, `"`) {
+		case "GET /v1/audit-log":
+			foundAuditLog = true
+		case "GET /v1/evidence-bundle":
+			foundBundle = true
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				t.Errorf("GET /v1/evidence-bundle's second argument is %T, want a call expression", call.Args[1])
+				return true
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "DownloadHandler" {
+				t.Error("GET /v1/evidence-bundle's handler call is not ....DownloadHandler(...)")
+				return true
+			}
+			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "archive" {
+				t.Error("GET /v1/evidence-bundle's handler is not archive.DownloadHandler(...)")
+			}
+		}
+		return true
+	})
+
+	if !foundAuditLog {
+		t.Fatal("control needle: no GET /v1/audit-log registration found -- the AST walk itself is broken, so the assertion below is vacuous")
+	}
+	if !foundBundle {
+		t.Error(`no app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+}
+
 // callSiteIndex returns the first index of name+"(" that is not its own
 // declaration, so an anchor cannot silently resolve to `func name(`.
 func callSiteIndex(src, name string) int {

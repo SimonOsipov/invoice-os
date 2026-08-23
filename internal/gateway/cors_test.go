@@ -350,6 +350,75 @@ func TestCORSPreflightDisallowedOriginNotForwarded(t *testing.T) {
 	}
 }
 
+// TestCORSExposesContentDisposition (AUDIT-05-08, AC-7, D-43): without this grant the
+// SPA's fetch cannot read Content-Disposition off a cross-origin response, so the
+// evidence-bundle download would have to invent a filename.
+func TestCORSExposesContentDisposition(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	r := httptest.NewRequest("GET", "/api/invoice/v1/evidence-bundle", nil)
+	r.Header.Set("Origin", allowedOrigin)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if !next.reached {
+		t.Fatal("a non-preflight GET must fall through to the wrapped handler")
+	}
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "Content-Disposition" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want %q", got, "Content-Disposition")
+	}
+}
+
+// TestCORSDisallowedOriginGetsNoExposeGrant is the negative control paired with the
+// test above, matching TestCORSDisallowedOriginGetsNoGrant's existing shape.
+func TestCORSDisallowedOriginGetsNoExposeGrant(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	r := httptest.NewRequest("GET", "/api/invoice/v1/evidence-bundle", nil)
+	r.Header.Set("Origin", disallowedOrigin)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if !next.reached {
+		t.Fatal("a non-preflight request still passes through (the browser, not the gateway, blocks it)")
+	}
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want empty for a disallowed origin", got)
+	}
+}
+
+// TestCORSPreflightStillGrantsGET (AUDIT-05-08, AC-8, D-43): pins that the expose-
+// headers grant did not silently drop GET from the preflight methods list. Splits on
+// ", " rather than strings.Contains, so a stray token like "TARGET" could never
+// satisfy it -- modelled on TestCORSPreflightGrantsPUT above.
+func TestCORSPreflightStillGrantsGET(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	r := httptest.NewRequest("OPTIONS", "/api/invoice/v1/evidence-bundle", nil)
+	r.Header.Set("Origin", allowedOrigin)
+	r.Header.Set("Access-Control-Request-Method", "GET")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", rec.Code)
+	}
+	raw := rec.Header().Get("Access-Control-Allow-Methods")
+	var gotGET bool
+	for _, m := range strings.Split(raw, ", ") {
+		if m == "GET" {
+			gotGET = true
+			break
+		}
+	}
+	if !gotGET {
+		t.Errorf("Access-Control-Allow-Methods = %q, want the exact token GET", raw)
+	}
+}
+
 // TestCORSNoOriginUntouched proves a request with no Origin header (same-origin or a
 // server-to-server caller like the Verifier fetching JWKS) passes through with no CORS
 // headers added and no preflight short-circuit.

@@ -473,6 +473,101 @@ func TestAssemble_PeakAllocDoesNotScaleWithBodySize(t *testing.T) {
 	}
 }
 
+// --- D-41: onStart fires after the cap check, before the first byte ----------------
+
+// orderRecorder captures the relative order of onStart vs. Write calls, so
+// TestAssemble_OnStartFiresAfterTheCapCheckAndBeforeTheFirstByte can prove ordering
+// rather than merely that both happened.
+type orderRecorder struct{ events []string }
+
+func (r *orderRecorder) note(e string) { r.events = append(r.events, e) }
+
+type notingWriter struct{ rec *orderRecorder }
+
+func (w *notingWriter) Write(p []byte) (int, error) {
+	w.rec.note("write")
+	return len(p), nil
+}
+
+func TestAssemble_OnStartFiresAfterTheCapCheckAndBeforeTheFirstByte(t *testing.T) {
+	super := dbSuperPool(t)
+
+	t.Run("over cap: onStart never fires", func(t *testing.T) {
+		tx := beginFixtureTx(t, super)
+		tenant := mustCreateTenant(t, tx, "archive-onstart-over-cap")
+		entity := mustCreateEntity(t, tx, tenant, "OnStart Over Cap Co", "80000014-0001")
+		from := time.Date(2027, 11, 1, 0, 0, 0, 0, time.UTC)
+		for i := 0; i < 3; i++ {
+			mustCreateInvoice(t, tx, invoiceFixture{
+				tenantID: tenant, entityID: entity, invoiceNumber: fmt.Sprintf("INV-ONSTART-CAP-%d", i),
+				createdAt: from.Add(time.Duration(i) * time.Minute),
+			})
+		}
+		actingAs(t, tx, tenant)
+
+		var onStartCalls int
+		var cw countingWriter
+		err := assemble(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, &cw,
+			assembleOpts{
+				tenantID: tenant, subject: "system", maxInvoices: 2, now: time.Now(),
+				onStart: func(string) { onStartCalls++ },
+			})
+
+		var tooMany *TooManyInvoicesError
+		if !errors.As(err, &tooMany) {
+			t.Fatalf("assemble(over cap) error = %v, want *TooManyInvoicesError", err)
+		}
+		if onStartCalls != 0 {
+			t.Errorf("onStart called %d times over the cap, want 0 -- headers must never be armed before the cap check clears", onStartCalls)
+		}
+	})
+
+	t.Run("under cap: onStart fires once, before the first write", func(t *testing.T) {
+		tx := beginFixtureTx(t, super)
+		tenant := mustCreateTenant(t, tx, "archive-onstart-under-cap")
+		entity := mustCreateEntity(t, tx, tenant, "OnStart Under Cap Co", "80000015-0001")
+		from := time.Date(2027, 11, 2, 0, 0, 0, 0, time.UTC)
+		mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-ONSTART-OK-01", createdAt: from})
+		actingAs(t, tx, tenant)
+
+		rec := &orderRecorder{}
+		sink := &notingWriter{rec: rec}
+		var onStartCalls int
+		var filename string
+		err := assemble(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, sink,
+			assembleOpts{
+				tenantID: tenant, subject: "system", maxInvoices: maxBundleInvoices, now: time.Now(),
+				onStart: func(name string) {
+					onStartCalls++
+					filename = name
+					rec.note("onStart")
+				},
+			})
+		if err != nil {
+			t.Fatalf("assemble(under cap): unexpected error: %v", err)
+		}
+		if onStartCalls != 1 {
+			t.Fatalf("onStart called %d times, want exactly 1", onStartCalls)
+		}
+		if filename == "" {
+			t.Error("onStart filename is empty, want the bundle filename")
+		}
+
+		if len(rec.events) == 0 || rec.events[0] != "onStart" {
+			t.Fatalf("event order = %v, want onStart to be the first recorded event", rec.events)
+		}
+		var sawWriteAfter bool
+		for _, e := range rec.events[1:] {
+			if e == "write" {
+				sawWriteAfter = true
+			}
+		}
+		if !sawWriteAfter {
+			t.Fatal("no Write call observed after onStart -- the ordering assertion above is vacuous with an empty bundle")
+		}
+	})
+}
+
 // --- AC-7 (DB-level): a mid-stream DB failure also leaves no central directory -----
 
 // cancelingTracer cancels ctx the instant a query matching match starts. The writer-

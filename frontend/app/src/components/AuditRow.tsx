@@ -61,7 +61,7 @@ export interface AuditRowProps {
   onToggle: () => void
   // Absent on an invoice-scoped mount (AUDIT-09): there is nothing to narrow to when the
   // caller already filtered to one invoice, so the affordance simply does not render.
-  onFilterToInvoice?: (invoiceId: string) => void
+  onFilterToInvoice?: (invoiceId: string, invoiceNumber: string | null) => void
 }
 
 export function AuditRow({ event, expanded, onToggle, onFilterToInvoice }: AuditRowProps) {
@@ -113,7 +113,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice }: Audit
             <button
               type="button"
               data-testid="audit-invoice-affordance"
-              onClick={() => onFilterToInvoice(inv.id)}
+              onClick={() => onFilterToInvoice(inv.id, inv.number)}
               className="pf-btn"
               style={{ marginTop: 14, border: 0, padding: 0, background: 'transparent', color: 'var(--accent-text, var(--fg-1))', fontSize: 12.5, fontWeight: 500, cursor: 'pointer' }}
             >

@@ -10,6 +10,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
+import { auditCsv } from '../lib/auditCsv'
 import { AUDIT_COPY } from '../lib/auditView'
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { PlatformCtx } from '../types'
@@ -891,5 +892,269 @@ describe('AuditView lifetime-count probe (AUDIT-07-08)', () => {
     for (const field of ['.events', '.facets', '.page', 'log_is_empty']) {
       expect(probeBody, `the probe's effect must not read ${field}`).not.toContain(field)
     }
+  })
+})
+// AUDIT-07-10 (task-662): the export control, the DOM download and its toast. The pure
+// halves (collectExportRows, auditCsv/auditCsvFilename/auditExportToastCopy) are already
+// shipped and green -- these specs pin only the component's wiring onto them.
+function isExportPageUrl(url: string): boolean {
+  return new URL(url).searchParams.get('limit') === '100'
+}
+
+// The one DOM seam under test, same spy idiom as ReviewAlreadyImportedTab.test.tsx's
+// AIMPTAB-QA-5: createObjectURL/revokeObjectURL plus the anchor's own click.
+function stubDownload() {
+  let capturedBlob: Blob | null = null
+  const createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation((b) => {
+    capturedBlob = b as Blob
+    return 'blob:audit-export'
+  })
+  const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  const clicks: { href: string; download: string }[] = []
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    clicks.push({ href: this.href, download: this.download })
+  })
+  return {
+    createSpy,
+    revokeSpy,
+    clickSpy,
+    clicks,
+    get blob() {
+      return capturedBlob
+    },
+    restore() {
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+      clickSpy.mockRestore()
+    },
+  }
+}
+
+async function blobBytes(blob: Blob): Promise<Uint8Array> {
+  const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as ArrayBuffer)
+    r.onerror = reject
+    r.readAsArrayBuffer(blob)
+  })
+  return new Uint8Array(buf)
+}
+
+describe('AuditView export control (AUDIT-07-10)', () => {
+  // Every scenario's main/probe response carries a non-empty row so the button starts
+  // enabled -- the abort must come from the export loop, never from the zero-rows gate.
+  const abortScenarios: { name: string; pages: Array<'reject' | MockResponse> }[] = [
+    { name: 'a rejected page', pages: ['reject'] },
+    {
+      name: 'a limit echo other than 100',
+      pages: [logResponse({ events: [auditEvent()], total: 1, page: { limit: 25, has_more: false, next_cursor: null } })],
+    },
+    {
+      name: 'a repeated cursor',
+      pages: [
+        logResponse({ events: [auditEvent()], total: 2, page: { limit: 100, has_more: true, next_cursor: 'stall' } }),
+        logResponse({ events: [auditEvent()], total: 2, page: { limit: 100, has_more: true, next_cursor: 'stall' } }),
+      ],
+    },
+    {
+      name: 'has_more with a null cursor',
+      pages: [logResponse({ events: [auditEvent()], total: 5, page: { limit: 100, has_more: true, next_cursor: null } })],
+    },
+    {
+      name: 'an empty page claiming has_more',
+      pages: [logResponse({ events: [], total: 5, page: { limit: 100, has_more: true, next_cursor: 'x' } })],
+    },
+  ]
+
+  // Floor: auditExport_oneClickOneDownload below proves createObjectURL fires on a clean
+  // export, so a zero-call result here can't be an unwired spy.
+  it.each(abortScenarios)('auditExport_neverWritesAPartialFile: $name', async ({ pages }) => {
+    let exportCalls = 0
+    const fetchMock = vi.fn((url: string) => {
+      if (!isExportPageUrl(url)) return Promise.resolve(logResponse())
+      const spec = pages[Math.min(exportCalls, pages.length - 1)]
+      exportCalls += 1
+      return spec === 'reject' ? Promise.reject(new Error('export page failed')) : Promise.resolve(spec)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders before it can be clicked').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+
+    await waitFor(() => expect(screen.getByTestId('audit-export-toast'), 'an error toast must appear once the loop aborts').toBeTruthy())
+    expect(dl.createSpy, 'a partial export must never reach createObjectURL').not.toHaveBeenCalled()
+
+    dl.restore()
+  })
+
+  it('auditExport_toastNamesTheStartingFilterSet', async () => {
+    const originalEvent = auditEvent({ id: 'evt-original', actor_name: 'Original Actor' })
+    const calls: string[] = []
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      if (isExportPageUrl(url)) return new Promise<MockResponse>((res) => (release = res))
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+    await waitFor(() => expect(release, 'the export request must actually be pending').not.toBeNull())
+
+    // Change the company filter while the export is still in flight.
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    await waitFor(() => expect(screen.getByTestId('audit-pill-company'), 'the filter change must actually land').toBeTruthy())
+
+    release!(logResponse({ events: [originalEvent], total: 1, page: { limit: 100, has_more: false, next_cursor: null } }))
+
+    await waitFor(() => {
+      expect(dl.clicks.length, 'the download must complete despite the mid-flight filter change').toBe(1)
+      expect(screen.getByTestId('audit-export-toast'), 'a completion toast must render').toBeTruthy()
+    })
+
+    const exportCalls = calls.filter(isExportPageUrl)
+    expect(exportCalls.length, 'the mid-flight filter change must not trigger a second export request').toBe(1)
+    expect(exportCalls[0], 'no export request may carry the post-change company filter').not.toContain('company=')
+
+    const bytes = await blobBytes(dl.blob as Blob)
+    const text = new TextDecoder('utf-8').decode(bytes.slice(3))
+    expect(text, "the file written must reflect the ORIGINAL filter's row, not the changed one").toContain('Original Actor')
+
+    const toastText = screen.getByTestId('audit-export-toast').textContent ?? ''
+    expect(toastText, "the toast must report the original filter's row count (1)").toMatch(/\b1\b/)
+
+    dl.restore()
+  })
+
+  it('auditExport_secondClickIsBlockedWhileRunning', async () => {
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url) ? new Promise<MockResponse>((res) => (release = res)) : Promise.resolve(logResponse()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    const btn = screen.getByTestId('audit-export') as HTMLButtonElement
+    fireEvent.click(btn)
+    await waitFor(() => expect(btn.disabled, 'the button must disable as soon as the export starts').toBe(true))
+    // jsdom still dispatches a click on a disabled button (only the native .click() method
+    // respects the attribute) -- this proves the HANDLER guards re-entry, not just the DOM.
+    fireEvent.click(btn)
+
+    release!(logResponse({ events: [auditEvent()], total: 1, page: { limit: 100, has_more: false, next_cursor: null } }))
+    await waitFor(() => expect(dl.clicks.length, 'the single run must complete').toBe(1))
+
+    expect(dl.createSpy, 'a click while disabled must not add a second download').toHaveBeenCalledTimes(1)
+    dl.restore()
+  })
+
+  it('auditExport_disabledAtZeroRows', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse({ events: [], total: 0, log_is_empty: false }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter'), 'control needle: the zero-row state must land').toBeTruthy())
+
+    const btn = screen.getByTestId('audit-export') as HTMLButtonElement
+    expect(btn.disabled, 'zero rows must disable the export control').toBe(true)
+    expect(btn.style.opacity, 'the disabled dim must read exactly 0.4').toBe('0.4')
+    expect(btn.style.cursor, 'the disabled cursor must read not-allowed').toBe('not-allowed')
+    expect(btn.style.background, 'the disabled background must read transparent').toBe('transparent')
+    expect(btn.hidden, 'a disabled control must still be a real, unhidden DOM node').toBe(false)
+
+    const callsBefore = calls.length
+    fireEvent.click(btn) // reaches the handler in jsdom regardless of the disabled attribute
+    await new Promise((r) => setTimeout(r, 10))
+    expect(calls.length, 'a click at zero rows must fire no export request').toBe(callsBefore)
+    expect(dl.createSpy, 'a click at zero rows must never reach the download step').not.toHaveBeenCalled()
+
+    dl.restore()
+  })
+
+  it('auditExport_disabledReasonIsVisibleText', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter'), 'control needle: the zero-row state must land').toBeTruthy())
+
+    const btn = screen.getByTestId('audit-export')
+    const describedbyId = btn.getAttribute('aria-describedby')
+    expect(describedbyId, 'the disabled control must point aria-describedby at a reason element').toBeTruthy()
+
+    const reason = screen.getByTestId('audit-export-reason')
+    expect(reason.id, 'aria-describedby must resolve to the visible reason element, not some other id').toBe(describedbyId)
+    expect((reason.textContent ?? '').trim().length, 'the reason text must not be empty').toBeGreaterThan(0)
+    expect(reason.hidden, 'a title-only or aria-label-only reason would leave no visible element -- this one must not be hidden').toBe(false)
+  })
+
+  it('auditExport_carriesNoTitleAttribute', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'positive floor: the button resolves at zero rows').toBeTruthy())
+    const zeroRowsBtn = screen.getByTestId('audit-export')
+    cleanup()
+
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'positive floor: the button resolves at non-zero rows').toBeTruthy())
+    const nonZeroRowsBtn = screen.getByTestId('audit-export')
+
+    expect(zeroRowsBtn.hasAttribute('title'), 'the zero-row control must carry no title attribute').toBe(false)
+    expect(nonZeroRowsBtn.hasAttribute('title'), 'the non-zero-row control must carry no title attribute').toBe(false)
+  })
+
+  it('auditExport_oneClickOneDownload', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => auditEvent({ id: `evt-${i}`, actor_name: `Actor ${i}` }))
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url)
+        ? Promise.resolve(logResponse({ events: rows, total: 12, page: { limit: 100, has_more: false, next_cursor: null } }))
+        : Promise.resolve(logResponse({ events: [rows[0]], total: 12 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+
+    await waitFor(() => {
+      expect(dl.createSpy, 'exactly one Blob must be created').toHaveBeenCalledTimes(1)
+      expect(dl.clicks.length, 'exactly one anchor click must fire the download').toBe(1)
+      expect(screen.getByTestId('audit-export-toast'), 'a completion toast must render').toBeTruthy()
+    })
+    expect(dl.clicks[0].download, 'the anchor must carry a download filename').toBeTruthy()
+
+    const bytes = await blobBytes(dl.blob as Blob)
+    expect(Array.from(bytes.slice(0, 3)), 'the file must open cleanly in Excel: byte-exact UTF-8 BOM').toEqual([0xef, 0xbb, 0xbf])
+    expect(new TextDecoder('utf-8').decode(bytes.slice(3)), "the CSV body must be the pure serializer's own output").toBe(auditCsv(rows))
+
+    dl.restore()
+  })
+
+  it('auditExport_captionIsTheFormatTag', async () => {
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+
+    expect(screen.getByTestId('audit-export').textContent?.trim(), 'the caption is the exact format tag').toBe('CSV · THE ROWS ON SCREEN')
+  })
+
+  it('auditExport_hiddenOnNewWorkspace', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: true })])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-new-workspace'), 'control needle: the new-workspace state must land').toBeTruthy())
+
+    expect(screen.queryByTestId('audit-export'), 'export must be entirely absent on a new workspace, not merely disabled').toBeNull()
   })
 })

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// Search + date-range controls only -- events, actor and company land in AUDIT-07-04..06.
+// Search, date-range and event-type controls. Actor and company land in AUDIT-07-05..06.
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -204,7 +204,7 @@ describe('AuditFilterCard: date range', () => {
 })
 
 // AUDIT-07-04 (task-656): event-type control -- ten domains, live counts, All/Clear, sticky
-// Clear all. RED -- AuditFilterCard has no event-type popover yet.
+// Clear all.
 const DOMAIN_ORDER: AuditDomain[] = [
   'invoices',
   'approvals',
@@ -387,5 +387,129 @@ describe('AuditFilterCard: event type', () => {
 
     const documentCreated = screen.getByTestId('audit-event-count-document.created')
     expect(documentCreated.textContent, "a second bucket must show its own count, not the first row's").toBe('5')
+  })
+
+  // Adversarial coverage added at QA (task-656 Mode B) -- the 9 specs above are the
+  // architect's RED table; these extend it.
+
+  it('auditEventFilter_unknownFacetIdentifierIsDroppedNotRendered', () => {
+    const f = facets()
+    f.event = [
+      { value: 'invoice.created', name: null, count: 2 },
+      { value: 'legacy.retired_event', name: null, count: 9 },
+    ]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openEventPopover()
+
+    const rows = screen.getAllByTestId(/^audit-event-row-/)
+    expect(rows.length, 'the vocabulary drives rows, not the facet array -- still exactly 36').toBe(36)
+    expect(
+      screen.queryByTestId('audit-event-row-legacy.retired_event'),
+      'an id outside the vocabulary gets no row',
+    ).toBeNull()
+    expect(
+      document.body.textContent,
+      'the unknown identifier must not leak into the panel as text',
+    ).not.toContain('legacy.retired_event')
+  })
+
+  it('auditEventFilter_deselectingOneRowAfterSelectingWholeGroupKeepsTheRest', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const { rerender } = render(<AuditFilterCard state={state} facets={facets()} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={facets()} busy={false} onChange={onChange} />)
+    openEventPopover()
+
+    // Control needle: an unrelated selection must survive the whole sequence below.
+    fireEvent.click(screen.getByTestId('audit-event-row-invoice.created'))
+    sync()
+
+    const approvalIds = idsInDomain('approvals')
+    expect(approvalIds.length, 'sanity: approvals has 4 ids').toBe(4)
+    for (const id of approvalIds) {
+      fireEvent.click(screen.getByTestId(`audit-event-row-${id}`))
+      sync()
+    }
+    expect(
+      [...state.events].sort(),
+      'clicking every row in the group one at a time selects all of it',
+    ).toEqual([...approvalIds, 'invoice.created'].sort())
+
+    fireEvent.click(screen.getByTestId(`audit-event-row-${approvalIds[0]}`))
+    sync()
+    expect(state.events, 'deselecting one row removes only that id, the rest and the control needle survive').toEqual([
+      'invoice.created',
+      ...approvalIds.slice(1),
+    ])
+  })
+
+  it('auditEventFilter_multiGroupSelectionCarriesAllAsRepeatedQueryParams', () => {
+    let state = AUDIT_FILTER_DEFAULT
+    const onChange = vi.fn((next: AuditFilterState) => {
+      state = next
+    })
+    const { rerender } = render(<AuditFilterCard state={state} facets={facets()} busy={false} onChange={onChange} />)
+    const sync = () => rerender(<AuditFilterCard state={state} facets={facets()} busy={false} onChange={onChange} />)
+    openEventPopover()
+
+    fireEvent.click(screen.getByTestId('audit-event-row-invoice.created'))
+    sync()
+    fireEvent.click(screen.getByTestId('audit-event-row-workflow_role.created'))
+    sync()
+
+    expect(
+      [...state.events].sort(),
+      'selections from two different groups both land in events',
+    ).toEqual(['invoice.created', 'workflow_role.created'].sort())
+
+    const query = auditFilterQuery(state)
+    expect(
+      query.event,
+      'the query carries every selected id, from every group, as one array the URL layer repeats as params',
+    ).toEqual(expect.arrayContaining(['invoice.created', 'workflow_role.created']))
+    expect(query.event?.length, 'no extra or dropped ids').toBe(2)
+  })
+
+  // `busy` only gates FilterPopover's trigger (AuditFilterCard.tsx's three `disabled={busy}`
+  // props) -- it never reaches into an already-open panel. Event selection applies
+  // immediately (no draft/Apply step), so a fetch can start while the panel is still open.
+  // This pins that actual behavior, matching the shipped search/date pattern -- not a gap
+  // introduced here.
+  it('auditEventFilter_rowsStayInteractiveIfBusyArrivesWhileThePanelIsAlreadyOpen', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(
+      <AuditFilterCard state={AUDIT_FILTER_DEFAULT} facets={facets()} busy={false} onChange={onChange} />,
+    )
+    openEventPopover()
+
+    rerender(<AuditFilterCard state={AUDIT_FILTER_DEFAULT} facets={facets()} busy={true} onChange={onChange} />)
+
+    const row = screen.getByTestId('audit-event-row-invoice.created') as HTMLButtonElement
+    expect(row.disabled, 'row buttons are not gated by busy once the panel is already open').toBe(false)
+    fireEvent.click(row)
+    expect(onChange, 'the row remains genuinely clickable while busy').toHaveBeenCalledTimes(1)
+  })
+
+  it('auditEventFilter_triggerSummaryReflectsZeroOneAndManySelected', () => {
+    renderCard({ ...AUDIT_FILTER_DEFAULT, events: [] })
+    expect(
+      screen.getByTestId('audit-event-trigger').textContent,
+      'no summary text when nothing is selected',
+    ).not.toMatch(/selected/)
+    cleanup()
+
+    renderCard({ ...AUDIT_FILTER_DEFAULT, events: ['invoice.created'] })
+    expect(
+      screen.getByTestId('audit-event-trigger').textContent,
+      'a single selection still reads "1 selected"',
+    ).toContain('1 selected')
+    cleanup()
+
+    renderCard({ ...AUDIT_FILTER_DEFAULT, events: ['invoice.created', 'document.read', 'membership.suspended'] })
+    expect(screen.getByTestId('audit-event-trigger').textContent, 'many selections read "3 selected"').toContain(
+      '3 selected',
+    )
   })
 })

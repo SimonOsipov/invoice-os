@@ -394,8 +394,9 @@ describe('AuditView filter card adversarial coverage (AUDIT-07-03 QA)', () => {
   })
 
   it('auditFilter_facetsPropComesFromTheResponseObject', () => {
-    // Rendering facet counts is AUDIT-07-04..06's; nothing draws them yet, so a rendered
-    // check cannot see this AC. Source-level, same idiom as isNotInsideTheLoadedRung.
+    // AuditFilterCard draws event-facet counts as of AUDIT-07-04; actor/company are still
+    // AUDIT-07-05..06's. AuditView itself never renders a count, so a rendered check on
+    // AuditView cannot see this AC. Source-level, same idiom as isNotInsideTheLoadedRung.
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AuditView.tsx'), 'utf8')
     expect(src.length).toBeGreaterThan(0)
     expect(src, 'the scan must be reading the real mount').toContain('<AuditFilterCard')

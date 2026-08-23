@@ -181,8 +181,8 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 // label). Firm mode splits into a CLIENT group of 7 and a FIRM-WIDE group of 3;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
-const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Validation', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Settings']
-const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Validation', 'Workflows', 'Rules', 'Approvals', 'Reports', 'Settings']
+const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Validation', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Audit', 'Settings']
+const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Validation', 'Workflows', 'Rules', 'Approvals', 'Reports', 'Audit', 'Settings']
 
 // ---------------------------------------------------------------------------------------
 // Test 1 -- the in-house sidebar sweep (Core AC 2, AC 8)

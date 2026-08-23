@@ -60,7 +60,7 @@ export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 
 // idiom exactly (same 13 / 2.4 pair), one column of dots instead of two.
 export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']} size={13} strokeWidth={2.4} />
 
-export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
+export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'audit' | 'settings'; label: string; glyph: ReactNode }
 
 // Every NAV_* glyph renders at this size; the icon column is sized to fit it with room to
 // spare so label x-offset never depends on which glyph is in play (Sidebar.tsx:234).
@@ -121,6 +121,19 @@ export const NAV_CUSTOMERS: NavDef = {
   glyph: <Icon paths={['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z']} size={17} />,
 }
 export const NAV_REPORTS: NavDef = { id: 'reports', label: 'Reports', glyph: <Icon paths={['M3 3v18h18', 'm19 9-5 5-4-4-3 3']} size={17} /> }
+// Audit is FIRM-WIDE, not client-scoped: the log spans the whole workspace, so in firm mode
+// it belongs beside Clients and Settings, never in the group that follows the switcher.
+// Scroll-with-a-seal glyph — the append-only record, not a generic list.
+export const NAV_AUDIT: NavDef = {
+  id: 'audit',
+  label: 'Audit',
+  glyph: (
+    <Icon
+      paths={['M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3', 'M8 3v4h4', 'M17 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z', 'm17 10 2 4h-4z']}
+      size={17}
+    />
+  ),
+}
 export const NAV_SETTINGS: NavDef = {
   id: 'settings',
   label: 'Settings',

@@ -2,6 +2,10 @@
 // AUDIT-06-07's RED specs. The `mockFetchSequence` / narrowed-ctx idiom is
 // ApprovalsView.test.tsx's, unchanged.
 
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -261,5 +265,92 @@ describe('AuditView keeps the table mounted across a page change', () => {
 
     release!(logResponse({ page: { limit: 25, has_more: false, next_cursor: null }, total: 60 }))
     await waitFor(() => expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', false))
+  })
+})
+
+// AUDIT-07-03's RED specs (task-655): the filter card must mount as a sibling of the pills,
+// survive a filter-driven refetch, and reset the page stack on every filter change.
+describe('AuditView filter card (AUDIT-07-03)', () => {
+  it('auditFilterCard_survivesARefetch', async () => {
+    // P8: the card must not unmount while a filter-driven refetch is in flight. A paused
+    // fetch lets the assertion land inside the loading window, not just after it settles.
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('q=narrowed')) {
+        return new Promise<MockResponse>((res) => {
+          release = res
+        })
+      }
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'narrowed' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('q=narrowed'))).toBe(true))
+    // Control needle: proves this check really lands inside the in-flight window.
+    expect(release, 'the refetch must actually be pending at this point').not.toBeNull()
+    expect(screen.getByTestId('audit-filter-card'), 'card must stay mounted through the in-flight refetch').toBeTruthy()
+    expect(screen.getByTestId('audit-search-trigger'), 'the control just touched must still be in the DOM').toBeTruthy()
+
+    release!(logResponse({ total: 4 }))
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+  })
+
+  it('auditFilterCard_isNotInsideTheLoadedRung', () => {
+    // A rendered check can pass on a structure that is still wrong -- this reads the source
+    // directly. Vacuity floor first: both anchors must be found before the negative means anything.
+    const BLOCK_ANCHOR = "(state === 'loaded' || state === 'filtered')"
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AuditView.tsx'), 'utf8')
+    expect(src.length, 'AuditView.tsx must be non-empty').toBeGreaterThan(0)
+    expect(src, 'AuditFilterCard must be mounted somewhere in the file').toContain('<AuditFilterCard')
+    expect(src, 'the scan must be reading the real loaded/filtered rung').toContain(BLOCK_ANCHOR)
+
+    const mountAt = src.indexOf('<AuditFilterCard')
+    const blockStart = src.indexOf(BLOCK_ANCHOR)
+    expect(mountAt, 'AuditFilterCard must mount before the loaded/filtered block, not inside it').toBeLessThan(blockStart)
+  })
+
+  it('auditFilter_changeResetsThePageStack', async () => {
+    const PAGE2_CURSOR = 'page2-cursor'
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      if (url.includes('q=narrowed')) return Promise.resolve(logResponse({ total: 3 }))
+      if (url.includes('cursor=')) return Promise.resolve(logResponse({ page: { limit: 25, has_more: false, next_cursor: null } }))
+      return Promise.resolve(logResponse({ page: { limit: 25, has_more: true, next_cursor: PAGE2_CURSOR } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+    await waitFor(() => expect(calls.some((u) => u.includes('cursor='))).toBe(true))
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'narrowed' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+
+    await waitFor(() => expect(calls.some((u) => u.includes('q=narrowed'))).toBe(true))
+    const filterCall = calls.find((u) => u.includes('q=narrowed'))
+    // Positive first: the request must actually carry the new filter, not merely lack a cursor.
+    expect(filterCall, 'the filter change must reach the network with the new filter').toBeTruthy()
+    expect(filterCall, 'a filter change must reset the cursor').not.toContain('cursor=')
+  })
+
+  it('auditFilterCard_hiddenOnNewWorkspace', async () => {
+    // Control needle: the card must exist on a normal load before its absence means anything.
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card'), 'control needle: card renders on a normal load').toBeTruthy())
+    cleanup()
+
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: true })])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-new-workspace')).toBeTruthy())
+    expect(screen.queryByTestId('audit-filter-card'), 'card must be hidden on new-workspace').toBeNull()
   })
 })

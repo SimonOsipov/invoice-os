@@ -1,14 +1,12 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
-//
-// AUDIT-07-02 RED spec (Test-Spec, Mode A). FilterPopover.tsx is a stub that renders null
-// -- every test below fails on the component not existing yet, never on setup/import.
 
 import { dirname, join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { FilterPopover } from './FilterPopover'
@@ -69,5 +67,41 @@ describe('FilterPopover', () => {
     fireEvent.click(screen.getByTestId('fp-trigger'))
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('fp-panel'), 'panel must be gone after the trigger closes it').toBeNull()
+  })
+
+  // fireEvent.click above fires only 'click', never 'mousedown' -- it cannot see the bug
+  // useDismiss.ts's own doc comment warns about (ref on the panel alone: mousedown-outside
+  // dismisses, then the trigger's own click re-opens). userEvent.click fires the full
+  // pointer sequence, so this is the oracle that actually depends on the ref wrapping the
+  // trigger, per AC#3's "(the ref wraps the trigger)".
+  it('filterPopover_triggerClickViaRealPointerSequenceClosesCleanly', async () => {
+    const user = userEvent.setup()
+    const { onClose } = renderPopover(true)
+    await user.click(screen.getByTestId('fp-trigger'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('fp-panel'), 'panel must not reappear from the click after mousedown dismissed it').toBeNull()
+  })
+
+  it('filterPopover_escapeWhenAlreadyClosedIsNoOp', () => {
+    const { onClose } = renderPopover(false)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'no listener is attached while closed').not.toHaveBeenCalled()
+  })
+
+  // AC#2 says "no background-image anywhere in the new files" (plural). The RED spec's
+  // scan only covers FilterPopover.tsx and only the kebab-case CSS string -- every style
+  // in both files is a JSX style object, whose property is camelCase `backgroundImage`,
+  // which the kebab-case regex cannot see. This scan covers both files and both spellings.
+  it('filterPopover_noBackgroundImageInEitherFileEitherSpelling', () => {
+    const filterPopoverSrc = readFileSync(join(COMPONENTS_DIR, 'FilterPopover.tsx'), 'utf8')
+    const auditFilterCardSrc = readFileSync(join(COMPONENTS_DIR, 'AuditFilterCard.tsx'), 'utf8')
+    for (const [name, src] of [
+      ['FilterPopover.tsx', filterPopoverSrc],
+      ['AuditFilterCard.tsx', auditFilterCardSrc],
+    ] as const) {
+      expect(src.length, `${name} must be non-empty`).toBeGreaterThan(0)
+      expect(src, `${name}: no kebab-case background-image`).not.toMatch(/background-image/)
+      expect(src, `${name}: no camelCase backgroundImage`).not.toMatch(/backgroundImage/)
+    }
   })
 })

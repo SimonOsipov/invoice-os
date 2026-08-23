@@ -100,12 +100,15 @@ test.describe('Audit screen', () => {
     await expect(prev).toBeDisabled()
 
     if (await next.isEnabled()) {
-      const firstId = await page.getByTestId('audit-event-id').first().textContent().catch(() => null)
+      // The first ROW's text, not `audit-event-id`: that testid lives inside an expansion,
+      // and nothing is expanded here, so reaching for it hangs until the test budget is
+      // gone (found on the deploy gate, PR #180).
+      const firstRowText = await page.getByTestId('audit-row').first().innerText()
       const requests: string[] = []
       page.on('request', (r) => {
         if (r.url().includes('/v1/audit-log')) requests.push(r.url())
       })
-      await next.click()
+      await next.click({ timeout: 15_000 })
       await expect(prev, 'advancing a page must arm prev').toBeEnabled()
       // The forward-only reader mints cursors; an offset here would mean the screen fell
       // back to a pagination the endpoint does not implement.
@@ -114,11 +117,23 @@ test.describe('Audit screen', () => {
         .toBe(true)
       expect(requests.every((u) => !u.includes('offset='))).toBe(true)
 
-      await prev.click()
+      // Page two is a different page: forward-only keyset means the rows must have moved.
+      await expect
+        .poll(async () => (await page.getByTestId('audit-row').first().innerText()) !== firstRowText, {
+          message: 'advancing a page must change the rows on screen',
+          timeout: 15_000,
+        })
+        .toBe(true)
+
+      await prev.click({ timeout: 15_000 })
       await expect(prev).toBeDisabled()
-      if (firstId) {
-        await expect(page.getByTestId('audit-event-id').first()).toHaveText(firstId)
-      }
+      // Back on page one, the client-held cursor stack returned the original rows.
+      await expect
+        .poll(async () => (await page.getByTestId('audit-row').first().innerText()) === firstRowText, {
+          message: 'prev must land back on the first page',
+          timeout: 15_000,
+        })
+        .toBe(true)
     }
   })
 

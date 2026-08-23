@@ -228,3 +228,38 @@ describe('AuditView immutability strip', () => {
     expect(copy).toContain('7')
   })
 })
+
+describe('AuditView keeps the table mounted across a page change', () => {
+  it('auditPager_tableAndPagerSurviveAPageLoad', async () => {
+    // Found by the deploy gate (PR #180, ac2f576): with the pager inside the loading rung,
+    // clicking next unmounted the very control under the pointer and swapped the table for
+    // the skeleton -- the layout jump the skeleton exists to prevent. Only the FIRST load
+    // may show the skeleton.
+    let release: ((v: MockResponse) => void) | null = null
+    const fetchMock = vi.fn((url: string) => {
+      if (!url.includes('cursor=')) {
+        return Promise.resolve(logResponse({ page: { limit: 25, has_more: true, next_cursor: 'c1' }, total: 60 }))
+      }
+      return new Promise<MockResponse>((res) => {
+        release = res
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
+
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+
+    // The second page is still in flight here.
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', true))
+    expect(screen.getByTestId('audit-table'), 'the table must stay on screen while the next page loads').toBeTruthy()
+    expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0)
+    expect(screen.queryByTestId('audit-skeleton-row'), 'the skeleton belongs to the first load only').toBeNull()
+
+    // And the readout still describes the rows actually on screen, not the page in flight.
+    expect(screen.getByTestId('audit-pager').textContent).toContain('1–1')
+
+    release!(logResponse({ page: { limit: 25, has_more: false, next_cursor: null }, total: 60 }))
+    await waitFor(() => expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', false))
+  })
+})

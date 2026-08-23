@@ -48,6 +48,12 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // Only ever written from an unfiltered response (see the effect below), so the
   // empty-by-filter copy can never pass a filtered `total` off as the size of the log.
   const [lifetimeTotal, setLifetimeTotal] = useState<number | null>(null)
+  // The last landed page, held WITH the page state that fetched it. useAsync nulls `data`
+  // on 'start', so without this the table and its pager unmount on every page change --
+  // the controls vanish under the pointer and the layout jumps, which is the thing the
+  // skeleton exists to prevent. Pairing the response with its page state also keeps the
+  // range readout describing the rows actually on screen, never the page being fetched.
+  const [landed, setLanded] = useState<{ res: AuditResponse; page: AuditPageState } | null>(null)
   const filtered = invoiceFilter != null
 
   const log = useAsync<AuditResponse>(
@@ -62,13 +68,21 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     { isEmpty: () => false, immediate: shouldFetchInvoices(base), deps: [invoiceFilter?.id, page.limit, page.cursor] },
   )
   const status = invoicesViewState(base, log)
-  const state = auditScreenState(status, log.data, filtered)
-  const events = log.data?.events ?? []
+  // First load has nothing to hold on to, so it takes the skeleton. Every load after it
+  // keeps the previous page on screen and disables the pager instead.
+  const shown = log.data != null ? { res: log.data, page } : landed
+  const state = auditScreenState(status, landed == null ? log.data : shown?.res ?? null, filtered)
+  const events = shown?.res.events ?? []
 
   useEffect(() => {
+    if (log.data == null) return
+    setLanded({ res: log.data, page })
     // useAsync nulls data on 'start', so a landed envelope always belongs to the current
     // filter -- there is no window where a filtered total could be read as the lifetime one.
-    if (log.data != null && !filtered && log.data.total > 0) setLifetimeTotal(log.data.total)
+    if (!filtered && log.data.total > 0) setLifetimeTotal(log.data.total)
+    // `page` is read, not tracked: it is whatever fetched this envelope, and adding it here
+    // would re-run the effect on a page change before its response lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [log.data, filtered])
 
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
@@ -168,14 +182,17 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
               />
             ))}
           </AuditTable>
+          {/* Everything here reads `shown`, not `page`/`log.data`: while a page is in
+              flight `page` has already advanced, so a readout built from it would describe
+              rows that are not on screen. */}
           <AuditPager
-            range={auditRangeLabel(page, events.length, log.data?.total ?? 0)}
+            range={auditRangeLabel(shown?.page ?? page, events.length, shown?.res.total ?? 0)}
             limit={page.limit}
-            canPrev={page.stack.length > 0}
-            canNext={log.data?.page.has_more === true}
+            canPrev={(shown?.page.stack.length ?? 0) > 0}
+            canNext={shown?.res.page.has_more === true}
             busy={status === 'loading'}
             onPrev={() => setPage(auditPagePrev(page))}
-            onNext={() => setPage(auditPageNext(page, log.data?.page.next_cursor ?? null))}
+            onNext={() => setPage(auditPageNext(page, shown?.res.page.next_cursor ?? null))}
             onLimit={(limit) => setPage(auditPageResize(limit))}
           />
         </>

@@ -132,6 +132,50 @@ describe('auditFilterQuery', () => {
     expect(Array.isArray(query.event)).toBe(true)
     expect(query.event).toEqual(['invoice.created', 'submission.failed'])
   })
+
+  it('auditFilters_allCompanyEmitsNoCompanyParam', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, company: { mode: 'all' } }
+
+    const query = auditFilterQuery(state)
+
+    expect('company' in query).toBe(false)
+  })
+
+  it('auditFilters_emptyStringQIsOmitted', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, q: '' }
+
+    const query = auditFilterQuery(state)
+
+    expect('q' in query).toBe(false)
+  })
+
+  it('auditFilters_whitespaceOnlyQIsSentVerbatim', () => {
+    // No trimming rule exists (or is required by any AC) -- pins actual behaviour so a
+    // future trim doesn't land silently.
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, q: '   ' }
+
+    const query = auditFilterQuery(state)
+
+    expect(query.q).toBe('   ')
+  })
+
+  it('auditFilters_duplicateEventIdsPassThroughUnchanged', () => {
+    // The builder is a pure mapper -- dedup is a UI-layer concern (07-04), not this module's.
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: ['invoice.created', 'invoice.created'] }
+
+    const query = auditFilterQuery(state)
+
+    expect(query.event).toEqual(['invoice.created', 'invoice.created'])
+  })
+
+  it('auditFilters_unknownEventIdentifierPassesThroughUnvalidated', () => {
+    // Vocabulary membership is enforced by the popover (AUDIT_EVENTS), not the query builder.
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: ['not.a.real.event'] }
+
+    const query = auditFilterQuery(state)
+
+    expect(query.event).toEqual(['not.a.real.event'])
+  })
 })
 
 describe('auditRangeIsValid', () => {
@@ -142,6 +186,13 @@ describe('auditRangeIsValid', () => {
     expect(auditRangeIsValid(invalid)).toBe(false)
     // positive companion: proves the function isn't just always returning false.
     expect(auditRangeIsValid(valid)).toBe(true)
+  })
+
+  it('auditFilters_customFromEqualsToIsValid', () => {
+    // A single-day range -- the string comparison is <=, not <.
+    const sameDay: AuditRange = { preset: 'custom', from: '2026-08-15', to: '2026-08-15' }
+
+    expect(auditRangeIsValid(sameDay)).toBe(true)
   })
 })
 
@@ -207,6 +258,87 @@ describe('auditFilterPills', () => {
     const query = auditFilterQuery(next)
     expect('from' in query).toBe(false)
     expect('to' in query).toBe(false)
+  })
+})
+
+describe('selectActor toggling', () => {
+  it('auditFilters_selectActorTogglesOffASecondClick', () => {
+    // Multi-select checkbox semantics (matches the 05 popover design): a second click on an
+    // already-selected actor removes it, it does not duplicate or replace the array.
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actors: ['u1'] }
+
+    const next = selectActor(state, 'u1')
+
+    expect(next.actors).toEqual([])
+  })
+
+  it('auditFilters_selectActorAddsADistinctSecondActor', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actors: ['u1'] }
+
+    const next = selectActor(state, 'u2')
+
+    expect(next.actors).toEqual(['u1', 'u2'])
+  })
+})
+
+describe('auditFilterPills adversarial coverage', () => {
+  it('auditFilters_clearAllPillsAreJustTheThirtyDayPill', () => {
+    const cleared = clearAllFilters()
+
+    const pills = auditFilterPills(cleared, EMPTY_FACETS)
+
+    expect(pills.length).toBe(1)
+    expect(pills[0].key).toBe('range')
+    expect(pills[0].label).toBe('Last 30 days')
+  })
+
+  it('auditFilters_pillKeysAreUniqueAndOrderStableUnderAFullState', () => {
+    const facets: AuditFacets = {
+      event: [
+        { value: 'invoice.created', name: 'Invoice created', count: 3 },
+        { value: 'approval.granted', name: 'Approval granted', count: 1 },
+      ],
+      actor: [{ value: 'u1', name: 'Musa Danjuma', kind: 'people', count: 2 }],
+      company: [{ value: '11111111-1111-1111-1111-111111111111', name: 'Acme', count: 5 }],
+    }
+    const state: AuditFilterState = {
+      q: 'invoice 42',
+      range: { preset: 'custom', from: '2026-08-01', to: '2026-08-20' },
+      events: ['invoice.created', 'approval.granted'],
+      actorKind: '',
+      actors: ['u1'],
+      company: { mode: 'named', id: '11111111-1111-1111-1111-111111111111', name: 'Acme' },
+      invoiceId: 'inv-1',
+      invoiceNumber: 'INV-0042',
+    }
+    // range + q + 2 events + 1 actor + company + invoice = 7, all keys distinct.
+
+    const pills = auditFilterPills(state, facets)
+    const keys = pills.map((p) => p.key)
+
+    expect(pills.length).toBeGreaterThan(0)
+    expect(pills.length).toBe(7)
+    expect(new Set(keys).size).toBe(keys.length)
+
+    const secondCall = auditFilterPills(state, facets).map((p) => p.key)
+    expect(secondCall).toEqual(keys)
+  })
+
+  it('auditFilters_inconsistentActorStateRendersBothPillsUntilTheStateIsCorrected', () => {
+    // Only reachable by constructing state directly (selectActor/selectKind never allow
+    // this) -- see the same gap auditFilters_queryTieBreaksToActorsWhenBothAreSet covers at
+    // the query layer. Pinned so a future pill-layer guard is a deliberate change, not a
+    // silent one: today BOTH an actorKind pill and an actor pill render for this state, even
+    // though auditFilterQuery would only ever emit `actor`.
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actorKind: 'system', actors: ['u1'] }
+    const facets: AuditFacets = { ...EMPTY_FACETS, actor: [{ value: 'u1', name: 'Musa Danjuma', kind: 'people', count: 1 }] }
+
+    const pills = auditFilterPills(state, facets)
+
+    const kindPill = pills.find((p) => p.key === 'actorKind')
+    const actorPill = pills.find((p) => p.key === 'actor:u1')
+    expect(kindPill).toBeDefined()
+    expect(actorPill).toBeDefined()
   })
 })
 

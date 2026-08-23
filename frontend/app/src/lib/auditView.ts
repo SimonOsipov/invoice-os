@@ -14,7 +14,6 @@ export const AUDIT_COPY = {
   h1: 'Audit log',
   subtitle: 'Every recorded action, newest first',
   tenantFallback: 'This workspace',
-  loading: 'Loading the audit log…',
   emptyTitle: 'Nothing recorded yet',
   emptyMessage: 'Actions appear here as soon as anyone creates, validates, approves or transmits an invoice.',
   // No count to state: the only unfiltered response this screen saw reported none.

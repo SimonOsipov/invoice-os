@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
 
 import { getAuditLog, type AuditResponse } from '../lib/audit'
 import { auditScreenState, AUDIT_COPY, emptyByFilterCopy, invoiceFilterPillLabel } from '../lib/auditView'
@@ -18,6 +18,7 @@ import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
 import { AuditRow } from './AuditRow'
+import { AuditSkeleton } from './AuditSkeleton'
 import { AuditTable } from './AuditTable'
 
 interface InvoiceFilter {
@@ -86,7 +87,13 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
 
       {pills}
 
-      {state === 'loading' && <Loading label={AUDIT_COPY.loading} />}
+      {/* The real chrome plus shimmer rows, never a spinner: the layout must not move
+          when data lands. */}
+      {state === 'loading' && (
+        <AuditTable>
+          <AuditSkeleton />
+        </AuditTable>
+      )}
       {state === 'error' && log.error && <ErrorState error={log.error} onRetry={log.run} />}
 
       {/* No filter language: on a workspace that has recorded nothing, mentioning filters

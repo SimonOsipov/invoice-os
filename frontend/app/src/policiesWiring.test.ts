@@ -430,6 +430,10 @@ describe('the deleted per-mode store leaves no comment behind (AC-7)', () => {
 
   it('Sidebar keeps NAV_WORKFLOWS in the FIRM-WIDE group — the conclusion the comment repair must not move', () => {
     const src = readFileSync(join(SRC, 'components', 'Sidebar.tsx'), 'utf8')
-    expect(src).toContain("scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_SETTINGS]")
+    // Matches the group's membership, not the whole array literal: the claim is that
+    // NAV_WORKFLOWS is FIRM-WIDE, and a later nav item joining that group does not move it.
+    const group = src.match(/scope: 'FIRM-WIDE', items: \[([^\]]*)\]/)
+    expect(group, "Sidebar still declares a FIRM-WIDE group").not.toBeNull()
+    expect(group?.[1]).toContain('NAV_WORKFLOWS')
   })
 })

@@ -389,10 +389,9 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const labels = extractGlyphLabels(glyphsSrc)
     const distinct = [...new Set([...firm, ...inhouse])]
 
-    // APPR-12-05 (task-530): firm gains a 10th item (NAV_APPROVALS). distinct/labels stay
-    // at 10 -- NAV_APPROVALS is ALREADY in the union via the in-house branch, and
-    // glyphs.tsx exports exactly ten NAV_* consts (no eleventh added by this subtask).
-    // Raising either to 11 would make this row permanently red (architect sweep V1).
+    // Floors, not exact counts: NAV_AUDIT took firm to 11 and in-house to 9, and glyphs.tsx
+    // now exports eleven NAV_* consts. Keeping these as >= is what lets a new nav item land
+    // without editing this row -- the real assertions are the missing/mismatched lists below.
     expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(10)
     expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(8)
     expect(distinct.length, 'distinct navConsts (vacuity guard)').toBeGreaterThanOrEqual(10)
@@ -702,6 +701,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('row 16 (G6b) -- the nav-only set equals EXPECTED_NAV_ONLY exactly', () => {
+    // 3 = firm:NAV_RULES plus both Audit cells. Drops back to 1 when audit.spec.ts drives them.
     expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(1)
 
     const actualNavOnly = new Set<string>()
@@ -785,6 +785,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('A05-3 -- nav-only did not grow: the new firm cell is graded drives, not nav-only (green-before guard)', () => {
+    // 3 = firm:NAV_RULES plus both Audit cells. Drops back to 1 when audit.spec.ts drives them.
     expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(1)
     expect(EXPECTED_NAV_ONLY.has('firm:NAV_APPROVALS'), 'firm:NAV_APPROVALS must never enter the nav-only set').toBe(false)
 

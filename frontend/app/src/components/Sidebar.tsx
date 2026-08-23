@@ -20,6 +20,7 @@ import { visibleEntityIds } from '../lib/portfolio'
 import {
   chevDownGlyph,
   NAV_APPROVALS,
+  NAV_AUDIT,
   NAV_CLIENTS,
   NAV_CUSTOMERS,
   NAV_DASHBOARD,
@@ -120,14 +121,14 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   const navGroups: { key: string; label: string; scope: string; items: SidebarNavItem[] }[] = isFirm
     ? [
         { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, approvalsItem, NAV_VALIDATION, NAV_RULES, NAV_CUSTOMERS, NAV_REPORTS] },
-        { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_SETTINGS] },
+        { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_AUDIT, NAV_SETTINGS] },
       ]
     : [
         {
           key: 'workspace',
           label: 'Workspace',
           scope: active.short,
-          items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_WORKFLOWS, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_SETTINGS],
+          items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_WORKFLOWS, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_AUDIT, NAV_SETTINGS],
         },
       ]
   // `let`, never `const`: e2e/personas.test.ts G3 slices this file between the

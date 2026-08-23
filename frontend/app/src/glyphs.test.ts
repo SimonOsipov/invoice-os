@@ -33,6 +33,7 @@ const NAV_DEFS: glyphs.NavDef[] = [
   glyphs.NAV_APPROVALS,
   glyphs.NAV_CUSTOMERS,
   glyphs.NAV_REPORTS,
+  glyphs.NAV_AUDIT,
   glyphs.NAV_SETTINGS,
 ]
 
@@ -103,6 +104,7 @@ describe('nav labels stay byte-identical to main (task-327 out-of-scope guard, A
       approvals: 'Approvals',
       customers: 'Customers',
       reports: 'Reports',
+      audit: 'Audit',
       settings: 'Settings',
     }
     const actual = Object.fromEntries(NAV_DEFS.map((def) => [def.id, def.label]))

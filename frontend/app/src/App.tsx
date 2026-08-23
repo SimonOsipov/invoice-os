@@ -87,6 +87,7 @@ import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
 import { ApprovalsView } from './components/ApprovalsView'
+import { AuditView } from './components/AuditView'
 import type {
   Client,
   ConnectorId,
@@ -1270,6 +1271,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
+          {view === 'audit' && <AuditView ctx={ctx} />}
         </div>
       </main>
     </div>

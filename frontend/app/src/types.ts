@@ -167,7 +167,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals'
+export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals' | 'audit'
 
 // 'review' was added by M4-08-04 under its former name (plan B1/DRIFT-1) — one subtask
 // ahead of story §6's original assignment (M4-08-05), because wizardHeader's index-2

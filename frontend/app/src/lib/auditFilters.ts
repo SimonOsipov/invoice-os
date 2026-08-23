@@ -1,11 +1,9 @@
 // Filter state model, query builder and pill derivation for the Audit screen (AUDIT-07-01,
 // task-653). Pure -- no React, no fetch, no DOM. lib/audit.ts owns the wire types and stays
 // unmodified; this module only builds an AuditLogQuery, it never serializes one.
-//
-// RED stub (Stage 2.5): every function below throws `not implemented`. auditFilters.test.ts
-// pins the target behaviour before the executor fills these bodies in.
 
 import type { AuditFacets, AuditLogQuery } from './audit'
+import { invoiceFilterPillLabel } from './auditView'
 
 export type AuditRangePreset = '24h' | '7d' | '30d' | 'custom'
 
@@ -48,32 +46,144 @@ export interface AuditFilterPill {
   onRemove: (state: AuditFilterState) => AuditFilterState
 }
 
-function notImplemented(fn: string): never {
-  throw new Error(`auditFilters.${fn}: not implemented`)
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// Removing the date pill leaves 'custom' with no from/to -- the type has no fifth "none"
+// preset, so an empty custom range is how "no date filter" is represented.
+const REMOVE_RANGE: AuditRange = { preset: 'custom' }
+
+function rangeToQuery(range: AuditRange, now: Date): Pick<AuditLogQuery, 'from' | 'to'> {
+  switch (range.preset) {
+    case '24h':
+      return { from: new Date(now.getTime() - DAY_MS).toISOString() }
+    case '7d':
+      return { from: new Date(now.getTime() - 7 * DAY_MS).toISOString() }
+    case '30d':
+      return { from: new Date(now.getTime() - 30 * DAY_MS).toISOString() }
+    case 'custom': {
+      const out: Pick<AuditLogQuery, 'from' | 'to'> = {}
+      if (range.from) out.from = `${range.from}T00:00:00.000Z`
+      // Inclusive <= on created_at (filter.go) -- a bare date would drop the whole last day.
+      if (range.to) out.to = `${range.to}T23:59:59.999Z`
+      return out
+    }
+  }
 }
 
-export function auditFilterQuery(_state: AuditFilterState, _now: Date = new Date()): AuditLogQuery {
-  return notImplemented('auditFilterQuery')
+// actor/actor_kind are server-mutually-exclusive (handlers.go:167-169, a 400 on both). The
+// type doesn't forbid both being set at once, so the builder tie-breaks defensively: actors
+// wins, the same direction selectActor already clears toward.
+function actorParams(state: AuditFilterState): Pick<AuditLogQuery, 'actor' | 'actor_kind'> {
+  if (state.actors.length > 0) return { actor: state.actors }
+  if (state.actorKind !== '') return { actor_kind: state.actorKind }
+  return {}
 }
 
-export function auditRangeIsValid(_range: AuditRange): boolean {
-  return notImplemented('auditRangeIsValid')
+function companyParam(company: AuditCompanySel): Pick<AuditLogQuery, 'company'> {
+  if (company.mode === 'named') return { company: company.id }
+  if (company.mode === 'workspace') return { company: 'workspace' }
+  return {}
+}
+
+export function auditFilterQuery(state: AuditFilterState, now: Date = new Date()): AuditLogQuery {
+  return {
+    ...rangeToQuery(state.range, now),
+    ...(state.q !== '' ? { q: state.q } : {}),
+    ...(state.events.length > 0 ? { event: state.events } : {}),
+    ...actorParams(state),
+    ...companyParam(state.company),
+    ...(state.invoiceId != null ? { invoice_id: state.invoiceId } : {}),
+  }
+}
+
+export function auditRangeIsValid(range: AuditRange): boolean {
+  if (range.preset !== 'custom') return true
+  if (!range.from || !range.to) return true
+  return range.from <= range.to
 }
 
 // Clears actorKind -- actor and actor_kind are server-mutually-exclusive (400 on both).
-export function selectActor(_state: AuditFilterState, _actorId: string): AuditFilterState {
-  return notImplemented('selectActor')
+export function selectActor(state: AuditFilterState, actorId: string): AuditFilterState {
+  const actors = state.actors.includes(actorId)
+    ? state.actors.filter((a) => a !== actorId)
+    : [...state.actors, actorId]
+  return { ...state, actorKind: '', actors }
 }
 
 // Clears actors -- same exclusivity, opposite direction.
-export function selectKind(_state: AuditFilterState, _kind: 'people' | 'system'): AuditFilterState {
-  return notImplemented('selectKind')
+export function selectKind(state: AuditFilterState, kind: 'people' | 'system'): AuditFilterState {
+  return { ...state, actorKind: kind, actors: [] }
 }
 
-export function auditFilterPills(_state: AuditFilterState, _facets: AuditFacets): AuditFilterPill[] {
-  return notImplemented('auditFilterPills')
+function rangePillFor(range: AuditRange): AuditFilterPill | null {
+  const onRemove = (state: AuditFilterState): AuditFilterState => ({ ...state, range: REMOVE_RANGE })
+  switch (range.preset) {
+    case '30d':
+      // Always present -- the 30-day window is a pre-applied filter (CA-12), not an unset one.
+      return { key: 'range', label: 'Last 30 days', onRemove }
+    case '24h':
+      return { key: 'range', label: 'Last 24 hours', onRemove }
+    case '7d':
+      return { key: 'range', label: 'Last 7 days', onRemove }
+    case 'custom':
+      if (!range.from || !range.to) return null
+      return { key: 'range', label: `${range.from} – ${range.to}`, onRemove }
+  }
+}
+
+export function auditFilterPills(state: AuditFilterState, facets: AuditFacets): AuditFilterPill[] {
+  const pills: AuditFilterPill[] = []
+
+  const rangePill = rangePillFor(state.range)
+  if (rangePill) pills.push(rangePill)
+
+  if (state.q !== '') {
+    pills.push({ key: 'q', label: `Search: "${state.q}"`, onRemove: (s) => ({ ...s, q: '' }) })
+  }
+
+  for (const id of state.events) {
+    pills.push({
+      key: `event:${id}`,
+      label: facets.event.find((f) => f.value === id)?.name ?? id,
+      onRemove: (s) => ({ ...s, events: s.events.filter((e) => e !== id) }),
+    })
+  }
+
+  if (state.actorKind !== '') {
+    pills.push({
+      key: 'actorKind',
+      label: state.actorKind === 'people' ? 'People only' : 'System only',
+      onRemove: (s) => ({ ...s, actorKind: '' }),
+    })
+  }
+
+  for (const id of state.actors) {
+    pills.push({
+      key: `actor:${id}`,
+      label: facets.actor.find((f) => f.value === id)?.name ?? id,
+      onRemove: (s) => ({ ...s, actors: s.actors.filter((a) => a !== id) }),
+    })
+  }
+
+  if (state.company.mode !== 'all') {
+    pills.push({
+      key: 'company',
+      label: state.company.mode === 'workspace' ? 'Workspace-level only' : state.company.name,
+      onRemove: (s) => ({ ...s, company: { mode: 'all' } }),
+    })
+  }
+
+  if (state.invoiceId != null) {
+    pills.push({
+      key: 'invoice',
+      label: invoiceFilterPillLabel(state.invoiceNumber),
+      onRemove: (s) => ({ ...s, invoiceId: null, invoiceNumber: null }),
+    })
+  }
+
+  return pills
 }
 
 export function clearAllFilters(): AuditFilterState {
-  return notImplemented('clearAllFilters')
+  return AUDIT_FILTER_DEFAULT
 }

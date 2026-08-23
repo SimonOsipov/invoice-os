@@ -1,8 +1,3 @@
-// RED specs (AUDIT-07-10, Stage 3/Mode A) -- pin collectExportRows's keyset walk, cap and
-// error contract before the executor implements the body, which currently always throws
-// `new Error('not implemented')`. Every spec below fails on its target assertion, never on
-// a missing module.
-
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditLogQuery, AuditResponse } from './audit'
@@ -60,7 +55,7 @@ describe('collectExportRows', () => {
       makePage({ events: makeEvents(100), total: 237, has_more: true, next_cursor: 'cursor-2' }),
       makePage({ events: makeEvents(37), total: 237, has_more: false, next_cursor: null }),
     ]
-    const fetchPage = vi.fn(async (_query: AuditLogQuery) => pages[fetchPage.mock.calls.length])
+    const fetchPage = vi.fn(async (_query: AuditLogQuery) => pages[fetchPage.mock.calls.length - 1])
 
     const result = await collectExportRows(fetchPage, {}, 1000)
 
@@ -90,7 +85,7 @@ describe('collectExportRows', () => {
       makePage({ events: makeEvents(100), total: 700, has_more: true, next_cursor: 'cursor-2' }),
       makePage({ events: makeEvents(50), total: 900, has_more: false, next_cursor: null }),
     ]
-    const fetchPage = vi.fn(async () => pages[fetchPage.mock.calls.length])
+    const fetchPage = vi.fn(async () => pages[fetchPage.mock.calls.length - 1])
 
     const result = await collectExportRows(fetchPage, {}, 1000)
 

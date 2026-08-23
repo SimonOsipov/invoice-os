@@ -21,6 +21,11 @@
 // (db/seed.dev.sql:684), and this spec's own invoice is never submitted either -- so a
 // deployed assertion about scrubbed headers or verbatim bodies would pass vacuously either
 // way, over data that was never real transmission evidence.
+// Departure from docs/e2e-convention.md's "containment, never a literal count": the bundle
+// is scoped to an entity this file creates in beforeAll and nothing else ever touches, so
+// the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
+// here -- it proves no OTHER entity's invoice leaked into the bundle, which a toContain
+// assertion cannot see.
 import { test, expect } from '@playwright/test'
 import { unzipSync } from 'fflate'
 import { createEntity, createInvoice, login, apiBase, PERSONAS } from './client'

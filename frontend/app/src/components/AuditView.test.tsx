@@ -485,12 +485,14 @@ describe('AuditView filter card adversarial coverage (AUDIT-07-03 QA)', () => {
     await waitFor(() => expect(releaseSecond, 'the second request must be in flight').not.toBeNull())
 
     // Resolve out of order: the stale "first" response lands after "second".
+    // The pager's range readout is fed by the main request's total; the immutability strip
+    // is not -- it reads the unfiltered probe, so it cannot witness a main-request race.
     releaseSecond!(logResponse({ total: 22 }))
-    await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('22'))
+    await waitFor(() => expect(screen.getByTestId('audit-pager').textContent).toContain('of 22'))
     releaseFirst!(logResponse({ total: 999 }))
     await new Promise((r) => setTimeout(r, 10))
-    expect(screen.getByTestId('audit-immutability-strip').textContent, 'a late stale response must not clobber the current one').toContain('22')
-    expect(screen.getByTestId('audit-immutability-strip').textContent).not.toContain('999')
+    expect(screen.getByTestId('audit-pager').textContent, 'a late stale response must not clobber the current one').toContain('of 22')
+    expect(screen.getByTestId('audit-pager').textContent).not.toContain('999')
   })
 
   it('auditFilter_dateWindowFrozenAcrossUnrelatedRerenders', async () => {
@@ -849,10 +851,13 @@ describe('AuditView lifetime-count probe (AUDIT-07-08)', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<AuditView ctx={auditCtx()} />)
 
-    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
-    const copy = screen.getByTestId('audit-empty-by-filter').textContent ?? ''
-    expect(copy, 'the probe-sourced lifetime figure must be named, not the bare fallback').not.toBe(AUDIT_COPY.emptyByFilterBare)
-    expect(copy, "the number named must be the probe's 7").toContain('7')
+    // The rung appears when the main request lands; the probe is a separate promise, so the
+    // copy is numbered only once its effect flushes. Snapshotting here races that.
+    await waitFor(() => {
+      const copy = screen.getByTestId('audit-empty-by-filter').textContent ?? ''
+      expect(copy, 'the probe-sourced lifetime figure must be named, not the bare fallback').not.toBe(AUDIT_COPY.emptyByFilterBare)
+      expect(copy, "the number named must be the probe's 7").toContain('7')
+    })
   })
 
   it('auditProbe_failureDegradesSilently', async () => {

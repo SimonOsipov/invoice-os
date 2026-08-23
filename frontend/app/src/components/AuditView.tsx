@@ -43,8 +43,8 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [filterState, setFilterState] = useState<AuditFilterState>(AUDIT_FILTER_DEFAULT)
   const [page, setPage] = useState<AuditPageState>(AUDIT_PAGE_INITIAL)
-  // Only ever written from an unfiltered response (see the effect below), so the
-  // empty-by-filter copy can never pass a filtered `total` off as the size of the log.
+  // Written only from the unfiltered probe below, never from the main (filtered) request,
+  // so this can never be mistaken for a windowed total.
   const [lifetimeTotal, setLifetimeTotal] = useState<number | null>(null)
   // The last landed page, held WITH the page state that fetched it. useAsync nulls `data`
   // on 'start', so without this the table and its pager unmount on every page change --
@@ -77,16 +77,30 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const state = auditScreenState(status, landed == null ? log.data : shown?.res ?? null, filtered)
   const events = shown?.res.events ?? []
 
+  // A lifetime figure can only come from an unfiltered `total`; internal/audit exposes no
+  // other source. Empty deps fires this once per mount, immune to filter/page changes.
+  const probe = useAsync<AuditResponse>(
+    () =>
+      base
+        ? getAuditLog(ctx.authedFetch, base, { limit: 1 })
+        : Promise.reject(new Error('no gateway configured')),
+    { isEmpty: () => false, immediate: shouldFetchInvoices(base), deps: [] },
+  )
+
   useEffect(() => {
     if (log.data == null) return
     setLanded({ res: log.data, page })
-    // useAsync nulls data on 'start', so a landed envelope always belongs to the current
-    // filter -- there is no window where a filtered total could be read as the lifetime one.
-    if (!filtered && log.data.total > 0) setLifetimeTotal(log.data.total)
     // `page` is read, not tracked: it is whatever fetched this envelope, and adding it here
     // would re-run the effect on a page change before its response lands.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [log.data, filtered])
+  }, [log.data])
+
+  // A failed probe leaves probe.data null forever, so lifetimeTotal just stays null --
+  // never surfaced as an error, never blocking the screen.
+  useEffect(() => {
+    if (probe.data == null) return
+    setLifetimeTotal(probe.data.total)
+  }, [probe.data])
 
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
   // filtered stream and means nothing in another.

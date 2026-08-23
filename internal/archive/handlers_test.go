@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -415,5 +416,152 @@ func TestBundleHandler_ErrorAfterFirstByteKeeps200AndAppendsNoJSON(t *testing.T)
 	}
 	if strings.Contains(rec.Body.String(), `{"error"`) {
 		t.Errorf("body %q contains an appended JSON error over an already-committed stream", rec.Body.String())
+	}
+}
+
+// --- AUDIT-05-09: PreviewHandler shares DownloadHandler's error surface (D-40, D-52) --
+
+// previewSpy stands in for Store.Preview as PreviewHandler consumes it (previewFn).
+// Mirrors assembleSpy so one table can drive both handlers identically.
+type previewSpy struct {
+	calls int
+	fn    func() (Preview, error)
+}
+
+func (s *previewSpy) Preview(_ context.Context, _ Request) (Preview, error) {
+	s.calls++
+	if s.fn == nil {
+		return Preview{}, nil
+	}
+	return s.fn()
+}
+
+// TestPreviewAndDownload_ShareOneErrorSurface (D-40, D-52): both handlers call the same
+// statusForErr, so the status/body mapping holds by construction -- asserting it alone
+// proves nothing. Each row also asserts the store-call count on BOTH handlers, which
+// does not hold by construction (each handler implements its own ordering).
+func TestPreviewAndDownload_ShareOneErrorSurface(t *testing.T) {
+	cases := []struct {
+		name         string
+		withIdentity bool
+		query        url.Values
+		storeErr     error // nil for the two pre-store rows -- the store must never be called
+		wantStatus   int
+		wantBody     string
+		wantCalls    int
+	}{
+		{
+			name:         "no identity",
+			withIdentity: false,
+			// Malformed entity_id too (D-52): without it a parse-first handler would
+			// still 401, making the ordering assertion vacuous.
+			query:      url.Values{"entity_id": {"not-a-uuid"}},
+			wantStatus: http.StatusUnauthorized,
+			wantBody:   `{"error":"unauthorized"}` + "\n",
+			wantCalls:  0,
+		},
+		{
+			name:         "malformed param",
+			withIdentity: true,
+			query:        url.Values{"entity_id": {validEntityID}, "from": {"not-a-time"}, "to": {validTo}},
+			wantStatus:   http.StatusBadRequest,
+			wantBody:     `{"error":"from must be an RFC3339 timestamp"}` + "\n",
+			wantCalls:    0,
+		},
+		{
+			name:         "unknown entity",
+			withIdentity: true,
+			query:        validQuery(),
+			storeErr:     ErrEntityNotFound,
+			wantStatus:   http.StatusNotFound,
+			wantBody:     `{"error":"not found"}` + "\n",
+			wantCalls:    1,
+		},
+		{
+			name:         "unknown store error",
+			withIdentity: true,
+			query:        validQuery(),
+			storeErr:     errors.New("pq: relation x does not exist"),
+			wantStatus:   http.StatusInternalServerError,
+			wantBody:     `{"error":"internal server error"}` + "\n",
+			wantCalls:    1,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			aSpy := &assembleSpy{}
+			if c.storeErr != nil {
+				aSpy.fn = func(io.Writer, func(string)) error { return c.storeErr }
+			}
+			dh := DownloadHandler(aSpy.Assemble, slog.Default())
+			dRec := httptest.NewRecorder()
+			dh.ServeHTTP(dRec, newTestRequest(t, c.query, c.withIdentity))
+
+			pSpy := &previewSpy{}
+			if c.storeErr != nil {
+				pSpy.fn = func() (Preview, error) { return Preview{}, c.storeErr }
+			}
+			ph := PreviewHandler(pSpy.Preview, slog.Default())
+			pRec := httptest.NewRecorder()
+			ph.ServeHTTP(pRec, newTestRequest(t, c.query, c.withIdentity))
+
+			if dRec.Code != c.wantStatus {
+				t.Errorf("download status = %d, want %d (body %s)", dRec.Code, c.wantStatus, dRec.Body.String())
+			}
+			if pRec.Code != c.wantStatus {
+				t.Errorf("preview status = %d, want %d (body %s)", pRec.Code, c.wantStatus, pRec.Body.String())
+			}
+			if dRec.Body.String() != c.wantBody {
+				t.Errorf("download body = %q, want %q", dRec.Body.String(), c.wantBody)
+			}
+			if pRec.Body.String() != c.wantBody {
+				t.Errorf("preview body = %q, want %q", pRec.Body.String(), c.wantBody)
+			}
+			if !bytes.Equal(dRec.Body.Bytes(), pRec.Body.Bytes()) {
+				t.Errorf("download and preview bodies differ byte-for-byte: %q vs %q", dRec.Body.String(), pRec.Body.String())
+			}
+			if aSpy.calls != c.wantCalls {
+				t.Errorf("download store calls = %d, want %d", aSpy.calls, c.wantCalls)
+			}
+			if pSpy.calls != c.wantCalls {
+				t.Errorf("preview store calls = %d, want %d", pSpy.calls, c.wantCalls)
+			}
+		})
+	}
+}
+
+// TestPreviewHandler_Success200 is the control that the error table above is not
+// PreviewHandler's only path (D-52).
+func TestPreviewHandler_Success200(t *testing.T) {
+	tin := "80000040-0001"
+	want := Preview{
+		Entity:    manifestEntity{ID: validEntityID, Name: "Success Co", TIN: &tin},
+		Period:    manifestPeriod{From: validFrom, To: validTo, Bounds: "inclusive", Basis: "invoices.created_at"},
+		Filename:  "ASComply_evidence_Success-Co_20260101_20260331.zip",
+		Counts:    manifestCounts{Invoices: 2, StatusTransitions: 1, Submissions: 1, ExchangeAttempts: 1, BodyFiles: 1},
+		OverLimit: false,
+	}
+	spy := &previewSpy{fn: func() (Preview, error) { return want, nil }}
+	h := PreviewHandler(spy.Preview, slog.Default())
+	r := newTestRequest(t, validQuery(), true)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	var got Preview
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("decoded body = %+v, want %+v", got, want)
+	}
+	if spy.calls != 1 {
+		t.Errorf("Preview called %d times, want 1", spy.calls)
 	}
 }

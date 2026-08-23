@@ -16,14 +16,22 @@ var submissionsCSVHeader = []string{
 	"created_at", "updated_at",
 }
 
+// submissionsScope: the FROM/WHERE selectSubmissionsSQL and countSubmissionsSQL
+// share (D-47).
+const submissionsScope = `
+  FROM submission_jobs
+ WHERE invoice_id = ANY($1::uuid[])`
+
 // selectSubmissionsSQL: invoice_number comes from invoiceNumbers, never a JOIN
 // against invoices. id breaks a created_at tie within one transaction.
 const selectSubmissionsSQL = `
 SELECT id, invoice_id, idempotency_key, adapter, adapter_version, state,
-       attempts, poll_ref, last_error, created_at, updated_at
-  FROM submission_jobs
- WHERE invoice_id = ANY($1::uuid[])
+       attempts, poll_ref, last_error, created_at, updated_at` +
+	submissionsScope + `
  ORDER BY invoice_id, created_at, id`
+
+// countSubmissionsSQL backs the preview's submissions count (subtask-09).
+const countSubmissionsSQL = `SELECT count(*)` + submissionsScope
 
 // selectSubmissions writes submissions.csv, one row per submission_jobs row -- the
 // only place poll_ref appears in any CSV (AC-5). A resubmitted invoice carries more

@@ -24,12 +24,25 @@ var invoicesCSVHeader = []string{
 	"irn", "csid", "qr_payload", "rejection_reasons", "created_at",
 }
 
+// invoicesScope: the FROM/WHERE every invoices.go statement shares (D-47).
+// selectInvoicesSQL, selectInvoiceIDsSQL and countInvoicesSQL are all built from this
+// exact text so they cannot drift from each other.
+const invoicesScope = `
+  FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3`
+
 // issue_date needs an explicit ::text cast — pgx errors scanning date into *string
 // without it. numeric and jsonb scan into *string/string fine, no cast needed.
 const selectInvoicesSQL = `
 SELECT id, invoice_number, status, issue_date::text, currency, subtotal, vat, total,
-       supplier_tin, supplier_name, buyer_tin, buyer_name, irn, csid, qr_payload, rejection_reasons, created_at
-  FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY created_at, id`
+       supplier_tin, supplier_name, buyer_tin, buyer_name, irn, csid, qr_payload, rejection_reasons, created_at` +
+	invoicesScope + ` ORDER BY created_at, id`
+
+// selectInvoiceIDsSQL: no ORDER BY -- order cannot change a row set or a count
+// (D-47, subtask-09 preview).
+const selectInvoiceIDsSQL = `SELECT id` + invoicesScope
+
+// countInvoicesSQL backs countInvoices below (D-14 cap check, subtask-09 preview).
+const countInvoicesSQL = `SELECT count(*)` + invoicesScope
 
 // selectInvoices streams the entity's invoices for the period as invoices.csv, no
 // WHERE tenant_id — FORCE RLS + app.current_tenant is the sole isolation.
@@ -76,19 +89,48 @@ func selectInvoices(ctx context.Context, tx pgx.Tx, r Request, w csvWriter) ([]s
 }
 
 // countInvoices returns the exact row count selectInvoices would return for the
-// same entity+period (D-14 cap check, subtask-09 preview).
+// same entity+period (D-14 cap check), built from the same invoicesScope
+// selectInvoicesSQL and selectInvoiceIDsSQL share -- no hand-written second copy of
+// the period predicate (D-47).
 func countInvoices(ctx context.Context, tx pgx.Tx, r Request) (int, error) {
 	canonical, err := normalizeEntityID(r.EntityID)
 	if err != nil {
 		return 0, err
 	}
 	var n int
-	err = tx.QueryRow(ctx, `SELECT count(*) FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3`,
-		canonical, r.From, r.To).Scan(&n)
+	err = tx.QueryRow(ctx, countInvoicesSQL, canonical, r.From, r.To).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("archive: count invoices: %w", err)
 	}
 	return n, nil
+}
+
+// selectInvoiceIDs returns the entity's invoice ids for the period, with no CSV
+// side effect -- the preview's own id list, chunked into the child scopes (D-47,
+// subtask-09). Counts.Invoices is len(ids), not a fifth count(*).
+func selectInvoiceIDs(ctx context.Context, tx pgx.Tx, r Request) ([]string, error) {
+	canonical, err := normalizeEntityID(r.EntityID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, selectInvoiceIDsSQL, canonical, r.From, r.To)
+	if err != nil {
+		return nil, fmt.Errorf("archive: select invoice ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("archive: scan invoice id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("archive: iterate invoice ids: %w", err)
+	}
+	return ids, nil
 }
 
 // emptyIfNil: NULL -> empty CSV cell (D-8); encoding/csv never quotes a genuinely empty field.

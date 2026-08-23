@@ -23,6 +23,9 @@ import (
 // assignable from cmd/invoice without naming it.
 type assembleFn func(ctx context.Context, r Request, w io.Writer, onStart func(filename string)) error
 
+// previewFn is Store.Preview as PreviewHandler consumes it.
+type previewFn func(ctx context.Context, r Request) (Preview, error)
+
 // DownloadHandler returns GET /v1/evidence-bundle. Identity is checked FIRST,
 // before any parameter is read (AC-1); parsing runs before the store is ever
 // touched (AC-2).
@@ -58,6 +61,38 @@ func DownloadHandler(assemble assembleFn, log *slog.Logger) http.HandlerFunc {
 			log.ErrorContext(r.Context(), "archive: assemble", slog.Any("err", err))
 		}
 		writeError(w, status, body)
+	}
+}
+
+// PreviewHandler returns GET /v1/evidence-bundle/preview. Same identity-then-parse-
+// then-store order as DownloadHandler (D-52), and the same statusForErr/writeJSON/
+// writeError seam -- no second error-mapping copy.
+func PreviewHandler(preview previewFn, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		req, msg := parseRequest(r.URL.Query())
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+
+		p, err := preview(r.Context(), req)
+		if err != nil {
+			status, body := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "archive: preview", slog.Any("err", err))
+			}
+			writeError(w, status, body)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
 	}
 }
 

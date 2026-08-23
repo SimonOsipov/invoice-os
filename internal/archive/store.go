@@ -45,3 +45,20 @@ func (s *Store) Assemble(ctx context.Context, r Request, w io.Writer, onStart fu
 		})
 	})
 }
+
+// Preview reports what Assemble would produce, without producing it. Unlike
+// Assemble it needs neither TenantID nor Subject (the response carries no tenant
+// id and no generated_by), so WithinRequestTenantTxOpts' own fail-closed
+// ErrNoTenant is the whole identity check -- no actor.Resolve call (D-51).
+func (s *Store) Preview(ctx context.Context, r Request) (Preview, error) {
+	var p Preview
+	err := db.WithinRequestTenantTxOpts(ctx, s.pool, bundleTxOptions, func(tx pgx.Tx) error {
+		var err error
+		p, err = preview(ctx, tx, r, previewOpts{maxInvoices: s.maxInvoices})
+		return err
+	})
+	if err != nil {
+		return Preview{}, err
+	}
+	return p, nil
+}

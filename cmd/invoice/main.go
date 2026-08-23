@@ -95,10 +95,14 @@ func main() {
 	// this is reached as /api/invoice/v1/audit-log with no gateway change. authorize()
 	// requires only a tenant, so every member of the workspace can read it.
 	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(audit.NewStore(pool).List, app.Logger))
-	// GET /v1/evidence-bundle -- the evidence bundle download (AUDIT-05-08).
-	// Reached as /api/invoice/v1/evidence-bundle; no gateway change needed, same
-	// reasoning as GET /v1/audit-log above.
-	app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(archive.NewStore(pool).Assemble, app.Logger))
+	// GET /v1/evidence-bundle(...) -- the evidence bundle download (AUDIT-05-08) and
+	// preview (AUDIT-05-09), sharing one Store so both routes agree by construction.
+	// Reached as /api/invoice/v1/evidence-bundle...; no gateway change needed, same
+	// reasoning as GET /v1/audit-log above. Neither pattern carries a trailing slash,
+	// so /preview cannot be shadowed and registration order is irrelevant (D-52).
+	bundleStore := archive.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(bundleStore.Assemble, app.Logger))
+	app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(bundleStore.Preview, app.Logger))
 	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
 	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the
 	// rail is derived from the whole batch instead of the 50 rows on the

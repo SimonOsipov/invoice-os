@@ -29,15 +29,29 @@ var exchangeCSVHeader = []string{
 	"adapter", "adapter_version", "occurred_at",
 }
 
+// exchangeScope: the FROM/WHERE selectExchangeSQL and countExchangeSQL share (D-47).
+const exchangeScope = `
+  FROM app_exchange
+ WHERE invoice_id = ANY($1::uuid[])`
+
 // selectExchangeSQL: invoice_number comes from invoiceNumbers, never a JOIN against
 // invoices (see TestExchangeSQL_ContainsNoJoinAgainstInvoices).
 const selectExchangeSQL = `
 SELECT id, submission_job_id, invoice_id, operation, outcome, attempt, http_status,
        latency_ms, truncated, encoding_coerced, request_headers, response_headers,
-       request_body, response_body, adapter, adapter_version, occurred_at
-  FROM app_exchange
- WHERE invoice_id = ANY($1::uuid[])
+       request_body, response_body, adapter, adapter_version, occurred_at` +
+	exchangeScope + `
  ORDER BY invoice_id, occurred_at, id`
+
+// countExchangeSQL returns exchange_attempts and body_files from ONE statement, so
+// the two numbers can never come from different rows (D-47, subtask-09): the second
+// column is request_body's non-NULL count plus response_body's, matching
+// selectExchange's own "write bodies/<id>.request|.response when non-nil" rule
+// exactly, so IS NOT NULL cannot drift from Go's != nil (including an empty-string
+// body, which is representable and must still count).
+const countExchangeSQL = `SELECT count(*),
+       count(*) FILTER (WHERE request_body IS NOT NULL)
+     + count(*) FILTER (WHERE response_body IS NOT NULL)` + exchangeScope
 
 // selectExchange writes exchange.csv, re-scrubbing both header maps through
 // submission.ScrubHeaders on the way OUT regardless of what write time stored (D-7),

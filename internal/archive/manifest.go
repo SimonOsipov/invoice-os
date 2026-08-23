@@ -99,6 +99,23 @@ func bodyFileCount(entries []manifestEntry) int {
 	return n
 }
 
+// bundleEntity renders e as the manifest/preview wire shape (D-49) -- the single home
+// for entity rendering, so writeManifest and Preview cannot drift apart.
+func bundleEntity(e Entity) manifestEntity {
+	return manifestEntity{ID: e.ID, Name: e.Name, TIN: e.TIN}
+}
+
+// bundlePeriod renders r as the manifest/preview wire shape (D-49) -- the single home
+// for period rendering, so writeManifest and Preview cannot drift apart.
+func bundlePeriod(r Request) manifestPeriod {
+	return manifestPeriod{
+		From:   r.From.UTC().Format(time.RFC3339),
+		To:     r.To.UTC().Format(time.RFC3339),
+		Bounds: "inclusive",
+		Basis:  "invoices.created_at",
+	}
+}
+
 // writeManifest builds manifest.json from bw's already-recorded entries and
 // writes it as the final ZIP entry. It never appends an entry describing
 // itself -- there is no chicken-and-egg problem because bw.entries is read
@@ -109,17 +126,8 @@ func (bw *bundleWriter) writeManifest(p ManifestParams) error {
 		GeneratedAt: p.Now.UTC().Format(time.RFC3339),
 		GeneratedBy: p.GeneratedBy,
 		TenantID:    p.TenantID,
-		Entity: manifestEntity{
-			ID:   p.Entity.ID,
-			Name: p.Entity.Name,
-			TIN:  p.Entity.TIN,
-		},
-		Period: manifestPeriod{
-			From:   p.Request.From.UTC().Format(time.RFC3339),
-			To:     p.Request.To.UTC().Format(time.RFC3339),
-			Bounds: "inclusive",
-			Basis:  "invoices.created_at",
-		},
+		Entity:      bundleEntity(p.Entity),
+		Period:      bundlePeriod(p.Request),
 		Counts: manifestCounts{
 			Invoices:          entryCount(bw.entries, "invoices.csv"),
 			StatusTransitions: entryCount(bw.entries, "status_history.csv"),

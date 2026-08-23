@@ -18,14 +18,21 @@ var historyCSVHeader = []string{
 	"actor_name", "actor_kind", "changed_at",
 }
 
+// historyScope: the FROM/WHERE selectHistorySQL and countHistorySQL share (D-47).
+const historyScope = `
+  FROM invoice_status_history
+ WHERE invoice_id = ANY($1::uuid[])`
+
 // selectHistorySQL: invoice_number comes from invoiceNumbers, never a JOIN against
 // invoices (see TestHistorySQL_ContainsNoJoinAgainstInvoices). id breaks a
 // changed_at tie -- two rows in one transaction can share the same now().
 const selectHistorySQL = `
-SELECT invoice_id, from_status, to_status, actor, changed_at
-  FROM invoice_status_history
- WHERE invoice_id = ANY($1::uuid[])
+SELECT invoice_id, from_status, to_status, actor, changed_at` +
+	historyScope + `
  ORDER BY invoice_id, changed_at, id`
+
+// countHistorySQL backs the preview's status_transitions count (subtask-09).
+const countHistorySQL = `SELECT count(*)` + historyScope
 
 // historyRow is one scanned invoice_status_history row, held in memory only long
 // enough to resolve its actor before being written out.

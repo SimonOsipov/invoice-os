@@ -107,8 +107,19 @@ function actorSummary(state: AuditFilterState, facets: AuditFacets): string | un
   return undefined
 }
 
+function companySummary(state: AuditFilterState): string | undefined {
+  if (state.company.mode === 'workspace') return 'Workspace-level only'
+  if (state.company.mode === 'named') return state.company.name
+  return undefined
+}
+
+// Workspace count comes from the value===null bucket, never a client tally (AC#3).
+function companyWorkspaceCount(facets: AuditFacets): number {
+  return facets.company.find((f) => f.value === null)?.count ?? 0
+}
+
 export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCardProps) {
-  const [openPopover, setOpenPopover] = useState<'search' | 'date' | 'event' | 'actor' | null>(null)
+  const [openPopover, setOpenPopover] = useState<'search' | 'date' | 'event' | 'actor' | 'company' | null>(null)
   const closePopover = useCallback(() => setOpenPopover(null), [])
 
   const [searchDraft, setSearchDraft] = useState(state.q)
@@ -173,6 +184,14 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
       .filter((id) => !facets.actor.some((f) => f.value === id))
       .map((id): AuditFacet => ({ value: id, name: null, kind: undefined, count: 0 })),
   ]
+
+  const openCompany = useCallback(() => setOpenPopover('company'), [])
+  const selectCompanyAll = () => onChange({ ...state, company: { mode: 'all' } })
+  const selectCompanyWorkspace = () => onChange({ ...state, company: { mode: 'workspace' } })
+  // Name is captured at selection time (AC#7) -- a later refetch dropping the bucket must
+  // not blank a pill that already carries the resolved (or deleted-copy) name.
+  const selectCompanyRow = (id: string, name: string) => onChange({ ...state, company: { mode: 'named', id, name } })
+  const namedCompanyRows = facets.company.filter((f) => f.value != null)
 
   return (
     <div
@@ -488,6 +507,119 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                     </button>
                   )
                 })}
+            </div>
+          )}
+        </div>
+      </FilterPopover>
+
+      <FilterPopover
+        testId="audit-company"
+        label="Company"
+        summary={companySummary(state)}
+        open={openPopover === 'company'}
+        onOpen={openCompany}
+        onClose={closePopover}
+        disabled={busy}
+      >
+        <div style={{ width: 260, maxHeight: 380, overflowY: 'auto' }}>
+          <div style={{ padding: 6 }}>
+            <button
+              type="button"
+              data-testid="audit-company-kind-all"
+              aria-pressed={state.company.mode === 'all'}
+              onClick={selectCompanyAll}
+              className="pf-menu-item"
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                border: 0,
+                background: state.company.mode === 'all' ? 'var(--bg-3)' : 'transparent',
+                padding: '9px 12px',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 13,
+                color: state.company.mode === 'all' ? 'var(--action)' : 'var(--fg-1)',
+                cursor: 'pointer',
+              }}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              data-testid="audit-company-kind-workspace"
+              aria-pressed={state.company.mode === 'workspace'}
+              onClick={selectCompanyWorkspace}
+              className="pf-menu-item"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                gap: 2,
+                width: '100%',
+                textAlign: 'left',
+                border: 0,
+                background: state.company.mode === 'workspace' ? 'var(--bg-3)' : 'transparent',
+                padding: '9px 12px',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 13,
+                color: state.company.mode === 'workspace' ? 'var(--action)' : 'var(--fg-1)',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Workspace-level only</span>
+                <span data-testid="audit-company-count-workspace" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
+                  {companyWorkspaceCount(facets)}
+                </span>
+              </span>
+              {/* D-7 / contract §3: visible text, never a title= attribute (invisible in Chromium). */}
+              <span
+                data-testid="audit-company-workspace-caveat"
+                style={{ fontSize: 11, fontWeight: 400, color: 'var(--fg-3)', lineHeight: 1.4 }}
+              >
+                {AUDIT_COPY.companyWorkspaceCaveat}
+              </span>
+            </button>
+          </div>
+          {namedCompanyRows.length > 0 && (
+            <div style={{ padding: '6px 0', borderTop: '1px solid var(--line-1)' }}>
+              {namedCompanyRows.map((f) => {
+                const id = f.value as string
+                // Contract §5: a null Name with a non-null id is a deleted company, never blank
+                // and never mislabeled as the workspace row.
+                const label = f.name ?? AUDIT_COPY.companyDeletedLabel
+                const selected = state.company.mode === 'named' && state.company.id === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    data-testid={`audit-company-row-${id}`}
+                    aria-pressed={selected}
+                    onClick={() => selectCompanyRow(id, label)}
+                    className="pf-menu-item"
+                    style={{
+                      display: 'flex',
+                      width: '100%',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      border: 0,
+                      background: selected ? 'var(--bg-3)' : 'transparent',
+                      padding: '7px 12px',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 13,
+                      color: selected ? 'var(--action)' : 'var(--fg-1)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span data-testid={`audit-company-label-${id}`}>{label}</span>
+                    <span data-testid={`audit-company-count-${id}`} style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
+                      {f.count}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>

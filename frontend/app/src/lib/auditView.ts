@@ -25,6 +25,10 @@ export const AUDIT_COPY = {
   searchHelper:
     'Searches event details, rule keys, IRNs, company names and member display names. It cannot find an invoice number, or a member shown by their email address.',
   dateRangeInvalidReason: 'End date must be on or after the start date.',
+  // D-7 / contract §3: the workspace bucket also holds events with no company to attribute.
+  companyWorkspaceCaveat: 'Also includes events with no company to attribute them to.',
+  // Contract §5: a non-null entity_id whose company was deleted, distinct from the workspace bucket.
+  companyDeletedLabel: 'A company that no longer exists',
 } as const
 
 export type AuditScreenState = 'loading' | 'error' | 'new-workspace' | 'empty-by-filter' | 'filtered' | 'loaded'

@@ -19,6 +19,12 @@ export const AUDIT_COPY = {
   // No count to state: the only unfiltered response this screen saw reported none.
   emptyByFilterBare: 'The log is not empty. These filters exclude every event in it.',
   clearFilter: 'Clear filter',
+  // D-8: five of the seven design-named search targets are reachable; invoice number and an
+  // email-only-resolved actor name are not. Placeholder stays neutral for the same reason.
+  searchPlaceholder: 'Search event details',
+  searchHelper:
+    'Searches event details, rule keys, IRNs, company names and member display names. It cannot find an invoice number, or a member shown by their email address.',
+  dateRangeInvalidReason: 'End date must be on or after the start date.',
 } as const
 
 export type AuditScreenState = 'loading' | 'error' | 'new-workspace' | 'empty-by-filter' | 'filtered' | 'loaded'

@@ -408,3 +408,22 @@ describe('company no-swallow, end to end at the client layer', () => {
     expect(url, 'no workspace literal riding alongside a named selection').not.toContain('workspace')
   })
 })
+
+// AUDIT-07-07 (task-659) RED spec: pins the fix for the bug 07-04's architecture pass left
+// standing -- the server never resolves Name for the event facet (internal/audit/facets.go /
+// reader.go), so a label built from facets.event[i].name falls through to the raw id. Facets
+// below carry name: null, the real server shape; the fix must read auditEventView(id).label.
+describe('auditFilterPills event label (AUDIT-07-07)', () => {
+  it('auditFilters_eventPillUsesVocabularyLabelNotRawId', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: ['invoice.kept_as_is'] }
+    const facets: AuditFacets = { ...EMPTY_FACETS, event: [{ value: 'invoice.kept_as_is', name: null, count: 4 }] }
+
+    const pills = auditFilterPills(state, facets)
+
+    const eventPill = pills.find((p) => p.key === 'event:invoice.kept_as_is')
+    expect(eventPill, 'the event pill must exist').toBeDefined()
+    // AUDIT_EVENTS['invoice.kept_as_is'].label in lib/auditVocabulary.ts -- checked verbatim, not quoted from memory.
+    expect(eventPill?.label, 'must be the vocabulary label, never the raw id').toBe('Kept as is')
+    expect(eventPill?.label).not.toBe('invoice.kept_as_is')
+  })
+})

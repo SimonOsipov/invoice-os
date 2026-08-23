@@ -103,7 +103,7 @@ describe('AuditView states', () => {
     expect(copy).toContain('1')
     expect(copy).not.toContain('0 events')
     // The pills are repeated beside the copy, so the user can see what to remove.
-    expect(screen.getByTestId('audit-filter-pill')).toBeTruthy()
+    expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy()
   })
 
   it('auditStates_newWorkspaceSaysNothingAboutFilters', async () => {
@@ -226,7 +226,7 @@ describe('AuditView immutability strip', () => {
     await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('7'))
     await applyInvoiceFilter()
 
-    await waitFor(() => expect(screen.getByTestId('audit-filter-pill')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy())
     const copy = screen.getByTestId('audit-immutability-strip').textContent ?? ''
     expect(copy).not.toContain('999')
     expect(copy).toContain('7')
@@ -591,5 +591,166 @@ describe('AuditView company control (AUDIT-07-06 QA)', () => {
       screen.queryByTestId('audit-company-row-co-acme'),
       'control needle: the bucket really vanished from the popover row list',
     ).toBeNull()
+  })
+})
+
+// AUDIT-07-07 (task-659) RED specs: the pills row moves into AuditFilterCard as its second
+// row. Testids are keyed on pill.key -- audit-pill-${key} -- plus audit-clear-all. Do not
+// implement here; these fail until the executor lands the move + auditFilterIsDefault gate.
+describe('AuditView pills row (AUDIT-07-07)', () => {
+  it('auditPills_defaultShowsTheThirtyDayPill', async () => {
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    const pills = screen.getAllByTestId(/^audit-pill-/)
+    expect(pills.length, 'only the default 30-day pill exists at first landing').toBe(1)
+    expect(screen.getByTestId('audit-pill-range').textContent).toContain('Last 30 days')
+  })
+
+  it('auditPills_everyAppliedFilterHasOne', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(logResponse()))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(screen.getByTestId('audit-pill-q')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('audit-event-trigger')).toHaveProperty('disabled', false))
+
+    fireEvent.click(screen.getByTestId('audit-event-trigger'))
+    fireEvent.click(screen.getByTestId('audit-event-row-invoice.kept_as_is'))
+    fireEvent.click(screen.getByTestId('audit-event-row-invoice.approval_approved'))
+    await waitFor(() => expect(screen.getByTestId('audit-pill-event:invoice.approval_approved')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('audit-actor-trigger')).toHaveProperty('disabled', false))
+
+    fireEvent.click(screen.getByTestId('audit-actor-trigger'))
+    fireEvent.click(screen.getByTestId('audit-actor-kind-people'))
+    await waitFor(() => expect(screen.getByTestId('audit-pill-actorKind')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('audit-company-trigger')).toHaveProperty('disabled', false))
+
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    await waitFor(() => expect(screen.getByTestId('audit-pill-company')).toBeTruthy())
+
+    await applyInvoiceFilter()
+    await waitFor(() => expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy())
+
+    // range (always-on) + q + 2 events + actorKind + company + invoice = 7 -- matches
+    // auditFilters.test.ts's auditFilters_everyNonDefaultFieldGetsExactlyOnePill, not the
+    // "6" shorthand in the plan's Test Specs table, which undercounts the 2-event expansion.
+    const pills = screen.getAllByTestId(/^audit-pill-/)
+    expect(pills.length, 'every applied filter has exactly one pill, including the default').toBe(7)
+    for (const p of pills) expect(p.tagName, 'each pill is itself the remove control').toBe('BUTTON')
+  })
+
+  it('auditPills_removingOneRemovesOnlyThat', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    fireEvent.click(screen.getByTestId('audit-event-trigger'))
+    fireEvent.click(screen.getByTestId('audit-event-row-invoice.kept_as_is'))
+    await waitFor(() => expect(calls.some((u) => u.includes('event=invoice.kept_as_is'))).toBe(true))
+
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    await waitFor(() => expect(calls.some((u) => u.includes('company=workspace'))).toBe(true))
+
+    const callsBefore = calls.length
+    fireEvent.click(screen.getByTestId('audit-pill-company'))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore))
+
+    const last = calls[calls.length - 1]
+    expect(last, 'company must be dropped by removing only its pill').not.toContain('company=')
+    expect(last, 'q must survive the removal').toContain('q=kept')
+    expect(last, 'event must survive the removal').toContain('event=invoice.kept_as_is')
+  })
+
+  it('auditPills_removeFiresExactlyOneRefetch', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    const callsBefore = calls.length
+    fireEvent.click(screen.getByTestId('audit-pill-q'))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore))
+    // Assert the delta itself, not just ">0" -- a double-fire bug would still pass a bare floor.
+    expect(calls.length - callsBefore, 'removing one pill must fire exactly one refetch').toBe(1)
+  })
+
+  it('auditPills_clearAllReturnsToDefault', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn((url: string) => {
+      calls.push(url)
+      return Promise.resolve(logResponse())
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    await waitFor(() => expect(calls.some((u) => u.includes('company=workspace'))).toBe(true))
+
+    fireEvent.click(screen.getByTestId('audit-clear-all'))
+    await waitFor(() => expect(screen.getByTestId('audit-pill-range')).toBeTruthy())
+
+    const last = calls[calls.length - 1]
+    const params = new URL(last).searchParams
+    expect(Array.from(params.keys()), 'Clear all must leave only the 30-day default on the wire').toEqual(['from'])
+  })
+
+  it('auditPills_clearAllAbsentAtDefault', async () => {
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    // Control needle: the pills row itself must render before the absence check means anything.
+    expect(screen.getByTestId('audit-pill-range'), 'control needle: the pills row renders at default').toBeTruthy()
+    expect(screen.queryByTestId('audit-clear-all'), 'Clear all must be absent with nothing beyond the default').toBeNull()
+  })
+
+  it('auditPills_invoicePillCopyIsUnchanged', async () => {
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await applyInvoiceFilter()
+    await waitFor(() => expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy())
+    // Byte-identical to AUDIT-06's shipped copy (lib/auditView.ts:55-57).
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain('Invoice INV-9')
+    cleanup()
+
+    mockFetchSequence([logResponse({ events: [auditEvent({ payload: { id: 'inv-9' } })] })])
+    render(<AuditView ctx={auditCtx()} />)
+    await applyInvoiceFilter()
+    await waitFor(() => expect(screen.getByTestId('audit-pill-invoice')).toBeTruthy())
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain('One invoice')
   })
 })

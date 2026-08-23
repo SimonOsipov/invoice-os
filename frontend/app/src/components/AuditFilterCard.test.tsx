@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditFacets } from '../lib/audit'
 import { AUDIT_FILTER_DEFAULT, auditFilterQuery, type AuditFilterState } from '../lib/auditFilters'
+import { AUDIT_EVENTS, type AuditDomain } from '../lib/auditVocabulary'
 
 import { AuditFilterCard } from './AuditFilterCard'
 
@@ -18,9 +19,9 @@ function facets(): AuditFacets {
   return { event: [], actor: [], company: [] }
 }
 
-function renderCard(state: AuditFilterState = AUDIT_FILTER_DEFAULT) {
+function renderCard(state: AuditFilterState = AUDIT_FILTER_DEFAULT, customFacets: AuditFacets = facets()) {
   const onChange = vi.fn()
-  const utils = render(<AuditFilterCard state={state} facets={facets()} busy={false} onChange={onChange} />)
+  const utils = render(<AuditFilterCard state={state} facets={customFacets} busy={false} onChange={onChange} />)
   return { ...utils, onChange }
 }
 
@@ -199,5 +200,192 @@ describe('AuditFilterCard: date range', () => {
     expect(screen.getByTestId('audit-date-apply').tagName, 'Apply must be a real button').toBe('BUTTON')
     expect(screen.getByTestId('audit-date-custom-from').tagName, 'From must be a real input').toBe('INPUT')
     expect(screen.getByTestId('audit-date-custom-to').tagName, 'To must be a real input').toBe('INPUT')
+  })
+})
+
+// AUDIT-07-04 (task-656): event-type control -- ten domains, live counts, All/Clear, sticky
+// Clear all. RED -- AuditFilterCard has no event-type popover yet.
+const DOMAIN_ORDER: AuditDomain[] = [
+  'invoices',
+  'approvals',
+  'policies',
+  'roles',
+  'companies',
+  'documents',
+  'memberships',
+  'validation',
+  'submissions',
+  'reconciliation',
+]
+
+const DOMAIN_HEADING_TEXT: Record<AuditDomain, string> = {
+  invoices: 'Invoices',
+  approvals: 'Approvals',
+  policies: 'Policies',
+  roles: 'Roles',
+  companies: 'Companies',
+  documents: 'Documents',
+  memberships: 'Memberships',
+  validation: 'Validation rules',
+  submissions: 'Submissions',
+  reconciliation: 'Reconciliation',
+}
+
+function idsInDomain(domain: AuditDomain): string[] {
+  return Object.entries(AUDIT_EVENTS)
+    .filter(([, def]) => def.domain === domain)
+    .map(([id]) => id)
+}
+
+function openEventPopover() {
+  fireEvent.click(screen.getByTestId('audit-event-trigger'))
+}
+
+describe('AuditFilterCard: event type', () => {
+  it('auditEventFilter_tenGroupsCoverAllThirtySix', () => {
+    renderCard()
+    openEventPopover()
+
+    const groups = screen.getAllByTestId(/^audit-event-group-.*-heading$/)
+    expect(groups.length, 'population floor: ten group headings').toBe(10)
+
+    const rows = screen.getAllByTestId(/^audit-event-row-/)
+    expect(rows.length, 'population floor: 36 rows').toBe(36)
+
+    const flattenedIds = rows.map((r) => r.getAttribute('data-testid')!.replace('audit-event-row-', ''))
+    expect(flattenedIds, 'the union of every group must equal the vocabulary exactly').toEqual(Object.keys(AUDIT_EVENTS))
+  })
+
+  it('auditEventFilter_groupOrderIsFixed', () => {
+    function headingTexts(): (string | null)[] {
+      openEventPopover()
+      const headings = screen.getAllByTestId(/^audit-event-group-.*-heading$/)
+      expect(headings.length, 'population floor: ten group headings').toBe(10)
+      return headings.map((h) => h.textContent)
+    }
+
+    const expected = DOMAIN_ORDER.map((d) => DOMAIN_HEADING_TEXT[d])
+
+    const first = renderCard()
+    const firstOrder = headingTexts()
+    expect(firstOrder, 'first render must follow the declared domain order').toEqual(expected)
+    first.unmount()
+
+    renderCard()
+    const secondOrder = headingTexts()
+    expect(secondOrder, 'a second render must produce the identical order').toEqual(expected)
+  })
+
+  it('auditEventFilter_typeAbsentFromFacetsShowsZeroAndStaysSelectable', () => {
+    const f = facets()
+    f.event = Object.keys(AUDIT_EVENTS)
+      .filter((id) => id !== 'document.reused')
+      .map((id) => ({ value: id, name: null, count: 1 }))
+    const { onChange } = renderCard(AUDIT_FILTER_DEFAULT, f)
+    openEventPopover()
+
+    const count = screen.getByTestId('audit-event-count-document.reused')
+    expect(count.textContent, 'a bucket-less type renders 0').toBe('0')
+
+    const row = screen.getByTestId('audit-event-row-document.reused') as HTMLButtonElement
+    expect(row.disabled, 'a zero-count type must stay selectable').toBe(false)
+
+    fireEvent.click(row)
+    expect(onChange, 'clicking it must still fire a change -- proving it is genuinely interactive').toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    expect(next.events).toContain('document.reused')
+  })
+
+  it('auditEventFilter_documentReadIsPresent', () => {
+    renderCard()
+    openEventPopover()
+    expect(screen.getByTestId('audit-event-row-document.read'), 'document.read must render (Decision Q2)').toBeTruthy()
+    const label = screen.getByTestId('audit-event-label-document.read')
+    expect(label.textContent).toBe('Document opened')
+  })
+
+  it('auditEventFilter_groupAllSelectsOnlyThatGroup', () => {
+    const approvalIds = idsInDomain('approvals')
+    expect(approvalIds.length, 'sanity: approvals has 4 ids').toBe(4)
+
+    const { onChange } = renderCard()
+    openEventPopover()
+    fireEvent.click(screen.getByTestId('audit-event-group-approvals-all'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    expect([...next.events].sort(), "All must select exactly that group's ids").toEqual([...approvalIds].sort())
+  })
+
+  it('auditEventFilter_groupClearRemovesOnlyThatGroup', () => {
+    const approvalIds = idsInDomain('approvals')
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: [...approvalIds, 'invoice.created'] }
+    const { onChange } = renderCard(state)
+    openEventPopover()
+    fireEvent.click(screen.getByTestId('audit-event-group-approvals-clear'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    expect(next.events, "control needle: the untouched invoice selection must survive").toContain('invoice.created')
+    expect(next.events, 'Clear must remove only that group').toEqual(['invoice.created'])
+  })
+
+  it('auditEventFilter_clearAllEmptiesOnlyEvents', () => {
+    const state: AuditFilterState = {
+      ...AUDIT_FILTER_DEFAULT,
+      events: ['invoice.created', 'document.read'],
+      q: 'acme',
+      company: { mode: 'workspace' },
+    }
+    const { onChange } = renderCard(state)
+    openEventPopover()
+    fireEvent.click(screen.getByTestId('audit-event-clear-all'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    expect(next.q, 'control needle: q must survive untouched').toBe('acme')
+    expect(next.company, 'control needle: company must survive untouched').toEqual({ mode: 'workspace' })
+    expect(next.events, 'events alone must empty').toEqual([])
+  })
+
+  it('auditEventFilter_rendersLabelsNeverIdentifiers', () => {
+    renderCard()
+    openEventPopover()
+
+    const labels = screen.getAllByTestId(/^audit-event-label-/)
+    expect(labels.length, 'population floor: 36 labels').toBe(36)
+
+    const texts = labels.map((l) => l.textContent ?? '')
+    expect(texts, 'control needle: a known human label must be present').toContain('Transmission failed')
+    expect(texts.every((t) => !t.includes('.')), 'no raw identifier as the primary label').toBe(true)
+  })
+
+  // The story's most important honesty constraint (CA-4, D-2): the count must come from
+  // facets.event, never from anything else the component could plausibly derive a number
+  // from. Every decoy below is deliberately distinct from the two real counts.
+  it('auditEventFilter_countsComeFromTheFacetNotAnyOtherDerivation', () => {
+    const f = facets()
+    f.event = [
+      { value: 'invoice.created', name: null, count: 999 },
+      { value: 'document.created', name: null, count: 5 },
+    ]
+    const state: AuditFilterState = {
+      ...AUDIT_FILTER_DEFAULT,
+      events: ['workflow_role.created', 'approval_policy.created', 'membership.suspended'],
+    }
+    renderCard(state, f)
+    openEventPopover()
+
+    const created = screen.getByTestId('audit-event-count-invoice.created')
+    expect(created.textContent, 'control needle: the real facet count must render').toBe('999')
+    expect(created.textContent, "must not be the OTHER bucket's count").not.toBe('5')
+    expect(created.textContent, 'must not be the sum of every bucket').not.toBe('1004')
+    expect(created.textContent, 'must not be facets.event.length').not.toBe('2')
+    expect(created.textContent, 'must not be the number of currently-selected events').not.toBe(
+      String(state.events.length),
+    )
+
+    const documentCreated = screen.getByTestId('audit-event-count-document.created')
+    expect(documentCreated.textContent, "a second bucket must show its own count, not the first row's").toBe('5')
   })
 })

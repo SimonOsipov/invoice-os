@@ -1271,6 +1271,9 @@ describe('EvidenceBundleDrawer', () => {
     expect(blob.size).toBe(ZIP_BYTES)
     expect(blob.type).toBe('application/zip')
     expect(dl.clicks).toHaveLength(1)
+    // The anchor must POINT at those bytes. Without this, a handler that never assigns
+    // a.href clicks an inert anchor, writes no file, and every other rung here still passes.
+    expect(dl.clicks[0].href).toBe(dl.createSpy.mock.results[0].value)
     expect(dl.revokeSpy).toHaveBeenCalledTimes(1)
     // Spy ARGUMENTS, never a.href: the stub's URL is per-call unique, so this cannot pass on
     // any other string the component happened to keep.
@@ -1422,5 +1425,212 @@ describe('EvidenceBundleDrawer', () => {
     // D-08-20: the bare fetch cannot reach createAuthedFetch's sign-out seam. First
     // measurement of that claim anywhere in the repo.
     expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  // EB-06-12 -- the catch branch's twin of EB-06-4's release rung. The stubbed fetch ignores
+  // `signal` and RESOLVES, so no shipped spec ever reaches the aborted guard inside catch.
+  it('building_aStaleRejectionAfterCancelNeverShowsFailure', async () => {
+    const rejects: Array<(e: unknown) => void> = []
+    routedFetch({ bundle: () => new Promise<MockResponse>((_, reject) => rejects.push(reject)) })
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-building')
+
+    fireEvent.click(screen.getByTestId('evidence-building-cancel'))
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-prepare'])
+
+    expect(rejects).toHaveLength(1)
+    rejects[0](new DOMException('The user aborted a request.', 'AbortError'))
+    await flush()
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-prepare'])
+    expect(dl.createSpy).not.toHaveBeenCalled()
+    expect(onToast).not.toHaveBeenCalled()
+    cleanup()
+
+    // Control: the identical rejection WITHOUT a cancel does land in Failed, so the rung
+    // above is not passing merely because rejections are dropped on the floor everywhere.
+    const live: Array<(e: unknown) => void> = []
+    routedFetch({ bundle: () => new Promise<MockResponse>((_, reject) => live.push(reject)) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-building')
+    live[0](new TypeError('Failed to fetch'))
+    await screen.findByTestId('evidence-bundle-failure')
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-failure'])
+  })
+
+  // EB-06-13 -- AC-2 on the RETRY path. EB-06-5 only counts the second request; a Try again
+  // that re-derives the window from the live clock issues one too.
+  it('retry_reusesTheFrozenPairNotAFreshWindow', async () => {
+    const fetchMock = routedFetch({
+      bundle: (n) => (n === 0 ? errorResponse(500, 'bundle assembly failed') : bundleResponse()),
+    })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-bundle-failure')
+    const first = parseCall(downloadCalls(fetchMock)[0])
+
+    vi.setSystemTime(new Date('2026-08-25T01:00:00.000Z'))
+    // Control: the clock crossed a UTC midnight, so a re-derivation is distinguishable.
+    expect(bundleRequestFor('ent-a', { preset: '30d' }, new Date())?.from).not.toBe(first.from)
+
+    fireEvent.click(screen.getByTestId('evidence-failed-retry'))
+    await waitFor(() => expect(downloadCalls(fetchMock)).toHaveLength(2))
+    expect(parseCall(downloadCalls(fetchMock)[1])).toEqual(first)
+    await screen.findByTestId('evidence-ready')
+  })
+
+  // EB-06-14 -- Start another had no oracle at all: the whole onClick could be deleted.
+  it('ready_startAnotherReturnsToTheFormAndDownloadsNothing', async () => {
+    const fetchMock = routedFetch()
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    fireEvent.click(screen.getByTestId('evidence-ready-start-another'))
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-prepare'])
+    expect(screen.getByTestId('evidence-confirm-block')).toBeTruthy()
+    expect(dl.createSpy).not.toHaveBeenCalled()
+    expect(onToast).not.toHaveBeenCalled()
+    expect(downloadCalls(fetchMock)).toHaveLength(1)
+
+    // The returned Form is live, not a corpse: Prepare builds again from the same block.
+    fireEvent.click(screen.getByTestId('evidence-bundle-prepare'))
+    await waitFor(() => expect(downloadCalls(fetchMock)).toHaveLength(2))
+    await screen.findByTestId('evidence-ready')
+  })
+
+  // EB-06-15 -- EB-06-8's fixture cannot tell the two file names or the two counts apart:
+  // PREVIEW.filename is also the disposition it sends, and 507 is the only count in play.
+  it('toast_namesTheCountAndFileThatActuallyLanded', async () => {
+    const preview: EvidenceBundlePreview = { ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 42 } }
+    // Fixture controls: both facts must differ from the shipped ones to discriminate.
+    expect(SERVER_NAMED).not.toBe(PREVIEW.filename)
+    expect(preview.counts.invoices).not.toBe(PREVIEW.counts.invoices)
+
+    routedFetch({
+      preview: () => previewResponse(preview),
+      bundle: () => bundleResponse(`attachment; filename=${SERVER_NAMED}`),
+    })
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    expect(onToast).toHaveBeenCalledTimes(1)
+    const text = String(onToast.mock.calls[0][0].text)
+    expect(text).toContain(SERVER_NAMED)
+    expect(text).not.toContain(PREVIEW.filename)
+    expect(text).toContain('42')
+    expect(text).not.toContain('507')
+    // What the toast claims is what the browser was told to save.
+    expect(dl.clicks[0].download).toBe(SERVER_NAMED)
+  })
+
+  // EB-06-16 -- the Ready surface element by element. The title and both mono classes had no
+  // oracle: each could be deleted with all 56 specs green (AC-5 names the mono explicitly).
+  it('ready_statesTitleFilenameAndSizeAsThreeMonoAwareLeaves', async () => {
+    routedFetch()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    expect(screen.getByTestId('evidence-ready-title').textContent).toBe(EVIDENCE_COPY.readyTitle)
+    const filename = screen.getByTestId('evidence-ready-filename')
+    const line = screen.getByTestId('evidence-ready-line')
+    expect(filename.textContent).toBe(PREVIEW.filename)
+    expect(line.textContent).toBe(bundleReadyLine(ZIP_BYTES))
+    expect(filename.className.split(/\s+/)).toContain('mono')
+    expect(line.className.split(/\s+/)).toContain('mono')
+    expect(screen.getByTestId('evidence-ready-download').textContent).toBe(EVIDENCE_COPY.downloadLabel)
+    expect(screen.getByTestId('evidence-ready-start-another').textContent).toBe(EVIDENCE_COPY.startAnotherLabel)
+    // Three separate leaves, so no assertion above is reading a glued sibling.
+    expect(new Set([filename, line, screen.getByTestId('evidence-ready-title')]).size).toBe(3)
+  })
+
+  // EB-06-17 -- ZIP_BYTES is the one size any spec renders, and it sits mid-unit. A zero-byte
+  // body and the three boundary values are where a stubbed or truncated size would show.
+  it.each([
+    { bytes: 0, reads: '0 B' },
+    { bytes: 1023, reads: '1023 B' },
+    { bytes: 1024, reads: '1 KB' },
+    { bytes: 1_048_575, reads: '1 MB' },
+  ])('ready_statesTheRealSizeAtAUnitBoundary -- $bytes bytes', async ({ bytes, reads }) => {
+    routedFetch({ bundle: () => bundleResponse(undefined, bytes) })
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    expect(screen.getByTestId('evidence-ready-line').textContent).toBe(`ZIP · ${reads} · MANIFEST · SHA-256`)
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    // The toast repeats the size, so the two readouts cannot disagree.
+    expect(String(onToast.mock.calls[0][0].text)).toContain(`(${reads}).`)
+    expect((dl.createSpy.mock.calls[0][0] as Blob).size).toBe(bytes)
+  })
+
+  // EB-06-18 -- the server names the file. DISPOSITION_RE fences the header, but the preview
+  // filename it falls back to is unfenced, and it reaches the DOM, the anchor and the toast.
+  it('ready_aHostileFilenameIsTextAndTheHostileHeaderIsRefused', async () => {
+    const HOSTILE = 'ASComply <script>alert(1)</script> & "quoted".zip'
+    const preview: EvidenceBundlePreview = { ...PREVIEW, filename: HOSTILE }
+
+    // (a) no header at all: the hostile preview name is what lands, rendered as TEXT.
+    routedFetch({ preview: () => previewResponse(preview), bundle: () => bundleResponse(null) })
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    const drawer = screen.getByTestId('evidence-bundle-drawer')
+    expect(screen.getByTestId('evidence-ready-filename').textContent).toBe(HOSTILE)
+    expect(drawer.querySelector('script')).toBeNull()
+    expect(drawer.innerHTML).toContain('&lt;script&gt;')
+    expect(drawer.innerHTML).not.toContain('<script>')
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    expect(dl.clicks[0].download).toBe(HOSTILE)
+    expect(String(onToast.mock.calls[0][0].text)).toContain(HOSTILE)
+    cleanup()
+
+    // (b) the same string arriving in the HEADER is refused by DISPOSITION_RE, so the name
+    // on screen is the fallback -- here the shipped one, which differs from HOSTILE.
+    routedFetch({ bundle: () => bundleResponse(`attachment; filename=${HOSTILE}`) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+    expect(screen.getByTestId('evidence-ready-filename').textContent).toBe(PREVIEW.filename)
+  })
+
+  // EB-06-19 -- st06-plan §9 forbids an in-flight guard on Download, so two clicks are two
+  // saves. Pinned in both directions: two files AND no second trip to the network.
+  it('download_clickedTwiceSavesTwiceAndRefetchesNothing', async () => {
+    const fetchMock = routedFetch()
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    const button = screen.getByTestId('evidence-ready-download')
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    expect(dl.createSpy).toHaveBeenCalledTimes(2)
+    expect(dl.clicks).toHaveLength(2)
+    expect(dl.clicks.map((c) => c.href)).toEqual(['blob:evidence-1', 'blob:evidence-2'])
+    expect(dl.revokeSpy.mock.calls.map((c) => c[0])).toEqual(['blob:evidence-1', 'blob:evidence-2'])
+    expect(onToast).toHaveBeenCalledTimes(2)
+    expect(onToast.mock.calls[1][0]).toEqual(onToast.mock.calls[0][0])
+    // The bytes are already held: Download is a save, not a second build.
+    expect(downloadCalls(fetchMock)).toHaveLength(1)
+    expect(phaseOnScreen()).toEqual(['evidence-ready'])
   })
 })

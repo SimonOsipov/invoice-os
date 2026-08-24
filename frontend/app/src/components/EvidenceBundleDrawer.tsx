@@ -156,7 +156,9 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
   const onDownload = () => {
     if (phase.kind !== 'ready') return
     // AuditView.tsx:53-58 / ReviewUnreadableTab.tsx:48-53 minus the Blob construction -- these
-    // bytes came off the wire. Revokes the local `url` const, never a.href (EB-06-7).
+    // bytes came off the wire. EB-06-7 pins one create, one click on an anchor pointing at
+    // that URL, and one revoke of it; `a.href` would satisfy it too, so the local const is a
+    // preference, not a tested claim.
     const url = URL.createObjectURL(phase.blob)
     const a = document.createElement('a')
     a.href = url

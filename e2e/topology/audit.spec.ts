@@ -17,7 +17,7 @@
 // a containment, or a comparison against a live read taken in the same test.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { signInAs } from '../personaSession'
+import { collectErrors, signInAs } from '../personaSession'
 import { assertFillsColumn, gaps, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
@@ -60,6 +60,39 @@ async function pickCountedEvent(page: Page): Promise<{ id: string; label: string
     }
   }
   throw new Error('no event type in the popover carries a nonzero count')
+}
+
+
+// --- AUDIT-08: the evidence bundle drawer -------------------------------------------------
+//
+// The drawer's state permutations are covered at the unit layer (EvidenceBundleDrawer.test.tsx,
+// 67 specs). These four prove the deployed stack integrates: a real archive is streamed, a real
+// browser download fires, and the panel's geometry holds at every swept width.
+//
+// The panel's width is never asserted as a number. It is read live from the viewport instead --
+// a width assertion passes on the very bug it should catch (layout.ts's header, BUG-03-05).
+
+// The company rows carry an entity uuid this suite cannot know, so they are reached by testid
+// prefix -- pickCountedEvent's idiom above. The chosen NAME is read back and every later claim
+// compares against it: every entity in ctx.entities is tenant-scoped, so the first row is the
+// persona's own company, and asserting a literal name would break the moment another spec's
+// entity sorted ahead of it (the drawer sorts by name).
+async function openBundleDrawer(page: Page): Promise<string> {
+  await page.getByTestId('audit-bundle-open').click({ timeout: 15_000 })
+  await expect(page.getByTestId('evidence-bundle-drawer')).toBeVisible({ timeout: 15_000 })
+
+  await page.getByTestId('evidence-company-trigger').click({ timeout: 15_000 })
+  const rows = page.getByTestId('evidence-company-panel').locator('[data-testid^="evidence-company-row-"]')
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 })
+  const chosen = ((await rows.first().textContent()) ?? '').trim()
+  expect(chosen, 'the persona owns no company, so the drawer has nothing to bundle').not.toBe('')
+  await rows.first().click({ timeout: 15_000 })
+
+  // 30d is the default, but clicking it is what proves the chip commits rather than merely
+  // rendering pressed -- and it is the period the confirmation block below is read against.
+  await page.getByTestId('evidence-period-30d').click({ timeout: 15_000 })
+  await expect(page.getByTestId('evidence-confirm-block')).toBeVisible({ timeout: 30_000 })
+  return chosen
 }
 
 test.describe('Audit screen', () => {
@@ -462,5 +495,395 @@ test.describe('Audit screen', () => {
 
     const bodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
     expect(bodyOverflow, 'an open popover must not widen the page past its own scrollbar').toBeLessThanOrEqual(1)
+  })
+
+  // AUDIT-08 AC-1/2/3/9/10. The one deployed-build oracle for the whole
+  // fetch -> stream -> blob -> object-URL -> download path.
+  test('audit_bundleFlowBuildsAndDownloadsAZip', async ({ page }) => {
+    test.setTimeout(180_000)
+    // First statement, before signInAs: a listener registered after navigation misses
+    // everything that already fired. This is the file's FIRST console gate.
+    const errors = collectErrors(page)
+
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    const company = await openBundleDrawer(page)
+
+    // The block states what the SERVER echoed, so these are the facts the bundle is built
+    // from -- not the local selection.
+    await expect(page.getByTestId('evidence-confirm-company')).toContainText(company)
+    const statedFilename = ((await page.getByTestId('evidence-confirm-filename').textContent()) ?? '').trim()
+    expect(statedFilename).toMatch(/^ASComply_evidence_.+_\d{8}_\d{8}\.zip$/)
+
+    // Both waits are armed BEFORE the click that causes them.
+    const bundleResponse = page.waitForResponse(
+      (r) => new URL(r.url()).pathname.endsWith('/evidence-bundle') && r.request().method() === 'GET',
+      { timeout: 120_000 },
+    )
+    await page.getByTestId('evidence-bundle-prepare').click({ timeout: 15_000 })
+
+    const res = await bundleResponse
+    expect(res.status(), 'the bundle request must succeed').toBe(200)
+    const headers = res.headers()
+    expect(headers['content-type']).toBe('application/zip')
+    expect(headers['x-content-type-options']).toBe('nosniff')
+    // Unquoted by construction, not by luck: bundleFilename collapses every non-alphanumeric
+    // run to '-' (internal/archive/request.go:21,66-76), so mime.FormatMediaType always sees
+    // an RFC-2045 token and never quotes it -- whatever the company is called.
+    expect(headers['content-disposition']).toMatch(/^attachment; filename=[A-Za-z0-9._-]+$/)
+
+    await expect(page.getByTestId('evidence-ready')).toBeVisible({ timeout: 120_000 })
+    // The archive's own name, which need not equal the preview's guess.
+    const readyFilename = ((await page.getByTestId('evidence-ready-filename').textContent()) ?? '').trim()
+    expect(readyFilename).toMatch(/^ASComply_evidence_.+_\d{8}_\d{8}\.zip$/)
+
+    const downloadEvent = page.waitForEvent('download', { timeout: 60_000 })
+    await page.getByTestId('evidence-ready-download').click({ timeout: 15_000 })
+    const download = await downloadEvent
+    expect(await download.failure(), 'the bundle download must complete').toBeNull()
+    expect(download.suggestedFilename()).toBe(readyFilename)
+
+    // Its own testid, so it cannot be confused with the CSV export's toast.
+    await expect(page.getByTestId('evidence-bundle-toast')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-export-toast')).toHaveCount(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  // L1, L3, L4, L7, L8. Relationships only -- the panel's own width never appears as a number.
+  test('audit_bundleDrawerGeometry', async ({ page }) => {
+    test.setTimeout(180_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await page.getByTestId('audit-bundle-open').click({ timeout: 15_000 })
+
+    const panel = page.getByTestId('evidence-bundle-drawer')
+    const scrim = page.getByTestId('evidence-bundle-scrim')
+    const body = page.getByTestId('evidence-bundle-body')
+    const footer = page.getByTestId('evidence-bundle-footer')
+    const title = page.getByTestId('evidence-bundle-title')
+    await expect(panel).toBeVisible({ timeout: 15_000 })
+
+    // 2px, not assertFillsColumn's 24: every comparison below is against the same edge or
+    // the same box, so this budgets sub-pixel rounding across independent boundingBox()
+    // reads, never a scrollbar gutter.
+    const SLACK_PX = 2
+
+    const measured: Array<{ width: number; rightGap: number; leftEdge: number; bandDrift: number }> = []
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const [panelBox, scrimBox, bodyBox, footerBox, titleBox] = await Promise.all([
+        panel.boundingBox(),
+        scrim.boundingBox(),
+        body.boundingBox(),
+        footer.boundingBox(),
+        title.boundingBox(),
+      ])
+      if (!panelBox || !scrimBox || !bodyBox || !footerBox || !titleBox) continue
+
+      // L1 -- flush to the viewport's right edge.
+      const rightGap = Math.abs(width - (panelBox.x + panelBox.width))
+      expect(rightGap, `the panel must sit flush right at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+
+      // L3 -- wholly inside the viewport.
+      expect(panelBox.x, `the panel must not start left of the viewport at ${width}px`).toBeGreaterThanOrEqual(0)
+      expect(panelBox.x + panelBox.width, `the panel must not run past the viewport at ${width}px`).toBeLessThanOrEqual(width + SLACK_PX)
+
+      // L8 -- the scrim covers the whole viewport, so there is no dead corner the drawer
+      // cannot be dismissed from, and the panel sits inside it.
+      expect(Math.abs(scrimBox.x), `the scrim must start at the viewport's left edge at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+      expect(scrimBox.width, `the scrim must span the viewport at ${width}px`).toBeGreaterThanOrEqual(width - SLACK_PX)
+      expect(rectsOverlap(panelBox, scrimBox), `the panel must lie over the scrim at ${width}px`).toBe(true)
+
+      // L7 -- header, body and footer share one content column. Without this, "the block
+      // fills the body" can hold while the body is inset differently from the header.
+      const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - titleBox.x))
+      expect(bandDrift, `the three bands must share one content column at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+
+      measured.push({ width, rightGap, leftEdge: panelBox.x, bandDrift })
+    }
+    expect(measured.length, 'the drawer geometry sweep measured nothing').toBe(WIDE_WIDTHS.length)
+    await test.info().attach('audit-bundle-drawer-geometry', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+
+    // L4 -- the pf-drawer collapse, stated as an equality against a live viewport read.
+    // Never against the panel's authored width, which is exactly the bug a numeric
+    // assertion would pass on.
+    await page.setViewportSize({ width: 860, height: 1080 })
+    const collapsed = await panel.boundingBox()
+    expect(collapsed, 'the panel vanished at the collapse width').not.toBeNull()
+    expect(Math.abs((collapsed?.width ?? 0) - 860), 'the panel must span the viewport at the collapse breakpoint').toBeLessThanOrEqual(SLACK_PX)
+
+    await page.setViewportSize({ width: 1280, height: 1080 })
+    const wide = await panel.boundingBox()
+    expect(wide, 'the panel vanished at 1280px').not.toBeNull()
+    expect((wide?.width ?? 0), 'the panel must NOT span the viewport above the breakpoint').toBeLessThan(1280 - SLACK_PX)
+
+    // L8's other half: the scrim is reachable, so a click at the far left dismisses.
+    await page.mouse.click(4, 540)
+    await expect(panel).toHaveCount(0, { timeout: 15_000 })
+  })
+
+  // L2, L9, L10, L11, L12, L13, L14, L15, L16 -- the Form phase and the confirmation block.
+  test('audit_bundleFormAndConfirmBlockGeometry', async ({ page }) => {
+    test.setTimeout(180_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await page.setViewportSize({ width: 1280, height: 1080 })
+
+    await page.getByTestId('audit-bundle-open').click({ timeout: 15_000 })
+    const body = page.getByTestId('evidence-bundle-body')
+    const footer = page.getByTestId('evidence-bundle-footer')
+    await expect(body).toBeVisible({ timeout: 15_000 })
+
+    const SLACK_PX = 2
+
+    // L11 -- the open company panel is not clipped by the body's scroll container.
+    // overflow-y:auto computes overflow-x:auto, so a wider panel is silently cut, and no
+    // jsdom spec can see it.
+    await page.getByTestId('evidence-company-trigger').click({ timeout: 15_000 })
+    const companyPanel = page.getByTestId('evidence-company-panel')
+    await expect(companyPanel).toBeVisible({ timeout: 15_000 })
+    const [panelBox, bodyBoxForPanel] = await Promise.all([companyPanel.boundingBox(), body.boundingBox()])
+    expect(panelBox && bodyBoxForPanel, 'the company panel or the body never rendered').toBeTruthy()
+    if (panelBox && bodyBoxForPanel) {
+      expect(panelBox.x, 'the company panel must not start left of the body column').toBeGreaterThanOrEqual(bodyBoxForPanel.x - SLACK_PX)
+      expect(panelBox.x + panelBox.width, 'the company panel must not be clipped on the right').toBeLessThanOrEqual(
+        bodyBoxForPanel.x + bodyBoxForPanel.width + SLACK_PX,
+      )
+    }
+
+    const rows = companyPanel.locator('[data-testid^="evidence-company-row-"]')
+    await expect(rows.first()).toBeVisible({ timeout: 15_000 })
+    await rows.first().click({ timeout: 15_000 })
+
+    // L10 -- the helper belongs to the company control: below its trigger, above the
+    // Period label, left edges aligned. A text assertion passes with the sentence
+    // rendered anywhere on the panel; this is the only oracle for where it sits.
+    const trigger = page.getByTestId('evidence-company-trigger')
+    const helper = page.getByTestId('evidence-company-helper')
+    const chips = page.getByTestId('evidence-period-chips')
+    const [triggerBox, helperBox, chipsBox] = await Promise.all([
+      trigger.boundingBox(),
+      helper.boundingBox(),
+      chips.boundingBox(),
+    ])
+    expect(triggerBox && helperBox && chipsBox, 'the company control, its helper or the chip row never rendered').toBeTruthy()
+    if (triggerBox && helperBox && chipsBox) {
+      expect(helperBox.y, 'the helper must sit below the company trigger').toBeGreaterThanOrEqual(triggerBox.y + triggerBox.height - SLACK_PX)
+      expect(helperBox.y + helperBox.height, 'the helper must sit above the period chips').toBeLessThanOrEqual(chipsBox.y + SLACK_PX)
+      expect(Math.abs(helperBox.x - triggerBox.x), "the helper must align with the control it explains").toBeLessThanOrEqual(SLACK_PX)
+    }
+
+    // L9 -- the four chips stay inside the body column, and chips sharing a visual row
+    // share a baseline. Their gutter is never asserted as a number.
+    const chipBoxes = await page.getByTestId('evidence-period-chips').locator('button').all()
+    expect(chipBoxes.length, 'the period chip row rendered no chips').toBeGreaterThan(0)
+    const chipRects = (await Promise.all(chipBoxes.map((c) => c.boundingBox()))).filter(
+      (b): b is { x: number; y: number; width: number; height: number } => b !== null,
+    )
+    expect(chipRects.length, 'no chip reported a box').toBe(chipBoxes.length)
+    if (bodyBoxForPanel) {
+      for (const rect of chipRects) {
+        expect(rect.x, 'a period chip started left of the body column').toBeGreaterThanOrEqual(bodyBoxForPanel.x - SLACK_PX)
+        expect(rect.x + rect.width, 'a period chip overflowed the body column').toBeLessThanOrEqual(
+          bodyBoxForPanel.x + bodyBoxForPanel.width + SLACK_PX,
+        )
+      }
+    }
+    const firstRowY = chipRects[0].y
+    for (const rect of chipRects.filter((r) => Math.abs(r.y - firstRowY) <= SLACK_PX)) {
+      expect(rect.height, 'chips on one visual row must share a height').toBe(chipRects[0].height)
+    }
+
+    await expect(page.getByTestId('evidence-confirm-block')).toBeVisible({ timeout: 30_000 })
+    const block = page.getByTestId('evidence-confirm-block')
+
+    // L2 -- the block fills the body's content column at every swept width. This helper
+    // sweeps WIDE_WIDTHS itself and restores the entry viewport.
+    const fits = await assertFillsColumn(page, block, body, 'the evidence confirmation block')
+    expect(fits.length, 'the confirm-block column sweep measured nothing').toBe(WIDE_WIDTHS.length)
+    await test.info().attach('audit-bundle-confirm-column', { body: JSON.stringify(fits, null, 2), contentType: 'application/json' })
+
+    await page.setViewportSize({ width: 1280, height: 1080 })
+
+    // L12 -- the manifest reads as two columns on every row: label and value never
+    // overlap horizontally and always overlap vertically. A row that wrapped into one
+    // column would still satisfy every text assertion at the unit layer.
+    const manifestRows = page.getByTestId('evidence-confirm-row')
+    const rowCount = await manifestRows.count()
+    expect(rowCount, 'the manifest listed no rows').toBeGreaterThan(0)
+    for (let i = 0; i < rowCount; i++) {
+      const row = manifestRows.nth(i)
+      const [labelBox, valueBox] = await Promise.all([
+        row.getByTestId('evidence-confirm-row-label').boundingBox(),
+        row.getByTestId('evidence-confirm-row-value').boundingBox(),
+      ])
+      expect(labelBox && valueBox, `manifest row ${i} lost a cell`).toBeTruthy()
+      if (labelBox && valueBox) {
+        expect(rectsOverlap(labelBox, valueBox), `manifest row ${i} must read as two columns`).toBe(false)
+        expect(labelBox.x, `manifest row ${i}'s label must sit left of its value`).toBeLessThan(valueBox.x)
+        const sharesABaseline = labelBox.y < valueBox.y + valueBox.height && valueBox.y < labelBox.y + labelBox.height
+        expect(sharesABaseline, `manifest row ${i} must keep its label and value on one line`).toBe(true)
+      }
+    }
+
+    // L13 -- the whole filename is visible. An ellipsis satisfies a textContent equality
+    // while hiding the exact name the block exists to state.
+    for (const width of [1280, 860, 480]) {
+      await page.setViewportSize({ width, height: 1080 })
+      const truncated = await page
+        .getByTestId('evidence-confirm-filename')
+        .evaluate((el) => el.scrollWidth - el.clientWidth)
+      expect(truncated, `the confirm filename must not be truncated at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+    }
+    await page.setViewportSize({ width: 1280, height: 1080 })
+
+    // L15 -- the Prepare helper belongs to the BODY, not the footer band.
+    const prepareHelper = page.getByTestId('evidence-prepare-helper')
+    if ((await prepareHelper.count()) > 0) {
+      const [helperRect, footerRect] = await Promise.all([prepareHelper.boundingBox(), footer.boundingBox()])
+      if (helperRect && footerRect) {
+        expect(rectsOverlap(helperRect, footerRect), 'the prepare helper must not sit on the footer band').toBe(false)
+        expect(helperRect.y + helperRect.height, 'the prepare helper must sit above the footer').toBeLessThanOrEqual(footerRect.y + SLACK_PX)
+      }
+    }
+
+    // L14 -- Prepare reads before Cancel, and L16 -- the footer is never pushed off the
+    // panel by the tallest reachable body content.
+    const prepare = page.getByTestId('evidence-bundle-prepare')
+    const cancel = page.getByTestId('evidence-bundle-cancel')
+    const [prepareBox, cancelBox, footerBox, drawerBox] = await Promise.all([
+      prepare.boundingBox(),
+      cancel.boundingBox(),
+      footer.boundingBox(),
+      page.getByTestId('evidence-bundle-drawer').boundingBox(),
+    ])
+    expect(prepareBox && cancelBox && footerBox && drawerBox, 'the footer pair never rendered').toBeTruthy()
+    if (prepareBox && cancelBox && footerBox && drawerBox) {
+      expect(prepareBox.x + prepareBox.width, 'Prepare must read before Cancel').toBeLessThanOrEqual(cancelBox.x + SLACK_PX)
+      expect(rectsOverlap(prepareBox, cancelBox), 'the footer pair must not overlap').toBe(false)
+      expect(footerBox.y + footerBox.height, 'the footer must stay inside the panel').toBeLessThanOrEqual(
+        drawerBox.y + drawerBox.height + SLACK_PX,
+      )
+      await expect(prepare).toBeEnabled({ timeout: 15_000 })
+    }
+  })
+
+  // L17, L18, L19, L20, L21 -- the Building and Ready phases.
+  //
+  // L20 lives here rather than with the other drawer geometry: proving the panel's box is
+  // identical across all three phases needs all three phases, and only this test builds.
+  test('audit_bundleBuildAndReadyGeometry', async ({ page }) => {
+    test.setTimeout(180_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await page.setViewportSize({ width: 1280, height: 1080 })
+    await openBundleDrawer(page)
+
+    const drawer = page.getByTestId('evidence-bundle-drawer')
+    const body = page.getByTestId('evidence-bundle-body')
+    const footer = page.getByTestId('evidence-bundle-footer')
+    const SLACK_PX = 2
+
+    const formBox = await drawer.boundingBox()
+    expect(formBox, 'the panel never rendered in the Form phase').not.toBeNull()
+
+    await page.getByTestId('evidence-bundle-prepare').click({ timeout: 15_000 })
+
+    // Building can be over in well under a second on a small tenant, so everything read
+    // here is a single synchronous read. The two-sample width check st06 named would be a
+    // race, and a flake in the one deployed oracle is worse than no assertion -- AC-1's
+    // "no timed animation" is carried by EB-06-1's source scan instead.
+    const building = page.getByTestId('evidence-building')
+    const bar = page.getByTestId('evidence-building-bar')
+    let buildingBox: { x: number; y: number; width: number; height: number } | null = null
+    if (await building.isVisible().catch(() => false)) {
+      buildingBox = await drawer.boundingBox()
+
+      // L17 -- indeterminate by structure: a determinate bar carries a fractional-width
+      // fill child, an indeterminate one animates its own background and has none.
+      const fillChildren = await bar.locator(':scope > *').count()
+      expect(fillChildren, 'an indeterminate bar must have no fill child').toBe(0)
+
+      const [barBox, bodyBox] = await Promise.all([bar.boundingBox(), body.boundingBox()])
+      if (barBox && bodyBox) {
+        expect(barBox.x, 'the bar must start at the body column').toBeGreaterThanOrEqual(bodyBox.x - SLACK_PX)
+        expect(barBox.x + barBox.width, 'the bar must fill the body column').toBeGreaterThanOrEqual(
+          bodyBox.x + bodyBox.width - 24,
+        )
+      }
+    }
+
+    await expect(page.getByTestId('evidence-ready')).toBeVisible({ timeout: 120_000 })
+    const readyBox = await drawer.boundingBox()
+
+    // L20 -- the phase switch lives INSIDE the body and footer, never around the panel.
+    // Building's content is much shorter than Form's, so a switch moved outside the panel
+    // (or a height:auto panel) would resize the drawer under the pointer mid-build while
+    // every unit spec stayed green.
+    expect(readyBox, 'the panel never rendered in the Ready phase').not.toBeNull()
+    if (formBox && readyBox) {
+      expect(Math.abs(readyBox.width - formBox.width), 'the panel must not resize between phases').toBeLessThanOrEqual(SLACK_PX)
+      expect(Math.abs(readyBox.height - formBox.height), 'the panel must not resize between phases').toBeLessThanOrEqual(SLACK_PX)
+      expect(Math.abs(readyBox.x - formBox.x), 'the panel must not move between phases').toBeLessThanOrEqual(SLACK_PX)
+    }
+    if (formBox && buildingBox) {
+      expect(Math.abs(buildingBox.width - formBox.width), 'the panel must not resize while building').toBeLessThanOrEqual(SLACK_PX)
+      expect(Math.abs(buildingBox.height - formBox.height), 'the panel must not resize while building').toBeLessThanOrEqual(SLACK_PX)
+    }
+
+    // L19 -- Download reads before Start another, the same relationship L14 asserts for
+    // the Form pair, so a phase swap that reverses one and not the other is caught.
+    const download = page.getByTestId('evidence-ready-download')
+    const startAnother = page.getByTestId('evidence-ready-start-another')
+    const [downloadBox, startBox, footerBox] = await Promise.all([
+      download.boundingBox(),
+      startAnother.boundingBox(),
+      footer.boundingBox(),
+    ])
+    expect(downloadBox && startBox && footerBox, 'the Ready footer pair never rendered').toBeTruthy()
+    if (downloadBox && startBox && footerBox) {
+      expect(downloadBox.x + downloadBox.width, 'Download must read before Start another').toBeLessThanOrEqual(startBox.x + SLACK_PX)
+      expect(rectsOverlap(downloadBox, startBox), 'the Ready footer pair must not overlap').toBe(false)
+      expect(downloadBox.x, 'Download must stay inside the footer column').toBeGreaterThanOrEqual(footerBox.x - SLACK_PX)
+      expect(startBox.x + startBox.width, 'Start another must stay inside the footer column').toBeLessThanOrEqual(
+        footerBox.x + footerBox.width + SLACK_PX,
+      )
+    }
+
+    // L18 -- the whole filename is visible at 1280 and at both collapse widths. The user
+    // is about to save this name; an ellipsis hides it while textContent still matches.
+    for (const width of [1280, 860, 480]) {
+      await page.setViewportSize({ width, height: 1080 })
+      const truncated = await page
+        .getByTestId('evidence-ready-filename')
+        .evaluate((el) => el.scrollWidth - el.clientWidth)
+      expect(truncated, `the Ready filename must not be truncated at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+    }
+
+    // L21 -- the toast and the open panel coexist. Swept over WIDE_WIDTHS and NOTHING
+    // narrower: below 1280 the two boxes genuinely overlap, and at <=860 .pf-drawer goes
+    // width:100vw so the toast necessarily sits on the panel. That is named, not fixed
+    // (mobile is out of scope for this layer) -- an assertion there would go red on
+    // correct, shipped behaviour.
+    await page.setViewportSize({ width: 1280, height: 1080 })
+    const downloadEvent = page.waitForEvent('download', { timeout: 60_000 })
+    await download.click({ timeout: 15_000 })
+    await downloadEvent
+
+    const toast = page.getByTestId('evidence-bundle-toast')
+    await expect(toast).toBeVisible({ timeout: 15_000 })
+
+    const measured: Array<{ width: number; overlap: boolean }> = []
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const [toastBox, panelBox] = await Promise.all([toast.boundingBox(), drawer.boundingBox()])
+      if (!toastBox || !panelBox) continue
+      const overlap = rectsOverlap(toastBox, panelBox)
+      measured.push({ width, overlap })
+      expect(overlap, `the bundle toast must not sit on the drawer at ${width}px`).toBe(false)
+    }
+    expect(measured.length, 'the toast/panel overlap sweep measured nothing').toBe(WIDE_WIDTHS.length)
+    await test.info().attach('audit-bundle-toast-overlap', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
   })
 })

@@ -72,6 +72,18 @@ async function pickCountedEvent(page: Page): Promise<{ id: string; label: string
 // The panel's width is never asserted as a number. It is read live from the viewport instead --
 // a width assertion passes on the very bug it should catch (layout.ts's header, BUG-03-05).
 
+// The panel slides in on `pfDrawer` (translateX(24px) -> none, 200ms) and the scrim fades on
+// `pfFade`. Geometry read before those settle is the ANIMATION's, not the layout's: the first
+// deploy-gate run measured a 24px right gap -- exactly the keyframe's start offset -- and 7.56px
+// on the retry. Waiting on the elements' own animations is deterministic where a sleep is not.
+async function settleDrawerAnimation(page: Page): Promise<void> {
+  for (const id of ['evidence-bundle-drawer', 'evidence-bundle-scrim']) {
+    await page
+      .getByTestId(id)
+      .evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => undefined))
+  }
+}
+
 // The company rows carry an entity uuid this suite cannot know, so they are reached by testid
 // prefix -- pickCountedEvent's idiom above. The chosen NAME is read back and every later claim
 // compares against it: every entity in ctx.entities is tenant-scoped, so the first row is the
@@ -563,6 +575,7 @@ test.describe('Audit screen', () => {
     const footer = page.getByTestId('evidence-bundle-footer')
     const title = page.getByTestId('evidence-bundle-title')
     await expect(panel).toBeVisible({ timeout: 15_000 })
+    await settleDrawerAnimation(page)
 
     // 2px, not assertFillsColumn's 24: every comparison below is against the same edge or
     // the same box, so this budgets sub-pixel rounding across independent boundingBox()
@@ -648,6 +661,7 @@ test.describe('Audit screen', () => {
     const body = page.getByTestId('evidence-bundle-body')
     const footer = page.getByTestId('evidence-bundle-footer')
     await expect(body).toBeVisible({ timeout: 15_000 })
+    await settleDrawerAnimation(page)
 
     const SLACK_PX = 2
 
@@ -809,6 +823,7 @@ test.describe('Audit screen', () => {
     const footer = page.getByTestId('evidence-bundle-footer')
     const SLACK_PX = 2
 
+    await settleDrawerAnimation(page)
     const formBox = await drawer.boundingBox()
     expect(formBox, 'the panel never rendered in the Form phase').not.toBeNull()
 

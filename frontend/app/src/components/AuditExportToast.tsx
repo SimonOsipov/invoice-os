@@ -11,10 +11,14 @@ export function AuditExportToast({
   kind,
   text,
   onDismiss,
+  // AUDIT-07's assertions address this toast by its default; only the evidence-bundle
+  // download passes a different one. EB-06-9's second render is the oracle.
+  testId = 'audit-export-toast',
 }: {
   kind: 'success' | 'error'
   text: string
   onDismiss: () => void
+  testId?: string
 }) {
   useEffect(() => {
     const timer = setTimeout(onDismiss, EXPORT_TOAST_MS)
@@ -25,7 +29,7 @@ export function AuditExportToast({
 
   return (
     <div
-      data-testid="audit-export-toast"
+      data-testid={testId}
       role="status"
       style={{
         position: 'fixed',

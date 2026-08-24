@@ -10,11 +10,11 @@
 // filter state via a separate entry point -- together they're what makes empty-by-filter
 // reachable today.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
 
-import { downloadGlyph } from '../glyphs'
+import { downloadGlyph, shieldGlyph15 } from '../glyphs'
 import { getAuditLog, type AuditResponse } from '../lib/audit'
 import { auditCsv, auditCsvFilename, auditExportToastCopy } from '../lib/auditCsv'
 import { collectExportRows, type AuditExportFetchPage } from '../lib/auditExport'
@@ -33,6 +33,7 @@ import {
   emptyByFilterCopy,
   type AuditPageState,
 } from '../lib/auditView'
+import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
 import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
@@ -42,6 +43,7 @@ import { AuditPager } from './AuditPager'
 import { AuditRow } from './AuditRow'
 import { AuditSkeleton } from './AuditSkeleton'
 import { AuditTable } from './AuditTable'
+import { EvidenceBundleDrawer } from './EvidenceBundleDrawer'
 
 // The one DOM step in the export: mirrors ReviewUnreadableTab.tsx's downloadCsv. The BOM
 // is what makes Excel read non-ASCII names as UTF-8 rather than the local codepage.
@@ -72,7 +74,15 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // range readout describing the rows actually on screen, never the page being fetched.
   const [landed, setLanded] = useState<{ res: AuditResponse; page: AuditPageState } | null>(null)
   const [exporting, setExporting] = useState(false)
-  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  // testId is optional so the CSV path keeps AuditExportToast's default; the drawer's
+  // download names its own (EB-06-8b).
+  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string } | null>(
+    null,
+  )
+  // Drives the trigger's aria-expanded and the drawer mount below.
+  const [bundleOpen, setBundleOpen] = useState(false)
+  // MembersView.tsx:72's idiom: must be STABLE -- it is a useDismiss dependency.
+  const closeBundle = useCallback(() => setBundleOpen(false), [])
   const filtered = filterState.invoiceId != null
 
   // Recomputed only when the filter state itself changes, not on every render -- the date
@@ -184,26 +194,56 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
             audit-empty-by-filter, racing `landed`'s effect-driven update. */}
         {(state === 'loaded' || state === 'filtered' || state === 'empty-by-filter') && (
           <div style={{ textAlign: 'right', flex: 'none' }}>
-            <button
-              type="button"
-              data-testid="audit-export"
-              className="v2-btn v2-btn-ghost pf-btn"
-              disabled={exportDisabled}
-              onClick={zeroRows ? undefined : handleExport}
-              aria-describedby={zeroRows ? 'audit-export-reason' : undefined}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                height: 36,
-                padding: '0 14px',
-                fontSize: 13,
-                ...(exportDisabled ? { opacity: 0.4, cursor: 'not-allowed', background: 'transparent' } : {}),
-              }}
-            >
-              <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span>
-              <span className="mono">{AUDIT_COPY.exportCaption}</span>
-            </button>
+            {/* The pair gets its own flex row: this wrapper is textAlign:right with no gap, so a
+                second child would sit on collapsed whitespace. The reason line below stays a
+                sibling of the row, never a flex item beside the buttons (EB-03-6). */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+              {/* Primary first because a primary reads first in a right-aligned group; the ghost
+                  keeping the column's right edge is a consequence of that, not the reason for it.
+                  aria-haspopup/aria-expanded are the first dialog trigger in this SPA -- the
+                  aria-expanded sites in src/ are in-place expanders, a different pattern.
+                  No `disabled` at all: the gate below admits only loaded/filtered/
+                  empty-by-filter, so no reachable render has this present and inert (EB-03-5). */}
+              <button
+                type="button"
+                data-testid="audit-bundle-open"
+                className="v2-btn v2-btn-primary pf-btn"
+                aria-haspopup="dialog"
+                aria-expanded={bundleOpen}
+                onClick={() => setBundleOpen(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  height: 36,
+                  padding: '0 14px',
+                  fontSize: 13,
+                }}
+              >
+                <span style={{ display: 'inline-flex' }}>{shieldGlyph15}</span>
+                <span className="mono">{EVIDENCE_COPY.openCaption}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="audit-export"
+                className="v2-btn v2-btn-ghost pf-btn"
+                disabled={exportDisabled}
+                onClick={zeroRows ? undefined : handleExport}
+                aria-describedby={zeroRows ? 'audit-export-reason' : undefined}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  height: 36,
+                  padding: '0 14px',
+                  fontSize: 13,
+                  ...(exportDisabled ? { opacity: 0.4, cursor: 'not-allowed', background: 'transparent' } : {}),
+                }}
+              >
+                <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span>
+                <span className="mono">{AUDIT_COPY.exportCaption}</span>
+              </button>
+            </div>
             {zeroRows && (
               <div id="audit-export-reason" data-testid="audit-export-reason" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 6 }}>
                 {AUDIT_COPY.exportDisabledReason}
@@ -295,7 +335,16 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {exportToast && (
-        <AuditExportToast kind={exportToast.kind} text={exportToast.text} onDismiss={() => setExportToast(null)} />
+        <AuditExportToast
+          kind={exportToast.kind}
+          text={exportToast.text}
+          testId={exportToast.testId}
+          onDismiss={() => setExportToast(null)}
+        />
+      )}
+
+      {bundleOpen && base != null && (
+        <EvidenceBundleDrawer ctx={ctx} base={base} onClose={closeBundle} onToast={setExportToast} />
       )}
     </div>
   )

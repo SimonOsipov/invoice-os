@@ -13,8 +13,10 @@ import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { auditCsv, auditExportToastCopy } from '../lib/auditCsv'
 import { AUDIT_COPY, AUDIT_EXPORT_CAP } from '../lib/auditView'
 import { createAuthedFetch } from '../lib/authedFetch'
+import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
 import type { PlatformCtx } from '../types'
 
+import { AuditExportToast } from './AuditExportToast'
 import { AuditView } from './AuditView'
 
 interface MockResponse {
@@ -63,6 +65,7 @@ function auditCtx(): PlatformCtx {
     mode: 'firm',
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
+    entities: [],
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
   } as unknown as PlatformCtx
 }
@@ -1344,5 +1347,481 @@ describe('AuditView export control (AUDIT-07-10)', () => {
     window.removeEventListener('unhandledrejection', onRejection)
     consoleError.mockRestore()
     dl.restore()
+  })
+})
+
+// AUDIT-08-03 (task-666): the header's primary bundle trigger, specified as a strict diff
+// against AUDIT-07's shipped ghost. Authored RED at Stage 2.5 against an unimplemented
+// component, so EB-03-1..4, 6 and 7 fail on a missing element. EB-03-8/9 assert an ABSENCE
+// and EB-03-10 fences the sibling, so all three are green from the start by design.
+const ZIP_CAPTION = 'ZIP · ONE COMPANY, ONE PERIOD'
+// shieldGlyph15's two paths (glyphs.tsx:19), restated so the spec pins the drawn shape
+// rather than reading back whatever the component imported.
+const SHIELD_PATHS = ['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']
+
+// The three states the header gate admits. Each returns only after its own landed needle,
+// so a fixture that silently resolves to `loading` cannot satisfy a spec vacuously.
+async function landLoaded() {
+  mockFetchSequence([logResponse()])
+  render(<AuditView ctx={auditCtx()} />)
+  await waitFor(() =>
+    expect(screen.getAllByTestId('audit-row').length, 'landed needle: the loaded rung must render rows').toBeGreaterThan(0),
+  )
+}
+
+async function landFiltered() {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(logResponse())))
+  render(<AuditView ctx={auditCtx()} />)
+  await applyInvoiceFilter()
+  await waitFor(() =>
+    expect(screen.getByTestId('audit-pill-invoice'), 'landed needle: the invoice pill proves the filtered rung').toBeTruthy(),
+  )
+  expect(
+    screen.getAllByTestId('audit-row').length,
+    'landed needle: filtered still has rows, so this is not empty-by-filter wearing a pill',
+  ).toBeGreaterThan(0)
+}
+
+async function landEmptyByFilter() {
+  mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+  render(<AuditView ctx={auditCtx()} />)
+  await waitFor(() =>
+    expect(screen.getByTestId('audit-empty-by-filter'), 'landed needle: the empty-by-filter rung must land').toBeTruthy(),
+  )
+}
+
+const GATED_STATES = [
+  { name: 'loaded', land: landLoaded },
+  { name: 'filtered', land: landFiltered },
+  { name: 'empty-by-filter', land: landEmptyByFilter },
+]
+
+function glyphPaths(el: HTMLElement): string[] {
+  return Array.from(el.querySelectorAll('svg path'), (p) => p.getAttribute('d') ?? '')
+}
+
+describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
+  it('EB-03-1 bundleButton_isPrimaryNotGhost', async () => {
+    await landLoaded()
+    const bundle = screen.getByTestId('audit-bundle-open')
+    const ghost = screen.getByTestId('audit-export')
+
+    expect(bundle.className, 'the new control carries primary weight').toContain('v2-btn-primary')
+    expect(bundle.className, 'a primary must not also carry the ghost class').not.toContain('v2-btn-ghost')
+    expect(bundle.className, "the repo's button base class").toContain('v2-btn ')
+    expect(bundle.className, "and the platform's button class").toContain('pf-btn')
+    expect(bundle.getAttribute('type'), 'a button outside a form still declares its type').toBe('button')
+
+    expect(ghost.className, 'the sibling stays ghost').toContain('v2-btn-ghost')
+    expect(ghost.className, 'the sibling must not be promoted to primary').not.toContain('v2-btn-primary')
+
+    // The diff is weight and glyph, never geometry: one measured 36px control height on the
+    // row. Compared against the sibling, not against literals, so the pair can only drift
+    // together -- and the sibling's own literals are fenced by EB-03-10.
+    for (const prop of ['display', 'alignItems', 'gap', 'height', 'padding', 'fontSize'] as const) {
+      expect(bundle.style[prop], `geometry must match the sibling byte-for-byte: ${prop}`).toBe(ghost.style[prop])
+    }
+    expect(bundle.style.height, 'control needle: the compared geometry must be real, not two empty strings').toBe('36px')
+  })
+
+  it('EB-03-2 bundleButton_captionIsTheZipTag', async () => {
+    await landLoaded()
+    const bundle = screen.getByTestId('audit-bundle-open')
+
+    const mono = bundle.querySelector('.mono')
+    expect(mono, "the caption is a .mono span, the sibling's grammar").toBeTruthy()
+    expect(mono?.textContent, 'the exact format tag, middle dot U+00B7').toBe(ZIP_CAPTION)
+    expect(
+      mono?.textContent,
+      'the literal must be sourced from EVIDENCE_COPY.openCaption, never typed into the component',
+    ).toBe(EVIDENCE_COPY.openCaption)
+    expect(ZIP_CAPTION.charCodeAt(4), 'control needle: the pinned string separator is U+00B7, not a bullet').toBe(0x00b7)
+
+    // D-08-05: the sibling diff is glyph + caption + class, not wording. Like the ghost, this
+    // control carries no aria-label and no prose label such as "Download evidence bundle" --
+    // the visible mono caption is its only text. Nothing here is a missing label to "fix".
+    expect(bundle.hasAttribute('aria-label'), 'no aria-label: the visible caption is the accessible name').toBe(false)
+    expect(bundle.textContent?.trim(), 'no prose label beside the caption').toBe(ZIP_CAPTION)
+
+    expect(screen.getByTestId('audit-export').textContent?.trim(), "the sibling's caption is untouched").toBe(
+      AUDIT_COPY.exportCaption,
+    )
+  })
+
+  it('EB-03-3 bundleButton_glyphDiffersFromTheSiblings', async () => {
+    await landLoaded()
+    const bundle = screen.getByTestId('audit-bundle-open')
+    const ghost = screen.getByTestId('audit-export')
+
+    const bundlePaths = glyphPaths(bundle)
+    const ghostPaths = glyphPaths(ghost)
+    // Vacuity floor, before any comparison: two EMPTY collections are trivially "different",
+    // so a selector typo would read as a pass. A scan is only worth its haystack.
+    expect(bundlePaths.length, 'vacuity floor: the primary must draw at least one glyph path').toBeGreaterThan(0)
+    expect(ghostPaths.length, 'vacuity floor: the ghost must draw at least one glyph path').toBeGreaterThan(0)
+
+    expect(bundlePaths.join('|'), 'the two controls must not share one glyph').not.toBe(ghostPaths.join('|'))
+    expect(bundlePaths, 'the primary must carry shieldGlyph15 exactly -- no new glyph, no redraw').toEqual(SHIELD_PATHS)
+
+    // AC-3's weight claim: 15 at 1.6, the sibling's. A 2px shield beside a 1.6px download is
+    // two glyph weights on one row.
+    const bundleSvg = bundle.querySelector('svg')
+    const ghostSvg = ghost.querySelector('svg')
+    expect(bundleSvg?.getAttribute('width'), 'no resize at the call site').toBe('15')
+    expect(bundleSvg?.getAttribute('height'), 'no resize at the call site').toBe('15')
+    expect(bundleSvg?.getAttribute('stroke-width'), "Icon's default weight, not an override").toBe('1.6')
+    expect(bundleSvg?.getAttribute('stroke-width'), 'one glyph weight on the row').toBe(ghostSvg?.getAttribute('stroke-width'))
+  })
+
+  it('EB-03-4 bundleButton_precedesTheGhostSibling', async () => {
+    await landLoaded()
+    const bundle = screen.getByTestId('audit-bundle-open')
+    const ghost = screen.getByTestId('audit-export')
+
+    expect(bundle.parentElement, 'both controls sit in one row').toBe(ghost.parentElement)
+    expect(
+      bundle.compareDocumentPosition(ghost) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the primary reads first, so the ghost stays rightmost',
+    ).toBeTruthy()
+
+    // The pair needs a designed gutter: the shipped wrapper is textAlign:right with no flex
+    // and no gap, so a bare second child would render on collapsed whitespace. The gap VALUE
+    // is not asserted here -- the topology sweep (L5) owns the pixel relationship.
+    const row = bundle.parentElement as HTMLElement
+    expect(row.style.display, 'the pair sits in a flex row').toBe('flex')
+    expect(row.style.justifyContent, "flush right, so the ghost keeps the content column's edge").toBe('flex-end')
+    expect(row.style.gap, 'the gutter must be designed, not collapsed whitespace').not.toBe('')
+  })
+
+  it.each(GATED_STATES)('EB-03-5 bundleButton_isNeverDisabledInAnyReachableState: $name', async ({ land }) => {
+    await land()
+
+    const btn = screen.getByTestId('audit-bundle-open') as HTMLButtonElement
+    expect(btn.disabled, 'the drawer opens whatever the screen shows -- the bundle is not the view').toBe(false)
+    expect(btn.hasAttribute('disabled'), 'no disabled prop is written at all').toBe(false)
+    // No dead disabled recipe shipped: the filter:none neutraliser exists only for a primary
+    // that CAN render disabled, and no reachable state renders this one disabled.
+    expect(btn.style.filter, 'no filter neutraliser').toBe('')
+    expect(btn.style.opacity, 'no dim').toBe('')
+    expect(btn.style.cursor, 'no not-allowed cursor').toBe('')
+  })
+
+  it('EB-03-6 bundleButton_staysEnabledWhileTheGhostIsDisabled', async () => {
+    await landEmptyByFilter()
+
+    const ghost = screen.getByTestId('audit-export') as HTMLButtonElement
+    expect(ghost.disabled, 'zero rows still disables the ghost -- AUDIT-07 unchanged').toBe(true)
+    const reason = screen.getByTestId('audit-export-reason')
+    expect((reason.textContent ?? '').trim().length, "the ghost's refusal stays visible text").toBeGreaterThan(0)
+
+    const bundle = screen.getByTestId('audit-bundle-open') as HTMLButtonElement
+    expect(bundle.disabled, 'a live primary beside a dimmed ghost is the product claim, not a defect').toBe(false)
+    expect(reason.parentElement, 'the reason line stays a sibling below the pair, never a flex item beside it').not.toBe(
+      bundle.parentElement,
+    )
+  })
+
+  it('EB-03-7 bundleButton_opensTheDrawerState', async () => {
+    await landLoaded()
+
+    const btn = screen.getByTestId('audit-bundle-open')
+    // The first dialog trigger in this SPA. The four aria-expanded sites in src/ are in-place
+    // expanders and popovers, none of which open an overlay -- this is a new pattern here,
+    // and the correct ARIA for a control that opens a modal dialog.
+    expect(btn.getAttribute('aria-haspopup'), 'a control that opens a dialog must say so').toBe('dialog')
+    expect(btn.getAttribute('aria-expanded'), 'closed before the first click').toBe('false')
+
+    fireEvent.click(btn)
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('audit-bundle-open').getAttribute('aria-expanded'),
+        'the click flips the seam subtask 04 mounts the drawer against',
+      ).toBe('true'),
+    )
+  })
+
+  it('EB-03-8 bundleButton_absentOnANewWorkspace', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: true })])
+    render(<AuditView ctx={auditCtx()} />)
+    // Positive rung FIRST: queryBy...toBeNull passes against a blank screen, so the absence
+    // is only evidence of the gate once the new-workspace rung has demonstrably rendered.
+    await waitFor(() =>
+      expect(screen.getByTestId('audit-new-workspace'), 'landed needle: the new-workspace rung must render').toBeTruthy(),
+    )
+
+    expect(screen.queryByTestId('audit-bundle-open'), 'absent on a new workspace, not merely disabled').toBeNull()
+    expect(screen.queryByTestId('audit-export'), 'one gate, both controls').toBeNull()
+  })
+
+  it('EB-03-9 bundleButton_absentWhileLoadingAndOnError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<MockResponse>(() => {})),
+    )
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId('audit-skeleton-row').length,
+        'landed needle: the loading rung draws its skeleton',
+      ).toBeGreaterThan(0),
+    )
+    expect(screen.queryByTestId('audit-bundle-open'), 'absent while loading').toBeNull()
+    expect(screen.queryByTestId('audit-export'), 'one gate, both controls').toBeNull()
+    cleanup()
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('boom'))),
+    )
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByText('Something went wrong'), 'landed needle: the error rung must render').toBeTruthy())
+    expect(screen.queryByTestId('audit-bundle-open'), 'absent on error').toBeNull()
+    expect(screen.queryByTestId('audit-export'), 'one gate, both controls').toBeNull()
+  })
+
+  it('EB-03-10 auditExportControl_isUnchanged', async () => {
+    // AUDIT-07's regression fence (AC-6). Literals, not the component's own constants: a
+    // fence that reads the thing it guards cannot see the thing it guards move.
+    const assertGhost = (btn: HTMLElement) => {
+      expect(btn.className).toBe('v2-btn v2-btn-ghost pf-btn')
+      expect(btn.getAttribute('type')).toBe('button')
+      expect(btn.style.display).toBe('inline-flex')
+      expect(btn.style.alignItems).toBe('center')
+      expect(btn.style.gap).toBe('8px')
+      expect(btn.style.height).toBe('36px')
+      expect(btn.style.fontSize).toBe('13px')
+      expect(btn.style.paddingTop).toBe('0px')
+      expect(btn.style.paddingLeft).toBe('14px')
+      expect(btn.style.paddingRight).toBe('14px')
+      expect(btn.textContent?.trim()).toBe('CSV · THE ROWS ON SCREEN')
+    }
+
+    await landLoaded()
+    const enabled = screen.getByTestId('audit-export') as HTMLButtonElement
+    assertGhost(enabled)
+    expect(enabled.disabled, 'rows on screen leave the ghost live').toBe(false)
+    expect(enabled.hasAttribute('aria-describedby'), 'no reason to describe while rows match').toBe(false)
+    expect(screen.queryByTestId('audit-export-reason'), 'no reason line while rows match').toBeNull()
+    cleanup()
+
+    await landEmptyByFilter()
+    const dimmed = screen.getByTestId('audit-export') as HTMLButtonElement
+    assertGhost(dimmed)
+    expect(dimmed.disabled, 'zero rows still disables it').toBe(true)
+    expect(dimmed.style.opacity, 'the dim recipe is unchanged').toBe('0.4')
+    expect(dimmed.style.cursor).toBe('not-allowed')
+    expect(dimmed.style.background).toBe('transparent')
+    expect(dimmed.getAttribute('aria-describedby')).toBe('audit-export-reason')
+
+    const reason = screen.getByTestId('audit-export-reason')
+    expect(reason.id).toBe('audit-export-reason')
+    expect(reason.textContent).toBe('No rows match the current filters — nothing to export.')
+  })
+})
+
+// AUDIT-08-03 QA (Mode B): adversarial coverage beyond the acceptance criteria. Each case
+// below closes a mutation that survived EB-03-1..10 -- the source-level halves of AC-3 and
+// AC-5 that jsdom cannot see, the visual order jsdom cannot measure, and the interactions
+// between the two controls that no single-button spec reaches.
+describe('AuditView evidence-bundle trigger, adversarial (AUDIT-08-03 QA)', () => {
+  // AC-5 says the component "writes no `disabled` prop"; AC-3 says the caption is "sourced
+  // from EVIDENCE_COPY.openCaption". Both are claims about the SOURCE, and jsdom cannot see
+  // either: React renders no attribute for `disabled={false}`, and a literal typed inline
+  // produces the same textContent as the imported key. Measured, not assumed -- both
+  // mutations were run and stayed green against EB-03-1..10.
+  //
+  // Scan idiom and vacuity floor are auditFilterCard_isNotInsideTheLoadedRung's. The control
+  // needle is the ghost: the same slicing machinery must FIND a disabled prop where one is
+  // written, otherwise the primary's clean slice proves only that the scan missed.
+  it('EB-03-11 bundleButton_sourceWritesNoDisabledAndSourcesItsCaption', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AuditView.tsx'), 'utf8')
+    expect(src.length, 'AuditView.tsx must be non-empty').toBeGreaterThan(0)
+
+    const sliceButton = (testid: string) => {
+      const start = src.indexOf(`data-testid="${testid}"`)
+      expect(start, `the scan must find the ${testid} button`).toBeGreaterThan(-1)
+      const end = src.indexOf('</button>', start)
+      expect(end, `the ${testid} button must close`).toBeGreaterThan(start)
+      return src.slice(start, end)
+    }
+
+    const primary = sliceButton('audit-bundle-open')
+    const ghost = sliceButton('audit-export')
+    expect(primary.length, 'vacuity floor: the primary slice must carry a real button body').toBeGreaterThan(100)
+    expect(ghost.length, 'vacuity floor: the ghost slice must carry a real button body').toBeGreaterThan(100)
+
+    // Control needles: the machinery finds what it is looking for when it is there.
+    expect(ghost, 'control needle: the ghost DOES write a disabled prop, so the scan can see one').toContain('disabled=')
+    expect(ghost, 'control needle: the ghost DOES ship a disabled style, so the scan can see one').toContain('not-allowed')
+    expect(primary, 'control needle: the primary slice is the right region').toContain('v2-btn-primary')
+
+    expect(primary, 'AC-5: no disabled prop is written at all -- not even disabled={false}').not.toContain('disabled')
+    expect(primary, 'AC-5: no dead dim recipe').not.toContain('opacity')
+    expect(primary, 'AC-5: no dead not-allowed cursor').not.toContain('not-allowed')
+    expect(primary, 'AC-5: the filter:none neutraliser stays dropped as unreachable').not.toContain('filter:')
+
+    // AC-3 / [bulk-copy-lives-in-the-lib]: the caption is read from the lib, never typed here.
+    expect(primary, 'the caption comes from EVIDENCE_COPY.openCaption').toContain('EVIDENCE_COPY.openCaption')
+    expect(primary, 'the literal must not be typed into the component beside the key').not.toContain('ZIP ')
+  })
+
+  // A row-reverse (or wrap-reverse) flips what the user sees while leaving DOM order, and so
+  // EB-03-4, untouched -- measured: that mutation stayed green. AC-1's claim is visual
+  // ("left of audit-export"), so this fences the shipped style; the pixel oracle is subtask
+  // 07's L5 sweep, which jsdom cannot stand in for.
+  it('EB-03-12 bundleRow_neverReversesItsVisualOrder', async () => {
+    await landLoaded()
+    const row = screen.getByTestId('audit-bundle-open').parentElement as HTMLElement
+
+    expect(row.style.display, 'control needle: the scanned element really is the flex row').toBe('flex')
+    expect(row.style.flexDirection, 'DOM order must equal visual order: no row-reverse').not.toMatch(/reverse/)
+    expect(row.style.flexWrap, 'and no wrap-reverse').not.toMatch(/reverse/)
+  })
+
+  // Neither control carries an aria-label and both glyphs are aria-hidden, so each button's
+  // accessible name is its mono caption alone. A screen-reader user must be able to tell the
+  // two apart without the visual weight difference that separates them on screen.
+  it('EB-03-13 headerControls_haveDistinctAccessibleNames', async () => {
+    await landLoaded()
+    const bundle = screen.getByTestId('audit-bundle-open')
+    const ghost = screen.getByTestId('audit-export')
+
+    for (const [name, btn] of [
+      ['primary', bundle],
+      ['ghost', ghost],
+    ] as const) {
+      expect(btn.hasAttribute('aria-label'), `${name}: the visible caption is the accessible name`).toBe(false)
+      expect(btn.hasAttribute('aria-labelledby'), `${name}: nothing else supplies the name`).toBe(false)
+      const svg = btn.querySelector('svg')
+      expect(svg, `control needle: ${name} must actually draw a glyph`).toBeTruthy()
+      expect(svg?.getAttribute('aria-hidden'), `${name}: the glyph must not leak into the name`).toBe('true')
+    }
+
+    const bundleName = (bundle.textContent ?? '').trim()
+    const ghostName = (ghost.textContent ?? '').trim()
+    expect(bundleName.length, 'a nameless button is unreachable by voice or screen reader').toBeGreaterThan(0)
+    expect(ghostName.length, 'the sibling must stay named too').toBeGreaterThan(0)
+    expect(bundleName, 'two controls on one row must not announce identically').not.toBe(ghostName)
+  })
+
+  // The pair shares a row and a click target size; a mis-wired handler or a stray form
+  // submit would run AUDIT-07's export off the primary. Differential, not merely negative:
+  // the same harness in the same test proves the ghost DOES download, so the primary's
+  // silence is evidence rather than a dead spy.
+  it('EB-03-14 bundleClick_doesNotRunTheGhostExport', async () => {
+    // The export page must echo limit=100 or collectExportRows aborts and the control below
+    // would "pass" on an ERROR toast with no download -- the exact false green this case exists
+    // to rule out. Same shape as auditExport_oneClickOneDownload.
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url)
+        ? Promise.resolve(logResponse({ page: { limit: 100, has_more: false, next_cursor: null } }))
+        : Promise.resolve(logResponse()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    try {
+      render(<AuditView ctx={auditCtx()} />)
+      await waitFor(() =>
+        expect(screen.getAllByTestId('audit-row').length, 'landed needle: the loaded rung must render rows').toBeGreaterThan(0),
+      )
+      const callsBefore = fetchMock.mock.calls.length
+
+      fireEvent.click(screen.getByTestId('audit-bundle-open'))
+      await waitFor(() => expect(screen.getByTestId('audit-bundle-open').getAttribute('aria-expanded')).toBe('true'))
+
+      expect(dl.createSpy, 'opening the drawer must not build a CSV blob').not.toHaveBeenCalled()
+      expect(dl.clicks, 'opening the drawer must not click a download anchor').toEqual([])
+      expect(screen.queryByTestId('audit-export-toast'), "opening the drawer must not raise the ghost's toast").toBeNull()
+      expect(fetchMock.mock.calls.length, 'opening the drawer issues no request of its own in this subtask').toBe(callsBefore)
+
+      // Control: the spies are live and this screen CAN export. A download, not merely a
+      // toast -- an aborted export raises a toast too.
+      fireEvent.click(screen.getByTestId('audit-export'))
+      await waitFor(() => expect(dl.clicks.length, 'control needle: the download spy was never dead').toBe(1))
+      expect(dl.createSpy, 'control needle: the ghost still builds its blob through the same spies').toHaveBeenCalledTimes(1)
+    } finally {
+      dl.restore()
+    }
+  })
+
+  // The two controls are independent: the ghost being mid-export dims the ghost alone. The
+  // needle separates `exporting` from `zeroRows` -- rows are on screen, so the reason line is
+  // absent and the only thing that can have disabled the ghost is the in-flight export.
+  it('EB-03-15 bundleButton_staysLiveWhileTheGhostIsExporting', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      isExportPageUrl(url) ? new Promise<MockResponse>(() => {}) : Promise.resolve(logResponse()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    try {
+      render(<AuditView ctx={auditCtx()} />)
+      await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+
+      fireEvent.click(screen.getByTestId('audit-export'))
+
+      const ghost = await waitFor(() => {
+        const g = screen.getByTestId('audit-export') as HTMLButtonElement
+        expect(g.disabled, 'landed needle: the export must actually be in flight').toBe(true)
+        return g
+      })
+      expect(ghost.style.opacity, "the ghost wears AUDIT-07's dim while exporting").toBe('0.4')
+      expect(screen.queryByTestId('audit-export-reason'), 'needle: rows are on screen, so this is exporting, not zeroRows').toBeNull()
+
+      const bundle = screen.getByTestId('audit-bundle-open') as HTMLButtonElement
+      expect(bundle, 'the primary must survive the sibling being busy').toBeTruthy()
+      expect(bundle.disabled, 'an in-flight CSV export says nothing about the bundle drawer').toBe(false)
+      fireEvent.click(bundle)
+      await waitFor(() => expect(screen.getByTestId('audit-bundle-open').getAttribute('aria-expanded')).toBe('true'))
+    } finally {
+      dl.restore()
+    }
+  })
+
+  it('EB-03-16 bundleButton_doubleClickStaysOpen', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await landLoaded()
+    const btn = screen.getByTestId('audit-bundle-open')
+
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('audit-bundle-open').getAttribute('aria-expanded'),
+        'a second click on an open trigger must not toggle the drawer shut',
+      ).toBe('true'),
+    )
+    expect(consoleError, 'a repeated click must not warn or throw').not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  // AC-6 fences the reason line out of the row; this fences everything else out of it, so a
+  // third control on this row is a deliberate change with a spec to update rather than an
+  // accident that ships.
+  it('EB-03-17 bundleRow_holdsExactlyTwoControls', async () => {
+    await landLoaded()
+    const row = screen.getByTestId('audit-bundle-open').parentElement as HTMLElement
+    expect(row.style.display, 'control needle: the counted element really is the flex row').toBe('flex')
+
+    expect(Array.from(row.children).map((c) => c.getAttribute('data-testid')), 'the row holds the pair and nothing else').toEqual([
+      'audit-bundle-open',
+      'audit-export',
+    ])
+    expect(row.querySelectorAll('button').length, 'two controls, no nested third').toBe(2)
+  })
+})
+
+describe('AuditExportToast testId prop (AUDIT-08-06)', () => {
+  // EB-06-9 -- asserting a default is the easiest kind of spec to write vacuously: the first
+  // render alone passes against a component that ignores the prop entirely. The second render
+  // is what makes the prop provably live wire.
+  it('toast_defaultTestIdUnchangedForTheCsvExport', () => {
+    render(<AuditExportToast kind="success" text="x" onDismiss={vi.fn()} />)
+    expect(screen.getByTestId('audit-export-toast')).toBeTruthy()
+    cleanup()
+
+    render(<AuditExportToast kind="success" text="x" onDismiss={vi.fn()} testId="probe-toast" />)
+    expect(screen.getByTestId('probe-toast')).toBeTruthy()
+    expect(screen.queryByTestId('audit-export-toast')).toBeNull()
   })
 })

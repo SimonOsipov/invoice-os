@@ -504,3 +504,39 @@ so a client implementer does not have to re-derive them from the sections above:
 4. **`Access-Control-Expose-Headers`** already covers `Content-Disposition` for a cross-origin
    `fetch` from the app SPA (§2.4) — no additional gateway change is needed to read the
    filename client-side.
+
+### 8.5 What AUDIT-08 actually did
+
+Each obligation above offers branches. The evidence bundle drawer took these, and the next
+reader should not re-derive a decision that was already made.
+
+1. **Read, never re-derived.** The drawer reads `preview.filename` before the build and the
+   unquoted `Content-Disposition` after it (`frontend/app/src/lib/evidenceBundle.ts`,
+   `dispositionFilename`). §2.3's algorithm is not reimplemented client-side — one filename
+   generator, server-side, and the client states whatever it is handed. The two can differ, and
+   Ready deliberately shows the archive's own name rather than the preview's guess.
+2. **`MANIFEST · SHA-256` shipped**, with a middot. Three tests pin it, at three layers:
+   `EB-02-1 evidenceCopy_neverSaysSigned` and `EB-02-3 evidenceCopy_agreesWithTheShippedManifestNote`
+   (the copy module against `internal/archive/manifest.go` on disk, so the doc and the code cannot
+   part company silently), and `drawer_neverRendersSignedInAnyPhase` (the rendered DOM in both the
+   Building and Ready phases — a literal typed straight into JSX bypasses the copy module).
+3. **The estimate was DROPPED, not derived.** No "up to" figure appears anywhere in the drawer.
+   `counts.exchange_attempts` is a row count, and a row count is not a byte count; an estimate
+   built from one would be a number the user could check and find wrong. The **real** size is
+   stated at Ready from `blob.size`, after the archive exists. `EB-02-2
+   evidenceCopy_neverPromisesAnEstimatedSize` pins the absence.
+4. **No gateway change was needed** and none was made. The SPA reads `Content-Disposition`
+   directly off the `fetch` response, exactly as §2.4 says it can.
+5. **The period basis is now surfaced.** The drawer states, in words, that the period selects
+   invoices by `invoices.created_at` — when they were added to ASComply, not the date on the
+   invoice. A regulator's window and an accounting window are not the same window, and a bundle
+   that silently picked the wrong one would be wrong in a way nobody could see. `bundleBasisLine`
+   renders it; three tests with differentiated fixtures cover it.
+
+**One case this story did not close, recorded so it is not mistaken for handled.** §7's
+mid-stream failure arrives at the client as a success: the `200` and its headers are already on
+the wire when assembly fails, so the browser's `blob()` resolves on the partial bytes and nothing
+distinguishes a truncated archive from a complete one. The drawer therefore never claims the
+archive was verified, complete or valid — it states only what it received. A client-side
+end-of-central-directory probe would close it, and it belongs to whoever owns bundle correctness
+(AUDIT-05), not to the surface that renders progress over it. **No owner today.**

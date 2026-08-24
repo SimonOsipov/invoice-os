@@ -29,7 +29,7 @@ export interface AuditFilterCardProps {
   onChange: (next: AuditFilterState) => void
 }
 
-const DATE_PRESETS: { id: AuditRangePreset; label: string }[] = [
+export const DATE_PRESETS: { id: AuditRangePreset; label: string }[] = [
   { id: '24h', label: 'Last 24 hours' },
   { id: '7d', label: 'Last 7 days' },
   { id: '30d', label: 'Last 30 days' },

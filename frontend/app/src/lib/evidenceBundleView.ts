@@ -8,9 +8,9 @@ import type { BundlePeriod, BundleRequest, EvidenceBundlePreview } from './evide
 import { formatBytes } from './sourceDocument'
 
 export const EVIDENCE_COPY = {
-  // The header trigger's mono caption (AUDIT-08-03). STUB: the real value is pinned by
-  // EB-03-2a in evidenceBundleView.test.ts and carries U+00B7, not a bullet.
-  openCaption: 'TBD',
+  // The header trigger's mono caption (AUDIT-08-03). Separator is U+00B7, the same one the
+  // shipped ghost's caption uses; pinned by EB-03-2a in evidenceBundleView.test.ts.
+  openCaption: 'ZIP · ONE COMPANY, ONE PERIOD',
   drawerTitle: 'Export evidence bundle',
   drawerSubtitle: 'One company, one period, one ZIP a regulator can verify on its own.',
   companyLabel: 'Company',

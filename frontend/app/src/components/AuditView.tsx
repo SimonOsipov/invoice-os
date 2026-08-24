@@ -10,7 +10,7 @@
 // filter state via a separate entry point -- together they're what makes empty-by-filter
 // reachable today.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, useAsync } from '@invoice-os/api-client'
 
@@ -43,6 +43,7 @@ import { AuditPager } from './AuditPager'
 import { AuditRow } from './AuditRow'
 import { AuditSkeleton } from './AuditSkeleton'
 import { AuditTable } from './AuditTable'
+import { EvidenceBundleDrawer } from './EvidenceBundleDrawer'
 
 // The one DOM step in the export: mirrors ReviewUnreadableTab.tsx's downloadCsv. The BOM
 // is what makes Excel read non-ASCII names as UTF-8 rather than the local codepage.
@@ -74,8 +75,10 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const [landed, setLanded] = useState<{ res: AuditResponse; page: AuditPageState } | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
-  // Read here as the trigger's aria-expanded; subtask 04 mounts the drawer against it.
+  // Drives the trigger's aria-expanded and the drawer mount below.
   const [bundleOpen, setBundleOpen] = useState(false)
+  // MembersView.tsx:72's idiom: must be STABLE -- it is a useDismiss dependency.
+  const closeBundle = useCallback(() => setBundleOpen(false), [])
   const filtered = filterState.invoiceId != null
 
   // Recomputed only when the filter state itself changes, not on every render -- the date
@@ -329,6 +332,10 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
 
       {exportToast && (
         <AuditExportToast kind={exportToast.kind} text={exportToast.text} onDismiss={() => setExportToast(null)} />
+      )}
+
+      {bundleOpen && base != null && (
+        <EvidenceBundleDrawer ctx={ctx} base={base} onClose={closeBundle} onToast={setExportToast} />
       )}
     </div>
   )

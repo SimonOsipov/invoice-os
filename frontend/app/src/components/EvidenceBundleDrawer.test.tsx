@@ -241,11 +241,8 @@ describe('EvidenceBundleDrawer', () => {
   it('drawerPeriod_offersAuditSevensPresets', async () => {
     expect(DATE_PRESETS.length).toBe(4)
     await renderDrawer()
-    // Typed explicitly: DATE_PRESETS' own type is unresolved until AuditFilterCard exports it
-    // (TS2459, the real RED signal here), which would otherwise cascade into implicit-any on
-    // every callback below and mask that one error under noise.
-    const chips = DATE_PRESETS.map((p: { id: string; label: string }) => screen.getByTestId(`evidence-period-${p.id}`))
-    expect(chips.map((c: HTMLElement) => c.textContent)).toEqual(DATE_PRESETS.map((p: { id: string; label: string }) => p.label))
+    const chips = DATE_PRESETS.map((p) => screen.getByTestId(`evidence-period-${p.id}`))
+    expect(chips.map((c) => c.textContent)).toEqual(DATE_PRESETS.map((p) => p.label))
   })
 
   // EB-04-7

@@ -31,6 +31,7 @@ import {
   bundleReadyLine,
   bundleToastCopy,
   type BundleBlock,
+  type BundleManifestLine,
   type BundleToastInput,
 } from './evidenceBundleView'
 import { formatBytes } from './sourceDocument'
@@ -207,6 +208,21 @@ describe('evidence-bundle drawer copy', () => {
     // A digit here is a smuggled estimate; this and EB-02-2 are then un-satisfiable together.
     expect(helper).not.toMatch(/\d/)
   })
+
+  // QA (Mode B). EB-02-1 only asserts that SOME string carries the needle, which
+  // bundleReadyLine alone satisfies -- the manifest ROW could drop it and stay green.
+  // AC-1 names both, and EB-05-4 asserts the contents block carries it.
+  it('EB-02-17 manifestRow_carriesTheManifestSha256Needle', () => {
+    // Control: the needle must be built from U+00B7, not U+2022 and not a hyphen.
+    expect(MID.charCodeAt(0), 'MID must be U+00B7').toBe(0x00b7)
+
+    expect(copy('rowManifest').startsWith(MANIFEST_NEEDLE), 'the manifest row must lead with the needle').toBe(true)
+
+    const manifestRow = bundleManifestLines(PREVIEW).find((l) => l.label.includes('manifest.json'))
+    expect(manifestRow, 'no row names manifest.json').toBeDefined()
+    expect(manifestRow!.label).toContain(MANIFEST_NEEDLE)
+    expect(bundleReadyLine(0)).toContain(MANIFEST_NEEDLE)
+  })
 })
 
 describe('bundleManifestLines', () => {
@@ -269,6 +285,70 @@ describe('bundleManifestLines', () => {
     expect(manifest).toContain('bw.zw.Create("manifest.json")')
     expect(labels.some((l) => l.includes('manifest.json'))).toBe(true)
   })
+
+  // QA (Mode B). Zero INVOICES is a refusal, but a period that has invoices and no
+  // submissions is legitimate and must still render all seven rows. Nothing held the
+  // all-zero shape, nor the locale formatter at seven figures.
+  it('EB-02-20 bundleManifestLines_zeroAndSevenFigureCountsStillRenderEveryRow', () => {
+    const zero = { invoices: 0, status_transitions: 0, submissions: 0, exchange_attempts: 0, body_files: 0 }
+    const zeroLines = bundleManifestLines({ ...PREVIEW, counts: zero })
+    expect(zeroLines).toHaveLength(7)
+    expect(zeroLines.map((l) => l.value)).toEqual(['0', '0', null, '0', '0', '0', null])
+
+    // The realistic case: invoices exist, nothing was ever transmitted.
+    const noTransmission = { ...COUNTS, submissions: 0, exchange_attempts: 0, body_files: 0 }
+    const partial = bundleManifestLines({ ...PREVIEW, counts: noTransmission })
+    expect(partial).toHaveLength(7)
+    expect(partial.map((l) => l.value)).toEqual([
+      (507).toLocaleString('en-NG'),
+      (2028).toLocaleString('en-NG'),
+      null,
+      '0',
+      '0',
+      '0',
+      null,
+    ])
+
+    // Seven figures through the same formatter -- toLocaleString('en-NG') varies with the
+    // Node ICU build (format.test.ts:9), so never assert a hardcoded '1,234,567'.
+    const big = { ...COUNTS, exchange_attempts: 1234567, submissions: 1000000 }
+    const bigLines = bundleManifestLines({ ...PREVIEW, counts: big })
+    expect(bigLines[3].value).toBe((1000000).toLocaleString('en-NG'))
+    expect(bigLines[4].value).toBe((1234567).toLocaleString('en-NG'))
+    expect(bigLines[4].value, 'a seven-figure count must not ship as raw digits').not.toBe('1234567')
+  })
+
+  // QA (Mode B). The label trap the plan named but no spec held: textContent glues a row's
+  // value to the NEXT row's label, so a label leading with B/KB/MB/GB reads as a byte size
+  // and false-trips EB-05-3. 08-05's size assertion depends on this staying true.
+  it('EB-02-21 evidenceCopy_noLabelCanBeMistakenForASize', () => {
+    const SIZE_RE = /\b\d[\d,.]*\s?(B|KB|MB|GB)\b/
+    const LEADS_WITH_UNIT = /^(B|KB|MB|GB)\b/
+
+    for (const value of copyValues() as string[]) {
+      expect(value, `a copy value leads with a byte unit: ${value}`).not.toMatch(LEADS_WITH_UNIT)
+    }
+
+    const lines = bundleManifestLines(PREVIEW)
+    for (const line of lines) {
+      expect(line.label, `a label leads with a byte unit: ${line.label}`).not.toMatch(LEADS_WITH_UNIT)
+    }
+
+    // The real adjacency: value_n concatenated with label_n+1, as textContent renders it.
+    const glued = (rows: BundleManifestLine[]) =>
+      rows.slice(0, -1).map((row, i) => `${row.value ?? ''}${rows[i + 1].label}`)
+
+    // Negative control. Note the real boundary, so 08-05 does not over-trust the reword:
+    // with SIZE_RE anchored by a trailing \b, '507' + 'Bodies (bodies/)' does NOT trip --
+    // 'B' is followed by a word character. A label whose unit token ends at a boundary does.
+    const planted: BundleManifestLine[] = [
+      { label: 'Transmission attempts (exchange.csv)', value: '507' },
+      { label: 'GB of recorded bodies', value: null },
+    ]
+    expect(glued(planted).filter((s) => SIZE_RE.test(s)), 'the checker cannot see a planted size').toHaveLength(1)
+
+    expect(glued(lines).filter((s) => SIZE_RE.test(s)), 'a row pair reads as a byte size').toEqual([])
+  })
 })
 
 describe('bundleBasisLine', () => {
@@ -291,6 +371,33 @@ describe('bundleBasisLine', () => {
     expect(line).toContain('invoices.issue_date')
     expect(line).not.toContain('added to ASComply')
     expect(line).not.toContain('not by the date on the invoice')
+  })
+
+  // QA (Mode B). EB-02-6/6b cover the basis branch; the BOUNDS branch was unpinned. The
+  // inclusivity claim is a statement about the regulator's date range, so it may only be
+  // made when the server sent `inclusive`.
+  it('EB-02-23 bundleBasisLine_neverClaimsInclusivityTheServerDidNotSend', () => {
+    for (const bounds of ['exclusive', 'half-open', '']) {
+      const line = bundleBasisLine({ ...PERIOD, bounds })
+      expect(line, `bounds ${JSON.stringify(bounds)} must not claim inclusivity`).not.toContain(
+        'Both dates are included',
+      )
+      // The basis half is unaffected by the bounds.
+      expect(line).toContain('added to ASComply')
+    }
+
+    // An absent basis names no field claim at all.
+    const noBasis = bundleBasisLine({ ...PERIOD, basis: '' })
+    expect(noBasis).not.toContain('added to ASComply')
+    expect(noBasis).toContain('Both dates are included')
+
+    // Oracle: the two values the server actually emits, so the primary branch is the live
+    // one. If bundlePeriod ever sends something else, the line degrades to the raw field.
+    const go = readFileSync(MANIFEST_GO, 'utf8')
+    expect(go, 'manifest.go must still render the period wire shape').toContain('func bundlePeriod(')
+    expect(go).toMatch(/Bounds:\s*"inclusive"/)
+    expect(go).toMatch(/Basis:\s*"invoices\.created_at"/)
+    expect(bundleBasisLine(PERIOD)).toContain('Both dates are included')
   })
 })
 
@@ -347,6 +454,40 @@ describe('bundleBlockFor', () => {
     expect(block).toEqual({ kind: 'invalid-range' })
     expect(bundleBlockReason(block)).toBe(AUDIT_COPY.dateRangeInvalidReason)
   })
+
+  // QA (Mode B). EB-02-13 pairs each refusal with a SATISFIED neighbour, so swapping the
+  // first two survives it. This is the only reachable combination -- bundleRequestFor
+  // returns null whenever entityId is falsy (evidenceBundle.ts:52-53) -- and it decides
+  // which sentence a user with nothing selected reads.
+  it('EB-02-18 bundleBlock_noCompanyOutranksNoPeriodWhenBothAreMissing', () => {
+    // Control: no company means no request, so (null, null) is what the drawer really holds.
+    expect(bundleRequestFor(null, { preset: '30d' }, NOW), 'a null company yields no request').toBeNull()
+    expect(bundleRequestFor('', { preset: '30d' }, NOW), 'an empty company yields no request').toBeNull()
+
+    for (const entityId of [null, '']) {
+      const block = bundleBlockFor(entityId, null, PREVIEW)
+      expect(block, `entityId ${JSON.stringify(entityId)} must refuse for the missing company`).toEqual({
+        kind: 'no-company',
+      })
+      // The sentence, not just the kind: a swapped order tells the user to pick a period.
+      expect(bundleBlockReason(block)).toBe(EVIDENCE_COPY.noCompanyReason)
+    }
+
+    // The widening is `!entityId`, not `== null`: an empty string is a missing company, and
+    // a strict null check would refuse it with no-period instead.
+    expect(bundleBlockFor('', REQ, PREVIEW)).toEqual({ kind: 'no-company' })
+  })
+
+  // QA (Mode B). The pair is unreachable on the wire (preview.go: OverLimit = len(ids) > max
+  // and Counts.Invoices = len(ids), so 0 can never be over the limit), but plan section 3
+  // pins the order for determinism and nothing held it.
+  it('EB-02-19 bundleBlock_emptyOutranksOverLimitForDeterminism', () => {
+    const both = { ...PREVIEW, over_limit: true, counts: { ...COUNTS, invoices: 0 } }
+
+    const block = bundleBlockFor(ENTITY_ID, REQ, both)
+    expect(block).toEqual({ kind: 'empty', company: PREVIEW.entity.name, period: PERIOD_LABEL })
+    expect(bundleBlockReason(block)).toContain('nothing to export')
+  })
 })
 
 describe('bundleToastCopy', () => {
@@ -394,6 +535,22 @@ describe('bundleToastCopy', () => {
     expect(bundle).not.toContain('No attachments, no payloads, no invoices')
     expect(bundle).not.toContain('Exported ')
   })
+
+  // QA (Mode B). EB-02-9/9b cover 1500 and 1. The ends were open: zero must stay plural,
+  // and a seven-figure count must still route through the locale formatter.
+  it('EB-02-24 bundleToast_holdsAtZeroAndAtSevenFigures', () => {
+    const zero = bundleToastCopy({ ...TOAST, invoices: 0, bytes: 0 })
+    expect(zero, 'zero is plural in English').toMatch(/\b0 invoices\b/)
+    expect(zero).toContain(TOAST.filename)
+    expect(zero).toContain(TOAST.company)
+    expect(zero).toContain(TOAST.period)
+    expect(zero).toContain(formatBytes(0))
+
+    const many = bundleToastCopy({ ...TOAST, invoices: 1000000, bytes: 1048576 })
+    expect(many).toContain(`${(1000000).toLocaleString('en-NG')} invoices`)
+    expect(many, 'a seven-figure count must not ship as raw digits').not.toContain('1000000')
+    expect(many).toContain(formatBytes(1048576))
+  })
 })
 
 describe('bundleReadyLine and bundlePeriodLabel', () => {
@@ -416,4 +573,47 @@ describe('bundleReadyLine and bundlePeriodLabel', () => {
     expect(label).toBe(PERIOD_LABEL)
     expect(label, 'BUG-03-02: new Date(iso).toLocaleDateString() shifts a day').not.toContain('30 June 2026')
   })
+
+  // QA (Mode B). Nothing pinned the SHAPE of this line or that it routes through the
+  // shipped formatter: a hand-rolled divide-by-1000, or a dropped `ZIP ` prefix, both
+  // stayed green. The literals below are 1024-base, so a /1000 formatter cannot pass.
+  it('EB-02-16 bundleReadyLine_isTheZipShapeThroughTheShippedFormatter', () => {
+    expect(bundleReadyLine(1023)).toBe(`ZIP ${MID} 1023 B ${MID} ${MANIFEST_NEEDLE}`)
+    expect(bundleReadyLine(1024)).toBe(`ZIP ${MID} 1 KB ${MID} ${MANIFEST_NEEDLE}`)
+    expect(bundleReadyLine(1048576)).toBe(`ZIP ${MID} 1 MB ${MID} ${MANIFEST_NEEDLE}`)
+    expect(bundleReadyLine(0)).toBe(`ZIP ${MID} 0 B ${MID} ${MANIFEST_NEEDLE}`)
+
+    // Every boundary agrees with the shipped formatter, including the ones it rounds up
+    // (1048575 reads "1 MB", per sourceDocument.ts:270-271) and the ones it floors to 0 B.
+    for (const bytes of [0, 1, 1023, 1024, 1048575, 1048576, 1073741824, -5, Number.NaN]) {
+      expect(bundleReadyLine(bytes), `bundleReadyLine(${bytes})`).toBe(
+        `ZIP ${MID} ${formatBytes(bytes)} ${MID} ${MANIFEST_NEEDLE}`,
+      )
+    }
+  })
+
+  // QA (Mode B). Boundary sweep: bundlePeriodLabel is prefix arithmetic, so it must hold
+  // across a month, a year, a single day and a leap day, at BOTH offset signs. EB-02-15
+  // stubbed only a negative offset.
+  it('EB-02-22 bundlePeriodLabel_holdsAcrossBoundariesAndBothOffsetSigns', () => {
+    const label = (from: string, to: string) => bundlePeriodLabel({ ...PERIOD, from, to })
+
+    const cases: Array<[string, string, string]> = [
+      ['2026-07-01T00:00:00Z', '2026-08-31T23:59:59Z', `1 July 2026 ${EN_DASH} 31 August 2026`],
+      ['2026-12-31T00:00:00Z', '2027-01-01T23:59:59Z', `31 December 2026 ${EN_DASH} 1 January 2027`],
+      ['2026-07-15T00:00:00Z', '2026-07-15T23:59:59Z', `15 July 2026 ${EN_DASH} 15 July 2026`],
+      ['2024-02-29T00:00:00Z', '2024-02-29T23:59:59Z', `29 February 2024 ${EN_DASH} 29 February 2024`],
+    ]
+
+    for (const tz of ['America/New_York', 'Pacific/Kiritimati']) {
+      vi.stubEnv('TZ', tz)
+      for (const [from, to, want] of cases) expect(label(from, to), `${tz} ${from}`).toBe(want)
+    }
+
+    // Positive offset (+14) pushes the LAST instant of the period into the next month.
+    vi.stubEnv('TZ', 'Pacific/Kiritimati')
+    expect(new Date('2026-07-31T23:59:59Z').getDate(), 'the +14 stub did not take effect').toBe(1)
+    expect(label('2026-07-31T23:59:59Z', '2026-07-31T23:59:59Z')).toBe(`31 July 2026 ${EN_DASH} 31 July 2026`)
+  })
+
 })

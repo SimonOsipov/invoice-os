@@ -223,6 +223,18 @@ describe('evidence-bundle drawer copy', () => {
     expect(manifestRow!.label).toContain(MANIFEST_NEEDLE)
     expect(bundleReadyLine(0)).toContain(MANIFEST_NEEDLE)
   })
+
+  // AUDIT-08-03 (task-666), the lib half of EB-03-2. The header trigger's caption lives here,
+  // not in AuditView.tsx, per [bulk-copy-lives-in-the-lib]; this pins the exact bytes so the
+  // component spec can assert equality with the key rather than restating the literal.
+  it('EB-03-2a evidenceCopy_openCaptionIsTheZipTag', () => {
+    // Control: the pin must compare against U+00B7, not U+2022 and not a hyphen.
+    expect(MID.charCodeAt(0), 'MID must be U+00B7').toBe(0x00b7)
+
+    expect(copy('openCaption')).toBe(`ZIP ${MID} ONE COMPANY, ONE PERIOD`)
+    // One middle dot on the header row: the same separator the shipped ghost already uses.
+    expect(AUDIT_COPY.exportCaption, 'the sibling carries the same separator').toContain(MID)
+  })
 })
 
 describe('bundleManifestLines', () => {

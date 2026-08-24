@@ -64,6 +64,7 @@ function auditCtx(): PlatformCtx {
     mode: 'firm',
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
+    entities: [],
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
   } as unknown as PlatformCtx
 }

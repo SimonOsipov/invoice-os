@@ -18,7 +18,19 @@ export const AUDIT_COPY = {
   emptyMessage: 'Actions appear here as soon as anyone creates, validates, approves or transmits an invoice.',
   // No count to state: the only unfiltered response this screen saw reported none.
   emptyByFilterBare: 'The log is not empty. These filters exclude every event in it.',
-  clearFilter: 'Clear filter',
+  // D-8: five of the seven design-named search targets are reachable; invoice number and an
+  // email-only-resolved actor name are not. Placeholder stays neutral for the same reason.
+  searchPlaceholder: 'Search event details',
+  searchHelper:
+    'Searches event details, rule keys, IRNs, company names and member display names. It cannot find an invoice number, or a member shown by their email address.',
+  dateRangeInvalidReason: 'End date must be on or after the start date.',
+  // D-7 / contract §3: the workspace bucket also holds events with no company to attribute.
+  companyWorkspaceCaveat: 'Also includes events with no company to attribute them to.',
+  // Contract §5: a non-null entity_id whose company was deleted, distinct from the workspace bucket.
+  companyDeletedLabel: 'A company that no longer exists',
+  // AUDIT-07-10: the export control's caption and its zero-rows disabled reason.
+  exportCaption: 'CSV · THE ROWS ON SCREEN',
+  exportDisabledReason: 'No rows match the current filters — nothing to export.',
 } as const
 
 export type AuditScreenState = 'loading' | 'error' | 'new-workspace' | 'empty-by-filter' | 'filtered' | 'loaded'
@@ -47,6 +59,10 @@ export function invoiceFilterPillLabel(invoiceNumber: string | null): string {
 }
 
 export const AUDIT_PAGE_SIZES = [25, 50, 100] as const
+
+// AUDIT-07-10: the keyset export loop's row ceiling (collectExportRows's `cap` param) --
+// 2000 rows at 100/page is 20 requests, the story's stated bound.
+export const AUDIT_EXPORT_CAP = 2000
 
 // The reader is forward-only: it mints a cursor for the NEXT page and never one for the
 // previous. Prev therefore has to be a client-held stack of the cursors already used --
@@ -89,9 +105,8 @@ export function auditRangeLabel(s: AuditPageState, rowsOnPage: number, total: nu
 export const AUDIT_IMMUTABILITY_CLAIM =
   'This log is append-only. Entries cannot be edited or deleted, by anyone, including us — the database accepts inserts and reads and rejects every update, delete and truncate.'
 
-// Only an unfiltered `total` is a lifetime figure (Option A, user decision 2026-08-23).
-// The reader exposes no first-row date, so the strip states none. If a later story gives
-// this screen a default filter, this sentence stops being true and must change with it.
+// lifetimeTotal comes from AuditView's dedicated unfiltered probe request, never from the
+// main (filtered) response. The reader exposes no first-row date, so the strip states none.
 export function auditStripCount(lifetimeTotal: number | null): string | null {
   if (lifetimeTotal == null || lifetimeTotal <= 0) return null
   const n = lifetimeTotal.toLocaleString('en-NG')

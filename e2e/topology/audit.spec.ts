@@ -574,15 +574,29 @@ test.describe('Audit screen', () => {
     const body = page.getByTestId('evidence-bundle-body')
     const footer = page.getByTestId('evidence-bundle-footer')
     const title = page.getByTestId('evidence-bundle-title')
+    // The header band carries no testid; it is the panel's first child. Asserted to contain
+    // the title so a structure change fails here rather than silently measuring the wrong box.
+    const header = panel.locator(':scope > div').first()
+    // Direct children of their bands, so each one's inset from its band IS that band's padding.
+    const bodyContent = page.getByTestId('evidence-company-helper')
+    const footerContent = page.getByTestId('evidence-bundle-cancel')
     await expect(panel).toBeVisible({ timeout: 15_000 })
     await settleDrawerAnimation(page)
+    await expect(header.getByTestId('evidence-bundle-title')).toHaveCount(1)
 
     // 2px, not assertFillsColumn's 24: every comparison below is against the same edge or
     // the same box, so this budgets sub-pixel rounding across independent boundingBox()
     // reads, never a scrollbar gutter.
     const SLACK_PX = 2
 
-    const measured: Array<{ width: number; layoutWidth: number; rightGap: number; leftEdge: number; bandDrift: number }> = []
+    const measured: Array<{
+      width: number
+      layoutWidth: number
+      rightGap: number
+      leftEdge: number
+      bandDrift: number
+      insetDrift: number
+    }> = []
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
       // A `position:fixed; right:0` element is flush to the LAYOUT viewport, which excludes
@@ -590,14 +604,19 @@ test.describe('Audit screen', () => {
       // width we asked for compares two different edges and fails by the gutter -- which is
       // why assertFillsColumn budgets 24px for it rather than 2.
       const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth)
-      const [panelBox, scrimBox, bodyBox, footerBox, titleBox] = await Promise.all([
-        panel.boundingBox(),
-        scrim.boundingBox(),
-        body.boundingBox(),
-        footer.boundingBox(),
-        title.boundingBox(),
-      ])
+      const [panelBox, scrimBox, bodyBox, footerBox, titleBox, headerBox, bodyContentBox, footerContentBox] =
+        await Promise.all([
+          panel.boundingBox(),
+          scrim.boundingBox(),
+          body.boundingBox(),
+          footer.boundingBox(),
+          title.boundingBox(),
+          header.boundingBox(),
+          bodyContent.boundingBox(),
+          footerContent.boundingBox(),
+        ])
       if (!panelBox || !scrimBox || !bodyBox || !footerBox || !titleBox) continue
+      if (!headerBox || !bodyContentBox || !footerContentBox) continue
 
       // L1 -- flush to the layout viewport's right edge.
       const rightGap = Math.abs(layoutWidth - (panelBox.x + panelBox.width))
@@ -613,12 +632,24 @@ test.describe('Audit screen', () => {
       expect(scrimBox.width, `the scrim must span the viewport at ${width}px`).toBeGreaterThanOrEqual(layoutWidth - SLACK_PX)
       expect(rectsOverlap(panelBox, scrimBox), `the panel must lie over the scrim at ${width}px`).toBe(true)
 
-      // L7 -- header, body and footer share one content column. Without this, "the block
-      // fills the body" can hold while the body is inset differently from the header.
-      const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - titleBox.x))
-      expect(bandDrift, `the three bands must share one content column at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+      // L7 -- header, body and footer share one content column. Two claims, and the second is
+      // the one that bites: the bands are full-width siblings, AND each band insets its own
+      // content by the same amount. Comparing a band's OUTER box against another band's INNER
+      // content compares two different edges and fails by exactly the padding -- the first
+      // deploy-gate run reported 22, which is the padding, not a misalignment.
+      const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - headerBox.x))
+      expect(bandDrift, `the three bands must be full-width siblings at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
-      measured.push({ width, layoutWidth, rightGap, leftEdge: panelBox.x, bandDrift })
+      // The footer is justify-content:flex-end, so its content column is measured from the
+      // RIGHT edge; the other two from the left. Equal insets is the relationship, and no
+      // number appears -- the three are only ever compared against each other.
+      const headerInset = titleBox.x - headerBox.x
+      const bodyInset = bodyContentBox.x - bodyBox.x
+      const footerInset = footerBox.x + footerBox.width - (footerContentBox.x + footerContentBox.width)
+      const insetDrift = Math.max(Math.abs(headerInset - bodyInset), Math.abs(headerInset - footerInset))
+      expect(insetDrift, `the three bands must share one content column at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
+
+      measured.push({ width, layoutWidth, rightGap, leftEdge: panelBox.x, bandDrift, insetDrift })
     }
     expect(measured.length, 'the drawer geometry sweep measured nothing').toBe(WIDE_WIDTHS.length)
     await test.info().attach('audit-bundle-drawer-geometry', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })

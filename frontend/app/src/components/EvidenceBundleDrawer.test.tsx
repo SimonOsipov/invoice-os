@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditEvent, AuditResponse } from '../lib/audit'
 import type { AuditRange } from '../lib/auditFilters'
 import { createAuthedFetch } from '../lib/authedFetch'
-import { bundleRequestFor } from '../lib/evidenceBundle'
-import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
+import { bundleRequestFor, type EvidenceBundlePreview } from '../lib/evidenceBundle'
+import { BUNDLE_INVOICE_LIMIT, EVIDENCE_COPY, bundleBlockReason, bundlePeriodLabel } from '../lib/evidenceBundleView'
 import type { Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 
@@ -107,9 +107,47 @@ function readDrawerSource(): string {
   return readFileSync(join(dir, 'EvidenceBundleDrawer.tsx'), 'utf8')
 }
 
-function previewCalls(fetchMock: ReturnType<typeof vi.fn>) {
-  return fetchMock.mock.calls.filter((call) => String(call[0]).includes('evidence-bundle'))
+// Path-scoped, not a substring match: '.../evidence-bundle' (the download URL) also
+// contains 'evidence-bundle', so a loose filter here would double-count as a preview call.
+function pathOf(call: unknown[]): string {
+  return new URL(String(call[0])).pathname
 }
+function previewCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter((call) => pathOf(call).endsWith('/evidence-bundle/preview'))
+}
+function downloadCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter((call) => pathOf(call).endsWith('/evidence-bundle'))
+}
+
+// Per-LEAF text, never one glued textContent blob -- adjacent siblings (e.g. the period
+// label and the basis line) glue into one string under plain textContent, which false-trips
+// a regex looking for a boundary that only exists between two separate leaves.
+function leafTexts(root: HTMLElement): string[] {
+  return [root, ...Array.from(root.querySelectorAll('*'))]
+    .filter((el) => el.children.length === 0)
+    .map((el) => el.textContent ?? '')
+    .filter((s) => s.trim().length > 0)
+}
+
+function previewResponse(preview: EvidenceBundlePreview): MockResponse {
+  return { ok: true, status: 200, json: () => Promise.resolve(preview) }
+}
+
+function errorResponse(status: number, error: string): MockResponse {
+  return { ok: false, status, json: () => Promise.resolve({ error }) }
+}
+
+// Mirrors evidenceBundleView.test.ts's fixture. Two deliberate divergences from the LOCAL
+// selection: the entity name differs, and the period is not the 30d default -- a block that
+// renders the selection instead of the server's response cannot pass against this pair.
+const PREVIEW: EvidenceBundlePreview = {
+  entity: { id: 'ent-a', name: 'Honeywell Group', tin: '12345678-0001' },
+  period: { from: '2026-07-01T00:00:00Z', to: '2026-07-31T23:59:59Z', bounds: 'inclusive', basis: 'invoices.created_at' },
+  filename: 'ASComply_evidence_Honeywell_Group_20260701_20260731.zip',
+  counts: { invoices: 507, status_transitions: 2028, submissions: 1204, exchange_attempts: 1521, body_files: 3042 },
+  over_limit: false,
+}
+const LOCAL = mkEntity('ent-a', 'Locally Picked Ltd')
 
 function parseCall(call: unknown[]): { entity_id: string | null; from: string | null; to: string | null } {
   const u = new URL(String(call[0]))
@@ -423,9 +461,7 @@ describe('EvidenceBundleDrawer', () => {
 
     fireEvent.click(screen.getByTestId('evidence-period-24h'))
     await waitFor(() => expect(previewCalls(fetchMock).length).toBe(baseline + 1))
-    // Not queryByTestId('evidence-period-custom') here: that id is shared by the "Custom
-    // range" CHIP (always rendered) and this date-fields wrapper (conditional) -- see
-    // EB-04-19, which pins the collision. `evidence-period-from` is the wrapper-only proof.
+    // 'evidence-period-custom' is the always-rendered chip's own testid; 'evidence-period-from' exists only inside the conditional wrapper, so its absence is the real proof.
     expect(screen.queryByTestId('evidence-period-from')).toBeNull()
     const last = parseCall(previewCalls(fetchMock)[previewCalls(fetchMock).length - 1])
     const expected24h = bundleRequestFor('ent-a', { preset: '24h' }, new Date())
@@ -442,5 +478,356 @@ describe('EvidenceBundleDrawer', () => {
     expect(screen.getByTestId('evidence-company-panel')).toBeTruthy()
     fireEvent.click(screen.getByTestId('evidence-bundle-scrim'))
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  // AUDIT-08-05 -- the confirmation block, the pre-build refusals and the two suppression
+  // gates (staleness, the client's own reason over the server's echoed 400).
+
+  // EB-05-1
+  it('confirmBlock_statesCompanyPeriodFilenameBeforeAnyDownload', async () => {
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    await screen.findByTestId('evidence-confirm-block')
+    // The server's name/period, never the local selection -- LOCAL and PREVIEW deliberately differ.
+    expect(screen.getByTestId('evidence-confirm-company').textContent).toBe('Honeywell Group')
+    expect(screen.getByTestId('evidence-confirm-period').textContent).toBe(bundlePeriodLabel(PREVIEW.period))
+    expect(screen.getByTestId('evidence-confirm-filename').textContent).toBe(PREVIEW.filename)
+    expect(downloadCalls(fetchMock)).toHaveLength(0)
+  })
+
+  // EB-05-2
+  it('confirmBlock_filenameIsThePreviewsNotAComputedOne', async () => {
+    const sentinel = 'sentinel_filename_do_not_recompute.zip'
+    mockFetchSequence([previewResponse({ ...PREVIEW, filename: sentinel })])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    await waitFor(() => expect(screen.getByTestId('evidence-confirm-filename').textContent).toBe(sentinel))
+
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('FilterPopover')
+    // No client-side name construction: a compliant drawer's source never carries the prefix.
+    expect(src).not.toContain('ASComply_evidence')
+  })
+
+  // EB-05-3 -- see the vacuity audit: bundlePeriodLabel ends in a year and bundleBasisLine
+  // starts with 'Both' for an inclusive period, so a glued textContent read matches this
+  // regex on CORRECT copy. leafTexts() is the fix.
+  it('confirmBlock_statesNoSize', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+
+    const SIZE_RE = /\d+(\.\d+)?\s?(B|KB|MB|GB)/
+    const panel = screen.getByTestId('evidence-bundle-drawer')
+    const texts = leafTexts(panel)
+    // Floor: a non-trivial haystack that holds two known needles.
+    expect(texts.length).toBeGreaterThanOrEqual(20)
+    expect(texts).toContain(PREVIEW.filename)
+    expect(texts).toContain(EVIDENCE_COPY.confirmFooter)
+    // Control: the scanner fires on a planted size sentence.
+    expect(['The bundle is 4.2 MB.'].filter((s) => SIZE_RE.test(s))).toHaveLength(1)
+    // Claim: no single leaf states a size.
+    expect(texts.filter((s) => SIZE_RE.test(s))).toEqual([])
+  })
+
+  // EB-05-4
+  it('confirmBlock_neverSaysSigned', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+
+    // Not /sign/i -- rowManifest deliberately carries "not a cryptographic signature".
+    const SIGNED_RE = /signed/i
+    const panel = screen.getByTestId('evidence-bundle-drawer')
+    const texts = leafTexts(panel)
+    expect(texts.length).toBeGreaterThanOrEqual(20)
+    expect(texts).toContain(PREVIEW.filename)
+    expect(texts).toContain(EVIDENCE_COPY.confirmFooter)
+    expect(['A signed SHA-256 manifest is attached.'].filter((s) => SIGNED_RE.test(s))).toHaveLength(1)
+    expect(texts.filter((s) => SIGNED_RE.test(s))).toEqual([])
+
+    // U+00B7, asserted before use -- the EB-02-17 idiom.
+    const MID = '·'
+    expect(MID.charCodeAt(0)).toBe(0x00b7)
+    expect(texts.some((t) => t.includes(`MANIFEST ${MID} SHA-256`))).toBe(true)
+  })
+
+  // EB-05-5
+  it('confirmBlock_footerSaysNothingDownloadsUntilYouConfirm', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    await waitFor(() => expect(screen.getByTestId('evidence-confirm-footnote').textContent).toBe(EVIDENCE_COPY.confirmFooter))
+
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('FilterPopover')
+    // DOM equality alone passes on a hardcoded literal too -- the source must read the key.
+    expect(src).not.toContain(EVIDENCE_COPY.confirmFooter)
+  })
+
+  // EB-05-6
+  it('confirmBlock_zeroInvoicesRefusesBeforeTheBuild', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    // Control: the happy path leaves Prepare enabled -- without this, "disabled" below proves nothing.
+    expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(false)
+    cleanup()
+
+    const empty = { ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 0 } }
+    const fetchMock = mockFetchSequence([previewResponse(empty)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    const expectedReason = bundleBlockReason({ kind: 'empty', company: 'Honeywell Group', period: bundlePeriodLabel(PREVIEW.period) })
+    await waitFor(() => expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(expectedReason))
+    expect(expectedReason).toContain('Honeywell Group')
+    expect(expectedReason).toContain('1 July 2026')
+
+    const prepare = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
+    expect(prepare.disabled).toBe(true)
+
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    fireEvent.click(prepare)
+    expect(downloadCalls(fetchMock)).toHaveLength(0)
+  })
+
+  // EB-05-7
+  it('confirmBlock_disabledPrepareNeutralisesFilter', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    const enabled = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
+    expect(enabled.style.filter).toBe('')
+    expect(enabled.style.background).toBe('')
+    cleanup()
+
+    const empty = { ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 0 } }
+    mockFetchSequence([previewResponse(empty)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await waitFor(() => expect(screen.getByTestId('evidence-bundle-reason')).toBeTruthy())
+
+    const disabled = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
+    expect(disabled.style.filter).toBe('none')
+    expect(disabled.style.background).toBe('var(--bg-3)')
+    expect(disabled.style.cursor).toBe('not-allowed')
+  })
+
+  // EB-05-8
+  it('confirmBlock_overLimitRefusesAndNamesBothNumbers', async () => {
+    const overLimit = { ...PREVIEW, over_limit: true, counts: { ...PREVIEW.counts, invoices: 12345 } }
+    const fetchMock = mockFetchSequence([previewResponse(overLimit)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    const expectedReason = bundleBlockReason({ kind: 'over-limit', invoices: 12345, limit: BUNDLE_INVOICE_LIMIT })
+    await waitFor(() => expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(expectedReason))
+    // The AC's own claim, independent of the lib producing the sentence.
+    expect(expectedReason).toContain('12,345')
+    expect(expectedReason).toContain('10,000')
+
+    const prepare = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
+    expect(prepare.disabled).toBe(true)
+    expect(prepare.style.filter).toBe('none')
+
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    expect(downloadCalls(fetchMock)).toHaveLength(0)
+  })
+
+  // EB-05-9
+  it('confirmBlock_a404NeverClaimsNonExistence', async () => {
+    mockFetchSequence([errorResponse(404, 'not found')])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    const error = await screen.findByTestId('evidence-bundle-error')
+    // Floor: the card is present and IS the 404 path, not some other failure.
+    expect(error.textContent).toContain('not found')
+    expect(error.textContent).toContain('HTTP 404')
+
+    const NON_EXISTENCE_RE = /does not exist|no such company/i
+    // Control: the scanner fires on a planted non-existence claim.
+    expect(['This company does not exist.'].filter((s) => NON_EXISTENCE_RE.test(s))).toHaveLength(1)
+
+    // Claim: D-26's indistinguishability, preserved by construction over the whole panel.
+    const panel = screen.getByTestId('evidence-bundle-drawer')
+    expect(leafTexts(panel).filter((s) => NON_EXISTENCE_RE.test(s))).toEqual([])
+
+    expect(screen.queryByTestId('evidence-confirm-block')).toBeNull()
+    expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // EB-05-10 -- jsdom applies no stylesheet, so only the inline `style` attribute is a live
+  // oracle, and it must be scoped to the block: ErrorState ships '#fff' and the drawer's own
+  // scrim ships an oklch() literal, both correct and both outside this block.
+  it('confirmBlock_usesTealTokensOnly', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    const block = await screen.findByTestId('evidence-confirm-block')
+    const heading = screen.getByTestId('evidence-confirm-heading')
+    expect(block.style.background).toBe('var(--action-tint)')
+    expect(block.style.border).toBe('1px solid var(--teal-200)')
+    expect(heading.style.color).toBe('var(--action)')
+
+    const nodes = [block, ...Array.from(block.querySelectorAll('*'))]
+    expect(nodes.length).toBeGreaterThanOrEqual(15)
+    const withVarBg = nodes.filter((n) => (n.getAttribute('style') ?? '').includes('var(--'))
+    expect(withVarBg.length).toBeGreaterThanOrEqual(5)
+
+    const OKLCH_RE = /oklch\(/i
+    const HEX_RE = /#[0-9a-f]{3,8}\b/i
+    // Control: both regexes fire on a planted literal-colour declaration.
+    const planted = 'color: #ff0000; background: oklch(50% 0 0)'
+    expect(HEX_RE.test(planted)).toBe(true)
+    expect(OKLCH_RE.test(planted)).toBe(true)
+
+    for (const n of nodes) {
+      const style = n.getAttribute('style') ?? ''
+      expect(style).not.toMatch(OKLCH_RE)
+      expect(style).not.toMatch(HEX_RE)
+    }
+  })
+
+  // EB-05-11
+  it('confirmBlock_prepareHelperSaysSizeIsUnknownUntilBuilt', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    const helper = await screen.findByTestId('evidence-prepare-helper')
+    expect(helper.textContent).toBe(EVIDENCE_COPY.prepareHelper)
+    expect(helper.textContent).toContain('not known until the bundle is built')
+    expect(helper.textContent).toContain('held in your browser until you save')
+    expect(helper.textContent).not.toMatch(/\d/)
+
+    const prepare = screen.getByTestId('evidence-bundle-prepare')
+    expect(prepare.getAttribute('aria-describedby')).toContain('evidence-prepare-helper')
+
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('FilterPopover')
+    expect(src).not.toContain(EVIDENCE_COPY.prepareHelper)
+  })
+
+  // EB-05-12 -- re-homed EB-04-8. The plan's literal "settle the first promise late" step
+  // cannot be replayed on the SAME promise (a Promise settles once); rungs (i)-(iii) below
+  // are the plan's abandoned-pending-request scenario verbatim, and the "slow first, fast
+  // second" regression (rung iv, over useAsync's inherited runId) is reproduced with a
+  // fresh pair of requests rather than reusing the already-settled first one.
+  it('confirmBlock_aStaleResponseNeverRenders', async () => {
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn(() => new Promise<MockResponse>((resolve) => resolvers.push(resolve)))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    resolvers[0](previewResponse({ ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 507 } }))
+    await waitFor(() =>
+      expect(screen.getAllByTestId('evidence-confirm-row-value').map((v) => v.textContent)).toContain('507'),
+    )
+
+    // The new selection's request is left pending -- the guard must drop the block on the
+    // key change alone, before any response has landed.
+    fireEvent.click(screen.getByTestId('evidence-period-7d'))
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    expect(screen.queryByTestId('evidence-confirm-block')).toBeNull()
+    expect(screen.queryByText('507')).toBeNull()
+
+    resolvers[1](previewResponse({ ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 42 } }))
+    await waitFor(() =>
+      expect(screen.getAllByTestId('evidence-confirm-row-value').map((v) => v.textContent)).toContain('42'),
+    )
+    expect(screen.queryByText('507')).toBeNull()
+
+    // Regression rung: fire a slow request, then a fast one that lands first, then settle
+    // the slow one late -- it must not clobber the fast one's already-rendered state.
+    fireEvent.click(screen.getByTestId('evidence-period-24h'))
+    await waitFor(() => expect(resolvers).toHaveLength(3))
+    fireEvent.click(screen.getByTestId('evidence-period-custom'))
+    fireEvent.change(screen.getByTestId('evidence-period-from'), { target: { value: '2026-06-01' } })
+    fireEvent.change(screen.getByTestId('evidence-period-to'), { target: { value: '2026-06-05' } })
+    await waitFor(() => expect(resolvers).toHaveLength(4))
+
+    resolvers[3](previewResponse({ ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 99 } }))
+    await waitFor(() =>
+      expect(screen.getAllByTestId('evidence-confirm-row-value').map((v) => v.textContent)).toContain('99'),
+    )
+
+    resolvers[2](previewResponse({ ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 12 } }))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const finalValues = screen.getAllByTestId('evidence-confirm-row-value').map((v) => v.textContent)
+    expect(finalValues).toContain('99')
+    expect(finalValues).not.toContain('12')
+  })
+
+  // EB-05-13 -- the oracle for `landed.key === reqKey`: a deps change that does NOT re-run
+  // (req becomes null, immediate:false) leaves useAsync's own state untouched, so only the
+  // key compare can hide the block.
+  it('confirmBlock_anAbandonedPeriodDropsTheLandedPreview', async () => {
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('evidence-period-custom'))
+
+    expect(screen.queryByTestId('evidence-confirm-block')).toBeNull()
+    expect(screen.queryByTestId('evidence-prepare-helper')).toBeNull()
+    expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(EVIDENCE_COPY.noPeriodReason)
+    expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
+    // No new request fired -- proving the guard, not a refetch, hid the block.
+    expect(previewCalls(fetchMock)).toHaveLength(1)
+  })
+
+  // EB-05-14 -- pins the `block == null` term of the error gate: an invalid range is caught
+  // client-side before the server's echo of the same fact ever gets to speak.
+  it('confirmBlock_anInvalidRangeStatesItsOwnReasonNotTheServers', async () => {
+    const fetchMock = mockFetchSequence([errorResponse(400, 'from must be before to')])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    fireEvent.click(screen.getByTestId('evidence-period-custom'))
+    fireEvent.change(screen.getByTestId('evidence-period-from'), { target: { value: '2026-05-10' } })
+    fireEvent.change(screen.getByTestId('evidence-period-to'), { target: { value: '2026-05-01' } })
+
+    expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(EVIDENCE_COPY.invalidRangeReason)
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    // Let the stubbed 400 settle before asserting it never surfaces its own card.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(screen.queryByTestId('evidence-bundle-error')).toBeNull()
+    const panel = screen.getByTestId('evidence-bundle-drawer')
+    expect(leafTexts(panel).some((s) => s.includes('from must be before to'))).toBe(false)
+    expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
   })
 })

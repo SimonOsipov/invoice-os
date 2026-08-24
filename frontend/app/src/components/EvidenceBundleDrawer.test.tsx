@@ -14,7 +14,7 @@ import type { AuditEvent, AuditResponse } from '../lib/audit'
 import type { AuditRange } from '../lib/auditFilters'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { bundleRequestFor, type EvidenceBundlePreview } from '../lib/evidenceBundle'
-import { BUNDLE_INVOICE_LIMIT, EVIDENCE_COPY, bundleBlockReason, bundlePeriodLabel } from '../lib/evidenceBundleView'
+import { BUNDLE_INVOICE_LIMIT, EVIDENCE_COPY, bundleBasisLine, bundleBlockReason, bundlePeriodLabel } from '../lib/evidenceBundleView'
 import type { Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 
@@ -829,5 +829,131 @@ describe('EvidenceBundleDrawer', () => {
     const panel = screen.getByTestId('evidence-bundle-drawer')
     expect(leafTexts(panel).some((s) => s.includes('from must be before to'))).toBe(false)
     expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // QA (AUDIT-08-05 Stage 4) -- mutation testing found AC-4 (the basis line) had no oracle
+  // at all: deleting evidence-confirm-basis entirely left all 34 specs green. These three
+  // fixtures differ in bounds/basis, so no single hardcoded sentence could satisfy all three
+  // -- the same discriminator EB-04-5 uses for static copy, applied to a derived one.
+  it('confirmBlock_basisLineStatesTheInclusiveBoundsHonestly', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    const text = screen.getByTestId('evidence-confirm-basis').textContent
+    expect(text).toBe(bundleBasisLine(PREVIEW.period))
+    expect(text).toMatch(/^Both dates are included\./)
+  })
+
+  it('confirmBlock_basisLineOmitsTheInclusiveClaimWhenBoundsAreNotInclusive', async () => {
+    const exclusive = { ...PREVIEW, period: { ...PREVIEW.period, bounds: 'exclusive' } }
+    mockFetchSequence([previewResponse(exclusive)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    const text = screen.getByTestId('evidence-confirm-basis').textContent
+    expect(text).toBe(bundleBasisLine(exclusive.period))
+    expect(text).not.toMatch(/^Both dates are included\./)
+  })
+
+  it('confirmBlock_basisLineNamesAnUnrecognisedBasisPlainly', async () => {
+    const oddBasis = { ...PREVIEW, period: { ...PREVIEW.period, basis: 'submissions.created_at' } }
+    mockFetchSequence([previewResponse(oddBasis)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    const text = screen.getByTestId('evidence-confirm-basis').textContent
+    expect(text).toBe(bundleBasisLine(oddBasis.period))
+    expect(text).toContain('submissions.created_at')
+  })
+
+  // A single invoice must not read "1 invoices" anywhere on the panel.
+  it('confirmBlock_singleInvoiceRowNeverPluralizesAsInvoices', async () => {
+    const one = { ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 1 } }
+    mockFetchSequence([previewResponse(one)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    const panel = screen.getByTestId('evidence-bundle-drawer')
+    const texts = leafTexts(panel)
+    const BAD_RE = /\b1\s+invoices\b/i
+    // Control: the scanner fires on a planted mis-pluralisation.
+    expect(['1 invoices were exported.'].filter((s) => BAD_RE.test(s))).toHaveLength(1)
+    expect(texts.filter((s) => BAD_RE.test(s))).toEqual([])
+    expect(texts).toContain('1')
+  })
+
+  // bundleBlockFor checks counts.invoices === 0 before over_limit -- pin the precedence
+  // through the whole wired component, not just the lib.
+  it('confirmBlock_emptyRefusalWinsOverOverLimitWhenBothConditionsHold', async () => {
+    const both = { ...PREVIEW, over_limit: true, counts: { ...PREVIEW.counts, invoices: 0 } }
+    mockFetchSequence([previewResponse(both)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    const expectedEmpty = bundleBlockReason({ kind: 'empty', company: 'Honeywell Group', period: bundlePeriodLabel(PREVIEW.period) })
+    await waitFor(() => expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(expectedEmpty))
+    expect(screen.getByTestId('evidence-bundle-reason').textContent).not.toContain('10,000')
+  })
+
+  // A 500 is not a 404: the generic surface renders, and carries neither the 404's
+  // sentinel nor a non-existence claim.
+  it('confirmBlock_a500RendersAGenericErrorNeverA404Claim', async () => {
+    mockFetchSequence([errorResponse(500, 'internal error')])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    const error = await screen.findByTestId('evidence-bundle-error')
+    expect(error.textContent).toContain('internal error')
+    expect(error.textContent).toContain('HTTP 500')
+    expect(error.textContent).not.toContain('HTTP 404')
+    expect(screen.queryByTestId('evidence-confirm-block')).toBeNull()
+    expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // Regex/wordBreak-hostile characters -- apostrophe, ampersand, parens, slash, em dash,
+  // diacritics -- must render verbatim, not be stripped, escaped or truncated.
+  it('confirmBlock_specialCharacterEntityNameAndFilenameRenderVerbatim', async () => {
+    const weird = {
+      ...PREVIEW,
+      entity: { id: 'ent-a', name: "O'Réilly & Zàng (Nig.) Ltd — Special/Chars", tin: '12345678-0001' },
+      filename: "ASComply_evidence_O'Reilly_&_Zang_(Special-Chars)_20260701_20260731.zip",
+    }
+    mockFetchSequence([previewResponse(weird)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    expect(screen.getByTestId('evidence-confirm-company').textContent).toBe(weird.entity.name)
+    expect(screen.getByTestId('evidence-confirm-filename').textContent).toBe(weird.filename)
+  })
+
+  // QA -- EB-05-14 as shipped fires its 400 for a request that gets discarded by useAsync's
+  // runId before it can settle (the deps change to Custom happens before the mocked promise's
+  // microtask fires), so it never actually exercises the `block == null` term: preview.error
+  // stays null throughout that test. This spec lets the FIRST request genuinely settle into
+  // an error, then abandons the selection into a `no-period` block -- the one sequence where
+  // a real (non-discarded) stale error and a non-null block coexist.
+  it('confirmBlock_aSettledErrorIsSuppressedByALaterClientSideRefusal', async () => {
+    const resolvers: Array<(r: MockResponse) => void> = []
+    const fetchMock = vi.fn(() => new Promise<MockResponse>((resolve) => resolvers.push(resolve)))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    resolvers[0](errorResponse(400, 'from must be before to'))
+    // Baseline: with nothing else in the way, the settled error DOES render.
+    const error = await screen.findByTestId('evidence-bundle-error')
+    expect(error.textContent).toContain('from must be before to')
+
+    fireEvent.click(screen.getByTestId('evidence-period-custom'))
+    expect(screen.queryByTestId('evidence-bundle-error')).toBeNull()
+    expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(EVIDENCE_COPY.noPeriodReason)
   })
 })

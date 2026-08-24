@@ -14,7 +14,15 @@ import type { AuditEvent, AuditResponse } from '../lib/audit'
 import type { AuditRange } from '../lib/auditFilters'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { bundleRequestFor, type EvidenceBundlePreview } from '../lib/evidenceBundle'
-import { BUNDLE_INVOICE_LIMIT, EVIDENCE_COPY, bundleBasisLine, bundleBlockReason, bundlePeriodLabel } from '../lib/evidenceBundleView'
+import {
+  BUNDLE_INVOICE_LIMIT,
+  EVIDENCE_COPY,
+  bundleBasisLine,
+  bundleBlockReason,
+  bundlePeriodLabel,
+  bundleReadyLine,
+  bundleToastCopy,
+} from '../lib/evidenceBundleView'
 import type { Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 
@@ -27,10 +35,14 @@ const BASE = 'https://gw.test'
 // output, instead of a tolerance window that would also pass a wrong-by-a-day value.
 const NOW = new Date('2026-08-24T12:00:00.000Z')
 
+// headers/blob are optional so every shipped preview fixture stays valid. The duck-typed
+// headers is evidenceBundle.test.ts:248's own shape -- no Headers global is required.
 interface MockResponse {
   ok: boolean
   status: number
   json: () => Promise<unknown>
+  headers?: { get: (name: string) => string | null }
+  blob?: () => Promise<Blob>
 }
 
 // Copied from AuditView.test.tsx: NOT a queue -- mockResolvedValue overwrites its own default
@@ -76,13 +88,16 @@ function mkEntity(id: string, name: string, status: 'active' | 'archived' = 'act
   return { id, name, tin: null, registration: null, sector: null, address: null, status, created_at: '2026-01-01T00:00:00.000Z' }
 }
 
-function evidenceCtx(entities: Entity[] = []): PlatformCtx {
+// getToken is the ONE transport that cannot go through authedFetch (types.ts:234); without
+// it every download spec dies on `ctx.getToken is not a function` before it can assert.
+function evidenceCtx(entities: Entity[] = [], onUnauthorized: () => void = vi.fn()): PlatformCtx {
   return {
     mode: 'firm',
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
     entities,
-    authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    getToken: () => 'tok',
+    authedFetch: createAuthedFetch(() => 'tok', onUnauthorized),
   } as unknown as PlatformCtx
 }
 
@@ -148,10 +163,99 @@ const PREVIEW: EvidenceBundlePreview = {
   over_limit: false,
 }
 const LOCAL = mkEntity('ent-a', 'Locally Picked Ltd')
+// Legal under DISPOSITION_RE (unquoted, [A-Za-z0-9._-]+) and deliberately not PREVIEW.filename.
+const SERVER_NAMED = 'ASComply_evidence_server_named_20260701_20260731.zip'
 
 function parseCall(call: unknown[]): { entity_id: string | null; from: string | null; to: string | null } {
   const u = new URL(String(call[0]))
   return { entity_id: u.searchParams.get('entity_id'), from: u.searchParams.get('from'), to: u.searchParams.get('to') }
+}
+
+// AUDIT-08-06 harness (st06-plan §8a). The download is a bare fetch that reads res.blob()
+// and res.headers, neither of which the shipped preview fixture carries.
+
+const ZIP_BYTES = 1_048_576 // formatBytes(1048576) === '1 MB'
+
+function bundleResponse(
+  disposition: string | null = `attachment; filename=${PREVIEW.filename}`,
+  bytes = ZIP_BYTES,
+): MockResponse {
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'application/zip' })
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({}),
+    headers: { get: (n: string) => (n.toLowerCase() === 'content-disposition' ? disposition : null) },
+    blob: () => Promise.resolve(blob),
+  }
+}
+
+// mockFetchSequence hands the LAST response to every call, so a download would receive the
+// preview's JSON stub and res.blob would be undefined. Path is the only discriminator --
+// the same reason pathOf() exists: the download URL is the preview URL minus '/preview'.
+function routedFetch(
+  on: {
+    preview?: (n: number) => MockResponse | Promise<MockResponse>
+    bundle?: (n: number) => MockResponse | Promise<MockResponse>
+  } = {},
+) {
+  let p = 0
+  let b = 0
+  const fetchMock = vi.fn()
+  fetchMock.mockImplementation((url: string) => {
+    const path = new URL(String(url)).pathname
+    if (path.endsWith('/evidence-bundle/preview')) return Promise.resolve(on.preview?.(p++) ?? previewResponse(PREVIEW))
+    if (path.endsWith('/evidence-bundle')) return Promise.resolve(on.bundle?.(b++) ?? bundleResponse())
+    return Promise.resolve(logResponse())
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+// AuditView.test.tsx's stubDownload with ONE change: the URL is per-call unique, not the
+// shipped constant 'blob:audit-export'. With a constant, "revoke was called with the URL
+// create returned" is true of any string the component kept, and the identity check is
+// vacuous. jsdom 27.4.0 DOES implement both methods, so spy and restore -- never delete.
+function stubDownload() {
+  let n = 0
+  const createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:evidence-${++n}`)
+  const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  const clicks: { href: string; download: string }[] = []
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    clicks.push({ href: this.href, download: this.download })
+  })
+  return {
+    createSpy,
+    revokeSpy,
+    clickSpy,
+    clicks,
+    restore() {
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+      clickSpy.mockRestore()
+    },
+  }
+}
+
+// Exactly one phase renders. Every phase spec asserts the whole vector, so a drawer that
+// renders ADDITIVELY (the Form left mounted under Building) fails everywhere at once.
+const PHASE_IDS = ['evidence-bundle-prepare', 'evidence-building', 'evidence-ready', 'evidence-bundle-failure'] as const
+function phaseOnScreen(): string[] {
+  return PHASE_IDS.filter((id) => screen.queryByTestId(id) != null)
+}
+
+// Form -> Building. The confirm block is what gates Prepare, so awaiting it first keeps a
+// RED failing on the phase target rather than on a disabled button.
+async function prepareBundle() {
+  fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+  fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+  await screen.findByTestId('evidence-confirm-block')
+  fireEvent.click(screen.getByTestId('evidence-bundle-prepare'))
+}
+
+// Real timers -- beforeEach fakes Date alone, so a pending promise's continuation runs.
+function flush() {
+  return new Promise((resolve) => setTimeout(resolve, 10))
 }
 
 beforeEach(() => {
@@ -168,6 +272,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
   vi.useRealTimers()
+  // A failing assertion skips the explicit dl.restore(), leaking the download spies into
+  // the next case and turning one real failure into several false ones.
+  vi.restoreAllMocks()
 })
 
 describe('EvidenceBundleDrawer', () => {
@@ -955,5 +1062,365 @@ describe('EvidenceBundleDrawer', () => {
     fireEvent.click(screen.getByTestId('evidence-period-custom'))
     expect(screen.queryByTestId('evidence-bundle-error')).toBeNull()
     expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(EVIDENCE_COPY.noPeriodReason)
+  })
+
+  // AUDIT-08-06 -- Building, Ready, Failed, the download and its toast (st06-plan §8b).
+
+  // EB-06-1
+  it('building_rendersNoNamedStages', async () => {
+    routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-building')
+
+    // Floor: exactly one phase is on screen, and it is the one holding both known strings.
+    expect(phaseOnScreen()).toEqual(['evidence-building'])
+    const texts = leafTexts(screen.getByTestId('evidence-bundle-drawer'))
+    expect(texts).toContain(EVIDENCE_COPY.buildingTitle)
+    expect(texts).toContain(EVIDENCE_COPY.buildingNote)
+
+    const PCT_RE = /\d+\s*%/
+    const STEP_RE = /\bstep\s*\d\b|\b\d+\s*(of|\/)\s*\d+\b/i
+    const STAGE_STEMS = [
+      'collecting invoices',
+      'rebuilding status timelines',
+      'attaching firs references',
+      'packing transmission',
+      'signing the manifest',
+    ]
+    const stageHit = (s: string) => STAGE_STEMS.some((stem) => s.toLowerCase().includes(stem))
+    // Control: all three scanners fire on one planted progress sentence.
+    const planted = ['Step 3 of 5 · 60% · Collecting invoices']
+    expect(planted.filter((s) => PCT_RE.test(s))).toHaveLength(1)
+    expect(planted.filter((s) => STEP_RE.test(s))).toHaveLength(1)
+    expect(planted.filter(stageHit)).toHaveLength(1)
+
+    expect(texts.filter((s) => PCT_RE.test(s))).toEqual([])
+    expect(texts.filter((s) => STEP_RE.test(s))).toEqual([])
+    expect(texts.filter(stageHit)).toEqual([])
+
+    // No DOM oracle exists for "no timed animation" -- a fake bar and an honest one both
+    // render a div with an animation. The source scan is the only mechanical form.
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('evidence-building-bar')
+    expect(src).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/)
+  })
+
+  // EB-06-2
+  it('building_saysWhyItCannotReportStages', async () => {
+    routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+
+    const note = await screen.findByTestId('evidence-building-note')
+    expect(note.textContent).toBe(EVIDENCE_COPY.buildingNote)
+    expect(note.textContent).toContain('single response')
+    expect(note.textContent).toContain('stages')
+    expect(note.textContent).not.toMatch(/\d/)
+
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('FilterPopover')
+    // DOM equality alone passes on a hardcoded literal too -- the source must read the key.
+    expect(src).not.toContain(EVIDENCE_COPY.buildingNote)
+  })
+
+  // EB-06-3
+  it('prepare_reusesTheFrozenTriple', async () => {
+    const fetchMock = routedFetch()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await screen.findByTestId('evidence-confirm-block')
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+    const sent = parseCall(previewCalls(fetchMock)[0])
+
+    vi.setSystemTime(new Date('2026-08-25T01:00:00.000Z'))
+    // Control: the clock really crossed a UTC midnight, so a re-derivation at click time
+    // would produce a window this spec can tell apart from the captured one.
+    expect(bundleRequestFor('ent-a', { preset: '30d' }, new Date())?.from).not.toBe(sent.from)
+    expect(String(sent.to).slice(0, 10)).not.toBe(new Date().toISOString().slice(0, 10))
+
+    fireEvent.click(screen.getByTestId('evidence-bundle-prepare'))
+    await waitFor(() => expect(downloadCalls(fetchMock)).toHaveLength(1))
+    const built = parseCall(downloadCalls(fetchMock)[0])
+    expect(built).toEqual({ entity_id: 'ent-a', from: sent.from, to: sent.to })
+    // A second, live mutation: the download must not read the server's echoed period
+    // (evidenceBundle.ts:16-18 -- surfaces render that, never the request).
+    expect(built.from).not.toBe(PREVIEW.period.from)
+    expect(built.to).not.toBe(PREVIEW.period.to)
+
+    expect(new Headers(downloadCalls(fetchMock)[0][1].headers).get('Authorization')).toBe('Bearer tok')
+  })
+
+  // EB-06-4
+  it('building_cancelAborts', async () => {
+    const releases: Array<(r: MockResponse) => void> = []
+    const fetchMock = routedFetch({ bundle: () => new Promise<MockResponse>((resolve) => releases.push(resolve)) })
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-building')
+
+    const signal: AbortSignal = downloadCalls(fetchMock)[0][1].signal
+    expect(signal.aborted).toBe(false)
+
+    fireEvent.click(screen.getByTestId('evidence-building-cancel'))
+    expect(signal.aborted).toBe(true)
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-prepare'])
+    expect(screen.getByTestId('evidence-confirm-block')).toBeTruthy()
+    expect(dl.createSpy).not.toHaveBeenCalled()
+    expect(onToast).not.toHaveBeenCalled()
+
+    // The only oracle for `if (ctrl.signal.aborted) return`: every rung above passes with
+    // that line deleted, because the promise has not settled yet when they run.
+    expect(releases).toHaveLength(1)
+    releases[0](bundleResponse())
+    await flush()
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-prepare'])
+    expect(dl.createSpy).not.toHaveBeenCalled()
+  })
+
+  // EB-06-4b -- the only oracle for the unmount cleanup. They ship together or not at all.
+  it('building_unmountAbortsTheInFlightBuild', async () => {
+    const fetchMock = routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+    const onClose = vi.fn()
+    const { unmount } = await renderDrawer({ ctx: evidenceCtx([LOCAL]), onClose })
+    await prepareBundle()
+    await screen.findByTestId('evidence-building')
+
+    const signal: AbortSignal = downloadCalls(fetchMock)[0][1].signal
+    expect(signal.aborted).toBe(false)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(signal.aborted).toBe(true)
+  })
+
+  // EB-06-5
+  it('download_failureWritesNoFile', async () => {
+    const fetchMock = routedFetch({
+      bundle: (n) => (n === 0 ? errorResponse(500, 'bundle assembly failed') : bundleResponse()),
+    })
+    const dl = stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+
+    const failure = await screen.findByTestId('evidence-bundle-failure')
+    // The whole vector, not just this card: an abort and a failure both end in a rejected
+    // promise, and the phase vector is the only thing that tells them apart (cf EB-06-4).
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-failure'])
+    expect(failure.textContent).toContain('bundle assembly failed')
+    expect(failure.textContent).toContain('HTTP 500')
+    expect(screen.getByTestId('evidence-failed-retry')).toBeTruthy()
+    expect(dl.createSpy).not.toHaveBeenCalled()
+    expect(dl.clicks).toEqual([])
+    expect(onToast).not.toHaveBeenCalled()
+
+    // A rendered button that issues no request is not a retry affordance.
+    fireEvent.click(screen.getByTestId('evidence-failed-retry'))
+    await waitFor(() => expect(downloadCalls(fetchMock)).toHaveLength(2))
+    await screen.findByTestId('evidence-ready')
+    expect(phaseOnScreen()).toEqual(['evidence-ready'])
+  })
+
+  // EB-06-6
+  it('ready_lineIsTheRealSizeAndShaNotSigned', async () => {
+    // U+00B7, asserted before use -- the EB-02-17 idiom, which stops an ASCII lookalike.
+    const MID = '·'
+    expect(MID.charCodeAt(0)).toBe(0x00b7)
+
+    routedFetch({ bundle: () => bundleResponse(undefined, 1_048_576) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+    expect(screen.getByTestId('evidence-ready-line').textContent).toBe(`ZIP ${MID} 1 MB ${MID} MANIFEST ${MID} SHA-256`)
+    // The render is the lib's output, not a hand-copy of it.
+    expect(bundleReadyLine(1_048_576)).toBe(`ZIP ${MID} 1 MB ${MID} MANIFEST ${MID} SHA-256`)
+    cleanup()
+
+    // Differential: the equality above passes against a hardcoded literal. A second size is
+    // what proves the line is read off blob.size.
+    routedFetch({ bundle: () => bundleResponse(undefined, 2_097_152) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+    expect(screen.getByTestId('evidence-ready-line').textContent).toBe(`ZIP ${MID} 2 MB ${MID} MANIFEST ${MID} SHA-256`)
+
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('FilterPopover')
+    expect(src).not.toContain(`MANIFEST ${MID} SHA-256`)
+  })
+
+  // EB-06-7
+  it('download_clicksOnceAndRevokes', async () => {
+    routedFetch()
+    const dl = stubDownload()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    expect(dl.createSpy).toHaveBeenCalledTimes(1)
+    const blob = dl.createSpy.mock.calls[0][0] as Blob
+    expect(blob.size).toBe(ZIP_BYTES)
+    expect(blob.type).toBe('application/zip')
+    expect(dl.clicks).toHaveLength(1)
+    expect(dl.revokeSpy).toHaveBeenCalledTimes(1)
+    // Spy ARGUMENTS, never a.href: the stub's URL is per-call unique, so this cannot pass on
+    // any other string the component happened to keep.
+    expect(dl.revokeSpy.mock.calls[0][0]).toBe(dl.createSpy.mock.results[0].value)
+    // Liveness: the value is one the component could not have guessed.
+    expect(dl.createSpy.mock.results[0].value).toBe('blob:evidence-1')
+  })
+
+  // EB-06-7b
+  it.each([
+    {
+      name: 'the server sent a legal Content-Disposition',
+      disposition: `attachment; filename=${SERVER_NAMED}`,
+      expected: SERVER_NAMED,
+      differs: true,
+    },
+    { name: 'no Content-Disposition at all', disposition: null, expected: PREVIEW.filename, differs: false },
+  ])('ready_namesTheFilenameTheServerSentNotThePreviews -- $name', async ({ disposition, expected, differs }) => {
+    // Fixture control: case (a) only discriminates because its name is NOT the preview's.
+    if (differs) expect(expected).not.toBe(PREVIEW.filename)
+    else expect(expected).toBe(PREVIEW.filename)
+
+    routedFetch({ bundle: () => bundleResponse(disposition) })
+    const dl = stubDownload()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    expect(screen.getByTestId('evidence-ready-filename').textContent).toBe(expected)
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    expect(dl.clicks[0].download).toBe(expected)
+  })
+
+  // EB-06-8
+  it('toast_namesAllFiveFactsOnScreen', async () => {
+    routedFetch()
+    stubDownload()
+    const onToast = vi.fn()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]), onToast })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    expect(onToast).toHaveBeenCalledTimes(1)
+    const expectedText = bundleToastCopy({
+      filename: PREVIEW.filename,
+      invoices: 507,
+      bytes: ZIP_BYTES,
+      company: 'Honeywell Group',
+      period: bundlePeriodLabel(PREVIEW.period),
+    })
+    expect(onToast.mock.calls[0][0]).toEqual({ kind: 'success', text: expectedText, testId: 'evidence-bundle-toast' })
+
+    // The AC's own five facts, independent of the lib producing the sentence: toEqual above
+    // passes whatever bundleToastCopy returns, including a string missing a fact.
+    const text = String(onToast.mock.calls[0][0].text)
+    expect(text).toContain(PREVIEW.filename)
+    expect(text).toContain('507')
+    expect(text).toContain('1 MB')
+    expect(text).toContain('Honeywell Group')
+    expect(text).toContain('1 July 2026')
+    // The company is the response's, not the local selection.
+    expect(text).not.toContain('Locally Picked Ltd')
+
+    const src = readDrawerSource()
+    expect(src.length).toBeGreaterThan(1000)
+    expect(src).toContain('FilterPopover')
+    expect(src).not.toContain('Saved ')
+    expect(src).not.toContain(' invoices for ')
+  })
+
+  // EB-06-8b -- the only spec that exercises AuditView's toast payload and render.
+  it('toast_isDistinguishableFromTheCsvToastThroughAuditView', async () => {
+    routedFetch()
+    stubDownload()
+    render(<AuditView ctx={evidenceCtx([LOCAL])} />)
+    fireEvent.click(await screen.findByTestId('audit-bundle-open'))
+    await screen.findByTestId('evidence-bundle-drawer')
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+
+    fireEvent.click(screen.getByTestId('evidence-ready-download'))
+    const toast = await screen.findByTestId('evidence-bundle-toast')
+    expect(toast.textContent).toBe(
+      bundleToastCopy({
+        filename: PREVIEW.filename,
+        invoices: 507,
+        bytes: ZIP_BYTES,
+        company: 'Honeywell Group',
+        period: bundlePeriodLabel(PREVIEW.period),
+      }),
+    )
+    expect(screen.queryByTestId('audit-export-toast')).toBeNull()
+  })
+
+  // EB-06-10
+  it('drawer_neverRendersSignedInAnyPhase', async () => {
+    // Not /sign/i -- rowManifest deliberately carries "not a cryptographic signature".
+    const SIGNED_RE = /signed/i
+    expect(['A signed SHA-256 manifest is attached.'].filter((s) => SIGNED_RE.test(s))).toHaveLength(1)
+    const MID = '·'
+    expect(MID.charCodeAt(0)).toBe(0x00b7)
+
+    routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-building')
+    expect(phaseOnScreen()).toEqual(['evidence-building'])
+    const building = leafTexts(screen.getByTestId('evidence-bundle-drawer'))
+    expect(building.length).toBeGreaterThanOrEqual(3)
+    expect(building.filter((s) => SIGNED_RE.test(s))).toEqual([])
+    cleanup()
+
+    routedFetch()
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    await prepareBundle()
+    await screen.findByTestId('evidence-ready')
+    expect(phaseOnScreen()).toEqual(['evidence-ready'])
+    const ready = leafTexts(screen.getByTestId('evidence-bundle-drawer'))
+    expect(ready.length).toBeGreaterThanOrEqual(5)
+    // A phase that rendered nothing is otherwise indistinguishable from a compliant one.
+    expect(ready.some((s) => s.includes(`MANIFEST ${MID} SHA-256`))).toBe(true)
+    expect(ready.filter((s) => SIGNED_RE.test(s))).toEqual([])
+  })
+
+  // EB-06-11
+  it('download_a401SurfacesItAndNeverAutoRetries', async () => {
+    const onUnauthorized = vi.fn()
+    const fetchMock = routedFetch({
+      bundle: (n) => (n === 0 ? errorResponse(401, 'unauthorized') : bundleResponse()),
+    })
+    await renderDrawer({ ctx: evidenceCtx([LOCAL], onUnauthorized) })
+    await prepareBundle()
+
+    const failure = await screen.findByTestId('evidence-bundle-failure')
+    expect(failure.textContent).toContain('unauthorized')
+    expect(failure.textContent).toContain('HTTP 401')
+    expect(downloadCalls(fetchMock)).toHaveLength(1)
+
+    // An automatic retry satisfies "a second request eventually appears" just as well as a
+    // manual one; only a real-timer flush with the count still at 1 tells them apart.
+    await flush()
+    expect(downloadCalls(fetchMock)).toHaveLength(1)
+    expect(phaseOnScreen()).toEqual(['evidence-bundle-failure'])
+
+    fireEvent.click(screen.getByTestId('evidence-failed-retry'))
+    await waitFor(() => expect(downloadCalls(fetchMock)).toHaveLength(2))
+
+    // D-08-20: the bare fetch cannot reach createAuthedFetch's sign-out seam. First
+    // measurement of that claim anywhere in the repo.
+    expect(onUnauthorized).not.toHaveBeenCalled()
   })
 })

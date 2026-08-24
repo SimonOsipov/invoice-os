@@ -16,6 +16,7 @@ import { createAuthedFetch } from '../lib/authedFetch'
 import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
 import type { PlatformCtx } from '../types'
 
+import { AuditExportToast } from './AuditExportToast'
 import { AuditView } from './AuditView'
 
 interface MockResponse {
@@ -1807,5 +1808,20 @@ describe('AuditView evidence-bundle trigger, adversarial (AUDIT-08-03 QA)', () =
       'audit-export',
     ])
     expect(row.querySelectorAll('button').length, 'two controls, no nested third').toBe(2)
+  })
+})
+
+describe('AuditExportToast testId prop (AUDIT-08-06)', () => {
+  // EB-06-9 -- asserting a default is the easiest kind of spec to write vacuously: the first
+  // render alone passes against a component that ignores the prop entirely. The second render
+  // is what makes the prop provably live wire.
+  it('toast_defaultTestIdUnchangedForTheCsvExport', () => {
+    render(<AuditExportToast kind="success" text="x" onDismiss={vi.fn()} />)
+    expect(screen.getByTestId('audit-export-toast')).toBeTruthy()
+    cleanup()
+
+    render(<AuditExportToast kind="success" text="x" onDismiss={vi.fn()} testId="probe-toast" />)
+    expect(screen.getByTestId('probe-toast')).toBeTruthy()
+    expect(screen.queryByTestId('audit-export-toast')).toBeNull()
   })
 })

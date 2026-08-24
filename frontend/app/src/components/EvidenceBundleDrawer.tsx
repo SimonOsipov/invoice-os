@@ -165,7 +165,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose }: EvidenceBundleDrawe
                 style={{
                   height: 30,
                   padding: '0 12px',
-                  borderRadius: 'var(--radius-md)',
+                  // No borderRadius: .pf-chip forces --radius-pill with !important (app-layer.css:275).
                   fontFamily: 'var(--font-sans)',
                   fontSize: 12.5,
                   fontWeight: 500,
@@ -181,7 +181,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose }: EvidenceBundleDrawe
           {/* No Apply button -- Custom commits immediately. bundleRequestFor returns null
               until both dates are set, so nothing fires per keystroke (task-667 §4). */}
           {range.preset === 'custom' && (
-            <div data-testid="evidence-period-custom" style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div data-testid="evidence-period-custom-fields" style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, color: 'var(--fg-3)' }}>
                 From
                 <input

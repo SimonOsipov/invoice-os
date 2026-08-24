@@ -360,4 +360,87 @@ describe('EvidenceBundleDrawer', () => {
     expect(panel.style.right).toBe('0px')
     expect(panel.style.bottom).toBe('0px')
   })
+
+  // EB-04-14 -- zero entities: floor is the panel itself rendering, not a row count of zero.
+  it('drawerCompany_zeroEntitiesRendersEmptyPopoverAndFiresNoPreview', async () => {
+    const fetchMock = mockFetchSequence([logResponse()])
+    render(<AuditView ctx={evidenceCtx([])} />)
+    await waitFor(() => expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('audit-log'))).toBe(true))
+    fireEvent.click(await screen.findByTestId('audit-bundle-open'))
+    await waitFor(() => expect(screen.getByTestId('evidence-bundle-drawer')).toBeTruthy())
+
+    const trigger = screen.getByTestId('evidence-company-trigger')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByTestId('evidence-company-panel')).toBeTruthy()
+    expect(screen.queryAllByTestId(/^evidence-company-row-/)).toHaveLength(0)
+    expect(previewCalls(fetchMock)).toHaveLength(0)
+  })
+
+  // EB-04-15 -- localeCompare, not insertion order and not a bare lexicographic sort:
+  // 'apple' < 'Banana' < 'cherry' under localeCompare, but insertion order (and a bare
+  // .sort() with no comparator) both give Banana/apple/cherry (uppercase sorts first).
+  it('drawerCompany_sortIsLocaleAwareNotInsertionOrder', async () => {
+    const entities = [mkEntity('ent-b', 'Banana Corp'), mkEntity('ent-a', 'apple Ltd'), mkEntity('ent-c', 'cherry Inc')]
+    await renderDrawer({ ctx: evidenceCtx(entities) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    const panel = screen.getByTestId('evidence-company-panel')
+    const rows = within(panel).getAllByTestId(/^evidence-company-row-/)
+    expect(rows).toHaveLength(3)
+    expect(rows.map((r) => r.textContent)).toEqual(['apple Ltd', 'Banana Corp', 'cherry Inc'])
+  })
+
+  // EB-04-16 -- reqKey is unchanged by a same-value reselect (new object, same id/name),
+  // so the effect's deps comparison must not refire.
+  it('drawerForm_reselectingTheSameCompanyFiresNoSecondRequest', async () => {
+    const entities = [mkEntity('ent-a', 'Alpha')]
+    const fetchMock = mockFetchSequence([{ ok: true, status: 200, json: () => Promise.resolve({}) }])
+    await renderDrawer({ ctx: evidenceCtx(entities) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(previewCalls(fetchMock)).toHaveLength(1)
+  })
+
+  // EB-04-17 -- a half-entered Custom range never commits (baseline stays put), and
+  // abandoning it for a preset fires that preset's own request, not a fused leftover.
+  it('drawerPeriod_switchingAwayFromCustomDiscardsAPartialDate', async () => {
+    const entities = [mkEntity('ent-a', 'Alpha')]
+    const fetchMock = mockFetchSequence([{ ok: true, status: 200, json: () => Promise.resolve({}) }])
+    await renderDrawer({ ctx: evidenceCtx(entities) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    await waitFor(() => expect(previewCalls(fetchMock).length).toBeGreaterThan(0))
+    const baseline = previewCalls(fetchMock).length
+
+    fireEvent.click(screen.getByTestId('evidence-period-custom'))
+    fireEvent.change(screen.getByTestId('evidence-period-from'), { target: { value: '2026-05-01' } })
+    expect(previewCalls(fetchMock).length).toBe(baseline)
+
+    fireEvent.click(screen.getByTestId('evidence-period-24h'))
+    await waitFor(() => expect(previewCalls(fetchMock).length).toBe(baseline + 1))
+    // Not queryByTestId('evidence-period-custom') here: that id is shared by the "Custom
+    // range" CHIP (always rendered) and this date-fields wrapper (conditional) -- see
+    // EB-04-19, which pins the collision. `evidence-period-from` is the wrapper-only proof.
+    expect(screen.queryByTestId('evidence-period-from')).toBeNull()
+    const last = parseCall(previewCalls(fetchMock)[previewCalls(fetchMock).length - 1])
+    const expected24h = bundleRequestFor('ent-a', { preset: '24h' }, new Date())
+    expect(last.from).toBe(expected24h?.from)
+    expect(last.to).toBe(expected24h?.to)
+  })
+
+  // EB-04-18 -- the scrim's onClose is unconditional (task-667 §5), unlike Escape's
+  // !companyOpen gate (EB-04-10): clicking it closes the drawer even mid-popover.
+  it('drawer_scrimClosesEvenWithThePopoverOpenUnlikeEscape', async () => {
+    const onClose = vi.fn()
+    await renderDrawer({ onClose })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    expect(screen.getByTestId('evidence-company-panel')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('evidence-bundle-scrim'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
 })

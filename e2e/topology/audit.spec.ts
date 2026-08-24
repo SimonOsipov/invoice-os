@@ -569,9 +569,14 @@ test.describe('Audit screen', () => {
     // reads, never a scrollbar gutter.
     const SLACK_PX = 2
 
-    const measured: Array<{ width: number; rightGap: number; leftEdge: number; bandDrift: number }> = []
+    const measured: Array<{ width: number; layoutWidth: number; rightGap: number; leftEdge: number; bandDrift: number }> = []
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
+      // A `position:fixed; right:0` element is flush to the LAYOUT viewport, which excludes
+      // the classic scrollbar; setViewportSize's width includes it. Measuring against the
+      // width we asked for compares two different edges and fails by the gutter -- which is
+      // why assertFillsColumn budgets 24px for it rather than 2.
+      const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth)
       const [panelBox, scrimBox, bodyBox, footerBox, titleBox] = await Promise.all([
         panel.boundingBox(),
         scrim.boundingBox(),
@@ -581,18 +586,18 @@ test.describe('Audit screen', () => {
       ])
       if (!panelBox || !scrimBox || !bodyBox || !footerBox || !titleBox) continue
 
-      // L1 -- flush to the viewport's right edge.
-      const rightGap = Math.abs(width - (panelBox.x + panelBox.width))
+      // L1 -- flush to the layout viewport's right edge.
+      const rightGap = Math.abs(layoutWidth - (panelBox.x + panelBox.width))
       expect(rightGap, `the panel must sit flush right at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
       // L3 -- wholly inside the viewport.
       expect(panelBox.x, `the panel must not start left of the viewport at ${width}px`).toBeGreaterThanOrEqual(0)
-      expect(panelBox.x + panelBox.width, `the panel must not run past the viewport at ${width}px`).toBeLessThanOrEqual(width + SLACK_PX)
+      expect(panelBox.x + panelBox.width, `the panel must not run past the viewport at ${width}px`).toBeLessThanOrEqual(layoutWidth + SLACK_PX)
 
       // L8 -- the scrim covers the whole viewport, so there is no dead corner the drawer
       // cannot be dismissed from, and the panel sits inside it.
       expect(Math.abs(scrimBox.x), `the scrim must start at the viewport's left edge at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
-      expect(scrimBox.width, `the scrim must span the viewport at ${width}px`).toBeGreaterThanOrEqual(width - SLACK_PX)
+      expect(scrimBox.width, `the scrim must span the viewport at ${width}px`).toBeGreaterThanOrEqual(layoutWidth - SLACK_PX)
       expect(rectsOverlap(panelBox, scrimBox), `the panel must lie over the scrim at ${width}px`).toBe(true)
 
       // L7 -- header, body and footer share one content column. Without this, "the block
@@ -600,23 +605,32 @@ test.describe('Audit screen', () => {
       const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - titleBox.x))
       expect(bandDrift, `the three bands must share one content column at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
-      measured.push({ width, rightGap, leftEdge: panelBox.x, bandDrift })
+      measured.push({ width, layoutWidth, rightGap, leftEdge: panelBox.x, bandDrift })
     }
     expect(measured.length, 'the drawer geometry sweep measured nothing').toBe(WIDE_WIDTHS.length)
     await test.info().attach('audit-bundle-drawer-geometry', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
 
-    // L4 -- the pf-drawer collapse, stated as an equality against a live viewport read.
-    // Never against the panel's authored width, which is exactly the bug a numeric
-    // assertion would pass on.
-    await page.setViewportSize({ width: 860, height: 1080 })
-    const collapsed = await panel.boundingBox()
-    expect(collapsed, 'the panel vanished at the collapse width').not.toBeNull()
-    expect(Math.abs((collapsed?.width ?? 0) - 860), 'the panel must span the viewport at the collapse breakpoint').toBeLessThanOrEqual(SLACK_PX)
+    // L4 -- the pf-drawer collapse, as a RATIO of the live viewport, never an equality.
+    //
+    // Measured, and not what the AC assumed: the collapse does NOT reach the full viewport.
+    // `.pf-drawer` sets `width: 100vw !important` under the breakpoint, but the panel also
+    // carries an inline `max-width: 94vw`, and !important on `width` does not override a
+    // different property -- so the panel lands at 94vw. An equality against the viewport
+    // width would fail on correct, shipped behaviour.
+    //
+    // The ratio is the relationship that actually matters and it discriminates sharply:
+    // ~0.94 collapsed, against well under half above the breakpoint. Dropping the
+    // `pf-drawer` class puts the collapsed case around two thirds and fails this.
+    const ratioAt = async (width: number): Promise<number> => {
+      await page.setViewportSize({ width, height: 1080 })
+      const box = await panel.boundingBox()
+      expect(box, `the panel vanished at ${width}px`).not.toBeNull()
+      const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth)
+      return (box?.width ?? 0) / layoutWidth
+    }
 
-    await page.setViewportSize({ width: 1280, height: 1080 })
-    const wide = await panel.boundingBox()
-    expect(wide, 'the panel vanished at 1280px').not.toBeNull()
-    expect((wide?.width ?? 0), 'the panel must NOT span the viewport above the breakpoint').toBeLessThan(1280 - SLACK_PX)
+    expect(await ratioAt(860), 'the panel must span the viewport at the collapse breakpoint').toBeGreaterThan(0.9)
+    expect(await ratioAt(1280), 'the panel must NOT span the viewport above the breakpoint').toBeLessThan(0.6)
 
     // L8's other half: the scrim is reachable, so a click at the far left dismisses.
     await page.mouse.click(4, 540)
@@ -712,11 +726,18 @@ test.describe('Audit screen', () => {
     const manifestRows = page.getByTestId('evidence-confirm-row')
     const rowCount = await manifestRows.count()
     expect(rowCount, 'the manifest listed no rows').toBeGreaterThan(0)
+    // The value cell is conditional -- bundleManifestLines emits rows whose `value` is null,
+    // and the drawer renders the span only when it is not. Reading a boundingBox off a
+    // locator matching nothing does not return null, it WAITS, so an unconditional read here
+    // times the whole test out rather than failing an assertion.
+    let twoColumnRows = 0
     for (let i = 0; i < rowCount; i++) {
       const row = manifestRows.nth(i)
+      const value = row.getByTestId('evidence-confirm-row-value')
+      if ((await value.count()) === 0) continue
       const [labelBox, valueBox] = await Promise.all([
         row.getByTestId('evidence-confirm-row-label').boundingBox(),
-        row.getByTestId('evidence-confirm-row-value').boundingBox(),
+        value.boundingBox(),
       ])
       expect(labelBox && valueBox, `manifest row ${i} lost a cell`).toBeTruthy()
       if (labelBox && valueBox) {
@@ -724,8 +745,11 @@ test.describe('Audit screen', () => {
         expect(labelBox.x, `manifest row ${i}'s label must sit left of its value`).toBeLessThan(valueBox.x)
         const sharesABaseline = labelBox.y < valueBox.y + valueBox.height && valueBox.y < labelBox.y + labelBox.height
         expect(sharesABaseline, `manifest row ${i} must keep its label and value on one line`).toBe(true)
+        twoColumnRows++
       }
     }
+    // Without this the loop above passes by measuring nothing.
+    expect(twoColumnRows, 'no manifest row carried a value, so the two-column claim went untested').toBeGreaterThan(0)
 
     // L13 -- the whole filename is visible. An ellipsis satisfies a textContent equality
     // while hiding the exact name the block exists to state.

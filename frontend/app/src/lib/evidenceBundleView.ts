@@ -44,7 +44,7 @@ export const EVIDENCE_COPY = {
   buildingTitle: 'Building the bundle',
   buildingNote: 'The export streams as a single response, so its progress cannot be broken into stages.',
   readyTitle: 'Bundle ready',
-  downloadLabel: 'Download',
+  downloadLabel: 'Download ZIP',
   startAnotherLabel: 'Start another',
   retryLabel: 'Try again',
 } as const

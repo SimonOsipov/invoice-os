@@ -74,7 +74,11 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   // range readout describing the rows actually on screen, never the page being fetched.
   const [landed, setLanded] = useState<{ res: AuditResponse; page: AuditPageState } | null>(null)
   const [exporting, setExporting] = useState(false)
-  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  // testId is optional so the CSV path keeps AuditExportToast's default; the drawer's
+  // download names its own (EB-06-8b).
+  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string } | null>(
+    null,
+  )
   // Drives the trigger's aria-expanded and the drawer mount below.
   const [bundleOpen, setBundleOpen] = useState(false)
   // MembersView.tsx:72's idiom: must be STABLE -- it is a useDismiss dependency.
@@ -331,7 +335,12 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {exportToast && (
-        <AuditExportToast kind={exportToast.kind} text={exportToast.text} onDismiss={() => setExportToast(null)} />
+        <AuditExportToast
+          kind={exportToast.kind}
+          text={exportToast.text}
+          testId={exportToast.testId}
+          onDismiss={() => setExportToast(null)}
+        />
       )}
 
       {bundleOpen && base != null && (

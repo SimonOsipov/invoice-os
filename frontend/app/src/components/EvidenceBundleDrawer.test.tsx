@@ -156,7 +156,7 @@ function parseCall(call: unknown[]): { entity_id: string | null; from: string | 
 
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', BASE)
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) }))
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(previewResponse(PREVIEW)))
   // Only Date is faked -- setTimeout/setInterval stay real, so waitFor's polling and React's
   // own scheduling are unaffected. This lets from/to assert byte-exact, not just close.
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -286,7 +286,7 @@ describe('EvidenceBundleDrawer', () => {
   // EB-04-7
   it('drawerForm_oneRequestPerSelectionChange', async () => {
     const entities = [mkEntity('ent-a', 'Alpha')]
-    const fetchMock = mockFetchSequence([{ ok: true, status: 200, json: () => Promise.resolve({}) }])
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
     await renderDrawer({ ctx: evidenceCtx(entities) })
     expect(previewCalls(fetchMock)).toHaveLength(0)
 
@@ -355,7 +355,7 @@ describe('EvidenceBundleDrawer', () => {
   // EB-04-12
   it('drawerPeriod_customCommitsOnlyWhenBothDatesAreSet', async () => {
     const entities = [mkEntity('ent-a', 'Alpha')]
-    const fetchMock = mockFetchSequence([{ ok: true, status: 200, json: () => Promise.resolve({}) }])
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
     await renderDrawer({ ctx: evidenceCtx(entities) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
@@ -433,7 +433,7 @@ describe('EvidenceBundleDrawer', () => {
   // so the effect's deps comparison must not refire.
   it('drawerForm_reselectingTheSameCompanyFiresNoSecondRequest', async () => {
     const entities = [mkEntity('ent-a', 'Alpha')]
-    const fetchMock = mockFetchSequence([{ ok: true, status: 200, json: () => Promise.resolve({}) }])
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
     await renderDrawer({ ctx: evidenceCtx(entities) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
@@ -448,7 +448,7 @@ describe('EvidenceBundleDrawer', () => {
   // abandoning it for a preset fires that preset's own request, not a fused leftover.
   it('drawerPeriod_switchingAwayFromCustomDiscardsAPartialDate', async () => {
     const entities = [mkEntity('ent-a', 'Alpha')]
-    const fetchMock = mockFetchSequence([{ ok: true, status: 200, json: () => Promise.resolve({}) }])
+    const fetchMock = mockFetchSequence([previewResponse(PREVIEW)])
     await renderDrawer({ ctx: evidenceCtx(entities) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))

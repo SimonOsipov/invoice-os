@@ -3,24 +3,35 @@
 // and .pf-chip paint themselves --bg-2, so a --bg-2 panel here would be ground-on-ground,
 // MemberDrawer's own documented defect in mirror image.
 //
-// Deliberately NOT built here (task-667 §8, owned by 05/06): confirmation block, counts,
-// Prepare button, refusal rendering, `phase` state, abort, toast. `onToast` is threaded for
-// 06 and stays undestructured -- there is nothing to hand it yet.
+// AUDIT-08-05 adds the confirmation block, refusal rendering and the disabled Prepare button.
+// Deliberately NOT built here (task-667 §8, owned by 06): `onClick` on Prepare, `phase` state,
+// Building/Ready, abort, toast. `onToast` is threaded for 06 and stays undestructured.
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { useAsync } from '@invoice-os/api-client'
+import { ErrorState, useAsync } from '@invoice-os/api-client'
 
 import { closeGlyph } from '../glyphs'
 import { AUDIT_FILTER_DEFAULT, type AuditRange } from '../lib/auditFilters'
 import { bundleRequestFor, getEvidenceBundlePreview, type EvidenceBundlePreview } from '../lib/evidenceBundle'
-import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
+import {
+  bundleBasisLine,
+  bundleBlockFor,
+  bundleBlockReason,
+  bundleManifestLines,
+  bundlePeriodLabel,
+  EVIDENCE_COPY,
+} from '../lib/evidenceBundleView'
 import type { Entity } from '../lib/portfolio'
 import { useDismiss } from '../lib/useDismiss'
 import type { PlatformCtx } from '../types'
 
 import { DATE_PRESETS } from './AuditFilterCard'
 import { FilterPopover } from './FilterPopover'
+
+// id === data-testid, the shipped shape at AuditView.tsx:244.
+const REASON_ID = 'evidence-bundle-reason'
+const HELPER_ID = 'evidence-prepare-helper'
 
 export interface EvidenceBundleDrawerProps {
   ctx: PlatformCtx
@@ -53,12 +64,34 @@ export function EvidenceBundleDrawer({ ctx, base, onClose }: EvidenceBundleDrawe
   const req = useMemo(() => bundleRequestFor(company?.id ?? null, range, new Date()), [company, range])
   const reqKey = JSON.stringify(req)
 
-  // Fired for its call-count and argument shape alone (EB-04-7, EB-04-12). The landed/shown
-  // staleness guard in task-667 §6 lands with subtask 05's confirm block, its only reader.
-  useAsync<EvidenceBundlePreview>(
+  // `req.from <= req.to` too: an inverted range 400s server-side (evidenceBundleView.ts:92
+  // draws the same line), and EB-05-14 pins that the client catches it before spending a
+  // network call the reason already answers.
+  const preview = useAsync<EvidenceBundlePreview>(
     () => (req ? getEvidenceBundlePreview(ctx.authedFetch, base, req) : Promise.reject(new Error('no request'))),
-    { immediate: req != null, deps: [reqKey] },
+    { immediate: req != null && req.from <= req.to, deps: [reqKey] },
   )
+
+  // The response is held WITH the request that produced it. useAsync keeps its last `data`
+  // when a deps change does NOT re-run it (immediate:false for a null request), so the block
+  // would otherwise outlive the selection it describes. EB-05-12, EB-05-13 are the oracles.
+  const [landed, setLanded] = useState<{ key: string; res: EvidenceBundlePreview } | null>(null)
+  useEffect(() => {
+    if (preview.data == null) return
+    setLanded({ key: reqKey, res: preview.data })
+    // `reqKey` is read, not tracked: useAsync only dispatches for the latest run
+    // (async-state.ts:96,101), so preview.data is always the current key's response.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview.data])
+  const shown = landed?.key === reqKey ? landed.res : null
+
+  // `shown`, never preview.data: a block computed from a response whose request has been
+  // abandoned is the exact failure AC-8b names (EB-05-12, EB-05-13).
+  const block = bundleBlockFor(company?.id ?? null, req, shown)
+  const reason = bundleBlockReason(block)
+  const canPrepare = shown != null && block == null
+  const describedBy =
+    [reason != null ? REASON_ID : null, shown != null ? HELPER_ID : null].filter(Boolean).join(' ') || undefined
 
   return (
     <>
@@ -204,12 +237,145 @@ export function EvidenceBundleDrawer({ ctx, base, onClose }: EvidenceBundleDrawe
               </label>
             </div>
           )}
+
+          {shown != null && (
+            <div
+              data-testid="evidence-confirm-block"
+              style={{
+                marginTop: 20,
+                background: 'var(--action-tint)',
+                border: '1px solid var(--teal-200)',
+                borderRadius: 'var(--radius-md)',
+                padding: '11px 14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 9,
+              }}
+            >
+              <div className="label" data-testid="evidence-confirm-heading" style={{ color: 'var(--action)' }}>
+                {EVIDENCE_COPY.confirmHeading}
+              </div>
+
+              <div>
+                <div
+                  data-testid="evidence-confirm-company"
+                  style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', wordBreak: 'break-word' }}
+                >
+                  {shown.entity.name}
+                </div>
+                <div data-testid="evidence-confirm-period" style={{ marginTop: 2, fontSize: 12.5, color: 'var(--fg-2)' }}>
+                  {bundlePeriodLabel(shown.period)}
+                </div>
+                {/* The server's basis, never a hardcoded claim (D-08-11). */}
+                <div
+                  data-testid="evidence-confirm-basis"
+                  style={{ marginTop: 4, fontSize: 11.5, lineHeight: 1.55, color: 'var(--fg-2)' }}
+                >
+                  {bundleBasisLine(shown.period)}
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
+                <div className="label" data-testid="evidence-confirm-contents-heading" style={{ color: 'var(--action)' }}>
+                  {EVIDENCE_COPY.contentsHeading}
+                </div>
+                <div
+                  data-testid="evidence-confirm-contents"
+                  style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}
+                >
+                  {bundleManifestLines(shown).map((line) => (
+                    <div
+                      key={line.label}
+                      data-testid="evidence-confirm-row"
+                      style={{ display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11.5, lineHeight: 1.5 }}
+                    >
+                      <span data-testid="evidence-confirm-row-label" style={{ flex: 1, minWidth: 0, color: 'var(--fg-2)' }}>
+                        {line.label}
+                      </span>
+                      {line.value != null && (
+                        <span
+                          data-testid="evidence-confirm-row-value"
+                          className="mono"
+                          style={{ flex: 'none', fontWeight: 600, color: 'var(--fg-1)' }}
+                        >
+                          {line.value}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
+                <div className="label" data-testid="evidence-confirm-filename-label">
+                  {EVIDENCE_COPY.filenameLabel}
+                </div>
+                {/* break-all, not ellipsis: the whole name is the claim (AC-2). ReviewBatch.tsx:500. */}
+                <div
+                  data-testid="evidence-confirm-filename"
+                  className="mono"
+                  style={{ marginTop: 4, fontSize: 12, color: 'var(--fg-1)', wordBreak: 'break-all' }}
+                >
+                  {shown.filename}
+                </div>
+              </div>
+
+              <div data-testid="evidence-confirm-footnote" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-2)' }}>
+                {EVIDENCE_COPY.confirmFooter}
+              </div>
+            </div>
+          )}
+
+          {/* AuditView.tsx:285's shape. Suppressed when a refusal already speaks (§4). */}
+          {block == null && shown == null && preview.error != null && (
+            <div data-testid="evidence-bundle-error" style={{ marginTop: 16 }}>
+              <ErrorState error={preview.error} onRetry={preview.run} />
+            </div>
+          )}
+
+          {/* Visible text, never a title=: a title on a DISABLED button is invisible in Chromium
+              (AUDIT-08's own [inved-02-scope] lesson, and APPR-16's two missed QA passes). */}
+          {reason != null && (
+            <div
+              id={REASON_ID}
+              data-testid={REASON_ID}
+              style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-2)' }}
+            >
+              {reason}
+            </div>
+          )}
+
+          {shown != null && (
+            <div
+              id={HELPER_ID}
+              data-testid={HELPER_ID}
+              style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}
+            >
+              {EVIDENCE_COPY.prepareHelper}
+            </div>
+          )}
         </div>
 
         <div
           data-testid="evidence-bundle-footer"
           style={{ flex: 'none', padding: '14px 22px', borderTop: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}
         >
+          <button
+            type="button"
+            data-testid="evidence-bundle-prepare"
+            disabled={!canPrepare}
+            aria-describedby={describedBy}
+            className="v2-btn v2-btn-primary pf-btn"
+            style={{
+              height: 36,
+              fontSize: 13,
+              // Spread ONLY when disabled; `filter:'none'` neutralises .v2-btn-primary:hover's
+              // unguarded brightness(1.22) (app-layer.css:213). InvoiceDetail.tsx:926.
+              ...(canPrepare ? null : { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }),
+            }}
+          >
+            {EVIDENCE_COPY.prepareLabel}
+          </button>
           <button
             type="button"
             data-testid="evidence-bundle-cancel"

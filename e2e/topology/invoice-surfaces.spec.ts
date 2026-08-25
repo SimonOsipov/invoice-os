@@ -2607,6 +2607,8 @@ test('detail surface: a history actor the server cannot name renders verbatim an
         // The clipping oracle proper: a squeezed caption reports more scrollWidth than it
         // can show, which no box comparison can see.
         const fit = await cell.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        // An unlaid-out caption reports 0/0 and satisfies the bound below vacuously.
+        expect(fit.clientWidth, `${name} caption must have a laid-out box at ${width}px`).toBeGreaterThan(0)
         expect(fit.scrollWidth, `${name} caption must not be cut at ${width}px`).toBeLessThanOrEqual(fit.clientWidth + 1)
       }
       pressure.push({ width, ...(await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))) })
@@ -2720,6 +2722,8 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
         await expect(captions).toHaveCount(5)
         for (const [i, caption] of (await captions.all()).entries()) {
           const fit = await caption.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+          // An unlaid-out caption reports 0/0 and satisfies the bound below vacuously.
+          expect(fit.clientWidth, `caption ${i} must have a laid-out box at ${width}px`).toBeGreaterThan(0)
           expect(fit.scrollWidth, `caption ${i} must not be cut at ${width}px`).toBeLessThanOrEqual(fit.clientWidth + 1)
         }
         pressure.push({ width, ...(await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))) })
@@ -2746,7 +2750,7 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
     const nodes = page.getByTestId('strip-node')
 
     const entryViewport = page.viewportSize()
-    const measured = new Map<number, { container: number; nodes: number[] }>()
+    const measured = new Map<number, { container: number; nodes: number[]; span: number }>()
     try {
       for (const width of [2560, 1280]) {
         await resizeTo(page, width)
@@ -2755,7 +2759,9 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
         const boxes = await Promise.all((await nodes.all()).map((n) => n.boundingBox()))
         expect(boxes, `five nodes must render at ${width}px`).toHaveLength(5)
         for (const [i, b] of boxes.entries()) expect(b, `node ${i} must render at ${width}px`).toBeTruthy()
-        measured.set(width, { container: box!.width, nodes: boxes.map((b) => b!.width) })
+        // First node's left edge to last node's right edge: what the connectors sit inside.
+        const span = boxes[4]!.x + boxes[4]!.width - boxes[0]!.x
+        measured.set(width, { container: box!.width, nodes: boxes.map((b) => b!.width), span })
       }
     } finally {
       if (entryViewport) await page.setViewportSize(entryViewport)
@@ -2768,14 +2774,20 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
       wide.container - narrow.container,
       `the strip must be materially wider at 2560 than at 1280 (${narrow.container} -> ${wide.container})`,
     ).toBeGreaterThan(400)
-    // The single assertion proving flex:'none' + minWidth:'max-content' on the blocks and
-    // flex:1 on the connectors: 1280px of extra page went entirely into the connectors.
+    // flex:'none' + minWidth:'max-content' on the blocks: the extra page did not go here.
     for (const [i, w] of wide.nodes.entries()) {
       expect(
         Math.abs(w - narrow.nodes[i]),
         `node ${i} must keep its content width across the sweep (${narrow.nodes[i]} vs ${w})`,
       ).toBeLessThanOrEqual(1)
     }
+    // ...and flex:1 on the connectors: it went THERE. Without this half, connectors set to
+    // flex:'none' pass every assertion above while the five nodes clump at the left edge
+    // and the extra 1280px strands as dead space -- BUG-03-05's shape on this surface.
+    expect(
+      wide.span - narrow.span,
+      `the connectors, not the nodes, must absorb the extra page (${narrow.span} -> ${wide.span})`,
+    ).toBeGreaterThan(400)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

@@ -147,6 +147,8 @@ interface DetailFetchOptions {
   // repeating once exhausted. Undefined (the default) repeats `history` forever, unchanged
   // from pre-task-547 behaviour.
   historySequence?: StatusChange[][]
+  // GET .../history, FIRST call only. Overrides `history` so a non-2xx can be produced.
+  historyResponse?: MockResponse
   // POST .../approvals (task-547, D-29's decide arm). Every call is recorded into the
   // returned `decideCalls`, win or lose. Defaults to a 200 carrying a plausible ApprovalRun
   // shaped by the posted decision.
@@ -180,6 +182,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     if (url.endsWith('/history')) {
       const call = historyCalls
       historyCalls++
+      if (call === 0 && opts.historyResponse) return Promise.resolve<MockResponse>(opts.historyResponse)
       const rows = call === 0 ? history : (opts.historySequence?.[call - 1] ?? opts.historySequence?.at(-1) ?? history)
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(rows) })
     }
@@ -1355,6 +1358,65 @@ describe('InvoiceDetail state strip: the approval-loading gate', () => {
     const node3 = (await screen.findByTestId('status-strip')).querySelector('[data-key="approved"]')
     expect(node3?.getAttribute('data-state')).toBe('not-required')
     expect(node3?.textContent).toContain('Not required')
+  })
+})
+
+// QA (AUDIT-09-02 Mode B). Three holes the migrated suite leaves open.
+describe('InvoiceDetail state strip: mount position and the two unowned error branches', () => {
+  it('the strip renders before .pf-detail-grid and outside it, not as a card inside it', async () => {
+    // The ordering specs above only pin "strip precedes the rail cards", which a strip
+    // moved INSIDE the grid still satisfies -- the whole app suite stays green on that
+    // move. AC-1's containment claim is otherwise proved only by the browser sweep
+    // (invoice-surfaces.spec.ts "D: the strip stays inside the 96px band").
+    mockDetailFetch(detailRecord({ status: 'accepted' }))
+    const { container } = render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const strip = await screen.findByTestId('status-strip')
+    const grid = container.querySelector('.pf-detail-grid')
+    expect(grid, 'the grid is the anchor this assertion is about').not.toBeNull()
+    expect(strip.compareDocumentPosition(grid!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(grid!.contains(strip), 'the strip is a sibling of the grid, never a card inside it').toBe(false)
+  })
+
+  it('characterisation (F-E, owner subtask 07): a 500 on GET /history renders no error and no Retry', async () => {
+    // Deleting the Status history card deleted the only reader of history.status. The
+    // states below still come from inv.status, so the surface does not lie -- but the
+    // attributions vanish with no error and nothing to retry. Pinned, not fixed.
+    mockDetailFetch(detailRecord({ status: 'accepted' }), [], {
+      historyResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'history unavailable' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    // Positive control first: the strip IS mounted, so every absence below is real.
+    const strip = await screen.findByTestId('status-strip')
+    expect(strip.querySelectorAll('[data-testid="strip-node"]')).toHaveLength(5)
+    expect(strip.querySelector('[data-key="draft"]')?.getAttribute('data-state')).toBe('done')
+
+    // The states survive; only the captions degrade.
+    expect(strip.querySelector('[data-key="draft"] [data-testid="strip-actor"]')?.textContent).toBe('—')
+    expect(screen.queryByText('Something went wrong')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('characterisation (arch §3 residual): a 500 on GET /approval still captions node 3 "Not required"', async () => {
+    // The mount gate excludes `idle` and `loading` only, so an ERRORED approval fetch
+    // renders the strip with run=null and node 3 claims a compliance fact nobody knows.
+    // The arch names this residual and accepts it; no test produced it until now.
+    mockDetailFetch(detailRecord({ status: 'accepted' }), [], {
+      approvalResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'approval unavailable' }) },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const node3 = (await screen.findByTestId('status-strip')).querySelector('[data-key="approved"]')
+    expect(node3?.getAttribute('data-state')).toBe('not-required')
+    expect(node3?.textContent).toContain('Not required')
+    // The screen contradicts itself: the trail card reports the failure while the strip
+    // states a compliance fact from the same unread response. That reporter is
+    // ApprovalTrailCard, which subtask 06 replaces -- if it stops rendering ErrorState,
+    // this line goes green and the strip becomes the ONLY thing the operator is told.
+    expect(screen.queryByText('Something went wrong'), 'the trail card still owns the error copy').not.toBeNull()
   })
 })
 

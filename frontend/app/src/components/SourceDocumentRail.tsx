@@ -59,8 +59,8 @@ export function SourceDocumentRail({
       <div data-testid="source-document-rail" style={frame}>
         <div style={scroll}>
           <div style={{ padding: '14px 16px', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', background: 'transparent', fontSize: 12.5, lineHeight: 1.6, color: 'var(--fg-3)' }}>
-            No file, no size, no fingerprint. Manually entered invoices carry their status history instead — every status
-            change on {invoiceNumber} is recorded there with who made it and when.
+            No file, no size, no fingerprint. Manually entered invoices carry their state strip instead — the five
+            stages {invoiceNumber} passes through, with each stage it reached showing who moved it and when.
           </div>
         </div>
       </div>

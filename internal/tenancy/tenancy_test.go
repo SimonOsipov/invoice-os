@@ -304,8 +304,10 @@ func TestStoreMe_UnknownTenant(t *testing.T) {
 }
 
 // TestStoreMe_NoIdentityFailsClosed (AC #3): a context with no identity must
-// fail closed with db.ErrNoTenant before any statement runs (the
-// WithinRequestTenantTx contract).
+// fail closed with db.ErrNoTenant before any statement runs. Me reads the
+// identity itself (AUDIT-10 §5 exempts it from the request seam's membership
+// gate), so this pins the fail-closed behaviour independently of which db helper
+// Me happens to call.
 func TestStoreMe_NoIdentityFailsClosed(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
@@ -314,6 +316,61 @@ func TestStoreMe_NoIdentityFailsClosed(t *testing.T) {
 	_, _, err := store.Me(ctx)
 	if !errors.Is(err, db.ErrNoTenant) {
 		t.Fatalf("Me err = %v, want db.ErrNoTenant", err)
+	}
+}
+
+// TestStoreMe_AnswersForASuspendedMember (AUDIT-10 AC-5, D-5): /v1/me is the ONE
+// deliberate hole in the read-path gate. auth.ts signIn throws on failure, so
+// gating it turns every suspended session into an unexplained sign-in failure
+// with nothing able to say why. The body must be unchanged, not merely non-empty.
+func TestStoreMe_AnswersForASuspendedMember(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	const tenantName = "tenancy me-test suspended firm"
+	tenantID := seedTenant(t, super, tenantName)
+	userID := uuid.NewString()
+	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	tenant, role, err := store.Me(c)
+	if err != nil {
+		t.Fatalf("Me: a suspended member must still get their boot payload, got %v", err)
+	}
+	if tenant.ID != tenantID {
+		t.Errorf("tenant.ID = %q, want %q", tenant.ID, tenantID)
+	}
+	if tenant.Name != tenantName {
+		t.Errorf("tenant.Name = %q, want %q", tenant.Name, tenantName)
+	}
+	if tenant.Kind != "firm" {
+		t.Errorf("tenant.Kind = %q, want %q", tenant.Kind, "firm")
+	}
+	if role != "admin" {
+		t.Errorf("role = %q, want %q", role, "admin")
+	}
+}
+
+// TestStoreListMemberships_RefusesASuspendedMember (AUDIT-10 AC-6): every other
+// tenancy read stays gated -- D-5 rejected extending Me's exemption to
+// /v1/memberships.
+func TestStoreListMemberships_RefusesASuspendedMember(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "tenancy list-memberships suspended firm")
+	userID := uuid.NewString()
+	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ListMemberships err = %v, want db.ErrNotActiveMember", err)
+	}
+	if got != nil {
+		t.Errorf("ListMemberships returned %d row(s) alongside the refusal, want none: %+v", len(got), got)
 	}
 }
 

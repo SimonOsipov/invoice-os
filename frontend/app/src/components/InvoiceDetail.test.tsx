@@ -173,6 +173,9 @@ interface DetailFetchOptions {
   sourceDocumentResponse?: MockResponse
   // GET .../audit-log, the activity card's read. Defaults to EMPTY_AUDIT_LOG.
   auditLog?: AuditResponse
+  // GET .../audit-log, overriding `auditLog` so a non-2xx can be produced. Absent (the
+  // default) leaves every pre-existing test's behaviour byte-identical.
+  auditLogResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -269,11 +272,13 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     // like /ubl and /source-document above: the fallback would answer it with an invoice
     // record and eat a detailSequence slot. `includes`, not `endsWith` -- it carries a query.
     if (method === 'GET' && url.includes('/audit-log')) {
-      return Promise.resolve<MockResponse>({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve(opts.auditLog ?? EMPTY_AUDIT_LOG),
-      })
+      return Promise.resolve<MockResponse>(
+        opts.auditLogResponse ?? {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(opts.auditLog ?? EMPTY_AUDIT_LOG),
+        },
+      )
     }
     // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
     // like /ubl and /source-document above. `.endsWith('/approval')` is false for
@@ -1450,25 +1455,137 @@ describe('InvoiceDetail state strip: mount position and the two unowned error br
     expect(grid!.contains(strip), 'the strip is a sibling of the grid, never a card inside it').toBe(false)
   })
 
-  it('characterisation (F-E, owner subtask 07): a 500 on GET /history renders no error and no Retry', async () => {
-    // Deleting the Status history card deleted the only reader of history.status. The
-    // states below still come from inv.status, so the surface does not lie -- but the
-    // attributions vanish with no error and nothing to retry. Pinned, not fixed.
-    mockDetailFetch(detailRecord({ status: 'accepted' }), [], {
-      historyResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'history unavailable' }) },
-    })
+  // ---- AUDIT-09-07 / F-E. D-07-1 accepts the history degradation and upgrades the old
+  // characterisation into a guarantee: a history 500 WITHHOLDS attribution, it never
+  // ASSERTS a false one. The state-equality row below is exactly the condition under which
+  // that decision must be reopened.
 
-    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+  const HISTORY_500: MockResponse = {
+    ok: false,
+    status: 500,
+    json: () => Promise.resolve({ error: 'history unavailable' }),
+  }
+  const HISTORY_ACTOR = '9a000000-0000-4000-8000-0000000000ab'
+  const HISTORY_ACTOR_NAME = 'Adaeze Nwosu'
+  const HEALTHY_HISTORY: StatusChange[] = [
+    { from_status: null, to_status: 'draft', changed_at: '2026-07-01T09:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
+    { from_status: 'draft', to_status: 'validated', changed_at: '2026-07-01T10:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
+    { from_status: 'validated', to_status: 'queued', changed_at: '2026-07-01T11:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
+    { from_status: 'queued', to_status: 'accepted', changed_at: '2026-07-01T12:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
+  ]
 
-    // Positive control first: the strip IS mounted, so every absence below is real.
+  interface StripReadout {
+    key: string
+    state: string
+    caption: string
+  }
+
+  async function stripReadout(): Promise<StripReadout[]> {
     const strip = await screen.findByTestId('status-strip')
-    expect(strip.querySelectorAll('[data-testid="strip-node"]')).toHaveLength(5)
-    expect(strip.querySelector('[data-key="draft"]')?.getAttribute('data-state')).toBe('done')
+    return [...strip.querySelectorAll('[data-testid="strip-node"]')].map((n) => ({
+      key: n.getAttribute('data-key') ?? '',
+      state: n.getAttribute('data-state') ?? '',
+      caption: n.querySelector('[data-testid="strip-actor"]')?.textContent ?? '',
+    }))
+  }
 
-    // The states survive; only the captions degrade.
-    expect(strip.querySelector('[data-key="draft"] [data-testid="strip-actor"]')?.textContent).toBe('—')
+  it('invoiceDetail_aHistory500WithholdsAttributionWithoutFabricatingIt', async () => {
+    mockDetailFetch(detailRecord({ status: 'accepted' }), HEALTHY_HISTORY)
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const healthy = await stripReadout()
+    cleanup()
+
+    mockDetailFetch(detailRecord({ status: 'accepted' }), [], { historyResponse: HISTORY_500 })
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const sick = await stripReadout()
+
+    // Positive control: both renders produced the whole strip.
+    expect(healthy).toHaveLength(5)
+    expect(sick).toHaveLength(5)
+    // THE guarantee. `status` and `run` decide every state; history supplies only at/actor
+    // (invoiceStrip.ts's module invariant, proven here through the real fetch ladder rather
+    // than at the pure-core level). If history ever leaked into node state, this reds.
+    expect(sick.map((n) => [n.key, n.state])).toEqual(healthy.map((n) => [n.key, n.state]))
+    // ...and the two renders really did differ, so the equality above is not two identical
+    // fixtures agreeing with themselves.
+    expect(sick.map((n) => n.caption)).not.toEqual(healthy.map((n) => n.caption))
+    // Names the spine explicitly, so the per-node loop below cannot pass on zero iterations
+    // and so the retired characterisation's draft-is-done pin survives the replacement.
+    expect(sick.filter((n) => n.state === 'done').map((n) => n.key)).toEqual([
+      'draft',
+      'validated',
+      'queued',
+      'accepted',
+    ])
+
+    for (const [i, node] of sick.entries()) {
+      if (node.state !== 'done') continue
+      expect(healthy[i]!.caption, `${node.key}: the healthy render must attribute the node`).toMatch(/^\d\d:\d\d · Adaeze$/)
+      // Withheld, never fabricated: no invented time, and never a claim word on a done node.
+      expect(node.caption, `${node.key}: a 500 must withhold, not invent`).toBe('—')
+    }
+    // Node 3 follows the approval run, not history, so it reads the same in both renders.
+    const node3 = (r: StripReadout[]) => r.find((n) => n.key === 'approved')!
+    expect(node3(sick).state).toBe('not-required')
+    expect(node3(sick).caption).toBe(node3(healthy).caption)
+
+    // D-07-1, accepted: no error and nothing to retry for history. Page-wide is the
+    // strongest form here because nothing else on this render errors.
     expect(screen.queryByText('Something went wrong')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('invoiceDetail_aHistory500LeavesTheTransitionRecordInTheFeed', async () => {
+    // The whole basis of D-07-1: every invoice_status_history row is written in the same
+    // transaction as an audit row (store.go:262/269, :1846/:1853), so the same transitions
+    // -- with actor and time -- arrive on an INDEPENDENT fetch one card below, which does
+    // have ErrorState + Retry. F-AI records that seeded demo data has no audit rows.
+    const TRANSITION_ACTOR = '5b000000-0000-4000-8000-0000000000cd'
+    const TRANSITION_NAME = 'Ibrahim Bello'
+    const TRANSITIONED_AT = '2026-07-01T12:00:00Z'
+    const transitioned: AuditEvent = {
+      id: 'ev-transitioned-1',
+      created_at: TRANSITIONED_AT,
+      event: 'invoice.transitioned',
+      actor: TRANSITION_ACTOR,
+      actor_name: TRANSITION_NAME,
+      actor_kind: 'person',
+      entity_id: 'ent-1',
+      company_name: 'Northgate Foods',
+      company_scope: 'company',
+      payload: { id: 'inv-failed-1', from: 'queued', to: 'accepted' },
+    }
+
+    mockDetailFetch(detailRecord({ status: 'accepted' }), [], {
+      historyResponse: HISTORY_500,
+      auditLog: auditLogOf([transitioned]),
+    })
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    // The degradation is live in this same render, so the feed below is the compensating
+    // surface for THIS failure and not a second, healthier page.
+    const sick = await stripReadout()
+    expect(sick.filter((n) => n.state === 'done').map((n) => n.caption)).toEqual(['—', '—', '—', '—'])
+
+    const activity = screen.getByTestId('invoice-activity')
+    const row = await within(activity).findByTestId('audit-row')
+    expect(within(row).getByText(TRANSITION_NAME)).toBeTruthy()
+    expect(within(row).queryByText(TRANSITION_ACTOR), 'the raw subject never renders').toBeNull()
+    expect(fmtDateTime(TRANSITIONED_AT)).not.toBe('—')
+    expect(within(row).getByText(fmtDateTime(TRANSITIONED_AT))).toBeTruthy()
+    cleanup()
+
+    // ...and when the compensating surface itself fails, THAT one is retryable. Scoped to
+    // invoice-activity (F-U M-2): an unscoped Retry now matches the approval card too.
+    mockDetailFetch(detailRecord({ status: 'accepted' }), [], {
+      historyResponse: HISTORY_500,
+      auditLogResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'audit log unavailable' }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const failed = await screen.findByTestId('invoice-activity')
+    expect(await within(failed).findByText('Something went wrong')).toBeTruthy()
+    expect(within(failed).getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 
   it('a 500 on GET /approval captions node 3 "Not required", and the approval card contradicts it', async () => {

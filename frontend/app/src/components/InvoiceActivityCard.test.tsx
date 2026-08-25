@@ -16,6 +16,7 @@ import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { auditEventView } from '../lib/auditVocabulary'
 import { AUDIT_COPY } from '../lib/auditView'
 import { createAuthedFetch } from '../lib/authedFetch'
+import { fmtDateTime } from '../lib/format'
 import {
   ACTIVITY_CHIP_LABELS,
   ACTIVITY_CHIP_ORDER,
@@ -709,5 +710,350 @@ describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () =>
     // Control needle: the slice must have captured the props, not an empty span.
     expect(tag, 'the slice missed the mount\'s props').toContain('invoiceId=')
     expect(tag, 'the card mount must pass the invoice number down').toContain('invoiceNumber={inv.invoice_number}')
+  })
+})
+
+// AUDIT-09-07: the nothing-dropped proof. Every field the retired approval trail carried is
+// either in an audit payload, in the event NAME, or on the surviving Approval card -- and
+// each claim below reaches an assertion. Contract: .ralph/AUDIT-09-07-arch.md sections 2, 6.
+
+const REJECTED_EVENT = 'invoice.approval_rejected'
+const APPROVED_EVENT = APPROVALS_EVENT
+const GO_DECISION = 'internal/approval/decision.go'
+const GO_ENGINE = 'internal/approval/engine.go'
+const CHIMERA = 'chimera_field'
+
+function repoFile(rel: string): string {
+  return readFileSync(join(__dirname, '../../../..', rel), 'utf8')
+}
+
+// The map literal's body ends at the first `}` after it opens, so a payload that ever
+// nested a struct would truncate the key set -- which fails the transcription row loudly,
+// never quietly. wireMirrors.test.ts carries the struct-scoped twin of this idea.
+function goAuditPayloadKeys(source: string, event: string): string[] {
+  const anchor = `"${event}", map[string]any{`
+  const start = source.indexOf(anchor)
+  if (start < 0) return []
+  const from = start + anchor.length
+  const end = source.indexOf('}', from)
+  if (end < 0) return []
+  return [...source.slice(from, end).matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1])
+}
+
+const APPROVAL_EVENT_SOURCES: Record<string, string> = {
+  'invoice.approval_approved': GO_DECISION,
+  'invoice.approval_rejected': GO_DECISION,
+  'invoice.approval_armed': GO_ENGINE,
+  'invoice.approval_cancelled': GO_ENGINE,
+}
+
+function extractedPayloadKeys(): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [event, path] of Object.entries(APPROVAL_EVENT_SOURCES)) {
+    out[event] = goAuditPayloadKeys(repoFile(path), event)
+  }
+  return out
+}
+
+// Transcribed from the four map literals. activityFeed_goPayloadKeysAreTheOnesThisTableClaims
+// is what stops this rotting into a claim about keys the server no longer writes.
+const TRANSCRIBED_PAYLOAD_KEYS: Record<string, string[]> = {
+  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason'],
+  'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason'],
+  'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'steps'],
+  'invoice.approval_cancelled': ['id', 'run_id'],
+}
+
+const RETIRED_FIELD_KEYS = ['run_id', 'step_ord', 'reason']
+const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'steps']
+
+const RUN_ID_SENTINEL = 'run-7f21-nothing-dropped'
+const STEP_ORD_SENTINEL = 7
+const REASON_SENTINEL = 'Budget exceeded, escalate to finance'
+const DECIDER_SUBJECT = 'd0000000-0000-0000-0000-00000000009c'
+const DECIDER_NAME = 'Folake Adeyemi'
+const DECIDED_AT = '2026-08-02T14:07:00Z'
+
+const SENTINELS: Record<string, unknown> = {
+  invoice_id: INVOICE_ID,
+  run_id: RUN_ID_SENTINEL,
+  step_ord: STEP_ORD_SENTINEL,
+  reason: REASON_SENTINEL,
+}
+
+// Built FROM the extraction, never typed by hand: a key the server adds arrives here with a
+// sentinel and lands in the render, so the exact-set row and the transcription row red
+// together instead of one of them passing on a stale fixture.
+function payloadFrom(keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of keys) out[k] = k in SENTINELS ? SENTINELS[k] : `sentinel-${k}`
+  return out
+}
+
+function payloadFieldLabels(scope: HTMLElement): string[] {
+  return within(scope)
+    .queryAllByTestId('audit-payload-field')
+    .map((el) => (el.firstElementChild?.textContent ?? '').trim())
+}
+
+// AuditRow's fieldLabel is private. Inverting its transform rather than copying it keeps
+// this assertion about the KEY the ledger claims instead of about the label's casing; the
+// per-field rows below still pin the label text itself.
+function keyOfLabel(label: string): string {
+  return label.toLowerCase().replace(/ /g, '_')
+}
+
+function payloadFieldValue(scope: HTMLElement, key: string): string | null {
+  for (const el of within(scope).queryAllByTestId('audit-payload-field')) {
+    if (keyOfLabel((el.firstElementChild?.textContent ?? '').trim()) === key) {
+      return (el.lastElementChild?.textContent ?? '').trim()
+    }
+  }
+  return null
+}
+
+// The scan every reachable row is proven by. It must be able to say "no", by name.
+function missingPayloadFields(scope: HTMLElement, keys: readonly string[]): string[] {
+  return keys.filter((k) => payloadFieldValue(scope, k) === null)
+}
+
+type CarriedBy = 'payload' | 'eventName' | 'surface'
+
+interface RetiredTrailField {
+  field: string
+  trailShowed: string
+  carriedBy: CarriedBy
+  payloadKey: string | null
+  label: string | null
+  where: string
+  provenBy: string
+}
+
+const RETIRED_TRAIL_FIELDS: RetiredTrailField[] = [
+  {
+    field: 'run',
+    trailShowed: "the run's state as a pill; the run id was never on screen",
+    carriedBy: 'payload',
+    payloadKey: 'run_id',
+    label: 'Run id',
+    where: 'the expansion (the run STATE is on approval-state and on strip node 3)',
+    provenBy: 'activityFeed_carriesEveryRetiredTrailField + approvalStateCard_rendersStateAndHolder',
+  },
+  {
+    field: 'step',
+    trailShowed: 'the medallion ord+1 and kindLabel · roleTitle per step',
+    carriedBy: 'payload',
+    payloadKey: 'step_ord',
+    label: 'Step ord',
+    where: 'the expansion, 0-based and raw -- the trail rendered ord + 1',
+    provenBy: 'activityFeed_carriesEveryRetiredTrailField',
+  },
+  {
+    field: 'holder',
+    trailShowed: 'holderText, plus an Unstaffed seat warn, for EVERY step with a role key',
+    carriedBy: 'surface',
+    payloadKey: null,
+    label: null,
+    where: "ApprovalStateCard's approval-holder / approval-holder-name -- an OPEN run's lowest-ord pending approval step only",
+    provenBy: 'approvalStateCard_carriesTheHolder + activityFeed_carriesNoHolderField',
+  },
+  {
+    field: 'decision',
+    trailShowed: 'outcomeLabel -- Approved / Rejected per decision row',
+    carriedBy: 'eventName',
+    payloadKey: null,
+    label: null,
+    where: "the row's audit-what label and the expansion's audit-event-identifier",
+    provenBy: 'activityFeed_carriesEveryRetiredTrailField + activityFeed_carriesTheDecisionActorAndTime',
+  },
+  {
+    field: 'reason',
+    trailShowed: 'decision.reason, free text under the decision row',
+    carriedBy: 'payload',
+    payloadKey: 'reason',
+    label: 'Reason',
+    where: 'the expansion; nil on approve, which renders —',
+    provenBy: 'activityFeed_carriesEveryRetiredTrailField',
+  },
+]
+
+async function expandOne(event: AuditEvent): Promise<{ row: HTMLElement; expansion: HTMLElement }> {
+  mockFetch(logResponse({ events: [event] }))
+  renderCard()
+  await loaded()
+  fireEvent.click(screen.getByTestId('audit-row'))
+  return { row: screen.getByTestId('audit-row'), expansion: screen.getByTestId('audit-expansion') }
+}
+
+describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
+  it('activityFeed_ledgerTableIsNonVacuous', () => {
+    // A cleared or truncated table would let every loop below pass on zero iterations.
+    expect(RETIRED_TRAIL_FIELDS.map((f) => f.field)).toEqual(['run', 'step', 'holder', 'decision', 'reason'])
+    expect(RETIRED_TRAIL_FIELDS.filter((f) => f.carriedBy === 'surface').map((f) => f.field)).toEqual(['holder'])
+    for (const f of RETIRED_TRAIL_FIELDS) {
+      // A payload row with no key or no label would loop as a no-op.
+      expect(f.payloadKey !== null, `${f.field}: payloadKey`).toBe(f.carriedBy === 'payload')
+      expect(f.label !== null, `${f.field}: label`).toBe(f.carriedBy === 'payload')
+      expect(f.trailShowed.length, `${f.field} must say what the trail showed`).toBeGreaterThan(0)
+      expect(f.where.length, `${f.field} must name where it renders now`).toBeGreaterThan(0)
+      expect(f.provenBy.length, `${f.field} must name the spec that proves it`).toBeGreaterThan(0)
+    }
+  })
+
+  it('activityFeed_goPayloadKeysAreTheOnesThisTableClaims', () => {
+    const decision = repoFile(GO_DECISION)
+    const engine = repoFile(GO_ENGINE)
+    // Anchors: a moved file makes the extractor return [], which reports every key missing
+    // -- a false RED, not a false green. Say so here rather than there.
+    expect(decision, `lost anchor on ${GO_DECISION}`).toContain('func commitDecisionTx')
+    expect(engine, `lost anchor on ${GO_ENGINE}`).toContain('func CancelLiveRunTx')
+
+    const extracted = extractedPayloadKeys()
+    // Floor: a broken extractor yields [] and every membership check below would report a
+    // miss. The floor makes that failure direction explicit instead of implied.
+    for (const event of [APPROVED_EVENT, REJECTED_EVENT]) {
+      expect(extracted[event]!.length, `${event}: the extractor returned a short key set`).toBeGreaterThanOrEqual(4)
+    }
+    // A key added or removed server-side names itself here. Per event, not one object
+    // compare: vitest truncates a whole-object diff to `{ …(4) }` and the point of this row
+    // is that the failure names the key.
+    expect(Object.keys(extracted).sort(), 'the source table lost an event').toEqual(
+      Object.keys(TRANSCRIBED_PAYLOAD_KEYS).sort(),
+    )
+    for (const [event, keys] of Object.entries(extracted)) {
+      expect(keys, `${event}: the Go payload no longer matches this table`).toEqual(TRANSCRIBED_PAYLOAD_KEYS[event])
+    }
+
+    const all = [...new Set(Object.values(extracted).flat())]
+    // Exhaustive partition, both directions: a new key belongs to a retired field or it
+    // does not, and the author has to say which.
+    for (const key of all) {
+      const retired = RETIRED_FIELD_KEYS.includes(key)
+      const other = KEYS_NOT_A_RETIRED_FIELD.includes(key)
+      expect(retired !== other, `${key} must fall in exactly one of the two partitions`).toBe(true)
+    }
+    for (const key of [...RETIRED_FIELD_KEYS, ...KEYS_NOT_A_RETIRED_FIELD]) {
+      expect(all, `${key} is claimed by a partition but no payload carries it`).toContain(key)
+    }
+    expect(all, 'the control needle must be fabricated, not a real key').not.toContain(CHIMERA)
+    // F-T / D-AC-11: this is why the holder row routes to the Approval card.
+    expect(all.filter((k) => /holder/i.test(k))).toEqual([])
+  })
+
+  it('activityFeed_carriesEveryRetiredTrailField', async () => {
+    const keys = goAuditPayloadKeys(repoFile(GO_DECISION), REJECTED_EVENT)
+    expect(keys.length, 'the extractor returned nothing -- see the Go-source row above').toBeGreaterThanOrEqual(4)
+
+    const { row, expansion } = await expandOne(auditEvent({ event: REJECTED_EVENT, payload: payloadFrom(keys) }))
+
+    // Exact-set equality, both directions: a key the row drops and a key the row invents
+    // both land here. AuditRow renders Object.keys(payload) unfiltered.
+    expect(payloadFieldLabels(expansion).map(keyOfLabel)).toEqual(keys)
+
+    const proven: string[] = []
+    for (const f of RETIRED_TRAIL_FIELDS) {
+      if (f.carriedBy === 'payload') {
+        expect(keys, `${f.field}: ${f.payloadKey} is not in the extracted key set`).toContain(f.payloadKey!)
+        expect(payloadFieldLabels(expansion), `${f.field} must render under "${f.label}"`).toContain(f.label!)
+        expect(payloadFieldValue(expansion, f.payloadKey!), `${f.field}: the sentinel must render`).toBe(
+          String(SENTINELS[f.payloadKey!]),
+        )
+      } else if (f.carriedBy === 'eventName') {
+        // The story's table calls `decision` a payload key. It is not: no approval payload
+        // carries one, and the decision IS the event name.
+        const label = auditEventView(REJECTED_EVENT).label
+        // Both sides of the row assertion read auditVocabulary, so these two pin what the
+        // vocabulary is FOR: a human label, distinct from the identifier beside it.
+        expect(label.length, 'the decision needs a label to render').toBeGreaterThan(0)
+        expect(label, 'the row must not fall through to the raw identifier').not.toBe(REJECTED_EVENT)
+        expect(within(row).getByTestId('audit-what').textContent).toBe(label)
+        expect(within(expansion).getByTestId('audit-event-identifier').textContent).toBe(REJECTED_EVENT)
+      } else {
+        expect(payloadFieldLabels(expansion).filter((l) => /holder/i.test(l))).toEqual([])
+      }
+      proven.push(f.field)
+    }
+    expect(proven, 'every ledger row must reach an assertion').toEqual(RETIRED_TRAIL_FIELDS.map((f) => f.field))
+  })
+
+  it('activityFeed_anApprovedEventCarriesTheReasonKeyWithNoValue', async () => {
+    // DecideSeam turns "" into nil and audit.Record marshals nil as JSON null, so an
+    // approve carries the key and renders the em dash. Presence, not value, is the claim.
+    const keys = goAuditPayloadKeys(repoFile(GO_DECISION), APPROVED_EVENT)
+    const { expansion } = await expandOne(
+      auditEvent({ event: APPROVED_EVENT, payload: { ...payloadFrom(keys), reason: null } }),
+    )
+
+    expect(payloadFieldLabels(expansion).map(keyOfLabel)).toEqual(keys)
+    expect(payloadFieldValue(expansion, 'reason')).toBe('—')
+    // Control on the same expansion: a sibling key DOES carry its sentinel, so the em dash
+    // is the null and not a card that rendered nothing.
+    expect(payloadFieldValue(expansion, 'run_id')).toBe(RUN_ID_SENTINEL)
+  })
+
+  it('activityFeed_carriesTheDecisionActorAndTime', async () => {
+    // F-AE: the decision ledger MOVED here. Actor and time come from the audit row's own
+    // columns, written in the same transaction by the same subject as approval_decisions.
+    const keys = goAuditPayloadKeys(repoFile(GO_DECISION), REJECTED_EVENT)
+    const { row, expansion } = await expandOne(
+      auditEvent({
+        event: REJECTED_EVENT,
+        actor: DECIDER_SUBJECT,
+        actor_name: DECIDER_NAME,
+        actor_kind: 'person',
+        created_at: DECIDED_AT,
+        payload: payloadFrom(keys),
+      }),
+    )
+
+    // getByText throws on absence AND on ambiguity: a regression to '—' fails here.
+    expect(within(row).getByText(DECIDER_NAME)).toBeTruthy()
+    // The BUG-03 class, and the negative control for the line above.
+    expect(within(row).queryByText(DECIDER_SUBJECT)).toBeNull()
+    // Computed, never hardcoded: fmtDateTime is toLocaleString('en-NG') and returns '—' on
+    // a missing time, so a dropped timestamp fails loudly rather than matching.
+    expect(fmtDateTime(DECIDED_AT)).not.toBe('—')
+    expect(within(row).getByText(fmtDateTime(DECIDED_AT))).toBeTruthy()
+    expect(within(row).getByTestId('audit-what').textContent).toBe(auditEventView(REJECTED_EVENT).label)
+    expect(within(expansion).getByTestId('audit-event-identifier').textContent).toBe(REJECTED_EVENT)
+  })
+
+  it('activityFeed_carriesNoHolderField', async () => {
+    const keys = goAuditPayloadKeys(repoFile(GO_DECISION), REJECTED_EVENT)
+    const { expansion } = await expandOne(auditEvent({ event: REJECTED_EVENT, payload: payloadFrom(keys) }))
+
+    // Positive control on the same locator: the expansion IS open and DOES carry a field.
+    expect(payloadFieldValue(expansion, 'run_id')).toBe(RUN_ID_SENTINEL)
+    // The trap-door. AUDIT-00 Q3 forbids joining out to manufacture a historical holder,
+    // and this is where a future author who tries lands.
+    expect(payloadFieldLabels(expansion).filter((l) => /holder/i.test(l))).toEqual([])
+    expect(screen.getByTestId('invoice-activity').querySelectorAll('[data-testid^="approval-holder"]')).toHaveLength(0)
+    // ...and no approval payload carries one to render in the first place.
+    expect(Object.values(extractedPayloadKeys()).flat().filter((k) => /holder/i.test(k))).toEqual([])
+  })
+
+  it('activityFeed_droppedFieldScanHasAControlNeedle', async () => {
+    const keys = goAuditPayloadKeys(repoFile(GO_DECISION), REJECTED_EVENT)
+    const { expansion } = await expandOne(auditEvent({ event: REJECTED_EVENT, payload: payloadFrom(keys) }))
+
+    // One assertion, two halves: every real key is found on a fully populated expansion,
+    // and the fabricated one is not. A lookup that returned something truthy for an absent
+    // key would make every passing row above vacuous.
+    expect(missingPayloadFields(expansion, [...keys, CHIMERA])).toEqual([CHIMERA])
+    expect(Object.values(extractedPayloadKeys()).flat()).not.toContain(CHIMERA)
+  })
+
+  it('activityFeed_droppedFieldScanCatchesARealKeyGoingMissing', async () => {
+    // The fabricated needle proves only that the lookup CAN say no. This is the planted
+    // positive on a real key: the bug the ledger exists to catch.
+    const keys = goAuditPayloadKeys(repoFile(GO_DECISION), REJECTED_EVENT)
+    expect(keys, 'the plant needs run_id present in order to omit it').toContain('run_id')
+    const planted = keys.filter((k) => k !== 'run_id')
+
+    const { expansion } = await expandOne(auditEvent({ event: REJECTED_EVENT, payload: payloadFrom(planted) }))
+
+    expect(missingPayloadFields(expansion, keys), 'the scan must name the missing key').toEqual(['run_id'])
+    // ...and the exact-set row that guards the ledger reds on the same payload.
+    expect(payloadFieldLabels(expansion).map(keyOfLabel)).not.toEqual(keys)
   })
 })

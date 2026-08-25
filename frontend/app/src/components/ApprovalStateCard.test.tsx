@@ -25,6 +25,27 @@ afterEach(cleanup)
 
 const SOURCE = join(__dirname, 'ApprovalStateCard.tsx')
 
+// AUDIT-09-07 / AC-3. The four approvals-domain audit writes, so this file can prove from
+// SOURCE that none of them carries a holder -- which is why the ledger routes the field
+// here. Extractor duplicated from InvoiceActivityCard.test.tsx: the repo's wire scans copy
+// rather than share, so a spec never depends on another suite's module.
+const GO_APPROVAL_EVENTS: Record<string, string> = {
+  'invoice.approval_approved': 'internal/approval/decision.go',
+  'invoice.approval_rejected': 'internal/approval/decision.go',
+  'invoice.approval_armed': 'internal/approval/engine.go',
+  'invoice.approval_cancelled': 'internal/approval/engine.go',
+}
+
+function goAuditPayloadKeys(source: string, event: string): string[] {
+  const anchor = `"${event}", map[string]any{`
+  const start = source.indexOf(anchor)
+  if (start < 0) return []
+  const from = start + anchor.length
+  const end = source.indexOf('}', from)
+  if (end < 0) return []
+  return [...source.slice(from, end).matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1])
+}
+
 // arch 3.2's fourteen keys. approvals.ts is NOT this subtask's file for a Mode A commit,
 // and the const is RENAMED here (APPROVAL_TRAIL_COPY -> APPROVAL_CARD_COPY, arch 3.5), so
 // importing it by either name would either not compile now or not compile later. The ten
@@ -371,6 +392,54 @@ describe('ApprovalStateCard', () => {
     expect(within(el).getByTestId('approval-state').textContent).toBe(copyOf('stateApproved'))
     expect(within(el).queryAllByTestId('approval-holder')).toHaveLength(0)
     expect(within(el).queryAllByTestId('approval-voided')).toHaveLength(0)
+  })
+
+  // ---- AUDIT-09-07 / AC-3: the one retired trail field no audit payload carries -------
+
+  it('approvalStateCard_carriesTheHolder', () => {
+    // Distinct sentinels for the role title and the holder, so neither assertion can be
+    // satisfied by the other.
+    const steps = [
+      stepFixture({
+        ord: 0,
+        kind: 'approval',
+        state: 'pending',
+        workflow_role_title: 'Group Controller',
+        holder: { text: 'Ngozi Eze', warn: false },
+      }),
+    ]
+
+    render(<ApprovalStateCard run={readyRun(runFixture({ state: 'open', steps }))} />)
+
+    expect(within(card()).getByTestId('approval-holder').textContent).toContain('Group Controller')
+    expect(within(card()).getByTestId('approval-holder-name').textContent).toBe('Ngozi Eze')
+    cleanup()
+
+    // NARROWED, not moved: the trail showed a holder for EVERY step with a role key; this
+    // card shows one only while the run is open, because pendingApprovalStep gates on
+    // run.state. approvalStateCard_aClosedRunNamesNobody pins the closed-run copy itself.
+    const closedRun = runFixture({ state: 'approved', closed_at: '2026-08-02T09:00:00Z', steps })
+    // Fixture guard: the step really is still pending on the closed run, so the absence
+    // below is the run state and not a fixture that lost its step.
+    expect(closedRun.steps.filter((st) => st.kind === 'approval' && st.state === 'pending')).toHaveLength(1)
+
+    render(<ApprovalStateCard run={readyRun(closedRun)} />)
+
+    const closed = card()
+    expect(within(closed).queryAllByTestId('approval-holder')).toHaveLength(0)
+    expect(within(closed).queryAllByTestId('approval-holder-name')).toHaveLength(0)
+    expect(leafTexts(closed)).not.toContain('Ngozi Eze')
+
+    // The routing itself. Without this half the reroute is a comment: the day someone adds
+    // a holder key to an approval payload, this row reds and the ledger is revisited.
+    for (const [event, path] of Object.entries(GO_APPROVAL_EVENTS)) {
+      const src = readFileSync(join(__dirname, '../../../..', path), 'utf8')
+      expect(src, `lost anchor on ${path} for ${event}`).toContain(`audit.Record(ctx, tx, actor, "${event}"`)
+      const keys = goAuditPayloadKeys(src, event)
+      // Floor: a broken extractor returns [], which would satisfy the ban vacuously.
+      expect(keys.length, `${event}: the extractor returned nothing`).toBeGreaterThan(0)
+      expect(keys.filter((k) => /holder/i.test(k)), `${event} must carry no holder key`).toEqual([])
+    }
   })
 
   it('approvalStateCard_ignoresANonApprovalPendingStep', () => {

@@ -441,7 +441,10 @@ describe('activityToggleCopy', () => {
     // AUDIT-09 mounts this module under the invoice detail page. An import from the Audit
     // screen would drag the whole screen -- and its fetch -- along with it.
     const src = readFileSync(fileURLToPath(new URL('./invoiceActivity.ts', import.meta.url)), 'utf8')
-    const imports = src.match(/^import .*$/gm) ?? []
+    // Multi-line, not /^import .*$/ (F-AG): a braced import list spans lines and a
+    // line-bounded regex captures only `import {`, so the ban half below would pass on
+    // any file at all. InvoiceActivityCard.test.tsx:229 carries the same form.
+    const imports = src.match(/^import\b[\s\S]*?from '[^']*'/gm) ?? []
     // Control needle: prove the scan reads a real import list before trusting its silence.
     expect(imports.length, 'the import scan found nothing -- the regex, not the file, is wrong').toBeGreaterThanOrEqual(2)
     const joined = imports.join('\n')

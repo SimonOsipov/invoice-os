@@ -766,11 +766,7 @@ describe('stripNodes: totality over malformed input', () => {
         for (const n of nodes) {
           expect(typeof n.caption, `${where} ${n.key}`).toBe('string')
           if (n.actor !== null) expect(n.at, `${where} ${n.key} pairing`).not.toBeNull()
-          // Caption non-emptiness is asserted for every node EXCEPT node 3 under an empty
-          // run state -- see S-33, which pins that hole rather than papering over it.
-          if (!(n.key === 'approved' && run?.state === '')) {
-            expect(n.caption.length, `${where} ${n.key}`).toBeGreaterThan(0)
-          }
+          expect(n.caption.length, `${where} ${n.key}`).toBeGreaterThan(0)
         }
         cases += 1
       }
@@ -808,19 +804,20 @@ describe('stripNodes: totality over malformed input', () => {
   })
 })
 
-describe('stripNodes: known gaps, pinned', () => {
-  it('S-33: an EMPTY run state leaves node 3 with an empty caption -- an unowned gap', () => {
-    // KNOWN GAP, not a sanctioned behaviour. approvalRunStateView('') returns its argument
-    // verbatim (approvals.ts:411), so the default branch captions the node with ''. Every
-    // other input in this file yields a non-empty caption; the strip would render a blank
-    // cell here. Unreachable through the run_state CHECK, but so is 'weird' -- and the
-    // default branch exists (arch §0.1) precisely because the wire widens state to `string`.
-    // Fixing it is an implementation change with no owner as of this pass.
+describe('stripNodes: the default branch captions a blank run state', () => {
+  it('S-33: an EMPTY run state falls back to the generic current caption, never a blank cell', () => {
+    // approvalRunStateView('') returns its argument verbatim (approvals.ts:411), so the
+    // default branch would otherwise caption the node with '' and the strip would draw a
+    // blank cell (StatusStrip.test.tsx 'no node ever renders a visually empty caption').
+    // Unreachable through the run_state CHECK, but so is 'weird' -- and the default branch
+    // exists because the wire widens state to `string`.
     const node = strip(HISTORY_TO_QUEUED, mkRun(''), 'validated')[2]
     expect(node.state).toBe('current')
-    expect(node.caption).toBe('')
-    // Control: a non-empty unknown state DOES caption, so the assertion above is about the
-    // empty string specifically, not about the default branch being captionless.
+    expect(node.caption).toBe('Waiting')
+    // Whitespace is as invisible as the empty string, so it takes the same fallback.
+    expect(strip(HISTORY_TO_QUEUED, mkRun('   '), 'validated')[2].caption).toBe('Waiting')
+    // Control: a non-empty unknown state is still echoed verbatim, so the fallback above is
+    // about a blank label specifically, not about the default branch losing its state.
     expect(strip(HISTORY_TO_QUEUED, mkRun('weird'), 'validated')[2].caption).toBe('weird')
   })
 })
@@ -842,7 +839,7 @@ describe('stripNodes: the scope fence (AC-7)', () => {
     return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
   }
 
-  it('S-34: invoiceStrip has no barrel and no importer outside StatusStrip and its own tests', () => {
+  it('S-34: invoiceStrip has no barrel and no importer outside the strip and its mount', () => {
     expect(existsSync(join(SRC_DIR, 'lib', 'index.ts'))).toBe(false)
 
     const files = walk(SRC_DIR)
@@ -856,7 +853,9 @@ describe('stripNodes: the scope fence (AC-7)', () => {
       .sort()
 
     expect(importers).toContain('invoiceStrip.test.ts') // vacuity floor: the needle matches
-    const ALLOWED = ['StatusStrip.test.tsx', 'StatusStrip.tsx', 'invoiceStrip.test.ts']
+    // InvoiceDetail.tsx is the ONE mount: it calls stripNodes and hands the result to
+    // StatusStrip, which is a pure renderer and imports the types only.
+    const ALLOWED = ['InvoiceDetail.tsx', 'StatusStrip.test.tsx', 'StatusStrip.tsx', 'invoiceStrip.test.ts']
     expect(importers.filter((f) => !ALLOWED.includes(f))).toEqual([])
   })
 })

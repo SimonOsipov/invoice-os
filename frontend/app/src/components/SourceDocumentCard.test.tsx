@@ -146,14 +146,15 @@ afterEach(() => {
 
 describe('SourceDocumentCard on the invoice detail', () => {
   // The design says "directly above Audit trail"; no card by that name exists here, and
-  // import-wizard.spec.ts:557 asserts that string has zero matches on this screen.
-  it('the card precedes status-history in DOM order', async () => {
+  // import-wizard.spec.ts:576 asserts that string has zero matches on this screen.
+  it('the card sits in the rail below the state strip, and no card is titled "Audit trail"', async () => {
     mockFetch(withDocument())
     render(<InvoiceDetail ctx={detailCtx()} />)
 
     const card = await screen.findByTestId('source-document-card')
-    const history = screen.getByTestId('status-history')
-    expect(card.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const strip = await screen.findByTestId('status-strip')
+    expect(strip.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByTestId('status-history')).toBeNull()
     expect(screen.queryByText('Audit trail')).toBeNull()
   })
 

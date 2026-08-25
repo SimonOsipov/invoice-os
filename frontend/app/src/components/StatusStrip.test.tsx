@@ -409,10 +409,10 @@ describe('StatusStrip: attribution', () => {
   })
 
   it('no node ever renders a visually empty caption', () => {
-    // RED BY DESIGN until the executor closes arch §12 C-6: an empty run.state captions
-    // node 3 with '' and the strip draws a blank cell. The fix is one line in
-    // invoiceStrip.ts (authorised by C-6) plus an S-33 update -- not a change here.
-    expect(EMPTY_RUN_STATE[2].caption, 'fixture guard: this is the C-6 hole').toBe('')
+    // Was RED against the arch §12 C-6 hole: an empty run.state captioned node 3 with ''
+    // and the strip drew a blank cell. Closed in invoiceStrip.ts's default branch, pinned
+    // there by S-33; the guard below keeps this fixture on that branch.
+    expect(EMPTY_RUN_STATE[2].caption, 'fixture guard: the C-6 fallback, not a blank cell').toBe('Waiting')
     for (const [name, nodes] of SCENARIOS) {
       cleanup()
       for (const actor of actorsOf(renderStrip(nodes))) {

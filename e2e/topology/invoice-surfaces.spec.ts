@@ -37,7 +37,7 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper } from './consoleGate'
-import { assertFillsColumn, gaps, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
@@ -111,6 +111,29 @@ async function goToInvoices(page: Page): Promise<void> {
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
   await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
+}
+
+// The state strip (StatusStrip.tsx) replaced the status-history timeline: every scenario
+// below asserts "node `queued` is done", never "history has N rows". `data-key` is stable,
+// so no index arithmetic. The strip unmounts for one round trip whenever the page refetches
+// the approval run (InvoiceDetail.tsx's loading gate), which Playwright's retrying
+// assertions ride out -- but an absence assertion must always follow a positive control on
+// the same locator, or it passes on the unmounted strip.
+type StripKey = 'draft' | 'validated' | 'approved' | 'queued' | 'accepted'
+
+function stripNode(page: Page, key: StripKey) {
+  return page.getByTestId('status-strip').locator(`[data-key="${key}"]`)
+}
+
+function stripCaption(page: Page, key: StripKey) {
+  return stripNode(page, key).getByTestId('strip-actor')
+}
+
+async function expectStripStates(page: Page, want: Partial<Record<StripKey, string>>): Promise<void> {
+  await expect(page.getByTestId('strip-node')).toHaveCount(5)
+  for (const [key, state] of Object.entries(want)) {
+    await expect(stripNode(page, key as StripKey), `node ${key}`).toHaveAttribute('data-state', state)
+  }
 }
 
 // selectEntity(): [dashboard-scope-per-client] (persona-handoff-fix step 2) made
@@ -429,11 +452,11 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
 
-  // 1. Not yet validated -- one genesis status-history row (from_status=null,
-  //    the INSERT Store.Create makes at creation time, store.go).
+  // 1. Not yet validated -- the Draft node is `current` and nothing downstream is reached.
   await expect(page.getByTestId('not-validated')).toBeVisible()
-  await expect(page.getByTestId('status-history-row')).toHaveCount(1)
-  await expect(page.getByTestId('status-history-row').first()).toContainText('Created · draft')
+  await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached' })
+  // A `current` node never renders an attribution, whatever the genesis row holds.
+  await expect(stripCaption(page, 'draft')).toHaveText('Waiting')
 
   // 2. First Re-validate: the bad fixture fires exactly BAD_INVOICE_KEYS
   //    (fixtures.ts) -- a blocking violation, so the invoice stays draft (no
@@ -507,7 +530,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   expect(messageBox.width, 'Message must not be crushed at the rail width').toBeGreaterThanOrEqual(160)
 
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
-  await expect(page.getByTestId('status-history-row')).toHaveCount(1)
+  await expectStripStates(page, { draft: 'current', validated: 'unreached' })
 
   // 3. The fix: edit VAT AND -- the priority regression QA flagged -- edit
   //    issue_date with a plain YYYY-MM-DD value, the form's own placeholder
@@ -548,11 +571,10 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // passes VACUOUSLY (not-found), so it never actually proved anything; toHaveCount(0) does.
   await expect(form, 'a successful save unmounts the editor').toHaveCount(0)
 
-  // 4. handleSaved now refreshes the status-history timeline IN PLACE
-  //    (history.run() alongside detail.run(), InvoiceDetail.tsx) -- no
-  //    navigation is needed to observe what the server recorded. Editing a
-  //    DRAFT invoice never demotes it, so the timeline stays at 1 row.
-  await expect(page.getByTestId('status-history-row')).toHaveCount(1)
+  // 4. handleSaved still calls history.run() alongside detail.run()
+  //    (InvoiceDetail.tsx) -- no navigation is needed to observe what the server
+  //    recorded. Editing a DRAFT invoice never promotes it, so the strip does not move.
+  await expectStripStates(page, { draft: 'current', validated: 'unreached' })
 
   // 5. Second Re-validate: now clean -- promotes draft -> validated (a new
   //    history row) and the violations panel flips to the clean-pass message.
@@ -565,24 +587,23 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(violationsTable).toContainText(`rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expect(page.getByTestId('status-history-row')).toHaveCount(2)
-  await expect(page.getByTestId('status-history-row').last()).toContainText('draft → validated')
+  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expect(stripCaption(page, 'validated')).toHaveText('Waiting')
 
-  // AUDIT-02-07 (AC-1/AC-4): both rows carry the SAME subject -- createInvoice's
-  // login(PERSONAS.A) and this page's firm persona are both c0000000-...-0001
+  // AUDIT-02-07 (AC-1/AC-4): the genesis row's subject is createInvoice's
+  // login(PERSONAS.A), the same c0000000-...-0001 as this page's firm persona
   // (targets.ts:27, frontend/app/src/auth.ts:44), whom db/seed.dev.sql:41 names. Count
   // first: an empty locator satisfies every assertion after it.
-  const validationActors = page.getByTestId('status-history-actor')
-  await expect(validationActors).toHaveCount(2)
-  // EXACT, never toContainText: the APP_PERSONAS fall-through renders 'Chinedu Okafor ·
-  // Okafor & Partners' (lib/actor.ts), which a substring match accepts. This is what proves
-  // on the deployed stack that the server's resolved pair wins, across BOTH writers
-  // (Store.Create's genesis row and transitionTx's promotion).
-  await expect(validationActors.nth(0)).toHaveText('Chinedu Okafor')
-  await expect(validationActors.nth(1)).toHaveText('Chinedu Okafor')
-  // Absences, after the positive control so neither can pass on an unrendered card.
-  await expect(page.getByTestId('status-history')).not.toContainText('c0000000-0000-0000-0000-000000000001')
-  await expect(validationActors.nth(0)).not.toHaveClass(/mono/)
+  await expect(page.getByTestId('strip-actor')).toHaveCount(5)
+  // Only the Draft node carries an attribution here -- the `validated` node is `current`.
+  // ANCHORED, never toContainText: the APP_PERSONAS fall-through renders 'Chinedu Okafor ·
+  // Okafor & Partners' (lib/actor.ts), which a substring match accepts, and the strip
+  // first-names a resolved person (invoiceStrip.ts display()). This is what proves on the
+  // deployed stack that the server's resolved pair wins.
+  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
+  // Absences, after the positive control so neither can pass on an unmounted strip.
+  await expect(page.getByTestId('status-strip')).not.toContainText('c0000000-0000-0000-0000-000000000001')
+  await expect(stripCaption(page, 'draft')).not.toHaveClass(/mono/)
 
   // 6. INVED-01-07/08: the OLD 409-on-Re-validate dead end is gone. On an untouched
   //    VALIDATED invoice, Re-validate is DISABLED with a visible reason
@@ -613,7 +634,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await revalidate.click({ force: true })
   await expect(noValidate).rejects.toThrow()
   expect(validatePosts, 'a disabled Re-validate must issue no request').toHaveLength(2)
-  await expect(page.getByTestId('status-history-row')).toHaveCount(2)
+  await expectStripStates(page, { draft: 'done', validated: 'current' })
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -758,15 +779,14 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await expect(page.getByTestId('stale-verdict')).toBeVisible()
   await expect(form, 'a successful save unmounts the editor').toHaveCount(0)
 
-  // 6. Re-validate to green. handleRevalidate also refreshes the status-history timeline
-  // in place (history.run(), alongside detail.run()) -- asserting its settled row count
-  // (1 genesis row from import + 1 draft->validated promotion row from this revalidate)
-  // proves BOTH in-flight fetches this click kicked off have resolved before the next
-  // step navigates away and unmounts this view.
+  // 6. Re-validate to green. handleRevalidate refreshes history and the approval run in
+  // place (alongside detail.run()) -- asserting the strip has settled on the promotion
+  // proves every in-flight fetch this click kicked off has resolved before the next step
+  // navigates away and unmounts this view.
   await page.getByTestId('revalidate').click()
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expect(page.getByTestId('status-history-row')).toHaveCount(2)
+  await expectStripStates(page, { draft: 'done', validated: 'current' })
 
   // 7a. Dashboard rollup ready state (Gap 1). [dashboard-scope-per-client] means this
   // page now shows the ACTIVE entity's OWN scoped total, not the tenant-wide count that
@@ -892,6 +912,15 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
 
   const errors = collectErrors(page)
 
+  // Every GET .../history the browser fires. The strip cannot express "a 9th row landed"
+  // -- node `accepted`'s caption is identical before and after (both actored `system`, and
+  // only the minute differs) -- so M5-09-07's live-refresh oracle becomes "the tick issued
+  // a refetch with no user action in between". A strictly better oracle than the count.
+  const historyGets: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/history')) historyGets.push(r.url())
+  })
+
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M509 reject ${Date.now()}`, tin: freshTin() })
 
@@ -973,28 +1002,30 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
 
   // Non-vacuity proof (Stage-1 correction C1), in this EXACT order, with no navigation
   // after this row click: the pending trigger holds `submitted` for >=10s, so pinning the
-  // detail on that in-flight state, capturing the baseline history count, THEN watching
-  // the badge flip to ACCEPTED and a 9th row appear is what proves the tick actually
-  // drove both -- not a count read at an arbitrary, possibly-already-terminal moment.
+  // detail on that in-flight state, capturing the baseline refetch count, THEN watching the
+  // badge flip to ACCEPTED and another refetch fire is what proves the tick actually drove
+  // both -- not a count read at an arbitrary, possibly-already-terminal moment.
   await openInvoiceRow(page, invoiceNumber)
   const badge = page.getByTestId('invoice-status-badge')
-  const historyRows = page.getByTestId('status-history-row')
 
-  // 1: Created·draft, 2: draft->validated, 3: validated->queued, 4: queued->rejected,
-  // 5: rejected->draft (edit), 6: draft->validated (revalidate), 7: validated->queued
-  // (resubmit), 8: queued->submitted -- deterministic given this exact fixture lifecycle.
   await expect(badge).toContainText('SUBMITTED')
-  await expect(historyRows).toHaveCount(8)
+  // Node 4 names the actual status: queued and submitted share the node (invoiceStrip.ts).
+  await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'current', accepted: 'unreached' })
+  await expect(stripCaption(page, 'queued')).toHaveText('Submitted')
+  const historyGetsAtSubmitted = historyGets.length
+  expect(historyGetsAtSubmitted, 'the recorder matched the mount fetch, so the rise below is not vacuous').toBeGreaterThan(0)
 
   // Stage-1 correction C4: the ONLY assertion in this file that needs an explicit
   // timeout above the config's 15s default -- pending convergence (adapter latency + two
   // poll hops + River's own 5s scheduler interval per hop) can run ~11-22s worst case.
   // No `page.waitForTimeout` anywhere in this test -- only retrying assertions.
   await expect(badge).toContainText('ACCEPTED', { timeout: 45_000 })
-  // 9: submitted->accepted -- can ONLY have arrived via the tick's own
-  // shouldRefreshHistory -> history.run(), never a user action (none happened between the
-  // two badge assertions above) -- this IS M5-09-07's live-refresh oracle.
-  await expect(historyRows).toHaveCount(9)
+  // The refetch can ONLY have come from the tick's own shouldRefreshHistory ->
+  // history.run(), never a user action (none happened between the two badge assertions
+  // above) -- this IS M5-09-07's live-refresh oracle. The caption twin, on a fixture whose
+  // node-5 attribution actually changes, is the ACCEPTED leg of the detail-submit test.
+  await expect.poll(() => historyGets.length, { timeout: 15_000 }).toBeGreaterThan(historyGetsAtSubmitted)
+  await expectStripStates(page, { queued: 'done', accepted: 'done' })
 
   // AC-6, on this SAME mounted view -- no re-navigation needed (Stage-1 correction C1):
   // the fiscal record renders once the overlay flips the invoice to accepted.
@@ -1047,12 +1078,13 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
 
   await openInvoiceRow(page, invoiceNumber)
 
-  // The rejection card carries the mock's real reason, and history sits at 4 rows: 1
-  // genesis, 2 draft->validated, 3 validated->queued, 4 queued->rejected.
+  // The rejection card carries the mock's real reason, and the strip has walked the whole
+  // spine: draft, validated and queued all done, node 5 relabelled and failed.
   const rejectionCard = page.getByTestId('rejection-reasons')
   await expect(rejectionCard).toBeVisible()
   await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
-  await expect(page.getByTestId('status-history-row')).toHaveCount(4)
+  await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'done', accepted: 'failed' })
+  await expect(stripNode(page, 'accepted')).toContainText('Rejected by FIRS')
 
   // Edit -> change ONLY a line's description. diffEditInput therefore emits {} for the
   // header and diffLineItems emits the one changed line, so only `line_items` reaches the
@@ -1069,8 +1101,12 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expect(rejectionCard).toBeVisible()
   await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
-  await expect(page.getByTestId('status-history-row')).toHaveCount(5)
-  await expect(page.getByTestId('status-history-row').last()).toContainText('rejected → draft')
+  // The loop correction: the demotion walks the cursor BACK, so node 5 loses its failure
+  // and its relabel, and everything past Draft is unreached again.
+  await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached', accepted: 'unreached' })
+  await expect(stripNode(page, 'accepted')).toContainText('Accepted by FIRS')
+  await expect(stripCaption(page, 'draft')).toHaveText('Waiting')
+  await expect(stripCaption(page, 'validated')).toHaveText('Not reached')
 
   // Re-validate is enabled again ([revalidate-visibility]/AC #2) -- the fixture's numbers
   // were always clean (only the description text changed), so this re-validates green.
@@ -1079,8 +1115,10 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await revalidate.click()
   await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expect(page.getByTestId('status-history-row')).toHaveCount(6)
-  await expect(page.getByTestId('status-history-row').last()).toContainText('draft → validated')
+  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  // The SHAPE, never a value: this proves node 1 took its at/actor from the LATEST
+  // `-> draft` row (the demotion), not from the genesis row.
+  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1461,30 +1499,31 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   await expect(page.getByTestId('invoices-list')).toHaveCount(0)
 
   const badge = page.getByTestId('invoice-status-badge')
-  const historyRows = page.getByTestId('status-history-row')
 
-  // 1: Created·draft, 2: draft->validated, 3: validated->queued, 4: queued->submitted --
-  // deterministic given this exact fixture lifecycle.
   await expect(badge).toContainText('SUBMITTED')
-  await expect(historyRows).toHaveCount(4)
+  await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'current', accepted: 'unreached' })
+  await expect(stripCaption(page, 'queued')).toHaveText('Submitted')
+  // The baseline for the live-refresh oracle below: node 5 has no row to read yet.
+  await expect(stripCaption(page, 'accepted')).toHaveText('Not reached')
 
   // Pending-convergence precedent (this file's reject/resubmit test): the ONLY assertion
   // needing a timeout above the config's 15s default.
   await expect(badge).toContainText('ACCEPTED', { timeout: 45_000 })
   await expect(page.getByTestId('invoices-list')).toHaveCount(0)
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  // 5: submitted->accepted -- can ONLY have arrived via the poll tick's own
-  // shouldRefreshHistory -> history.run(), never a user action (none happened between the
-  // two badge assertions above).
-  await expect(historyRows).toHaveCount(5)
+  await expectStripStates(page, { queued: 'done', accepted: 'done' })
 
   // AUDIT-02-07 (AC-3): the worker writes actor 'system' itself (internal/invoice/actor.go
   // SystemActor), so this run's OWN submitted->accepted row is the oracle -- no seeded row,
-  // no extra navigation. toHaveText is case-sensitive, so the raw rung's lowercase 'system'
-  // cannot pass it; the class check is the AC's "in mono" half, which the text alone cannot
-  // see (lib/actor.ts narrows an unknown actor_kind to raw, keeping the text and adding mono).
-  const systemActor = page.getByTestId('status-history-actor').last()
-  await expect(systemActor).toHaveText('System')
+  // no extra navigation. Node 5's caption moving off 'Not reached' onto a timestamped
+  // attribution can ONLY have come from the poll tick's own shouldRefreshHistory ->
+  // history.run() (no user action happened between the two badge assertions), so this one
+  // assertion carries M5-09-07's live refresh AND proves the mapper picked the right row.
+  // Anchored and case-sensitive, so the raw rung's lowercase 'system' cannot pass it; the
+  // class check is the AC's "in mono" half, which the text alone cannot see (lib/actor.ts
+  // narrows an unknown actor_kind to raw, keeping the text and adding mono).
+  const systemActor = stripCaption(page, 'accepted')
+  await expect(systemActor).toHaveText(/^\d\d:\d\d · System$/)
   await expect(systemActor).not.toHaveClass(/mono/)
 
   await assertFiscalRecord(page, invoiceNumber)
@@ -2432,19 +2471,22 @@ test('detail surface: the armed decision block and trail card, plus their layout
     if (entryViewport) await page.setViewportSize(entryViewport)
   }
 
-  // AC-4: the trail card matches its rail sibling's (status-history's) width -- both are
-  // unstyled-width children of one flexDirection:'column' rail (InvoiceDetail.tsx:1083).
-  // 1px, not assertFillsColumn's 24px default: that slack is sized for a scrollbar/list-
-  // vs-bar gutter and would pass a card overflowing its own 16px padding.
-  const trail = page.getByTestId('approval-trail')
-  const statusHistory = page.getByTestId('status-history')
-  const trailFit = await assertFillsColumn(page, trail, statusHistory, 'approval-trail vs status-history', 1)
+  // AC-4: the trail card fills the rail it sits in -- an unstyled-width child of the
+  // flexDirection:'column' second column of `.pf-detail-grid`. Measured against the rail
+  // itself (the testid-less-ancestor idiom this file already uses above), not against a
+  // sibling card: source-document-card's testid is its PADDED body, and that 4px mismatch
+  // would push the slack up and weaken the bound. 1px, not assertFillsColumn's 24px
+  // default: that slack is sized for a scrollbar/list-vs-bar gutter and would pass a card
+  // overflowing its own 16px padding.
+  const trailCard = page.getByTestId('approval-trail-card')
+  const rail = trailCard.locator('xpath=..')
+  const trailFit = await assertFillsColumn(page, trailCard, rail, 'approval-trail-card vs rail', 1)
   for (const entry of trailFit) {
     // assertFillsColumn's own bound only catches the trail card being too NARROW
     // (positive gaps); overflow yields NEGATIVE gaps that pass max(left,right)<=slack, so
     // this second bound is what catches the trail card being too WIDE.
-    expect(entry.left, `trail card must not overflow status-history's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
-    expect(entry.right, `trail card must not overflow status-history's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+    expect(entry.left, `trail card must not overflow the rail's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+    expect(entry.right, `trail card must not overflow the rail's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
   }
 
   // General console hygiene only now -- this invoice is armed, so its approval GET
@@ -2461,11 +2503,10 @@ test('detail surface: the armed decision block and trail card, plus their layout
 //    FIRM tenant, so the RLS-scoped memberships query (internal/actor/resolve.go:75-78)
 //    finds no row and answers kind 'raw'. Any client-side fall-through to that table
 //    prints "Ngozi Balogun · Honeywell Group" to an Okafor viewer.
-// 2. CLIPPING. The rail is `1fr minmax(220px, 25%)` above 1180 (platform.css:233) and the
-//    card sets overflow:hidden (InvoiceDetail.tsx:1315), so an unbreakable actor is
-//    clipped SILENTLY -- no page-level overflow, no console line. A hyphenated uuid breaks
-//    at its hyphens under plain `overflow-wrap: normal`, so only a token with no hyphen at
-//    all can prove the `anywhere` on that span is load-bearing.
+// 2. CLIPPING. The strip's captions are `white-space: nowrap` and the strip itself scrolls
+//    (StatusStrip.tsx), so a long actor must push the STRIP over its own client width and
+//    still render whole -- never get squeezed inside its caption box. A hyphenated uuid can
+//    break at its hyphens, so only a token with no hyphen at all applies real pressure.
 //
 // The two rows spell the SAME uuid two ways, which is what makes both facts testable from
 // one page. The verifier requires uuid.Parse to accept the JWT subject
@@ -2483,8 +2524,8 @@ test('detail surface: the armed decision block and trail card, plus their layout
 // non-uuid subject at the middleware, so that token 401'd on first use. Nor is that email
 // reachable as an actor by any other route -- actor.Name only falls to its email rung
 // when display_name is null, and all 13 seeded memberships fill it.
-// Needs `data-testid="status-history-actor"` on the actor span (InvoiceDetail.tsx:1335).
-test('detail surface: a history actor the server cannot name renders verbatim and stays inside its rail', async ({ page }) => {
+// Needs `data-testid="strip-actor"` on every caption span (StatusStrip.tsx).
+test('detail surface: a history actor the server cannot name renders verbatim and is never clipped', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2495,73 +2536,272 @@ test('detail surface: a history actor the server cannot name renders verbatim an
   const validatorToken = await login({ ...PERSONAS.A, subject: unbreakableActor })
   const entity = await createEntity(creatorToken, { name: `AUDIT-02-04 actor ${Date.now()}`, tin: freshTin() })
   const invoiceNumber = `INV-AUDIT0204-${Date.now()}`
-  const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  // Driven all the way to `rejected` (the loop test's recipe verbatim: MOCK_TIN_REJECT
+  // converges synchronously). At `validated` the strip's node 2 is `current` and renders NO
+  // attribution, so the 32-char clipping oracle -- the only subject with no hyphen, and
+  // therefore the only one that can prove the bounds below are load-bearing -- would never
+  // reach the screen and both its assertions would pass vacuously.
+  const invoice = await createInvoice(creatorToken, {
+    entity_id: entity.id,
+    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
+  })
   await validateInvoice(validatorToken, invoice.id)
+  await approveUntilClosed(invoice.id, await firmApproverTokens())
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+  await expect(row.getByTestId('invoice-status-badge')).toContainText('REJECTED')
+
   await openInvoiceRow(page, invoiceNumber)
 
-  // Positive control before either absence assertion: both rows render, in changed_at
-  // order, each carrying its stored actor byte for byte and flagged mono. Byte-for-byte
-  // matters twice over here -- it is also what stops the sweep below passing vacuously on
-  // a short name, which is what a client that re-normalised row 1 into APP_PERSONAS would
-  // render.
-  const actors = page.getByTestId('status-history-actor')
-  await expect(actors).toHaveCount(2)
-  await expect(actors.nth(0)).toHaveText(otherTenantAdmin)
-  await expect(actors.nth(1)).toHaveText(unbreakableActor)
-  await expect(actors.nth(0)).toHaveClass(/mono/)
-  await expect(actors.nth(1)).toHaveClass(/mono/)
+  // Positive control before either absence assertion: both subjects render on their own
+  // node, byte for byte and flagged mono. Byte-for-byte matters twice over here -- it is
+  // also what stops the sweep below passing vacuously on a short name, which is what a
+  // client that re-normalised the bare-hex subject into APP_PERSONAS would render.
+  await expectStripStates(page, { draft: 'done', validated: 'done', accepted: 'failed' })
+  const creatorCell = stripCaption(page, 'draft')
+  const validatorCell = stripCaption(page, 'validated')
+  await expect(creatorCell).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${otherTenantAdmin}$`))
+  await expect(validatorCell).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${unbreakableActor}$`))
+  await expect(creatorCell).toHaveClass(/mono/)
+  await expect(validatorCell).toHaveClass(/mono/)
 
-  const card = page.getByTestId('status-history')
-  await expect(card).not.toContainText('Ngozi Balogun')
-  await expect(card).not.toContainText('Honeywell Group')
+  const strip = page.getByTestId('status-strip')
+  await expect(strip).not.toContainText('Ngozi Balogun')
+  await expect(strip).not.toContainText('Honeywell Group')
 
   // Containment, never a width: a dimension bound passes on the very clipping it should
-  // catch (BUG-03-05, e2e/topology/layout.ts:4-8). getBoundingClientRect reports LAYOUT
-  // geometry, so the card's overflow:hidden hides the defect from the eye but not from
-  // gaps(). 1px, matching the trail-card check at :2416-2423, not assertFillsColumn's
-  // 24px: this cell is legitimately narrower than its card, so only overflow is a defect.
+  // catch (BUG-03-05, e2e/topology/layout.ts:4-8). Two relationships, both scroll-safe.
+  //
+  // gaps() is taken against each caption's OWN node block, not against the strip: the strip
+  // scrolls, so its far children legitimately sit outside its client box and a gaps() bound
+  // there would fail on correct layout. The node block is minWidth:'max-content', so it
+  // must contain its caption whole -- 1px, matching the trail-card check above.
   //
   // 1180 is swept after WIDE_WIDTHS (widest first, layout.ts:22) because it is the rail's
-  // 220px floor -- the narrowest the rail is allowed to be, and so the rung where 32 mono
+  // 220px floor -- the narrowest the page is allowed to be, and so the rung where 32 mono
   // characters have the least room. WIDE_WIDTHS alone would leave this oracle resting on
   // 1280 by a couple of characters.
   const entryViewport = page.viewportSize()
-  // How many line boxes the unbreakable cell occupied, per width. An inline element
-  // reports one rect per line, so >1 is the browser's own proof that the string did not
-  // fit and `overflow-wrap: anywhere` is what kept it in -- the non-vacuity control for
-  // the gaps() bound below, measured rather than computed from a font advance.
-  const wrapped: Array<{ width: number; lines: number }> = []
+  // Whether the STRIP overflowed its own client width, per swept width -- the non-vacuity
+  // control replacing the retired line-box count (the strip cannot wrap). If the strip
+  // never overflows, the no-clipping bound below is proving nothing.
+  const pressure: Array<{ width: number; scrollWidth: number; clientWidth: number }> = []
   try {
     for (const width of [...WIDE_WIDTHS, 1180]) {
       await page.setViewportSize({ width, height: 1080 })
-      const cardBox = await card.boundingBox()
-      expect(cardBox, `the status history card must render at ${width}px`).toBeTruthy()
+      await expect(strip).toBeVisible()
 
-      const boxes = await Promise.all((await actors.all()).map((a) => a.boundingBox()))
-      expect(boxes, `both actor cells must render at ${width}px`).toHaveLength(2)
-      for (const [i, box] of boxes.entries()) {
-        expect(box, `actor cell ${i} must render at ${width}px`).toBeTruthy()
-        const g = gaps(box!, cardBox!)
-        expect(g.left, `actor cell ${i} must not start left of the status history card at ${width}px`).toBeGreaterThanOrEqual(-1)
-        expect(g.right, `actor cell ${i} must not extend right of the status history card at ${width}px`).toBeGreaterThanOrEqual(-1)
+      for (const [name, cell] of [['creator', creatorCell], ['validator', validatorCell]] as const) {
+        const nodeBox = await cell.locator('xpath=../..').boundingBox()
+        const cellBox = await cell.boundingBox()
+        expect(nodeBox && cellBox, `the ${name} caption and its node must render at ${width}px`).toBeTruthy()
+        const g = gaps(cellBox!, nodeBox!)
+        expect(g.left, `${name} caption must not start left of its node at ${width}px`).toBeGreaterThanOrEqual(-1)
+        expect(g.right, `${name} caption must not extend right of its node at ${width}px`).toBeGreaterThanOrEqual(-1)
+        // The clipping oracle proper: a squeezed caption reports more scrollWidth than it
+        // can show, which no box comparison can see.
+        const fit = await cell.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        expect(fit.scrollWidth, `${name} caption must not be cut at ${width}px`).toBeLessThanOrEqual(fit.clientWidth + 1)
       }
-      wrapped.push({ width, lines: await actors.nth(1).evaluate((el) => el.getClientRects().length) })
+      pressure.push({ width, ...(await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))) })
     }
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
   }
 
-  // Red here means the bound above went vacuous, not that the page regressed: the rail
+  // Red here means the bound above went vacuous, not that the page regressed: the page
   // grew, or the actor shrank, until the longest subject the auth verifier admits fits
-  // every swept width uncut. Widen the sweep or lengthen the actor -- do not delete this.
+  // every swept width with room to spare. Widen the sweep or lengthen the actor -- do not
+  // delete this.
   expect(
-    wrapped.filter((w) => w.lines > 1),
-    `the unbreakable actor must overflow its cell at some swept width, or nothing here can catch a lost overflow-wrap:\n${JSON.stringify(wrapped)}`,
+    pressure.filter((w) => w.scrollWidth > w.clientWidth),
+    `the unbreakable actor must push the strip past its client width at some swept width, or nothing here can catch a clipped caption:\n${JSON.stringify(pressure)}`,
   ).not.toHaveLength(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// arch §7 A-D: the four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
+// reads inline style PROPS -- it can prove the component ASKED for flex:none/max-content/nowrap,
+// never that a browser delivered them. These four are the only oracle for the delivered layout.
+//
+// The fixture is driven all the way to `failed` on purpose. Terminal, so nothing polls while a
+// viewport sweep measures; and every one of the five nodes is then attributed, two of them by
+// 32-char bare-hex subjects the RLS-scoped resolver cannot name -- which is what makes the strip
+// genuinely wider than its rail at the narrow end, and §7B's no-clipping bound non-vacuous.
+test.describe.serial("detail surface: the state strip's geometry", () => {
+  // 32 bare hex is one of the four lengths uuid.Parse admits (verify.go), so the mock issuer's
+  // token survives the middleware, and no membership names it -- the caption renders whole.
+  const STRIP_CREATOR = 'd4e5f60718293a4b5c6d7e8f90a1b2c3'
+  const STRIP_VALIDATOR = 'f60718293a4b5c6d7e8f90a1b2c3d4e5'
+
+  let entityName = ''
+  let invoiceNumber = ''
+
+  test.beforeAll(async () => {
+    // The two long subjects only CREATE and VALIDATE, so they land on nodes 1 and 2. The
+    // transitions run on PERSONAS.A: the transmit door is role-gated, and an unmembered
+    // subject has no seat to drive it with.
+    const creatorToken = await login({ ...PERSONAS.A, subject: STRIP_CREATOR })
+    const validatorToken = await login({ ...PERSONAS.A, subject: STRIP_VALIDATOR })
+    const token = await login(PERSONAS.A)
+    entityName = `AUDIT-09 strip ${Date.now()}`
+    const entity = await createEntity(creatorToken, { name: entityName, tin: freshTin() })
+    invoiceNumber = `INV-AUDIT09-STRIP-${Date.now()}`
+    const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    await validateInvoice(validatorToken, invoice.id)
+    // TransmitClearTx gates the queued edge on a closed run, same as the dead-end fixture above.
+    await approveUntilClosed(invoice.id, await firmApproverTokens())
+    await transitionInvoice(token, invoice.id, 'queued')
+    await transitionInvoice(token, invoice.id, 'failed')
+  })
+
+  // setViewportSize resolves before the page has necessarily re-laid out; every measurement
+  // below compares across widths, where a stale read is a confusing red rather than a
+  // silent pass. window.innerWidth is the resize's own completion signal.
+  async function resizeTo(page: Page, width: number) {
+    await page.setViewportSize({ width, height: 1080 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+  }
+
+  async function openStrip(page: Page) {
+    await signInFirm(page)
+    await selectEntity(page, entityName)
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    const strip = page.getByTestId('status-strip')
+    await expect(strip).toBeVisible()
+    await expect(page.getByTestId('strip-node')).toHaveCount(5)
+    return strip
+  }
+
+  test('A: the whole strip is above the fold at every wide width', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const strip = await openStrip(page)
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        await page.evaluate(() => window.scrollTo(0, 0))
+        const box = await strip.boundingBox()
+        expect(box, `the strip must render at ${width}px`).toBeTruthy()
+        // Containment against the viewport, both edges -- never a height or an offset bound.
+        expect(box!.y, `the strip must not start above the fold at ${width}px`).toBeGreaterThanOrEqual(0)
+        expect(box!.y + box!.height, `the strip must end above the fold at ${width}px`).toBeLessThanOrEqual(1080)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('B: no caption is cut, and the strip itself is what overflows', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const strip = await openStrip(page)
+    const captions = page.getByTestId('strip-actor')
+
+    // 1180 after WIDE_WIDTHS (widest first, layout.ts:22): the rail's own floor, the rung
+    // where the two 32-char subjects have the least room.
+    const entryViewport = page.viewportSize()
+    const pressure: Array<{ width: number; scrollWidth: number; clientWidth: number }> = []
+    try {
+      for (const width of [...WIDE_WIDTHS, 1180]) {
+        await resizeTo(page, width)
+        await expect(captions).toHaveCount(5)
+        for (const [i, caption] of (await captions.all()).entries()) {
+          const fit = await caption.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+          expect(fit.scrollWidth, `caption ${i} must not be cut at ${width}px`).toBeLessThanOrEqual(fit.clientWidth + 1)
+        }
+        pressure.push({ width, ...(await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))) })
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // Red here means the bound above went vacuous, not that the page regressed: the page grew,
+    // or the captions shrank, until the strip fits every swept width with room to spare and no
+    // clipping is possible. Widen the sweep or lengthen the actors -- do not delete this.
+    expect(
+      pressure.filter((p) => p.scrollWidth > p.clientWidth),
+      `the strip must overflow its own client width at some swept width, or nothing above can catch a clipped caption:\n${JSON.stringify(pressure)}`,
+    ).not.toHaveLength(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('C: widening the page grows the rail between the nodes, never the nodes', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const strip = await openStrip(page)
+    const nodes = page.getByTestId('strip-node')
+
+    const entryViewport = page.viewportSize()
+    const measured = new Map<number, { container: number; nodes: number[] }>()
+    try {
+      for (const width of [2560, 1280]) {
+        await resizeTo(page, width)
+        const box = await strip.boundingBox()
+        expect(box, `the strip must render at ${width}px`).toBeTruthy()
+        const boxes = await Promise.all((await nodes.all()).map((n) => n.boundingBox()))
+        expect(boxes, `five nodes must render at ${width}px`).toHaveLength(5)
+        for (const [i, b] of boxes.entries()) expect(b, `node ${i} must render at ${width}px`).toBeTruthy()
+        measured.set(width, { container: box!.width, nodes: boxes.map((b) => b!.width) })
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    const wide = measured.get(2560)!
+    const narrow = measured.get(1280)!
+    // Without this the per-node comparison below passes on a strip that never resized at all.
+    expect(
+      wide.container - narrow.container,
+      `the strip must be materially wider at 2560 than at 1280 (${narrow.container} -> ${wide.container})`,
+    ).toBeGreaterThan(400)
+    // The single assertion proving flex:'none' + minWidth:'max-content' on the blocks and
+    // flex:1 on the connectors: 1280px of extra page went entirely into the connectors.
+    for (const [i, w] of wide.nodes.entries()) {
+      expect(
+        Math.abs(w - narrow.nodes[i]),
+        `node ${i} must keep its content width across the sweep (${narrow.nodes[i]} vs ${w})`,
+      ).toBeLessThanOrEqual(1)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D: the strip stays inside the 96px band and never pushes the grid down', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const strip = await openStrip(page)
+    const grid = page.locator('.pf-detail-grid')
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        const [stripBox, gridBox] = await Promise.all([strip.boundingBox(), grid.boundingBox()])
+        expect(stripBox && gridBox, `the strip and the grid must both render at ${width}px`).toBeTruthy()
+        // The one bound D-AC-10 sanctions, fenced by two relationships so it cannot pass on a
+        // strip that grew back into a timeline and shoved the grid down the page.
+        expect(stripBox!.height, `the strip must stay inside the 96px band at ${width}px`).toBeLessThanOrEqual(96)
+        expect(rectsOverlap(stripBox!, gridBox!), `the strip must not overlap the grid at ${width}px: ${JSON.stringify(overlapOf(stripBox!, gridBox!))}`).toBe(false)
+        expect(stripBox!.y + stripBox!.height, `the strip must end before the grid begins at ${width}px`).toBeLessThanOrEqual(gridBox!.y + 1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })

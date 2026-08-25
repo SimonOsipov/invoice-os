@@ -542,10 +542,10 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
 
   // E2E-09 (the F6 regression guard, [detail-target-exclusive]): leave the review
   // screen for Invoices and open one of this batch's invoices -- the live detail must
-  // render THAT invoice's own content. "Audit trail" was the retired mock detail's
-  // panel title; M4-09-05's live detail names the equivalent panel "Status history"
-  // instead, so its absence here is also proof this is the live surface, never the old
-  // mock fallback.
+  // render THAT invoice's own content. The live surface is proven by `invoice-detail`
+  // plus `status-strip`; "Audit trail" (the retired mock detail's panel title, and the
+  // design's name for the same evidence) stays at zero matches because no card here
+  // carries that title.
   //
   // The exit is "Finish · go to invoices" (INVCR-01-09), not the detail view's
   // "← All invoices": with E2E-05 deleted this test never leaves the review shell, so
@@ -572,7 +572,7 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-CLEAN')
   await expect(page.getByRole('heading', { level: 1 })).not.toHaveText('INV-UI-MIX-VIOLATE')
-  await expect(page.getByTestId('status-history')).toBeVisible()
+  await expect(page.getByTestId('status-strip')).toBeVisible()
   await expect(page.getByText('Audit trail', { exact: true })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1207,7 +1207,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 
 // AC-2: Core AC 8's N=1 route, proven on the deployed build for the first time -- a
 // single-invoice CSV lands directly on the real InvoiceDetail, asserted by PRESENCE of
-// its own data-testid and status-history, never by the review table's absence alone
+// its own data-testid and status-strip, never by the review table's absence alone
 // ([E2E-must-not] #4).
 test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, never a one-row review grid', async ({ page }) => {
   const errors = collectErrors(page)
@@ -1245,7 +1245,7 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
 
   await expect(page.getByTestId('invoice-detail'), 'N=1 routes to the real detail').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
-  await expect(page.getByTestId('status-history'), 'the real detail carries a status-history panel').toBeVisible()
+  await expect(page.getByTestId('status-strip'), 'the real detail carries the state strip').toBeVisible()
   await expect(page.getByTestId('review-table')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

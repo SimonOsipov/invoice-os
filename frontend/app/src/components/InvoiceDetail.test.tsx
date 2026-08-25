@@ -523,7 +523,7 @@ describe('InvoiceDetail terminal rail order', () => {
     expect(screen.queryByTestId('rejection-reasons')).toBeNull()
   })
 
-  it('AC-2 extended: the live rejection card also precedes source-document-card and status-history', async () => {
+  it('AC-2 extended: the live rejection card also precedes source-document-card, and the state strip precedes both', async () => {
     mockDetailFetch(
       detailRecord({
         status: 'rejected',
@@ -536,9 +536,9 @@ describe('InvoiceDetail terminal rail order', () => {
 
     const card = await screen.findByTestId('rejection-reasons')
     const doc = await screen.findByTestId('source-document-card')
-    const history = screen.getByTestId('status-history')
+    const strip = await screen.findByTestId('status-strip')
     expect(card.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(card.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(strip.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 
@@ -605,7 +605,7 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     expect(within(table).queryByText('Budget exceeded, escalate to finance')).toBeNull()
   })
 
-  it('the card sits below Compliance and above Status history', async () => {
+  it('the card sits below Compliance, and the state strip precedes the whole grid', async () => {
     mockDetailFetch(detailRecord({ rule_set_version: 3 }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -613,10 +613,10 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     const table = await screen.findByTestId('violations-table')
     const trail = screen.getByTestId('approval-trail')
     const doc = screen.getByTestId('source-document-card')
-    const history = screen.getByTestId('status-history')
+    const strip = await screen.findByTestId('status-strip')
     expect(table.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(trail.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(trail.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(strip.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('the card sits above a historical rejection card', async () => {
@@ -1313,11 +1313,56 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
   })
 })
 
+describe('InvoiceDetail state strip: the approval-loading gate', () => {
+  const RUN: ApprovalRun = {
+    run_id: 'run-1',
+    state: 'approved',
+    opened_at: '2026-08-01T00:00:00Z',
+    closed_at: '2026-08-01T01:00:00Z',
+    closed_by: 'system',
+    steps: [],
+    decisions: [],
+  }
+
+  it('node 3 never flashes "Not required" while the approval fetch is in flight', async () => {
+    let release: (run: ApprovalRun) => void = () => {}
+    const gate = new Promise<ApprovalRun>((resolve) => {
+      release = resolve
+    })
+    mockDetailFetch(detailRecord({ status: 'accepted' }), [], {
+      approvalResponse: { ok: true, status: 200, json: () => gate },
+    })
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    // The invoice itself has rendered, so the absence below is the approval fetch and not
+    // the page still loading.
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.queryByTestId('status-strip'), 'no strip until the run is known').toBeNull()
+
+    release(RUN)
+    const node3 = (await screen.findByTestId('status-strip')).querySelector('[data-key="approved"]')
+    expect(node3?.getAttribute('data-state')).toBe('done')
+    expect(node3?.textContent).not.toContain('Not required')
+  })
+
+  it('control: a settled 404 DOES caption node 3 "Not required" at this cursor', async () => {
+    // Without this the assertion above would pass on a strip that can never say it.
+    mockDetailFetch(detailRecord({ status: 'accepted' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const node3 = (await screen.findByTestId('status-strip')).querySelector('[data-key="approved"]')
+    expect(node3?.getAttribute('data-state')).toBe('not-required')
+    expect(node3?.textContent).toContain('Not required')
+  })
+})
+
 // RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture carries the literal
 // actor 'system', which renders fine today and hides the raw-UUID defect -- these pass a
 // real StatusChange[] through mockDetailFetch instead of relying on the [] default.
-describe('InvoiceDetail status history: actor resolution ([actor-label-shared])', () => {
-  it('AC2: the status history renders a person, not a subject uuid', async () => {
+describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', () => {
+  it('AC2: the strip renders a person, not a subject uuid', async () => {
     const history: StatusChange[] = [
       { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person' },
     ]
@@ -1325,10 +1370,12 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    await screen.findByTestId('status-history-row')
-    // AUDIT-02-04: the wire's actor_name is the whole label now, and it carries no org --
-    // the ' · Okafor & Partners' suffix was APP_PERSONAS' contribution and must be gone.
-    expect(document.body.textContent).toContain(APP_PERSONAS.firm.name)
+    const strip = await screen.findByTestId('status-strip')
+    // The wire's actor_name is the whole label; the strip then reduces a resolved person to
+    // its first token (invoiceStrip.ts display()). The ' · Okafor & Partners' suffix was
+    // APP_PERSONAS' contribution and must be gone.
+    const caption = strip.querySelector('[data-key="draft"] [data-testid="strip-actor"]')
+    expect(caption?.textContent).toMatch(new RegExp(`^\\d\\d:\\d\\d · ${APP_PERSONAS.firm.name.split(' ')[0]}$`))
     expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.org)
     expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.subject)
   })
@@ -1342,10 +1389,10 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    const row = await screen.findByTestId('status-history-row')
-    // Exact match: today the actor and timestamp share one text node ('uuid · date'), so
-    // this element-boundary lookup fails until the actor gets its own span.
-    const actorEl = within(row).getByText(unknown)
+    const strip = await screen.findByTestId('status-strip')
+    // The subject and its timestamp share one caption span, so the whole span is mono.
+    const actorEl = within(strip).getByText(new RegExp(unknown))
+    expect(actorEl.getAttribute('data-testid')).toBe('strip-actor')
     expect(actorEl.className.split(' ')).toContain('mono')
   })
 
@@ -1364,10 +1411,11 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    const row = await screen.findByTestId('status-history-row')
+    const strip = await screen.findByTestId('status-strip')
     // Positive control first: the subject IS on screen, in mono. Without it the two
-    // absence assertions below would pass on a card that rendered nothing at all.
-    const actorEl = within(row).getByText(honeywellAdmin)
+    // absence assertions below would pass on a strip that rendered nothing at all.
+    const actorEl = within(strip).getByText(new RegExp(honeywellAdmin))
+    expect(actorEl.getAttribute('data-testid')).toBe('strip-actor')
     expect(actorEl.className.split(' ')).toContain('mono')
     expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
     expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
@@ -1388,11 +1436,14 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    await screen.findByTestId('status-history-row')
-    const actors = screen.getAllByTestId('status-history-actor')
-    expect(actors, 'the row must render an actor span at all').toHaveLength(1)
-    expect(actors[0].textContent, 'today the cell paints one space -- open finding, not a fix').toBe(' ')
-    expect(actors[0].className.split(' '), 'a person kind is never mono').not.toContain('mono')
+    const strip = await screen.findByTestId('status-strip')
+    const actors = screen.getAllByTestId('strip-actor')
+    expect(actors, 'a caption on every node, whatever its state').toHaveLength(5)
+    const caption = strip.querySelector('[data-key="draft"] [data-testid="strip-actor"]')
+    // display() returns parts[0] of a trimmed split, so the space collapses to '' and the
+    // caption trails its separator -- open finding, characterised not fixed.
+    expect(caption?.textContent, 'the attribution paints a bare separator').toMatch(/^\d\d:\d\d · $/)
+    expect(caption?.className.split(' '), 'a person kind is never mono').not.toContain('mono')
     expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.name)
     expect(document.body.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
@@ -1478,7 +1529,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
 
   // QA adversarial: kept_as_is_by is a raw GoTrue subject on the wire same as h.actor --
   // an unrecognised one must still surface (raw), not go blank or silently drop to a
-  // placeholder, mirroring AC2's guarantee for the status-history line.
+  // placeholder, mirroring AC2's guarantee for the strip's attribution.
   it('an unrecognised kept_as_is_by renders raw on the banner, not blank', async () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
     const kept = detailRecord({
@@ -3286,8 +3337,12 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     // Scoped to the whole card, not the `approval-trail` body: the state pill
     // says "Approved" from the header, and that is the record, not a banner.
     const card = screen.getByTestId('approval-trail-card')
+    const strip = screen.getByTestId('status-strip')
     const outsideTrail = screen.queryAllByText(/approved|success|sent/i).filter((el) => !card.contains(el))
-    expect(outsideTrail).toHaveLength(0)
+    // The strip's node-3 label is the permanent word 'Approved' -- structure, same as the
+    // pill. Pinning the count keeps that carve-out from swallowing a real banner.
+    expect(outsideTrail.filter((el) => !strip.contains(el))).toHaveLength(0)
+    expect(outsideTrail, "only the strip's node-3 label").toHaveLength(1)
   })
 
   // Latent guard: no one-line mutation of today's code can fail this row, because
@@ -3312,7 +3367,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-01T00:00:00Z' }
     const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-02T00:00:00Z' }
     const afterReject = detailRecord({ id: ID, status: 'draft', can_edit: true, can_reject: false })
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }), [row1], {
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }), [row1], {
       detailSequence: [afterReject],
       historySequence: [[row1, row2]],
     })
@@ -3323,7 +3378,13 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByTestId('detail-reject-confirm'))
 
     await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('DRAFT'))
-    expect(screen.getAllByTestId('status-history-row')).toHaveLength(2)
+    // The second row (validated -> draft) is invisible on the strip -- node `draft` is
+    // `current` and captions `Waiting`, node `validated` is `unreached`. So the refetch is
+    // asserted at the fetch layer instead.
+    const historyGets = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/history'))
+    expect(historyGets, 'the demotion refetches history').toHaveLength(2)
+    const draft = screen.getByTestId('status-strip').querySelector('[data-key="draft"]')
+    expect(draft?.getAttribute('data-state')).toBe('current')
   })
 
   it('AC-6: the error leg unsticks the bar', async () => {

@@ -301,17 +301,18 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
     // source scan below is the arity one.
   })
 
-  // AC #6 (D-23/D-24), mechanically: TWO surfaces pass the resolved pair -- the status
-  // history row, and the no-source canvas that Stage 4 added deliberately (it puts the
+  // AC #6 (D-23/D-24), mechanically: TWO surfaces pass the resolved pair -- the state
+  // strip's mapper, and the no-source canvas that Stage 4 added deliberately (it puts the
   // actor mid-prose, so it must have the server's answer). A THIRD acquiring one silently
   // would be a behaviour change on a screen no render test elsewhere would notice.
-  it('the status history row and the no-source canvas pass a resolved pair; the four legacy callers pass one argument', () => {
+  it('the strip mapper and the no-source canvas pass a resolved pair; the five legacy callers pass one argument', () => {
     const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
     const files = {
-      'components/InvoiceDetail.tsx': { one: 2, two: 2, pair: 'h.actor_name' },
+      'components/InvoiceDetail.tsx': { one: 2, two: 0, pair: '' },
       'components/SourceDocumentStates.tsx': { one: 0, two: 1, pair: 'createdByResolved' },
       'components/SourceDocumentRail.tsx': { one: 1, two: 0, pair: '' },
       'lib/approvals.ts': { one: 1, two: 0, pair: '' },
+      'lib/invoiceStrip.ts': { one: 1, two: 1, pair: 'row.actor_name' },
     }
     const here = dirname(fileURLToPath(import.meta.url))
 
@@ -326,14 +327,14 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
       const one = calls.filter((a) => !a.includes(','))
       expect(one.length, `one-argument actorLabel calls in ${rel}`).toBe(expected.one)
       expect(two.length, `two-argument actorLabel calls in ${rel}`).toBe(expected.two)
-      // Every pair-passing call names its own file's wire-derived source: the history row
-      // reads actor_name off the wire, and the canvas threads the prop InvoiceDetail built
+      // Every pair-passing call names its own file's wire-derived source: the mapper reads
+      // actor_name off the history row, and the canvas threads the prop InvoiceDetail built
       // from it rather than rebuilding one locally.
       for (const args of two) expect(args, `resolved pair in ${rel}`).toContain(expected.pair)
       totalOne += one.length
       totalTwo += two.length
     }
-    expect(totalOne, 'the four pairless callers').toBe(4)
-    expect(totalTwo, 'the status history className + text calls, plus the no-source canvas').toBe(3)
+    expect(totalOne, 'the five pairless callers').toBe(5)
+    expect(totalTwo, "the mapper's history call, plus the no-source canvas").toBe(2)
   })
 })

@@ -139,9 +139,13 @@ function approvalNode(run: ApprovalRun | null, cursor: SpineNode): StripNode {
       // closed_at is written COALESCE(closed_at, now()), so on a cancelled run it means
       // the approval time or the cancellation time. Not renderable either way (S-12).
       return { ...bare, state: 'not-required', caption: 'Approval voided' }
-    default:
-      // ApprovalRun.state is `string` on the wire; a DB CHECK is the only enforcement.
-      return { ...bare, state: 'current', caption: approvalRunStateView(run.state).label }
+    default: {
+      // ApprovalRun.state is `string` on the wire; a DB CHECK is the only enforcement. A
+      // blank state has no label to echo, so it takes the generic `current` caption rather
+      // than rendering an empty cell (S-33).
+      const label = approvalRunStateView(run.state).label
+      return { ...bare, state: 'current', caption: label.trim() === '' ? 'Waiting' : label }
+    }
   }
 }
 

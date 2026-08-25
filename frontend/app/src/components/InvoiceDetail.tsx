@@ -1,8 +1,8 @@
 // Invoice detail dispatcher: for an imported invoice, mounts the live detail surface
 // (status pill, line items + totals, compliance/violations panel, fiscal record, APP
 // rejection reasons, the Edit / Re-validate actions bar + inline edit mode, failed dead
-// end, status history) fetched from the gateway; otherwise renders an honest EmptyState
-// ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
+// end, the five-node state strip) fetched from the gateway; otherwise renders an honest
+// EmptyState ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
 // into two independently-gated actions ([actions-visibility], [edit-ux]). The
 // Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
 // the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
@@ -26,6 +26,7 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
+import { stripNodes } from '../lib/invoiceStrip'
 import {
   BUYER_TIN_MISSING,
   canResolveOutside,
@@ -71,6 +72,7 @@ import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ApprovalTrailCard } from './ApprovalTrailCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
+import { StatusStrip } from './StatusStrip'
 import { ViolationsTable } from './ViolationsTable'
 import { XmlModal } from './XmlModal'
 import type { PlatformCtx } from '../types'
@@ -1026,6 +1028,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           )}
         </div>
 
+        {/* Gated on the approval fetch settling: useAsync carries data:null while loading,
+            and a null run captions node 3 `Not required` -- a false compliance claim on an
+            invoice that does need approval (InvoiceDetail.test.tsx 'node 3 never flashes').
+            A poll tick's history.run() still nulls history.data for one round trip
+            (async-state.ts 'start'), so captions blank rather than lie. No last-good ref:
+            deps:[invoiceId] resets useAsync and a ref would paint the previous invoice's
+            timestamps. */}
+        {approval.status !== 'idle' && approval.status !== 'loading' && (
+          <StatusStrip
+            nodes={stripNodes(history.data ?? [], approval.status === 'ready' ? approval.data : null, inv.status)}
+          />
+        )}
+
         <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
           {/* The left-column card has two mutually exclusive bodies ([edit-mode-in-body]).
               The read-only one below is unchanged from before INVED-01-07 -- deliberately,
@@ -1296,61 +1311,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 button, so Edit and Re-validate could never be gated apart. Both now live
                 in the page-header actions bar above, independently gated. */}
 
-            {/* Directly above `Status history`, because that is where the evidence sits.
-                NOT titled "Audit trail" (the design's name for the same card):
-                import-wizard.spec.ts:557 asserts that string has zero matches here. */}
+            {/* Not titled "Audit trail" (the design's name): import-wizard.spec.ts:576 pins
+                zero matches. */}
             <SourceDocumentCard meta={source} onOpen={openPreview} />
-
-            {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge
-                above, not this card): on the one poll tick where shouldRefreshHistory
-                fires, history.run() dispatches useAsync's 'start' action and this card
-                drops to <Loading/> before returning at N+1 rows -- a real, accepted
-                flash. Not overlaid like `inv`/`live` above: this card is the ONE render
-                path that is allowed to show its async state honestly, the flash is
-                confined to a single card (never the badge or invoice body), and
-                M5-09-08's oracle already asserts the post-flip count with an
-                auto-retrying toHaveCount(N+1), not a point-in-time read across the
-                window. Overlaying history too would duplicate the runId/live-clearing
-                machinery above for a card whose own oracle tolerates the dip. */}
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                <span className="card-title">Status history</span>
-              </div>
-              <div data-testid="status-history" style={{ padding: '16px 18px' }}>
-                {history.status === 'loading' && <Loading label="Loading history…" />}
-                {history.status === 'error' && history.error && <ErrorState error={history.error} onRetry={history.run} />}
-                {history.status === 'empty' && <div style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>No history yet.</div>}
-                {history.status === 'ready' &&
-                  (history.data ?? []).map((h, i, arr) => (
-                    <div key={i} data-testid="status-history-row" style={{ display: 'flex', gap: 12 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--fg-3)', marginTop: 4 }} />
-                        <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: i === arr.length - 1 ? '0px' : '20px' }} />
-                      </div>
-                      <div style={{ paddingBottom: 16 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>
-                          {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                          {/* overflowWrap 'anywhere' (not 'break-word'): the server's email rung
-                              (internal/actor/actor.go:39-40) is one unbreakable token, and only
-                              'anywhere' shrinks min-content so the 220px rail cannot clip it
-                              behind the card's overflow:hidden. invoice-surfaces.spec.ts:2448. */}
-                          <span
-                            data-testid="status-history-actor"
-                            className={actorLabel(h.actor, { name: h.actor_name, kind: h.actor_kind }).mono ? 'mono' : undefined}
-                            style={{ overflowWrap: 'anywhere' }}
-                          >
-                            {actorLabel(h.actor, { name: h.actor_name, kind: h.actor_kind }).text}
-                          </span>
-                          {' · '}
-                          <span className="mono">{fmtDateTime(h.changed_at)}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </div>
           </div>
         </div>
 

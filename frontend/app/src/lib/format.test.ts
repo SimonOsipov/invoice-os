@@ -83,8 +83,8 @@ describe('toDateInputValue', () => {
   })
 })
 
-// RED specs (AUDIT-09-01, Mode A) -- fmtTime's stub throws 'not implemented', so every
-// case below fails on that throw, not on a missing export.
+// fmtTime specs. T-1..T-5 were written RED against a throwing stub (Mode A); T-6..T-9 are
+// the Mode B adversarial pass.
 //
 // TIMEZONE: no TZ is pinned in this repo (vitest.config.ts is three lines; no playwright
 // config sets one). Every input here is OFFSET-LESS, which ECMA-262 parses as LOCAL time,
@@ -126,5 +126,92 @@ describe('fmtTime', () => {
       if (original === undefined) delete process.env.TZ
       else process.env.TZ = original
     }
+  })
+})
+
+// --- QA Mode B (task-672): adversarial coverage on top of T-1..T-5. Those are untouched. ---
+
+describe('fmtTime: adversarial', () => {
+  const HHMM = /^\d{2}:\d{2}$/
+
+  it('T-6: a Z-suffixed input is read as UTC and rendered in the local zone', () => {
+    // Under the ambient TZ only the shape and the stability can be asserted -- the hour of
+    // a Z-suffixed input is machine-dependent, which is why the file header forbids pinning
+    // one. Asserting a clock therefore needs an explicit zone, as T-5 does.
+    const rendered = fmtTime('2026-07-01T14:32:07Z')
+    expect(rendered).not.toBe('—')
+    expect(rendered).toMatch(HHMM)
+    expect(fmtTime('2026-07-01T14:32:07Z')).toBe(rendered)
+
+    // Half-hour offsets included: a minute field copied from the UTC input rather than the
+    // local Date reads 20:32 under Kolkata.
+    const original = process.env.TZ
+    try {
+      for (const [tz, clock] of [
+        ['UTC', '14:32'],
+        ['Asia/Kolkata', '20:02'],
+        ['America/Los_Angeles', '07:32'],
+      ] as const) {
+        process.env.TZ = tz
+        expect(fmtTime('2026-07-01T14:32:07Z'), tz).toBe(clock)
+      }
+    } finally {
+      if (original === undefined) delete process.env.TZ
+      else process.env.TZ = original
+    }
+  })
+
+  it('T-7: a leap second is unparseable and takes the em-dash, not a wrapped clock', () => {
+    // ECMA-262 caps seconds at 59, so :60 is Invalid Date -- it must NOT roll over to
+    // '00:00' via a normalised Date.
+    expect(fmtTime('2026-06-30T23:59:60Z')).toBe('—')
+    expect(fmtTime('2026-06-30T23:59:60')).toBe('—')
+    // Control: the last representable instant before it does render, so the guard above is
+    // about the leap second and not about the whole minute being rejected.
+    expect(fmtTime('2026-06-30T23:59:59.999')).toBe('23:59')
+  })
+
+  it('T-8: never throws and never leaks NaN, on any hostile string', () => {
+    const hostile = [
+      '',
+      '   ',
+      'not-a-date',
+      '0000-00-00',
+      '2026-13-45T99:99:99',
+      '275760-09-14',
+      '1e309',
+      'Invalid Date',
+      '2026-07-01T14:32:07+05:30',
+      '2026-07-01',
+      '2026-07-01T14:32:07.123456789Z',
+      'x'.repeat(10_000),
+      '2026-07-01T14:32:07 ',
+      '٢٠٢٦-٠٧-٠١',
+    ]
+    expect(hostile.length).toBeGreaterThan(0)
+    let rendered = 0
+    for (const input of hostile) {
+      let out = ''
+      expect(() => {
+        out = fmtTime(input)
+      }, input).not.toThrow()
+      expect(out === '—' || HHMM.test(out), `${JSON.stringify(input)} -> ${out}`).toBe(true)
+      expect(out, input).not.toContain('NaN')
+      if (out !== '—') rendered += 1
+    }
+    // Anti-vacuity: an implementation returning '—' unconditionally would satisfy every
+    // assertion above. Some of these inputs are valid and must render.
+    expect(rendered).toBeGreaterThan(0)
+  })
+
+  it('T-9: fmtTime and fmtDateTime agree on what is unrenderable', () => {
+    // Both guard `!iso` then isNaN. A divergence means one of them started building a clock
+    // from an input the other rejects.
+    for (const input of [null, undefined, '', '   ', 'not-a-date', '2026-06-30T23:59:60Z']) {
+      expect(fmtTime(input) === '—', String(input)).toBe(fmtDateTime(input) === '—')
+    }
+    // Control: both render the same valid input.
+    expect(fmtTime('2026-07-01T14:32:07')).not.toBe('—')
+    expect(fmtDateTime('2026-07-01T14:32:07')).not.toBe('—')
   })
 })

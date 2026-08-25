@@ -1,6 +1,6 @@
-// RED specs (AUDIT-09-01, Mode A) -- pin stripNodes before the executor fills in its
-// body. invoiceStrip.ts is a stub that throws 'not implemented', so every case below
-// fails on that throw: the correct red reason, not an import or compile error.
+// Specs for stripNodes. S-1..S-26 were written RED against a throwing stub (Mode A);
+// S-27..S-31 are the Mode B adversarial pass. Every spec below is proven killable by a
+// source mutation -- see the QA report on task-672.
 //
 // The source of truth is .ralph/AUDIT-09-01-arch.md, which overrides the story's Test
 // Specs table in eight places (its §7). Section references below point at that file.
@@ -10,6 +10,9 @@
 // ECMA-262 parses as LOCAL time, so fmtTime's local getHours()/getMinutes() round-trip it
 // exactly in every timezone. A 'Z'-suffixed input has no timezone-stable HH:MM -- never
 // assert one in this file.
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
@@ -66,6 +69,20 @@ const HISTORY_TO_QUEUED: StatusChange[] = [
   h('draft', T_DRAFT),
   h('validated', T_VALIDATED, { from_status: 'draft' }),
   h('queued', T_QUEUED, { from_status: 'validated' }),
+]
+
+// A transmission failure, then a re-draft and a revalidation. S-2's claim that state and
+// label never move with history is VACUOUS for node 5 without this: HISTORY_TO_QUEUED has
+// no terminal row at all, so a node 5 that wrongly read history would still agree with one
+// that read status. Here the LAST terminal row is red while the cursor has moved on.
+const HISTORY_AFTER_FAILURE_LOOP: StatusChange[] = [
+  h('draft', '2026-07-01T09:00:00'),
+  h('validated', '2026-07-01T10:15:00', { from_status: 'draft' }),
+  h('queued', '2026-07-01T11:30:00', { from_status: 'validated' }),
+  h('submitted', '2026-07-01T12:00:00', { from_status: 'queued' }),
+  h('failed', '2026-07-01T12:30:00', { from_status: 'submitted' }),
+  h('draft', '2026-07-01T13:00:00', { from_status: 'failed' }),
+  h('validated', '2026-07-01T13:30:00', { from_status: 'draft' }),
 ]
 
 // ---------------------------------------------------------------------------
@@ -150,6 +167,7 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
       const histories: Array<[string, StatusChange[]]> = [
         ['empty', []],
         ['toQueued', HISTORY_TO_QUEUED],
+        ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
       ]
       for (const [hName, history] of histories) {
         const n = strip(history, null, status)
@@ -600,5 +618,245 @@ describe('stripNodes: actor rendering, arch §3d', () => {
     // internal/actor/actor.go:38-40 returns the email rung with KindPerson; it has no
     // whitespace, so it survives whole.
     expect(withActor({ actor_name: 'n.balogun@honeywell.ng' })[0].caption).toBe('14:32 · n.balogun@honeywell.ng')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// QA Mode B (task-672): the shipped invariants, malformed input, and the scope fence.
+// S-1..S-26 above are untouched.
+// ---------------------------------------------------------------------------
+
+const ALL_STATUSES = Object.keys(STATUS_TABLE) as InvoiceStatus[]
+
+// Every run shape a consumer can be handed, including the two the arch calls type-legal
+// but unenumerated (approved/rejected with no close time) and an unknown state.
+const ALL_RUNS: Array<[string, ApprovalRun | null]> = [
+  ['null', null],
+  ['open', mkRun('open')],
+  ['approved+time+system', mkRun('approved', { closed_at: T_CLOSED, closed_by: 'system' })],
+  ['approved+time+person', mkRun('approved', { closed_at: T_CLOSED, closed_by: OTHER_TENANT_SUBJECT })],
+  ['approved+notime+system', mkRun('approved', { closed_at: null, closed_by: 'system' })],
+  ['approved+notime+null', mkRun('approved', { closed_at: null, closed_by: null })],
+  ['rejected+time+system', mkRun('rejected', { closed_at: T_CLOSED, closed_by: 'system' })],
+  ['rejected+notime+system', mkRun('rejected', { closed_at: null, closed_by: 'system' })],
+  ['cancelled+time+system', mkRun('cancelled', { closed_at: T_CLOSED, closed_by: 'system' })],
+  ['weird', mkRun('weird')],
+  ['emptyState', mkRun('')],
+]
+
+describe('stripNodes: the invariants subtask 02 relies on (arch §12)', () => {
+  const SWEEP_HISTORIES: Array<[string, StatusChange[]]> = [
+    ['empty', []],
+    ['toQueued', HISTORY_TO_QUEUED],
+    ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+  ]
+
+  it('S-27 (arch §12 C-2): a node never carries an actor without a time', () => {
+    // The renderer draws the actor chip off `actor` and the time off `at`, so an actor with
+    // no time is a chip floating next to an em-dash. The regression that motivated C-2 lived
+    // on ONE run shape (approved with closed_at null), which is why this sweeps.
+    //
+    // ONE-DIRECTIONAL, and arch §12 C-2's "populated together or not at all" over-claims it.
+    // The converse is false BY DESIGN: a human-approved run gives node 3 `at` with a null
+    // `actor`, because resolving closed_by would re-open the cross-tenant leak (S-10, S-29).
+    // A renderer must handle a time with no actor; it never sees an actor with no time.
+    expect(SWEEP_HISTORIES.length * ALL_RUNS.length * ALL_STATUSES.length).toBeGreaterThan(0)
+
+    let checked = 0
+    let withActor = 0
+    let timeOnly = 0
+    for (const [hName, history] of SWEEP_HISTORIES) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          for (const n of strip(history, run, status)) {
+            if (n.actor !== null) {
+              expect(n.at, `${hName}/${rName}/${status} ${n.key}`).not.toBeNull()
+              withActor += 1
+            } else if (n.at !== null) {
+              timeOnly += 1
+            }
+            checked += 1
+          }
+        }
+      }
+    }
+    expect(checked).toBe(1155) // 3 x 11 x 7 x 5 -- the sweep is not empty
+    // Anti-vacuity: the implication is trivially true on a node with no actor at all, so the
+    // sweep must reach both arms.
+    expect(withActor).toBeGreaterThan(0)
+    expect(timeOnly).toBeGreaterThan(0) // the by-design case the over-claimed wording denies
+  })
+
+  it('S-28 (arch §12 C-2): an approved run with no close time carries no actor either', () => {
+    // The regression: §3c gave node 3 its actor with no closed_at condition, so this input
+    // produced caption '—' next to a populated System chip.
+    const node = strip(HISTORY_TO_QUEUED, mkRun('approved', { closed_at: null, closed_by: 'system' }), 'queued')[2]
+    expect(node.state).toBe('done')
+    expect(node.at).toBeNull()
+    expect(node.actor).toBeNull()
+    expect(node.caption).toBe('—')
+
+    // Control: the same run WITH a close time does populate both, so the assertion above
+    // is not passing because node 3 never carries an actor at all.
+    const withTime = strip(HISTORY_TO_QUEUED, mkRun('approved', { closed_at: T_CLOSED, closed_by: 'system' }), 'queued')[2]
+    expect(withTime.at).toBe(T_CLOSED)
+    expect(withTime.actor?.text).toBe('System')
+  })
+
+  it('S-29 (arch §6.3, swept): node 3 never names its closer, whoever closed it', () => {
+    // S-10 pins the one persona subject. This sweeps every closer shape the wire can carry
+    // -- including null, which actorLabel(null) answers with 'Not recorded', not null.
+    const closers = [
+      OTHER_TENANT_SUBJECT,
+      APP_PERSONAS.firm.subject,
+      APP_PERSONAS.inhouse.email,
+      'c0000000000000000000000000000009',
+      '',
+      null,
+    ]
+    expect(closers.length).toBeGreaterThan(0)
+    const forbidden = Object.values(APP_PERSONAS).flatMap((p) => [p.name, p.org, p.email, p.subject, p.initials])
+    expect(forbidden.length).toBeGreaterThan(0)
+
+    for (const state of ['approved', 'rejected'] as const) {
+      for (const closed_by of closers) {
+        const where = `${state}/${closed_by}`
+        const node = strip(HISTORY_TO_QUEUED, mkRun(state, { closed_at: T_CLOSED, closed_by }), 'queued')[2]
+        expect(node.actor, where).toBeNull()
+        expect(node.caption, where).toBe('13:05')
+        for (const needle of forbidden) expect(node.caption, `${where} ${needle}`).not.toContain(needle)
+        expect(node.caption, where).not.toContain('Not recorded')
+      }
+    }
+
+    // Control needle: the scan above can still find an actor -- 'system' produces one.
+    const auto = strip(HISTORY_TO_QUEUED, mkRun('approved', { closed_at: T_CLOSED, closed_by: 'system' }), 'queued')[2]
+    expect(auto.actor?.text).toBe('System')
+    expect(auto.caption).toBe('13:05 · System')
+  })
+})
+
+describe('stripNodes: totality over malformed input', () => {
+  // The mapper is specified TOTAL. These shapes are all reachable from a wire the server
+  // widened to `string` (ApprovalRun.state, StatusChange.actor_kind) or from a partial
+  // response; a throw here blanks the whole detail page.
+  const MALFORMED: Array<[string, StatusChange[], ApprovalRun | null]> = [
+    ['changed_at is not a date', [h('draft', 'not-a-date'), h('validated', 'not-a-date')], null],
+    ['changed_at is empty', [h('draft', ''), h('validated', '')], null],
+    [
+      'to_status outside InvoiceStatus',
+      [h('draft', T_DRAFT), { ...h('draft', T_VALIDATED), to_status: 'approved' as InvoiceStatus }],
+      null,
+    ],
+    ['a draft -> draft self-transition', [h('draft', T_DRAFT, { from_status: 'draft' })], null],
+    ['run with no steps or decisions', [h('draft', T_DRAFT)], { ...mkRun('open'), steps: undefined, decisions: undefined } as unknown as ApprovalRun],
+    ['run state is empty string', [h('draft', T_DRAFT)], mkRun('')],
+    ['actor_kind is a nonsense string', [h('draft', T_DRAFT, { actor_kind: 'wat' })], null],
+    ['actor_name is whitespace only', [h('draft', T_DRAFT, { actor_name: '   ' })], null],
+  ]
+
+  it('S-30: no malformed input throws, and every case still yields five captioned nodes', () => {
+    expect(MALFORMED.length).toBeGreaterThan(0)
+    let cases = 0
+    for (const [name, history, run] of MALFORMED) {
+      for (const status of ALL_STATUSES) {
+        const where = `${name}/${status}`
+        const nodes = strip(history, run, status)
+        expect(nodes, where).toHaveLength(5)
+        for (const n of nodes) {
+          expect(typeof n.caption, `${where} ${n.key}`).toBe('string')
+          if (n.actor !== null) expect(n.at, `${where} ${n.key} pairing`).not.toBeNull()
+          // Caption non-emptiness is asserted for every node EXCEPT node 3 under an empty
+          // run state -- see S-33, which pins that hole rather than papering over it.
+          if (!(n.key === 'approved' && run?.state === '')) {
+            expect(n.caption.length, `${where} ${n.key}`).toBeGreaterThan(0)
+          }
+        }
+        cases += 1
+      }
+    }
+    expect(cases).toBe(MALFORMED.length * 7)
+  })
+
+  it('S-31: an unparseable changed_at degrades to the em-dash rather than a bogus clock', () => {
+    // fmtTime guards NaN, so the attribution keeps the actor and drops the time. The node
+    // stays reached -- `at` is a non-null string, it is just not renderable.
+    const nodes = strip([h('draft', 'not-a-date')], null, 'validated')
+    expect(nodes[0].state).toBe('done')
+    expect(nodes[0].at).toBe('not-a-date')
+    expect(nodes[0].caption).toBe('— · Ada')
+    expect(nodes[0].caption).not.toContain('NaN')
+    expect(nodes[0].caption).not.toContain('Invalid')
+  })
+
+  it('S-32: a to_status outside InvoiceStatus is ignored, never mapped onto a node', () => {
+    // 'approved' is an approval-run state, not an invoice status (arch §3a). A history row
+    // carrying it must not become node 3's source, nor displace node 2's row.
+    const history: StatusChange[] = [
+      h('draft', T_DRAFT),
+      h('validated', T_VALIDATED, { from_status: 'draft', actor_name: 'Real Validator' }),
+      { ...h('draft', T_TERMINAL), to_status: 'approved' as InvoiceStatus, actor_name: 'Phantom Row' },
+    ]
+    const nodes = strip(history, null, 'validated')
+    expect(nodes[1].at).toBe(T_VALIDATED)
+    expect(nodes[1].actor?.text).toBe('Real Validator')
+    expect(nodes[2].at).toBeNull()
+    expect(nodes[2].actor).toBeNull()
+    for (const n of nodes) expect(n.caption).not.toContain('Phantom')
+    // Control: the same helper DOES surface an actor name when the row is well-formed.
+    expect(strip(history, null, 'draft')[0].actor?.text).toBe('Ada Lovelace')
+  })
+})
+
+describe('stripNodes: known gaps, pinned', () => {
+  it('S-33: an EMPTY run state leaves node 3 with an empty caption -- an unowned gap', () => {
+    // KNOWN GAP, not a sanctioned behaviour. approvalRunStateView('') returns its argument
+    // verbatim (approvals.ts:411), so the default branch captions the node with ''. Every
+    // other input in this file yields a non-empty caption; the strip would render a blank
+    // cell here. Unreachable through the run_state CHECK, but so is 'weird' -- and the
+    // default branch exists (arch §0.1) precisely because the wire widens state to `string`.
+    // Fixing it is an implementation change with no owner as of this pass.
+    const node = strip(HISTORY_TO_QUEUED, mkRun(''), 'validated')[2]
+    expect(node.state).toBe('current')
+    expect(node.caption).toBe('')
+    // Control: a non-empty unknown state DOES caption, so the assertion above is about the
+    // empty string specifically, not about the default branch being captionless.
+    expect(strip(HISTORY_TO_QUEUED, mkRun('weird'), 'validated')[2].caption).toBe('weird')
+  })
+})
+
+describe('stripNodes: the scope fence (AC-7)', () => {
+  // AC-7 has no runtime surface, so it is asserted mechanically. Idiom copied from
+  // src/sourceDocumentScope.test.ts.
+  const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+  function walk(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = join(dir, e.name)
+      if (e.isDirectory()) return e.name === 'node_modules' ? [] : walk(full)
+      return /\.tsx?$/.test(e.name) ? [full] : []
+    })
+  }
+
+  function stripComments(src: string): string {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  }
+
+  it('S-34: invoiceStrip has no barrel and no importer outside StatusStrip and its own tests', () => {
+    expect(existsSync(join(SRC_DIR, 'lib', 'index.ts'))).toBe(false)
+
+    const files = walk(SRC_DIR)
+    expect(files.length).toBeGreaterThan(50) // vacuity floor: the walk actually found the tree
+
+    // The module-specifier form only, so this file's own `it(...)` titles -- which contain
+    // the bare word invoiceStrip -- cannot self-match.
+    const importers = files
+      .filter((f) => /(?:from|import\()\s*['"][^'"]*\/invoiceStrip['"]/.test(stripComments(readFileSync(f, 'utf8'))))
+      .map((f) => basename(f))
+      .sort()
+
+    expect(importers).toContain('invoiceStrip.test.ts') // vacuity floor: the needle matches
+    const ALLOWED = ['StatusStrip.test.tsx', 'StatusStrip.tsx', 'invoiceStrip.test.ts']
+    expect(importers.filter((f) => !ALLOWED.includes(f))).toEqual([])
   })
 })

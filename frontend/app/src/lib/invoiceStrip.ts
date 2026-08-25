@@ -125,7 +125,8 @@ function approvalNode(run: ApprovalRun | null, cursor: SpineNode): StripNode {
       // GET /v1/invoices/{id}/approval ships no resolved actor pair, so any subject other
       // than 'system' would fall through actorLabel to APP_PERSONAS and print the other
       // tenant's name (S-10). 'system' short-circuits above that table.
-      const actor = run.closed_by === 'system' ? actorLabel('system') : null
+      // The closed_at guard keeps `at` and `actor` non-null together on every node (S-27).
+      const actor = run.closed_at !== null && run.closed_by === 'system' ? actorLabel('system') : null
       return {
         ...bare,
         state: run.state === 'approved' ? 'done' : 'failed',

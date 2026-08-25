@@ -41,6 +41,11 @@ export function fmtDateTime(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleString('en-NG')
 }
 
+// RED stub (AUDIT-09-01) -- HH:MM, local, 24h, via pad2. Implemented next.
+export function fmtTime(_iso: string | null | undefined): string {
+  throw new Error('not implemented')
+}
+
 export function amount(items: LineItem[]): number {
   return items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0)
 }

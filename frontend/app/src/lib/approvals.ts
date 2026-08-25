@@ -1,7 +1,7 @@
 // Approvals screen pure core + fan-out client (APPR-12-02, task-527), covered by
 // approvals.test.ts (A02-1..A02-18). Also carries the invoice-detail run read model +
-// decide client (APPR-13-01, task-550) and the trail projection + copy consts
-// (APPR-13-02, task-552) -- each carries its own comment block further down.
+// decide client (APPR-13-01, task-550) and the approval state projection + copy consts
+// (AUDIT-09-06) -- each carries its own comment block further down.
 //
 // listAwaitingApproval wraps invoices.ts's listInvoices, forcing awaiting_approval=true
 // (ListFilter.AwaitingApproval, internal/invoice/handlers.go:349-451, shipped APPR-08-07)
@@ -35,8 +35,7 @@
 
 import { ApiError } from '@invoice-os/api-client'
 
-import { actorLabel } from './actor'
-import { fmtDate, fmtDateTime } from './format'
+import { fmtDate } from './format'
 import { listInvoices, type InvoiceListResponse, type InvoiceRecord, type ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -44,7 +43,7 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 
 // step / role / holder-warning / due / overdue / approve_blocked_reason -- wire values
 // passed through, except roleLabel's own em-dash fallback for a null pending_role_title
-// (A02-15; approvalTrailSteps's roleTitle repeats the same em-dash convention below).
+// (A02-15; ApprovalPendingView's roleTitle repeats the same em-dash convention below).
 export interface ApprovalRowView {
   approvable: boolean
   pendingOrd: number | null
@@ -366,44 +365,82 @@ export function decisionBlockedReasons(approve: string | null, reject: string | 
   return [approve, reject]
 }
 
-// ---- Trail projection (APPR-13-02, task-552): the pure core the invoice-detail trail
-// card renders. holderText is a straight passthrough of step.holder?.text -- never
-// re-derived through ./roles's resolve()/inspectorResolve() (D-34), which need a
-// Role[]/Member[] this projection never receives.
+// ---- Approval state projection (AUDIT-09-06): the one thing the rail card shows that the
+// state strip and the activity feed do not -- who an OPEN run is waiting on.
+//
+// The pending step is the lowest-ord step with kind 'approval' and state 'pending' -- the
+// server's own predicate (internal/approval/decision.go, gate.go, three sites).
+// holderText is a straight passthrough of step.holder?.text, never re-derived through
+// ./roles's resolve() (D-34), which needs a Role[]/Member[] this projection never receives.
 
-export interface TrailStepView {
-  ord1: number
-  kind: string
-  kindLabel: string
-  stateLabel: string
+export interface ApprovalPendingView {
   roleTitle: string
   holderText: string | null
   holderWarn: boolean
   dueLabel: string | null
   overdue: boolean
-  notifyNote: string | null
-  // AC-4 (card renders "<target> · <channel>" on the notify row): straight passthrough
-  // of notify_target/notify_channel, null for every non-notify kind exactly as
-  // notifyNote is -- avoids a second read of the raw step for the same data (D-34).
-  notifyTarget: string | null
-  notifyChannel: string | null
 }
 
-export interface TrailDecisionView {
-  ord1: number
-  outcomeLabel: string
-  actorText: string
-  actorMono: boolean
-  whenLabel: string
-  reason: string | null
+export interface ApprovalStateView {
+  stateLabel: string
+  stateTone: 'amber' | 'green' | 'red' | 'muted'
+  voided: boolean
+  // null on every run that is not open, and on an open run with no pending approval step.
+  pending: ApprovalPendingView | null
+}
+
+// Gated on run.state === 'open' because CancelLiveRunTx (internal/approval/engine.go)
+// updates approval_runs only, so a voided run keeps its steps 'pending'.
+// approvalStateCard_aVoidedRunNeverClaimsAHolder asserts the gate directly -- the card
+// double-guards it, so the DOM cannot see it.
+export function pendingApprovalStep(run: ApprovalRun): ApprovalRunStep | null {
+  if (run.state !== 'open') return null
+  let best: ApprovalRunStep | null = null
+  for (const step of run.steps) {
+    if (step.kind !== 'approval' || step.state !== 'pending') continue
+    // Lowest ord, not first in the array: a client that trusts array position would pick a
+    // different step than the server if read_model.go's ORDER BY ever changed.
+    if (best === null || step.ord < best.ord) best = step
+  }
+  return best
+}
+
+export function approvalStateView(run: ApprovalRun): ApprovalStateView {
+  const state = approvalRunStateView(run.state)
+  const step = pendingApprovalStep(run)
+  // overdue is the server's own answer (read_model.go:161), passed through -- never
+  // re-derived from due_at. Overdue wins over a formatted due date, which wins over null.
+  let dueLabel: string | null = null
+  if (step !== null) {
+    if (step.overdue) {
+      dueLabel = APPROVAL_CARD_COPY.overdue
+    } else if (step.due_at != null) {
+      dueLabel = fmtDate(step.due_at)
+    }
+  }
+  return {
+    stateLabel: state.label,
+    stateTone: state.tone,
+    voided: run.state === 'cancelled',
+    pending:
+      step === null
+        ? null
+        : {
+            roleTitle: step.workflow_role_title ?? '—',
+            holderText: step.holder?.text ?? null,
+            holderWarn: step.holder?.warn ?? false,
+            dueLabel,
+            overdue: step.overdue,
+          },
+  }
 }
 
 export function approvalRunStateView(state: string): { label: string; tone: 'amber' | 'green' | 'red' | 'muted' } {
   const known: Record<string, { label: string; tone: 'amber' | 'green' | 'red' | 'muted' }> = {
-    open: { label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' },
-    approved: { label: APPROVAL_TRAIL_COPY.stateApproved, tone: 'green' },
-    rejected: { label: APPROVAL_TRAIL_COPY.stateRejected, tone: 'red' },
-    cancelled: { label: APPROVAL_TRAIL_COPY.stateCancelled, tone: 'muted' },
+    open: { label: APPROVAL_CARD_COPY.stateOpen, tone: 'amber' },
+    approved: { label: APPROVAL_CARD_COPY.stateApproved, tone: 'green' },
+    rejected: { label: APPROVAL_CARD_COPY.stateRejected, tone: 'red' },
+    cancelled: { label: APPROVAL_CARD_COPY.stateCancelled, tone: 'muted' },
   }
   // Unknown state falls back to its own raw value, never a guessed label (AC-3).
   // hasOwn guards against a wire value like 'constructor'/'toString' resolving to an
@@ -411,103 +448,25 @@ export function approvalRunStateView(state: string): { label: string; tone: 'amb
   return Object.hasOwn(known, state) ? known[state] : { label: state, tone: 'muted' }
 }
 
-export function approvalTrailSteps(run: ApprovalRun): TrailStepView[] {
-  const kindLabels: Record<string, string> = {
-    approval: APPROVAL_TRAIL_COPY.kindApproval,
-    condition: APPROVAL_TRAIL_COPY.kindCondition,
-    notify: APPROVAL_TRAIL_COPY.kindNotify,
-    autoapprove: APPROVAL_TRAIL_COPY.kindAutoapprove,
-  }
-  const stateLabels: Record<string, string> = {
-    pending: APPROVAL_TRAIL_COPY.stepWaiting,
-    satisfied: APPROVAL_TRAIL_COPY.stepSigned,
-    skipped: APPROVAL_TRAIL_COPY.stepSkipped,
-    rejected: APPROVAL_TRAIL_COPY.stepRejected,
-  }
-  return run.steps.map((step) => {
-    const isNotify = step.kind === 'notify'
-    // overdue is the server's own answer (read_model.go:161), passed through -- never
-    // re-derived from due_at here. Overdue wins over a formatted due date, which wins
-    // over null.
-    let dueLabel: string | null = null
-    if (step.overdue) {
-      dueLabel = APPROVAL_TRAIL_COPY.overdue
-    } else if (step.due_at != null) {
-      dueLabel = fmtDate(step.due_at)
-    }
-    return {
-      ord1: step.ord + 1,
-      kind: step.kind,
-      // Unknown kind/state falls back to its own raw value, never a guessed label (AC-3).
-      // hasOwn guards both maps against inherited Object.prototype keys (see
-      // approvalRunStateView above).
-      kindLabel: Object.hasOwn(kindLabels, step.kind) ? kindLabels[step.kind] : step.kind,
-      stateLabel: Object.hasOwn(stateLabels, step.state) ? stateLabels[step.state] : step.state,
-      roleTitle: step.workflow_role_title ?? '—',
-      holderText: step.holder?.text ?? null,
-      holderWarn: step.holder?.warn ?? false,
-      dueLabel,
-      overdue: step.overdue,
-      notifyNote: isNotify ? APPROVAL_TRAIL_COPY.notifyNote : null,
-      notifyTarget: isNotify ? (step.notify_target ?? null) : null,
-      notifyChannel: isNotify ? (step.notify_channel ?? null) : null,
-    }
-  })
-}
-
-export function approvalTrailDecisions(run: ApprovalRun): TrailDecisionView[] {
-  const outcomeLabels: Record<string, string> = {
-    approved: APPROVAL_TRAIL_COPY.stateApproved,
-    rejected: APPROVAL_TRAIL_COPY.stateRejected,
-  }
-  return run.decisions.map((decision) => {
-    const actor = actorLabel(decision.actor)
-    return {
-      ord1: decision.ord + 1,
-      // hasOwn guards against an inherited Object.prototype key, same as above.
-      outcomeLabel: Object.hasOwn(outcomeLabels, decision.decision) ? outcomeLabels[decision.decision] : decision.decision,
-      actorText: actor.text,
-      actorMono: actor.mono,
-      whenLabel: fmtDateTime(decision.decided_at),
-      reason: decision.reason,
-    }
-  })
-}
-
-export const APPROVAL_TRAIL_COPY = {
+export const APPROVAL_CARD_COPY = {
   cardTitle: 'Approvals',
-  loading: 'Loading the approval trail…',
+  loading: 'Loading approval status…',
   emptyTitle: 'No approval run',
   emptyMessage:
     'Nothing on this invoice is waiting on a sign-off. Either this workspace has no active approval policy, or this invoice has not been validated yet.',
-  stepsHeading: 'Steps',
-  decisionsHeading: 'Decisions',
-  noDecisions: 'No decision has been recorded on this run.',
   voided: 'This approval was voided by an edit — the invoice must be approved again from step one.',
-  notifyNote: 'No message is delivered — notifications are recorded but not yet sent.',
-  autoApproved: 'Settled automatically — nobody was asked.',
-  // Same string as APPROVALS_COPY.unstaffedSeat (:269) -- deliberate duplication, not
-  // aliased: per-screen copy consts already repeat labels (e.g. `cancel`), so one edit
-  // here never silently changes the queue screen's wording too.
+  waitingOn: 'Waiting on',
+  noPending: 'Nobody is waiting on this invoice.',
+  decideAbove: 'Approve or reject from the buttons at the top of this page.',
+  // Same string as APPROVALS_COPY.unstaffedSeat -- deliberate duplication, not aliased: one
+  // edit here never silently changes the queue screen's wording too.
   unstaffedSeat: 'Unstaffed seat',
-  // Same string as APPROVALS_COPY.overdue (:270) -- deliberate duplication, see
-  // unstaffedSeat above.
+  // Same string as APPROVALS_COPY.overdue -- see unstaffedSeat above.
   overdue: 'Overdue',
   stateOpen: 'In progress',
   stateApproved: 'Approved',
   stateRejected: 'Rejected',
   stateCancelled: 'Voided',
-  // kindApproval/kindAutoapprove diverge from WorkflowInspector.tsx's private TITLES map
-  // ('Approval'/'Auto-approved' here vs 'Approval step'/'Auto-approve' there) --
-  // deliberate: that map is the policy-authoring domain, this is the run-trail domain.
-  kindApproval: 'Approval',
-  kindCondition: 'Condition',
-  kindNotify: 'Notification',
-  kindAutoapprove: 'Auto-approved',
-  stepWaiting: 'Waiting',
-  stepSigned: 'Signed',
-  stepSkipped: 'Skipped',
-  stepRejected: 'Rejected',
 } as const
 
 // approveDetail names the ACTION, never claims the OUTCOME -- the same rule

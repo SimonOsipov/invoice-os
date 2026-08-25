@@ -9,7 +9,7 @@
 // toLocaleString('en-NG') output varies with the Node ICU build.
 import { describe, expect, it } from 'vitest'
 
-import { fmtDateTime, toDateInputValue } from './format'
+import { fmtDateTime, fmtTime, toDateInputValue } from './format'
 
 describe('fmtDateTime', () => {
   it('F-1: renders date and time, and guards bad input', () => {
@@ -80,5 +80,138 @@ describe('toDateInputValue', () => {
       if (original === undefined) delete process.env.TZ
       else process.env.TZ = original
     }
+  })
+})
+
+// fmtTime specs. T-1..T-5 were written RED against a throwing stub (Mode A); T-6..T-9 are
+// the Mode B adversarial pass.
+//
+// TIMEZONE: no TZ is pinned in this repo (vitest.config.ts is three lines; no playwright
+// config sets one). Every input here is OFFSET-LESS, which ECMA-262 parses as LOCAL time,
+// so a local getHours()/getMinutes() round-trips it exactly in every timezone. A
+// 'Z'-suffixed input has no timezone-stable HH:MM and is deliberately never asserted.
+describe('fmtTime', () => {
+  it('T-1: renders a local offset-less timestamp as exact 24h HH:MM', () => {
+    expect(fmtTime('2026-07-01T14:32:07')).toBe('14:32')
+  })
+
+  it('T-2: null, undefined, empty and unparseable input all yield the em-dash', () => {
+    expect(fmtTime(null)).toBe('—')
+    expect(fmtTime(undefined)).toBe('—')
+    expect(fmtTime('')).toBe('—')
+    expect(fmtTime('not-a-date')).toBe('—')
+    expect(fmtTime('   ')).toBe('—')
+  })
+
+  it('T-3: single-digit hours and minutes are zero-padded to two places', () => {
+    expect(fmtTime('2026-07-01T04:05:00')).toBe('04:05')
+  })
+
+  it('T-4: midnight and the last minute of the day stay on a 24-hour cycle', () => {
+    // Guards toLocaleTimeString('en-NG'): most ICU builds resolve it to a 12-hour cycle,
+    // which renders these as '12:00 AM' / '11:59 PM'.
+    expect(fmtTime('2026-07-01T00:00:00')).toBe('00:00')
+    expect(fmtTime('2026-07-01T23:59:00')).toBe('23:59')
+  })
+
+  it('T-5: the offset-less form is timezone-invariant', () => {
+    // Parse and render are both local, so they cancel. Restores TZ the way D-5 does.
+    const original = process.env.TZ
+    try {
+      for (const tz of ['America/Los_Angeles', 'Pacific/Kiritimati', 'UTC']) {
+        process.env.TZ = tz
+        expect(fmtTime('2026-07-01T14:32:07'), tz).toBe('14:32')
+      }
+    } finally {
+      if (original === undefined) delete process.env.TZ
+      else process.env.TZ = original
+    }
+  })
+})
+
+// --- QA Mode B (task-672): adversarial coverage on top of T-1..T-5. Those are untouched. ---
+
+describe('fmtTime: adversarial', () => {
+  const HHMM = /^\d{2}:\d{2}$/
+
+  it('T-6: a Z-suffixed input is read as UTC and rendered in the local zone', () => {
+    // Under the ambient TZ only the shape and the stability can be asserted -- the hour of
+    // a Z-suffixed input is machine-dependent, which is why the file header forbids pinning
+    // one. Asserting a clock therefore needs an explicit zone, as T-5 does.
+    const rendered = fmtTime('2026-07-01T14:32:07Z')
+    expect(rendered).not.toBe('—')
+    expect(rendered).toMatch(HHMM)
+    expect(fmtTime('2026-07-01T14:32:07Z')).toBe(rendered)
+
+    // Half-hour offsets included: a minute field copied from the UTC input rather than the
+    // local Date reads 20:32 under Kolkata.
+    const original = process.env.TZ
+    try {
+      for (const [tz, clock] of [
+        ['UTC', '14:32'],
+        ['Asia/Kolkata', '20:02'],
+        ['America/Los_Angeles', '07:32'],
+      ] as const) {
+        process.env.TZ = tz
+        expect(fmtTime('2026-07-01T14:32:07Z'), tz).toBe(clock)
+      }
+    } finally {
+      if (original === undefined) delete process.env.TZ
+      else process.env.TZ = original
+    }
+  })
+
+  it('T-7: a leap second is unparseable and takes the em-dash, not a wrapped clock', () => {
+    // ECMA-262 caps seconds at 59, so :60 is Invalid Date -- it must NOT roll over to
+    // '00:00' via a normalised Date.
+    expect(fmtTime('2026-06-30T23:59:60Z')).toBe('—')
+    expect(fmtTime('2026-06-30T23:59:60')).toBe('—')
+    // Control: the last representable instant before it does render, so the guard above is
+    // about the leap second and not about the whole minute being rejected.
+    expect(fmtTime('2026-06-30T23:59:59.999')).toBe('23:59')
+  })
+
+  it('T-8: never throws and never leaks NaN, on any hostile string', () => {
+    const hostile = [
+      '',
+      '   ',
+      'not-a-date',
+      '0000-00-00',
+      '2026-13-45T99:99:99',
+      '275760-09-14',
+      '1e309',
+      'Invalid Date',
+      '2026-07-01T14:32:07+05:30',
+      '2026-07-01',
+      '2026-07-01T14:32:07.123456789Z',
+      'x'.repeat(10_000),
+      '2026-07-01T14:32:07 ',
+      '٢٠٢٦-٠٧-٠١',
+    ]
+    expect(hostile.length).toBeGreaterThan(0)
+    let rendered = 0
+    for (const input of hostile) {
+      let out = ''
+      expect(() => {
+        out = fmtTime(input)
+      }, input).not.toThrow()
+      expect(out === '—' || HHMM.test(out), `${JSON.stringify(input)} -> ${out}`).toBe(true)
+      expect(out, input).not.toContain('NaN')
+      if (out !== '—') rendered += 1
+    }
+    // Anti-vacuity: an implementation returning '—' unconditionally would satisfy every
+    // assertion above. Some of these inputs are valid and must render.
+    expect(rendered).toBeGreaterThan(0)
+  })
+
+  it('T-9: fmtTime and fmtDateTime agree on what is unrenderable', () => {
+    // Both guard `!iso` then isNaN. A divergence means one of them started building a clock
+    // from an input the other rejects.
+    for (const input of [null, undefined, '', '   ', 'not-a-date', '2026-06-30T23:59:60Z']) {
+      expect(fmtTime(input) === '—', String(input)).toBe(fmtDateTime(input) === '—')
+    }
+    // Control: both render the same valid input.
+    expect(fmtTime('2026-07-01T14:32:07')).not.toBe('—')
+    expect(fmtDateTime('2026-07-01T14:32:07')).not.toBe('—')
   })
 })

@@ -104,7 +104,7 @@ export function NoSourceCanvas({
       <div style={HEADING}>There is no source document</div>
       <p style={BODY}>
         {invoiceNumber} was typed into ASComply{by} on {fmtDate(createdAt)}. No file was uploaded, so there is nothing
-        to preview — the status history is the record of how this invoice came to exist.
+        to preview — the state strip is the record of how far this invoice has come.
       </p>
       <div style={{ marginTop: 6, padding: '14px 16px', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', background: 'transparent', maxWidth: 620 }}>
         <div className="label" style={{ marginBottom: 6 }}>

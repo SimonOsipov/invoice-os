@@ -41,6 +41,14 @@ export function fmtDateTime(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleString('en-NG')
 }
 
+// HH:MM, local, 24h. pad2 over the Date getters rather than toLocaleTimeString: en-NG
+// resolves to a 12-hour cycle on most ICU builds (format.test.ts T-4).
+export function fmtTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? '—' : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
 export function amount(items: LineItem[]): number {
   return items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0)
 }

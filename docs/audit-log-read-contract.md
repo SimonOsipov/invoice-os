@@ -28,7 +28,7 @@ shipped. Reads of `audit_log` in the tree are now: the five statements `Query` i
 `Record` takes no entity argument and does not need one: a `BEFORE INSERT` trigger
 (`audit_log_entity_on_insert`) fills `entity_id` from the event name and payload. Callers
 neither set it nor can override it. `invoice_id` is filled the same way but by a different
-mechanism — a STORED generated column, not a trigger (§6).
+mechanism — a STORED generated column, not a trigger (§11).
 
 ## 2. The five indexes and the predicates they serve
 
@@ -42,7 +42,7 @@ index read with no sort.
 | `audit_log_tenant_event_created_idx` `(tenant_id, event, created_at DESC, id DESC)` | `WHERE event = $1`; the event facet `SELECT event, count(*) … GROUP BY event` as an Index Only Scan |
 | `audit_log_tenant_actor_created_idx` `(tenant_id, actor, created_at DESC, id DESC)` | `WHERE actor = $1` |
 | `audit_log_tenant_entity_created_idx` `(tenant_id, entity_id, created_at DESC, id DESC)` | `WHERE entity_id = $1`; `WHERE entity_id IS NULL` (**corpus-dependent — see below**); the company facet `GROUP BY entity_id` as an Index Only Scan |
-| `audit_log_tenant_invoice_created_idx` `(tenant_id, invoice_id, created_at DESC, id DESC)` | `WHERE invoice_id = $1`, the per-invoice scoped read (§6). Added by AUDIT-04-11 alongside the generated column |
+| `audit_log_tenant_invoice_created_idx` `(tenant_id, invoice_id, created_at DESC, id DESC)` | `WHERE invoice_id = $1`, the per-invoice scoped read (§11). Added by AUDIT-04-11 alongside the generated column |
 
 Pinned by `internal/audit/audit_plan_test.go` over a 20-tenant corpus. The event filter is
 bracketed at **1% and 30%** selectivity, so the pin is not knife-edge. No test asserts a node
@@ -560,3 +560,63 @@ client, so `Query` formats it with `strconv.FormatInt`. Do not "fix" it to a num
 Free-text search can match an invoice's *id*, because that is what payloads carry. It cannot
 match `INV-2026-0042`, because no writer puts the human-facing number in an audit payload. A
 reader that offers a search box should not promise otherwise.
+
+## 11. The invoice-scoped read reaches 17 of the 36 event types
+
+`Filter.InvoiceID` emits exactly one predicate — `a.invoice_id = $n::uuid`
+(`internal/audit/filter.go`) — against the `STORED` generated column AUDIT-04-11 added in
+`migrations/20260822080722_audit_log_invoice_id_column_and_index.sql`. That column dispatches
+on the **event name**, never on which payload key happens to be present, for the same reason
+`audit_log_entity_for` does (§3): several non-invoice families carry a real invoice id under
+the bare `id` key.
+
+So the set of rows an invoice's own page can ever show is not "every event that mentions this
+invoice". It is exactly the two `event IN (…)` lists inside that generation expression: **ten
+events whose id is read from `payload->>'id'`, seven from `payload->>'invoice_id'` —
+seventeen of the thirty-six event types the log carries.**
+`TestAuditScopeOf_RuleSetsAreDisjointAndSumToThirtySix` pins the 36.
+**Derive this list from the migration, never from prose — this page included.**
+
+| Domain | Count | Events | Payload key |
+|---|---|---|---|
+| Invoices | 8 | `invoice.created`, `invoice.updated`, `invoice.transitioned`, `invoice.validated`, `invoice.kept_as_is`, `invoice.unkept_as_is`, `invoice.resolved_outside`, `invoice.unresolved_outside` | `id` |
+| Approvals | 4 | `invoice.approval_armed`, `invoice.approval_cancelled` | `id` |
+| | | `invoice.approval_approved`, `invoice.approval_rejected` | `invoice_id` |
+| Submissions | 3 | `submission.accepted`, `submission.rejected`, `submission.failed` | `invoice_id` |
+| Reconciliation | 2 | `reconciliation.drift_detected`, `reconciliation.auto_fixed` | `invoice_id` |
+
+The approvals domain is the one that straddles the two branches: an *armed* or *cancelled* run
+spells the invoice `id`, an *approved* or *rejected* decision spells it `invoice_id`. A reader
+that assumes one spelling per domain loses half of them.
+
+**The scoped predicate reaches into no jsonb, and that is what makes it fast.** It compares a
+column, so §7's rule — under `FORCE ROW LEVEL SECURITY` no non-`LEAKPROOF` operator can be
+pushed into an Index Cond — does not bite. `audit_log_tenant_invoice_created_idx` serves it as
+an Index Cond, unlike every payload filter on this table.
+`TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression` holds the no-jsonb half.
+
+**`document.*` is outside the set by design.** The three document events — `document.created`,
+`document.reused`, `document.read` — are in neither branch, so a document uploaded against an
+invoice never appears in that invoice's scoped read. `document.created` carries the invoice's
+real id under `id`, spelled byte for byte like `invoice.created`'s, which is precisely why the
+dispatch is on the event name and not the key. §3 and §5 record the same fact from the
+`entity_id` side, including the measurement that every payload-`id` row resolving NULL was a
+`document.created`; nothing here restates that reasoning.
+`TestAuditScoped_EventGateExcludesACollidingID` asserts the exclusion, running
+`document.created` and `portfolio.entity.updated` as the two colliding families with a genuine
+`invoice.created` row as the control needle — without which every case would pass by returning
+nothing at all.
+
+Two consequences for anyone building on this.
+
+A per-domain breakdown of an invoice's feed has a Documents bucket that is **structurally
+zero**, not empty-by-coincidence. Say so on the surface. AUDIT-09's activity card ships that
+chip permanently inert with a visible reason for exactly this, so a reader does not file the
+zero as a bug.
+
+Widening the set is a **second migration on `audit_log`**, not a query change. The column is
+`GENERATED ALWAYS … STORED` and inlined rather than factored into a function, deliberately, so
+that the expression is frozen in `pg_attrdef` and cannot be `CREATE OR REPLACE`d out from under
+the rows already stored — the migration's own header records why. Adding an event type to the
+scoped read therefore means a new `ALTER TABLE` and a table rewrite, subject to the same
+500,000-row in-migration ceiling that migration guards with.

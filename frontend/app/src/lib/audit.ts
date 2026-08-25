@@ -9,6 +9,8 @@ import type { AuthedFetch } from './portfolio'
 
 export type AuditCompanyScope = 'company' | 'workspace' | 'unattributed'
 
+// Mirrored against internal/audit/reader.go and e2e/api/client.ts by
+// lib/wireMirrors.test.ts -- edit all three together.
 export interface AuditEvent {
   id: string
   created_at: string

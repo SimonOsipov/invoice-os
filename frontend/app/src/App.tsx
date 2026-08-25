@@ -89,6 +89,7 @@ import { SettingsView } from './components/SettingsView'
 import { ApprovalsView } from './components/ApprovalsView'
 import { AuditView } from './components/AuditView'
 import type {
+  AuditPrefilter,
   Client,
   ConnectorId,
   ConnectorMappings,
@@ -280,6 +281,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
   // this state with an inline object literal — go through a constructor.
   const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
+  // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
+  // that clears the atom it seeds from can re-read the cleared value and drop the filter.
+  const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(null)
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery] = useState('')
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -455,6 +459,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // `reviewBatchIds.join(',')`, never the array reference itself: a fresh array every
     // render would otherwise re-run this effect on every render forever.
   }, [view, createStep, reviewBatchIds.join(',')])
+
+  // Consume-once. AuditView seeds its filter state during the RENDER of the commit that
+  // mounts it; this effect runs in that same commit's effect phase, strictly after.
+  // Clearing here keeps the atom single-owner and leaves AuditView with no mount effect for
+  // StrictMode to double-invoke. auditView_aSeededFilterSurvivesARefetchAndTheClear.
+  useEffect(() => {
+    if (view === 'audit' && auditPrefilter != null) setAuditPrefilter(null)
+  }, [view, auditPrefilter])
 
   function nav(id: View) {
     setView(id)
@@ -983,6 +995,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setDetailSel(selectImported(id))
   }
 
+  // Both setters in one handler, so the first render that sees view === 'audit' already
+  // carries the atom -- AuditView reads it during THAT render, before any effect runs.
+  function openAuditForInvoice(invoiceId: string, invoiceNumber: string | null) {
+    setAuditPrefilter({ invoiceId, invoiceNumber })
+    setView('audit')
+  }
+
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
   }
@@ -1184,6 +1203,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     importError,
     reviewBatchIds,
     importedInvoiceId: detailSel.importedInvoiceId,
+    auditPrefilter,
     nav,
     setInvoiceQuery,
     toggleSwitcher,
@@ -1212,6 +1232,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     fileDraft,
     selectInvoice,
     openImportedInvoice,
+    openAuditForInvoice,
     setSandbox,
     setSettingsTab,
     toggleConnector,

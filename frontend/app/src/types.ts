@@ -224,6 +224,12 @@ export type SignedInUser = {
   verified: boolean
 }
 
+// The Audit screen's cross-screen pre-filter (AUDIT-09-05). The SPA has no router and no URL
+// params, so this atom IS the hand-off. `invoiceId` must be a real invoice UUID -- the reader
+// 400s on anything else (internal/audit/handlers.go:187-189). `invoiceNumber` is nullable
+// because the pill reads the number and a payload need not carry one.
+export type AuditPrefilter = { invoiceId: string; invoiceNumber: string | null }
+
 // The full app state + action bundle threaded through every section component, mirroring
 // the prototype's single `renderVals()` bag of state/handlers (Platform.dc.html ~L1266+).
 export type PlatformCtx = {
@@ -402,6 +408,9 @@ export type PlatformCtx = {
   // stale when the other is written. Non-null makes InvoiceDetail render its honest
   // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
+  // Set by openAuditForInvoice and consumed by the NEXT AuditView mount, which reads it in a
+  // lazy useState initializer. Workspace clears it; AuditView never does.
+  auditPrefilter: AuditPrefilter | null
 
   nav: (id: View) => void
   setInvoiceQuery: (q: string) => void
@@ -458,6 +467,9 @@ export type PlatformCtx = {
   fileDraft: () => void
   selectInvoice: (number: string) => void
   openImportedInvoice: (id: string) => void
+  // Sets auditPrefilter and navigates to Audit in ONE handler, so no committed render can carry
+  // one without the other.
+  openAuditForInvoice: (invoiceId: string, invoiceNumber: string | null) => void
   setSandbox: (v: boolean) => void
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void

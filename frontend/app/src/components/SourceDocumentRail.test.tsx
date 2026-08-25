@@ -139,7 +139,7 @@ describe('SourceDocumentRail', () => {
 
     const rail = screen.getByTestId('source-document-rail')
     expect(rail.textContent).toContain('No file, no size, no fingerprint')
-    expect(rail.textContent).toContain('every status change on INV-2026-0037 is recorded there')
+    expect(rail.textContent).toContain('the five stages INV-2026-0037 passes through')
     expect(rail.textContent).not.toContain('Original filename')
     expect(rail.textContent).not.toContain('File size')
     expect(rail.textContent).not.toContain('Uploaded by')

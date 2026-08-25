@@ -1524,7 +1524,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
 
-    test('the rejection adds a status-history row', async () => {
+    test('the rejection adds an invoice_status_history row', async () => {
       const { invoiceId, policyId } = await armedInvoice('cfo')
       try {
         const before = await getInvoiceHistory(token, invoiceId)

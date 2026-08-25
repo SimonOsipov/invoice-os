@@ -21,7 +21,7 @@ describe('NoSourceCanvas actor resolution ([actor-label-shared])', () => {
   })
 
   // NoSourceCanvas's own contract (SourceDocumentStates.tsx comment: "a raw uuid never
-  // appears mid-prose"): unlike the status-history line and the kept-banner, an
+  // appears mid-prose"): unlike the strip's attribution and the kept-banner, an
   // unrecognised subject here is NOT shown raw -- the whole "by ..." clause is dropped.
   it('an unrecognised subject omits the "by" clause instead of leaking a raw uuid mid-prose', () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'

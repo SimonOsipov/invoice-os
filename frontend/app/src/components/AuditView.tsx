@@ -35,7 +35,7 @@ import {
 } from '../lib/auditView'
 import { EVIDENCE_COPY } from '../lib/evidenceBundleView'
 import { invoicesViewState, shouldFetchInvoices } from '../lib/invoices'
-import type { PlatformCtx } from '../types'
+import type { AuditPrefilter, PlatformCtx } from '../types'
 
 import { AuditExportToast } from './AuditExportToast'
 import { AuditFilterCard } from './AuditFilterCard'
@@ -59,10 +59,25 @@ function downloadAuditCsv(csv: string, filename: string): Blob {
   return blob
 }
 
+// Consume-once seed for the "Open in Audit ->" hand-off. Read from a LAZY useState
+// initializer below, NEVER from an effect -- an effect keyed on the atom fires the instant
+// Workspace clears it and drops the filter the user just arrived with. `{ preset: 'custom' }`
+// with no from/to is auditFilters' own "no date filter" (REMOVE_RANGE): the 30-day default is
+// a pre-applied window and would hide an older invoice's events.
+function seedFilterState(pre: AuditPrefilter | null): AuditFilterState {
+  if (pre == null) return AUDIT_FILTER_DEFAULT
+  return {
+    ...AUDIT_FILTER_DEFAULT,
+    range: { preset: 'custom' },
+    invoiceId: pre.invoiceId,
+    invoiceNumber: pre.invoiceNumber,
+  }
+}
+
 export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [filterState, setFilterState] = useState<AuditFilterState>(AUDIT_FILTER_DEFAULT)
+  const [filterState, setFilterState] = useState<AuditFilterState>(() => seedFilterState(ctx.auditPrefilter))
   const [page, setPage] = useState<AuditPageState>(AUDIT_PAGE_INITIAL)
   // Written only from the unfiltered probe below, never from the main (filtered) request,
   // so this can never be mistaken for a windowed total.

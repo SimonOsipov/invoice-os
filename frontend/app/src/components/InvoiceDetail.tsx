@@ -1,8 +1,8 @@
 // Invoice detail dispatcher: for an imported invoice, mounts the live detail surface
 // (status pill, line items + totals, compliance/violations panel, fiscal record, APP
 // rejection reasons, the Edit / Re-validate actions bar + inline edit mode, failed dead
-// end, status history) fetched from the gateway; otherwise renders an honest EmptyState
-// ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
+// end, the five-node state strip) fetched from the gateway; otherwise renders an honest
+// EmptyState ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
 // into two independently-gated actions ([actions-visibility], [edit-ux]). The
 // Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
 // the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
@@ -26,6 +26,7 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
+import { stripNodes } from '../lib/invoiceStrip'
 import {
   BUYER_TIN_MISSING,
   canResolveOutside,
@@ -68,9 +69,11 @@ import {
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
-import { ApprovalTrailCard } from './ApprovalTrailCard'
+import { ApprovalStateCard } from './ApprovalStateCard'
+import { InvoiceActivityCard } from './InvoiceActivityCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
+import { StatusStrip } from './StatusStrip'
 import { ViolationsTable } from './ViolationsTable'
 import { XmlModal } from './XmlModal'
 import type { PlatformCtx } from '../types'
@@ -1026,72 +1029,94 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           )}
         </div>
 
+        {/* Gated on the approval fetch settling: useAsync carries data:null while loading,
+            and a null run captions node 3 `Not required` -- a false compliance claim on an
+            invoice that does need approval (InvoiceDetail.test.tsx 'node 3 never flashes').
+            A poll tick's history.run() still nulls history.data for one round trip
+            (async-state.ts 'start'), so captions blank rather than lie. No last-good ref:
+            deps:[invoiceId] resets useAsync and a ref would paint the previous invoice's
+            timestamps. */}
+        {approval.status !== 'idle' && approval.status !== 'loading' && (
+          <StatusStrip
+            nodes={stripNodes(history.data ?? [], approval.status === 'ready' ? approval.data : null, inv.status)}
+          />
+        )}
+
         <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-          {/* The left-column card has two mutually exclusive bodies ([edit-mode-in-body]).
-              The read-only one below is unchanged from before INVED-01-07 -- deliberately,
-              so the split ships zero read-mode visual diff. */}
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            {editing ? (
-              <InvoiceEditBody
-                ctx={ctx}
-                base={base}
-                invoiceId={invoiceId}
-                inv={inv}
-                onSaved={handleSaved}
-                onCancel={() => setEditing(false)}
-              />
-            ) : (
-              <>
-                <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
-                    <div>
-                      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{inv.supplier_name ?? '—'}</div>
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>TIN {inv.supplier_tin ?? '—'}</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
-                      <div data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(inv.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(inv.buyer_tin) ? BUYER_TIN_MISSING : inv.buyer_tin}</div>
-                    </div>
-                  </div>
-                  <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
-                      <span className="label">Description</span>
-                      <span className="label" style={{ textAlign: 'right' }}>Qty</span>
-                      <span className="label" style={{ textAlign: 'right' }}>Unit</span>
-                      <span className="label" style={{ textAlign: 'right' }}>Amount</span>
-                    </div>
-                    {items.map((it) => (
-                      <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
-                        <span style={{ fontSize: 13 }}>{it.description ?? '—'}</span>
-                        <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.quantity ?? '—'}</span>
-                        <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.unit_price != null ? fmtPlain(Number(it.unit_price)) : '—'}</span>
-                        <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{it.line_total != null ? fmt(Number(it.line_total)) : '—'}</span>
+          {/* A wrapper, not a third grid child: a third child auto-places into row 2 and
+              starts below the RAIL's bottom edge whenever the rail is taller, stranding a
+              gap under the record card. minWidth:0 is load-bearing -- `1fr` is
+              minmax(auto,1fr), whose automatic minimum is content-based, and the activity
+              card's 868px table would raise it. Held by the activity card's geometry spec C. */}
+          <div data-testid="invoice-main-column" style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            {/* The left-column card has two mutually exclusive bodies ([edit-mode-in-body]).
+                The read-only one below is unchanged from before INVED-01-07 -- deliberately,
+                so the split ships zero read-mode visual diff. */}
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              {editing ? (
+                <InvoiceEditBody
+                  ctx={ctx}
+                  base={base}
+                  invoiceId={invoiceId}
+                  inv={inv}
+                  onSaved={handleSaved}
+                  onCancel={() => setEditing(false)}
+                />
+              ) : (
+                <>
+                  <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
+                      <div>
+                        <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{inv.supplier_name ?? '—'}</div>
+                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>TIN {inv.supplier_tin ?? '—'}</div>
                       </div>
-                    ))}
+                      <div style={{ textAlign: 'right' }}>
+                        <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
+                        <div data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(inv.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(inv.buyer_tin) ? BUYER_TIN_MISSING : inv.buyer_tin}</div>
+                      </div>
+                    </div>
+                    <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+                        <span className="label">Description</span>
+                        <span className="label" style={{ textAlign: 'right' }}>Qty</span>
+                        <span className="label" style={{ textAlign: 'right' }}>Unit</span>
+                        <span className="label" style={{ textAlign: 'right' }}>Amount</span>
+                      </div>
+                      {items.map((it) => (
+                        <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
+                          <span style={{ fontSize: 13 }}>{it.description ?? '—'}</span>
+                          <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.quantity ?? '—'}</span>
+                          <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.unit_price != null ? fmtPlain(Number(it.unit_price)) : '—'}</span>
+                          <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{it.line_total != null ? fmt(Number(it.line_total)) : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
-                  <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
-                      <span className="money" style={{ fontSize: 13 }}>{subtotal != null ? fmt(subtotal) : '—'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT</span>
-                      <span className="money" style={{ fontSize: 13 }}>{vat != null ? fmt(vat) : '—'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
-                      <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{total != null ? fmt(total) : '—'}</span>
+                  <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
+                        <span className="money" style={{ fontSize: 13 }}>{subtotal != null ? fmt(subtotal) : '—'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT</span>
+                        <span className="money" style={{ fontSize: 13 }}>{vat != null ? fmt(vat) : '—'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
+                        <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{total != null ? fmt(total) : '—'}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </>
-            )}
+                </>
+              )}
+            </div>
+
+            <InvoiceActivityCard ctx={ctx} invoiceId={invoiceId} invoiceNumber={inv.invoice_number} />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div data-testid="invoice-rail" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {inv.status === 'failed' && (
               <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
@@ -1287,7 +1312,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             </div>
 
-            <ApprovalTrailCard run={approval} />
+            <ApprovalStateCard run={approval} />
 
             {!rejectionLeadsRail && rejectionCard}
 
@@ -1296,61 +1321,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 button, so Edit and Re-validate could never be gated apart. Both now live
                 in the page-header actions bar above, independently gated. */}
 
-            {/* Directly above `Status history`, because that is where the evidence sits.
-                NOT titled "Audit trail" (the design's name for the same card):
-                import-wizard.spec.ts:557 asserts that string has zero matches here. */}
+            {/* Not titled "Audit trail" (the design's name): import-wizard.spec.ts:576 pins
+                zero matches. */}
             <SourceDocumentCard meta={source} onOpen={openPreview} />
-
-            {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge
-                above, not this card): on the one poll tick where shouldRefreshHistory
-                fires, history.run() dispatches useAsync's 'start' action and this card
-                drops to <Loading/> before returning at N+1 rows -- a real, accepted
-                flash. Not overlaid like `inv`/`live` above: this card is the ONE render
-                path that is allowed to show its async state honestly, the flash is
-                confined to a single card (never the badge or invoice body), and
-                M5-09-08's oracle already asserts the post-flip count with an
-                auto-retrying toHaveCount(N+1), not a point-in-time read across the
-                window. Overlaying history too would duplicate the runId/live-clearing
-                machinery above for a card whose own oracle tolerates the dip. */}
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                <span className="card-title">Status history</span>
-              </div>
-              <div data-testid="status-history" style={{ padding: '16px 18px' }}>
-                {history.status === 'loading' && <Loading label="Loading history…" />}
-                {history.status === 'error' && history.error && <ErrorState error={history.error} onRetry={history.run} />}
-                {history.status === 'empty' && <div style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>No history yet.</div>}
-                {history.status === 'ready' &&
-                  (history.data ?? []).map((h, i, arr) => (
-                    <div key={i} data-testid="status-history-row" style={{ display: 'flex', gap: 12 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--fg-3)', marginTop: 4 }} />
-                        <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: i === arr.length - 1 ? '0px' : '20px' }} />
-                      </div>
-                      <div style={{ paddingBottom: 16 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>
-                          {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                          {/* overflowWrap 'anywhere' (not 'break-word'): the server's email rung
-                              (internal/actor/actor.go:39-40) is one unbreakable token, and only
-                              'anywhere' shrinks min-content so the 220px rail cannot clip it
-                              behind the card's overflow:hidden. invoice-surfaces.spec.ts:2448. */}
-                          <span
-                            data-testid="status-history-actor"
-                            className={actorLabel(h.actor, { name: h.actor_name, kind: h.actor_kind }).mono ? 'mono' : undefined}
-                            style={{ overflowWrap: 'anywhere' }}
-                          >
-                            {actorLabel(h.actor, { name: h.actor_name, kind: h.actor_kind }).text}
-                          </span>
-                          {' · '}
-                          <span className="mono">{fmtDateTime(h.changed_at)}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </div>
           </div>
         </div>
 

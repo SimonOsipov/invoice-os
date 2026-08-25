@@ -2,8 +2,8 @@
 // BUG-03-03). Moved verbatim from SourceDocumentRail.test.ts's uploaderLabel describe
 // block, plus the 'system' case -- which AUDIT-02-04 inverted (note at the second describe).
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { APP_PERSONAS } from '../auth'
@@ -288,7 +288,7 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
   })
 
   // AC #6's mechanism, asserted directly: the parameter is OPTIONAL, so passing nothing
-  // and passing undefined are the same call, and the four pairless callers keep compiling.
+  // and passing undefined are the same call, and the five pairless callers keep compiling.
   it('omitting the pair and passing undefined are the same call', () => {
     const subjects = [FIRM, INHOUSE, 'system', UNKNOWN, 'not-a-uuid', '']
     expect(subjects.length).toBeGreaterThan(0)
@@ -301,39 +301,65 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
     // source scan below is the arity one.
   })
 
-  // AC #6 (D-23/D-24), mechanically: TWO surfaces pass the resolved pair -- the status
-  // history row, and the no-source canvas that Stage 4 added deliberately (it puts the
-  // actor mid-prose, so it must have the server's answer). A THIRD acquiring one silently
-  // would be a behaviour change on a screen no render test elsewhere would notice.
-  it('the status history row and the no-source canvas pass a resolved pair; the four legacy callers pass one argument', () => {
-    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-    const files = {
-      'components/InvoiceDetail.tsx': { one: 2, two: 2, pair: 'h.actor_name' },
-      'components/SourceDocumentStates.tsx': { one: 0, two: 1, pair: 'createdByResolved' },
-      'components/SourceDocumentRail.tsx': { one: 1, two: 0, pair: '' },
-      'lib/approvals.ts': { one: 1, two: 0, pair: '' },
+  // AC #6 (D-23/D-24), mechanically, over the WHOLE app tree: four call sites pass the
+  // resolved pair, four pass the subject alone. Scanning a hand-picked file list cannot see
+  // a FIFTH surface acquiring a pair silently, so the caller set is asserted too -- a new
+  // caller fails here instead of hiding.
+  it('every actorLabel call site under src: four pass a resolved pair, four pass one argument', () => {
+    const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+    function walk(dir: string): string[] {
+      return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const full = join(dir, e.name)
+        if (e.isDirectory()) return e.name === 'node_modules' ? [] : walk(full)
+        return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [full] : []
+      })
     }
-    const here = dirname(fileURLToPath(import.meta.url))
+
+    // Test files are excluded because they are not surfaces; actor.ts stays IN, its own
+    // declaration renamed so it cannot read as a call.
+    const scrub = (src: string) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '')
+        .replace(/function\s+actorLabel\s*\(/g, 'function DECLARED(')
+
+    const expected: Record<string, { one: number; two: number; pair: string }> = {
+      'components/ActorCell.tsx': { one: 0, two: 1, pair: 'actor_name' },
+      'components/AuditFilterCard.tsx': { one: 0, two: 1, pair: 'f.name' },
+      'components/InvoiceDetail.tsx': { one: 2, two: 0, pair: '' },
+      'components/SourceDocumentRail.tsx': { one: 1, two: 0, pair: '' },
+      'components/SourceDocumentStates.tsx': { one: 0, two: 1, pair: 'createdByResolved' },
+      'lib/invoiceStrip.ts': { one: 1, two: 1, pair: 'row.actor_name' },
+    }
+
+    const files = walk(SRC_DIR)
+    expect(files.length, 'vacuity floor: the walk actually found the tree').toBeGreaterThan(50)
+
+    const found = new Map<string, string[]>()
+    for (const full of files) {
+      const calls = [...scrub(readFileSync(full, 'utf8')).matchAll(/actorLabel\(([^)]*)\)/g)].map((m) => m[1])
+      if (calls.length > 0) found.set(relative(SRC_DIR, full).split(sep).join('/'), calls)
+    }
+
+    expect([...found.keys()].sort(), 'the complete caller set -- a new one belongs in `expected`').toEqual(
+      Object.keys(expected).sort(),
+    )
 
     let totalOne = 0
     let totalTwo = 0
-    for (const [rel, expected] of Object.entries(files)) {
-      const src = strip(readFileSync(join(here, '..', rel), 'utf8'))
-      const calls = [...src.matchAll(/actorLabel\(([^)]*)\)/g)].map((m) => m[1])
-      expect(calls.length, `no actorLabel call found in ${rel}`).toBeGreaterThan(0)
-
+    for (const [rel, calls] of found) {
       const two = calls.filter((a) => a.includes(','))
       const one = calls.filter((a) => !a.includes(','))
-      expect(one.length, `one-argument actorLabel calls in ${rel}`).toBe(expected.one)
-      expect(two.length, `two-argument actorLabel calls in ${rel}`).toBe(expected.two)
-      // Every pair-passing call names its own file's wire-derived source: the history row
-      // reads actor_name off the wire, and the canvas threads the prop InvoiceDetail built
-      // from it rather than rebuilding one locally.
-      for (const args of two) expect(args, `resolved pair in ${rel}`).toContain(expected.pair)
+      expect(one.length, `one-argument actorLabel calls in ${rel}`).toBe(expected[rel].one)
+      expect(two.length, `two-argument actorLabel calls in ${rel}`).toBe(expected[rel].two)
+      // Every pair-passing call names its own file's wire-derived source rather than
+      // rebuilding one locally.
+      for (const args of two) expect(args, `resolved pair in ${rel}`).toContain(expected[rel].pair)
       totalOne += one.length
       totalTwo += two.length
     }
     expect(totalOne, 'the four pairless callers').toBe(4)
-    expect(totalTwo, 'the status history className + text calls, plus the no-source canvas').toBe(3)
+    expect(totalTwo, 'the four pair-passing callers').toBe(4)
   })
 })

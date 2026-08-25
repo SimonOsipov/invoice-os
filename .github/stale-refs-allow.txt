@@ -39,3 +39,13 @@ Folake Adesina +1
 # One line and not five: the other four retired scopes still have real
 # producers, and a suppression with no finding behind it cannot be falsified.
 Credit notes & adjustments
+
+# --- absence registries ---------------------------------------------------
+# `status-history` is the invoice-detail card AUDIT-09-02 retired. The rail-order
+# specs list it in a RAIL_WATCHED array so the one-shot document-order read proves
+# it is GONE — same reason as the registries above: nothing produces it any more,
+# and that is precisely what the array asserts. Removing the literal would delete
+# the guarantee, so the entry is for the absence guard, not to silence a break.
+# Literal and not `file:`: invoice-surfaces.spec.ts carries dozens of live
+# assertions a file-level suppression would blind.
+status-history

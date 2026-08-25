@@ -17,7 +17,7 @@ import { ApiError, type ApiFetchOptions } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
 import {
-  APPROVAL_TRAIL_COPY,
+  APPROVAL_CARD_COPY,
   APPROVALS_COPY,
   approvalOutcome,
   approvalProgressLabel,
@@ -25,8 +25,7 @@ import {
   approvalRunStateView,
   approvalSelectAllState,
   approvalsBarView,
-  approvalTrailDecisions,
-  approvalTrailSteps,
+  approvalStateView,
   approveInvoices,
   canRejectReason,
   decideInvoice,
@@ -34,15 +33,13 @@ import {
   getInvoiceApprovalRun,
   isApprovableRow,
   listAwaitingApproval,
+  pendingApprovalStep,
   pruneApprovalSelection,
   type ApprovalRun,
-  type ApprovalRunDecision,
   type ApprovalRunStep,
   type ApproveResult,
 } from './approvals'
-import { APP_PERSONAS } from '../auth'
-import { actorLabel } from './actor'
-import { fmtDate, fmtDateTime } from './format'
+import { fmtDate } from './format'
 import type { InvoiceApproval, InvoiceRecord, ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -1191,12 +1188,8 @@ describe('decisionBlockedReasons: adversarial dedup edges (QA-added)', () => {
   })
 })
 
-// --- APPR-13-02 (task-552, Mode A) -- RED specs for the trail projection:
-// approvalRunStateView/approvalTrailSteps/approvalTrailDecisions (AC-1..AC-7). The two
-// view interfaces are real and complete; the three functions throw
-// `new Error('not implemented')`. APPROVAL_TRAIL_COPY/DETAIL_DECISION_COPY are real,
-// complete copy consts from day one (a stub const would make the copy-comparison
-// assertions below meaningless).
+// --- AUDIT-09-06: the approval state projection. approvalRunStateView survives the
+// trail projection's deletion because invoiceStrip.ts's node 3 reads it.
 
 function baseStep(overrides: Partial<ApprovalRunStep> = {}): ApprovalRunStep {
   return {
@@ -1217,116 +1210,149 @@ function baseStep(overrides: Partial<ApprovalRunStep> = {}): ApprovalRunStep {
   }
 }
 
-function baseDecision(overrides: Partial<ApprovalRunDecision> = {}): ApprovalRunDecision {
-  return {
-    run_step_id: 'step-1',
-    ord: 0,
-    decision: 'approved',
-    actor: APP_PERSONAS.firm.subject,
-    decided_at: '2026-08-10T12:00:00Z',
-    reason: null,
-    ...overrides,
-  }
-}
-
-function trailRun(steps: ApprovalRunStep[], decisions: ApprovalRunDecision[] = []): ApprovalRun {
+function stateRun(steps: ApprovalRunStep[], state = 'open'): ApprovalRun {
   return {
     run_id: 'run-1',
-    state: 'open',
+    state,
     opened_at: '2026-08-01T00:00:00Z',
     closed_at: null,
     closed_by: null,
     steps,
-    decisions,
+    decisions: [],
   }
 }
 
-describe('approvalTrailSteps: ord ordering and 1-based ord1 (AC-1)', () => {
-  it('steps keep wire order and are 1-based', () => {
-    const run = trailRun([baseStep({ ord: 0 }), baseStep({ ord: 1 }), baseStep({ ord: 2 })])
+describe("pendingApprovalStep: the server's own predicate (P-14)", () => {
+  it('the lowest ord wins regardless of array order', () => {
+    const later = baseStep({ ord: 2, workflow_role_title: 'Tax Reviewer' })
+    const earlier = baseStep({ ord: 1, workflow_role_title: 'Engagement Manager' })
 
-    const views = approvalTrailSteps(run)
+    // Supplied out of ord order: a .find() that trusts array position returns `later`.
+    expect(pendingApprovalStep(stateRun([later, earlier]))).toBe(earlier)
+  })
 
-    expect(views.map((v) => v.ord1)).toEqual([1, 2, 3])
+  it('null on every run state but open -- a voided run keeps its pending steps (P-13)', () => {
+    const steps = [baseStep({ ord: 0 })]
+
+    // Positive control first: the identical steps DO yield the step on an open run, so the
+    // nulls below are the state gate and not a predicate that never matches.
+    expect(pendingApprovalStep(stateRun(steps, 'open'))).toBe(steps[0])
+    for (const state of ['approved', 'rejected', 'cancelled', '', 'weird']) {
+      expect(pendingApprovalStep(stateRun(steps, state)), state).toBeNull()
+    }
+  })
+
+  it('kind must be approval -- a pending notify/condition/autoapprove step is not a holder', () => {
+    for (const kind of ['notify', 'condition', 'autoapprove']) {
+      expect(pendingApprovalStep(stateRun([baseStep({ kind })])), kind).toBeNull()
+    }
+    // Positive control on the same fixture axis.
+    expect(pendingApprovalStep(stateRun([baseStep({ kind: 'approval' })]))).not.toBeNull()
+  })
+
+  it('a non-pending approval step is not a holder', () => {
+    for (const state of ['satisfied', 'skipped', 'rejected']) {
+      expect(pendingApprovalStep(stateRun([baseStep({ state })])), state).toBeNull()
+    }
   })
 })
 
-describe('approvalTrailSteps: notify-note presence (AC-2)', () => {
-  it('a notify step carries the no-delivery note, target/channel survive untouched', () => {
-    const step = baseStep({ kind: 'notify', notify_target: 'finance@x', notify_channel: 'email' })
-    const run = trailRun([step])
+describe("approvalStateView: the rail card's pure core", () => {
+  it('overdue wins over a formatted due date', () => {
+    const dueAt = '2026-07-01T00:00:00Z'
 
-    const [view] = approvalTrailSteps(run)
+    const view = approvalStateView(stateRun([baseStep({ overdue: true, due_at: dueAt })]))
 
-    expect(view.notifyNote).toBe(APPROVAL_TRAIL_COPY.notifyNote)
-    // TrailStepView carries notifyTarget/notifyChannel (Stage 3 addition, story AC-4 --
-    // the card renders "<target> · <channel>") as a straight passthrough (D-34): the
-    // view fields must equal the fixture's values, not just leave the source untouched.
-    expect(view.notifyTarget).toBe('finance@x')
-    expect(view.notifyChannel).toBe('email')
-    expect(step.notify_target).toBe('finance@x')
-    expect(step.notify_channel).toBe('email')
+    expect(view.pending?.dueLabel).toBe(APPROVAL_CARD_COPY.overdue)
+    expect(view.pending?.dueLabel).not.toBe(fmtDate(dueAt))
+    // Positive control: the same due_at DOES format once the server stops calling it overdue.
+    expect(approvalStateView(stateRun([baseStep({ overdue: false, due_at: dueAt })])).pending?.dueLabel).toBe(fmtDate(dueAt))
   })
 
-  it('a non-notify step carries no note', () => {
-    const run = trailRun([
-      baseStep({ ord: 0, kind: 'approval' }),
-      baseStep({ ord: 1, kind: 'condition' }),
-      baseStep({ ord: 2, kind: 'autoapprove' }),
-    ])
+  it('a null role title falls back to the em dash, never the string "null"', () => {
+    const view = approvalStateView(stateRun([baseStep({ workflow_role_key: null, workflow_role_title: null })]))
 
-    const views = approvalTrailSteps(run)
+    expect(view.pending?.roleTitle).toBe('—')
+    expect(view.pending?.holderText).toBeNull()
+  })
 
-    expect(views.map((v) => v.notifyNote)).toEqual([null, null, null])
+  it('holder is a passthrough, never re-derived through roles.ts (D-34)', () => {
+    // withExtra's "+N" form (internal/approval/read_model.go) survives byte for byte.
+    const view = approvalStateView(stateRun([baseStep({ holder: { text: 'Ada Obi +2', warn: false } })]))
+
+    expect(view.pending?.holderText).toBe('Ada Obi +2')
+    expect(view.pending?.holderWarn).toBe(false)
+    expect(approvalStateView(stateRun([baseStep({ holder: { text: 'Nobody assigned', warn: true } })])).pending?.holderWarn).toBe(true)
+  })
+
+  it('voided is exactly run.state === "cancelled"', () => {
+    const steps = [baseStep({ ord: 0 })]
+
+    expect(approvalStateView(stateRun(steps, 'cancelled')).voided).toBe(true)
+    for (const state of ['open', 'approved', 'rejected', 'weird']) {
+      expect(approvalStateView(stateRun(steps, state)).voided, state).toBe(false)
+    }
+  })
+
+  it('the state label and tone come from approvalRunStateView, and pending is null off an open run', () => {
+    const steps = [baseStep({ ord: 0, workflow_role_title: 'Finance lead' })]
+
+    const open = approvalStateView(stateRun(steps, 'open'))
+    expect(open.stateLabel).toBe(APPROVAL_CARD_COPY.stateOpen)
+    expect(open.stateTone).toBe('amber')
+    expect(open.pending?.roleTitle).toBe('Finance lead')
+
+    const cancelled = approvalStateView(stateRun(steps, 'cancelled'))
+    expect(cancelled.stateLabel).toBe(APPROVAL_CARD_COPY.stateCancelled)
+    expect(cancelled.pending).toBeNull()
   })
 })
 
-describe('approvalTrailSteps: kind labels, known and unknown (AC-3)', () => {
-  it('an autoapprove step says nobody was asked', () => {
-    const run = trailRun([baseStep({ kind: 'autoapprove', state: 'satisfied' })])
+// Three assertions the deleted approvals.test.ts describes carried that arch 4.5's ledger
+// does not name, re-expressed against the new projection. Each survives a shape the wire
+// can still produce; none is reached by the specs above.
+describe('approvalStateView: edges the retired trail projection covered (AUDIT-09-06 QA)', () => {
+  it('an OPEN run with no steps at all yields no pending step, and does not throw', () => {
+    // A policy whose ladder is all conditions/notifies arms an open run with no approval
+    // step. Retired twin: `an empty steps array projects to an empty array, does not throw`.
+    // Positive control on the same axis, first: one pending approval step DOES yield a holder.
+    expect(approvalStateView(stateRun([baseStep({ ord: 0 })], 'open')).pending).not.toBeNull()
 
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.kindLabel).toBe(APPROVAL_TRAIL_COPY.kindAutoapprove)
+    const view = approvalStateView(stateRun([], 'open'))
+    expect(view.pending, 'an empty ladder is nobody waiting, not a throw').toBeNull()
+    expect(view.stateLabel).toBe(APPROVAL_CARD_COPY.stateOpen)
+    expect(view.voided).toBe(false)
+    expect(pendingApprovalStep(stateRun([], 'open'))).toBeNull()
   })
 
-  it('an unknown kind renders itself', () => {
-    const run = trailRun([baseStep({ kind: 'quorum' })])
+  it('a malformed due_at falls through to fmtDate\'s em-dash guard, never "Invalid Date"', () => {
+    // approvalStateView calls fmtDate(step.due_at) unguarded; fmtDate answers the em dash
+    // on a NaN date (lib/format.ts). Nothing has pinned that path since the trail
+    // projection died. Positive control on the same field: a well-formed due_at formats.
+    expect(approvalStateView(stateRun([baseStep({ due_at: '2026-07-01T00:00:00Z' })])).pending?.dueLabel).toBe(
+      fmtDate('2026-07-01T00:00:00Z'),
+    )
 
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.kindLabel).toBe('quorum')
-  })
-})
-
-describe('approvalTrailSteps: due-date precedence, overdue wins (AC-4)', () => {
-  it('overdue beats a due date', () => {
-    const dueAt = '2026-01-01T00:00:00Z'
-    const run = trailRun([baseStep({ overdue: true, due_at: dueAt })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.dueLabel).toBe(APPROVAL_TRAIL_COPY.overdue)
-    expect(view.dueLabel).not.toBe(fmtDate(dueAt))
+    const label = approvalStateView(stateRun([baseStep({ due_at: 'not-a-date' })])).pending?.dueLabel
+    expect(label).toBe('\u2014')
+    expect(label).not.toMatch(/Invalid/i)
   })
 
-  it('a settled step with a stale due_at is not overdue -- the server already gates overdue on state==="pending" (read_model.go:161)', () => {
-    const dueAt = '2020-01-01T00:00:00Z'
-    const run = trailRun([baseStep({ state: 'satisfied', overdue: false, due_at: dueAt })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.overdue).toBe(false)
-    expect(view.dueLabel).toBe(fmtDate(dueAt))
+  it('an empty-string holder text is not the same as an absent one', () => {
+    // `?? null` keeps '' as ''; the card's `holderText != null` guard then renders an empty
+    // holder-name line instead of omitting it. Conflating the two is a one-character change
+    // (`??` -> `||`). Retired twin of the same name.
+    expect(approvalStateView(stateRun([baseStep({ holder: { text: '', warn: true } })])).pending?.holderText).toBe('')
+    expect(approvalStateView(stateRun([baseStep({ holder: null })])).pending?.holderText).toBeNull()
   })
 })
 
 describe('approvalRunStateView: the four run states, plus an unknown fallback (AC-5)', () => {
   it('the four run states map to label and tone', () => {
-    expect(approvalRunStateView('open')).toEqual({ label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' })
-    expect(approvalRunStateView('approved')).toEqual({ label: APPROVAL_TRAIL_COPY.stateApproved, tone: 'green' })
-    expect(approvalRunStateView('rejected')).toEqual({ label: APPROVAL_TRAIL_COPY.stateRejected, tone: 'red' })
-    expect(approvalRunStateView('cancelled')).toEqual({ label: APPROVAL_TRAIL_COPY.stateCancelled, tone: 'muted' })
+    expect(approvalRunStateView('open')).toEqual({ label: APPROVAL_CARD_COPY.stateOpen, tone: 'amber' })
+    expect(approvalRunStateView('approved')).toEqual({ label: APPROVAL_CARD_COPY.stateApproved, tone: 'green' })
+    expect(approvalRunStateView('rejected')).toEqual({ label: APPROVAL_CARD_COPY.stateRejected, tone: 'red' })
+    expect(approvalRunStateView('cancelled')).toEqual({ label: APPROVAL_CARD_COPY.stateCancelled, tone: 'muted' })
   })
 
   it('an unknown run state is muted and self-labelled', () => {
@@ -1334,153 +1360,15 @@ describe('approvalRunStateView: the four run states, plus an unknown fallback (A
   })
 })
 
-describe('approvalTrailSteps: holder passthrough, never re-derived through roles.ts (AC-7, D-34)', () => {
-  it('holder text and warn pass through untouched', () => {
-    const run = trailRun([baseStep({ holder: { text: 'Ada Obi +2', warn: true } })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.holderText).toBe('Ada Obi +2')
-    expect(view.holderWarn).toBe(true)
-  })
-
-  it('a null holder yields null, not a fabricated name', () => {
-    const run = trailRun([baseStep({ holder: null, workflow_role_title: null })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.holderText).toBeNull()
-    expect(view.roleTitle).toBe('—')
-  })
-})
-
-describe('approvalTrailDecisions: actor, time and reason projection', () => {
-  it('decisions project actor, time and reason', () => {
-    const decidedAt = '2026-08-10T12:34:56Z'
-    const decision = baseDecision({ actor: APP_PERSONAS.firm.subject, decided_at: decidedAt, reason: 'Looks right' })
-    const run = trailRun([], [decision])
-
-    const [view] = approvalTrailDecisions(run)
-
-    const expectedActor = actorLabel(APP_PERSONAS.firm.subject)
-    expect(view.actorText).toBe(expectedActor.text)
-    expect(view.actorMono).toBe(expectedActor.mono)
-    expect(view.whenLabel).toBe(fmtDateTime(decidedAt))
-    expect(view.reason).toBe('Looks right')
-  })
-})
-
-// GREEN by design: the needle, floor and no-import facts this row checks are all
-// already true today (Mode A adds the real, exported function signatures now -- only
-// their bodies defer to Stage 3 -- and the two copy consts are real from day one), so
-// there is no throwing stub on this row's path to turn it red. Reusing the existing
-// LIB_APPROVALS_PATH/readFileSync pair (:850-852) per Stage 1.
+// D-34: holderText is a passthrough, so the projection must never reach roles.ts for a
+// Role[]/Member[] it does not receive. Reuses the LIB_APPROVALS_PATH/readFileSync pair above.
 describe('lib/approvals.ts source: no import from roles.ts (AC-7, D-34)', () => {
   it('the projection does not import roles.ts', () => {
     const libSource = readFileSync(LIB_APPROVALS_PATH, 'utf8')
 
-    expect(libSource, 'lost anchor on lib/approvals.ts').toContain('export function approvalTrailSteps')
+    expect(libSource, 'lost anchor on lib/approvals.ts').toContain('export function approvalStateView')
     expect(libSource.length).toBeGreaterThan(15000)
     expect(libSource).not.toContain("from './roles'")
-  })
-})
-
-describe('approvalTrailSteps: adversarial edges (QA Stage 4, Mode B)', () => {
-  it('an empty steps array projects to an empty array, does not throw', () => {
-    const run = trailRun([])
-
-    expect(approvalTrailSteps(run)).toEqual([])
-  })
-
-  it('produces exactly one view per wire step -- guards AC rows 1-7/10-11 against a silently-empty projection', () => {
-    const run = trailRun([baseStep({ ord: 0 }), baseStep({ ord: 1 }), baseStep({ ord: 2 })])
-
-    expect(approvalTrailSteps(run).length).toBe(run.steps.length)
-    expect(approvalTrailSteps(run).length).toBeGreaterThan(0)
-  })
-
-  it('wire order is preserved verbatim even when ord is non-contiguous and out of ascending order -- the projection never re-sorts (the server already sorts)', () => {
-    const run = trailRun([baseStep({ ord: 5 }), baseStep({ ord: 1 }), baseStep({ ord: 9 })])
-
-    const views = approvalTrailSteps(run)
-
-    // Array order, not ord-ascending order: 5,1,9 stay in that sequence (ord1 6,2,10).
-    expect(views.map((v) => v.ord1)).toEqual([6, 2, 10])
-  })
-
-  it('a notify step with null target/channel still carries the note, and the fields stay null -- not the string "null"', () => {
-    const run = trailRun([baseStep({ kind: 'notify', notify_target: null, notify_channel: null })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.notifyNote).toBe(APPROVAL_TRAIL_COPY.notifyNote)
-    expect(view.notifyTarget).toBeNull()
-    expect(view.notifyChannel).toBeNull()
-  })
-
-  it('an empty-string holder text is not the same as an absent one', () => {
-    const run = trailRun([baseStep({ holder: { text: '', warn: true } })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.holderText).toBe('')
-    expect(view.holderText).not.toBeNull()
-    expect(view.holderWarn).toBe(true)
-  })
-
-  it('a malformed due_at falls through to fmtDate\'s own em-dash guard, not a thrown error or a fabricated label', () => {
-    const run = trailRun([baseStep({ state: 'pending', overdue: false, due_at: 'not-a-real-date' })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.dueLabel).toBe(fmtDate('not-a-real-date'))
-    expect(view.dueLabel).toBe('—')
-  })
-
-  it('a pending step with a future due_at and overdue:false shows the formatted date, not the overdue label', () => {
-    const dueAt = '2099-01-01T00:00:00Z'
-    const run = trailRun([baseStep({ state: 'pending', overdue: false, due_at: dueAt })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.overdue).toBe(false)
-    expect(view.dueLabel).toBe(fmtDate(dueAt))
-    expect(view.dueLabel).not.toBe(APPROVAL_TRAIL_COPY.overdue)
-  })
-})
-
-describe('approvalTrailDecisions: adversarial edges (QA Stage 4, Mode B)', () => {
-  it('an empty decisions array projects to an empty array, does not throw', () => {
-    const run = trailRun([], [])
-
-    expect(approvalTrailDecisions(run)).toEqual([])
-  })
-
-  it('produces exactly one view per wire decision', () => {
-    const run = trailRun([], [baseDecision({ ord: 0 }), baseDecision({ ord: 1 })])
-
-    expect(approvalTrailDecisions(run).length).toBe(run.decisions.length)
-    expect(approvalTrailDecisions(run).length).toBeGreaterThan(0)
-  })
-
-  it('an unknown actor subject falls through actorLabel to the raw subject, mono', () => {
-    const decision = baseDecision({ actor: 'ext-9999-not-a-persona' })
-    const run = trailRun([], [decision])
-
-    const [view] = approvalTrailDecisions(run)
-
-    expect(view.actorText).toBe('ext-9999-not-a-persona')
-    expect(view.actorMono).toBe(true)
-  })
-
-  it('a null reason and an empty-string reason project distinctly, neither one collapsing into the other', () => {
-    const run = trailRun([], [baseDecision({ ord: 0, reason: null }), baseDecision({ ord: 1, reason: '' })])
-
-    const [nullView, emptyView] = approvalTrailDecisions(run)
-
-    expect(nullView.reason).toBeNull()
-    expect(emptyView.reason).toBe('')
-    expect(emptyView.reason).not.toBeNull()
   })
 })
 
@@ -1491,15 +1379,13 @@ describe('approvalRunStateView: adversarial edges (QA Stage 4, Mode B)', () => {
 
   it('a case-differing state is exact-match only, never case-insensitive', () => {
     expect(approvalRunStateView('Open')).toEqual({ label: 'Open', tone: 'muted' })
-    expect(approvalRunStateView('Open')).not.toEqual({ label: APPROVAL_TRAIL_COPY.stateOpen, tone: 'amber' })
+    expect(approvalRunStateView('Open')).not.toEqual({ label: APPROVAL_CARD_COPY.stateOpen, tone: 'amber' })
   })
 })
 
-// CodeRabbit PR #167 fix: known/kindLabels/stateLabels/outcomeLabels are plain object
-// literals, so an unguarded `map[key] ?? fallback` resolves an inherited
-// Object.prototype member ('constructor', 'toString', ...) as a hit instead of falling
-// through -- `??` never fires because the inherited value isn't null/undefined. Each
-// lookup now guards with Object.hasOwn first.
+// CodeRabbit PR #167 fix: approvalRunStateView's `known` map is a plain object literal, so
+// an unguarded `map[key] ?? fallback` resolves an inherited Object.prototype member
+// ('constructor', 'toString') as a hit instead of falling through. Object.hasOwn guards it.
 describe('prototype-pollution guard: inherited Object.prototype keys never resolve as labels (CodeRabbit PR #167)', () => {
   it('approvalRunStateView("constructor") falls through to the raw string, not Object', () => {
     expect(approvalRunStateView('constructor')).toEqual({ label: 'constructor', tone: 'muted' })
@@ -1507,53 +1393,5 @@ describe('prototype-pollution guard: inherited Object.prototype keys never resol
 
   it('approvalRunStateView("toString") falls through to the raw string', () => {
     expect(approvalRunStateView('toString')).toEqual({ label: 'toString', tone: 'muted' })
-  })
-
-  it('approvalTrailSteps: a step kind of "constructor" falls through to the raw string', () => {
-    const run = trailRun([baseStep({ kind: 'constructor' })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.kindLabel).toBe('constructor')
-  })
-
-  it('approvalTrailSteps: a step kind of "toString" falls through to the raw string', () => {
-    const run = trailRun([baseStep({ kind: 'toString' })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.kindLabel).toBe('toString')
-  })
-
-  it('approvalTrailSteps: a step state of "constructor" falls through to the raw string', () => {
-    const run = trailRun([baseStep({ state: 'constructor' })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.stateLabel).toBe('constructor')
-  })
-
-  it('approvalTrailSteps: a step state of "toString" falls through to the raw string', () => {
-    const run = trailRun([baseStep({ state: 'toString' })])
-
-    const [view] = approvalTrailSteps(run)
-
-    expect(view.stateLabel).toBe('toString')
-  })
-
-  it('approvalTrailDecisions: a decision of "constructor" falls through to the raw string', () => {
-    const run = trailRun([], [baseDecision({ decision: 'constructor' })])
-
-    const [view] = approvalTrailDecisions(run)
-
-    expect(view.outcomeLabel).toBe('constructor')
-  })
-
-  it('approvalTrailDecisions: a decision of "toString" falls through to the raw string', () => {
-    const run = trailRun([], [baseDecision({ decision: 'toString' })])
-
-    const [view] = approvalTrailDecisions(run)
-
-    expect(view.outcomeLabel).toBe('toString')
   })
 })

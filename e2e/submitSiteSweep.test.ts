@@ -395,6 +395,12 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
     'click:review-bulk-confirm',
     1,
   ],
+  [
+    INVOICE_SURFACES,
+    'test:detail surface: a history actor the server cannot name renders verbatim and is never clipped',
+    'click:batch-submit-confirm',
+    1,
+  ],
   [INVOICE_SURFACES, 'test:submission surface: a failed invoice is an honest dead end', 'transitionInvoice:queued', 1],
   [
     INVOICE_SURFACES,
@@ -402,6 +408,22 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
     'transitionInvoice:queued',
     1,
   ],
+  // The state-strip geometry block's test.beforeAll -- a describe-level fixture, so
+  // resolveEnclosing finds neither a test() nor a top-level function declaration. It drives one
+  // invoice to `failed` (via queued) purely so the strip has five attributed nodes to measure;
+  // no browser submit control is involved.
+  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 1],
+  // The activity-card geometry block's test.beforeAll (AUDIT-09-04), same shape as #1
+  // above: it drives one invoice to `failed` (via queued) so the card has real audit rows
+  // to measure. No browser submit control is involved.
+  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 2],
+  // AUDIT-09-08's deployed journey: the FIRS-rejection leg submits from the register via
+  // submitSelected, so the helper's one click expands to this call site (AC-7).
+  [INVOICE_SURFACES, 'test:detail surface: a FIRS rejection redens the final node only', 'click:batch-submit-confirm', 1],
+  // AUDIT-09-09's rail-order guard: the fiscal-record card only mounts on `accepted` with a
+  // real IRN, and a raw transitionInvoice never creates a submission job -- so pinning the
+  // rail's four cards needs a real browser submit.
+  [INVOICE_SURFACES, 'test:detail surface: the untouched rail order is unchanged', 'click:batch-submit-confirm', 1],
 ]
 
 // AC-16's four observers, keyed the same way as the two manifests above -- not by line
@@ -498,13 +520,19 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
     // AC-9 as literally worded said "fails below 7"; the story's own author confirmed that
     // was a miscount (7 was meant as "5 submitSelected callers + detail-submit-confirm +
     // review-bulk-confirm", forgetting it should then ADD the 2 transitionInvoice calls to
-    // reach 9, not stop at 7). A floor of 7 against a measured population of 9 lets someone
-    // delete two real submit sites and stay green -- the same defect class as counting
-    // observers instead of submits. Floored at the measured 9: 5 submitSelected callers
-    // (batch-submit-confirm) + 1 detail-submit-confirm + 1 review-bulk-confirm + 2
-    // transitionInvoice(..., 'queued').
-    it('floor: at least 9 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
-      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 9`).toBeGreaterThanOrEqual(9)
+    // reach 9, not stop at 7). A floor below the measured population lets someone delete a
+    // real submit site and stay green -- the same defect class as counting observers instead
+    // of submits.
+    //
+    // Re-measured 2026-08-25 (AUDIT-09-09): 14 = 8 submitSelected callers
+    // (batch-submit-confirm) + 1 detail-submit-confirm + 1 review-bulk-confirm + 4
+    // transitionInvoice(..., 'queued'). 13 -> 14 is AUDIT-09-09's rail-order guard, whose
+    // accepted fixture needs a real browser submit. Manifesting a site and flooring it are
+    // two steps and the suite only enforces the first -- AUDIT-09-04 manifested its site and
+    // left the floor at 11 against a population of 12, so an "exact" floor sat a whole site
+    // slack until AUDIT-09-08 corrected it.
+    it('floor: at least 14 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 14`).toBeGreaterThanOrEqual(14)
     })
 
     it('every submit-driving call site is in the manifest', () => {
@@ -572,8 +600,8 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 //    about.
 //
 // 4. THE FLOORS ARE EXACT, NOT SOFT -- both equal today's full measured population: api 19
-//    (this file's own scan), topology 9 (5 submitSelected callers + 1 detail-submit-confirm +
-//    1 review-bulk-confirm + 2 transitionInvoice). AC-9 as literally worded said "fails below
+//    (this file's own scan), topology 14 (8 submitSelected callers + 1 detail-submit-confirm +
+//    1 review-bulk-confirm + 4 transitionInvoice). AC-9 as literally worded said "fails below
 //    7"; re-verified 2026-08-18 as a miscount (7 was arithmetic on the way to 9, not the
 //    intended floor) and corrected here, rather than quietly kept, once a floor of 7 against
 //    a population of 9 was pointed out to let someone delete two real submit sites and stay

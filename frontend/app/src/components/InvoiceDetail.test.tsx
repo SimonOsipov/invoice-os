@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
 import { APPROVAL_TRAIL_COPY, type ApprovalRun } from '../lib/approvals'
+import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { fmtDateTime } from '../lib/format'
 import {
@@ -43,6 +44,20 @@ interface MockResponse {
 }
 
 const UBL_FIXTURE = '<?xml version="1.0" encoding="UTF-8"?>\n<Invoice/>\n'
+
+// The activity card's log, empty unless a test passes `auditLog`. That emptiness is why a
+// page-wide text sweep has to carve the card out explicitly -- see AC-6's banner spec.
+const EMPTY_AUDIT_LOG: AuditResponse = {
+  events: [],
+  page: { limit: 100, has_more: false, next_cursor: null },
+  total: 0,
+  log_is_empty: false,
+  facets: { event: [], actor: [], company: [] },
+}
+
+function auditLogOf(events: AuditEvent[]): AuditResponse {
+  return { ...EMPTY_AUDIT_LOG, events, total: events.length }
+}
 
 function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRecord {
   return {
@@ -156,6 +171,8 @@ interface DetailFetchOptions {
   // GET .../source-document. Defaults to the invoice record itself -- a body carrying no
   // `document` key, which every pre-existing test reads as "no source document".
   sourceDocumentResponse?: MockResponse
+  // GET .../audit-log, the activity card's read. Defaults to EMPTY_AUDIT_LOG.
+  auditLog?: AuditResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -255,14 +272,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
       return Promise.resolve<MockResponse>({
         ok: true,
         status: 200,
-        json: () =>
-          Promise.resolve({
-            events: [],
-            page: { limit: 100, has_more: false, next_cursor: null },
-            total: 0,
-            log_is_empty: false,
-            facets: { event: [], actor: [], company: [] },
-          }),
+        json: () => Promise.resolve(opts.auditLog ?? EMPTY_AUDIT_LOG),
       })
     }
     // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
@@ -1483,6 +1493,9 @@ describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', (
   // APP_PERSONAS holds that subject anyway (auth.ts:47-60), so any fall-through prints
   // Honeywell's admin and employer to an Okafor viewer. See actor.test.ts's
   // actorLabel_neverConsultsPersonasWhenTheServerAnswered for the unit-level twin.
+  // Reach: the two document.body sweeps below cover the whole page, so they now police
+  // the activity card's actor and Company cells too, not just the strip's. Inert only
+  // while mockDetailFetch's audit log is empty (F-Q).
   it('AC-9: a row the server could not name never borrows the other tenant\'s persona', async () => {
     const honeywellAdmin = APP_PERSONAS.inhouse.subject
     const history: StatusChange[] = [
@@ -1508,6 +1521,9 @@ describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', (
   // exact (actor.ts:28) and the server's ladder stops on ' ' for the same reason
   // (internal/actor/actor.go:36), so a membership row with a whitespace display_name
   // reaches this span. The security property still holds and is asserted alongside.
+  // Reach: the two document.body sweeps below cover the whole page, so they now police
+  // the activity card's actor and Company cells too, not just the strip's. Inert only
+  // while mockDetailFetch's audit log is empty (F-Q).
   it('QA: a whitespace-only resolved name paints an empty actor cell, and still no persona', async () => {
     const honeywellAdmin = APP_PERSONAS.inhouse.subject
     const history: StatusChange[] = [
@@ -3410,8 +3426,24 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 
   it('AC-6: no success banner is rendered', async () => {
+    // A loaded log, not the default empty one: the activity card renders AuditRow's
+    // 'Approved' label for this event, so the sweep below only means anything against it.
+    // Neutral company name -- APP_PERSONAS.inhouse.org is swept for by two specs above.
+    const approvedEvent: AuditEvent = {
+      id: 'ev-approved-1',
+      created_at: '2026-08-01T01:00:00Z',
+      event: 'invoice.approval_approved',
+      actor: APP_PERSONAS.firm.subject,
+      actor_name: APP_PERSONAS.firm.name,
+      actor_kind: 'person',
+      entity_id: ID,
+      company_name: 'Northgate Foods',
+      company_scope: 'company',
+      payload: { invoice_id: ID },
+    }
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
       approvalResponse: { ok: true, status: 200, json: () => Promise.resolve(APPROVED_RUN) },
+      auditLog: auditLogOf([approvedEvent]),
     })
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -3423,11 +3455,16 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     // says "Approved" from the header, and that is the record, not a banner.
     const card = screen.getByTestId('approval-trail-card')
     const strip = screen.getByTestId('status-strip')
-    const outsideTrail = screen.queryAllByText(/approved|success|sent/i).filter((el) => !card.contains(el))
+    // Carved out for the same reason as the trail card: every AuditRow for an
+    // `invoice.approval_approved` event prints 'Approved', which is the log, not a banner.
+    const activity = screen.getByTestId('invoice-activity')
+    const outside = screen
+      .queryAllByText(/approved|success|sent/i)
+      .filter((el) => !card.contains(el) && !activity.contains(el))
     // The strip's node-3 label is the permanent word 'Approved' -- structure, same as the
-    // pill. Pinning the count keeps that carve-out from swallowing a real banner.
-    expect(outsideTrail.filter((el) => !strip.contains(el))).toHaveLength(0)
-    expect(outsideTrail, "only the strip's node-3 label").toHaveLength(1)
+    // pill. Pinning the count keeps the three carve-outs from swallowing a real banner.
+    expect(outside.filter((el) => !strip.contains(el))).toHaveLength(0)
+    expect(outside, "only the strip's node-3 label").toHaveLength(1)
   })
 
   // Latent guard: no one-line mutation of today's code can fail this row, because

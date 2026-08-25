@@ -41,9 +41,12 @@ export function fmtDateTime(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleString('en-NG')
 }
 
-// RED stub (AUDIT-09-01) -- HH:MM, local, 24h, via pad2. Implemented next.
-export function fmtTime(_iso: string | null | undefined): string {
-  throw new Error('not implemented')
+// HH:MM, local, 24h. pad2 over the Date getters rather than toLocaleTimeString: en-NG
+// resolves to a 12-hour cycle on most ICU builds (format.test.ts T-4).
+export function fmtTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? '—' : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
 export function amount(items: LineItem[]): number {

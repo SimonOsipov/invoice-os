@@ -2497,12 +2497,14 @@ test('detail surface: the armed decision block and approval card, plus their lay
   }
 
   // G2 -- G1 alone proves the card fills the rail and NOTHING about the rail: a card that
-  // perfectly fills a collapsed or 1fr-1fr track passes it. The relationship
-  // `gridTemplateColumns: '1fr 340px'` encodes is that the rail is INVARIANT across widths
-  // while the main column absorbs them. railWidths are G1's own comparand measurements, so
-  // G2a is about the very box G1 measured against.
+  // perfectly fills a collapsed or 1fr-1fr track passes it. railWidths are G1's own comparand
+  // measurements, so G2 is about the very box G1 measured against.
   const railWidths = cardFit.map((entry) => entry.outerWidth)
-  expect(railWidths.length, 'G2 needs every WIDE_WIDTHS entry measured').toBe(WIDE_WIDTHS.length)
+  // Rail and column are paired by INDEX below, so both sweeps must have run the same order.
+  expect(
+    cardFit.map((entry) => entry.width),
+    'G2 needs every WIDE_WIDTHS entry measured, in order',
+  ).toEqual([...WIDE_WIDTHS])
   const mainColumn = page.getByTestId('invoice-main-column')
   const columnWidths: Array<{ width: number; column: number }> = []
   const gridViewport = page.viewportSize()
@@ -2517,13 +2519,38 @@ test('detail surface: the armed decision block and approval card, plus their lay
     if (gridViewport) await page.setViewportSize(gridViewport)
   }
   const spread = (ns: number[]) => Math.max(...ns) - Math.min(...ns)
-  // G2a: the rail is the FIXED track.
-  expect(spread(railWidths), `the rail must not grow with the viewport: ${JSON.stringify(railWidths)}`).toBeLessThanOrEqual(2)
-  // G2b, G2a's non-vacuity floor. Without it G2a passes on a page frozen at one width or on
-  // a detached measurement -- and then G1 is measuring a comparand nothing verified.
+
+  // G2a: the rail is a constant FRACTION of the grid, not a constant width. The inline
+  // `1fr 340px` (InvoiceDetail.tsx:1045) is overridden above 1180 by platform.css:233-236,
+  // `1fr minmax(220px, 25%) !important`, so the rail grows with the viewport (239/279/399/559
+  // across WIDE_WIDTHS) and only its SHARE is invariant. Share of (rail + main), read from the
+  // two boxes themselves, so a scrollbar gutter or a sidebar change cannot move it.
+  const shares = railWidths.map((rail, i) => rail / (rail + columnWidths[i].column))
+  const seen = columnWidths.map((c, i) => ({ ...c, rail: railWidths[i], share: Number(shares[i].toFixed(4)) }))
+  // Both tolerances come from the arithmetic, not from taste. share = 0.25C/(C - 16) for content
+  // box C, so the fixed 16px gap drifts it from 0.2543 (C=956, at 1280) to 0.2518 (C=2236, at
+  // 2560): a 0.0025 band, and 0.0043 at most off 0.25. 0.01 and +/-0.02 clear those ~4x and
+  // still fail hard on the two defects -- `1fr 1fr` sits at 0.50, a rail refrozen at 340px
+  // swings 0.36 -> 0.15. The 220px floor cannot bite here: it is overtaken by 1204px wide.
+  // Asserted on the ROUNDED shares, the ones the message prints, so a failure is reproducible
+  // from its own output rather than from numbers only the run held.
+  expect(
+    spread(seen.map((s) => s.share)),
+    `the rail's share of the grid must not vary with the viewport: ${JSON.stringify(seen)}`,
+  ).toBeLessThanOrEqual(0.01)
+  // The value anchor, without which G2a is vacuous: `1fr 1fr` holds a rock-steady 0.50 share and
+  // passes invariance outright -- the same "passed on the bug it targeted" shape this branch has
+  // already shipped twice.
+  for (const s of seen) {
+    expect(s.share, `the rail must hold its 25% of the grid at ${s.width}px: ${JSON.stringify(seen)}`).toBeGreaterThan(0.23)
+    expect(s.share, `the rail must not overrun its 25% of the grid at ${s.width}px: ${JSON.stringify(seen)}`).toBeLessThan(0.27)
+  }
+  // G2b, G2a's non-vacuity floor. Without it both bounds above pass on a page frozen at one width
+  // or on a detached measurement -- every share identical and correct -- and then G1 is measuring
+  // a comparand nothing verified.
   expect(
     spread(columnWidths.map((c) => c.column)),
-    `the main column must absorb the width instead: ${JSON.stringify(columnWidths)}`,
+    `the main column must absorb the width instead: ${JSON.stringify(seen)}`,
   ).toBeGreaterThan(400)
 
   // G3 -- AC-2's "same rail slot" is a position claim, and DOM order in jsdom is its weaker

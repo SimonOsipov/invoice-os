@@ -315,6 +315,8 @@ export interface InvoiceListResponse {
 // actor_name/actor_kind are the server-resolved display of actor (AUDIT-02-03);
 // actor itself still carries the stored value verbatim. Both are plain required
 // strings -- the server never emits null for either.
+// Mirrored against internal/invoice/invoice.go and e2e/api/client.ts by
+// lib/wireMirrors.test.ts -- edit all three together.
 export interface StatusChange {
   from_status: InvoiceStatus | null
   to_status: InvoiceStatus

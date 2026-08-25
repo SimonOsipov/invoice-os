@@ -36,14 +36,21 @@ const GO_APPROVAL_EVENTS: Record<string, string> = {
   'invoice.approval_cancelled': 'internal/approval/engine.go',
 }
 
+// Comments stripped and braces balanced: taking the first `}` let a braced comment hide
+// every key after it, which is how a holder key could have been added unnoticed.
 function goAuditPayloadKeys(source: string, event: string): string[] {
   const anchor = `"${event}", map[string]any{`
   const start = source.indexOf(anchor)
   if (start < 0) return []
-  const from = start + anchor.length
-  const end = source.indexOf('}', from)
+  const rest = source.slice(start + anchor.length).replace(/\/\/[^\n]*/g, '')
+  let depth = 1
+  let end = -1
+  for (let i = 0; i < rest.length && end < 0; i++) {
+    if (rest[i] === '{') depth++
+    else if (rest[i] === '}' && --depth === 0) end = i
+  }
   if (end < 0) return []
-  return [...source.slice(from, end).matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1])
+  return [...rest.slice(0, end).matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1])
 }
 
 // arch 3.2's fourteen keys. approvals.ts is NOT this subtask's file for a Mode A commit,
@@ -436,8 +443,9 @@ describe('ApprovalStateCard', () => {
       const src = readFileSync(join(__dirname, '../../../..', path), 'utf8')
       expect(src, `lost anchor on ${path} for ${event}`).toContain(`audit.Record(ctx, tx, actor, "${event}"`)
       const keys = goAuditPayloadKeys(src, event)
-      // Floor: a broken extractor returns [], which would satisfy the ban vacuously.
-      expect(keys.length, `${event}: the extractor returned nothing`).toBeGreaterThan(0)
+      // Floor at a real boundary: every one of the four carries run_id, so a truncated or
+      // empty extraction cannot satisfy the ban below vacuously.
+      expect(keys, `${event}: the extractor returned a short key set`).toContain('run_id')
       expect(keys.filter((k) => /holder/i.test(k)), `${event} must carry no holder key`).toEqual([])
     }
   })

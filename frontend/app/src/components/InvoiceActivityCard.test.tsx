@@ -727,17 +727,28 @@ function repoFile(rel: string): string {
   return readFileSync(join(__dirname, '../../../..', rel), 'utf8')
 }
 
-// The map literal's body ends at the first `}` after it opens, so a payload that ever
-// nested a struct would truncate the key set -- which fails the transcription row loudly,
-// never quietly. wireMirrors.test.ts carries the struct-scoped twin of this idea.
+// Comments stripped and braces balanced. Taking the first `}` truncated the body, and a
+// truncation landing exactly on the transcribed boundary hid every key after it while every
+// row below still agreed -- a green ledger over a payload nobody had checked.
 function goAuditPayloadKeys(source: string, event: string): string[] {
   const anchor = `"${event}", map[string]any{`
   const start = source.indexOf(anchor)
   if (start < 0) return []
-  const from = start + anchor.length
-  const end = source.indexOf('}', from)
+  const rest = source.slice(start + anchor.length).replace(/\/\/[^\n]*/g, '')
+  let depth = 1
+  let end = -1
+  for (let i = 0; i < rest.length && end < 0; i++) {
+    if (rest[i] === '{') depth++
+    else if (rest[i] === '}' && --depth === 0) end = i
+  }
   if (end < 0) return []
-  return [...source.slice(from, end).matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1])
+  return [...rest.slice(0, end).matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1])
+}
+
+// indexOf reads the FIRST write site. A second, divergent audit.Record for the same event
+// would be invisible to every row below, so the count is pinned.
+function goAuditRecordSites(source: string, event: string): number {
+  return source.split(`audit.Record(ctx, tx, actor, "${event}"`).length - 1
 }
 
 const APPROVAL_EVENT_SOURCES: Record<string, string> = {
@@ -900,6 +911,35 @@ describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
     }
   })
 
+  it('activityFeed_everyProvenBySpecNameExistsOnDisk', () => {
+    // `holder`'s positive lives in ApprovalStateCard.test.tsx and its negative here; the
+    // ledger links them by prose alone. This reads the named specs off disk so a rename or
+    // a deletion in the sibling file reds here instead of leaving the row unbacked.
+    const SOURCES = [
+      ['components/InvoiceActivityCard.test.tsx', 'activityFeed_ledgerTableIsNonVacuous'],
+      ['components/ApprovalStateCard.test.tsx', 'approvalStateCard_aClosedRunNamesNobody'],
+    ] as const
+    const files = SOURCES.map(([f]) => repoFile(`frontend/app/src/${f}`))
+    // Control needle: each read is a real file, and the right one.
+    SOURCES.forEach(([f, anchor], i) => expect(files[i], `lost anchor on ${f}`).toContain(`it('${anchor}'`))
+
+    const named = [...new Set(RETIRED_TRAIL_FIELDS.flatMap((f) => f.provenBy.split(' + ')))]
+    expect(named.length, 'the ledger names no proving spec').toBeGreaterThanOrEqual(5)
+    for (const name of named) {
+      expect(
+        files.some((src) => src.includes(`it('${name}'`)),
+        `${name} is cited as proof but no spec by that name exists`,
+      ).toBe(true)
+    }
+    // The holder row specifically: its two halves must live in DIFFERENT files, which is
+    // the reason this row exists at all.
+    const holder = RETIRED_TRAIL_FIELDS.find((f) => f.field === 'holder')!.provenBy.split(' + ')
+    expect(holder).toHaveLength(2)
+    expect(files[0].includes(`it('${holder[0]}'`)).toBe(false)
+    expect(files[1].includes(`it('${holder[0]}'`)).toBe(true)
+    expect(files[0].includes(`it('${holder[1]}'`)).toBe(true)
+  })
+
   it('activityFeed_goPayloadKeysAreTheOnesThisTableClaims', () => {
     const decision = repoFile(GO_DECISION)
     const engine = repoFile(GO_ENGINE)
@@ -907,6 +947,12 @@ describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
     // -- a false RED, not a false green. Say so here rather than there.
     expect(decision, `lost anchor on ${GO_DECISION}`).toContain('func commitDecisionTx')
     expect(engine, `lost anchor on ${GO_ENGINE}`).toContain('func CancelLiveRunTx')
+
+    // One write site per event, or the extraction describes a payload the server may no
+    // longer be the only writer of.
+    for (const [event, path] of Object.entries(APPROVAL_EVENT_SOURCES)) {
+      expect(goAuditRecordSites(repoFile(path), event), `${event}: expected exactly one audit.Record site`).toBe(1)
+    }
 
     const extracted = extractedPayloadKeys()
     // Floor: a broken extractor yields [] and every membership check below would report a
@@ -968,12 +1014,33 @@ describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
         expect(label, 'the row must not fall through to the raw identifier').not.toBe(REJECTED_EVENT)
         expect(within(row).getByTestId('audit-what').textContent).toBe(label)
         expect(within(expansion).getByTestId('audit-event-identifier').textContent).toBe(REJECTED_EVENT)
+        // The trail rendered outcomeLabel in colour. The label alone does not carry the
+        // outcome -- dropping `outcome` from the vocabulary entry leaves the text intact.
+        expect(auditEventView(REJECTED_EVENT).tone, 'the decision lost its outcome tone').not.toBeNull()
+        expect(auditEventView(APPROVED_EVENT).tone, 'the decision lost its outcome tone').not.toBeNull()
+        expect(auditEventView(APPROVED_EVENT).tone).not.toBe(auditEventView(REJECTED_EVENT).tone)
       } else {
         expect(payloadFieldLabels(expansion).filter((l) => /holder/i.test(l))).toEqual([])
       }
       proven.push(f.field)
     }
     expect(proven, 'every ledger row must reach an assertion').toEqual(RETIRED_TRAIL_FIELDS.map((f) => f.field))
+  })
+
+  it('activityFeed_theDecisionRowKeepsItsOutcomeTint', async () => {
+    // The trail rendered outcomeLabel green/red. Dropping `outcome` from a vocabulary entry
+    // leaves the label text intact, so the text assertions above cannot see it.
+    const tinted = await expandOne(auditEvent({ event: REJECTED_EVENT, payload: payloadFrom(['run_id']) }))
+    const tintedColour = within(tinted.row).getByTestId('audit-what').style.color
+    cleanup()
+
+    // invoice.approval_armed is the same domain with no outcome -- the control that makes
+    // the difference below about the tint and not about the testid.
+    const plain = await expandOne(auditEvent({ event: 'invoice.approval_armed', payload: payloadFrom(['run_id']) }))
+    const plainColour = within(plain.row).getByTestId('audit-what').style.color
+
+    expect(plainColour.length, 'both rows must carry a resolved colour').toBeGreaterThan(0)
+    expect(tintedColour, 'a decision row must not read as an untinted event').not.toBe(plainColour)
   })
 
   it('activityFeed_anApprovedEventCarriesTheReasonKeyWithNoValue', async () => {
@@ -1034,6 +1101,9 @@ describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
 
   it('activityFeed_droppedFieldScanHasAControlNeedle', async () => {
     const keys = goAuditPayloadKeys(repoFile(GO_DECISION), REJECTED_EVENT)
+    // An empty key set renders "This event carries no detail." and reports the needle
+    // missing -- the needle only means something on a populated expansion.
+    expect(keys.length, 'the needle needs real fields beside it').toBeGreaterThanOrEqual(4)
     const { expansion } = await expandOne(auditEvent({ event: REJECTED_EVENT, payload: payloadFrom(keys) }))
 
     // One assertion, two halves: every real key is found on a fully populated expansion,

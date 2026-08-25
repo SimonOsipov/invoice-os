@@ -1,6 +1,4 @@
 // Activity feed's pure core: chip set, per-chip counts, rest/expanded slice, overflow copy.
-// STUB ONLY -- the three functions throw pending the executor; invoiceActivity.test.ts pins
-// the contract red against them.
 //
 // Chip counts are derived off the fetched page, which inverts [filters-are-server-side]
 // (lib/reviewBatch.ts:29). The exception is narrow: the invoice scoping stays server-side on
@@ -61,17 +59,43 @@ export const ACTIVITY_COPY = {
   auditLink: 'Open in Audit →',
 } as const
 
-export function activityChips(events: AuditEvent[]): ActivityChip[] {
-  void events
-  void auditEventView
-  throw new Error('not implemented')
+// The five chips that stand for an AuditDomain. `all` stands for the page and is excluded.
+const DOMAIN_CHIP_KEYS = new Set<string>(ACTIVITY_CHIP_ORDER.filter((k) => k !== 'all'))
+
+// A domain with no chip -- and an identifier the vocabulary does not know, whose domain is
+// null -- counts under `all` and nowhere else.
+// invoiceActivity_unmappedEventCountsUnderEverythingOnly.
+function chipOf(e: AuditEvent): ActivityChipKey | null {
+  const { domain } = auditEventView(e.event)
+  return domain != null && DOMAIN_CHIP_KEYS.has(domain) ? (domain as ActivityChipKey) : null
 }
 
+export function activityChips(events: AuditEvent[]): ActivityChip[] {
+  const counts = new Map<ActivityChipKey, number>()
+  for (const e of events) {
+    const key = chipOf(e)
+    if (key != null) counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return ACTIVITY_CHIP_ORDER.map((key) => {
+    const count = key === 'all' ? events.length : (counts.get(key) ?? 0)
+    return {
+      key,
+      label: ACTIVITY_CHIP_LABELS[key],
+      count,
+      // Not `key === 'documents' || count === 0`: the permanence of the Documents zero is
+      // the vocabulary's doing, proven by invoiceActivity_documentsChipIsAlwaysInert.
+      inert: count === 0,
+      reason: key === 'documents' ? ACTIVITY_COPY.documentsInert : null,
+    }
+  })
+}
+
+// filter + slice only. reader.go:288-293 already ordered these newest-first and
+// Array.prototype.sort would reorder in place -- invoiceActivity_chipFilterPreservesServerOrder
+// scrambles created_at against array order, invoiceActivity_doesNotMutateItsInput holds the rest.
 export function activityRows(events: AuditEvent[], chip: ActivityChipKey, showAll: boolean): AuditEvent[] {
-  void events
-  void chip
-  void showAll
-  throw new Error('not implemented')
+  const rows = events.filter((e) => chip === 'all' || chipOf(e) === chip)
+  return showAll ? rows : rows.slice(0, ACTIVITY_REST_ROWS)
 }
 
 // Object arg, not three bare numbers (reviewBatch.ts:909 records why). `label` depends only on
@@ -83,6 +107,18 @@ export function activityToggleCopy(n: {
   fetched: number // res.events.length
   showAll: boolean
 }): ActivityToggle {
-  void n
-  throw new Error('not implemented')
+  // `shown`, never `total`: the label may name only what the toggle puts on screen.
+  const label =
+    n.shown <= ACTIVITY_REST_ROWS
+      ? null
+      : n.showAll
+        ? 'Show fewer'
+        : `Show all ${n.shown.toLocaleString('en-NG')} events`
+
+  let note: string | null = null
+  if (n.total > n.fetched) {
+    const loaded = n.fetched.toLocaleString('en-NG')
+    note = `The ${loaded} most recent of ${n.total.toLocaleString('en-NG')} events are loaded. Chip counts and rows cover those ${loaded} — use ${ACTIVITY_COPY.auditLink} for the whole log.`
+  }
+  return { label, note }
 }

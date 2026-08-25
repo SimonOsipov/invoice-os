@@ -25,7 +25,7 @@ import {
 } from '../lib/invoiceActivity'
 import type { PlatformCtx } from '../types'
 
-import { AuditRow } from './AuditRow'
+import { AUDIT_TABLE_MIN_WIDTH, AuditRow } from './AuditRow'
 import { InvoiceActivityCard } from './InvoiceActivityCard'
 
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -561,5 +561,31 @@ describe('InvoiceActivityCard inherited controls (F-J)', () => {
     expect(screen.getByTestId('audit-expansion')).toBeTruthy()
     expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
     expect(screen.queryByTestId('audit-evidence-blocked-reason')).toBeNull()
+  })
+})
+
+// AUDIT-09-04 QA, AC-7's unit half. Geometry A asserts the card scrolls and the page does
+// not; arch section 7 says this file proves the card ASKED for the scroll container. It did
+// not -- replacing <AuditTable> with a bare fragment left all 3152 app tests green, taking
+// the overflowX scroller and the 868px floor with it. The import scan cannot see this: an
+// unused import is still import text.
+describe('InvoiceActivityCard scroll containment (AC-7, unit half)', () => {
+  it('invoiceActivity_delegatesContainmentToAuditTablesScroller', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }]) }))
+    renderCard()
+    await loaded()
+
+    const table = screen.getByTestId('audit-table')
+    expect(screen.getByTestId('audit-table-head')).toBeTruthy()
+    // The 868px floor is what makes the rows refuse to collapse; without it the table
+    // shrinks to the column and geometry A3 has nothing to measure.
+    expect(table.style.minWidth).toBe(`${AUDIT_TABLE_MIN_WIDTH}px`)
+    // AuditTable.tsx wraps the table in the overflowX:'auto' div. jsdom applies no layout,
+    // so this is the ask, not the result -- geometry A1/A3 own the result.
+    const scroller = table.parentElement
+    expect(scroller, 'the table must sit inside a scroll container').toBeTruthy()
+    expect(scroller!.style.overflowX).toBe('auto')
+    // ...and the card clips at its own rounded border rather than letting the row escape.
+    expect(screen.getByTestId('invoice-activity').style.overflow).toBe('hidden')
   })
 })

@@ -7,8 +7,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Mock } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { auditEventView } from '../lib/auditVocabulary'
@@ -107,18 +109,32 @@ function eventsOf(spec: Array<{ event: string; n: number }>): AuditEvent[] {
   return out
 }
 
-function activityCtx(): PlatformCtx {
+// openAuditForInvoice is AUDIT-09-05's PlatformCtx verb; it is a spy here because the card's
+// only job is to call it once with the right pair.
+type ActivityCtx = PlatformCtx & { openAuditForInvoice: Mock }
+
+function activityCtx(): ActivityCtx {
   return {
     mode: 'firm',
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
     entities: [],
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
-  } as unknown as PlatformCtx
+    openAuditForInvoice: vi.fn(),
+  } as unknown as ActivityCtx
 }
 
-function renderCard(invoiceId: string = INVOICE_ID) {
-  return render(<InvoiceActivityCard ctx={activityCtx()} invoiceId={invoiceId} />)
+const INVOICE_NUMBER = 'INV-9'
+
+// `invoiceNumber` is not on the component's props until AUDIT-09-05 lands it; the cast is what
+// keeps tsc green on the RED commit and is a no-op once the prop exists.
+type CardProps = ComponentProps<typeof InvoiceActivityCard>
+function cardProps(ctx: ActivityCtx, invoiceId: string, invoiceNumber: string): CardProps {
+  return { ctx, invoiceId, invoiceNumber } as unknown as CardProps
+}
+
+function renderCard(invoiceId: string = INVOICE_ID, invoiceNumber: string = INVOICE_NUMBER, ctx: ActivityCtx = activityCtx()) {
+  return { ctx, ...render(<InvoiceActivityCard {...cardProps(ctx, invoiceId, invoiceNumber)} />) }
 }
 
 const rowCount = () => screen.queryAllByTestId('audit-row').length
@@ -177,10 +193,10 @@ describe('InvoiceActivityCard fetch', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     // A parent re-render is not a new invoice. useAsync's effect deps are [invoiceId].
-    rerender(<InvoiceActivityCard ctx={activityCtx()} invoiceId={INVOICE_ID} />)
+    rerender(<InvoiceActivityCard {...cardProps(activityCtx(), INVOICE_ID, INVOICE_NUMBER)} />)
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
 
-    rerender(<InvoiceActivityCard ctx={activityCtx()} invoiceId={OTHER_INVOICE_ID} />)
+    rerender(<InvoiceActivityCard {...cardProps(activityCtx(), OTHER_INVOICE_ID, 'INV-OTHER')} />)
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(paramsOf(fetchMock, 1).get('invoice_id')).toBe(OTHER_INVOICE_ID)
   })
@@ -326,7 +342,7 @@ describe('InvoiceActivityCard chips', () => {
     fireEvent.click(screen.getByTestId('activity-chip-approvals'))
     expect(rowCount()).toBe(2)
 
-    rerender(<InvoiceActivityCard ctx={activityCtx()} invoiceId={INVOICE_ID} />)
+    rerender(<InvoiceActivityCard {...cardProps(activityCtx(), INVOICE_ID, INVOICE_NUMBER)} />)
     expect(screen.getByTestId('invoice-activity-chips')).toBeTruthy()
     expect(screen.getByTestId('activity-chip-approvals').getAttribute('aria-pressed')).toBe('true')
     expect(rowCount()).toBe(2)
@@ -587,5 +603,111 @@ describe('InvoiceActivityCard scroll containment (AC-7, unit half)', () => {
     expect(scroller!.style.overflowX).toBe('auto')
     // ...and the card clips at its own rounded border rather than letting the row escape.
     expect(screen.getByTestId('invoice-activity').style.overflow).toBe('hidden')
+  })
+})
+
+// AUDIT-09-05 Mode A: the "Open in Audit →" control. The card's whole job is to call
+// ctx.openAuditForInvoice(invoiceId, invoiceNumber) once; the atom, the nav and the seed are
+// App.auditPrefilter.test.tsx's and AuditView.test.tsx's.
+describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () => {
+  // Naive: it would also cut a `//` inside a string literal, and this file's component has
+  // none. The paired control needles below fail loudly if it eats too much or too little.
+  function stripComments(src: string): string {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  }
+
+  it('invoiceActivity_openInAuditCallsTheHandoff', async () => {
+    mockFetch(logResponse())
+    const { ctx } = renderCard(INVOICE_ID, INVOICE_NUMBER)
+    await loaded()
+
+    const btn = screen.queryByTestId('activity-open-in-audit')
+    expect(btn, 'the loaded rung must carry the hand-off control').not.toBeNull()
+    // Read from the lib, never retyped: the cap note interpolates the same constant.
+    expect(btn!.textContent).toBe(ACTIVITY_COPY.auditLink)
+    expect(ctx.openAuditForInvoice, 'nothing may call the hand-off before the click').not.toHaveBeenCalled()
+
+    fireEvent.click(btn!)
+
+    // Exactly once, with the id AND the number: the pill reads the number, and the reader 400s
+    // on anything that is not a uuid, so the two are not interchangeable.
+    expect(ctx.openAuditForInvoice).toHaveBeenCalledTimes(1)
+    expect(ctx.openAuditForInvoice).toHaveBeenCalledWith(INVOICE_ID, INVOICE_NUMBER)
+  })
+
+  it('invoiceActivity_openInAuditPassesTheInvoiceItIsMounted', async () => {
+    // A hardcoded id or a number read off a payload would pass the case above. This one moves
+    // both props off their defaults.
+    mockFetch(logResponse())
+    const { ctx } = renderCard(OTHER_INVOICE_ID, 'INV-OTHER')
+    await loaded()
+
+    const btn = screen.queryByTestId('activity-open-in-audit')
+    expect(btn, 'the loaded rung must carry the hand-off control').not.toBeNull()
+    fireEvent.click(btn!)
+    expect(ctx.openAuditForInvoice).toHaveBeenCalledWith(OTHER_INVOICE_ID, 'INV-OTHER')
+  })
+
+  it('invoiceActivity_openInAuditRendersWithAndWithoutTheToggle', async () => {
+    // One row: activityToggleCopy returns no label, so the hand-off holds the row alone.
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 1 }]) }))
+    renderCard()
+    await loaded()
+    expect(screen.queryByTestId('activity-toggle'), 'control: one row means no toggle').toBeNull()
+    expect(screen.queryAllByTestId('activity-open-in-audit'), 'the hand-off must not depend on the toggle').toHaveLength(1)
+    cleanup()
+
+    // Six rows: the toggle appears beside it, and the hand-off is still exactly one control.
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: ACTIVITY_REST_ROWS + 1 }]) }))
+    renderCard()
+    await loaded()
+    expect(screen.queryByTestId('activity-toggle'), 'control: six rows means a toggle').not.toBeNull()
+    expect(screen.queryAllByTestId('activity-open-in-audit'), 'exactly one hand-off, never one per row').toHaveLength(1)
+  })
+
+  it('invoiceActivity_openInAuditIsAbsentWhenThereIsNothingToOpen', async () => {
+    // Positive control on the same locator first: the loaded rung DOES carry it.
+    mockFetch(logResponse())
+    renderCard()
+    await loaded()
+    expect(screen.queryByTestId('activity-open-in-audit'), 'control: the loaded rung carries the hand-off').not.toBeNull()
+    cleanup()
+
+    // An empty feed would hand off to an Audit screen pre-filtered to an invoice with no
+    // events -- an empty screen. The control has nothing to offer there.
+    mockFetch(logResponse({ events: [], total: 0 }))
+    renderCard()
+    await screen.findByTestId('invoice-activity-empty')
+    expect(screen.queryByTestId('activity-open-in-audit'), 'the empty rung must not offer the hand-off').toBeNull()
+  })
+
+  it('invoiceActivity_openInAuditLabelIsNeverHardcoded', () => {
+    const raw = readFileSync(SOURCE, 'utf8')
+    const src = stripComments(raw)
+    expect(src, 'the scan read the wrong file').toContain('export function InvoiceActivityCard')
+    // Paired control needles for the stripper itself.
+    expect(raw, 'control: the reference comment must exist to be stripped').toContain('the ONLY owner of the toggle')
+    expect(src, 'control: the stripper removed nothing').not.toContain('the ONLY owner of the toggle')
+
+    // The positive half is what stops this being a guard that is vacuously green forever.
+    expect(src, 'the label must be READ from the lib').toContain('ACTIVITY_COPY.auditLink')
+    expect(src, 'a second copy of the string drifts from the note that interpolates it').not.toContain(
+      ACTIVITY_COPY.auditLink,
+    )
+  })
+
+  it('invoiceActivity_theMountSuppliesTheInvoiceNumber', () => {
+    // C-4: the card has no invoice number on its props, so InvoiceDetail owes it a fifth edit.
+    // Nothing else in this suite can see a missing prop -- it arrives as `undefined` and the
+    // hand-off silently loses the pill's label.
+    const src = readFileSync(join(__dirname, 'InvoiceDetail.tsx'), 'utf8')
+    expect(src, 'the scan read the wrong file').toContain('<InvoiceActivityCard')
+    const mount = src.slice(src.indexOf('<InvoiceActivityCard'))
+    const end = mount.indexOf('/>')
+    expect(end, 'the card mount has no self-closing tag').toBeGreaterThan(-1)
+    const tag = mount.slice(0, end)
+    // Control needle: the slice must have captured the props, not an empty span.
+    expect(tag, 'the slice missed the mount\'s props').toContain('invoiceId=')
+    expect(tag, 'the card mount must pass the invoice number down').toContain('invoiceNumber={inv.invoice_number}')
   })
 })

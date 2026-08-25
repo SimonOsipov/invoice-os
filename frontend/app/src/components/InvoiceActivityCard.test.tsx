@@ -511,3 +511,55 @@ describe('InvoiceActivityCard copy', () => {
     expect((src.match(/ACTIVITY_COPY\./g) ?? []).length, 'the card must read its copy from the lib').toBeGreaterThanOrEqual(3)
   })
 })
+
+// AUDIT-09-04 QA, F-J. Reusing AuditRow drags a disabled "View transmission evidence ->"
+// onto the invoice page for the three submissions-domain types the invoice-scoped read can
+// return (submission.accepted/rejected/failed -- the generated column's second event list).
+// It is not a defect, but it is NEW on this surface, so it gets an oracle here rather than
+// only in AuditRow's own suite: subtask 09's whole-surface diff must LIST it.
+describe('InvoiceActivityCard inherited controls (F-J)', () => {
+  const SUBMISSION_EVENT = 'submission.failed'
+
+  it('invoiceActivity_fixtureSubmissionEventBinsWhereTheSpecAssumes', () => {
+    expect(auditEventView(SUBMISSION_EVENT).domain).toBe('submissions')
+  })
+
+  it('invoiceActivity_inheritsTheDisabledEvidenceAffordance', async () => {
+    // submission.* takes payload.invoice_id, not payload.id (the generated column's second
+    // branch); invoiceRef reads invoice_id first, and a null ref hides the button entirely.
+    mockFetch(logResponse({ events: [auditEvent({ event: SUBMISSION_EVENT, payload: { invoice_id: INVOICE_ID, attempt: 3 } })] }))
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+
+    const evidence = screen.getByTestId('audit-evidence-affordance')
+    expect(evidence, 'the control is present, not hidden').toBeTruthy()
+    expect(evidence).toHaveProperty('disabled', true)
+    // AUDIT-08: a title= on a disabled button never fires in Chromium.
+    expect(evidence.getAttribute('title')).toBeNull()
+    const reasonId = evidence.getAttribute('aria-describedby')
+    expect(reasonId, 'the block must be a text node the control names').toBeTruthy()
+    const reason = document.getElementById(reasonId!)
+    expect(reason, `aria-describedby="${reasonId}" points at nothing`).toBeTruthy()
+    expect(reason!.textContent!.length).toBeGreaterThan(0)
+    // Honest on THIS surface: the invoice page offers no evidence route at all, so the
+    // sentence must not promise one somewhere on this page.
+    expect(reason!.textContent).toContain('not reachable from this screen')
+    // The other inherited affordance stays off: this row is the only one where both could
+    // have appeared, since invoiceRef is non-null for exactly the same payloads.
+    expect(screen.queryByTestId('audit-invoice-affordance')).toBeNull()
+  })
+
+  it('invoiceActivity_evidenceAffordanceIsScopedToSubmissionRows', async () => {
+    // The control for the case above: an invoices-domain row expands with no evidence
+    // button, so its presence there is the domain gate and not an unconditional render.
+    mockFetch(logResponse({ events: [auditEvent({ event: INVOICES_EVENT, payload: { id: INVOICE_ID } })] }))
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+
+    expect(screen.getByTestId('audit-expansion')).toBeTruthy()
+    expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
+    expect(screen.queryByTestId('audit-evidence-blocked-reason')).toBeNull()
+  })
+})

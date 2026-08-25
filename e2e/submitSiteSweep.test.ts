@@ -413,6 +413,10 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   // invoice to `failed` (via queued) purely so the strip has five attributed nodes to measure;
   // no browser submit control is involved.
   [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 1],
+  // The activity-card geometry block's test.beforeAll (AUDIT-09-04), same shape as #1
+  // above: it drives one invoice to `failed` (via queued) so the card has real audit rows
+  // to measure. No browser submit control is involved.
+  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 2],
 ]
 
 // AC-16's four observers, keyed the same way as the two manifests above -- not by line

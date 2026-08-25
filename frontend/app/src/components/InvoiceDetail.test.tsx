@@ -3827,3 +3827,105 @@ describe('InvoiceDetail no-source canvas: only a person is named ([actor-label-s
     expect(canvas.textContent).not.toContain(APP_PERSONAS.inhouse.org)
   })
 })
+
+// AUDIT-09-04 QA. The activity card's own suite proves what the card renders; nothing
+// proved it is ON this page. Deleting the <InvoiceActivityCard/> line, moving it into the
+// rail and putting it above the record card each left the whole 3146-test app suite green.
+// Geometry spec C in e2e/topology/invoice-surfaces.spec.ts is the layout oracle; these are
+// the mount oracle, and they run without a browser.
+describe('InvoiceDetail mounts the activity card in the main column (AUDIT-09-04 AC-1)', () => {
+  const ID = 'inv-activity-mount-1'
+  const QA_RUN: ApprovalRun = {
+    run_id: 'run-qa-1',
+    state: 'approved',
+    opened_at: '2026-08-01T00:00:00Z',
+    closed_at: '2026-08-01T01:00:00Z',
+    closed_by: APP_PERSONAS.firm.subject,
+    steps: [],
+    decisions: [],
+  }
+
+  it('invoiceDetail_activityCardIsTheMainColumnsSecondChild', async () => {
+    mockDetailFetch(detailRecord({ id: ID }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const column = await screen.findByTestId('invoice-main-column')
+    const rail = screen.getByTestId('invoice-rail')
+    const card = screen.getByTestId('invoice-activity')
+
+    expect(column.contains(card), 'the card must live in the main column').toBe(true)
+    // Positive control for the absence: the rail renders and owns a card of its own, so a
+    // rail that never mounted cannot be what makes the line below pass.
+    expect(rail.contains(screen.getByTestId('source-document-card'))).toBe(true)
+    expect(rail.contains(card), 'the card must not be in the right rail').toBe(false)
+
+    // Order, not geometry: the record card is child 1, the activity card child 2.
+    const children = Array.from(column.children)
+    expect(children).toHaveLength(2)
+    expect(children[1]).toBe(card)
+    expect(children[0]!.contains(screen.getByTestId('buyer-tin')), 'child 1 must be the record card').toBe(true)
+  })
+
+  it('invoiceDetail_mainColumnKeepsItsGridMinimumAtZero', async () => {
+    mockDetailFetch(detailRecord({ id: ID }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    // A declaration assertion, deliberately: `1fr` is minmax(auto,1fr) and a grid item with
+    // visible overflow takes a content-based automatic minimum, which the card's 868px
+    // table would raise until the column pushed the rail off the page. jsdom applies no
+    // layout, so geometry spec A1 (.pf-scroll must not scroll sideways) is the real oracle
+    // -- this only stops the declaration being deleted between browser runs.
+    const column = await screen.findByTestId('invoice-main-column')
+    expect((column as HTMLElement).style.minWidth, 'minWidth:0 on the grid item').toMatch(/^0(px)?$/)
+  })
+
+  it('invoiceDetail_activityCardUnmountsAndRefetchesOnAMutationRoundTrip', async () => {
+    // CHARACTERISATION, reported not fixed. AC-2 reads "fetches once per invoiceId" and the
+    // card's own contract holds it; the PAGE does not. handleSaved / handleRevalidate /
+    // approve / reject / submit / resolve-outside all run `setLive(null); detail.run()`,
+    // and detail.run() dispatches useAsync's 'start', which nulls detail.data and drops the
+    // ladder to <Loading label="Loading invoice..."/> -- unmounting the whole
+    // .pf-detail-grid, activity card included. The card then remounts, refetches
+    // /audit-log, and the user's chip, expansion and Show-all reset with no warning.
+    // Arch section 6 checked only that nothing nulls log.data; the ancestor is what
+    // unmounts the card.
+    //
+    // The detail GET is deferred on purpose. With an instantly-resolving mock React's
+    // scheduler (a MessageChannel macrotask) never commits the loading render, so this
+    // whole path is invisible in jsdom -- which is why no shipped spec sees it.
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      approvalResponse: { ok: true, status: 200, json: () => Promise.resolve(QA_RUN) },
+    })
+    const isDetailGet = (url: string, init?: RequestInit) =>
+      (init?.method ?? 'GET') === 'GET' &&
+      !url.endsWith('/history') &&
+      !url.endsWith('/source-document') &&
+      !url.endsWith('/approval') &&
+      !url.includes('/audit-log')
+    const auditGets = () =>
+      fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => (init?.method ?? 'GET') === 'GET' && String(url).includes('/audit-log'))
+
+    let defer = false
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      const res = fetchMock(url, init)
+      if (defer && isDetailGet(String(url), init)) {
+        return new Promise((resolve) => setTimeout(() => resolve(res as unknown as Response), 60))
+      }
+      return res
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-activity')
+    await waitFor(() => expect(auditGets()).toHaveLength(1))
+
+    defer = true
+    fireEvent.click(screen.getByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+
+    // The grid is gone while the detail refetch is in flight.
+    await waitFor(() => expect(screen.queryByTestId('invoice-activity'), 'the card survived the loading rung').toBeNull())
+    // ...and it comes back having asked the server for the log a second time.
+    await screen.findByTestId('invoice-activity')
+    await waitFor(() => expect(auditGets().length, 'the remounted card refetched /audit-log').toBeGreaterThanOrEqual(2))
+  })
+})

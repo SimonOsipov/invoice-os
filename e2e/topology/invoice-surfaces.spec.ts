@@ -3499,3 +3499,69 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 })
+
+// AUDIT-09-09 (task-680, AC-5). The rail's shape after the rework, pinned as a LIST.
+//
+// Not four presence checks: those pass on any permutation, and a permutation is the
+// regression this story can actually cause -- AUDIT-09-02 deleted a rail card and
+// AUDIT-09-06 swapped another one out, both by editing the same JSX block.
+//
+// `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
+// mounts it only on `accepted` with a real IRN. Compliance carries no testid of its own, so
+// `violations-table` -- its only body once an invoice has a rule-set version -- stands for it.
+const RAIL_ORDER = ['fiscal-record-card', 'violations-table', 'approval-card', 'source-document-card']
+// Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
+// failed-dead-end / rejection-reasons are the two rail members an accepted invoice
+// suppresses. Any of them mounting lands in the read below and breaks the equality, so
+// absence and order are ONE assertion rather than two.
+const RAIL_WATCHED = [...RAIL_ORDER, 'status-history', 'failed-dead-end', 'rejection-reasons']
+
+test('detail surface: the untouched rail order is unchanged', async ({ page }) => {
+  // Same budget as the sibling accept test above: one sign-in, one submit and one
+  // poll-driven badge flip, on a possibly cold fleet.
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AUDIT-09 rail ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-AUDIT09-RAIL-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT) })
+  await validateInvoice(token, inv.id)
+  // Validating arms the governed tenant's run, and isRowSelectable disables the checkbox
+  // while one is open -- close it before the row is selected.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+  await expect(row.getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
+
+  await openInvoiceRow(page, invoiceNumber)
+
+  // The positive controls, read off the SAME locator the order comes from: every member of
+  // the expected list is awaited here, so the one-shot read below cannot resolve against a
+  // half-mounted rail, and an empty rail cannot be what makes the equality pass.
+  const rail = page.getByTestId('invoice-rail')
+  for (const id of RAIL_ORDER) await expect(rail.getByTestId(id)).toBeVisible()
+
+  const order = await rail.evaluate(
+    (el, watched: string[]) =>
+      Array.from(el.querySelectorAll('[data-testid]'))
+        .map((n) => n.getAttribute('data-testid') ?? '')
+        .filter((id) => watched.includes(id)),
+    RAIL_WATCHED,
+  )
+  expect(order, "the rail's cards in document order: Fiscal record -> Compliance -> Approvals -> Source document").toEqual(RAIL_ORDER)
+
+  // The page-wide half of the absence: the retired card must not have come back outside the
+  // rail either. Preceded by a positive control on its replacement -- an absence read on an
+  // unmounted tree passes for the wrong reason (F-F).
+  await expect(page.getByTestId('status-strip')).toBeVisible()
+  await expect(page.getByTestId('status-history')).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

@@ -4166,3 +4166,396 @@ describe('InvoiceDetail "Open in Audit →" wiring (AUDIT-09-05)', () => {
     expect(openAuditForInvoice).toHaveBeenCalledWith(ID, NUMBER)
   })
 })
+
+// AUDIT-09-09 (task-680, AC-5). The whole-surface guard.
+//
+// An EXPLICIT inventory of every data-testid the invoice detail page renders, asserted as
+// a set. Never a snapshot: `vitest -u` folds a deletion into the stored file and the suite
+// stays green, which is the one failure this guard exists to stop.
+//
+// THE BOUNDARY, drawn mechanically rather than from memory:
+//   git show main:...InvoiceDetail.tsx | grep -o 'data-testid="[^"]*"' | sort -u   -> 57
+//   the same on this branch                                                        -> 56
+//   the whole diff:  -status-history -status-history-row -status-history-actor
+//                    +invoice-main-column +invoice-rail
+// Plus two component swaps in the rail/column: ApprovalTrailCard -> ApprovalStateCard, and
+// InvoiceActivityCard added. So AUDIT-09 owns status-strip/strip-*, approval-card/approval-*,
+// invoice-activity*, and the two new wrappers; everything else is UNTOUCHED. SourceDocumentCard
+// and SourceDocumentStates do appear in the branch diff, but only as copy edits (F-H's two
+// "state strip" strings) -- no testid moved, so they count as untouched.
+//
+// The reworked cards' own inventories are exhaustive in StatusStrip.test.tsx,
+// ApprovalStateCard.test.tsx and InvoiceActivityCard.test.tsx; what is declared here is only
+// what THIS page mounts them into.
+describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUDIT-09-09 AC-5)', () => {
+  const ID = 'inv-surface-1'
+
+  // The 54 survivors of InvoiceDetail.tsx's own set, plus the child components this story
+  // never opened: SourceDocumentCard (5) and ViolationsTable (1).
+  const UNTOUCHED_TESTIDS = [
+    'approve-blocked-reason',
+    'buyer-tin',
+    'computed-line-sum',
+    'detail-approve',
+    'detail-approve-cancel',
+    'detail-approve-confirm',
+    'detail-approve-confirm-prompt',
+    'detail-decision-actions',
+    'detail-decision-error',
+    'detail-kept-banner',
+    'detail-reject',
+    'detail-reject-cancel',
+    'detail-reject-confirm',
+    'detail-reject-reason',
+    'detail-resolved-banner',
+    'detail-submit',
+    'detail-submit-cancel',
+    'detail-submit-confirm',
+    'detail-submit-confirm-prompt',
+    'detail-submit-error',
+    'detail-submit-skipped',
+    'edit-cancel',
+    'edit-invoice',
+    'edit-toggle',
+    'failed-dead-end',
+    'failure-detail',
+    'failure-headline',
+    'failure-next-step',
+    'field-flag',
+    'fiscal-csid',
+    'fiscal-irn',
+    'fiscal-qr',
+    'fiscal-record-card',
+    'invoice-actions',
+    'invoice-detail',
+    'invoice-status-badge',
+    'line-add',
+    'line-remove',
+    'line-row',
+    'not-validated',
+    'reject-blocked-reason',
+    'rejection-reason-row',
+    'rejection-reasons',
+    'resolve-outside',
+    'resolve-outside-blocked-reason',
+    'resolve-outside-reason',
+    'resolve-outside-undo',
+    'revalidate',
+    'revalidate-blocked-reason',
+    'stale-verdict',
+    'submit-blocked-reason',
+    'view-ubl',
+    'view-ubl-blocked-reason',
+    'violations-table',
+    // SourceDocumentCard.tsx
+    'source-document-card',
+    'source-document-card-meta',
+    'source-document-range',
+    'view-source-document',
+    'why-no-source-document',
+    // ViolationsTable.tsx
+    'violations-scroll',
+  ]
+
+  // What AUDIT-09 put on this page. Listed so the closed-world check below can tell a
+  // deliberate addition from a stray one.
+  const AUDIT_09_TESTIDS = [
+    'invoice-main-column',
+    'invoice-rail',
+    'status-strip',
+    'strip-node',
+    'strip-actor',
+    'approval-card',
+    'approval-empty',
+    'invoice-activity',
+    'invoice-activity-body',
+    'invoice-activity-empty',
+  ]
+
+  // Deleted by AUDIT-09-02 and AUDIT-09-06. A resurrection is as much a surface change as a
+  // deletion, and `git grep` cannot see one that arrives under a new component.
+  const RETIRED_TESTIDS = [
+    'status-history',
+    'status-history-row',
+    'status-history-actor',
+    'approval-trail-card',
+    'approval-trail',
+    'approval-trail-step',
+    'approval-trail-state',
+    'approval-trail-decision',
+    'approval-trail-empty',
+    'approval-trail-voided',
+    'approval-trail-notify-note',
+  ]
+
+  const A_DOCUMENT: MockResponse = {
+    ok: true,
+    status: 200,
+    json: () =>
+      Promise.resolve({
+        document: { id: 'doc-1', filename: 'june.csv', declared_content_type: 'text/csv', size_bytes: 4096, content_hash: 'a'.repeat(64) },
+        source_rows: [7],
+      }),
+  }
+
+  const LINE = { id: 'li-1', line_no: 1, description: 'Widget', quantity: '2', unit_price: '500.00', line_total: '1000.00', line_tax: null }
+
+  // Nine mounts, not one: whole groups of this page are mutually exclusive (failed vs
+  // accepted, read vs edit, resolved vs unresolved, a skip vs an error on the same submit),
+  // so no single fixture can render the surface. Each one names the ids it is here for.
+  const SCENARIOS: { name: string; mount: () => Promise<void> }[] = [
+    {
+      // failed-dead-end + resolve-outside's unresolved arm + a stale rejection card + every
+      // blocked-reason line at once.
+      name: 'failed, unvalidated, blocked everywhere',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({
+            id: ID,
+            status: 'failed',
+            failure_kind: 'app_rejected',
+            rule_set_version: null,
+            rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+            can_view_ubl: false,
+            ubl_blocked_reason: 'This invoice has no document yet.',
+            approve_blocked_reason: 'Only an approver can approve this invoice.',
+            reject_blocked_reason: 'A rejection needs the workflow role this step waits on.',
+            can_resolve_outside: false,
+            resolve_outside_blocked_reason: 'Only an admin can mark this resolved.',
+          }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('failed-dead-end')
+        await screen.findByTestId('invoice-activity')
+      },
+    },
+    {
+      // resolve-outside's OTHER arm: the banner and Undo replace the input and the button.
+      name: 'failed and already resolved outside',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({
+            id: ID,
+            status: 'failed',
+            kept_as_is_at: '2026-07-02T09:00:00Z',
+            kept_as_is_by: APP_PERSONAS.firm.subject,
+            kept_as_is_reason: 'Settled directly with the buyer',
+            can_resolve_outside: true,
+          }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('detail-resolved-banner')
+      },
+    },
+    {
+      // The fiscal record (accepted + irn only), a violations table with rows, and the
+      // source-document card's document arm.
+      name: 'accepted, fiscal record, violations, a real source document',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({
+            id: ID,
+            status: 'accepted',
+            irn: 'IRN-2026-0001',
+            csid: 'CSID-2026-0001',
+            qr_png_base64: 'iVBORw0KGgo=',
+            rule_set_version: 3,
+            rule_set_version_id: 'rsv-3',
+            violations: [{ rule_key: 'NGE-1001', severity: 'warning', message: 'Rounding differs by 0.01', path: 'total' }],
+          }),
+          [],
+          { sourceDocumentResponse: A_DOCUMENT },
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('fiscal-record-card')
+        await screen.findByTestId('view-source-document')
+      },
+    },
+    {
+      // The actions bar, both its blocked reasons, the kept-as-is banner and the stale
+      // verdict -- a draft demoted after a clean validation is what makes the verdict stale.
+      name: 'draft, editable, kept as-is, verdict stale',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({
+            id: ID,
+            status: 'draft',
+            rule_set_version: 3,
+            rule_set_version_id: 'rsv-3',
+            violations: [],
+            kept_as_is_at: '2026-07-02T09:00:00Z',
+            kept_as_is_by: APP_PERSONAS.firm.subject,
+            kept_as_is_reason: 'Supplier confirmed the figures',
+            can_edit: true,
+            can_revalidate: false,
+            revalidate_blocked_reason: 'Re-validate applies to drafts that have changed.',
+            can_submit: false,
+            submit_blocked_reason: 'This invoice is not validated.',
+          }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('invoice-actions')
+        await screen.findByTestId('detail-kept-banner')
+      },
+    },
+    {
+      // Edit mode owns the left card outright: the read-mode block, the actions bar and the
+      // decision pair all leave. `buyer.tin` is a mapped MBS path, so the reason raises a flag.
+      name: 'draft in edit mode',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({
+            id: ID,
+            status: 'draft',
+            can_edit: true,
+            line_items: [LINE],
+            rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation', path: 'buyer.tin' }],
+          }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('edit-toggle'))
+        await screen.findByTestId('edit-invoice')
+      },
+    },
+    {
+      // All three inline arm->confirm machines open at once. They are independent by design
+      // (the approve pair swaps in place, reject and submit open their own rows), so one
+      // mount reaches all nine armed ids.
+      name: 'validated, all three decisions armed',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_submit: true, can_approve: true, can_reject: true }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('detail-approve'))
+        fireEvent.click(screen.getByTestId('detail-reject'))
+        fireEvent.click(screen.getByTestId('detail-submit'))
+        await screen.findByTestId('detail-approve-confirm')
+        await screen.findByTestId('detail-reject-confirm')
+        await screen.findByTestId('detail-submit-confirm')
+      },
+    },
+    {
+      // [never-report-success-on-a-skip]: the skip banner, which is a different element from
+      // the error banner below and never renders beside it.
+      name: 'a submit the server skipped',
+      mount: async () => {
+        mockDetailFetch(detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_submit: true }), [], {
+          submitResponses: [
+            {
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ results: [{ invoice_id: ID, enqueued: false, status: 'queued', reason: 'duplicate_request' }] }),
+            },
+          ],
+        })
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('detail-submit'))
+        fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+        await screen.findByTestId('detail-submit-skipped')
+      },
+    },
+    {
+      name: 'a submit that failed',
+      mount: async () => {
+        mockDetailFetch(detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_submit: true }), [], {
+          submitResponses: [{ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }],
+        })
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('detail-submit'))
+        fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+        await screen.findByTestId('detail-submit-error')
+      },
+    },
+    {
+      name: 'an approval decision the server refused',
+      mount: async () => {
+        mockDetailFetch(detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_approve: true }), [], {
+          decideResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) },
+        })
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('detail-approve'))
+        fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+        await screen.findByTestId('detail-decision-error')
+      },
+    },
+  ]
+
+  it('invoiceDetail_untouchedTestidsAreIntact', async () => {
+    const seen = new Map<string, string>()
+    for (const scenario of SCENARIOS) {
+      cleanup()
+      await scenario.mount()
+      for (const el of Array.from(document.querySelectorAll('[data-testid]'))) {
+        const id = el.getAttribute('data-testid')!
+        if (!seen.has(id)) seen.set(id, scenario.name)
+      }
+    }
+
+    // Fails on: any collateral deletion of an untouched testid -- the rename of a card's
+    // wrapper, a conditional narrowed until a branch stops rendering, a whole card dropped
+    // while its own spec still passes against a sibling.
+    const missing = UNTOUCHED_TESTIDS.filter((id) => !seen.has(id))
+    expect(
+      missing,
+      `AUDIT-09 left the invoice detail page without ${missing.length} untouched testid(s): ${missing.join(', ')}. Either the element was deleted, or a fixture above stopped reaching it.`,
+    ).toEqual([])
+
+    // The positive control for the two absence checks below: this run rendered the real page,
+    // so an empty document cannot be what makes them pass.
+    expect(seen.has('status-strip') && seen.has('approval-card'), 'the replacements must have rendered').toBe(true)
+
+    const resurrected = RETIRED_TESTIDS.filter((id) => seen.has(id))
+    expect(resurrected, `retired testid(s) back on the page: ${resurrected.join(', ')}`).toEqual([])
+
+    // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
+    // element on this page must be declared, in one of the two lists above, by whoever adds it.
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS])
+    const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
+    expect(
+      undeclared,
+      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS or AUDIT_09_TESTIDS.`,
+    ).toEqual([])
+  })
+
+  // The jsdom twin of invoice-surfaces.spec.ts's `detail surface: the untouched rail order
+  // is unchanged`. Same read, same two lists, no browser -- so a permutation reds here in
+  // one second instead of only on the deploy gate. The e2e twin is still the one that runs
+  // against the shipped bundle; this is the one that runs on every push.
+  //
+  // A LIST, never four presence checks: four presence checks are satisfied by any
+  // permutation of the four cards, and reordering the rail's JSX is precisely what
+  // AUDIT-09-02 and AUDIT-09-06 both did.
+  const RAIL_ORDER = ['fiscal-record-card', 'violations-table', 'approval-card', 'source-document-card']
+  // Wider than RAIL_ORDER: `status-history` is the retired card, and failed-dead-end /
+  // rejection-reasons are the two rail members an accepted invoice suppresses. Any of them
+  // mounting lands in the read and breaks the equality, so absence and order are one
+  // assertion rather than two.
+  const RAIL_WATCHED = [...RAIL_ORDER, 'status-history', 'failed-dead-end', 'rejection-reasons']
+
+  it('invoiceDetail_railOrderIsUnchanged', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'accepted',
+        irn: 'IRN-2026-0001',
+        csid: 'CSID-2026-0001',
+        rule_set_version: 3,
+        rule_set_version_id: 'rsv-3',
+        // Suppressed on `accepted`, and carried anyway: the watched list below is what
+        // proves the suppression, not the absence of the data.
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+      }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    // Positive controls on the same element the order is read from.
+    const rail = await screen.findByTestId('invoice-rail')
+    for (const id of RAIL_ORDER) expect(within(rail).getByTestId(id), `${id} must render in the rail`).toBeTruthy()
+
+    const order = Array.from(rail.querySelectorAll('[data-testid]'))
+      .map((n) => n.getAttribute('data-testid') ?? '')
+      .filter((id) => RAIL_WATCHED.includes(id))
+    expect(order, "the rail's cards in document order: Fiscal record -> Compliance -> Approvals -> Source document").toEqual(RAIL_ORDER)
+  })
+})

@@ -27,8 +27,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // Me returns the caller's tenant (id, name, kind) and their domain role, both
 // resolved under RLS: SELECT id, name, kind FROM tenants (bare — the
 // app.current_tenant GUC is the filter, not a WHERE clause) then SELECT role FROM
-// memberships WHERE user_id = $1 (identity.Subject, read inside the closure — RLS
-// scopes the row set to the current tenant). No visible tenant row maps to
+// memberships WHERE user_id = $1 (identity.Subject — RLS scopes the row set to
+// the current tenant). No visible tenant row maps to
 // ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
 //
 // Both queries run inside the SAME transaction, so a missing tenant row surfaces

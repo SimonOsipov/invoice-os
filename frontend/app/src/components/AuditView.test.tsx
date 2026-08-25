@@ -2144,3 +2144,202 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     )
   })
 })
+
+// AUDIT-09-05 QA. AC-6 says the rest of the screen is unchanged on a prefiltered mount.
+// auditView_prefilterChangesNothingElse proves that for the testid SURFACE; these prove it
+// for the BEHAVIOUR behind four of those testids -- a control can render while the thing
+// behind it is broken. The closed-surface spec is here because the difference set above is
+// closed over DIFFERENCES only: a testid added unconditionally lands in both renders and
+// falls out of both `lost` and `gained`. Mutation-verified.
+describe('AuditView pre-filter: the rest of the screen (AUDIT-09-05 QA)', () => {
+  const PREFILTER_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const PREFILTER_NUMBER = 'INV-1'
+  const PRE: AuditPrefilter = { invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER }
+
+  function seededCtx(pre: AuditPrefilter | null): PlatformCtx {
+    return { ...auditCtx(), auditPrefilter: pre } as unknown as PlatformCtx
+  }
+
+  it('auditView_prefilteredExportCarriesTheSeed', async () => {
+    // If export ignored the seed the user would export the WHOLE workspace log believing it
+    // was scoped to the invoice on screen -- silent, and the file is the artefact they keep.
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        calls.push(url)
+        return Promise.resolve(
+          isExportPageUrl(url)
+            ? logResponse({ page: { limit: 100, has_more: false, next_cursor: null } })
+            : logResponse(),
+        )
+      }),
+    )
+    const dl = stubDownload()
+    render(<AuditView ctx={seededCtx(PRE)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+    expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('audit-export'))
+    await waitFor(() => expect(dl.clicks.length, 'the export must write a file').toBe(1))
+
+    const exportCalls = calls.filter(isExportPageUrl)
+    expect(exportCalls.length, 'one page, one request').toBe(1)
+    const p = new URL(exportCalls[0]!).searchParams
+    expect(p.get('invoice_id'), 'the export must carry the seeded invoice').toBe(PREFILTER_ID)
+    expect(p.has('from'), 'the export must carry the seeded range, which applies no window').toBe(false)
+    dl.restore()
+    cleanup()
+
+    // Control on the same locator: unprefiltered, the same click windows by 30 days and sends
+    // no invoice. Without it the two assertions above could be reading a request nobody made.
+    const plain: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        plain.push(url)
+        return Promise.resolve(
+          isExportPageUrl(url)
+            ? logResponse({ page: { limit: 100, has_more: false, next_cursor: null } })
+            : logResponse(),
+        )
+      }),
+    )
+    const dl2 = stubDownload()
+    render(<AuditView ctx={seededCtx(null)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('audit-export'))
+    await waitFor(() => expect(dl2.clicks.length).toBe(1))
+
+    const bare = new URL(plain.filter(isExportPageUrl)[0]!).searchParams
+    expect(bare.has('invoice_id'), 'control: an unprefiltered export sends no invoice').toBe(false)
+    expect(bare.has('from'), 'control: an unprefiltered export DOES window by 30 days').toBe(true)
+    dl2.restore()
+  })
+
+  it('auditView_prefilteredPagerAndPageSizeKeepTheSeed', async () => {
+    // The hazard spec pages forward once. This one walks the whole pager -- next, prev and a
+    // page-size change -- because each rebuilds the page state from a different helper.
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        calls.push(url)
+        return Promise.resolve(logResponse({ page: { limit: 25, has_more: true, next_cursor: 'c-next' }, total: 3 }))
+      }),
+    )
+    render(<AuditView ctx={seededCtx(PRE)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
+    expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
+
+    const seen: string[] = []
+    const step = async (label: string, click: () => void, match: (u: string) => boolean) => {
+      const n = calls.length
+      click()
+      await waitFor(() => expect(calls.slice(n).some(match), `${label} never issued a request`).toBe(true))
+      seen.push(calls.slice(n).find(match)!)
+    }
+
+    await step('next', () => fireEvent.click(screen.getByTestId('audit-pager-next')), (u) => u.includes('cursor=c-next'))
+    await waitFor(() => expect(screen.getByTestId('audit-pager-prev')).toHaveProperty('disabled', false))
+    await step('prev', () => fireEvent.click(screen.getByTestId('audit-pager-prev')), (u) => !u.includes('cursor='))
+    await step(
+      'page size',
+      () => fireEvent.change(screen.getByTestId('audit-page-size'), { target: { value: '50' } }),
+      (u) => new URL(u).searchParams.get('limit') === '50',
+    )
+
+    expect(seen.length, 'vacuity floor: all three pager steps must have fired').toBe(3)
+    for (const url of seen) {
+      const p = new URL(url).searchParams
+      expect(p.get('invoice_id'), `a pager request lost the seed: ${url}`).toBe(PREFILTER_ID)
+      expect(p.has('from'), `a pager request regained the 30-day window: ${url}`).toBe(false)
+    }
+    expect(screen.queryByTestId('audit-pill-invoice'), 'and the pill must still be on screen').not.toBeNull()
+  })
+
+  it('auditView_prefilteredFilterCardAndsWithTheSeed', async () => {
+    // AuditFilterCard must operate ON the seeded state, not replace it: a filter applied from
+    // the card has to AND with the invoice, or the screen silently widens back to the log.
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        calls.push(url)
+        return Promise.resolve(logResponse())
+      }),
+    )
+    render(<AuditView ctx={seededCtx(PRE)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+    expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
+
+    const before = calls.length
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    fireEvent.click(screen.getByTestId('audit-company-kind-workspace'))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(before))
+
+    const p = new URL(calls[calls.length - 1]!).searchParams
+    expect(p.get('company'), 'the card filter must reach the wire').toBe('workspace')
+    expect(p.get('invoice_id'), 'the card filter must AND with the seed, never replace it').toBe(PREFILTER_ID)
+    expect(p.has('from'), 'and must not restore the 30-day window').toBe(false)
+    expect(screen.queryByTestId('audit-pill-company'), 'both pills must be on screen').not.toBeNull()
+    expect(screen.queryByTestId('audit-pill-invoice'), 'both pills must be on screen').not.toBeNull()
+  })
+
+  it('auditView_theRenderedSurfaceIsAClosedSet', async () => {
+    // AC-6's difference set is closed over what CHANGES between the two mounts, so a testid
+    // added unconditionally is in both and invisible to it -- verified by mutation. This is
+    // the fence for "this subtask is the only change to the Audit screen": one plain loaded
+    // mount, one row expanded, and the whole rendered surface pinned. It reaches into the
+    // child components too -- renaming AuditRow's audit-what reds it.
+    // Panels are absent because FilterPopover mounts them only when open; the toast and the
+    // evidence drawer are absent because nothing here opens them.
+    const SURFACE = [
+      'actor-initials',
+      'audit-actor-chevron',
+      'audit-actor-trigger',
+      'audit-bundle-open',
+      'audit-company',
+      'audit-company-chevron',
+      'audit-company-trigger',
+      'audit-date-chevron',
+      'audit-date-trigger',
+      'audit-event-chevron',
+      'audit-event-id',
+      'audit-event-identifier',
+      'audit-event-trigger',
+      'audit-expansion',
+      'audit-export',
+      'audit-filter-card',
+      'audit-immutability-strip',
+      'audit-invoice-affordance',
+      'audit-page-size',
+      'audit-pager',
+      'audit-pager-next',
+      'audit-pager-prev',
+      'audit-payload-field',
+      'audit-pill-range',
+      'audit-row',
+      'audit-search-chevron',
+      'audit-search-trigger',
+      'audit-subtitle',
+      'audit-table',
+      'audit-table-head',
+      'audit-what',
+    ]
+
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={seededCtx(null)} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBe(1))
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+
+    const onScreen = [
+      ...new Set(Array.from(document.querySelectorAll('[data-testid]')).map((el) => el.getAttribute('data-testid')!)),
+    ].sort()
+    // Control needle: a mount that rendered almost nothing would make both sides agree cheaply.
+    expect(onScreen.length, 'the mount rendered almost nothing -- this comparison proves nothing').toBeGreaterThan(20)
+    expect(onScreen, 'the Audit screen gained or lost a testid -- update this list and say why in the PR').toEqual(
+      SURFACE,
+    )
+  })
+})

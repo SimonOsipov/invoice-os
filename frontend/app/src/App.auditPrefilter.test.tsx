@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { StrictMode } from 'react'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
@@ -229,5 +229,107 @@ describe('the PlatformCtx contract', () => {
     expect(body, 'PlatformCtx must carry the openAuditForInvoice verb').toContain('openAuditForInvoice: (')
     expect(body, 'auditPrefilter must be required, not optional').not.toContain('auditPrefilter?:')
     expect(body, 'openAuditForInvoice must be required, not optional').not.toContain('openAuditForInvoice?:')
+  })
+})
+
+// AUDIT-09-05 QA. The two suites above stop at the seam: this file watched ctx and never the
+// screen, and AuditView.test.tsx renders AuditView with a hand-built ctx object. Nothing
+// asserted that App.tsx's own mount hands the LIVE atom to AuditView before the clear lands.
+// Mutation-verified: `<AuditView ctx={{...ctx, auditPrefilter: null}} />` and a `key` that
+// remounts AuditView on the clear each left the whole app suite green.
+describe('the App -> AuditView seam', () => {
+  const GATEWAY = 'https://gw.test'
+
+  // Everything the workspace fetches on the way to the Audit screen. Only the audit-log arm
+  // is under test; the rest just has to be shaped well enough not to crash a render.
+  function routeFetch(calls: string[]) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        calls.push(url)
+        if (url.includes('/audit-log')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                events: [],
+                page: { limit: 25, has_more: false, next_cursor: null },
+                total: 0,
+                log_is_empty: false,
+                facets: { event: [], actor: [], company: [] },
+              }),
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ entities: [], policies: [], members: [], roles: [], invoices: [], total: 0 }),
+        })
+      }),
+    )
+  }
+
+  async function renderAppWithGateway(calls: string[]) {
+    routeFetch(calls)
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    return render(<App />)
+  }
+
+  // The screen's own main request: limit=25 is AUDIT_PAGE_INITIAL's, and the lifetime probe
+  // carries limit=1. Keyed on the limit, never on the presence of a date window -- a
+  // prefiltered mount sends no `from` on the main request either.
+  const mainAuditCalls = (calls: string[]) =>
+    calls.filter((u) => u.includes('/audit-log') && new URL(u).searchParams.get('limit') === '25')
+
+  it('platformCtx_theAuditScreenActuallyLandsFiltered', async () => {
+    const calls: string[] = []
+    await renderAppWithGateway(calls)
+    const ctx = requireCtx()
+
+    await act(async () => {
+      ctx.openAuditForInvoice(INVOICE_ID, INVOICE_NUMBER)
+    })
+    await waitFor(() => expect(mainAuditCalls(calls).length, 'the Audit screen never fetched').toBeGreaterThan(0))
+
+    // EVERY main request, not just the first: a remount on the clear would issue a second one
+    // carrying the default filter, and asserting only the first would miss it.
+    for (const url of mainAuditCalls(calls)) {
+      const p = new URL(url).searchParams
+      expect(p.get('invoice_id'), `the Audit screen was not filtered by the hand-off: ${url}`).toBe(INVOICE_ID)
+      expect(p.has('from'), `the Audit screen regained the 30-day window: ${url}`).toBe(false)
+    }
+    await waitFor(() =>
+      expect(screen.queryByTestId('audit-pill-invoice'), 'the invoice pill must be on screen').not.toBeNull(),
+    )
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(INVOICE_NUMBER)
+  })
+
+  it('platformCtx_aManualNavToAuditLandsUnfiltered', async () => {
+    // Control on the same locators and the same wire: without the hand-off the very same
+    // screen windows by 30 days and sends no invoice.
+    const calls: string[] = []
+    await renderAppWithGateway(calls)
+    const ctx = requireCtx()
+
+    await act(async () => {
+      ctx.nav('audit')
+    })
+    await waitFor(() => expect(mainAuditCalls(calls).length, 'the Audit screen never fetched').toBeGreaterThan(0))
+
+    for (const url of mainAuditCalls(calls)) {
+      const p = new URL(url).searchParams
+      expect(p.has('invoice_id'), `a manual nav must send no invoice: ${url}`).toBe(false)
+      expect(p.has('from'), `a manual nav must window by 30 days: ${url}`).toBe(true)
+    }
+    // Positive control on the same row: the pills row rendered and carries the 30-day pill,
+    // so the absence below is the missing invoice filter, not a screen that never mounted.
+    await waitFor(() =>
+      expect(screen.queryByTestId('audit-pill-range'), 'control: the pills row rendered').not.toBeNull(),
+    )
+    expect(screen.queryByTestId('audit-pill-invoice'), 'and must show no invoice pill').toBeNull()
   })
 })

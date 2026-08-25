@@ -4009,3 +4009,43 @@ describe('InvoiceDetail mounts the activity card in the main column (AUDIT-09-04
     await waitFor(() => expect(auditGets().length, 'the remounted card refetched /audit-log').toBeGreaterThanOrEqual(2))
   })
 })
+
+// AUDIT-09-05 QA. The card's own suite proves it calls ctx.openAuditForInvoice with the two
+// props it was handed; the fifth edit that supplies the SECOND prop was pinned only by a
+// source scan for the literal `invoiceNumber={inv.invoice_number}`. This is the rendered
+// oracle for the same wire: the number the hand-off carries is the one the server sent.
+describe('InvoiceDetail "Open in Audit →" wiring (AUDIT-09-05)', () => {
+  const ID = 'inv-handoff-1'
+  const NUMBER = 'INV-HANDOFF-77'
+
+  const handoffEvent: AuditEvent = {
+    id: 'ev-handoff-1',
+    created_at: '2026-08-01T01:00:00Z',
+    event: 'invoice.created',
+    actor: APP_PERSONAS.firm.subject,
+    actor_name: APP_PERSONAS.firm.name,
+    actor_kind: 'person',
+    entity_id: 'ent-1',
+    company_name: 'Northgate Foods',
+    company_scope: 'company',
+    payload: { invoice_id: ID },
+  }
+
+  it('invoiceDetail_openInAuditCarriesTheRecordsOwnNumber', async () => {
+    // The number is deliberately NOT the record factory's default: a hardcoded literal or a
+    // number read off the audit payload would pass against the default and fail here.
+    mockDetailFetch(detailRecord({ id: ID, invoice_number: NUMBER }), [], {
+      auditLog: auditLogOf([handoffEvent]),
+    })
+    const openAuditForInvoice = vi.fn()
+    const ctx = { ...detailCtx(ID), openAuditForInvoice } as unknown as PlatformCtx
+
+    render(<InvoiceDetail ctx={ctx} />)
+    const btn = await screen.findByTestId('activity-open-in-audit')
+    expect(openAuditForInvoice, 'nothing may hand off before the click').not.toHaveBeenCalled()
+
+    fireEvent.click(btn)
+    expect(openAuditForInvoice).toHaveBeenCalledTimes(1)
+    expect(openAuditForInvoice).toHaveBeenCalledWith(ID, NUMBER)
+  })
+})

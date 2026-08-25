@@ -302,10 +302,10 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
   })
 
   // AC #6 (D-23/D-24), mechanically, over the WHOLE app tree: four call sites pass the
-  // resolved pair, five pass the subject alone. Scanning a hand-picked file list cannot see
-  // a SIXTH surface acquiring a pair silently, so the caller set is asserted too -- a new
+  // resolved pair, four pass the subject alone. Scanning a hand-picked file list cannot see
+  // a FIFTH surface acquiring a pair silently, so the caller set is asserted too -- a new
   // caller fails here instead of hiding.
-  it('every actorLabel call site under src: four pass a resolved pair, five pass one argument', () => {
+  it('every actorLabel call site under src: four pass a resolved pair, four pass one argument', () => {
     const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
 
     function walk(dir: string): string[] {
@@ -330,7 +330,6 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
       'components/InvoiceDetail.tsx': { one: 2, two: 0, pair: '' },
       'components/SourceDocumentRail.tsx': { one: 1, two: 0, pair: '' },
       'components/SourceDocumentStates.tsx': { one: 0, two: 1, pair: 'createdByResolved' },
-      'lib/approvals.ts': { one: 1, two: 0, pair: '' },
       'lib/invoiceStrip.ts': { one: 1, two: 1, pair: 'row.actor_name' },
     }
 
@@ -360,7 +359,7 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
       totalOne += one.length
       totalTwo += two.length
     }
-    expect(totalOne, 'the five pairless callers').toBe(5)
+    expect(totalOne, 'the four pairless callers').toBe(4)
     expect(totalTwo, 'the four pair-passing callers').toBe(4)
   })
 })

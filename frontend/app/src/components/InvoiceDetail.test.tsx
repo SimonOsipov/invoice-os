@@ -10,7 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
-import { APPROVAL_TRAIL_COPY, type ApprovalRun } from '../lib/approvals'
+import { APPROVAL_CARD_COPY, type ApprovalRun } from '../lib/approvals'
 import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { fmtDateTime } from '../lib/format'
@@ -572,10 +572,9 @@ describe('InvoiceDetail terminal rail order', () => {
   })
 })
 
-// RED specs (task-553, APPR-13-03, Mode A): ApprovalTrailCard is not yet mounted in
-// InvoiceDetail.tsx -- that is Stage 3's work. Every row below fails on the card's
-// absence, an honest red for a not-yet-mounted component, never on a broken fixture.
-describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => {
+// The page-level approval AsyncState reaching the rail card, which renders no control of
+// its own.
+describe('InvoiceDetail approval state card', () => {
   it('a 404 renders the no-run empty state', async () => {
     mockDetailFetch(detailRecord({ rule_set_version: 3 }), [], {
       approvalResponse: { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) },
@@ -584,8 +583,9 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     await screen.findByText('INV-FAILED-1')
-    expect(screen.getByTestId('approval-trail-empty')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(screen.getByTestId('approval-empty')).toBeTruthy()
+    // Scoped: an unscoped Retry also matches the Activity card's ErrorState (F-U M-2).
+    expect(within(screen.getByTestId('approval-card')).queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
   it('a 500 renders ErrorState, not the empty state', async () => {
@@ -596,12 +596,27 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     await screen.findByText('INV-FAILED-1')
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(screen.queryByTestId('approval-trail-empty')).toBeNull()
+    expect(within(screen.getByTestId('approval-card')).getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(screen.queryByTestId('approval-empty')).toBeNull()
   })
 
-  it('a rejection reason never reaches the violations table', async () => {
+  it('a rejection reason reaches the activity feed and never the violations table', async () => {
+    const REASON = 'Budget exceeded, escalate to finance'
+    // The reason's home is the feed's payload expansion now, not a rail ledger (D-AC-11).
+    const rejectedEvent: AuditEvent = {
+      id: 'ev-rejected-1',
+      created_at: '2026-08-02T00:00:00Z',
+      event: 'invoice.approval_rejected',
+      actor: APP_PERSONAS.firm.subject,
+      actor_name: APP_PERSONAS.firm.name,
+      actor_kind: 'person',
+      entity_id: 'inv-failed-1',
+      company_name: 'Northgate Foods',
+      company_scope: 'company',
+      payload: { invoice_id: 'inv-failed-1', run_id: 'run-1', step_ord: 0, reason: REASON },
+    }
     mockDetailFetch(detailRecord({ rule_set_version: 3, violations: [] }), [], {
+      auditLog: auditLogOf([rejectedEvent]),
       approvalResponse: {
         ok: true,
         status: 200,
@@ -620,7 +635,7 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
                 decision: 'rejected',
                 actor: APP_PERSONAS.firm.subject,
                 decided_at: '2026-08-02T00:00:00Z',
-                reason: 'Budget exceeded, escalate to finance',
+                reason: REASON,
               },
             ],
           }),
@@ -630,9 +645,15 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const table = await screen.findByTestId('violations-table')
-    const trail = screen.getByTestId('approval-trail')
-    expect(within(trail).getByText('Budget exceeded, escalate to finance')).toBeTruthy()
-    expect(within(table).queryByText('Budget exceeded, escalate to finance')).toBeNull()
+    const activity = screen.getByTestId('invoice-activity')
+    // Awaited, not queried: /audit-log is its own fetch and the row lands after the detail.
+    // Positive control -- the payload only renders once the row is expanded. Without it the
+    // two absences below pass on a reason that reached no surface at all.
+    fireEvent.click(await within(activity).findByTestId('audit-row'))
+    expect(await within(activity).findByText(REASON)).toBeTruthy()
+    expect(within(table).queryByText(REASON)).toBeNull()
+    // The run still carries the decision; the card no longer restates it.
+    expect(within(screen.getByTestId('approval-card')).queryByText(REASON)).toBeNull()
   })
 
   it('the card sits below Compliance, and the state strip precedes the whole grid', async () => {
@@ -641,12 +662,12 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const table = await screen.findByTestId('violations-table')
-    const trail = screen.getByTestId('approval-trail')
+    const approvalCard = screen.getByTestId('approval-card')
     const doc = screen.getByTestId('source-document-card')
     const strip = await screen.findByTestId('status-strip')
-    expect(table.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(trail.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(strip.compareDocumentPosition(trail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(table.compareDocumentPosition(approvalCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(approvalCard.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(strip.compareDocumentPosition(approvalCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('the card sits above a historical rejection card', async () => {
@@ -661,8 +682,30 @@ describe('InvoiceDetail approval trail card (not yet mounted, task-553)', () => 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const rejection = await screen.findByTestId('rejection-reasons')
-    const trail = screen.getByTestId('approval-trail')
-    expect(trail.compareDocumentPosition(rejection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const approvalCard = screen.getByTestId('approval-card')
+    expect(approvalCard.compareDocumentPosition(rejection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('invoiceDetail_trailCardIsGone', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    // Positive control: without it the eight absences pass on an unmounted page.
+    expect(screen.getByTestId('approval-card')).toBeTruthy()
+    for (const retired of [
+      'approval-trail',
+      'approval-trail-card',
+      'approval-trail-state',
+      'approval-trail-step',
+      'approval-trail-decision',
+      'approval-trail-voided',
+      'approval-trail-empty',
+      'approval-trail-notify-note',
+    ]) {
+      expect(screen.queryByTestId(retired), retired).toBeNull()
+    }
   })
 })
 
@@ -1428,7 +1471,7 @@ describe('InvoiceDetail state strip: mount position and the two unowned error br
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
-  it('characterisation (arch §3 residual): a 500 on GET /approval still captions node 3 "Not required"', async () => {
+  it('a 500 on GET /approval captions node 3 "Not required", and the approval card contradicts it', async () => {
     // The mount gate excludes `idle` and `loading` only, so an ERRORED approval fetch
     // renders the strip with run=null and node 3 claims a compliance fact nobody knows.
     // The arch names this residual and accepts it; no test produced it until now.
@@ -1441,11 +1484,12 @@ describe('InvoiceDetail state strip: mount position and the two unowned error br
     const node3 = (await screen.findByTestId('status-strip')).querySelector('[data-key="approved"]')
     expect(node3?.getAttribute('data-state')).toBe('not-required')
     expect(node3?.textContent).toContain('Not required')
-    // The screen contradicts itself: the trail card reports the failure while the strip
-    // states a compliance fact from the same unread response. That reporter is
-    // ApprovalTrailCard, which subtask 06 replaces -- if it stops rendering ErrorState,
-    // this line goes green and the strip becomes the ONLY thing the operator is told.
-    expect(screen.queryByText('Something went wrong'), 'the trail card still owns the error copy').not.toBeNull()
+    // F-E, settled: the approval card keeps ErrorState + Retry, because it is the only
+    // thing contradicting node 3's claim. Asserted positively and INSIDE approval-card --
+    // a page-wide queryByText would go green on any other card's error state.
+    const approvalCard = screen.getByTestId('approval-card')
+    expect(within(approvalCard).getByText('Something went wrong')).toBeTruthy()
+    expect(within(approvalCard).getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 })
 
@@ -3184,18 +3228,17 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(screen.getByTestId('detail-reject')).toBeTruthy()
   })
 
-  // QA-added (task-554, Mode B adversarial): the two surfaces this story adds -- the
-  // decision pair here and ApprovalTrailCard (APPR-13-03) -- must agree on the same
-  // invoice. A disabled pair alongside an empty trail is a real, reachable state (no
-  // approval run yet), not a contradiction between the two.
-  it('both controls render disabled while the trail card shows its empty state, in agreement', async () => {
+  // The two surfaces -- the decision pair here and ApprovalStateCard -- must agree on the
+  // same invoice. A disabled pair alongside the no-run empty state is a real, reachable
+  // state, not a contradiction between the two.
+  it('both controls render disabled while the approval card shows its empty state, in agreement', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     expect(((await screen.findByTestId('detail-approve')) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(true)
-    expect(await screen.findByTestId('approval-trail-empty')).toBeTruthy()
+    expect(await screen.findByTestId('approval-empty')).toBeTruthy()
   })
 
   // CodeRabbit PR #167 fix: decisionBlockedReasons's array was positional
@@ -3451,11 +3494,11 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
     await screen.findByTestId('detail-approve')
 
-    // Scoped to the whole card, not the `approval-trail` body: the state pill
-    // says "Approved" from the header, and that is the record, not a banner.
-    const card = screen.getByTestId('approval-trail-card')
+    // Scoped to the whole card: the state pill says "Approved" from the header, and that
+    // is the record, not a banner.
+    const card = screen.getByTestId('approval-card')
     const strip = screen.getByTestId('status-strip')
-    // Carved out for the same reason as the trail card: every AuditRow for an
+    // Carved out for the same reason as the approval card: every AuditRow for an
     // `invoice.approval_approved` event prints 'Approved', which is the log, not a banner.
     const activity = screen.getByTestId('invoice-activity')
     const outside = screen
@@ -3482,7 +3525,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
     await screen.findByTestId('detail-approve')
 
-    expect(screen.getByTestId('approval-trail-state').textContent).toBe(APPROVAL_TRAIL_COPY.stateOpen)
+    expect(screen.getByTestId('approval-state').textContent).toBe(APPROVAL_CARD_COPY.stateOpen)
   })
 
   it("AC-6: a rejection's demotion surfaces through the refetch", async () => {
@@ -3611,7 +3654,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByText('INV-VOID-1')
-    expect(screen.getByTestId('approval-trail-state').textContent).toBe(APPROVAL_TRAIL_COPY.stateApproved)
+    expect(screen.getByTestId('approval-state').textContent).toBe(APPROVAL_CARD_COPY.stateApproved)
 
     fireEvent.click(screen.getByTestId('edit-toggle'))
     const buyerInput = await screen.findByDisplayValue('Beta Ltd')
@@ -3619,8 +3662,8 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await screen.findByText('INV-VOID-1-EDITED')
-    expect(screen.getByTestId('approval-trail-voided')).toBeTruthy()
-    expect(screen.getByTestId('approval-trail-state').textContent).not.toBe(APPROVAL_TRAIL_COPY.stateApproved)
+    expect(screen.getByTestId('approval-voided')).toBeTruthy()
+    expect(screen.getByTestId('approval-state').textContent).not.toBe(APPROVAL_CARD_COPY.stateApproved)
   })
 
   // ---- QA adversarial (task-547 verification pass): gaps the 18 Test Specs rows left open --

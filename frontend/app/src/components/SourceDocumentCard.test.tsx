@@ -104,9 +104,8 @@ function mockFetch(source: SourceDocumentResponse | null) {
     if (url.endsWith('/sheet')) {
       return new Promise(() => {}) // the sheet canvas is DOC-02-06's; hold it open here
     }
-    // APPR-13-03: LiveInvoiceDetail now fires a fourth request for the approval trail
-    // card. Default 404 so this file's assertions (about SourceDocumentCard, not the
-    // trail card) are unaffected.
+    // LiveInvoiceDetail fires a fourth request for the approval card. Default 404 so
+    // this file's assertions (about SourceDocumentCard) are unaffected.
     if (url.endsWith('/approval')) {
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) })
     }

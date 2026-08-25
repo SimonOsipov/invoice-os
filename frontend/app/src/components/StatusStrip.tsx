@@ -7,7 +7,7 @@ import { Fragment, type ReactNode } from 'react'
 import { crossGlyph, tickGlyph11 } from '../glyphs'
 import type { StripNode, StripState } from '../lib/invoiceStrip'
 
-// Lifted verbatim from ApprovalTrailCard's pill tones -- no new hue.
+// Lifted verbatim from ApprovalStateCard's STATE_TONE -- no new hue.
 const TONE: Record<StripState, { bg: string; border: string; text: string }> = {
   done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
   failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)' },

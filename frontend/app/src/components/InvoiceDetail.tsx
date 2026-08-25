@@ -69,7 +69,7 @@ import {
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
-import { ApprovalTrailCard } from './ApprovalTrailCard'
+import { ApprovalStateCard } from './ApprovalStateCard'
 import { InvoiceActivityCard } from './InvoiceActivityCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
@@ -1312,7 +1312,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             </div>
 
-            <ApprovalTrailCard run={approval} />
+            <ApprovalStateCard run={approval} />
 
             {!rejectionLeadsRail && rejectionCard}
 

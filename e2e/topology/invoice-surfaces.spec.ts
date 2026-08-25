@@ -1441,10 +1441,11 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   // the backend's own sentence is on screen ([revalidate-visibility] convention, extended to
   // Submit).
   await openInvoiceRow(page, draftNumber)
-  // The approval-trail card fetches its run unconditionally on mount (InvoiceDetail.tsx:
-  // 196-199), so this never-validated draft still renders the empty branch -- topology's
-  // only remaining assertion of it now that a validated firm invoice always arms a run.
-  await expect(page.getByTestId('approval-trail-empty')).toBeVisible()
+  // LiveInvoiceDetail's page-level useAsync fetches the run unconditionally on mount and
+  // the approval card consumes it, so this never-validated draft still renders the empty
+  // branch -- topology's only remaining assertion of it now that a validated firm invoice
+  // always arms a run.
+  await expect(page.getByTestId('approval-empty')).toBeVisible()
   await expect(page.getByTestId('detail-submit')).toBeVisible()
   await expect(page.getByTestId('detail-submit')).toBeDisabled()
   await expect(page.getByTestId('submit-blocked-reason')).toContainText(
@@ -2391,7 +2392,7 @@ test("invoice detail: an incomplete invoice shows a disabled View UBL/XML carryi
 // draft never arms anything). [topology-never-publishes] still holds: no
 // armedInvoice()-style helper, no policy call anywhere below -- this test only validates,
 // same as every other case in this file.
-test('detail surface: the armed decision block and trail card, plus their layout at every wide width', async ({ page }) => {
+test('detail surface: the armed decision block and approval card, plus their layout at every wide width', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2426,16 +2427,22 @@ test('detail surface: the armed decision block and trail card, plus their layout
   // reject-blocked-reason never renders: handlers.go:506-509 assigns reject the same reason
   // as approve, and InvoiceDetail.tsx:769 only renders reject's own div when they differ.
 
-  // The pending step and its role live on the TRAIL CARD, not the decision block above.
-  // `Engagement Manager` is the FIRM tenant's fin_mgr title (db/seed.dev.sql:65) --
+  // The pending step and its role live on the APPROVAL CARD, not the decision block above.
+  // `Engagement Manager` is the FIRM tenant's fin_mgr title (db/seed.dev.sql:71) --
   // Honeywell's title for the same key is `Finance Manager` and would be wrong here.
-  const trailState = page.getByTestId('approval-trail-state')
-  await expect(trailState).toBeVisible()
-  await expect(trailState).toHaveText('In progress')
-  const trailSteps = page.getByTestId('approval-trail-step')
-  await expect(trailSteps).toHaveCount(2)
-  await expect(trailSteps.first()).toContainText('Approval · Engagement Manager')
-  await expect(page.getByTestId('approval-trail-empty')).toHaveCount(0)
+  const approvalState = page.getByTestId('approval-state')
+  await expect(approvalState).toBeVisible()
+  await expect(approvalState).toHaveText('In progress')
+  // Positive control first (F-F): the card unmounts to <Loading/> for one round trip after
+  // every mutation, so an absence asserted on it alone can pass on an unmounted card.
+  await expect(page.getByTestId('approval-holder')).toContainText('Engagement Manager')
+  await expect(page.getByTestId('approval-holder-name')).toHaveText('Musa Danjuma')
+  const approvalCard = page.getByTestId('approval-card')
+  // ord 1's role: the card names ONE step, not a ladder.
+  await expect(approvalCard).not.toContainText('Tax Reviewer')
+  // The other tenant's title for the same role key: the cross-tenant guard.
+  await expect(approvalCard).not.toContainText('Finance Manager')
+  await expect(page.getByTestId('approval-empty')).toHaveCount(0)
 
   // AC-1: containment -- decision block inside its action column, the file's own idiom
   // verbatim (:1626-1632). NOT assertFillsColumn here: the decision block right-aligns
@@ -2471,27 +2478,71 @@ test('detail surface: the armed decision block and trail card, plus their layout
     if (entryViewport) await page.setViewportSize(entryViewport)
   }
 
-  // AC-4: the trail card fills the rail it sits in -- an unstyled-width child of the
-  // flexDirection:'column' second column of `.pf-detail-grid`. Measured against the rail
-  // itself (the testid-less-ancestor idiom this file already uses above), not against a
-  // sibling card: source-document-card's testid is its PADDED body, and that 4px mismatch
-  // would push the slack up and weaken the bound. 1px, not assertFillsColumn's 24px
-  // default: that slack is sized for a scrollbar/list-vs-bar gutter and would pass a card
-  // overflowing its own 16px padding.
-  const trailCard = page.getByTestId('approval-trail-card')
-  const rail = trailCard.locator('xpath=..')
-  const trailFit = await assertFillsColumn(page, trailCard, rail, 'approval-trail-card vs rail', 1)
-  for (const entry of trailFit) {
-    // assertFillsColumn's own bound only catches the trail card being too NARROW
-    // (positive gaps); overflow yields NEGATIVE gaps that pass max(left,right)<=slack, so
-    // this second bound is what catches the trail card being too WIDE.
-    expect(entry.left, `trail card must not overflow the rail's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
-    expect(entry.right, `trail card must not overflow the rail's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+  // G1 -- AC-4: the approval card fills the rail it sits in. Measured against `invoice-rail`
+  // itself, not against a sibling card: source-document-card's testid is its PADDED body,
+  // and that mismatch would push the slack up and weaken the bound. 1px, not
+  // assertFillsColumn's 24px default: that slack is sized for a scrollbar/list-vs-bar
+  // gutter and would pass a card overflowing its own 16px padding.
+  const rail = page.getByTestId('invoice-rail')
+  const cardFit = await assertFillsColumn(page, approvalCard, rail, 'approval-card vs rail', 1)
+  for (const entry of cardFit) {
+    // assertFillsColumn's own bound only catches the card being too NARROW (positive gaps);
+    // overflow yields NEGATIVE gaps that pass max(left,right)<=slack, so this second bound
+    // is what catches the card being too WIDE.
+    expect(entry.left, `approval card must not overflow the rail's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+    expect(entry.right, `approval card must not overflow the rail's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
   }
+
+  // G2 -- G1 alone proves the card fills the rail and NOTHING about the rail: a card that
+  // perfectly fills a collapsed or 1fr-1fr track passes it. The relationship
+  // `gridTemplateColumns: '1fr 340px'` encodes is that the rail is INVARIANT across widths
+  // while the main column absorbs them. railWidths are G1's own comparand measurements, so
+  // G2a is about the very box G1 measured against.
+  const railWidths = cardFit.map((entry) => entry.outerWidth)
+  expect(railWidths.length, 'G2 needs every WIDE_WIDTHS entry measured').toBe(WIDE_WIDTHS.length)
+  const mainColumn = page.getByTestId('invoice-main-column')
+  const columnWidths: Array<{ width: number; column: number }> = []
+  const gridViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const box = await mainColumn.boundingBox()
+      expect(box, `the main column must render at ${width}px`).toBeTruthy()
+      columnWidths.push({ width, column: box!.width })
+    }
+  } finally {
+    if (gridViewport) await page.setViewportSize(gridViewport)
+  }
+  const spread = (ns: number[]) => Math.max(...ns) - Math.min(...ns)
+  // G2a: the rail is the FIXED track.
+  expect(spread(railWidths), `the rail must not grow with the viewport: ${JSON.stringify(railWidths)}`).toBeLessThanOrEqual(2)
+  // G2b, G2a's non-vacuity floor. Without it G2a passes on a page frozen at one width or on
+  // a detached measurement -- and then G1 is measuring a comparand nothing verified.
+  expect(
+    spread(columnWidths.map((c) => c.column)),
+    `the main column must absorb the width instead: ${JSON.stringify(columnWidths)}`,
+  ).toBeGreaterThan(400)
+
+  // G3 -- AC-2's "same rail slot" is a position claim, and DOM order in jsdom is its weaker
+  // half. One axis, at 1280 only: ordering does not vary with width. source-document-card's
+  // testid is the padded BODY, so its y sits inside its wrapper -- the bound is loose in the
+  // safe direction and still catches a reorder.
+  await page.setViewportSize({ width: 1280, height: 1080 })
+  const [approvalBox, docBox] = await Promise.all([
+    approvalCard.boundingBox(),
+    page.getByTestId('source-document-card').boundingBox(),
+  ])
+  expect(approvalBox && docBox, 'both rail cards must render').toBeTruthy()
+  // G3's own non-vacuity control: without it G3 passes on a zero-height sliver.
+  expect(approvalBox!.height, 'the approval card must be a real card, not a collapsed one').toBeGreaterThan(40)
+  expect(
+    approvalBox!.y + approvalBox!.height,
+    `the approval card must end above the source-document card (approval ends ${approvalBox!.y + approvalBox!.height}, doc starts ${docBox!.y})`,
+  ).toBeLessThanOrEqual(docBox!.y + 1)
 
   // General console hygiene only now -- this invoice is armed, so its approval GET
   // returns 200, not a 404. D-27's no-console-error-on-404 observation moved with
-  // approval-trail-empty to the "submit one invoice from its own page" test's draft
+  // approval-empty to the "submit one invoice from its own page" test's draft
   // leg above, the only site left where a detail page's approval GET still 404s.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -2581,7 +2632,7 @@ test('detail surface: a history actor the server cannot name renders verbatim an
   // gaps() is taken against each caption's OWN node block, not against the strip: the strip
   // scrolls, so its far children legitimately sit outside its client box and a gaps() bound
   // there would fail on correct layout. The node block is minWidth:'max-content', so it
-  // must contain its caption whole -- 1px, matching the trail-card check above.
+  // must contain its caption whole -- 1px, matching the approval-card check above.
   //
   // 1180 is swept after WIDE_WIDTHS (widest first, layout.ts:22) because it is the rail's
   // 220px floor -- the narrowest the page is allowed to be, and so the rung where 32 mono

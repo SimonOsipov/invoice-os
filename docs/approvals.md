@@ -276,8 +276,8 @@ stays true exactly as written; the runs are a second, independent signal.
 > 2. **A run is written closed `approved` at arm time when no `approval` step is left
 >    `pending`.** That covers the zero-step version, the condition whose selected lane is
 >    empty, the notify-only policy, and `autoapprove`. `closed_by = 'system'`, and arming
->    writes no `approval_decisions` row ever — so the trail shows honestly that nobody
->    was asked.
+>    writes no `approval_decisions` row ever — so no decision is ever attributed to a
+>    person who was never asked.
 > 3. **An active but empty policy therefore still transmits exactly like no policy at
 >    all** — through the gate's *second* disjunct (an `approved` run) rather than its
 >    first (no active version). The transmit freeze is avoided by CLOSING the run, not by
@@ -312,7 +312,7 @@ Any caller holding a tenant claim may read a run — no role gate (`RunHandler`,
 
 The SPA maps this `404` to a no-run **empty state**, not an error: `getInvoiceApprovalRun`
 (`lib/approvals.ts`) catches it and resolves `null`, which `useAsync`'s default emptiness
-check turns into the trail card's empty state rather than its error branch.
+check turns into the approval card's empty state rather than its error branch.
 
 ### 2.2 `POST /v1/invoices/{id}/approvals` — approve or reject
 
@@ -787,8 +787,9 @@ and has no owner yet.
 A notify step persists its target and its channel, and the arming engine materialises it as a
 `skipped` run step. **No message is dispatched, on any channel.** APPR-10 put that on the screen:
 one sentence in the step inspector, one in the simulator's result, each rendered beside the
-controls it qualifies. A third now renders on the invoice detail page's approval trail card,
-beside any notify step in a run (`APPROVAL_TRAIL_COPY.notifyNote`, `approval-trail-notify-note`).
+controls it qualifies. **The invoice detail page renders no notify disclosure at all**: AUDIT-09-06
+retired the approval trail card, and the approval card that replaced it names only the step an
+approver could act on right now — a notify step is rendered nowhere on that page.
 
 All three sentences rest on a repo-wide **absence**, and an absence is not something a test can pin.
 Verified at the time of writing: no mail, SMS or push dependency in any `package.json`; the AWS
@@ -800,11 +801,11 @@ run in production — `submission_submit` and `submission_poll`, both registered
 appear" passes on any transport not in its list, so its green would be indistinguishable from a
 real absence — the failure mode `stale-refs` avoids by pinning known positives, which an absence
 list has no way to construct. What reduces the risk instead is routing, not proof: each sentence
-is a single named constant behind a stable `data-testid`: two are pinned in
-`WorkflowBuilder.test.tsx` (`NOTIFY_CLAIM_ID`, `SIM_NOTIFY_CLAIM_ID`), the third —
-`APPROVAL_TRAIL_COPY.notifyNote` / `approval-trail-notify-note` — in
-`ApprovalTrailCard.test.tsx`. **Whoever adds a transport must edit those three constants to keep
-the screen honest, and this entry is where they are told to.** That is a signpost, not a gate.
+is a single named constant behind a stable `data-testid`. **There are two**, both pinned in
+`WorkflowBuilder.test.tsx`: `NOTIFY_CLAIM_ID` and `SIM_NOTIFY_CLAIM_ID`. (A third lived on the
+invoice detail page until AUDIT-09-06 deleted the approval trail card that carried it.)
+**Whoever adds a transport must edit those two constants to keep the screen honest, and this entry
+is where they are told to.** That is a signpost, not a gate.
 
 ### No `updated` timestamp exists — and the list no longer claims one (shipped)
 
@@ -893,7 +894,7 @@ off — still submits the same invoice. Pinned by
   on `GET /v1/invoices` (APPR-12-09), from the same `approvalGate` call, so the two wires
   cannot disagree. `can_reject` stays detail-only — the approvals queue has no reject
   action.
-- The invoice detail page's approve/reject controls and its approval trail card. Both
+- The invoice detail page's approve/reject controls and its approval card. Both
   render from the facts above (`can_approve`/`can_reject`, and the run read in §2.1) and
   behave identically whether the flag is on or off.
 - The per-row `approval` facts on `GET /v1/invoices`. **With one consequence**: the SPA

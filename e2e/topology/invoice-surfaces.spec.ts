@@ -2817,3 +2817,208 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 })
+
+// AUDIT-09-04 §7 (AC-1/7/8/9). The card inherits AUDIT_TABLE_MIN_WIDTH = 868 (AuditRow.tsx)
+// into a main column that resolves to ~701px at 1280 (1280 - 252 sidebar - 72 page padding
+// - 16 gap - a 25% rail; platform.css overrides the inline `340px` above 1180). Nothing here
+// asserts those figures -- InvoiceActivityCard.test.tsx can prove the card ASKED for a scroll
+// container, and only a browser shows whether it got one instead of widening the page.
+//
+// Driven to `failed` for the strip suite's reason: terminal, so nothing polls while a
+// viewport sweep measures. `Zenith activity` sorts after every seeded business_entity name,
+// so this fixture can never become another spec's default active entity.
+test.describe.serial("detail surface: the activity card's geometry", () => {
+  let entityName = ''
+  let invoiceNumber = ''
+
+  test.beforeAll(async () => {
+    const token = await login(PERSONAS.A)
+    entityName = `Zenith activity ${Date.now()}`
+    const entity = await createEntity(token, { name: entityName, tin: freshTin() })
+    invoiceNumber = `INV-AUDIT0904-${Date.now()}`
+    const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    await validateInvoice(token, invoice.id)
+    // TransmitClearTx gates the queued edge on a closed run.
+    await approveUntilClosed(invoice.id, await firmApproverTokens())
+    await transitionInvoice(token, invoice.id, 'queued')
+    await transitionInvoice(token, invoice.id, 'failed')
+  })
+
+  // setViewportSize resolves before the page has necessarily re-laid out; window.innerWidth
+  // is the resize's own completion signal.
+  async function resizeTo(page: Page, width: number) {
+    await page.setViewportSize({ width, height: 1080 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+  }
+
+  async function openActivity(page: Page) {
+    await signInFirm(page)
+    await selectEntity(page, entityName)
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    const card = page.getByTestId('invoice-activity')
+    await expect(card).toBeVisible()
+    // The loaded rung, not the spinner: every measurement below is meaningless on a
+    // 60px-tall <Loading/>.
+    await expect(page.getByTestId('audit-row').first()).toBeVisible()
+    return card
+  }
+
+  const overflowOf = (el: Element) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth })
+
+  test('A: the card scrolls, the page does not', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openActivity(page)
+    // AuditTable.tsx wraps the table in the `overflowX:'auto'` div -- the card's own scroller.
+    const scroller = page.getByTestId('audit-table').locator('xpath=..')
+
+    const entryViewport = page.viewportSize()
+    const pressure: Array<{ width: number; scrollWidth: number; clientWidth: number }> = []
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+
+        // A1, the oracle AC-7 MEANT. `.pf-scroll` sets only overflowY, and CSS raises the
+        // other axis from `visible` to `auto` -- an escaped 868px table drags the h1, the
+        // back button and the env banner sideways with it (MembersTable.tsx names this).
+        // This is the assertion a missing minWidth:0 on the main-column wrapper fails.
+        const shell = await page.locator('.pf-scroll').evaluate(overflowOf)
+        expect(shell.clientWidth, `.pf-scroll must have a laid-out box at ${width}px`).toBeGreaterThan(0)
+        expect(shell.scrollWidth - shell.clientWidth, `the page column must not scroll sideways at ${width}px: ${JSON.stringify(shell)}`).toBeLessThanOrEqual(1)
+
+        // A2, the oracle AC-7 WROTE. VACUOUS BY CONSTRUCTION and kept as a labelled guard on
+        // the shell's clip, never as this test's oracle: `.pf-shell` is height:100vh /
+        // overflow:hidden (App.tsx), so no descendant can push the document past its client
+        // width. It can only redden if someone removes that clip. F-G; audit.spec.ts:224 and
+        // :508 are already shipped false-green this way.
+        const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+        expect(doc.scrollWidth - doc.clientWidth, `the shell's clip must hold at ${width}px: ${JSON.stringify(doc)}`).toBeLessThanOrEqual(1)
+
+        const fit = await scroller.evaluate(overflowOf)
+        expect(fit.clientWidth, `the card's scroller must have a laid-out box at ${width}px`).toBeGreaterThan(0)
+        pressure.push({ width, ...fit })
+
+        // A3, A1's floor. ~205px of real pressure against a 100px bound. Without it A1 goes
+        // green the moment the card silently stops scrolling -- a removed overflowX, a
+        // dropped minWidth -- because then nothing presses on the page either.
+        if (width === 1280) {
+          expect(fit.scrollWidth - fit.clientWidth, `at 1280 the 868px table must overflow the card's own scroller: ${JSON.stringify(fit)}`).toBeGreaterThan(100)
+        }
+
+        // A5, BUG-03-05's shape one level down: a table pinned at 868 inside a 1661px card,
+        // stranding 793px of dead space. assertFillsColumn measures the CARD and cannot see it.
+        if (fit.scrollWidth - fit.clientWidth <= 0) {
+          const tableBox = await page.getByTestId('audit-table').boundingBox()
+          expect(tableBox, `the table must render at ${width}px`).toBeTruthy()
+          expect(tableBox!.width, `where the card does not scroll, the table must fill it at ${width}px (${tableBox!.width} vs ${fit.clientWidth})`).toBeGreaterThanOrEqual(fit.clientWidth - 1)
+        }
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // A3's own floor: A3 is written `if (width === 1280)`, so a WIDE_WIDTHS edit could delete
+    // it without deleting a line of this file.
+    expect(pressure.map((p) => p.width), 'A3 only fires at 1280, and 1280 was not swept').toContain(1280)
+
+    // A4. Red here means A1 went vacuous, not that the page regressed: the page grew or the
+    // table shrank until nothing presses anywhere. Widen the sweep -- do not delete this.
+    expect(
+      pressure.filter((p) => p.scrollWidth > p.clientWidth),
+      `the table must overflow the card's scroller at some swept width, or nothing above proves the card is what absorbed it:\n${JSON.stringify(pressure)}`,
+    ).not.toHaveLength(0)
+
+    // A5's floor, A4's mirror. A5 runs only where the card does NOT overflow, so if the
+    // table ever overflowed at every swept width, A5 would silently never execute. It also
+    // asserts something real: the 868px degradation is sanctioned at the narrow end, not
+    // permanent -- at the wide end the card must have room to spare.
+    expect(
+      pressure.filter((p) => p.scrollWidth - p.clientWidth <= 0),
+      `the card must fit its table at some swept width, or A5 above never ran:\n${JSON.stringify(pressure)}`,
+    ).not.toHaveLength(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('B: the card clears the right rail', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const activity = await openActivity(page)
+    const rail = page.getByTestId('invoice-rail')
+
+    const entryViewport = page.viewportSize()
+    const shared: Array<{ width: number; height: number }> = []
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        const [a, r] = await Promise.all([activity.boundingBox(), rail.boundingBox()])
+        // B4. boundingBox() on a detached node returns null and every comparison below
+        // would short-circuit silently.
+        expect(a && r, `the card and the rail must both render at ${width}px`).toBeTruthy()
+        expect(a!.width, `the card must have width at ${width}px`).toBeGreaterThan(0)
+        expect(r!.width, `the rail must have width at ${width}px`).toBeGreaterThan(0)
+
+        // B1. One axis, so it can never go vacuous: the main column overran its track and
+        // the card is sitting under the rail's cards.
+        expect(a!.x + a!.width, `the card must end before the rail begins at ${width}px`).toBeLessThanOrEqual(r!.x + 1)
+        // B2, AC-8's literal form.
+        expect(rectsOverlap(a!, r!), `the card must not overlap the rail at ${width}px: ${JSON.stringify(overlapOf(a!, r!))}`).toBe(false)
+        shared.push({ width, height: overlapOf(a!, r!).height })
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // B3, B2's floor. rectsOverlap needs BOTH axes, so B2 passes on a card sitting squarely
+    // on the rail's left edge whenever the two do not share a y-band at all. This proves
+    // they do, so B2 had something to catch.
+    expect(
+      shared.filter((s) => s.height > 0),
+      `the card and the rail must share a y-band at some swept width, or rectsOverlap above proves nothing:\n${JSON.stringify(shared)}`,
+    ).not.toHaveLength(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('C: the card fills the main column, below the record card, and the column grows', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const activity = await openActivity(page)
+    const column = page.getByTestId('invoice-main-column')
+
+    // C1. slackPx 1, not the helper's 24 default: the card is a stretched flex item in a
+    // column-flex wrapper, so the true gaps are 0, and 24 is sized for a scrollbar gutter.
+    const fits = await assertFillsColumn(page, activity, column, 'invoice-activity vs main column', 1)
+    expect(fits.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+
+    // C2, the hole assertFillsColumn leaves: it bounds max(left,right) <= slack, which a
+    // NEGATIVE gap -- the card overflowing its own column -- satisfies.
+    for (const f of fits) {
+      expect(f.left, `the card must not start left of its column at ${f.width}px`).toBeGreaterThanOrEqual(-1)
+      expect(f.right, `the card must not extend right of its column at ${f.width}px`).toBeGreaterThanOrEqual(-1)
+    }
+
+    // C3, BUG-03-05 proper. A card that perfectly fills a column that itself never grows
+    // passes C1 and C2. Measured spread is ~701 -> ~1661, so 400 has 2.4x margin.
+    const wide = fits.find((f) => f.width === 2560)!
+    const narrow = fits.find((f) => f.width === 1280)!
+    expect(
+      wide.outerWidth - narrow.outerWidth,
+      `the main column must be materially wider at 2560 than at 1280 (${narrow.outerWidth} -> ${wide.outerWidth})`,
+    ).toBeGreaterThan(400)
+
+    // C4/C5, AC-1's real oracle. "Below the invoice record card" is a layout fact; a
+    // DOM-order assertion in jsdom cannot see it.
+    await resizeTo(page, 1280)
+    const record = column.locator('> div').first()
+    expect(await record.getAttribute('data-testid'), 'the record card must come first in the main column, not the activity card').not.toBe('invoice-activity')
+    const [recordBox, activityBox] = await Promise.all([record.boundingBox(), activity.boundingBox()])
+    expect(recordBox && activityBox, 'the record card and the activity card must both render').toBeTruthy()
+    // C5 is C4's floor: C4 passes trivially against a collapsed or unrendered record card.
+    expect(recordBox!.height, `the record card must be a real card (${recordBox!.height}px tall)`).toBeGreaterThan(100)
+    expect(activityBox!.y, `the card must start below the record card (record ends ${recordBox!.y + recordBox!.height}, card starts ${activityBox!.y})`).toBeGreaterThanOrEqual(recordBox!.y + recordBox!.height - 1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})

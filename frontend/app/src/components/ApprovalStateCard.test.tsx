@@ -7,7 +7,7 @@
 // Contract: .ralph/AUDIT-09-06-arch.md section 3 (the component), 4.5 (the guarantee
 // ledger), 6.1 (the spec table), 7 (the branch ladder).
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -485,6 +485,18 @@ describe('ApprovalStateCard', () => {
   })
 
   // ---- arch 4.4 / 4.5: what is dropped, and proved dropped -------------------------
+
+  // AC-1 literally. Every other proof of the deletion is indirect: tsc reds only because
+  // the restored file references symbols arch 3.1 removed, and the testid sweeps red only
+  // once something MOUNTS the card. A stub re-added under the old name passes both.
+  it('approvalStateCard_theRetiredCardFilesAreGone', () => {
+    // Positive control on the same locator: the replacement IS on disk, so the two
+    // absences below cannot be satisfied by a wrong __dirname.
+    expect(existsSync(SOURCE), 'the file scan is pointed at the wrong directory').toBe(true)
+    for (const retired of ['ApprovalTrailCard.tsx', 'ApprovalTrailCard.test.tsx']) {
+      expect(existsSync(join(__dirname, retired)), retired + ' is deleted by AUDIT-09-06 (AC-1)').toBe(false)
+    }
+  })
 
   it('approvalStateCard_copyConstIsPrunedAndByteIdentical', () => {
     // Red today on the first assertion, not on a throw: the rename in arch 3.5 has not

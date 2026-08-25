@@ -1308,6 +1308,45 @@ describe("approvalStateView: the rail card's pure core", () => {
   })
 })
 
+// Three assertions the deleted approvals.test.ts describes carried that arch 4.5's ledger
+// does not name, re-expressed against the new projection. Each survives a shape the wire
+// can still produce; none is reached by the specs above.
+describe('approvalStateView: edges the retired trail projection covered (AUDIT-09-06 QA)', () => {
+  it('an OPEN run with no steps at all yields no pending step, and does not throw', () => {
+    // A policy whose ladder is all conditions/notifies arms an open run with no approval
+    // step. Retired twin: `an empty steps array projects to an empty array, does not throw`.
+    // Positive control on the same axis, first: one pending approval step DOES yield a holder.
+    expect(approvalStateView(stateRun([baseStep({ ord: 0 })], 'open')).pending).not.toBeNull()
+
+    const view = approvalStateView(stateRun([], 'open'))
+    expect(view.pending, 'an empty ladder is nobody waiting, not a throw').toBeNull()
+    expect(view.stateLabel).toBe(APPROVAL_CARD_COPY.stateOpen)
+    expect(view.voided).toBe(false)
+    expect(pendingApprovalStep(stateRun([], 'open'))).toBeNull()
+  })
+
+  it('a malformed due_at falls through to fmtDate\'s em-dash guard, never "Invalid Date"', () => {
+    // approvalStateView calls fmtDate(step.due_at) unguarded; fmtDate answers the em dash
+    // on a NaN date (lib/format.ts). Nothing has pinned that path since the trail
+    // projection died. Positive control on the same field: a well-formed due_at formats.
+    expect(approvalStateView(stateRun([baseStep({ due_at: '2026-07-01T00:00:00Z' })])).pending?.dueLabel).toBe(
+      fmtDate('2026-07-01T00:00:00Z'),
+    )
+
+    const label = approvalStateView(stateRun([baseStep({ due_at: 'not-a-date' })])).pending?.dueLabel
+    expect(label).toBe('\u2014')
+    expect(label).not.toMatch(/Invalid/i)
+  })
+
+  it('an empty-string holder text is not the same as an absent one', () => {
+    // `?? null` keeps '' as ''; the card's `holderText != null` guard then renders an empty
+    // holder-name line instead of omitting it. Conflating the two is a one-character change
+    // (`??` -> `||`). Retired twin of the same name.
+    expect(approvalStateView(stateRun([baseStep({ holder: { text: '', warn: true } })])).pending?.holderText).toBe('')
+    expect(approvalStateView(stateRun([baseStep({ holder: null })])).pending?.holderText).toBeNull()
+  })
+})
+
 describe('approvalRunStateView: the four run states, plus an unknown fallback (AC-5)', () => {
   it('the four run states map to label and tone', () => {
     expect(approvalRunStateView('open')).toEqual({ label: APPROVAL_CARD_COPY.stateOpen, tone: 'amber' })

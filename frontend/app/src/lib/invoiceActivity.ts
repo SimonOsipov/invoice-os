@@ -51,6 +51,17 @@ export const ACTIVITY_CHIP_LABELS: Record<ActivityChipKey, string> = {
 }
 
 export const ACTIVITY_COPY = {
+  // Never 'Audit trail': import-wizard.spec.ts:576 pins zero matches on this page.
+  cardTitle: 'Activity',
+  loading: 'Loading activity…',
+  // Scoped, never the Audit screen's firm-wide wording -- that would be a lie beside one
+  // invoice. invoiceActivity_emptyScopedLogIsHonest holds the split.
+  emptyScopedTitle: 'No activity recorded for this invoice',
+  emptyScopedBody: 'Edits, validations, approvals and transmissions appear here as they happen.',
+  // An ADDITION to the two scoped lines, never a swap. Rendered only on log_is_empty.
+  emptyWorkspaceAlso: 'This workspace has not recorded anything at all yet.',
+  // The incidental zero, distinct from documentsInert's structural one.
+  chipZeroInert: 'A chip with no count is dimmed: this invoice has no events of that kind in the loaded page.',
   // D-AC-6: the Documents zero is structural, not "nothing yet". document.* is gated out of
   // the invoice-scoped read (TestAuditScoped_EventGateExcludesACollidingID).
   documentsInert:

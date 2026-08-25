@@ -70,6 +70,7 @@ import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/rev
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ApprovalTrailCard } from './ApprovalTrailCard'
+import { InvoiceActivityCard } from './InvoiceActivityCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
 import { StatusStrip } from './StatusStrip'
@@ -1042,71 +1043,80 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         )}
 
         <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-          {/* The left-column card has two mutually exclusive bodies ([edit-mode-in-body]).
-              The read-only one below is unchanged from before INVED-01-07 -- deliberately,
-              so the split ships zero read-mode visual diff. */}
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            {editing ? (
-              <InvoiceEditBody
-                ctx={ctx}
-                base={base}
-                invoiceId={invoiceId}
-                inv={inv}
-                onSaved={handleSaved}
-                onCancel={() => setEditing(false)}
-              />
-            ) : (
-              <>
-                <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
-                    <div>
-                      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{inv.supplier_name ?? '—'}</div>
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>TIN {inv.supplier_tin ?? '—'}</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
-                      <div data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(inv.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(inv.buyer_tin) ? BUYER_TIN_MISSING : inv.buyer_tin}</div>
-                    </div>
-                  </div>
-                  <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
-                      <span className="label">Description</span>
-                      <span className="label" style={{ textAlign: 'right' }}>Qty</span>
-                      <span className="label" style={{ textAlign: 'right' }}>Unit</span>
-                      <span className="label" style={{ textAlign: 'right' }}>Amount</span>
-                    </div>
-                    {items.map((it) => (
-                      <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
-                        <span style={{ fontSize: 13 }}>{it.description ?? '—'}</span>
-                        <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.quantity ?? '—'}</span>
-                        <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.unit_price != null ? fmtPlain(Number(it.unit_price)) : '—'}</span>
-                        <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{it.line_total != null ? fmt(Number(it.line_total)) : '—'}</span>
+          {/* A wrapper, not a third grid child: a third child auto-places into row 2 and
+              starts below the RAIL's bottom edge whenever the rail is taller, stranding a
+              gap under the record card. minWidth:0 is load-bearing -- `1fr` is
+              minmax(auto,1fr), whose automatic minimum is content-based, and the activity
+              card's 868px table would raise it. Held by the activity card's geometry spec C. */}
+          <div data-testid="invoice-main-column" style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            {/* The left-column card has two mutually exclusive bodies ([edit-mode-in-body]).
+                The read-only one below is unchanged from before INVED-01-07 -- deliberately,
+                so the split ships zero read-mode visual diff. */}
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              {editing ? (
+                <InvoiceEditBody
+                  ctx={ctx}
+                  base={base}
+                  invoiceId={invoiceId}
+                  inv={inv}
+                  onSaved={handleSaved}
+                  onCancel={() => setEditing(false)}
+                />
+              ) : (
+                <>
+                  <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
+                      <div>
+                        <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{inv.supplier_name ?? '—'}</div>
+                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>TIN {inv.supplier_tin ?? '—'}</div>
                       </div>
-                    ))}
+                      <div style={{ textAlign: 'right' }}>
+                        <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
+                        <div data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(inv.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(inv.buyer_tin) ? BUYER_TIN_MISSING : inv.buyer_tin}</div>
+                      </div>
+                    </div>
+                    <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+                        <span className="label">Description</span>
+                        <span className="label" style={{ textAlign: 'right' }}>Qty</span>
+                        <span className="label" style={{ textAlign: 'right' }}>Unit</span>
+                        <span className="label" style={{ textAlign: 'right' }}>Amount</span>
+                      </div>
+                      {items.map((it) => (
+                        <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
+                          <span style={{ fontSize: 13 }}>{it.description ?? '—'}</span>
+                          <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.quantity ?? '—'}</span>
+                          <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.unit_price != null ? fmtPlain(Number(it.unit_price)) : '—'}</span>
+                          <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{it.line_total != null ? fmt(Number(it.line_total)) : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
-                  <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
-                      <span className="money" style={{ fontSize: 13 }}>{subtotal != null ? fmt(subtotal) : '—'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT</span>
-                      <span className="money" style={{ fontSize: 13 }}>{vat != null ? fmt(vat) : '—'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
-                      <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{total != null ? fmt(total) : '—'}</span>
+                  <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
+                        <span className="money" style={{ fontSize: 13 }}>{subtotal != null ? fmt(subtotal) : '—'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT</span>
+                        <span className="money" style={{ fontSize: 13 }}>{vat != null ? fmt(vat) : '—'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
+                        <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{total != null ? fmt(total) : '—'}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </>
-            )}
+                </>
+              )}
+            </div>
+
+            <InvoiceActivityCard ctx={ctx} invoiceId={invoiceId} />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div data-testid="invoice-rail" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {inv.status === 'failed' && (
               <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>

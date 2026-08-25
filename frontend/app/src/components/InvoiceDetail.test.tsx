@@ -248,6 +248,23 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
         opts.sourceDocumentResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) },
       )
     }
+    // The activity card's GET .../audit-log, dispatched before the detail-refetch counter
+    // like /ubl and /source-document above: the fallback would answer it with an invoice
+    // record and eat a detailSequence slot. `includes`, not `endsWith` -- it carries a query.
+    if (method === 'GET' && url.includes('/audit-log')) {
+      return Promise.resolve<MockResponse>({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            events: [],
+            page: { limit: 100, has_more: false, next_cursor: null },
+            total: 0,
+            log_is_empty: false,
+            facets: { event: [], actor: [], company: [] },
+          }),
+      })
+    }
     // GET .../approval (APPR-13-03, D-29), dispatched before the detail-refetch counter
     // like /ubl and /source-document above. `.endsWith('/approval')` is false for
     // '/approvals' (the POST decide route), so that arm is unaffected. First call always
@@ -1177,7 +1194,9 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
+          // /audit-log excluded like the rest: counting the activity card's fetch as a
+          // detail GET satisfies the >=2 floor below before the poll tick ever lands.
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log')
         })
       // 1 initial mount fetch + 1 poll tick fetch.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2144,7 +2163,9 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
+          // /audit-log excluded like the rest: counting the activity card's fetch as a
+          // detail GET satisfies the >=2 floor below before the poll tick ever lands.
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log')
         })
       // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2178,7 +2199,9 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
         fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
           const method = init?.method ?? 'GET'
           const u = String(url)
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval')
+          // /audit-log excluded like the rest: counting the activity card's fetch as a
+          // detail GET satisfies the >=2 floor below before the poll tick ever lands.
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log')
         })
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
 

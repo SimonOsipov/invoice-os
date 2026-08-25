@@ -1,11 +1,12 @@
-// RED specs (AUDIT-09-03, T-1..T-16) -- pin the activity feed's chip derivation, slicing and
-// overflow copy before the executor fills in invoiceActivity.ts's stub bodies. Every spec that
-// calls activityChips/activityRows/activityToggleCopy fails on their `not implemented` throw,
-// which IS the correct RED reason. T-9 and T-16 read no stub: they are standing guards over the
-// vocabulary and the page-size cap, and they pass today.
+// The activity feed's chip derivation, slicing and overflow copy.
 //
-// `9`, `100`, `412`, `5`, `6` are ungrouped, so toLocaleString('en-NG') cannot move them
-// (format.test.ts:9). A four-digit total would have to have its expectation computed.
+// invoiceActivity_everyReachableDomainHasAChip and invoiceActivity_fetchLimitIsTheServersMax
+// call none of the three functions: they are standing guards over the vocabulary and the
+// page-size cap, and each carries its own oracle rather than the module's.
+//
+// `5`, `6`, `9`, `100`, `412` are ungrouped, so toLocaleString('en-NG') cannot move them
+// (format.test.ts:9). The four-digit case computes its expectation --
+// invoiceActivity_noteGroupsAFourDigitTotal.
 
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
@@ -92,7 +93,7 @@ const DOMAIN_CHIP_KEYS = CHIP_KEYS.filter((k) => k !== 'all')
 describe('activityChips', () => {
   it('invoiceActivity_sixChipsFixedOrder', () => {
     // Asserted against a literal, not ACTIVITY_CHIP_ORDER: an oracle the implementation reads
-    // cannot see a wrong order. These two assertions pass today.
+    // cannot see a wrong order.
     expect(ACTIVITY_CHIP_ORDER).toEqual(CHIP_KEYS)
     expect(ACTIVITY_CHIP_LABELS).toEqual({
       all: 'Everything',
@@ -157,7 +158,7 @@ describe('activityChips', () => {
 
   it('invoiceActivity_everyReachableDomainHasAChip', () => {
     // The standing guard the Reconciliation chip was added to satisfy: iterates all 17, never
-    // a sample. Reads no stub, so it passes today.
+    // a sample.
     expect(REACHABLE_EVENTS).toHaveLength(17)
     expect(DOMAIN_CHIP_KEYS).toEqual(['invoices', 'approvals', 'documents', 'submissions', 'reconciliation'])
     expect(ACTIVITY_CHIP_ORDER.filter((k) => k !== 'all')).toEqual(DOMAIN_CHIP_KEYS)
@@ -180,6 +181,29 @@ describe('activityChips', () => {
     expect(chip(chips, 'invoices').count).toBe(2)
     // Never silently reattributed to a domain.
     expect(domainCountSum(chips)).toBe(2)
+  })
+
+  it('invoiceActivity_toleratesMalformedEventIdentifiers', () => {
+    // `event` is free text on the wire. 'constructor' is the adversarial one: AUDIT_EVENTS is
+    // a bare object literal, so the lookup hits Object.prototype and returns a truthy def
+    // whose `domain` is undefined -- chipOf's `!= null` is what keeps that out of a chip.
+    const junk = ['', '.', 'invoice.', 'INVOICE.CREATED', 'invoice.created ', 'constructor', 'a'.repeat(300)]
+    const chips = activityChips(evs(junk))
+    expect(chips).toHaveLength(6)
+    expect(chip(chips, 'all').count).toBe(junk.length)
+    expect(domainCountSum(chips)).toBe(0)
+    expect(activityRows(evs(junk), 'all', true)).toHaveLength(junk.length)
+    expect(activityRows(evs(junk), 'invoices', true)).toEqual([])
+
+    // Mixed: the one real event is still attributed and the junk still is not.
+    const mixed = activityChips(evs([...junk, 'submission.accepted']))
+    expect(chip(mixed, 'all').count).toBe(junk.length + 1)
+    expect(chip(mixed, 'submissions').count).toBe(1)
+    expect(domainCountSum(mixed)).toBe(1)
+
+    // A null element is not producible by the reader ([]AuditEvent of structs); pinned so a
+    // malformed page fails loudly instead of being silently miscounted.
+    expect(() => activityChips([null as unknown as AuditEvent])).toThrow()
   })
 
   it('invoiceActivity_chipCountsIgnoreTheRestSlice', () => {
@@ -254,6 +278,60 @@ describe('activityRows', () => {
     ])
   })
 
+  it('invoiceActivity_chipCountMatchesItsRowCount', () => {
+    // activityChips and activityRows call chipOf independently; nothing else pins them to the
+    // same answer, and a chip whose count disagrees with its rows is the visible bug.
+    const events = evs([...REACHABLE_EVENTS, 'not.a.real.event'])
+    expect(events).toHaveLength(18)
+    const chips = activityChips(events)
+    expect(chips).toHaveLength(6)
+    expect(chips.filter((c) => c.count > 0).length).toBeGreaterThan(1)
+
+    for (const c of chips) {
+      expect(activityRows(events, c.key, true), c.key).toHaveLength(c.count)
+      expect(activityRows(events, c.key, false), c.key).toHaveLength(Math.min(c.count, ACTIVITY_REST_ROWS))
+    }
+  })
+
+  it('invoiceActivity_unknownChipKeyRendersNothing', () => {
+    const events = evs(REACHABLE_EVENTS)
+    // Control: the fixture is not empty, so [] below is the filter's answer, not the input's.
+    expect(activityRows(events, 'all', true)).toHaveLength(17)
+    // 'policies' is a real AuditDomain with no chip; '' is not a domain at all.
+    expect(activityRows(events, 'policies' as ActivityChipKey, true)).toEqual([])
+    expect(activityRows(events, '' as ActivityChipKey, false)).toEqual([])
+
+    const keys = activityChips(events).map((c) => c.key)
+    expect(keys).toHaveLength(6)
+    expect(keys.every((k) => (CHIP_KEYS as string[]).includes(k))).toBe(true)
+  })
+
+  it('invoiceActivity_doesNotReorderTheCallersArray', () => {
+    // invoiceActivity_doesNotMutateItsInput shares one created_at across its fixture, so a
+    // stable in-place sort is invisible to it. These timestamps are scrambled.
+    const events: AuditEvent[] = [
+      ev({ id: 'ev-1', event: 'invoice.created', created_at: '2026-08-20T10:00:00Z' }),
+      ev({ id: 'ev-2', event: 'invoice.approval_armed', created_at: '2026-08-23T10:00:00Z' }),
+      ev({ id: 'ev-3', event: 'submission.accepted', created_at: '2026-08-21T10:00:00Z' }),
+      ev({ id: 'ev-4', event: 'invoice.approval_approved', created_at: '2026-08-25T10:00:00Z' }),
+      ev({ id: 'ev-5', event: 'invoice.updated', created_at: '2026-08-22T10:00:00Z' }),
+      ev({ id: 'ev-6', event: 'invoice.approval_cancelled', created_at: '2026-08-24T10:00:00Z' }),
+    ]
+    const ids = events.map((e) => e.id)
+    // Guard the scramble: a sort by created_at in EITHER direction moves an id.
+    const byDate = [...events].sort((a, b) => a.created_at.localeCompare(b.created_at)).map((e) => e.id)
+    expect(byDate).not.toEqual(ids)
+    expect([...byDate].reverse()).not.toEqual(ids)
+
+    for (const key of ACTIVITY_CHIP_ORDER) {
+      activityChips(events)
+      activityRows(events, key, true)
+      activityRows(events, key, false)
+    }
+    expect(events).toHaveLength(6)
+    expect(events.map((e) => e.id)).toEqual(ids)
+  })
+
   it('invoiceActivity_doesNotMutateItsInput', () => {
     const events = evs(REACHABLE_EVENTS.slice(0, 8))
     const ids = events.map((e) => e.id)
@@ -296,9 +374,64 @@ describe('activityToggleCopy', () => {
     expect(collapsed.note).toBe(wantNote)
   })
 
+  it('invoiceActivity_toggleLabelIgnoresTotalAndFetched', () => {
+    // D-AC-9 rests on label and note being orthogonal, not on one branch reading the right
+    // field today. A label that could see `total` could name rows it did not render.
+    const labels = [
+      { total: 9, fetched: 9 },
+      { total: 412, fetched: 100 },
+      { total: 10, fetched: 9 },
+    ].map((t) => activityToggleCopy({ shown: 9, showAll: false, ...t }).label)
+    expect(labels).toHaveLength(3)
+    expect(new Set(labels).size).toBe(1)
+    expect(labels[0]).toBe('Show all 9 events')
+
+    const notes = [
+      activityToggleCopy({ shown: 3, total: 412, fetched: 100, showAll: false }).note,
+      activityToggleCopy({ shown: 100, total: 412, fetched: 100, showAll: true }).note,
+    ]
+    expect(notes[0]).not.toBeNull()
+    expect(new Set(notes).size).toBe(1)
+  })
+
+  it('invoiceActivity_noteGroupsAFourDigitTotal', () => {
+    // `total` is the server's scoped count and is uncapped, so four digits are reachable where
+    // `shown`/`fetched` are not. Expectation computed, never hardcoded -- format.test.ts:9.
+    const grouped = (1234).toLocaleString('en-NG')
+    // Control: without grouping in this ICU build the assertions below cannot tell the
+    // formatter from String(n).
+    expect(grouped, 'en-NG did not group in this build').not.toBe('1234')
+
+    const { note } = activityToggleCopy({ shown: 100, total: 1234, fetched: 100, showAll: false })
+    expect(note).not.toBeNull()
+    expect(note).toContain(grouped)
+    expect(note).not.toContain('1234')
+  })
+
+  it('invoiceActivity_shownAboveFetchedIsNotClamped', () => {
+    // `shown` is a precondition, not a guard: the module never sees the chip, so it cannot
+    // check it. Subtask 04 must pass activityRows(events, chip, true).length -- passing
+    // `total` reinstates D-AC-9's overclaim and only this test says so.
+    const { label, note } = activityToggleCopy({ shown: 412, total: 412, fetched: 100, showAll: false })
+    expect(label).toBe(`Show all ${(412).toLocaleString('en-NG')} events`)
+    // The note still describes the page, so a bad `shown` puts two numbers in one render.
+    expect(note).toContain('100')
+    expect(note).toContain('412')
+  })
+
+  it('invoiceActivity_toggleCopyOnDegenerateNumbers', () => {
+    // An empty feed renders neither control.
+    expect(activityToggleCopy({ shown: 0, total: 0, fetched: 0, showAll: false })).toEqual({ label: null, note: null })
+    expect(activityToggleCopy({ shown: 0, total: 0, fetched: 0, showAll: true })).toEqual({ label: null, note: null })
+    // Unreachable numbers must not throw; a negative count cannot produce a label.
+    expect(activityToggleCopy({ shown: -3, total: -3, fetched: -3, showAll: false }).label).toBeNull()
+    expect(() => activityToggleCopy({ shown: NaN, total: NaN, fetched: NaN, showAll: false })).not.toThrow()
+    expect(() => activityToggleCopy({ shown: 5.5, total: 9, fetched: 9, showAll: false })).not.toThrow()
+  })
+
   it('invoiceActivity_fetchLimitIsTheServersMax', () => {
     // A vitest cannot read internal/audit/handlers.go:39. AUDIT_PAGE_SIZES is the shipped
-    // mirror of the same cap. Reads no stub, so it passes today.
+    // mirror of the same cap.
     expect(AUDIT_PAGE_SIZES.length).toBeGreaterThan(0)
     expect(ACTIVITY_FETCH_LIMIT).toBe(Math.max(...AUDIT_PAGE_SIZES))
     expect(ACTIVITY_FETCH_LIMIT).toBe(100)
@@ -318,5 +451,12 @@ describe('activityToggleCopy', () => {
     expect(joined).not.toContain('AuditView')
     expect(joined).not.toContain('authedFetch')
     expect(src).not.toContain('PlatformCtx')
+
+    // The ^import scan is blind to a dynamic import and to a re-export, so these read the
+    // whole file. Second control needle: prove it is THIS file.
+    expect(src, 'the source scan read the wrong file').toContain('export function activityChips')
+    expect(src).not.toMatch(/from ['"]react/)
+    expect(src).not.toContain('import(')
+    expect(src).not.toContain('require(')
   })
 })

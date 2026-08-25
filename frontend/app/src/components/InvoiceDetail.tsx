@@ -1113,7 +1113,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               )}
             </div>
 
-            <InvoiceActivityCard ctx={ctx} invoiceId={invoiceId} />
+            <InvoiceActivityCard ctx={ctx} invoiceId={invoiceId} invoiceNumber={inv.invoice_number} />
           </div>
 
           <div data-testid="invoice-rail" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

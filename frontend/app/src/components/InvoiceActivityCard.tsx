@@ -32,7 +32,11 @@ import { AuditTable } from './AuditTable'
 const DOCUMENTS_REASON_ID = 'activity-chip-documents-reason'
 const EMPTY_CHIP_REASON_ID = 'activity-chip-empty-reason'
 
-export function InvoiceActivityCard({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }): ReactNode {
+export function InvoiceActivityCard({
+  ctx,
+  invoiceId,
+  invoiceNumber,
+}: { ctx: PlatformCtx; invoiceId: string; invoiceNumber: string }): ReactNode {
   const base = gatewayBase()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [chip, setChip] = useState<ActivityChipKey>('all')
@@ -152,17 +156,32 @@ export function InvoiceActivityCard({ ctx, invoiceId }: { ctx: PlatformCtx; invo
           </AuditTable>
         </div>
 
-        {toggle.label != null && (
+        {/* The toggle and the hand-off share one row: the cap note directly below points the
+            reader at ACTIVITY_COPY.auditLink, so pointer and target must be adjacent. marginTop
+            moves to the wrapper so spacing is the same whether or not the toggle renders. */}
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {toggle.label != null && (
+            <button
+              type="button"
+              data-testid="activity-toggle"
+              onClick={() => setShowAll(!showAll)}
+              className="v2-btn v2-btn-ghost pf-btn"
+              style={{ height: 32, padding: '0 12px', fontSize: 12.5 }}
+            >
+              {toggle.label}
+            </button>
+          )}
+          {/* A <button>, not an <a>: there is no URL to point at. The SPA has no router. */}
           <button
             type="button"
-            data-testid="activity-toggle"
-            onClick={() => setShowAll(!showAll)}
+            data-testid="activity-open-in-audit"
+            onClick={() => ctx.openAuditForInvoice(invoiceId, invoiceNumber)}
             className="v2-btn v2-btn-ghost pf-btn"
-            style={{ marginTop: 12, height: 32, padding: '0 12px', fontSize: 12.5 }}
+            style={{ height: 32, padding: '0 12px', fontSize: 12.5 }}
           >
-            {toggle.label}
+            {ACTIVITY_COPY.auditLink}
           </button>
-        )}
+        </div>
         {toggle.note != null && (
           <div data-testid="activity-cap-note" style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
             {toggle.note}

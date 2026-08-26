@@ -160,7 +160,7 @@ func TestRLS_AuditPayloadSummaryOnly(t *testing.T) {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
 	if len(body) == 0 {
-		t.Fatal("payload is empty {} — want invoice_id/submission_job_id/drift_kind/action " +
+		t.Fatal("payload is empty {} — want invoice_id/invoice_number/submission_job_id/drift_kind/action " +
 			"populated; an empty payload would trivially (and vacuously) satisfy the key-set " +
 			"check below without proving anything was actually written")
 	}

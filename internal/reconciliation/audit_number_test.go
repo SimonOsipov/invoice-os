@@ -230,8 +230,24 @@ func rcDecodePayload(t *testing.T, payload json.RawMessage) map[string]any {
 
 // --- cleanup -----------------------------------------------------------------------------
 
+// rcCleanupAudit deletes the tenant's audit rows. A plain DELETE is refused by the
+// audit_log_no_update_delete trigger even as superuser, so it runs under
+// session_replication_role='replica' -- the same escape rcTeardownApproval uses. Without it
+// the helper is inert and every run leaks its rows into the dev corpus (D-22 plan drift).
 func rcCleanupAudit(h *harness, tenantID string) {
-	_, _ = h.super.Exec(context.Background(), `DELETE FROM audit_log WHERE tenant_id = $1`, tenantID)
+	ctx := context.Background()
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		return
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, tenantID); err != nil {
+		return
+	}
+	_ = tx.Commit(ctx)
 }
 
 // rcCleanupReArmKeys removes the idempotency_keys row ReArmPoll writes for a healed

@@ -181,7 +181,8 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 		// what those filters orphaned; the live check above covers them already.
 		postdatesTheFrozenFilters := func(n string) bool {
 			return n == "TestCIRunFiltersReachEveryTestInThePackage" ||
-				strings.HasPrefix(n, "TestPurge")
+				strings.HasPrefix(n, "TestPurge") ||
+				strings.HasPrefix(n, "TestHandlerMapping")
 		}
 		var historical []string
 		for _, n := range names {

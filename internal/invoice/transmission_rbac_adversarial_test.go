@@ -368,11 +368,9 @@ func TestGetHandler_RealStore_SuspendedAndInvitedApproverRefused(t *testing.T) {
 			id := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 
 			rec, resp := doInvoiceGetAs(t, store.Get, store.CallerRole, &id, invID)
-			// The seam refuses the read; the exact status is pinned by
-			// TestInvoiceStatusForErr_NotActiveMemberIs403 (AUDIT-10-03).
-			if rec.Code == http.StatusOK {
-				t.Fatalf("status = 200, want a refusal (body=%s)", rec.Body.String())
-			}
+			// The seam refuses the read, and the refusal reaches the wire as the
+			// 403 the mapper produces -- the same body every other handler gives.
+			assertNotActiveMember403(t, rec)
 			if resp.CanSubmit || resp.SubmitBlockedReason != nil {
 				t.Errorf("the refusal still published can_submit=%v submit_blocked_reason=%v, want neither key set",
 					resp.CanSubmit, resp.SubmitBlockedReason)

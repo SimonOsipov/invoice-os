@@ -225,7 +225,7 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				}
 				// Last statement, like the verdict branches: OncePerJob's guarantee then covers
 				// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
-				return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind)
+				return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind, canonical.InvoiceNumber)
 			})
 			return err
 		})
@@ -255,7 +255,7 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				}
 				// M5-05-04 (task-240): the 08 audit event. Must stay the closure's LAST
 				// statement so OncePerJob's exactly-once guarantee covers it too (AC#5).
-				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "accepted", r.IRN)
+				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "accepted", r.IRN, canonical.InvoiceNumber)
 			})
 			return err
 
@@ -275,7 +275,7 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				}
 				// M5-05-04 (task-240): the 08 audit event, no reference on Rejected
 				// ([audit-reference-is-the-irn] -- Rejected has no IRN field to pass).
-				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "rejected", "")
+				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "rejected", "", canonical.InvoiceNumber)
 			})
 			return err
 
@@ -321,7 +321,7 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					}
 					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
 					// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
-					return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind)
+					return recordFailureAudit(ctx, tx, args.InvoiceID, jobID, kind, canonical.InvoiceNumber)
 				})
 				if err != nil {
 					return err
@@ -466,6 +466,11 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 		case Accepted:
 			ex := ExchangeFor(w.Adapter, OpPoll, newAttempts, args.SubmissionJobID, args.InvoiceID, evidence)
 			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+				// First, so a failed lookup rolls the closure back before any write.
+				number, err := w.InvoicePort.Number(ctx, tx, args.InvoiceID)
+				if err != nil {
+					return err
+				}
 				if err := RecordExchange(ctx, tx, ex); err != nil {
 					return err
 				}
@@ -478,13 +483,18 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 				// M5-05-05 (task-241): the 08 audit event, same helper SubmitWorker's synchronous
 				// Accepted branch uses (M5-05-04 (task-240), System Design §6). Must stay the
 				// closure's LAST statement so OncePerJob's exactly-once guarantee covers it too.
-				return recordVerdictAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, "accepted", r.IRN)
+				return recordVerdictAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, "accepted", r.IRN, number)
 			})
 			return err
 
 		case Rejected:
 			ex := ExchangeFor(w.Adapter, OpPoll, newAttempts, args.SubmissionJobID, args.InvoiceID, evidence)
 			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+				// First, so a failed lookup rolls the closure back before any write.
+				number, err := w.InvoicePort.Number(ctx, tx, args.InvoiceID)
+				if err != nil {
+					return err
+				}
 				if err := RecordExchange(ctx, tx, ex); err != nil {
 					return err
 				}
@@ -496,7 +506,7 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 				}
 				// M5-05-05 (task-241): the 08 audit event, no reference on Rejected
 				// ([audit-reference-is-the-irn]).
-				return recordVerdictAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, "rejected", "")
+				return recordVerdictAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, "rejected", "", number)
 			})
 			return err
 
@@ -524,6 +534,11 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 				// Final attempt: dead-letter. Wrapped in OncePerJob -- this is a terminal
 				// write, unlike the mid-budget branch below.
 				_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+					// First, so a failed lookup rolls the closure back before any write.
+					number, err := w.InvoicePort.Number(ctx, tx, args.InvoiceID)
+					if err != nil {
+						return err
+					}
 					if err := RecordExchange(ctx, tx, ex); err != nil {
 						return err
 					}
@@ -538,7 +553,7 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					}
 					// Last statement, like the verdict branches: OncePerJob's guarantee then covers
 					// the audit row too. Pinned by TestSubmissionAudit_FailureWriteIsLastInItsClosure.
-					return recordFailureAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, kind)
+					return recordFailureAudit(ctx, tx, args.InvoiceID, args.SubmissionJobID, kind, number)
 				})
 				if err != nil {
 					return err

@@ -282,7 +282,7 @@ func TestSubmissionAudit_OutcomeVocabularyIsExactlyThree(t *testing.T) {
 		values  []string
 		smuggle []string
 	)
-	// recordVerdictAudit(ctx, tx, invoiceID, jobID, outcome, reference) -- outcome is arg 4.
+	// recordVerdictAudit(ctx, tx, invoiceID, jobID, outcome, reference, invoiceNumber) -- outcome is arg 4.
 	for _, c := range vaCollectCalls(files, "recordVerdictAudit") {
 		sites++
 		v, ok := vaStringArg(c, 4)
@@ -457,6 +457,10 @@ func vaWithinFreshTenant(t *testing.T, wantRows int, write func(ctx context.Cont
 	}
 }
 
+// vaInvoiceNumber is the number the whitebox cases hand the seam; these tests write no
+// invoices row, so the value only has to be a distinctive non-blank string.
+const vaInvoiceNumber = "INV-VA-0001"
+
 func vaKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -477,7 +481,7 @@ func TestRecordFailureAudit_ActorIsSystem(t *testing.T) {
 	invoiceID, jobID := uuid.NewString(), uuid.NewString()
 	vaWithinFreshTenant(t, 1,
 		func(ctx context.Context, tx pgx.Tx) error {
-			return recordFailureAudit(ctx, tx, invoiceID, jobID, FailurePayloadNotBuilt)
+			return recordFailureAudit(ctx, tx, invoiceID, jobID, FailurePayloadNotBuilt, vaInvoiceNumber)
 		},
 		func(t *testing.T, rows []vaRow) {
 			if rows[0].actor != "system" {
@@ -489,24 +493,25 @@ func TestRecordFailureAudit_ActorIsSystem(t *testing.T) {
 		})
 }
 
-// TestRecordFailureAudit_PayloadIsExactlyFourKeys pins AC-1's payload shape. The fourth
-// key is what makes the extraction worth doing: the verdict payload has no failure_kind
-// and this one has no reference. The event suffix and payload outcome are asserted to
-// agree, since "failed" is written twice in the helper.
-func TestRecordFailureAudit_PayloadIsExactlyFourKeys(t *testing.T) {
+// TestRecordFailureAudit_PayloadIsExactlyFiveKeys pins AC-1's payload shape. failure_kind
+// is what makes the extraction worth doing: the verdict payload has no failure_kind and
+// this one has no reference. The event suffix and payload outcome are asserted to agree,
+// since "failed" is written twice in the helper.
+func TestRecordFailureAudit_PayloadIsExactlyFiveKeys(t *testing.T) {
 	invoiceID, jobID := uuid.NewString(), uuid.NewString()
 	kind := FailureNeverAcknowledged
 	vaWithinFreshTenant(t, 1,
 		func(ctx context.Context, tx pgx.Tx) error {
-			return recordFailureAudit(ctx, tx, invoiceID, jobID, kind)
+			return recordFailureAudit(ctx, tx, invoiceID, jobID, kind, vaInvoiceNumber)
 		},
 		func(t *testing.T, rows []vaRow) {
-			want := []string{"failure_kind", "invoice_id", "outcome", "submission_job_id"}
+			want := []string{"failure_kind", "invoice_id", "invoice_number", "outcome", "submission_job_id"}
 			if got := vaKeys(rows[0].payload); !vaSameSet(got, want) || len(got) != len(want) {
 				t.Fatalf("payload keys = %v, want exactly %v", got, want)
 			}
 			for key, want := range map[string]string{
 				"invoice_id":        invoiceID,
+				"invoice_number":    vaInvoiceNumber,
 				"submission_job_id": jobID,
 				"outcome":           "failed",
 				"failure_kind":      string(kind),
@@ -537,7 +542,7 @@ func TestRecordFailureAudit_CarriesNoWireDetail(t *testing.T) {
 	vaWithinFreshTenant(t, len(kinds),
 		func(ctx context.Context, tx pgx.Tx) error {
 			for _, k := range kinds {
-				if err := recordFailureAudit(ctx, tx, invoiceID, jobID, k); err != nil {
+				if err := recordFailureAudit(ctx, tx, invoiceID, jobID, k, vaInvoiceNumber); err != nil {
 					return err
 				}
 			}
@@ -564,7 +569,7 @@ func TestRecordFailureAudit_CarriesNoWireDetail(t *testing.T) {
 						rest[k] = v
 					}
 				}
-				wantRest := map[string]any{"invoice_id": invoiceID, "submission_job_id": jobID, "outcome": "failed"}
+				wantRest := map[string]any{"invoice_id": invoiceID, "invoice_number": vaInvoiceNumber, "submission_job_id": jobID, "outcome": "failed"}
 				if fmt.Sprint(vaKeys(rest)) != fmt.Sprint(vaKeys(wantRest)) {
 					t.Errorf("row %d payload keys beside failure_kind = %v, want %v", i, vaKeys(rest), vaKeys(wantRest))
 					continue
@@ -601,10 +606,10 @@ func TestRecordVerdictAudit_AcceptedRejectedUnchanged(t *testing.T) {
 
 	vaWithinFreshTenant(t, 2,
 		func(ctx context.Context, tx pgx.Tx) error {
-			if err := recordVerdictAudit(ctx, tx, invoiceID, jobID, "accepted", irn); err != nil {
+			if err := recordVerdictAudit(ctx, tx, invoiceID, jobID, "accepted", irn, vaInvoiceNumber); err != nil {
 				return err
 			}
-			return recordVerdictAudit(ctx, tx, invoiceID, jobID, "rejected", "")
+			return recordVerdictAudit(ctx, tx, invoiceID, jobID, "rejected", "", vaInvoiceNumber)
 		},
 		func(t *testing.T, rows []vaRow) {
 			accepted, rejected := rows[0], rows[1]
@@ -612,7 +617,7 @@ func TestRecordVerdictAudit_AcceptedRejectedUnchanged(t *testing.T) {
 			if accepted.event != "submission.accepted" {
 				t.Errorf("first event = %q, want %q", accepted.event, "submission.accepted")
 			}
-			wantAccepted := []string{"invoice_id", "outcome", "reference", "submission_job_id"}
+			wantAccepted := []string{"invoice_id", "invoice_number", "outcome", "reference", "submission_job_id"}
 			if got := vaKeys(accepted.payload); !vaSameSet(got, wantAccepted) || len(got) != len(wantAccepted) {
 				t.Errorf("accepted payload keys = %v, want exactly %v", got, wantAccepted)
 			}
@@ -626,7 +631,7 @@ func TestRecordVerdictAudit_AcceptedRejectedUnchanged(t *testing.T) {
 			if rejected.event != "submission.rejected" {
 				t.Errorf("second event = %q, want %q", rejected.event, "submission.rejected")
 			}
-			wantRejected := []string{"invoice_id", "outcome", "submission_job_id"}
+			wantRejected := []string{"invoice_id", "invoice_number", "outcome", "submission_job_id"}
 			if got := vaKeys(rejected.payload); !vaSameSet(got, wantRejected) || len(got) != len(wantRejected) {
 				t.Errorf("rejected payload keys = %v, want exactly %v", got, wantRejected)
 			}

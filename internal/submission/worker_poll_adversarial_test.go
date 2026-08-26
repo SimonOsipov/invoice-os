@@ -779,9 +779,9 @@ func TestPollWorker_AcceptedAuditPayloadIsStrictSummaryNoWireLeak(t *testing.T) 
 	}
 
 	payload := auditPayloadMap(t, f, tenantID, "submission.accepted")
-	wantKeys := map[string]bool{"invoice_id": true, "submission_job_id": true, "outcome": true, "reference": true}
+	wantKeys := map[string]bool{"invoice_id": true, "invoice_number": true, "submission_job_id": true, "outcome": true, "reference": true}
 	if len(payload) != len(wantKeys) {
-		t.Errorf("submission.accepted payload has %d keys (%v), want exactly the 4 in %v -- "+
+		t.Errorf("submission.accepted payload has %d keys (%v), want exactly the 5 in %v -- "+
 			"a wire-payload leak (csid/qr_payload) would show up as extra keys here", len(payload), payload, wantKeys)
 	}
 	for k := range payload {
@@ -848,9 +848,9 @@ func TestPollWorker_RejectedAuditPayloadIsStrictSummaryNoWireLeak(t *testing.T) 
 	}
 
 	payload := auditPayloadMap(t, f, tenantID, "submission.rejected")
-	wantKeys := map[string]bool{"invoice_id": true, "submission_job_id": true, "outcome": true}
+	wantKeys := map[string]bool{"invoice_id": true, "invoice_number": true, "submission_job_id": true, "outcome": true}
 	if len(payload) != len(wantKeys) {
-		t.Errorf("submission.rejected payload has %d keys (%v), want exactly the 3 in %v -- "+
+		t.Errorf("submission.rejected payload has %d keys (%v), want exactly the 4 in %v -- "+
 			"a wire-payload leak (the reasons array) would show up as extra keys here", len(payload), payload, wantKeys)
 	}
 	for k := range payload {
@@ -1001,7 +1001,7 @@ func TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 
 // TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant: QA adversarial addition
 // (task-385). No existing case exercised RLS isolation specifically on the poll dead-letter
-// path (worker.go:523 [job.Attempt >= job.MaxAttempts]) -- the existing poll RLS cases
+// path (worker.go:533 [job.Attempt >= job.MaxAttempts]) -- the existing poll RLS cases
 // (this file's #13, poll_ref_db_test.go)
 // cover the Pending/Accepted/Rejected audit rows and poll_ref. This case covers
 // invoices.status/failure_kind after a dead-letter; the dead-letter's own audit row (wired

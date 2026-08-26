@@ -78,10 +78,10 @@ func TestRecordVerdictAudit_RejectedStoredJSONOmitsReference(t *testing.T) {
 	pool := vaRequireAppPool(t)
 	ctx := context.Background()
 	vaRequireRollback(t, db.WithinTenantTx(ctx, pool, uuid.NewString(), func(tx pgx.Tx) error {
-		if err := recordVerdictAudit(ctx, tx, invoiceID, jobID, "accepted", irn); err != nil {
+		if err := recordVerdictAudit(ctx, tx, invoiceID, jobID, "accepted", irn, vaInvoiceNumber); err != nil {
 			return err
 		}
-		if err := recordVerdictAudit(ctx, tx, invoiceID, jobID, "rejected", ""); err != nil {
+		if err := recordVerdictAudit(ctx, tx, invoiceID, jobID, "rejected", "", vaInvoiceNumber); err != nil {
 			return err
 		}
 		rows, err := vaReadRawRows(ctx, tx)
@@ -93,15 +93,15 @@ func TestRecordVerdictAudit_RejectedStoredJSONOmitsReference(t *testing.T) {
 		}
 
 		accepted, rejected := rows[0], rows[1]
-		if got := vaRawKeys(t, accepted.rawJSON); len(got) != 4 {
-			t.Errorf("stored accepted payload keys = %v (%d), want 4: %s", got, len(got), accepted.rawJSON)
+		if got := vaRawKeys(t, accepted.rawJSON); len(got) != 5 {
+			t.Errorf("stored accepted payload keys = %v (%d), want 5: %s", got, len(got), accepted.rawJSON)
 		}
 		if !strings.Contains(accepted.rawJSON, irn) {
 			t.Errorf("stored accepted payload %s does not carry the reference %q", accepted.rawJSON, irn)
 		}
 
-		if got := vaRawKeys(t, rejected.rawJSON); len(got) != 3 {
-			t.Errorf("stored rejected payload keys = %v (%d), want 3: %s", got, len(got), rejected.rawJSON)
+		if got := vaRawKeys(t, rejected.rawJSON); len(got) != 4 {
+			t.Errorf("stored rejected payload keys = %v (%d), want 4: %s", got, len(got), rejected.rawJSON)
 		}
 		if strings.Contains(rejected.rawJSON, "reference") {
 			t.Errorf("stored rejected payload %s spells reference at all, want the key left out", rejected.rawJSON)
@@ -119,7 +119,7 @@ func TestRecordFailureAudit_IsScopedToTheWritingTenant(t *testing.T) {
 	tenantA, tenantB := uuid.NewString(), uuid.NewString()
 
 	vaRequireRollback(t, db.WithinTenantTx(ctx, pool, tenantA, func(tx pgx.Tx) error {
-		if err := recordFailureAudit(ctx, tx, uuid.NewString(), uuid.NewString(), FailureNeverAcknowledged); err != nil {
+		if err := recordFailureAudit(ctx, tx, uuid.NewString(), uuid.NewString(), FailureNeverAcknowledged, vaInvoiceNumber); err != nil {
 			return err
 		}
 		setTenant := func(id string) error {
@@ -173,7 +173,7 @@ func TestRecordFailureAudit_EmptyIdentifiersDoNotMisattribute(t *testing.T) {
 	ctx := context.Background()
 
 	vaRequireRollback(t, db.WithinTenantTx(ctx, pool, uuid.NewString(), func(tx pgx.Tx) error {
-		if err := recordFailureAudit(ctx, tx, "", "", FailurePayloadNotBuilt); err != nil {
+		if err := recordFailureAudit(ctx, tx, "", "", FailurePayloadNotBuilt, vaInvoiceNumber); err != nil {
 			return err
 		}
 		rows, err := vaReadRawRows(ctx, tx)
@@ -190,7 +190,7 @@ func TestRecordFailureAudit_EmptyIdentifiersDoNotMisattribute(t *testing.T) {
 		if r.entityID != nil {
 			t.Errorf("entity_id = %q, want NULL -- a blank invoice_id must attribute to no company", *r.entityID)
 		}
-		want := []string{"failure_kind", "invoice_id", "outcome", "submission_job_id"}
+		want := []string{"failure_kind", "invoice_id", "invoice_number", "outcome", "submission_job_id"}
 		got := vaRawKeys(t, r.rawJSON)
 		if len(got) != len(want) || !vaSameSet(got, want) {
 			t.Fatalf("stored payload keys = %v, want exactly %v", got, want)
@@ -215,13 +215,13 @@ func TestSubmissionAudit_ActorAndEventFitTheAuditLogChecks(t *testing.T) {
 	ctx := context.Background()
 
 	vaRequireRollback(t, db.WithinTenantTx(ctx, pool, uuid.NewString(), func(tx pgx.Tx) error {
-		if err := recordFailureAudit(ctx, tx, uuid.NewString(), uuid.NewString(), FailureAcknowledgedNoVerdict); err != nil {
+		if err := recordFailureAudit(ctx, tx, uuid.NewString(), uuid.NewString(), FailureAcknowledgedNoVerdict, vaInvoiceNumber); err != nil {
 			return err
 		}
-		if err := recordVerdictAudit(ctx, tx, uuid.NewString(), uuid.NewString(), "accepted", "IRN-VA-ADV-2"); err != nil {
+		if err := recordVerdictAudit(ctx, tx, uuid.NewString(), uuid.NewString(), "accepted", "IRN-VA-ADV-2", vaInvoiceNumber); err != nil {
 			return err
 		}
-		if err := recordVerdictAudit(ctx, tx, uuid.NewString(), uuid.NewString(), "rejected", ""); err != nil {
+		if err := recordVerdictAudit(ctx, tx, uuid.NewString(), uuid.NewString(), "rejected", "", vaInvoiceNumber); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT actor, event, char_length(actor), char_length(event) FROM audit_log ORDER BY id`)

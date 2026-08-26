@@ -42,6 +42,13 @@
 // the walked roots, and resolves a non-literal route argument only when it is a
 // string const declared in the same directory.
 //
+// Scans 1 and 2 walk internal/ and cmd/; scan 3 walks cmd/ plus the one
+// internal/ file that registers a route for every service. Nothing outside those
+// two trees is walked. Both scans attribute a site to its innermost enclosing
+// func, so an exemption can name a func and not a whole file, and both cross-check
+// the attributed count against the file's raw count so a site outside every func
+// fails rather than vanishing.
+//
 // All three walk non-test .go files only: a fixture reaching a pool directly is
 // not a production hole, and admitting them would accrete exemptions that blur
 // the signal.
@@ -70,6 +77,10 @@ const (
 	// scMinReasonRunes is the shortest text that can carry a reason.
 	scMinReasonRunes = 20
 )
+
+// scSeamRoots are the roots scans 1 and 2 walk. cmd/ holds no direct pool use
+// today; walking it is what keeps that a guarded property rather than a claim.
+var scSeamRoots = []string{"cmd", "internal"}
 
 // scPoolMethods are the pgxpool.Pool methods that reach the database.
 var scPoolMethods = map[string]bool{
@@ -137,29 +148,55 @@ func scParse(t *testing.T, fset *token.FileSet, root, rel string) *ast.File {
 // Scan 1 — no HTTP-serving code reaches a pool directly
 // ---------------------------------------------------------------------------
 
-// scPoolAllowlist is every file allowed to reach the database without the seam.
-var scPoolAllowlist = []string{
-	"internal/platform/db/db.go",        // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
-	"internal/platform/db/tenant.go",    // declares the gated seam; its pool.BeginTx IS the gate this story shipped
-	"internal/platform/db/migrate.go",   // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
-	"internal/platform/db/bootstrap.go", // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
-	"internal/platform/db/provision.go", // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	"internal/validation/store.go",      // LoadActiveRuleSetGlobal is the S2S peer path, which has no caller identity at all to gate on
-	"internal/importer/backfill.go",     // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	"internal/invoice/revalidate.go",    // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
-	"internal/reconciliation/sweep.go",  // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+// scPoolExemption is one exemption from the pool monopoly. fn narrows it to a
+// single func; a bare file exempts the whole file. There is no package scope:
+// this scan's whole claim is that no HTTP-serving file reaches a handle, and a
+// package-wide hole is not something it should be able to express.
+type scPoolExemption struct {
+	file string
+	fn   string
 }
 
-// scPoolSite is one direct pool call: recv is the pool-typed name it was made on.
+func (e scPoolExemption) String() string {
+	if e.fn != "" {
+		return e.file + " func " + e.fn
+	}
+	return e.file
+}
+
+func (e scPoolExemption) covers(s scPoolSite) bool {
+	if e.fn != "" {
+		return s.file == e.file && s.fn == e.fn
+	}
+	return s.file == e.file
+}
+
+// scPoolAllowlist is every caller allowed to reach the database without the seam.
+var scPoolAllowlist = []scPoolExemption{
+	{file: "internal/platform/db/db.go"},                                  // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	{file: "internal/platform/db/tenant.go"},                              // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	{file: "internal/platform/db/migrate.go"},                             // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	{file: "internal/platform/db/bootstrap.go"},                           // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	{file: "internal/platform/db/provision.go"},                           // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"}, // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/importer/backfill.go"},                               // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	{file: "internal/invoice/revalidate.go"},                              // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	{file: "internal/reconciliation/sweep.go"},                            // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+}
+
+// scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
+// fn the INNERMOST enclosing func so a func-scoped exemption cannot cover a
+// literal the exempted func merely returns.
 type scPoolSite struct {
 	file   string
 	line   int
 	recv   string
 	method string
+	fn     string
 }
 
 func (s scPoolSite) String() string {
-	return s.file + ":" + strconv.Itoa(s.line) + " (" + s.recv + "." + s.method + ")"
+	return s.file + ":" + strconv.Itoa(s.line) + " (" + s.recv + "." + s.method + " in " + s.fn + ")"
 }
 
 // scIsPoolType reports whether e is spelled *alias.Pool.
@@ -228,42 +265,97 @@ func scPoolNameFixpoint(names map[string]bool, aliases [][2]string) {
 	}
 }
 
-// scPoolSitesIn finds every way f reaches the database without the seam: a pool
-// method called on a pool-typed name, or a connection opened straight off a DSN.
-func scPoolSitesIn(fset *token.FileSet, rel string, f *ast.File, names map[string]bool) []scPoolSite {
-	// Resolve each handle package's alias once, so an aliased import is still seen.
+// scPoolHandles resolves each handle package's alias once, so an aliased import
+// is still seen.
+func scPoolHandles(f *ast.File) map[string]map[string]bool {
 	handles := map[string]map[string]bool{}
 	for _, h := range scHandleFuncs {
 		if alias := scImportAlias(f, h.path, h.def); alias != "" {
 			handles[alias] = h.funcs
 		}
 	}
-	var out []scPoolSite
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	return handles
+}
+
+// scPoolCallParts reports whether call reaches the database without the seam: a
+// pool method called on a pool-typed name, or a connection opened straight off a
+// DSN.
+func scPoolCallParts(call *ast.CallExpr, names map[string]bool, handles map[string]map[string]bool) (recv, method string, ok bool) {
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	if !isSel {
+		return "", "", false
+	}
+	recv = scBaseName(sel.X)
+	switch {
+	case scPoolMethods[sel.Sel.Name] && recv != "" && names[recv]:
+	case handles[recv][sel.Sel.Name]:
+	default:
+		return "", "", false
+	}
+	return recv, sel.Sel.Name, true
+}
+
+// scOwnBodyPoolCalls returns the acquisitions in body, EXCLUDING nested func
+// literals: a literal is its own site.
+func scOwnBodyPoolCalls(body *ast.BlockStmt, names map[string]bool, handles map[string]map[string]bool) []*ast.CallExpr {
+	if body == nil {
+		return nil
+	}
+	var out []*ast.CallExpr
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			return false
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
+		if _, isLit := n.(*ast.FuncLit); isLit {
+			return false
 		}
-		recv := scBaseName(sel.X)
-		switch {
-		case scPoolMethods[sel.Sel.Name] && recv != "" && names[recv]:
-		case handles[recv][sel.Sel.Name]:
-		default:
-			return true
+		if call, ok := n.(*ast.CallExpr); ok {
+			if _, _, isSite := scPoolCallParts(call, names, handles); isSite {
+				out = append(out, call)
+			}
 		}
-		out = append(out, scPoolSite{
-			file:   rel,
-			line:   fset.Position(call.Pos()).Line,
-			recv:   recv,
-			method: sel.Sel.Name,
-		})
 		return true
 	})
 	return out
+}
+
+// scPoolSitesIn returns the attributed sites and the file's unattributed total.
+// The two must agree; an acquisition outside every func would otherwise vanish
+// the moment attribution replaced the flat walk.
+func scPoolSitesIn(fset *token.FileSet, rel string, f *ast.File, names map[string]bool) (sites []scPoolSite, total int) {
+	handles := scPoolHandles(f)
+	ast.Inspect(f, func(n ast.Node) bool {
+		var body *ast.BlockStmt
+		var fn string
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			body, fn = x.Body, x.Name.Name
+		case *ast.FuncLit:
+			body, fn = x.Body, hmLiteralName
+		default:
+			return true
+		}
+		for _, call := range scOwnBodyPoolCalls(body, names, handles) {
+			recv, method, _ := scPoolCallParts(call, names, handles)
+			sites = append(sites, scPoolSite{
+				file:   rel,
+				line:   fset.Position(call.Pos()).Line,
+				recv:   recv,
+				method: method,
+				fn:     fn,
+			})
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if _, _, isSite := scPoolCallParts(call, names, handles); isSite {
+				total++
+			}
+		}
+		return true
+	})
+	return sites, total
 }
 
 // scFixturePoolSites runs the whole scan over one in-test source string. Control
@@ -280,7 +372,11 @@ func scFixturePoolSites(t *testing.T, name, src string) []scPoolSite {
 	var aliases [][2]string
 	scPoolNamesIn(f, names, &aliases)
 	scPoolNameFixpoint(names, aliases)
-	return scPoolSitesIn(fset, name, f, names)
+	sites, total := scPoolSitesIn(fset, name, f, names)
+	if len(sites) != total {
+		t.Fatalf("fixture %s: attributed %d of %d acquisition(s) — a site outside every func escaped attribution", name, len(sites), total)
+	}
+	return sites
 }
 
 // scNeedleReaderPoolAndURL pins both real bugs at once: a case-sensitive `pool.`
@@ -385,6 +481,26 @@ func f(ctx context.Context, dsn string) {
 }
 `
 
+// scNeedlePoolLiteral is the attribution rule a func-scoped exemption rests on:
+// an acquisition inside an inline literal belongs to the literal.
+const scNeedlePoolLiteral = `package x
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type S struct{ AppPool *pgxpool.Pool }
+
+func (s *S) Outer(ctx context.Context) func() error {
+	return func() error {
+		_, err := s.AppPool.Exec(ctx, "SELECT 1")
+		return err
+	}
+}
+`
+
 func scPoolControlNeedles(t *testing.T) {
 	t.Run("N1 ReaderPool is a site and URL is not", func(t *testing.T) {
 		sites := scFixturePoolSites(t, "n1.go", scNeedleReaderPoolAndURL)
@@ -445,6 +561,16 @@ func scPoolControlNeedles(t *testing.T) {
 			t.Fatalf("found %d site(s) %v for pp.New behind a renamed import, want 1 — resolving by import path is what keeps a rename from silently emptying the population", len(sites), sites)
 		}
 	})
+
+	t.Run("N7 an acquisition inside a literal is the literal's", func(t *testing.T) {
+		sites := scFixturePoolSites(t, "n7.go", scNeedlePoolLiteral)
+		if len(sites) != 1 {
+			t.Fatalf("found %d site(s) %v, want exactly 1", len(sites), sites)
+		}
+		if sites[0].fn != hmLiteralName {
+			t.Fatalf("site = %+v, want %q — attributing it to Outer would let a func-scoped exemption cover a literal it merely returns", sites[0], hmLiteralName)
+		}
+	})
 }
 
 func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
@@ -453,9 +579,9 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 	t.Run("control needles", scPoolControlNeedles)
 
 	root := repoRootDir(t)
-	files := hmGoFiles(t, root, []string{"internal"})
-	if len(files) < 120 {
-		t.Fatalf("the walk found %d non-test .go file(s) under internal/, want at least 120 (130 measured at AUDIT-10-04) — a clean report over a broken walk means nothing", len(files))
+	files := hmGoFiles(t, root, scSeamRoots)
+	if len(files) < 130 {
+		t.Fatalf("the walk found %d non-test .go file(s) under %v, want at least 130 (139 measured at AUDIT-10-04) — a clean report over a broken walk means nothing", len(files), scSeamRoots)
 	}
 
 	fset := token.NewFileSet()
@@ -473,8 +599,14 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 	}
 
 	var sites []scPoolSite
+	total := 0
 	for i, rel := range files {
-		sites = append(sites, scPoolSitesIn(fset, rel, parsed[i], names)...)
+		s, n := scPoolSitesIn(fset, rel, parsed[i], names)
+		sites = append(sites, s...)
+		total += n
+	}
+	if len(sites) != total {
+		t.Fatalf("attributed %d acquisition(s) of %d found — one sits outside every func, and an exemption cannot be scoped to a func that does not exist", len(sites), total)
 	}
 
 	byFile := map[string][]scPoolSite{}
@@ -485,19 +617,29 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 		t.Fatalf("found %d ungated database handle(s) across %d file(s) %v, want at least 9 across at least 8 (10 across 9 measured at AUDIT-10-04) — zero is what a broken scan and a clean repo both look like", len(sites), len(byFile), sortedKeys(byFile))
 	}
 
-	allowed := map[string]bool{}
-	for _, f := range scPoolAllowlist {
-		allowed[f] = true
-	}
 	for _, s := range sites {
-		if !allowed[s.file] {
-			t.Errorf("%s reaches the database without the seam — if this file can serve HTTP, the read-path gate does not apply to it; allowlist it with its reason only if it cannot serve a request", s)
+		covered := false
+		for _, e := range scPoolAllowlist {
+			if e.covers(s) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s reaches the database without the seam — if this func can serve HTTP, the read-path gate does not apply to it; exempt it with its reason only if it cannot serve a request", s)
 		}
 	}
-	// Anti-rot: the allowlist is matched exactly, never as a superset.
-	for _, f := range scPoolAllowlist {
-		if len(byFile[f]) == 0 {
-			t.Errorf("allowlist entry %q matched nothing — delete it; a stale exemption is an open door nobody is looking at", f)
+	// Anti-rot: every exemption must still be earning its place.
+	for _, e := range scPoolAllowlist {
+		used := false
+		for _, s := range sites {
+			if e.covers(s) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			t.Errorf("allowlist entry %q matched nothing — delete it; a stale exemption is an open door nobody is looking at", e)
 		}
 	}
 }
@@ -707,9 +849,9 @@ func TestRLS_UngatedCoreIsWorkerAndExemptionOnly(t *testing.T) {
 	t.Run("control needles", scCoreControlNeedles)
 
 	root := repoRootDir(t)
-	files := hmGoFiles(t, root, []string{"internal"})
-	if len(files) < 120 {
-		t.Fatalf("the walk found %d non-test .go file(s) under internal/, want at least 120 (130 measured at AUDIT-10-04)", len(files))
+	files := hmGoFiles(t, root, scSeamRoots)
+	if len(files) < 130 {
+		t.Fatalf("the walk found %d non-test .go file(s) under %v, want at least 130 (139 measured at AUDIT-10-04)", len(files), scSeamRoots)
 	}
 
 	fset := token.NewFileSet()

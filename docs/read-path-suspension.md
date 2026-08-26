@@ -168,10 +168,11 @@ fragile part of it.
 ## 8. The endpoint table — every route, covered or exempt
 
 **`covered` is structural, not per-route inspection.** Scans 1 and 2 (§9) make the gated seam a
-monopoly: outside nine named files, nothing in `internal/` can obtain a database handle at all,
-so nothing can reach tenant data except through `db.WithinRequestTenantTx*`. Every route that
-touches tenant data is therefore gated by construction, and `covered` records that. `exempt`
-rows each state their own reason.
+monopoly: outside eight named files and one named func, nothing in `internal/` **or `cmd/`** can
+obtain a database handle at all, and the only callers allowed to reach the identity-free core
+are workers, boot-time seeders, two operator CLIs and `GET /v1/me`. Every route that touches
+tenant data is therefore gated by construction, and `covered` records that. `exempt` rows each
+state their own reason.
 
 The gate applies to the whole request, so a `POST`/`PATCH`/`DELETE` route is covered too — a
 suspended caller is now refused at the seam, before the write-path `status = 'active'`
@@ -267,8 +268,8 @@ exemption cannot outlive its reason.
 
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
-| `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside nine named files**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import | ≥120 files walked (130); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
-| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, an operator CLI, or `tenancy` func `Me` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥120 files walked (130); ≥12 sites across ≥6 packages (14 across 7) |
+| `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside eight named files and one named func**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
+| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
 
 A fourth, `TestRLS_EveryAllowlistEntryNamesItsReason`, reads the guard file's own source and
@@ -299,15 +300,23 @@ rather than a property of each route.
   short-var local carries no declared type, so the pool method later called on it is invisible
   to the type-spelling pass, and catching the constructor is what closes that.
 - Scan 2 sees a direct `db.WithinTenantTx` selector call, not one reached through a func value.
-  It also cross-checks its attributed count against the file's raw count, so a call outside
-  every func fails rather than vanishing.
+- Scans 1 and 2 attribute each site to its **innermost enclosing func**, which is what lets an
+  exemption name a func rather than a whole file. Both cross-check the attributed count against
+  the file's raw count, so a site outside every func fails rather than vanishing.
 - Scan 3 sees only routes registered on `app.Mux` in the walked roots, and resolves a
   non-literal route argument only when it is a string const declared in the same directory. Any
   other shape fails loudly; it is never skipped.
-- All three walk `internal/` and `cmd/` only. `frontend/**` and `e2e/**` are out of scope for
-  the same reason they are in `handler_mapping_test.go`: no `ci.yml` path filter routes a
-  frontend-only commit to the Go job, so a Go assertion over them would be unreachable on the
-  very commit it guards.
+- No scan walks outside `internal/` and `cmd/`: scans 1 and 2 walk both trees whole, scan 3
+  walks `cmd/` plus the one `internal/` file that registers a route for every service.
+  `frontend/**` and `e2e/**` are out of scope for the same reason they are in
+  `handler_mapping_test.go`: no `ci.yml` path filter routes a frontend-only commit to the Go
+  job, so a Go assertion over them would be unreachable on the very commit it guards.
+- **The mapping-arm guard cannot see a handler that maps neither sentinel.**
+  `TestHandlerMappingEveryRefusalSiteNamesNotActiveMember` (`handler_mapping_test.go`) draws its
+  population from funcs that already map `db.ErrNoTenant` — named `statusForErr`/`*StatusForErr`,
+  or calling `errors.Is(_, db.ErrNoTenant)`. A future handler mapping neither sentinel is outside
+  both populations, so it would fall to its `default` arm and answer a suspended caller `500`
+  instead of the `403` §2 specifies. The seam still refuses the caller; only the status is wrong.
 
 ## 10. The hand-maintained mirror
 

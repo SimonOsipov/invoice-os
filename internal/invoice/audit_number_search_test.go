@@ -2,8 +2,8 @@
 // a REAL writer, read back through the REAL reader (audit.NewStore().List, which adds the
 // identity -> tenant-GUC seam), searched by the invoice number a human would type.
 //
-// No other test crosses that seam: AUDIT-11-09's cases all raw-INSERT their audit rows, and
-// no writer-package case calls the reader.
+// Only this file and audit_number_search_adversarial_test.go cross that seam: AUDIT-11-09's
+// cases all raw-INSERT their audit rows, and no other writer-package case calls the reader.
 //
 // CF-30: after 09 the reader resolves the typed number through the live invoices table and
 // never reads the payload key, so "the row comes back" is satisfiable with subtasks 01-04
@@ -22,14 +22,17 @@ package invoice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // auditSearchLimit is well above any fixture row count here, so HasMore stays false and the
@@ -69,11 +72,15 @@ func auditSearchPayload(t *testing.T, e audit.Event) map[string]any {
 
 // auditSearchFind returns the returned event named event whose payload id is invoiceID, and
 // fails when the response holds none -- every assertion after that would read another row.
-func auditSearchFind(t *testing.T, got audit.Response, q, event, invoiceID string) audit.Event {
+//
+// Both not-found paths carry auditSearchWriterState: without it a writer that dropped the
+// addressing key and a reader that lost the resolved arm red at the same line with the
+// same text.
+func auditSearchFind(t *testing.T, app *pgxpool.Pool, tenantID string, got audit.Response, q, event, invoiceID string) audit.Event {
 	t.Helper()
 	if len(got.Events) == 0 {
-		t.Fatalf("q=%q returned no events at all (total=%d, log_is_empty=%v); a real writer wrote a row for invoice %s and the real reader must find it",
-			q, got.Total, got.LogIsEmpty, invoiceID)
+		t.Fatalf("q=%q returned no events at all (total=%d, log_is_empty=%v); a real writer wrote a row for invoice %s and the real reader must find it%s",
+			q, got.Total, got.LogIsEmpty, invoiceID, auditSearchWriterState(t, app, tenantID, event, invoiceID))
 	}
 	if got.Page.HasMore {
 		t.Fatalf("q=%q filled the %d-row page; the control assertion below would only see a prefix", q, auditSearchLimit)
@@ -86,9 +93,38 @@ func auditSearchFind(t *testing.T, got audit.Response, q, event, invoiceID strin
 			return e
 		}
 	}
-	t.Fatalf("q=%q returned %d events (total=%d) but none is a %s for invoice %s:%s",
-		q, len(got.Events), got.Total, event, invoiceID, auditSearchDump(got))
+	t.Fatalf("q=%q returned %d events (total=%d) but none is a %s for invoice %s:%s%s",
+		q, len(got.Events), got.Total, event, invoiceID, auditSearchDump(got),
+		auditSearchWriterState(t, app, tenantID, event, invoiceID))
 	return audit.Event{}
+}
+
+// auditSearchWriterState names which half broke. The resolved arm compares
+// audit_log.invoice_id, so a row that names the invoice in its payload but does not carry
+// it in that column is a writer defect, and a row that carries it is a reader defect.
+func auditSearchWriterState(t *testing.T, app *pgxpool.Pool, tenantID, event, invoiceID string) string {
+	t.Helper()
+	ctx := context.Background()
+	var forEvent, scoped, named int
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*),
+			       count(*) FILTER (WHERE invoice_id::text = $2),
+			       count(*) FILTER (WHERE payload::text LIKE '%' || $2 || '%')
+			  FROM audit_log WHERE event = $1`, event, invoiceID).Scan(&forEvent, &scoped, &named)
+	}); err != nil {
+		return fmt.Sprintf("\n\tdiagnosis unavailable: %v", err)
+	}
+	switch {
+	case forEvent == 0:
+		return fmt.Sprintf("\n\tdiagnosis: audit_log holds no %s row in this tenant at all -- the WRITER did not run", event)
+	case scoped > 0:
+		return fmt.Sprintf("\n\tdiagnosis: %d %s row(s) carry invoice_id = %s, so the WRITER is fine and the READER did not return them", scoped, event, invoiceID)
+	case named > 0:
+		return fmt.Sprintf("\n\tdiagnosis: %d %s row(s) name invoice %s in the payload but none carries it in audit_log.invoice_id -- the WRITER dropped the addressing key, so no resolved arm can match", named, event, invoiceID)
+	default:
+		return fmt.Sprintf("\n\tdiagnosis: %d %s row(s) exist in this tenant but none names invoice %s at all -- the WRITER dropped the addressing key or wrote for another invoice", forEvent, event, invoiceID)
+	}
 }
 
 func auditSearchDump(got audit.Response) string {
@@ -172,9 +208,10 @@ func TestAuditNumber_SearchFindsARealWritersRow(t *testing.T) {
 			}
 			got := auditSearchList(t, app, tenantID, want)
 			if got.Total < 1 {
-				t.Fatalf("q=%q reported total %d, want at least 1", want, got.Total)
+				t.Fatalf("q=%q reported total %d, want at least 1%s", want, got.Total,
+					auditSearchWriterState(t, app, tenantID, s.event, invID))
 			}
-			e := auditSearchFind(t, got, want, s.event, invID)
+			e := auditSearchFind(t, app, tenantID, got, want, s.event, invID)
 			auditSearchAssertScoped(t, got, want, ctrl.ID, auditSearchControlNumber)
 			auditSearchAssertNumber(t, e, s.site, want)
 		})
@@ -212,7 +249,7 @@ func TestAuditNumber_SearchFindsARealWritersRow(t *testing.T) {
 		}
 
 		got := auditSearchList(t, app, tenantID, fragment)
-		e := auditSearchFind(t, got, fragment, event, inv.ID)
+		e := auditSearchFind(t, app, tenantID, got, fragment, event, inv.ID)
 		auditSearchAssertScoped(t, got, fragment, ctrl.ID, auditSearchControlNumber)
 		auditSearchAssertNumber(t, e, "store.go:269", want)
 
@@ -221,7 +258,7 @@ func TestAuditNumber_SearchFindsARealWritersRow(t *testing.T) {
 		// make every control assertion above pass by having nothing to leak.
 		ctrlWant := mustInvoiceNumber(t, super, ctrl.ID)
 		back := auditSearchList(t, app, tenantID, ctrlWant)
-		ce := auditSearchFind(t, back, ctrlWant, event, ctrl.ID)
+		ce := auditSearchFind(t, app, tenantID, back, ctrlWant, event, ctrl.ID)
 		auditSearchAssertScoped(t, back, ctrlWant, inv.ID, want)
 		auditSearchAssertNumber(t, ce, "store.go:269", ctrlWant)
 	})

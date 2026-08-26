@@ -64,8 +64,8 @@ describe('AuditRow', () => {
 
   it('auditRow_expansionRendersOnlyPayloadKeys', () => {
     // The design mock draws six fields for an accepted transmission. The payload the Go
-    // writer actually stores has four. Rendering the payload's OWN keys is the contract --
-    // a fixed field list would print two empty rows and read as missing data.
+    // writer actually stores has five. Rendering the payload's OWN keys is the contract --
+    // a fixed field list would print empty rows and read as missing data.
     const payload = { irn: 'NG-001', csid: 'CSID-9', status_code: '200', attempt: 2 }
     render(<AuditRow event={ev({ payload })} expanded onToggle={() => {}} />)
     const fields = screen.getAllByTestId('audit-payload-field')

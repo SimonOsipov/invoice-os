@@ -276,10 +276,20 @@ func pgCode(err error) string {
 
 // sqlRecorder records the SQL of every statement its pool issues, so a statement
 // COUNT can be asserted — the only way to see an N+1, whose results are identical.
+//
+// The request seam batches set_config + its membership read; pgx routes those
+// through BatchTracer. Recorded apart so mentioning() keeps meaning "the store's
+// own SQL".
 type sqlRecorder struct {
-	mu  sync.Mutex
-	sql []string
+	mu      sync.Mutex
+	sql     []string
+	batched []string
 }
+
+var (
+	_ pgx.QueryTracer = (*sqlRecorder)(nil)
+	_ pgx.BatchTracer = (*sqlRecorder)(nil)
+)
 
 func (r *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
 	r.mu.Lock()
@@ -290,9 +300,22 @@ func (r *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.Tr
 
 func (r *sqlRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (r *sqlRecorder) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	return ctx
+}
+
+func (r *sqlRecorder) TraceBatchQuery(_ context.Context, _ *pgx.Conn, d pgx.TraceBatchQueryData) {
+	r.mu.Lock()
+	r.batched = append(r.batched, d.SQL)
+	r.mu.Unlock()
+}
+
+func (r *sqlRecorder) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
 func (r *sqlRecorder) reset() {
 	r.mu.Lock()
 	r.sql = nil
+	r.batched = nil
 	r.mu.Unlock()
 }
 
@@ -301,8 +324,29 @@ func (r *sqlRecorder) reset() {
 func (r *sqlRecorder) mentioning(substr string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return filterContaining(r.sql, substr)
+}
+
+// seamMentioning scans the batched statements only — the request seam's gate.
+func (r *sqlRecorder) seamMentioning(substr string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return filterContaining(r.batched, substr)
+}
+
+// tenantTxCount counts set_config('app.current_tenant') across both slices: the
+// request seam batches that statement, WithinTenantTx execs it plainly, and either
+// way there is exactly one per transaction.
+func (r *sqlRecorder) tenantTxCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	const needle = "set_config('app.current_tenant'"
+	return len(filterContaining(r.sql, needle)) + len(filterContaining(r.batched, needle))
+}
+
+func filterContaining(stmts []string, substr string) []string {
 	var out []string
-	for _, s := range r.sql {
+	for _, s := range stmts {
 		if strings.Contains(s, substr) {
 			out = append(out, s)
 		}
@@ -579,27 +623,37 @@ func TestWorkflowRole_CreateRequiresActiveAdmin(t *testing.T) {
 	tenantID := seedTenant(t, super, "APPR-02 caller-axis")
 	store := NewStore(app, stubFingerprinter, nil)
 
-	refused := map[string]context.Context{}
-	for _, caller := range []struct{ name, role, status string }{
-		{"active preparer", "preparer", "active"},
-		{"active reviewer", "reviewer", "active"},
-		{"suspended admin", "admin", "suspended"},
-		{"invited admin", "admin", "invited"},
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE caller, and one with no row at all,
+	// are still role refusals.
+	type refusal struct {
+		ctx  context.Context
+		want error
+	}
+	refused := map[string]refusal{}
+	for _, caller := range []struct {
+		name, role, status string
+		want               error
+	}{
+		{"active preparer", "preparer", "active", ErrNotPermitted},
+		{"active reviewer", "reviewer", "active", ErrNotPermitted},
+		{"suspended admin", "admin", "suspended", db.ErrNotActiveMember},
+		{"invited admin", "admin", "invited", db.ErrNotActiveMember},
 	} {
 		c, _ := callerCtx(t, super, tenantID, caller.role, caller.status)
-		refused[caller.name] = c
+		refused[caller.name] = refusal{c, caller.want}
 	}
 	// No membership row: a valid tenant claim for a user the tenant does not know.
-	refused["no membership row"] = auth.WithIdentity(context.Background(),
-		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	refused["no membership row"] = refusal{auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}), ErrNotPermitted}
 
 	if len(refused) != 5 {
 		t.Fatalf("built %d callers, want 5 — a short table would pass vacuously", len(refused))
 	}
-	for name, c := range refused {
+	for name, tc := range refused {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.CreateRole(c, "Engagement Partner", ""); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("CreateRole as %s: err = %v, want ErrNotPermitted", name, err)
+			if _, err := store.CreateRole(tc.ctx, "Engagement Partner", ""); !errors.Is(err, tc.want) {
+				t.Errorf("CreateRole as %s: err = %v, want %v", name, err, tc.want)
 			}
 		})
 	}
@@ -1361,29 +1415,39 @@ func TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin(t *testing.T) {
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	before := roleRow(t, super, roleID)
 
-	refused := map[string]context.Context{}
-	for _, caller := range []struct{ name, role, status string }{
-		{"active preparer", "preparer", "active"},
-		{"active reviewer", "reviewer", "active"},
-		{"suspended admin", "admin", "suspended"},
-		{"invited admin", "admin", "invited"},
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE caller, and one with no row at all,
+	// are still role refusals.
+	type refusal struct {
+		ctx  context.Context
+		want error
+	}
+	refused := map[string]refusal{}
+	for _, caller := range []struct {
+		name, role, status string
+		want               error
+	}{
+		{"active preparer", "preparer", "active", ErrNotPermitted},
+		{"active reviewer", "reviewer", "active", ErrNotPermitted},
+		{"suspended admin", "admin", "suspended", db.ErrNotActiveMember},
+		{"invited admin", "admin", "invited", db.ErrNotActiveMember},
 	} {
 		c, _ := callerCtx(t, super, tenantID, caller.role, caller.status)
-		refused[caller.name] = c
+		refused[caller.name] = refusal{c, caller.want}
 	}
-	refused["no membership row"] = auth.WithIdentity(context.Background(),
-		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	refused["no membership row"] = refusal{auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}), ErrNotPermitted}
 
 	if len(refused) != 5 {
 		t.Fatalf("built %d callers, want 5 — a short table would pass vacuously", len(refused))
 	}
-	for name, c := range refused {
+	for name, tc := range refused {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.UpdateRole(c, "tax-reviewer", ptr("New Title"), nil); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("UpdateRole as %s: err = %v, want ErrNotPermitted", name, err)
+			if _, err := store.UpdateRole(tc.ctx, "tax-reviewer", ptr("New Title"), nil); !errors.Is(err, tc.want) {
+				t.Errorf("UpdateRole as %s: err = %v, want %v", name, err, tc.want)
 			}
-			if _, err := store.DeleteRole(c, "tax-reviewer"); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("DeleteRole as %s: err = %v, want ErrNotPermitted", name, err)
+			if _, err := store.DeleteRole(tc.ctx, "tax-reviewer"); !errors.Is(err, tc.want) {
+				t.Errorf("DeleteRole as %s: err = %v, want %v", name, err, tc.want)
 			}
 		})
 	}

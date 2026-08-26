@@ -31,6 +31,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- interleaving harness -----------------------------------------------------
@@ -356,9 +358,15 @@ func TestPublish_RoleDeletedWhileTheSealWaitsStillSeals(t *testing.T) {
 // Removing requireActiveAdmin from the publish path left every acceptance-criteria spec
 // green, because all of them call it as an active admin.
 func TestPublish_NeedsAnActiveAdmin(t *testing.T) {
-	callers := []struct{ name, role, status string }{
-		{"a preparer", "preparer", "active"},
-		{"a suspended admin", "admin", "suspended"},
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE preparer is still a role refusal.
+	callers := []struct {
+		name, role, status string
+		want               error
+		bySeam             bool
+	}{
+		{"a preparer", "preparer", "active", ErrNotPermitted, false},
+		{"a suspended admin", "admin", "suspended", db.ErrNotActiveMember, true},
 	}
 	for _, tc := range callers {
 		t.Run(tc.name, func(t *testing.T) {
@@ -372,10 +380,17 @@ func TestPublish_NeedsAnActiveAdmin(t *testing.T) {
 			traced, rec := tracedAppPool(t)
 			rec.reset()
 			_, err := NewStore(traced, stubFingerprinter, nil).PublishPolicy(c, policyID)
-			if !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("PublishPolicy as %s: err = %v, want ErrNotPermitted", tc.name, err)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("PublishPolicy as %s: err = %v, want %v", tc.name, err, tc.want)
 			}
-			if sql := rec.mentioning("memberships"); len(sql) == 0 {
+			if tc.bySeam {
+				if sql := rec.seamMentioning("FROM memberships"); len(sql) == 0 {
+					t.Error("no memberships statement was issued — the seam gate did not run")
+				}
+				if sql := rec.mentioning("memberships"); len(sql) != 0 {
+					t.Errorf("the store read memberships itself despite the seam's refusal:\n%v", sql)
+				}
+			} else if sql := rec.mentioning("memberships"); len(sql) == 0 {
 				t.Error("no memberships statement was issued — requireActiveAdmin did not run")
 			}
 			if sql := rec.mentioning("approval_policies"); len(sql) != 0 {

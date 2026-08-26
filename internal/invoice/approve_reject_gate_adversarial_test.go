@@ -270,20 +270,24 @@ func approvalStoreFor(app *pgxpool.Pool) *approval.Store {
 // flag by the sentinel whose sentence the wire just published.
 func TestGetHandler_ApproveFlagAgreesWithTheDecisionEndpoint(t *testing.T) {
 	rows := []struct {
-		name  string
-		spoil func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture)
+		name string
+		// The request seam refuses a non-active caller before the store reads
+		// anything (db.WithinRequestTenantTxOpts), so this row has no flags to
+		// agree on -- both doors refuse under one sentinel instead.
+		refusedBySeam bool
+		spoil         func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture)
 	}{
-		{"staffed_admin_allowed", func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {}},
-		{"membership_downgraded_to_preparer", func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
+		{"staffed_admin_allowed", false, func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {}},
+		{"membership_downgraded_to_preparer", false, func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
 			mustExec(t, super, `UPDATE memberships SET role = 'preparer' WHERE tenant_id = $1 AND user_id = $2`, fx.tenantID, fx.subject)
 		}},
-		{"membership_suspended", func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
+		{"membership_suspended", true, func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
 			mustExec(t, super, `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, fx.tenantID, fx.subject)
 		}},
-		{"workflow_role_soft_deleted", func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
+		{"workflow_role_soft_deleted", false, func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
 			mustExec(t, super, `UPDATE workflow_roles SET deleted_at = now() WHERE tenant_id = $1 AND key = 'finance-lead'`, fx.tenantID)
 		}},
-		{"unstaffed_from_the_role", func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
+		{"unstaffed_from_the_role", false, func(t *testing.T, super *pgxpool.Pool, fx approvalFactsFixture) {
 			mustExec(t, super, `DELETE FROM workflow_role_members WHERE tenant_id = $1 AND user_id = $2`, fx.tenantID, fx.subject)
 		}},
 	}
@@ -294,6 +298,24 @@ func TestGetHandler_ApproveFlagAgreesWithTheDecisionEndpoint(t *testing.T) {
 			fx := seedApprovalFactsFixture(t, super, fmt.Sprintf("APPR-08-06-AGREE-%d", i), true)
 			fx.armInvoice(t, super, app, fmt.Sprintf("appr-08-06-agree-%d", i))
 			row.spoil(t, super, fx)
+
+			if row.refusedBySeam {
+				store := NewStore(app, WithApprovalsEnforced(true))
+				r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
+				r.SetPathValue("id", fx.invID)
+				r = r.WithContext(fx.ctx)
+				rec := httptest.NewRecorder()
+				GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+				// The seam refuses the read; the exact status is pinned by
+				// TestInvoiceStatusForErr_NotActiveMemberIs403 (AUDIT-10-03).
+				if rec.Code == http.StatusOK {
+					t.Fatalf("status = 200, want a refusal (body=%s)", rec.Body.String())
+				}
+				if _, err := approvalStoreFor(app).Decide(fx.ctx, fx.invID, "approved", nil); !errors.Is(err, db.ErrNotActiveMember) {
+					t.Errorf("Decide err = %v, want db.ErrNotActiveMember -- both doors refuse under one sentinel", err)
+				}
+				return
+			}
 
 			got := approveFlagsVia(t, app, fx, true)
 			_, decideErr := approvalStoreFor(app).Decide(fx.ctx, fx.invID, "approved", nil)

@@ -1073,7 +1073,10 @@ func TestStoreListMemberships_ReadsStatusAndIdentity(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: userSuspended, Role: "authenticated", TenantID: tenantID})
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so the caller is the active row and the
+	// suspended row stays the subject under test.
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userBare, Role: "authenticated", TenantID: tenantID})
 	got, err := store.ListMemberships(c)
 	if err != nil {
 		t.Fatalf("ListMemberships: %v", err)
@@ -1794,14 +1797,16 @@ func TestMembership_SuspendedAdminCannotAdminister(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: suspendedAdmin, Role: "authenticated", TenantID: tenantID})
 
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so the refusal is now the status sentinel.
 	t.Run("self reactivate", func(t *testing.T) {
-		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, ErrNotPermitted) {
-			t.Fatalf("SetMembershipStatus (suspended admin reactivates self) err = %v, want ErrNotPermitted -- suspension must not be self-undoable", err)
+		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, db.ErrNotActiveMember) {
+			t.Fatalf("SetMembershipStatus (suspended admin reactivates self) err = %v, want db.ErrNotActiveMember -- suspension must not be self-undoable", err)
 		}
 	})
 	t.Run("suspend another", func(t *testing.T) {
-		if _, err := store.SetMembershipStatus(c, otherAdmin, "suspended"); !errors.Is(err, ErrNotPermitted) {
-			t.Fatalf("SetMembershipStatus (suspended admin targets another) err = %v, want ErrNotPermitted", err)
+		if _, err := store.SetMembershipStatus(c, otherAdmin, "suspended"); !errors.Is(err, db.ErrNotActiveMember) {
+			t.Fatalf("SetMembershipStatus (suspended admin targets another) err = %v, want db.ErrNotActiveMember", err)
 		}
 	})
 }
@@ -2105,12 +2110,18 @@ func TestMembership_CallerGateRefusesEveryNonActiveAdmin(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(app)
 
-	cases := []struct{ name, role, status string }{
-		{"active reviewer", "reviewer", "active"},
-		{"suspended reviewer", "reviewer", "suspended"},
-		{"suspended preparer", "preparer", "suspended"},
-		{"suspended admin", "admin", "suspended"},
-		{"invited admin", "admin", "invited"},
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE non-admin is still a role refusal,
+	// and keeping the two sentinels apart is what this table exists to catch.
+	cases := []struct {
+		name, role, status string
+		want               error
+	}{
+		{"active reviewer", "reviewer", "active", ErrNotPermitted},
+		{"suspended reviewer", "reviewer", "suspended", db.ErrNotActiveMember},
+		{"suspended preparer", "preparer", "suspended", db.ErrNotActiveMember},
+		{"suspended admin", "admin", "suspended", db.ErrNotActiveMember},
+		{"invited admin", "admin", "invited", db.ErrNotActiveMember},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2124,8 +2135,8 @@ func TestMembership_CallerGateRefusesEveryNonActiveAdmin(t *testing.T) {
 			seedMembership(t, super, tenantID, uuid.NewString(), "admin", "active")
 
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
-			if _, err := store.SetMembershipStatus(c, targetID, "suspended"); !errors.Is(err, ErrNotPermitted) {
-				t.Fatalf("SetMembershipStatus (%s caller) err = %v, want ErrNotPermitted", tc.name, err)
+			if _, err := store.SetMembershipStatus(c, targetID, "suspended"); !errors.Is(err, tc.want) {
+				t.Fatalf("SetMembershipStatus (%s caller) err = %v, want %v", tc.name, err, tc.want)
 			}
 			if got := mustStatus(t, super, targetID); got != "active" {
 				t.Errorf("target status after a refused PATCH = %q, want unchanged %q", got, "active")
@@ -2150,13 +2161,18 @@ func TestMembership_ZeroActiveAdminsIsUnrecoverable(t *testing.T) {
 	reviewer := uuid.NewString()
 	seedMembership(t, super, tenantID, reviewer, "reviewer", "active")
 
-	for name, callerID := range map[string]string{
-		"the suspended admin themselves": suspendedAdmin,
-		"an active reviewer":             reviewer,
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); the active reviewer is still a role refusal.
+	for name, tc := range map[string]struct {
+		callerID string
+		want     error
+	}{
+		"the suspended admin themselves": {suspendedAdmin, db.ErrNotActiveMember},
+		"an active reviewer":             {reviewer, ErrNotPermitted},
 	} {
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
-		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, ErrNotPermitted) {
-			t.Errorf("reactivate by %s err = %v, want ErrNotPermitted", name, err)
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: tc.callerID, Role: "authenticated", TenantID: tenantID})
+		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, tc.want) {
+			t.Errorf("reactivate by %s err = %v, want %v", name, err, tc.want)
 		}
 	}
 	if got := mustStatus(t, super, suspendedAdmin); got != "suspended" {

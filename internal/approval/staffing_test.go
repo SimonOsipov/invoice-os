@@ -443,8 +443,10 @@ func TestStaffing_DuplicateUserRejected(t *testing.T) {
 	if _, err := store.SetRoleMembers(c, "tax-reviewer", []string{users[0], users[0]}); !errors.Is(err, ErrValidation) {
 		t.Errorf("SetRoleMembers with a repeated id: err = %v (SQLSTATE %q), want ErrValidation", err, pgCode(err))
 	}
-	if got := rec.mentioning("app.current_tenant"); len(got) != 0 {
-		t.Errorf("a rejected duplicate opened %d transactions, want 0 — the check reads no row", len(got))
+	// The request seam batches its set_config, which a QueryTracer alone cannot see —
+	// tenantTxCount() counts both routes (db.WithinRequestTenantTxOpts).
+	if got := rec.tenantTxCount(); got != 0 {
+		t.Errorf("a rejected duplicate opened %d transactions, want 0 — the check reads no row", got)
 	}
 	if got := rec.mentioning("workflow_role"); len(got) != 0 {
 		t.Errorf("a rejected duplicate issued %d workflow_role statements, want 0: %v", len(got), got)
@@ -460,7 +462,7 @@ func TestStaffing_DuplicateUserRejected(t *testing.T) {
 	if _, err := store.SetRoleMembers(c, "tax-reviewer", []string{users[1]}); err != nil {
 		t.Fatalf("control: SetRoleMembers with one id: %v — the assertions above are vacuous unless this succeeds", err)
 	}
-	if got := rec.mentioning("app.current_tenant"); len(got) == 0 {
+	if got := rec.tenantTxCount(); got == 0 {
 		t.Error("control: the successful call opened no transaction, so the statement counts above prove nothing")
 	}
 }
@@ -750,26 +752,36 @@ func TestStaffing_RequiresActiveAdminCaller(t *testing.T) {
 	staffWorkflowRole(t, super, tenantID, roleID, users[0], 0)
 	before := staffingRows(t, super, roleID)
 
-	refused := map[string]context.Context{}
-	for _, caller := range []struct{ name, role, status string }{
-		{"active preparer", "preparer", "active"},
-		{"active reviewer", "reviewer", "active"},
-		{"suspended admin", "admin", "suspended"},
-		{"invited admin", "admin", "invited"},
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE caller, and one with no row at all,
+	// are still role refusals.
+	type refusal struct {
+		ctx  context.Context
+		want error
+	}
+	refused := map[string]refusal{}
+	for _, caller := range []struct {
+		name, role, status string
+		want               error
+	}{
+		{"active preparer", "preparer", "active", ErrNotPermitted},
+		{"active reviewer", "reviewer", "active", ErrNotPermitted},
+		{"suspended admin", "admin", "suspended", db.ErrNotActiveMember},
+		{"invited admin", "admin", "invited", db.ErrNotActiveMember},
 	} {
 		c, _ := callerCtx(t, super, tenantID, caller.role, caller.status)
-		refused[caller.name] = c
+		refused[caller.name] = refusal{c, caller.want}
 	}
-	refused["no membership row"] = auth.WithIdentity(context.Background(),
-		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	refused["no membership row"] = refusal{auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}), ErrNotPermitted}
 
 	if len(refused) != 5 {
 		t.Fatalf("built %d callers, want 5 — a short table would pass vacuously", len(refused))
 	}
-	for name, c := range refused {
+	for name, tc := range refused {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.SetRoleMembers(c, "tax-reviewer", []string{users[1]}); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("SetRoleMembers as %s: err = %v, want ErrNotPermitted", name, err)
+			if _, err := store.SetRoleMembers(tc.ctx, "tax-reviewer", []string{users[1]}); !errors.Is(err, tc.want) {
+				t.Errorf("SetRoleMembers as %s: err = %v, want %v", name, err, tc.want)
 			}
 		})
 	}
@@ -1120,8 +1132,10 @@ func TestStaffing_DuplicateIsDetectedAcrossSpellings(t *testing.T) {
 				t.Errorf("SetRoleMembers with %q beside its canonical form: err = %v (SQLSTATE %q), want ErrValidation",
 					form, err, pgCode(err))
 			}
-			if got := rec.mentioning("app.current_tenant"); len(got) != 0 {
-				t.Errorf("a rejected duplicate opened %d transactions, want 0 — the check reads no row", len(got))
+			// The request seam batches its set_config, which a QueryTracer alone cannot
+			// see — tenantTxCount() counts both routes (db.WithinRequestTenantTxOpts).
+			if got := rec.tenantTxCount(); got != 0 {
+				t.Errorf("a rejected duplicate opened %d transactions, want 0 — the check reads no row", got)
 			}
 			if rows := staffingRows(t, super, roleID); len(rows) != 0 {
 				t.Errorf("staffing = %v, want none", rows)

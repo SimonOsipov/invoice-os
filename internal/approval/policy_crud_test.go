@@ -18,6 +18,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -683,11 +685,16 @@ func TestPolicy_CreatePermissionCheckedBeforeRowRead(t *testing.T) {
 	traced, rec := tracedAppPool(t)
 	rec.reset()
 	_, err := NewStore(traced, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", "")
-	if !errors.Is(err, ErrNotPermitted) {
-		t.Errorf("CreatePolicy as a suspended admin: err = %v, want ErrNotPermitted", err)
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so the membership read is the seam's, batched.
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("CreatePolicy as a suspended admin: err = %v, want db.ErrNotActiveMember", err)
 	}
-	if sql := rec.mentioning("memberships"); len(sql) == 0 {
-		t.Error("no memberships statement was issued — requireActiveAdmin did not run")
+	if sql := rec.seamMentioning("FROM memberships"); len(sql) == 0 {
+		t.Error("no memberships statement was issued — the seam gate did not run")
+	}
+	if sql := rec.mentioning("memberships"); len(sql) != 0 {
+		t.Errorf("the store read memberships itself despite the seam's refusal:\n%v", sql)
 	}
 	if sql := rec.mentioning("approval_polic"); len(sql) != 0 {
 		t.Errorf("a policy-table statement ran despite the refusal, so the permission check is not first:\n%v", sql)

@@ -496,6 +496,11 @@ func TestApprovalRun_SixStatementsRegardlessOfStepAndRoleCount(t *testing.T) {
 			t.Errorf("statements mentioning %q = %d, want exactly 1 (five steps across three roles must not inflate this)", table, got)
 		}
 	}
+	// Counted apart so the six above stay the STORE's budget: the request seam's
+	// batched gate adds one more memberships read (db.WithinRequestTenantTxOpts).
+	if got := len(rec.seamMentioning("FROM memberships")); got != 1 {
+		t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1 -- the six counts above are scoped, not blind", got)
+	}
 }
 
 // --- zero-step run: the []-never-nil rule holds even with nothing to report ----------

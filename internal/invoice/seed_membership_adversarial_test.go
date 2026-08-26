@@ -49,8 +49,10 @@ func TestStore_ResolveOutside_SeededSuspendedReviewerRefused(t *testing.T) {
 
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: suspendedSubject, Role: "authenticated", TenantID: demoTenant})
 	store := NewStore(app)
-	if _, err := store.ResolveOutside(c, invID, "qa-adversarial"); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("ResolveOutside (seeded suspended reviewer) err = %v, want ErrNotPermitted", err)
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts).
+	if _, err := store.ResolveOutside(c, invID, "qa-adversarial"); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ResolveOutside (seeded suspended reviewer) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	at, by, reason := mustKeptAsIsTriple(t, super, invID)

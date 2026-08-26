@@ -302,7 +302,9 @@ rather than a property of each route.
 - Scan 2 sees a direct `db.WithinTenantTx` selector call, not one reached through a func value.
 - Scans 1 and 2 attribute each site to its **innermost enclosing func**, which is what lets an
   exemption name a func rather than a whole file. Both cross-check the attributed count against
-  the file's raw count, so a site outside every func fails rather than vanishing.
+  the file's raw count, so a site outside every func fails rather than vanishing. A func-scoped
+  exemption matches by bare func name within its file, so two same-named methods on different
+  receivers in one file would share one exemption.
 - Scan 3 sees only routes registered on `app.Mux` in the walked roots, and resolves a
   non-literal route argument only when it is a string const declared in the same directory. Any
   other shape fails loudly; it is never skipped.

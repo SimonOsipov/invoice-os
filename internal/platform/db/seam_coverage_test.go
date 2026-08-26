@@ -133,6 +133,24 @@ func scBaseName(e ast.Expr) string {
 	return ""
 }
 
+// scSeamFiles is the corpus scans 1 and 2 share. It floors the whole walk AND
+// the cmd/ half separately: internal/ alone measured 130 files, so a total-only
+// floor would still pass if cmd/ were dropped from the roots again.
+func scSeamFiles(t *testing.T, root string) []string {
+	t.Helper()
+	files := hmGoFiles(t, root, scSeamRoots)
+	cmdFiles := 0
+	for _, rel := range files {
+		if strings.HasPrefix(rel, "cmd/") {
+			cmdFiles++
+		}
+	}
+	if len(files) < 130 || cmdFiles < 8 {
+		t.Fatalf("the walk found %d non-test .go file(s) under %v, %d of them under cmd/, want at least 130 and at least 8 (139 and 9 measured at AUDIT-10-04) — a clean report over a broken walk means nothing", len(files), scSeamRoots, cmdFiles)
+	}
+	return files
+}
+
 // scParse parses one repo file, failing loudly: a file the scan cannot read is a
 // file it silently reports clean on.
 func scParse(t *testing.T, fset *token.FileSet, root, rel string) *ast.File {
@@ -579,10 +597,7 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 	t.Run("control needles", scPoolControlNeedles)
 
 	root := repoRootDir(t)
-	files := hmGoFiles(t, root, scSeamRoots)
-	if len(files) < 130 {
-		t.Fatalf("the walk found %d non-test .go file(s) under %v, want at least 130 (139 measured at AUDIT-10-04) — a clean report over a broken walk means nothing", len(files), scSeamRoots)
-	}
+	files := scSeamFiles(t, root)
 
 	fset := token.NewFileSet()
 	parsed := make([]*ast.File, 0, len(files))
@@ -849,10 +864,7 @@ func TestRLS_UngatedCoreIsWorkerAndExemptionOnly(t *testing.T) {
 	t.Run("control needles", scCoreControlNeedles)
 
 	root := repoRootDir(t)
-	files := hmGoFiles(t, root, scSeamRoots)
-	if len(files) < 130 {
-		t.Fatalf("the walk found %d non-test .go file(s) under %v, want at least 130 (139 measured at AUDIT-10-04)", len(files), scSeamRoots)
-	}
+	files := scSeamFiles(t, root)
 
 	fset := token.NewFileSet()
 	var sites []scCoreSite

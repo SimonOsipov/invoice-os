@@ -583,6 +583,20 @@ number even though their payloads still carry it. No production path renames an 
 today (D-15), so this is latent rather than observed. The recorded key's role is display and
 provenance, not search.
 
+### 10.13 The write side: the writer set is enumerated, not hand-maintained
+
+An invoice-scoped writer records `invoice_number` in its payload (above), beside whichever id
+key it already carried. Which writers count as invoice-scoped is not a second list someone has
+to keep in sync — it is **enumerated** by the same expression that backs `audit_log.invoice_id`
+(§11): the 17 events its generated column dispatches on are the entire set, no more and no
+fewer. A writer for an event outside that set has nothing to enumerate against, because it is
+not invoice-scoped by definition.
+
+`TestRLS_EveryInvoiceScopedWriterCarriesTheNumber`
+(`internal/platform/db/audit_number_scan_test.go`) is the scan that keeps this true: it derives
+the 17-event set from the migration itself, walks every `audit.Record` call site under `cmd/`
+and `internal/`, and fails if a literal-event writer inside that set is missing the key.
+
 ## 11. The invoice-scoped read reaches 17 of the 36 event types
 
 `Filter.InvoiceID` emits exactly one predicate — `a.invoice_id = $n::uuid`

@@ -471,3 +471,47 @@ func TestAuditResponse_NilSliceStillMarshalsNullWithoutStoreCoercion(t *testing.
 		t.Errorf("expected an explicitly-empty slice to marshal as [], got %s", b2)
 	}
 }
+
+// --- AUDIT-11-09 AC #6: the fence adds no wire field ---------------------------------------
+
+// TestAuditFilter_NumberArmAddsNoWireField pins Filter and Event against the shape they
+// have on main. AUDIT-11-09's fence lives entirely inside resolveSearchTargets, which is
+// unexported; a Filter.InvoiceNumber or an Event.InvoiceNumber would be a wire change and
+// would need both mirrors moved with it. The mirror half is already guarded by
+// frontend/app/src/lib/wireMirrors.test.ts — this is the Go half.
+func TestAuditFilter_NumberArmAddsNoWireField(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  []string
+	}{
+		{audit.Filter{}, []string{
+			"Limit", "Cursor", "From", "To", "Events", "Actors", "ActorKind", "Company", "Q", "InvoiceID",
+		}},
+		{audit.Event{}, []string{
+			"ID", "CreatedAt", "Event", "Actor", "ActorName", "ActorKind", "EntityID", "CompanyName",
+			"CompanyScope", "Payload",
+		}},
+	} {
+		rt := reflect.TypeOf(tc.value)
+		got := map[string]bool{}
+		for i := 0; i < rt.NumField(); i++ {
+			if f := rt.Field(i); f.IsExported() {
+				got[f.Name] = true
+			}
+		}
+		if len(tc.want) == 0 {
+			t.Fatalf("%s: the expected field set is empty, so this case asserts nothing", rt.Name())
+		}
+		for _, w := range tc.want {
+			if !got[w] {
+				t.Errorf("%s lost the exported field %s", rt.Name(), w)
+			}
+			delete(got, w)
+		}
+		for extra := range got {
+			t.Errorf("%s gained the exported field %s; the number fence must add no wire field, "+
+				"and a new one needs frontend/app/src/lib/audit.ts and e2e/api/client.ts moved with it",
+				rt.Name(), extra)
+		}
+	}
+}

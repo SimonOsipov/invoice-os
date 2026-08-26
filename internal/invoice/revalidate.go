@@ -74,7 +74,7 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 
 	// No run outlives the promotion it belonged to (APPR-06-07, D37). The sweep has no
 	// request identity, so the canceller is RevalidateActor's fixed literal.
-	if _, err := approval.CancelLiveRunTx(ctx, tx, id, actor.Subject); err != nil {
+	if _, err := approval.CancelLiveRunTx(ctx, tx, id, inv.InvoiceNumber, actor.Subject); err != nil {
 		return Invoice{}, err
 	}
 
@@ -83,6 +83,7 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 		"rule_set_version_id": ruleSetVersionID,
 		"outcome":             "demoted",
 		"violation_count":     len(vs),
+		"invoice_number":      inv.InvoiceNumber,
 	}); err != nil {
 		return Invoice{}, err
 	}

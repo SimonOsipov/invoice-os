@@ -69,7 +69,7 @@ func TestRLS_ScanCrossTenantRiverJobIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan(tenantA): %v", err)
 	}
-	wantA := Finding{InvoiceID: invoiceA, SubmissionJobID: &jobA, Kind: LostPoll, Healable: true}
+	wantA := Finding{InvoiceID: invoiceA, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceA), SubmissionJobID: &jobA, Kind: LostPoll, Healable: true}
 	if len(gotA) != 1 || !findingEqual(gotA[0], wantA) {
 		t.Errorf("Scan(tenantA) findings = %+v, want exactly [%+v] — an unrelated river_job "+
 			"row (seeded for a different job id) must not suppress tenant A's own lost_poll", gotA, wantA)
@@ -121,7 +121,7 @@ func TestRLS_ScanLiveRiverJobSuppressionIsJobSpecific(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	wantX := Finding{InvoiceID: invoiceX, SubmissionJobID: &jobX, Kind: LostPoll, Healable: true}
+	wantX := Finding{InvoiceID: invoiceX, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceX), SubmissionJobID: &jobX, Kind: LostPoll, Healable: true}
 	foundX := false
 	for _, f := range got {
 		if f.InvoiceID == invoiceX {
@@ -168,7 +168,7 @@ func TestRLS_ReArmThenRescanClosesTheLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan (before ReArmPoll): %v", err)
 	}
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
 	if len(before) != 1 || !findingEqual(before[0], want) {
 		t.Fatalf("Scan (before ReArmPoll) findings = %+v, want exactly [%+v] — the positive "+
 			"control this closes-the-loop case is measured against", before, want)

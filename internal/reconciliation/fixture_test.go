@@ -178,6 +178,11 @@ func findingEqual(a, b Finding) bool {
 	if a.InvoiceID != b.InvoiceID || a.Kind != b.Kind || a.Healable != b.Healable {
 		return false
 	}
+	// InvoiceNumber is compared too: a field this oracle cannot see is a field no exact-Finding
+	// call site in this package can see drift in (TestRLS_AuditNumber_FindingEqualComparesTheNumber).
+	if a.InvoiceNumber != b.InvoiceNumber {
+		return false
+	}
 	if (a.SubmissionJobID == nil) != (b.SubmissionJobID == nil) {
 		return false
 	}

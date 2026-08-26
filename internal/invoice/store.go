@@ -266,7 +266,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			return err
 		}
 
-		return audit.Record(ctx, tx, id.Subject, "invoice.created", map[string]any{"id": inv.ID})
+		return audit.Record(ctx, tx, id.Subject, "invoice.created", map[string]any{
+			"id":             inv.ID,
+			"invoice_number": inv.InvoiceNumber,
+		})
 	})
 	if err != nil {
 		return Invoice{}, err
@@ -944,8 +947,9 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
-			"id":     inv.ID,
-			"fields": changedFields,
+			"id":             inv.ID,
+			"fields":         changedFields,
+			"invoice_number": inv.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -1030,7 +1034,7 @@ func strPtrEqual(a, b *string) bool {
 // itself, enough to earn a "supplier_tin"/"supplier_name" audit-fields
 // entry. But this is NOT "never audited" (product-advisor review, 2026-07-31):
 // audit.Record's "invoice.updated" payload is fields-ONLY, no from/to
-// snapshot (map[string]any{"id":..., "fields": changedFields}, below in
+// snapshot (map[string]any{"id":..., "fields": changedFields, ...}, below in
 // Store.Update/Store.Edit) -- if the override were unconditionally excluded
 // from changedFields, a REAL silent correction of a compliance-relevant
 // field (a fiscal invoice's own supplier identity) would leave literally NO
@@ -1368,9 +1372,11 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 		if in.LineItems != nil {
 			fields = append(append([]string{}, changed...), "line_items")
 		}
+		// invoice_number is immutable, so before and after agree.
 		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
-			"id":     id,
-			"fields": fields,
+			"id":             id,
+			"fields":         fields,
+			"invoice_number": before.InvoiceNumber,
 		}); err != nil {
 			return err
 		}
@@ -1393,7 +1399,7 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 			// 8b. no run outlives the promotion it belonged to (APPR-06-07, D37).
 			// Hooked BELOW step 6's no-op return, so an unchanged edit cancels
 			// nothing (TestEdit_NoOpEditCancelsNothing).
-			if _, err := approval.CancelLiveRunTx(ctx, tx, id, callerID.Subject); err != nil {
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, before.InvoiceNumber, callerID.Subject); err != nil {
 				return err
 			}
 		}
@@ -1730,7 +1736,7 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		// approval_run_orphaned detector reads. The gate above narrows that window
 		// rather than closing it — the edge still passes when no policy is active.
 		if target == StatusDraft {
-			if _, err := approval.CancelLiveRunTx(ctx, tx, id, actorFromContext(ctx).Subject); err != nil {
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, inv.InvoiceNumber, actorFromContext(ctx).Subject); err != nil {
 				return err
 			}
 		}
@@ -1850,9 +1856,10 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	}
 
 	if err := audit.Record(ctx, tx, actor.Subject, "invoice.transitioned", map[string]any{
-		"id":   id,
-		"from": current,
-		"to":   target,
+		"id":             id,
+		"from":           current,
+		"to":             target,
+		"invoice_number": inv.InvoiceNumber,
 	}); err != nil {
 		return Invoice{}, err
 	}
@@ -2032,6 +2039,7 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			"rule_set_version_id": ruleSetVersionID,
 			"outcome":             outcome,
 			"violation_count":     len(vs),
+			"invoice_number":      locked.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -2058,7 +2066,7 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 //  3. UPDATE ... SET the triple, RETURNING <invoiceColumns> -- re-keeping an
 //     already-kept invoice is legal (a changed mind about the reason), overwriting the
 //     prior at/by/reason.
-//  4. audit.Record(ctx, tx, subject, "invoice.kept_as_is", {id, reason}) in the SAME
+//  4. audit.Record(ctx, tx, subject, "invoice.kept_as_is", {id, reason, invoice_number}) in the SAME
 //     transaction as the column write (this package's standing convention,
 //     invoice.go:1-9 / the audit_log CHECKs' own actor-length failure mode) -- a failed
 //     audit write rolls the column write back too.
@@ -2103,8 +2111,9 @@ func (s *Store) KeepAsIs(ctx context.Context, id, reason string) (Invoice, error
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.kept_as_is", map[string]any{
-			"id":     id,
-			"reason": reason,
+			"id":             id,
+			"reason":         reason,
+			"invoice_number": inv.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -2152,7 +2161,10 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 			return err
 		}
 
-		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{"id": id})
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{
+			"id":             id,
+			"invoice_number": inv.InvoiceNumber,
+		})
 	})
 	if err != nil {
 		return Invoice{}, err
@@ -2208,8 +2220,9 @@ func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice,
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.resolved_outside", map[string]any{
-			"id":     id,
-			"reason": reason,
+			"id":             id,
+			"reason":         reason,
+			"invoice_number": inv.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -2264,7 +2277,10 @@ func (s *Store) UnresolveOutside(ctx context.Context, id string) (Invoice, error
 			return err
 		}
 
-		return audit.Record(ctx, tx, callerID.Subject, "invoice.unresolved_outside", map[string]any{"id": id})
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unresolved_outside", map[string]any{
+			"id":             id,
+			"invoice_number": inv.InvoiceNumber,
+		})
 	})
 	if err != nil {
 		return Invoice{}, err

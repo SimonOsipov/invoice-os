@@ -22,9 +22,9 @@ import { freshTin } from './fixtures'
 import type { Persona } from './client'
 
 // causeAnInvoiceCreatedRow: internal/invoice/store.go:269 records `invoice.created` with
-// payload {"id": <invoice id>}, and that event is on the list audit_log.invoice_id's generated
-// column dispatches on — so the row it writes is addressable by ?invoice_id= rather than only
-// findable by scanning the page.
+// payload {"id": <invoice id>, "invoice_number": …}, and that event is on the list
+// audit_log.invoice_id's generated column dispatches on — so the row it writes is
+// addressable by ?invoice_id= rather than only findable by scanning the page.
 //
 // The name must sort AFTER both tenants' own names. GET /v1/entities is `ORDER BY name ASC`
 // (internal/portfolio/store.go:115) and the SPA's resolveActiveClient falls back to

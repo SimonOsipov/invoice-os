@@ -653,9 +653,9 @@ func TestSubmitWorker_AcceptedAuditPayloadIsStrictSummaryNoWireLeak(t *testing.T
 	}
 
 	payload := auditPayloadMap(t, f, tenantID, "submission.accepted")
-	wantKeys := map[string]bool{"invoice_id": true, "submission_job_id": true, "outcome": true, "reference": true}
+	wantKeys := map[string]bool{"invoice_id": true, "invoice_number": true, "submission_job_id": true, "outcome": true, "reference": true}
 	if len(payload) != len(wantKeys) {
-		t.Errorf("submission.accepted payload has %d keys (%v), want exactly the 4 in %v -- "+
+		t.Errorf("submission.accepted payload has %d keys (%v), want exactly the 5 in %v -- "+
 			"a wire-payload leak (csid/qr_payload) would show up as extra keys here", len(payload), payload, wantKeys)
 	}
 	for k := range payload {
@@ -705,9 +705,9 @@ func TestSubmitWorker_RejectedAuditPayloadIsStrictSummaryNoWireLeak(t *testing.T
 	}
 
 	payload := auditPayloadMap(t, f, tenantID, "submission.rejected")
-	wantKeys := map[string]bool{"invoice_id": true, "submission_job_id": true, "outcome": true}
+	wantKeys := map[string]bool{"invoice_id": true, "invoice_number": true, "submission_job_id": true, "outcome": true}
 	if len(payload) != len(wantKeys) {
-		t.Errorf("submission.rejected payload has %d keys (%v), want exactly the 3 in %v -- "+
+		t.Errorf("submission.rejected payload has %d keys (%v), want exactly the 4 in %v -- "+
 			"a wire-payload leak (the reasons array) would show up as extra keys here", len(payload), payload, wantKeys)
 	}
 	for k := range payload {

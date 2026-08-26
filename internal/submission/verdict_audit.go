@@ -31,9 +31,10 @@ func recordSubmissionAudit(ctx context.Context, tx pgx.Tx, outcome string, paylo
 // reference is included only when non-empty (the scripted IRN on Accepted); on Rejected the caller
 // passes "" and the key is left ABSENT from the payload entirely, not written as an empty string
 // ([audit-reference-is-the-irn]). Pinned by TestRecordVerdictAudit_AcceptedRejectedUnchanged.
-func recordVerdictAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID, outcome, reference string) error {
+func recordVerdictAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID, outcome, reference, invoiceNumber string) error {
 	payload := map[string]any{
 		"invoice_id":        invoiceID,
+		"invoice_number":    invoiceNumber,
 		"submission_job_id": jobID,
 		"outcome":           outcome,
 	}
@@ -47,11 +48,15 @@ func recordVerdictAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID, outcom
 // invoice in status='failed' with no further attempt, whichever submission_jobs state it sets.
 // The reason travels as the FailureKind enum, never submission_jobs.last_error: that column is
 // adapter-shaped free text that can carry wire detail, which [audit-payloads] forbids and
-// submission_jobs already holds. Pinned by TestRecordFailureAudit_PayloadIsExactlyFourKeys and
+// submission_jobs already holds. Pinned by TestRecordFailureAudit_PayloadIsExactlyFiveKeys and
 // TestRecordFailureAudit_CarriesNoWireDetail.
-func recordFailureAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID string, kind FailureKind) error {
+//
+// invoiceNumber is LAST: TestSubmissionAudit_FailureKindArgumentIsAConstant reads kind at
+// argument index 4.
+func recordFailureAudit(ctx context.Context, tx pgx.Tx, invoiceID, jobID string, kind FailureKind, invoiceNumber string) error {
 	return recordSubmissionAudit(ctx, tx, "failed", map[string]any{
 		"invoice_id":        invoiceID,
+		"invoice_number":    invoiceNumber,
 		"submission_job_id": jobID,
 		"outcome":           "failed",
 		"failure_kind":      string(kind),

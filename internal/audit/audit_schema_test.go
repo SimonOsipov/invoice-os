@@ -9,6 +9,8 @@ package audit_test
 import (
 	"context"
 	"io/fs"
+	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -441,4 +443,114 @@ func triggerNames(states map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// --- AUDIT-11-05 Core AC 8 (no DB, no git) ---------------------------------------------
+
+// auditNumberMigrationCount and auditNumberNewestMigration pin migrations/ as it stands on
+// main. A migration added on this branch raises the count and, because goose stamps ascending
+// and TestAudit_SingleMigrationForThisStory enforces that rule, sorts after the newest name --
+// so either half fires. A later story that legitimately adds one moves both pins.
+//
+// CF-31: the obvious oracle, a diff of migrations/ against main, CANNOT run in CI. Every job
+// checks out at fetch-depth 1, where `git diff main...HEAD` exits 128 with "ambiguous argument".
+// This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
+const (
+	auditNumberMigrationCount  = 48
+	auditNumberNewestMigration = "20260822080722_audit_log_invoice_id_column_and_index.sql"
+)
+
+// auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of
+// them, AUDIT-11-09's filter.go, and adds none.
+var auditReaderFiles = []string{
+	"audit.go", "facets.go", "filter.go", "handlers.go", "reader.go", "store.go",
+}
+
+// auditReaderImports is that surface's import set, measured on this branch. It is the half a
+// file count cannot see: an existing file widened to reach a new dependency.
+var auditReaderImports = []string{
+	"context",
+	"encoding/base64",
+	"encoding/json",
+	"errors",
+	"fmt",
+	"github.com/SimonOsipov/invoice-os/internal/actor",
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth",
+	"github.com/SimonOsipov/invoice-os/internal/platform/db",
+	"github.com/google/uuid",
+	"github.com/jackc/pgx/v5",
+	"github.com/jackc/pgx/v5/pgxpool",
+	"log/slog",
+	"net/http",
+	"net/url",
+	"strconv",
+	"strings",
+	"time",
+}
+
+// Core AC 8: this story adds no migration. Nothing else owns that claim -- the append-only
+// enforcement is green but no test says this story left it alone.
+func TestAuditNumber_StoryAddsNoMigration(t *testing.T) {
+	all, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("glob migrations.FS: %v", err)
+	}
+	if len(all) == 0 {
+		t.Fatalf("migrations.FS contains no *.sql files -- the embed is broken, so both assertions below would pass vacuously")
+	}
+	if len(all) != auditNumberMigrationCount {
+		t.Errorf("migrations.FS holds %d *.sql files, want %d -- AUDIT-11 adds none (Core AC 8)", len(all), auditNumberMigrationCount)
+	}
+	sorted := append([]string(nil), all...)
+	sort.Strings(sorted)
+	if got := sorted[len(sorted)-1]; got != auditNumberNewestMigration {
+		t.Errorf("the newest migration is %q, want %q -- AUDIT-11 adds none, and one added on this branch would sort after it", got, auditNumberNewestMigration)
+	}
+}
+
+// Core AC 8: no file under internal/audit/ other than tests and AUDIT-11-09's filter.go moves.
+// The file list catches a new file; the import set catches an existing file widened to reach
+// past the fence. Both read the package itself, so neither needs a main ref (CF-31).
+func TestAuditNumber_ReaderSurfaceIsStillSixFiles(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		files = append(files, name)
+	}
+	if len(files) == 0 {
+		t.Fatalf("internal/audit holds no non-test .go files -- the scan is wrong, so the comparison below would pass vacuously")
+	}
+	sort.Strings(files)
+	if strings.Join(files, ",") != strings.Join(auditReaderFiles, ",") {
+		t.Errorf("internal/audit non-test files = [%s], want [%s] -- AUDIT-11 adds none and removes none",
+			strings.Join(files, ","), strings.Join(auditReaderFiles, ","))
+	}
+
+	out, err := exec.Command("go", "list", "-f", `{{join .Imports "\n"}}`, ".").Output()
+	if err != nil {
+		t.Fatalf("go list the audit package imports: %v", err)
+	}
+	var imports []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			imports = append(imports, line)
+		}
+	}
+	if len(imports) == 0 {
+		t.Fatalf("go list reported no imports for internal/audit -- the comparison below would pass vacuously")
+	}
+	sort.Strings(imports)
+	want := append([]string(nil), auditReaderImports...)
+	sort.Strings(want)
+	if strings.Join(imports, ",") != strings.Join(want, ",") {
+		t.Errorf("internal/audit imports = [%s], want [%s] -- AUDIT-11-09's filter.go edits reach for nothing new, and this story adds no import",
+			strings.Join(imports, ","), strings.Join(want, ","))
+	}
 }

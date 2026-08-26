@@ -10,8 +10,10 @@ package audit_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -210,5 +212,84 @@ func TestRLS_AuditForeignCursorYieldsAnEmptyPageNotALeak(t *testing.T) {
 	unbounded := pageQuery(t, f, a, audit.Filter{Limit: 50})
 	if unbounded.Total == 0 {
 		t.Fatalf("tenant A has no rows at all; the empty page above proves nothing")
+	}
+}
+
+// TestRLS_AuditSearchNumberFoldInIsTenantScoped is AUDIT-11-09's new read path under the
+// isolation claim. The number fence resolves free text against `invoices` — a table the
+// audit reader never touched before AUDIT-11 — and writes no tenant predicate of its own:
+// app.current_tenant plus FORCE RLS is the whole of the scope, exactly as for the
+// memberships and business_entities fold-ins.
+//
+// Two claims, because a leak here has two shapes. Rows: tenant B's number must never reach
+// tenant A's page. Existence: a caller must not be able to probe another tenant's numbering
+// by comparing a real foreign number against one nobody holds — so the two responses are
+// asserted indistinguishable, not merely both empty.
+//
+// Measured, so the strength of this case is not overstated: disabling RLS on `invoices`
+// entirely leaves it GREEN. The mutation is effective at the fold-in (tenant A then resolves
+// tenant B's invoice id), but audit_log's own policy fences the page independently, so a
+// foreign id matches no visible row. audit_log RLS is the load-bearing fence here and
+// invoices RLS is defence in depth. What this case does catch is the arm being widened,
+// re-pointed at a column audit_log does not scope, or dropped (its controls go red).
+func TestRLS_AuditSearchNumberFoldInIsTenantScoped(t *testing.T) {
+	f := requireFixture(t)
+	a := pageSeedTenant(t, f)
+	b := pageSeedTenant(t, f)
+
+	const foreign, mine, nobody = "INV-SECRET-77", "INV-OWN-1", "INV-NOBODY-99"
+	aEntity := pageSeedEntity(t, f, a, "RLS Number A Ltd")
+	bEntity := pageSeedEntity(t, f, b, "RLS Number B Ltd")
+	aInvoice := filtSeedNumberedInvoice(t, f, a, aEntity, mine)
+	bInvoice := filtSeedNumberedInvoice(t, f, b, bEntity, foreign)
+
+	filtInsert(t, f, a, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, aInvoice), ageSeconds: 10},
+	})
+	filtInsert(t, f, b, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, bInvoice), ageSeconds: 20},
+		{event: "invoice.updated", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"invoice_number":%q}`, bInvoice, foreign), ageSeconds: 10},
+	})
+
+	// Controls FIRST. B's rows really exist and really are reachable by that number, and A's
+	// own search works — otherwise A seeing nothing proves nothing.
+	if own := pageQuery(t, f, b, audit.Filter{Limit: 20, Q: foreign}); own.Total != 2 {
+		t.Fatalf("tenant B reads back %d of its own rows for %q, want 2; the isolation claim below "+
+			"cannot be made against an empty fixture", own.Total, foreign)
+	}
+	if got := pageQuery(t, f, a, audit.Filter{Limit: 20, Q: mine}); got.Total != 1 {
+		t.Fatalf("tenant A's search for its own number %q returned total %d, want 1; search is not "+
+			"working for A at all", mine, got.Total)
+	}
+
+	leak := pageQuery(t, f, a, audit.Filter{Limit: 20, Q: foreign})
+	if leak.Total != 0 || len(leak.Events) != 0 {
+		t.Errorf("tenant A's search for tenant B's invoice number %q matched %d rows (total %d), "+
+			"want none — the fold-in reads invoices under RLS alone", foreign, len(leak.Events), leak.Total)
+	}
+	for _, e := range leak.Events {
+		if e.EntityID != nil && *e.EntityID == bEntity {
+			t.Errorf("tenant A's page carries a row scoped to tenant B's company %s", bEntity)
+		}
+	}
+
+	// The existence half: a real foreign number and a number nobody holds must be
+	// indistinguishable, or the fold-in becomes a probe of another tenant's numbering.
+	blank := pageQuery(t, f, a, audit.Filter{Limit: 20, Q: nobody})
+	if leak.Total != blank.Total || len(leak.Events) != len(blank.Events) ||
+		leak.LogIsEmpty != blank.LogIsEmpty ||
+		len(leak.Facets.Event) != len(blank.Facets.Event) ||
+		len(leak.Facets.Actor) != len(blank.Facets.Actor) ||
+		len(leak.Facets.Company) != len(blank.Facets.Company) {
+		t.Errorf("tenant A can tell a real foreign number from an unused one: %q gives "+
+			"total=%d events=%d empty=%v facets=%d/%d/%d, %q gives total=%d events=%d empty=%v "+
+			"facets=%d/%d/%d — that difference is a probe of tenant B's numbering",
+			foreign, leak.Total, len(leak.Events), leak.LogIsEmpty,
+			len(leak.Facets.Event), len(leak.Facets.Actor), len(leak.Facets.Company),
+			nobody, blank.Total, len(blank.Events), blank.LogIsEmpty,
+			len(blank.Facets.Event), len(blank.Facets.Actor), len(blank.Facets.Company))
 	}
 }

@@ -808,10 +808,10 @@ func TestApprove_AuditPayloadShape(t *testing.T) {
 	if len(body) == 0 {
 		t.Fatal("payload is empty {} -- want invoice_id/run_id/step_ord/reason populated")
 	}
-	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true}
+	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason} -- deliberately unlike ArmTx/CancelLiveRunTx's \"id\" key", k)
+			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number} -- deliberately unlike ArmTx/CancelLiveRunTx's \"id\" key", k)
 		}
 	}
 	for k := range allowed {
@@ -941,11 +941,12 @@ func TestApprove_SatisfiedStepUpdateAffectsNoRowsAndWritesNoDecision(t *testing.
 	super, app := dbTestPools(t)
 	f := newApproveFixture(t, super, app, "APPR-07 satisfied-step-no-op", "satisfied-step-role")
 
+	number := mustInvoiceNumberFor(t, super, f.invoiceID)
 	call := func(t *testing.T) (satisfied bool, err error) {
 		t.Helper()
 		err = db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
 			var callErr error
-			satisfied, callErr = commitDecisionTx(context.Background(), tx, f.invoiceID, f.tenantID, f.runID, f.stepID, 0, "approved", "commit-tx-actor", nil, nil)
+			satisfied, callErr = commitDecisionTx(context.Background(), tx, f.invoiceID, number, f.tenantID, f.runID, f.stepID, 0, "approved", "commit-tx-actor", nil, nil)
 			return callErr
 		})
 		return satisfied, err
@@ -1483,10 +1484,10 @@ func TestReject_AuditPayloadShape(t *testing.T) {
 	if len(body) == 0 {
 		t.Fatal("payload is empty {} -- want invoice_id/run_id/step_ord/reason populated")
 	}
-	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true}
+	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason}", k)
+			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number}", k)
 		}
 	}
 	for k := range allowed {

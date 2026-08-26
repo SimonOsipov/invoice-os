@@ -13,7 +13,7 @@ import (
 // No status vocabulary crosses this seam — that is why Mark* is four
 // methods, not one taking a target Status.
 //
-// invoiceID is always the FIRST positional arg across all six methods,
+// invoiceID is always the FIRST positional arg across all seven methods,
 // matching 02's shipped MarkSubmittedTx/MarkFailedTx(ctx, tx, id, tenantID)
 // order exactly [Stage-2 architect validation, 2026-07-23] — deliberately
 // NOT tenantID-first (an earlier draft of this interface had it reversed;
@@ -30,6 +30,12 @@ type InvoicePort interface {
 	// HasFiscalOutcome reports invoices.irn IS NOT NULL for invoiceID.
 	// Cross-tenant / absent id -> RLS 0-rows -> false, nil (not an error).
 	HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error)
+
+	// Number reports invoices.invoice_number for invoiceID. PollWorker holds
+	// no invoice fact of its own, so this is its only route to the number its
+	// terminal audit rows carry; SubmitWorker never calls it (the number is
+	// already on the Canonical tx1 fetched).
+	Number(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error)
 
 	// MarkSubmitted transitions invoiceID -> submitted as SystemActor(tenantID).
 	// Idempotent: a redundant call on an already-submitted invoice returns nil.

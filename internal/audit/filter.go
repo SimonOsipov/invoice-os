@@ -11,17 +11,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// searchTargets holds the two fold-in lookups: the subjects whose display name matches q,
-// and the companies whose name does. Both come back as column predicates, which is the
-// only way free text can reach an actor or a company under FORCE RLS.
+// searchTargets holds the three fold-in lookups: the subjects whose display name matches
+// q, the companies whose name does, and the invoices whose number does. All come back as
+// column predicates, which is the only way free text can reach an actor, a company or an
+// invoice number under FORCE RLS.
 type searchTargets struct {
 	subjects  []string
 	companies []string
+	invoices  []string
 }
 
-// resolveSearchTargets runs the two fold-in lookups on tx. RLS on tx is the only scope —
-// no tenant predicate, the same rule as actor.Resolve. Neither list is capped: a cap
-// would silently drop matches, and both tables are small per tenant.
+// resolveSearchTargets runs the three fold-in lookups on tx. RLS on tx is the only scope —
+// no tenant predicate, the same rule as actor.Resolve. No list is capped: a cap
+// would silently drop matches, and all three tables are small per tenant.
 func resolveSearchTargets(ctx context.Context, tx pgx.Tx, q string) (searchTargets, error) {
 	if q == "" {
 		return searchTargets{}, nil
@@ -65,6 +67,27 @@ func resolveSearchTargets(ctx context.Context, tx pgx.Tx, q string) (searchTarge
 	}
 	if err := rows.Err(); err != nil {
 		return searchTargets{}, fmt.Errorf("audit: read search companies: %w", err)
+	}
+
+	// Resolved through the live invoices table, not matched in the payload: the row's own
+	// entity_id then fences a company-scoped search (D-24). Writers store the number
+	// verbatim, so the search side owns all escaping — reuse the needle above.
+	numbered, err := tx.Query(ctx,
+		`SELECT id::text FROM invoices WHERE invoice_number ILIKE '%' || $1 || '%' ESCAPE '\'`, like)
+	if err != nil {
+		return searchTargets{}, fmt.Errorf("audit: resolve search invoices: %w", err)
+	}
+	for numbered.Next() {
+		var id string
+		if err := numbered.Scan(&id); err != nil {
+			numbered.Close()
+			return searchTargets{}, fmt.Errorf("audit: scan search invoice: %w", err)
+		}
+		out.invoices = append(out.invoices, id)
+	}
+	numbered.Close()
+	if err := numbered.Err(); err != nil {
+		return searchTargets{}, fmt.Errorf("audit: read search invoices: %w", err)
 	}
 	return out, nil
 }
@@ -143,28 +166,35 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 	return strings.Join(conditions, " AND "), args, nil
 }
 
-// searchFragment is q's four routes as one parenthesised OR-group. The parentheses are
+// searchFragment is q's five routes as one parenthesised OR-group. The parentheses are
 // load-bearing: conditions join with AND, so a bare `x OR y` would bind as
 // `(everything AND x) OR y` and every other filter would silently evaporate, leaving a
 // tenant-wide result with a plausible-looking total.
 //
 // The payload route matches VALUES, via jsonb_each_text, not payload::text. payload::text
 // renders the key names too, and `id` alone appears as a key on nearly every row — a
-// measured 50,000 of 50,000. The two fold-in arms are omitted when their lookup found
+// measured 50,000 of 50,000. The three fold-in arms are omitted when their lookup found
 // nothing; the two text arms always appear, so the group can never collapse to nothing
 // and fall back to the unfiltered set.
+//
+// invoice_number leaves the generic arm: an OR-group only widens, so matched there it would
+// stay unscoped and the resolved arm below could not fence it.
 func searchFragment(q string, s searchTargets, bind func(any) string) string {
 	like := bind(escapeLike(q))
 	arms := []string{
 		`a.event ILIKE '%' || ` + like + ` || '%' ESCAPE '\'`,
 		`EXISTS (SELECT 1 FROM jsonb_each_text(a.payload) kv
-		          WHERE kv.value ILIKE '%' || ` + like + ` || '%' ESCAPE '\')`,
+		          WHERE kv.key <> 'invoice_number'
+		            AND kv.value ILIKE '%' || ` + like + ` || '%' ESCAPE '\')`,
 	}
 	if len(s.subjects) > 0 {
 		arms = append(arms, "a.actor = ANY("+bind(s.subjects)+")")
 	}
 	if len(s.companies) > 0 {
 		arms = append(arms, "a.entity_id = ANY("+bind(s.companies)+"::uuid[])")
+	}
+	if len(s.invoices) > 0 {
+		arms = append(arms, "a.invoice_id = ANY("+bind(s.invoices)+"::uuid[])")
 	}
 	return "(" + strings.Join(arms, " OR ") + ")"
 }

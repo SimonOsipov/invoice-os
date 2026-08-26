@@ -769,14 +769,14 @@ function extractedPayloadKeys(): Record<string, string[]> {
 // Transcribed from the four map literals. activityFeed_goPayloadKeysAreTheOnesThisTableClaims
 // is what stops this rotting into a claim about keys the server no longer writes.
 const TRANSCRIBED_PAYLOAD_KEYS: Record<string, string[]> = {
-  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason'],
-  'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason'],
-  'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'steps'],
-  'invoice.approval_cancelled': ['id', 'run_id'],
+  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number'],
+  'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number'],
+  'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'steps', 'invoice_number'],
+  'invoice.approval_cancelled': ['id', 'run_id', 'invoice_number'],
 }
 
 const RETIRED_FIELD_KEYS = ['run_id', 'step_ord', 'reason']
-const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'steps']
+const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'steps', 'invoice_number']
 
 const RUN_ID_SENTINEL = 'run-7f21-nothing-dropped'
 const STEP_ORD_SENTINEL = 7

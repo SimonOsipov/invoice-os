@@ -593,8 +593,11 @@ func demoteAndCancel(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID, acto
 			`UPDATE invoices SET status = 'draft' WHERE id = $1 AND status = 'validated'`, invoiceID); err != nil {
 			return err
 		}
-		var err error
-		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, actor)
+		invoiceNumber, err := invoiceNumberOnTx(context.Background(), tx, invoiceID)
+		if err != nil {
+			return err
+		}
+		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, invoiceNumber, actor)
 		return err
 	})
 	return cancelled, err

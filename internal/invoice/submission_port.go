@@ -41,6 +41,18 @@ func (s *Store) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceID strin
 	return has, err
 }
 
+// Number reports invoices.invoice_number for invoiceID -- one column off the
+// primary key, for PollWorker's terminal audit rows. RLS 0-rows returns
+// pgx.ErrNoRows rather than a blank: an absent number must not be substituted
+// for a real one in an immutable audit_log row.
+func (s *Store) Number(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error) {
+	var number string
+	err := tx.QueryRow(ctx,
+		`SELECT invoice_number FROM invoices WHERE id = $1`, invoiceID,
+	).Scan(&number)
+	return number, err
+}
+
 // MarkSubmitted is a thin 1:1 forward onto 02's already-tested
 // MarkSubmittedTx (actor.go) -- NOT a reimplementation of markTerminalTx's
 // lock/idempotency/transition sequence. A private markTerminal helper here

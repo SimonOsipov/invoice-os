@@ -46,12 +46,16 @@ describe('AuditFilterCard: search', () => {
     expect((onChange.mock.calls[0][0] as AuditFilterState).q).toBe('hello')
   })
 
-  it('auditSearch_statesWhatItCannotFind', () => {
+  // AUDIT-11-08: the new copy contains "invoice numbers", so a bare /invoice number/ match
+  // stays green on the opposite claim. Assert the DENIAL classes instead of a substring.
+  it('auditSearch_helperDeniesEmailButNotInvoiceNumberSearch', () => {
     renderCard()
     fireEvent.click(screen.getByTestId('audit-search-trigger'))
-    const helper = screen.getByTestId('audit-search-helper')
-    expect(helper.textContent, 'must state the invoice-number caveat').toMatch(/invoice number/)
-    expect(helper.textContent, 'must state the email caveat').toMatch(/email address/)
+    const text = screen.getByTestId('audit-search-helper').textContent ?? ''
+    expect(text, 'must not deny invoice-number search').not.toMatch(/cannot find an invoice number/i)
+    expect(text, 'must still deny actor-by-email search').toMatch(
+      /cannot find.{0,60}email|email address.{0,20}(cannot|can't|not)/i,
+    )
   })
 
   it('auditSearch_maxLengthIs200', () => {

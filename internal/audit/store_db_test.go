@@ -7,11 +7,13 @@ package audit_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -98,7 +100,7 @@ func TestAuditStore_AllStatementsShareOneTransaction(t *testing.T) {
 	// above while doing nothing. Five statements read audit_log on a populated request —
 	// the page, the three facets and the count. actor.Resolve adds a memberships query
 	// only when a subject passes its uuid gate (these rows' actor does not), search adds
-	// two fold-ins, and the empty probe runs only when nothing matched.
+	// three fold-ins (AUDIT-11-09), and the empty probe runs only when nothing matched.
 	if n := stAuditLogCount(tr); n != 5 {
 		t.Errorf("the request issued %d statements against audit_log, want 5 (page, three facets, "+
 			"count): %v", n, tr.sqls)
@@ -281,5 +283,149 @@ func TestAuditStore_EmptyProbeSharesThePageTransaction(t *testing.T) {
 	if n := tr.count("commit"); n != 1 {
 		t.Errorf("a request whose page AND probe both ran issued %d COMMITs, want exactly 1 "+
 			"(statements: %v)", n, tr.sqls)
+	}
+}
+
+// --- AUDIT-11-09: the third fold-in and the arm it feeds -----------------------------------
+
+// stFoldInCount counts the statements resolving free text against table. actor.Resolve
+// also reads memberships, so the ILIKE is what separates a fold-in lookup from it; the
+// page and the company facet reach business_entities through a LEFT JOIN, not a FROM.
+func stFoldInCount(tr *stTracer, table string) int {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	n := 0
+	for _, s := range tr.sqls {
+		if strings.Contains(s, "FROM "+table) && strings.Contains(s, "ILIKE") {
+			n++
+		}
+	}
+	return n
+}
+
+// stFilteredStatements returns the statements carrying the built predicate set — the page,
+// the count and the three facets, all aliased `a` — and how many of them contain needle.
+// The empty probe reads audit_log unaliased and is deliberately excluded: it carries no
+// predicate.
+func stFilteredStatements(tr *stTracer, needle string) (total, withNeedle int) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for _, s := range tr.sqls {
+		if !strings.Contains(s, "FROM audit_log a") {
+			continue
+		}
+		total++
+		if strings.Contains(s, needle) {
+			withNeedle++
+		}
+	}
+	return total, withNeedle
+}
+
+// stNumberFixture seeds one tenant where all three fold-ins resolve on the term "Foldin":
+// a company, a membership display name and an invoice number.
+func stNumberFixture(t *testing.T, f *fixture) pageFixture {
+	t.Helper()
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Foldin Freight")
+	invoice := filtSeedNumberedInvoice(t, f, p, entity, "FOLDIN-1")
+	filtSeedMembership(t, f, p, uuid.NewString(), "Foldin Person")
+	filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, invoice), ageSeconds: 10},
+	})
+	return p
+}
+
+// TestAuditStore_SearchIssuesThreeFoldIns is AUDIT-11-09 AC #7. Free text cannot reach an
+// actor, a company or an invoice number through a column predicate under FORCE RLS, so each
+// is resolved first and folded back in as ids. The read contract's per-request budget moves
+// from 5-10 to 5-11 because of the third lookup; a budget that drifts unasserted is how
+// §10.1's statement count went wrong once already.
+func TestAuditStore_SearchIssuesThreeFoldIns(t *testing.T) {
+	f := requireFixture(t)
+	p := stNumberFixture(t, f)
+
+	store, tr := stTracedStore(t)
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{TenantID: p.tenant})
+
+	got, err := store.List(ctx, audit.Filter{Limit: 10, Q: "Foldin"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got.Total == 0 {
+		t.Fatalf("the search matched 0 rows; the statement counts below would be from a request " +
+			"that did no work")
+	}
+	for _, table := range []string{"memberships", "business_entities", "invoices"} {
+		if n := stFoldInCount(tr, table); n != 1 {
+			t.Errorf("a free-text search ran %d fold-in lookups against %s, want exactly 1 "+
+				"(statements: %v)", n, table, tr.sqls)
+		}
+	}
+
+	tr.mu.Lock()
+	tr.sqls = nil
+	tr.mu.Unlock()
+
+	if _, err := store.List(ctx, audit.Filter{Limit: 10}); err != nil {
+		t.Fatalf("List (no search): %v", err)
+	}
+	for _, table := range []string{"memberships", "business_entities", "invoices"} {
+		if n := stFoldInCount(tr, table); n != 0 {
+			t.Errorf("a search-free request ran %d fold-in lookups against %s, want 0 — the "+
+				"lookups belong to q alone (statements: %v)", n, table, tr.sqls)
+		}
+	}
+}
+
+// TestAuditStore_NumberArmIsDroppedWhenNothingResolves is AUDIT-11-09 AC #2. The two text
+// arms always appear, so the OR-group can never collapse; the fold-in arms are added only
+// when their lookup found something, and an unconditional one would bind an empty array —
+// a disjunct that can never be true. The arm must also reach the count and the facets, not
+// only the page: a predicate applied to the page alone makes total a lie with every other
+// case still green.
+func TestAuditStore_NumberArmIsDroppedWhenNothingResolves(t *testing.T) {
+	f := requireFixture(t)
+	p := stNumberFixture(t, f)
+
+	const arm = "a.invoice_id = ANY("
+	store, tr := stTracedStore(t)
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{TenantID: p.tenant})
+
+	if _, err := store.List(ctx, audit.Filter{Limit: 10, Q: "FOLDIN-1"}); err != nil {
+		t.Fatalf("List (resolving): %v", err)
+	}
+	total, withArm := stFilteredStatements(tr, arm)
+	if total != 5 {
+		t.Fatalf("the request built %d filtered statements, want 5 (page, count, three facets): %v",
+			total, tr.sqls)
+	}
+	if withArm != total {
+		t.Errorf("%d of %d filtered statements carry %q, want all of them (statements: %v)",
+			withArm, total, arm, tr.sqls)
+	}
+
+	tr.mu.Lock()
+	tr.sqls = nil
+	tr.mu.Unlock()
+
+	if _, err := store.List(ctx, audit.Filter{Limit: 10, Q: "zzzznomatchzzzz"}); err != nil {
+		t.Fatalf("List (unresolving): %v", err)
+	}
+	total, withArm = stFilteredStatements(tr, arm)
+	if total != 5 {
+		t.Fatalf("the unresolving request built %d filtered statements, want 5: %v", total, tr.sqls)
+	}
+	if withArm != 0 {
+		t.Errorf("%d filtered statements carry %q on a term resolving no invoice, want 0 "+
+			"(statements: %v)", withArm, arm, tr.sqls)
+	}
+	// The two text arms are unconditional, or a search that resolves nothing drops its
+	// whole fragment and falls back to the unfiltered set.
+	for _, want := range []string{"a.event ILIKE", "jsonb_each_text(a.payload)"} {
+		if _, n := stFilteredStatements(tr, want); n != total {
+			t.Errorf("%d of %d filtered statements carry %q, want all of them", n, total, want)
+		}
 	}
 }

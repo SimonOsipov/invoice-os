@@ -12,9 +12,9 @@ import (
 )
 
 // fsqlBuild renders one Filter's predicates, failing on an unexpected error.
-func fsqlBuild(t *testing.T, f audit.Filter, subjects, companies []string) string {
+func fsqlBuild(t *testing.T, f audit.Filter, subjects, companies, invoices []string) string {
 	t.Helper()
-	where, _, err := audit.FilterSQLForTest(f, subjects, companies)
+	where, _, err := audit.FilterSQLForTest(f, subjects, companies, invoices)
 	if err != nil {
 		t.Fatalf("FilterSQLForTest: unexpected error %v", err)
 	}
@@ -55,7 +55,7 @@ func TestAuditFilter_CompanyPredicateNeverOrsInWorkspaceRows(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.mode, func(t *testing.T) {
-			where := fsqlBuild(t, audit.Filter{Limit: 50, Company: c.company}, nil, nil)
+			where := fsqlBuild(t, audit.Filter{Limit: 50, Company: c.company}, nil, nil, nil)
 
 			for _, want := range c.want {
 				if !strings.Contains(where, want) {
@@ -84,7 +84,7 @@ func TestAuditFilter_CompanyPredicateNeverOrsInWorkspaceRows(t *testing.T) {
 // while opening an injection path.
 func TestAuditFilter_NamedCompanyBindsTheIDRatherThanInliningIt(t *testing.T) {
 	entity := uuid.NewString()
-	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, Company: audit.NamedCompany(entity)}, nil, nil)
+	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, Company: audit.NamedCompany(entity)}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("FilterSQLForTest: %v", err)
 	}
@@ -108,14 +108,14 @@ func TestAuditFilter_NamedCompanyBindsTheIDRatherThanInliningIt(t *testing.T) {
 // TestAuditFilter_EmptyValueAppliesNoFilter would then read as correct.
 func TestAuditFilter_UnknownActorKindIsRefused(t *testing.T) {
 	for _, kind := range []string{"person", "People", "system ", "robot"} {
-		_, _, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, ActorKind: kind}, nil, nil)
+		_, _, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, ActorKind: kind}, nil, nil, nil)
 		if err == nil {
 			t.Errorf("ActorKind = %q was accepted, want an error — an unrecognised kind must not "+
 				"silently become 'no filter'", kind)
 		}
 	}
 	for _, kind := range []string{"", "system", "people"} {
-		if _, _, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, ActorKind: kind}, nil, nil); err != nil {
+		if _, _, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, ActorKind: kind}, nil, nil, nil); err != nil {
 			t.Errorf("ActorKind = %q was refused (%v), want it accepted", kind, err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestAuditFilter_ActorKindEmitsNoBindParameter(t *testing.T) {
 		{"system", "a.actor = 'system'"},
 		{"people", "a.actor <> 'system'"},
 	} {
-		where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, ActorKind: tc.kind}, nil, nil)
+		where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, ActorKind: tc.kind}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("ActorKind=%s: %v", tc.kind, err)
 		}
@@ -146,6 +146,10 @@ func TestAuditFilter_ActorKindEmitsNoBindParameter(t *testing.T) {
 // records at :663-666. Fragments join with AND, so an unparenthesised OR-group binds as
 // (everything AND first) OR rest — every other filter evaporates and the query goes
 // tenant-wide with a plausible-looking total.
+//
+// AUDIT-11-09 added a third fold-in arm, so the walk runs over every combination of
+// resolved lists: an arm appended after the closing paren is invisible to a case whose
+// list is nil, and the number arm is the one most recently added outside that guard.
 func TestAuditFilter_SearchFragmentIsParenthesised(t *testing.T) {
 	f := audit.Filter{
 		Limit:   50,
@@ -153,27 +157,45 @@ func TestAuditFilter_SearchFragmentIsParenthesised(t *testing.T) {
 		Events:  []string{"invoice.created"},
 		Company: audit.NamedCompany(uuid.NewString()),
 	}
-	where := fsqlBuild(t, f, []string{uuid.NewString()}, []string{uuid.NewString()})
+	one := func() []string { return []string{uuid.NewString()} }
 
-	or := strings.Index(where, " OR ")
-	if or == -1 {
-		t.Fatalf("where = %q, want a search fragment containing OR", where)
-	}
-	// Every OR in the built predicate must sit inside a parenthesised group: walk the
-	// text and require depth > 0 at each OR.
-	depth := 0
-	for i := 0; i < len(where); i++ {
-		switch where[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-		case 'O':
-			if strings.HasPrefix(where[i:], "OR ") && i > 0 && where[i-1] == ' ' && depth == 0 {
-				t.Errorf("where = %q has an OR at paren depth 0 (offset %d) — it will swallow every "+
-					"other filter", where, i)
+	for _, tc := range []struct {
+		label                         string
+		subjects, companies, invoices []string
+	}{
+		{"no fold-in resolves", nil, nil, nil},
+		{"subjects only", one(), nil, nil},
+		{"companies only", nil, one(), nil},
+		{"invoices only", nil, nil, one()},
+		{"all three fold-ins", one(), one(), one()},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			where := fsqlBuild(t, f, tc.subjects, tc.companies, tc.invoices)
+
+			or := strings.Index(where, " OR ")
+			if or == -1 {
+				t.Fatalf("where = %q, want a search fragment containing OR", where)
 			}
-		}
+			if len(tc.invoices) > 0 && !strings.Contains(where, "a.invoice_id = ANY(") {
+				t.Fatalf("where = %q carries no number arm, so this case cannot make its claim", where)
+			}
+			// Every OR in the built predicate must sit inside a parenthesised group: walk the
+			// text and require depth > 0 at each OR.
+			depth := 0
+			for i := 0; i < len(where); i++ {
+				switch where[i] {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				case 'O':
+					if strings.HasPrefix(where[i:], "OR ") && i > 0 && where[i-1] == ' ' && depth == 0 {
+						t.Errorf("where = %q has an OR at paren depth 0 (offset %d) — it will swallow every "+
+							"other filter", where, i)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -181,7 +203,7 @@ func TestAuditFilter_SearchFragmentIsParenthesised(t *testing.T) {
 // must emit no text at all, not a guarded "$1 IS NULL OR ..." form. The guarded form is
 // what stops the cursor's row-value comparison folding into the Index Cond.
 func TestAuditFilter_EmptyFilterEmitsNoPredicate(t *testing.T) {
-	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50}, nil, nil)
+	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("FilterSQLForTest: %v", err)
 	}
@@ -202,7 +224,7 @@ func TestAuditFilter_EmptyFilterEmitsNoPredicate(t *testing.T) {
 // claim is about the SCOPED predicate alone — do not weaken it to accommodate search.
 func TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression(t *testing.T) {
 	invoice := uuid.NewString()
-	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, InvoiceID: invoice}, nil, nil)
+	where, args, err := audit.FilterSQLForTest(audit.Filter{Limit: 50, InvoiceID: invoice}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("FilterSQLForTest: %v", err)
 	}
@@ -235,11 +257,50 @@ func TestAuditFilter_ScopedPredicateTouchesNoPayloadExpression(t *testing.T) {
 // predicate set. It is a position, not a filter: total is built from these predicates and
 // must not shrink as the caller pages.
 func TestAuditFilter_CursorIsNeverPartOfThePredicates(t *testing.T) {
-	where := fsqlBuild(t, audit.Filter{Limit: 50, Cursor: &audit.Cursor{ID: 42}}, nil, nil)
+	where := fsqlBuild(t, audit.Filter{Limit: 50, Cursor: &audit.Cursor{ID: 42}}, nil, nil, nil)
 	for _, forbidden := range []string{"created_at, a.id", "a.id) <", "ROW("} {
 		if strings.Contains(where, forbidden) {
 			t.Errorf("where = %q contains the cursor fragment %q; the cursor belongs to the page "+
 				"statement alone, or total counts only the rows after it", where, forbidden)
+		}
+	}
+}
+
+// --- AUDIT-11-09: the number leaves the generic arm ----------------------------------------
+
+// TestAuditFilter_GenericValueArmSkipsTheNumberKey is AUDIT-11-09 AC #1. The generic arm
+// walks every payload key, so once the writers record invoice_number it matches the number
+// as an anonymous value — unscoped, and no added arm can fence that because an OR-group
+// only ever widens. The key must leave the generic arm before the resolved arm can fence it.
+func TestAuditFilter_GenericValueArmSkipsTheNumberKey(t *testing.T) {
+	where := fsqlBuild(t, audit.Filter{Limit: 50, Q: "INV-DUP-1"}, nil, nil, nil)
+
+	open := strings.Index(where, "jsonb_each_text(a.payload) kv")
+	if open == -1 {
+		t.Fatalf("where = %q, want the generic value arm; this case cannot make its claim", where)
+	}
+	value := strings.Index(where, "kv.value ILIKE")
+	if value == -1 {
+		t.Fatalf("where = %q, want the generic arm to match payload VALUES", where)
+	}
+
+	// Inside the EXISTS and before the value comparison: an exclusion written anywhere
+	// else is not the generic arm's exclusion.
+	key := strings.Index(where, "kv.key <> 'invoice_number'")
+	if key == -1 {
+		t.Errorf("where = %q, want the generic arm to skip the invoice_number key — without the "+
+			"exclusion the number matches unscoped and AUDIT-11-09's fence is inert", where)
+	} else if key < open || key > value {
+		t.Errorf("where = %q has the invoice_number exclusion outside the jsonb_each_text EXISTS "+
+			"(offsets: EXISTS %d, exclusion %d, value %d)", where, open, key, value)
+	}
+
+	// Keyed, not row-scoped. Dropping the whole row would take note/key/reference with it,
+	// which is TestAuditSearch_OtherSixTargetsUnchanged's behavioural half.
+	for _, forbidden := range []string{"payload ? 'invoice_number'", "jsonb_exists(a.payload, 'invoice_number')"} {
+		if strings.Contains(where, forbidden) {
+			t.Errorf("where = %q contains %q — that excludes the whole ROW, so every other key on "+
+				"an invoice row stops matching", where, forbidden)
 		}
 	}
 }

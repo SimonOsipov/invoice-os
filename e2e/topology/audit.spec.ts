@@ -409,8 +409,9 @@ test.describe('Audit screen', () => {
     await openAudit(page)
     await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
 
-    // A fresh random string cannot appear in any event, payload value, actor name or
-    // company name -- searchFragment's four routes are all substring matches on real data.
+    // A fresh random string cannot appear in any event, payload value, actor name, company
+    // name or invoice number -- searchFragment's five routes are all substring matches on
+    // real data.
     const nonce = crypto.randomUUID()
     await page.getByTestId('audit-search-trigger').click({ timeout: 15_000 })
     const input = page.getByTestId('audit-search-input')

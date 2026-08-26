@@ -420,10 +420,10 @@ One request, all inside **one** `db.WithinRequestTenantTx`:
 | 5 | always — the page, the three facet `GROUP BY`s, the count |
 | +1 | the seam's own membership gate (AUDIT-10), whenever the caller's subject is a uuid. It rides `set_config` in one `pgx.Batch`, so it costs a statement but not a round trip |
 | +1 | `actor.Resolve`, and only when some subject passes its uuid gate. It short-circuits `system` and any non-uuid subject in Go, so a page whose actors are all free text issues no `memberships` query **of its own** — the gate's still runs |
-| +2 | free-text search only — the `memberships` and `business_entities` fold-ins |
+| +3 | free-text search only — the `memberships`, `business_entities` and `invoices` fold-ins. The third resolves a typed invoice number to invoice ids (AUDIT-11) |
 | +1 | the empty probe, and only when `total == 0` |
 
-So 5 to 10, and 6 to 10 for the real HTTP path, where the caller's subject is always a uuid.
+So 5 to 11, and 6 to 11 for the real HTTP path, where the caller's subject is always a uuid.
 Older drafts of this page said "six statements", which is the populated common case with
 resolvable actors, not a constant.
 
@@ -491,16 +491,23 @@ Searching `payload::text` matches JSON **key names**: measured, `q=id` matched 5
 rows, because `id` / `policy_id` / `invoice_id` / `user_id` / `run_id` are keys on nearly every
 row. The same holds for `from`, `to`, `version`, `reason`, `key`, `name` and `steps`.
 
-The shipped form walks `jsonb_each_text` and matches values only. One residual leak remains: the
-three keys carrying nested structure (`fields`, `steps`, `members`) render as JSON text *inside*
-their value, so their inner key names stay matchable — 3 of 27 keys.
+The shipped form walks `jsonb_each_text` and matches values only, and it skips one key outright:
+the generic arm carries `WHERE kv.key <> 'invoice_number'` (`searchFragment`,
+`internal/audit/filter.go`), so the invoice number every writer now records is the one payload
+value this arm deliberately does **not** match. AUDIT-11 resolves a typed number through the
+`invoices` fold-in below instead, where the company fence can reach it; matched generically it
+would stay unscoped, because an OR-group only ever widens. One residual leak remains: the three
+keys carrying nested structure (`fields`, `steps`, `members`) render as JSON text *inside* their
+value, so their inner key names stay matchable. Per §10.7 that leak is stated without a
+key-count denominator: the dev corpus's distinct-key total moves with its test debris.
 
 The values-only form also keeps the keyset short-circuit: the ordered index scan streams and
 `LIMIT` stops it early. The rejected `payload::text ILIKE` shape added a Sort over the whole
 candidate set first.
 
-`q` is exactly four OR-ed arms (`searchFragment`, `internal/audit/filter.go`): the event text,
-the payload **values**, and two fold-ins that resolve a name to ids first. What that covers:
+`q` is exactly five OR-ed arms (`searchFragment`, `internal/audit/filter.go`): the event text,
+the payload **values**, and three fold-in arms that resolve a typed string to ids first — a
+display name, a company name, and an invoice number. What that covers:
 
 | A user types | Matched? | By which arm |
 |---|---|---|
@@ -510,12 +517,12 @@ the payload **values**, and two fold-ins that resolve a name to ids first. What 
 | a company name | yes | `business_entities.name` fold-in -> `a.entity_id = ANY(...)` |
 | a uuid that appears as a payload value — invoice id, document id, policy id | yes | `jsonb_each_text` values |
 | an **actor uuid**, typed in full | **no** | there is no `a.actor ILIKE` arm. It matches only if that same uuid also sits in a payload value |
-| a JSON **key** name — `invoice_id`, `reason`, `version` | **no, by design** | values-only. Residual leak: `fields`, `steps`, `members` render nested JSON inside their value, so their inner keys stay matchable — 3 of 27 keys |
-| an invoice **number** — `INV-2026-0042` | **no** | nothing to match: see §10.12 |
+| a JSON **key** name — `invoice_id`, `reason`, `version` | **no, by design** | values-only. Residual leak: `fields`, `steps`, `members` render nested JSON inside their value, so their inner keys stay matchable |
+| an invoice **number** — `INV-2026-0042` | **yes** | the `invoices` fold-in -> `a.invoice_id = ANY($n::uuid[])`, never the recorded payload value: see §10.12 |
 | `system`, to find system-actored rows | no | use `actor_kind=system`, which is a column predicate |
 
-The two text arms are always emitted and the two fold-in arms are dropped when their lookup
-found nothing, so the OR-group can never collapse to empty and silently widen to the
+The two text arms are always emitted, and each of the three fold-in arms is dropped when its own
+lookup found nothing, so the OR-group can never collapse to empty and silently widen to the
 unfiltered set.
 
 ### 10.9 The cursor is opaque, not tamper-evident
@@ -557,11 +564,38 @@ counts one `begin` and one `commit` across the whole request and holds that.
 `audit_log.id` is a `bigint`. A JSON number above 2^53 loses precision in every JavaScript
 client, so `Query` formats it with `strconv.FormatInt`. Do not "fix" it to a number.
 
-### 10.12 No writer records an invoice NUMBER
+### 10.12 Writers record the invoice NUMBER; the search does not read it
 
-Free-text search can match an invoice's *id*, because that is what payloads carry. It cannot
-match `INV-2026-0042`, because no writer puts the human-facing number in an audit payload. A
-reader that offers a search box should not promise otherwise.
+Every invoice-scoped writer puts `invoice_number` in its audit payload (AUDIT-11), alongside the
+invoice *id* payloads already carried. That is what makes an audit row self-describing: an
+expanded row can name the invoice it is about without a second lookup, and it names it as the
+invoice was named when the row was written.
+
+Free-text search does **not** reach the row that way. The generic payload arm excludes
+`invoice_number` (§10.8), and a typed number is resolved through the live `invoices` table into
+`a.invoice_id = ANY(...)` instead, so the match is fenced by the caller's company exactly like
+every other scoped read.
+
+The consequence is that the recorded key renders **then** while the search renders **now**. A
+renamed invoice strands the rows carrying its old number — the new number finds them, the old one
+does not — and a deleted invoice cannot be resolved at all, so its rows stop being findable by
+number even though their payloads still carry it. No production path renames an invoice number
+today (D-15), so this is latent rather than observed. The recorded key's role is display and
+provenance, not search.
+
+### 10.13 The write side: the writer set is enumerated, not hand-maintained
+
+An invoice-scoped writer records `invoice_number` in its payload (above), beside whichever id
+key it already carried. Which writers count as invoice-scoped is not a second list someone has
+to keep in sync — it is **enumerated** by the same expression that backs `audit_log.invoice_id`
+(§11): the 17 events its generated column dispatches on are the entire set, no more and no
+fewer. A writer for an event outside that set has nothing to enumerate against, because it is
+not invoice-scoped by definition.
+
+`TestRLS_EveryInvoiceScopedWriterCarriesTheNumber`
+(`internal/platform/db/audit_number_scan_test.go`) is the scan that keeps this true: it derives
+the 17-event set from the migration itself, walks every `audit.Record` call site under `cmd/`
+and `internal/`, and fails if a literal-event writer inside that set is missing the key.
 
 ## 11. The invoice-scoped read reaches 17 of the 36 event types
 

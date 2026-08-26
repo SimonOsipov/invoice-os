@@ -24,7 +24,7 @@ var fctsqlNames = []string{"event", "actor", "company"}
 // fctsqlBuild renders the three facet statements, failing on an unexpected error.
 func fctsqlBuild(t *testing.T, f audit.Filter) []string {
 	t.Helper()
-	got, err := audit.FacetSQLForTest(f, nil, nil)
+	got, err := audit.FacetSQLForTest(f, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("FacetSQLForTest: unexpected error %v", err)
 	}
@@ -155,7 +155,7 @@ func TestAuditFacetSQL_NoCursorReachesAFacet(t *testing.T) {
 // reaching the facets: an unrecognised kind must error rather than degrade to "no filter"
 // on three more statements.
 func TestAuditFacetSQL_UnknownActorKindIsRefused(t *testing.T) {
-	if _, err := audit.FacetSQLForTest(audit.Filter{Limit: 50, ActorKind: "robot"}, nil, nil); err == nil {
+	if _, err := audit.FacetSQLForTest(audit.Filter{Limit: 50, ActorKind: "robot"}, nil, nil, nil); err == nil {
 		t.Error("an unknown actor kind was accepted by the facet builder, want an error")
 	}
 }

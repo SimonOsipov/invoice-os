@@ -615,13 +615,27 @@ type testInvoicePort struct {
 	buyerTIN string
 }
 
+// InvoiceNumber is read off the row, mirroring the real *invoice.Store.Canonical, which
+// projects invoices.invoice_number. A double that returned "" here would freeze a blank into
+// an immutable audit_log row on every SubmitWorker branch (AUDIT-11-03).
 func (t testInvoicePort) Canonical(ctx context.Context, tx pgx.Tx, invoiceID string) (submission.Canonical, error) {
 	c := submission.Canonical{InvoiceID: invoiceID}
+	if err := tx.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, invoiceID).Scan(&c.InvoiceNumber); err != nil {
+		return submission.Canonical{}, err
+	}
 	if t.buyerTIN != "" {
 		tin := t.buyerTIN
 		c.Buyer = submission.Party{TIN: &tin}
 	}
 	return c, nil
+}
+
+// Number mirrors the real *invoice.Store.Number. anCountingInvoicePort and
+// anFailingNumberPort (audit_number_test.go) embed this double and override it.
+func (testInvoicePort) Number(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error) {
+	var number string
+	err := tx.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, invoiceID).Scan(&number)
+	return number, err
 }
 
 func (testInvoicePort) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error) {
@@ -1462,7 +1476,7 @@ func TestSubmitWorker_AdapterNotCalledUnderTransaction(t *testing.T) {
 // Three MarkFailed call sites currently ALL pass the same placeholder FailurePayloadNotBuilt:
 // worker.go:223 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)],
 // worker.go:319 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)], and
-// worker.go:536 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]. These specs pin
+// worker.go:551 [MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, kind)]. These specs pin
 // each site to its own distinct, provable kind -- see task-385's Implementation Plan for the
 // site-by-site justification.
 
@@ -1592,7 +1606,7 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 	}
 	kind2 := wiRead(t, f, tenantID2, invoiceID2).failureKind
 
-	// Path 3: submit to Pending, then poll dead-letter (worker.go:523 [job.Attempt >= job.MaxAttempts]).
+	// Path 3: submit to Pending, then poll dead-letter (worker.go:533 [job.Attempt >= job.MaxAttempts]).
 	tenantID3, invoiceID3, cleanup3 := seedQueuedInvoice(t, f)
 	defer cleanup3()
 	future := time.Now().Add(time.Hour)
@@ -1693,11 +1707,11 @@ func TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError(t *tes
 // failureAuditWantKeys is the strict summary key set recordFailureAudit writes. Shared by
 // the two payload cases so a key added at one site but not the other cannot pass.
 var failureAuditWantKeys = map[string]bool{
-	"invoice_id": true, "submission_job_id": true, "outcome": true, "failure_kind": true,
+	"invoice_id": true, "invoice_number": true, "submission_job_id": true, "outcome": true, "failure_kind": true,
 }
 
 // assertFailureAuditPayload checks the one submission.failed row's payload is exactly the
-// four summary keys, carries the wanted kind, and names the job's OWN submission_jobs.id --
+// five summary keys, carries the wanted kind, and names the job's OWN submission_jobs.id --
 // not River's int64 job id, and not some other job's uuid.
 func assertFailureAuditPayload(t *testing.T, f *effectsFixture, tenantID, invoiceID, jobID, wantKind string) {
 	t.Helper()
@@ -1706,7 +1720,7 @@ func assertFailureAuditPayload(t *testing.T, f *effectsFixture, tenantID, invoic
 		t.Fatalf("submission.failed payload decoded to %d keys -- an empty payload makes every check below vacuous", len(payload))
 	}
 	if len(payload) != len(failureAuditWantKeys) {
-		t.Errorf("submission.failed payload has %d keys (%v), want exactly the 4 in %v -- "+
+		t.Errorf("submission.failed payload has %d keys (%v), want exactly the 5 in %v -- "+
 			"last_error or any wire detail would show up as an extra key here", len(payload), payload, failureAuditWantKeys)
 	}
 	for k := range payload {

@@ -143,8 +143,10 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 	// and decimal's Scan errors on it, which would roll back the caller's promotion. An
 	// unparseable total reads as absent, which evalCondition folds to zero.
 	var totalText *string
+	var invoiceNumber string
 	if err := tx.QueryRow(ctx,
-		`SELECT total::text FROM invoices WHERE id = $1`, invoiceID).Scan(&totalText); err != nil {
+		`SELECT total::text, invoice_number FROM invoices WHERE id = $1`, invoiceID,
+	).Scan(&totalText, &invoiceNumber); err != nil {
 		return ArmResult{}, err
 	}
 	var total *decimal.Decimal
@@ -241,6 +243,7 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 		"run_id":            runID,
 		"policy_version_id": versionID,
 		"steps":             len(steps),
+		"invoice_number":    invoiceNumber,
 	}); err != nil {
 		return ArmResult{}, err
 	}
@@ -258,7 +261,11 @@ func ArmTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID, fingerprint, act
 // A 'rejected' run is deliberately NOT cancelled: it cannot satisfy APPR-08's gate,
 // re-arming beside one is legal, and rewriting a refusal as a cancellation would destroy
 // the evidence APPR-07 reads. Errors propagate RAW, matching ArmTx.
-func CancelLiveRunTx(ctx context.Context, tx pgx.Tx, invoiceID, actor string) (bool, error) {
+//
+// invoiceNumber is a parameter, not a lookup: every caller already holds a hydrated
+// invoice and this runs once per demotion on the request path
+// (TestAuditNumber_CancelTakesTheNumberFromItsCaller).
+func CancelLiveRunTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, actor string) (bool, error) {
 	// COALESCE, not plain assignment: an open run has both columns NULL so this IS plain
 	// assignment, while an already-closed 'approved' run keeps who closed it and when —
 	// the cancellation itself is what the audit row records.
@@ -298,8 +305,9 @@ func CancelLiveRunTx(ctx context.Context, tx pgx.Tx, invoiceID, actor string) (b
 
 	for _, runID := range runIDs {
 		if err := audit.Record(ctx, tx, actor, "invoice.approval_cancelled", map[string]any{
-			"id":     invoiceID,
-			"run_id": runID,
+			"id":             invoiceID,
+			"run_id":         runID,
+			"invoice_number": invoiceNumber,
 		}); err != nil {
 			return false, err
 		}

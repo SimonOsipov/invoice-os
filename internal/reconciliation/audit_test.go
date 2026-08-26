@@ -160,16 +160,26 @@ func TestRLS_AuditPayloadSummaryOnly(t *testing.T) {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
 	if len(body) == 0 {
-		t.Fatal("payload is empty {} — want invoice_id/submission_job_id/drift_kind/action " +
+		t.Fatal("payload is empty {} — want invoice_id/invoice_number/submission_job_id/drift_kind/action " +
 			"populated; an empty payload would trivially (and vacuously) satisfy the key-set " +
 			"check below without proving anything was actually written")
 	}
 
-	allowed := map[string]bool{"invoice_id": true, "submission_job_id": true, "drift_kind": true, "action": true}
+	allowed := map[string]bool{
+		"invoice_id": true, "invoice_number": true, "submission_job_id": true,
+		"drift_kind": true, "action": true,
+	}
 	for k := range body {
 		if !allowed[k] {
 			t.Errorf("payload key %q is not in the summary-only allowlist "+
-				"{invoice_id, submission_job_id, drift_kind, action} — no wire bodies", k)
+				"{invoice_id, invoice_number, submission_job_id, drift_kind, action} — no wire bodies", k)
+		}
+	}
+	// The allowlist alone is one-directional: it cannot see an omitted key.
+	for k := range allowed {
+		if _, ok := body[k]; !ok {
+			t.Errorf("payload = %+v, want key %q present — this fixture's finding carries a "+
+				"submission_jobs row and is healable, so every allowlisted key is owed", body, k)
 		}
 	}
 }
@@ -241,13 +251,16 @@ func TestRLS_ApprovalDriftAuditsWritten(t *testing.T) {
 		if err := json.Unmarshal(payload, &body); err != nil {
 			t.Fatalf("unmarshal payload: %v", err)
 		}
-		if len(body) != 2 {
-			t.Errorf("payload = %+v, want exactly {invoice_id, drift_kind} (submission_job_id "+
-				"absent, action absent)", body)
+		if len(body) != 3 {
+			t.Errorf("payload = %+v, want exactly {invoice_id, invoice_number, drift_kind} "+
+				"(submission_job_id absent, action absent)", body)
 			continue
 		}
 		if _, ok := body["invoice_id"]; !ok {
 			t.Errorf("payload = %+v, want invoice_id present", body)
+		}
+		if got, _ := body["invoice_number"].(string); got == "" {
+			t.Errorf("payload = %+v, want invoice_number present and non-blank", body)
 		}
 		if _, ok := body["drift_kind"]; !ok {
 			t.Errorf("payload = %+v, want drift_kind present", body)

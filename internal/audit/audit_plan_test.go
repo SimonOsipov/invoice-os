@@ -1066,3 +1066,103 @@ func TestAudit_RowsExaminedCountsBothSurvivedAndRemovedRows(t *testing.T) {
 			"summed across every line the audit_log node attributes to itself", got, want)
 	}
 }
+
+// --- AUDIT-11-07: the corpus payloads, and the number search ----------------------------
+//
+// D-22: every pin in this file is evidence about a 20-tenant x 1,000-row synthetic corpus
+// and nothing else. Postgres picks a scan strategy from table-wide reltuples/relpages/
+// pg_stats, all computed before RLS filters anything, and audit_log grows without bound by
+// design -- its production row count has never been probed. Read a green pin as "the plan
+// is the one this corpus was designed for", never as a production guarantee.
+
+// planNumberedEvents are the arms of planEventMix whose payload names an invoice. The insert
+// trigger resolves invoice_id from exactly these, so they are the rows a number can reach.
+var planNumberedEvents = []string{
+	"invoice.created",
+	"invoice.updated",
+	"invoice.validated",
+	"invoice.transitioned",
+	"submission.accepted",
+	"invoice.approval_approved",
+}
+
+// TestAudit_PlanCorpusCarriesAnInvoiceNumber is the floor under every pin below it. Before
+// AUDIT-11-01 the corpus payloads carried an id and nothing else, so a search for a number
+// matched nothing through any arm and a pin phrased against one would be vacuous.
+func TestAudit_PlanCorpusCarriesAnInvoiceNumber(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+
+	withKey := map[string]int{}
+	total := map[string]int{}
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		rows, e := tx.Query(ctx, `
+			SELECT event, count(*) FILTER (WHERE payload ? 'invoice_number'), count(*)
+			  FROM audit_log WHERE tenant_id = $1 GROUP BY event`, p.tenant)
+		if e != nil {
+			return e
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ev string
+			var n, all int
+			if e := rows.Scan(&ev, &n, &all); e != nil {
+				return e
+			}
+			withKey[ev] = n
+			total[ev] = all
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("count payloads carrying invoice_number: %v", err)
+	}
+
+	numbered := map[string]bool{}
+	for _, ev := range planNumberedEvents {
+		numbered[ev] = true
+		if total[ev] == 0 {
+			t.Fatalf("the corpus holds no %s rows at all, so its payload shape proves nothing", ev)
+		}
+		if withKey[ev] != total[ev] {
+			t.Errorf("%s: %d of %d rows carry invoice_number, want all of them", ev, withKey[ev], total[ev])
+		}
+	}
+	for _, m := range planEventMix {
+		if numbered[m.event] {
+			continue
+		}
+		if withKey[m.event] != 0 {
+			t.Errorf("%s is workspace-level but %d of its rows carry invoice_number; the mix "+
+				"must leave those payloads unnumbered", m.event, withKey[m.event])
+		}
+	}
+}
+
+// TestAudit_PlanCorpusNumberMatchesTheResolvedInvoice stops the widening from writing a
+// constant. A constant would leave every pin below green while the number in the payload
+// named a different invoice than the row's own invoice_id.
+func TestAudit_PlanCorpusNumberMatchesTheResolvedInvoice(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+
+	var joined, disagree int
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*),
+			       count(*) FILTER (WHERE a.payload->>'invoice_number' IS DISTINCT FROM i.invoice_number)
+			  FROM audit_log a JOIN invoices i ON i.id = a.invoice_id
+			 WHERE a.tenant_id = $1 AND a.payload ? 'invoice_number'`, p.tenant).
+			Scan(&joined, &disagree)
+	}); err != nil {
+		t.Fatalf("join corpus payloads to invoices: %v", err)
+	}
+
+	if joined == 0 {
+		t.Fatalf("no corpus row joins an invoice through invoice_id while carrying a number, " +
+			"so the agreement check proves nothing")
+	}
+	if disagree != 0 {
+		t.Errorf("%d of %d numbered rows name an invoice_number that is not their own "+
+			"invoice_id's; payload and column must agree", disagree, joined)
+	}
+}

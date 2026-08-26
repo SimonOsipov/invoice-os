@@ -16,21 +16,33 @@ describe('AUDIT_COPY.searchHelper', () => {
   })
 
   it('auditCopy_doesNotClaimOlderEventsAreUnsearchableByNumber', () => {
-    // Guards the disproved cutover class, not one byte string: "recorded/searchable from
-    // <date> onward", "events before/logged before then", "older events ... other details
-    // only" all express the same false claim CF-40 forbids.
-    const cutoverClaim = /(before|prior to|onward|from).{0,40}(search|find|number)|only.{0,20}other details/i
-    expect(AUDIT_COPY.searchHelper, 'must not re-introduce the disproved cutover sentence').not.toMatch(cutoverClaim)
+    // Two failure classes reintroduce the false belief CF-40 forbids: an explicit
+    // exclusion ("other details only") and a reliability hedge ("older ... less
+    // reliably matched"). Scoped so "before the number was recorded" (temporal
+    // narration, not an exclusion claim) does not trip it.
+    const cutoverExclusion = /other details.{0,20}only|only.{0,20}other details/i
+    const reliabilityHedge =
+      /(older|earlier|past|historical).{0,40}(less reliably|less likely|not always|may not|might not|harder to find|inconsistently|unreliably|not as reliably|worse matched)/i
+    expect(AUDIT_COPY.searchHelper, 'must not claim older events are excluded from number search').not.toMatch(
+      cutoverExclusion,
+    )
+    expect(AUDIT_COPY.searchHelper, 'must not hedge that older events are less reliably matched').not.toMatch(
+      reliabilityHedge,
+    )
   })
 
   it('auditCopy_statesTheDisplayGapNotASearchCutover', () => {
-    // A bare "it can find an invoice number" leaves the found-but-not-shown asymmetry
-    // looking like a bug -- the helper must account for older rows not listing the number.
-    expect(AUDIT_COPY.searchHelper, 'must state invoice numbers are searchable').toMatch(/invoice number/i)
+    // Both properties must hold in the SAME sentence -- otherwise "invoice numbers"
+    // in one clause and the gap explanation in an unrelated one satisfy this by
+    // coincidence (proved by a mutation that drops the number from the search-term
+    // sentence and keeps it only in the unrelated features list).
     const explainsTheGap = /older|earlier|do not list|does not list|own details|not (?:show|shown|listed) in/i
-    expect(AUDIT_COPY.searchHelper, 'must explain older rows lack the number in their own details').toMatch(
-      explainsTheGap,
-    )
+    const sentences = AUDIT_COPY.searchHelper.split(/(?<=[.!?])\s+/).map((s) => s.trim())
+    const gapSentence = sentences.find((s) => /invoice number/i.test(s) && explainsTheGap.test(s))
+    expect(
+      gapSentence,
+      'one sentence must state the invoice number is searchable AND explain older rows lack it in their own details',
+    ).toBeDefined()
   })
 
   it('auditCopy_stillDeniesEmailActorSearch', () => {

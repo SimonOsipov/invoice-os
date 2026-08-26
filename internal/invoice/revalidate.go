@@ -83,6 +83,7 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 		"rule_set_version_id": ruleSetVersionID,
 		"outcome":             "demoted",
 		"violation_count":     len(vs),
+		"invoice_number":      inv.InvoiceNumber,
 	}); err != nil {
 		return Invoice{}, err
 	}

@@ -266,7 +266,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			return err
 		}
 
-		return audit.Record(ctx, tx, id.Subject, "invoice.created", map[string]any{"id": inv.ID})
+		return audit.Record(ctx, tx, id.Subject, "invoice.created", map[string]any{
+			"id":             inv.ID,
+			"invoice_number": inv.InvoiceNumber,
+		})
 	})
 	if err != nil {
 		return Invoice{}, err
@@ -944,8 +947,9 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
-			"id":     inv.ID,
-			"fields": changedFields,
+			"id":             inv.ID,
+			"fields":         changedFields,
+			"invoice_number": inv.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -1368,9 +1372,11 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 		if in.LineItems != nil {
 			fields = append(append([]string{}, changed...), "line_items")
 		}
+		// invoice_number is immutable, so before and after agree.
 		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
-			"id":     id,
-			"fields": fields,
+			"id":             id,
+			"fields":         fields,
+			"invoice_number": before.InvoiceNumber,
 		}); err != nil {
 			return err
 		}
@@ -1850,9 +1856,10 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	}
 
 	if err := audit.Record(ctx, tx, actor.Subject, "invoice.transitioned", map[string]any{
-		"id":   id,
-		"from": current,
-		"to":   target,
+		"id":             id,
+		"from":           current,
+		"to":             target,
+		"invoice_number": inv.InvoiceNumber,
 	}); err != nil {
 		return Invoice{}, err
 	}
@@ -2032,6 +2039,7 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			"rule_set_version_id": ruleSetVersionID,
 			"outcome":             outcome,
 			"violation_count":     len(vs),
+			"invoice_number":      locked.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -2103,8 +2111,9 @@ func (s *Store) KeepAsIs(ctx context.Context, id, reason string) (Invoice, error
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.kept_as_is", map[string]any{
-			"id":     id,
-			"reason": reason,
+			"id":             id,
+			"reason":         reason,
+			"invoice_number": inv.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -2152,7 +2161,10 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 			return err
 		}
 
-		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{"id": id})
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{
+			"id":             id,
+			"invoice_number": inv.InvoiceNumber,
+		})
 	})
 	if err != nil {
 		return Invoice{}, err
@@ -2208,8 +2220,9 @@ func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice,
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.resolved_outside", map[string]any{
-			"id":     id,
-			"reason": reason,
+			"id":             id,
+			"reason":         reason,
+			"invoice_number": inv.InvoiceNumber,
 		})
 	})
 	if err != nil {
@@ -2264,7 +2277,10 @@ func (s *Store) UnresolveOutside(ctx context.Context, id string) (Invoice, error
 			return err
 		}
 
-		return audit.Record(ctx, tx, callerID.Subject, "invoice.unresolved_outside", map[string]any{"id": id})
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unresolved_outside", map[string]any{
+			"id":             id,
+			"invoice_number": inv.InvoiceNumber,
+		})
 	})
 	if err != nil {
 		return Invoice{}, err

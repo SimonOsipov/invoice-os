@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
+import { NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
+
 function repoFile(rel: string): string {
   return readFileSync(fileURLToPath(new URL(`../../../../${rel}`, import.meta.url)), 'utf8')
 }
@@ -78,6 +80,42 @@ const WIRE_MIRRORS = [
   },
 ] as const
 
+// AUDIT-10-07 — the message mirror.
+//
+// WIRE_MIRRORS above compares KEY SETS between a Go struct and its TypeScript twins. This
+// compares a LITERAL: db.NotActiveMemberMessage is the 403 body every gated handler returns,
+// and `isSuspended` matches on it, not on the bare status. Nothing links the two at compile
+// time, and Go's own TestHandlerMappingMessageIsNeverRetyped walks internal/, cmd/ and tools/
+// only — it cannot see either TypeScript copy.
+//
+// Two extracted legs, not one: e2e/api/suspension.spec.ts transcribes the same sentence for
+// its deployed-wire assertion, so a reword in Go would leave that spec passing against a
+// message the server no longer sends.
+
+// Refuses to match a literal containing ANY backslash escape: an escaped literal yields ''
+// and trips the non-vacuity row rather than being silently half-read.
+function goStringConst(source: string, name: string): string {
+  return new RegExp(`\\bconst\\s+${name}\\s*=\\s*"([^"\\\\]*)"`).exec(source)?.[1] ?? ''
+}
+
+// Same refusal, single-quoted — the e2e transcription's form.
+function tsStringConst(source: string, name: string): string {
+  return new RegExp(`\\bconst\\s+${name}\\s*=\\s*'([^'\\\\]*)'`).exec(source)?.[1] ?? ''
+}
+
+// Each anchor is a symbol OTHER than the constant being extracted, same reason as above.
+const MESSAGE_MIRRORS = [
+  {
+    go: 'NotActiveMemberMessage',
+    goPath: 'internal/platform/db/tenant.go',
+    goAnchor: 'func WithinRequestTenantTxOpts(',
+    spa: NOT_ACTIVE_MEMBER_MESSAGE,
+    e2e: 'NOT_ACTIVE_MESSAGE',
+    e2ePath: 'e2e/api/suspension.spec.ts',
+    e2eAnchor: 'setMembershipStatus',
+  },
+] as const
+
 describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
   it('wireMirrors_controlNeedleEverySourceFileWasActuallyRead', () => {
     const e2e = repoFile(E2E_CLIENT)
@@ -140,8 +178,11 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
   })
 
   it('wireMirrors_tableIsNonVacuous', () => {
-    // A cleared table would let all three loops above pass on zero iterations.
+    // The registry of what this file checks. A cleared table would let every loop here pass
+    // on zero iterations, so each table is named — a new mirror that skips this row is a
+    // mirror nothing runs.
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual(['StatusChange', 'AuditEvent'])
+    expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
 
   it('wireMirrors_theApprovalRunMirrorStillLivesInApprovalsTest', () => {
@@ -151,5 +192,66 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(src, 'the scan read the wrong file').toContain('function goStructKeys')
     expect(src).toContain('wire mirror: Go read_model.go <-> lib/approvals.ts <-> e2e/api/client.ts')
     expect(src, 'ApprovalRun lost its row in WIRE_STRUCTS').toContain("{ go: 'Run', ts: 'ApprovalRun'")
+  })
+})
+
+describe('wire mirror: db.NotActiveMemberMessage <-> the SPA <-> e2e/api/suspension.spec.ts (AUDIT-10-07)', () => {
+  it('messageMirror_controlNeedleEverySourceFileWasActuallyRead', () => {
+    for (const m of MESSAGE_MIRRORS) {
+      expect(repoFile(m.goPath), `lost anchor on ${m.goPath}`).toContain(m.goAnchor)
+      expect(repoFile(m.e2ePath), `lost anchor on ${m.e2ePath}`).toContain(m.e2eAnchor)
+    }
+  })
+
+  it('messageMirror_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
+    // Zero hits must never read as agreement: '' === '' would pass the equality row below.
+    for (const m of MESSAGE_MIRRORS) {
+      expect(
+        goStringConst(repoFile(m.goPath), m.go),
+        `extracted nothing for Go const ${m.go} — the declaration moved, was renamed, or grew an escape`,
+      ).not.toBe('')
+      expect(
+        tsStringConst(repoFile(m.e2ePath), m.e2e),
+        `extracted nothing for ${m.e2ePath}'s ${m.e2e}`,
+      ).not.toBe('')
+      expect(m.spa, 'the SPA constant is empty').not.toBe('')
+    }
+  })
+
+  it('messageMirror_theGoLiteralEqualsBothTypeScriptCopies', () => {
+    for (const m of MESSAGE_MIRRORS) {
+      const goValue = goStringConst(repoFile(m.goPath), m.go)
+
+      expect(m.spa, 'isSuspended would stop matching the wire body').toBe(goValue)
+      expect(
+        tsStringConst(repoFile(m.e2ePath), m.e2e),
+        'the deployed-wire assertion would pass against a message the server no longer sends',
+      ).toBe(goValue)
+    }
+  })
+
+  it('messageMirror_plantedPositiveTheExtractorsCanReportARealMismatch', () => {
+    // Synthetic, in-memory only.
+    const goFixture = 'package db\n\nconst Msg = "the original sentence"\n'
+    const tsFixture = "const MSG = 'a reworded sentence'\n"
+
+    expect(goStringConst(goFixture, 'Msg')).toBe('the original sentence')
+    expect(tsStringConst(tsFixture, 'MSG')).toBe('a reworded sentence')
+    expect(goStringConst(goFixture, 'Msg')).not.toBe(tsStringConst(tsFixture, 'MSG'))
+
+    // A renamed or escaped declaration yields '', which the non-vacuity row rejects.
+    expect(goStringConst(goFixture, 'Absent')).toBe('')
+    expect(goStringConst('const Msg = "has an \\" escape"', 'Msg')).toBe('')
+    expect(tsStringConst(tsFixture, 'ABSENT')).toBe('')
+  })
+
+  it('messageMirror_theGoCommentStillPointsHere', () => {
+    // internal/platform/db/tenant.go's comment claimed this mirror before it existed
+    // (AUDIT-10-04 reworded it to name the owner). A claim about a guard has to be
+    // checkable, or the next reader trusts it and skips writing the guard.
+    const src = repoFile('internal/platform/db/tenant.go')
+    expect(src, 'tenant.go stopped naming the file that pins its message').toContain(
+      'frontend/app/src/lib/wireMirrors.test.ts',
+    )
   })
 })

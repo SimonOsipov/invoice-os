@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
-import { createAuthedFetch, isUnauthorized } from './authedFetch'
+import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch, isSuspended, isUnauthorized, makeAuthedFetch } from './authedFetch'
 import { SESSION_KEY, clearSession, loadSession, saveSession } from './session'
 
 interface MockResponse {
@@ -240,5 +240,121 @@ describe('authedFetch: edge cases beyond the happy path', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(401)
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// AUDIT-10-07 — the suspension seam, mirroring the 401 seam above.
+//
+// The discriminator is the MESSAGE, never the bare 403: ErrNoMembership and ErrNotPermitted
+// are also 403, and a predicate that matched on status alone would tell an unauthorized
+// preparer their membership was suspended.
+describe('isSuspended matches only the seam refusal (AC-1)', () => {
+  const envelope = (error: string) => new ApiError('http', error, 403, { error })
+
+  const table: Array<{ label: string; error: unknown; want: boolean }> = [
+    { label: '403 carrying the seam message', error: envelope(NOT_ACTIVE_MEMBER_MESSAGE), want: true },
+    { label: '403 carrying "no membership"', error: envelope('no membership in this tenant'), want: false },
+    { label: '403 carrying "not permitted"', error: envelope('not permitted'), want: false },
+    { label: '401 carrying the seam message', error: new ApiError('http', NOT_ACTIVE_MEMBER_MESSAGE, 401, { error: NOT_ACTIVE_MEMBER_MESSAGE }), want: false },
+    { label: 'a network error', error: new ApiError('network', 'network error', null), want: false },
+    { label: 'a malformed-body error', error: new ApiError('malformed', 'malformed response body', 403), want: false },
+    { label: 'a 403 whose body never parsed', error: new ApiError('http', 'Forbidden', 403), want: false },
+    { label: 'a 403 whose message matches but whose body does not', error: new ApiError('http', NOT_ACTIVE_MEMBER_MESSAGE, 403, { error: 'something else' }), want: false },
+    { label: 'a plain Error', error: new Error(NOT_ACTIVE_MEMBER_MESSAGE), want: false },
+    { label: 'undefined', error: undefined, want: false },
+  ]
+
+  for (const row of table) {
+    it(`S1: ${row.label} -> ${row.want}`, () => {
+      expect(isSuspended(row.error)).toBe(row.want)
+    })
+  }
+})
+
+describe('authedFetch suspension seam (AC-2, AC-3)', () => {
+  const suspendedBody = { error: NOT_ACTIVE_MEMBER_MESSAGE }
+
+  it('S2: calls onSuspended exactly once and still rethrows the ApiError', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve(suspendedBody) })
+    const onSuspended = vi.fn()
+    const af = createAuthedFetch(() => 'tok', vi.fn(), onSuspended)
+
+    const err = await captureRejection(() => af('/x'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+    expect((err as ApiError).body).toEqual(suspendedBody)
+    expect(onSuspended).toHaveBeenCalledTimes(1)
+  })
+
+  it('S3: a 403 never signs the user out', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve(suspendedBody) })
+    const onUnauthorized = vi.fn()
+    const onSuspended = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized, onSuspended)
+
+    await captureRejection(() => af('/x'))
+
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('S4: a 401 never fires onSuspended', async () => {
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'not authenticated' }) })
+    const onUnauthorized = vi.fn()
+    const onSuspended = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized, onSuspended)
+
+    await captureRejection(() => af('/x'))
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    expect(onSuspended).not.toHaveBeenCalled()
+  })
+
+  it('S5: a 403 that is NOT the seam refusal fires neither callback', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: 'not permitted' }) })
+    const onUnauthorized = vi.fn()
+    const onSuspended = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized, onSuspended)
+
+    await captureRejection(() => af('/x'))
+
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect(onSuspended).not.toHaveBeenCalled()
+  })
+
+  it('S6: onSuspended fires once PER suspended response, not once per fetch instance', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve(suspendedBody) })
+    const onSuspended = vi.fn()
+    const af = createAuthedFetch(() => 'tok', vi.fn(), onSuspended)
+
+    await captureRejection(() => af('/x'))
+    await captureRejection(() => af('/y'))
+
+    expect(onSuspended).toHaveBeenCalledTimes(2)
+  })
+
+  it('S7: an omitted onSuspended leaves the 401 seam and the rethrow intact', async () => {
+    // The parameter is optional so the ~30 ctx-fixture call sites stay two-argument. A
+    // construction site that forgets it must degrade to today's behaviour, never throw.
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve(suspendedBody) })
+    const onUnauthorized = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized)
+
+    const err = await captureRejection(() => af('/x'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+})
+
+describe('makeAuthedFetch forwards onSuspended (AC-2)', () => {
+  it('S8: the third argument reaches the seam through the app-side factory', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: NOT_ACTIVE_MEMBER_MESSAGE }) })
+    const onSuspended = vi.fn()
+    const af = makeAuthedFetch(seededSession(), vi.fn(), onSuspended)
+
+    await captureRejection(() => af('/x'))
+
+    expect(onSuspended).toHaveBeenCalledTimes(1)
   })
 })

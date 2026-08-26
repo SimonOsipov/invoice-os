@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
@@ -1474,8 +1477,12 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     // §8's two bullets, character for character. This is the text a buyer reads to decide
     // whether removing someone destroys their audit trail, and the answer is no — which is
     // a promise the product keeps only if the sentence keeps saying it.
+    // Middle sentence rewritten by AUDIT-10-07: the read-path gate made "Sign-in is not
+    // blocked yet" a promise the product had already kept — a suspended member still signs
+    // in, and now gets a card instead of a workspace. The other two sentences are §8's,
+    // byte for byte.
     expect(SUSPEND_EXPLANATION).toBe(
-      'Removes their approver rights and keeps all history. Sign-in is not blocked yet. Their name stays on every invoice they touched.',
+      'Removes their approver rights and keeps all history. They can still sign in, but the workspace will not open. Their name stays on every invoice they touched.',
     )
     expect(REMOVE_EXPLANATION).toBe(
       'Revokes access permanently. Their name stays on every invoice they touched; audit history is never rewritten.',
@@ -1493,11 +1500,27 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     expect(REMOVE_EXPLANATION).toContain('touched; audit history is never rewritten.')
   })
 
-  // AC8 [suspend-copy-is-true]: suspension only pulls approver rights, it does not block
-  // sign-in — nothing in the auth path reads the status column.
-  it('AC8: SUSPEND_EXPLANATION stops claiming to block sign-in', () => {
+  // AC8 [suspend-copy-is-true], as AUDIT-10-07 left it: sign-in itself is still not blocked
+  // (GET /v1/me is the gate's one exemption), but every tenant-scoped read now refuses, so
+  // "not blocked yet" understated what suspension does.
+  it('AC8: SUSPEND_EXPLANATION says what suspension now does', () => {
     expect(SUSPEND_EXPLANATION).not.toContain('Blocks sign-in')
-    expect(SUSPEND_EXPLANATION).toContain('Sign-in is not blocked yet.')
+    expect(SUSPEND_EXPLANATION).not.toContain('not blocked yet')
+    expect(SUSPEND_EXPLANATION).toContain('They can still sign in, but the workspace will not open.')
+  })
+
+  // AUDIT-10-07. This sentence has FOUR homes: the constant above, its byte-pin at T7.1,
+  // e2e/topology/settingsFixtures.ts's transcription, and roles.spec.ts's assertion against
+  // that transcription. The e2e copy is deliberately transcribed rather than imported (that
+  // package cannot depend on frontend/app/src), so until now a one-sided edit only surfaced
+  // on the deploy gate. It surfaces here instead.
+  it('AC8: e2e/topology/settingsFixtures.ts still transcribes this sentence byte for byte', () => {
+    const src = readFileSync(
+      fileURLToPath(new URL('../../../../e2e/topology/settingsFixtures.ts', import.meta.url)),
+      'utf8',
+    )
+    expect(src, 'the scan read the wrong file').toContain('export const SUSPEND_EXPLANATION')
+    expect(src, 'the e2e transcription drifted from lib/members.ts').toContain(SUSPEND_EXPLANATION)
   })
 
   it('AC8: the shared audit-trail clause survives the rewrite in both explanations', () => {

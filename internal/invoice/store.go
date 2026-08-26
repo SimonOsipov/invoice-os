@@ -1529,10 +1529,9 @@ func callerRoleTx(ctx context.Context, tx pgx.Tx, subject string) (string, error
 	return role, nil
 }
 
-// CallerRole reads the caller's memberships.role, RLS-scoped like
-// tenancy.Store.Me (internal/tenancy/store.go): a thin WithinRequestTenantTx
-// wrapper around callerRoleTx. Exported for the handler layer, which needs
-// the role without a write.
+// CallerRole reads the caller's memberships.role, RLS-scoped: a thin
+// WithinRequestTenantTx wrapper around callerRoleTx. Exported for the handler
+// layer, which needs the role without a write.
 func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	var role string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

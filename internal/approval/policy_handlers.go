@@ -20,7 +20,7 @@ type policiesResponse struct {
 }
 
 // ListPoliciesHandler returns GET /v1/approval-policies. No access-role gate — any
-// caller holding a tenant claim may list.
+// caller the request seam admits may list.
 func ListPoliciesHandler(list PolicyLister, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()

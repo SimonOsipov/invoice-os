@@ -707,7 +707,9 @@ func TestPurgeWitnessAssertionIsSensitiveToTheTenantFilter(t *testing.T) {
 
 // ---- Obligation 4: the replica window is exactly one statement -------------
 
-// stmtTracer records the SQL of every statement pgx sends on a connection.
+// stmtTracer records the SQL of every STANDALONE statement pgx sends on a
+// connection. It is a QueryTracer only, so it sees nothing a SendBatch carries —
+// request_gate_db_test.go's seamTracer is the one that does.
 type stmtTracer struct {
 	mu    sync.Mutex
 	stmts []string

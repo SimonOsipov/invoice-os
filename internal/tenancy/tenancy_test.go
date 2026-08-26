@@ -352,6 +352,44 @@ func TestStoreMe_AnswersForASuspendedMember(t *testing.T) {
 	}
 }
 
+// TestMe_SuspendedMemberStillGets200 (AUDIT-10 AC-5, D-5): the store-level exemption
+// has to reach the wire. MeHandler runs over the REAL Store.Me here --
+// TestStoreMe_AnswersForASuspendedMember stops at the store and TestMe_OKShape uses a
+// fake loader, so neither sees a gated Me turn into a non-200.
+func TestMe_SuspendedMemberStillGets200(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	const tenantName = "tenancy me-handler suspended firm"
+	tenantID := seedTenant(t, super, tenantName)
+	userID := uuid.NewString()
+	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+
+	id := auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID}
+	rec, body := doMe(t, NewStore(app).Me, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if body.Error != "" {
+		t.Errorf("error = %q, want empty", body.Error)
+	}
+	if body.Tenant.ID != tenantID {
+		t.Errorf("tenant.id = %q, want %q", body.Tenant.ID, tenantID)
+	}
+	if body.Tenant.Name != tenantName {
+		t.Errorf("tenant.name = %q, want %q", body.Tenant.Name, tenantName)
+	}
+	if body.Tenant.Kind != "firm" {
+		t.Errorf("tenant.kind = %q, want %q", body.Tenant.Kind, "firm")
+	}
+	if body.User.ID != userID {
+		t.Errorf("user.id = %q, want %q", body.User.ID, userID)
+	}
+	if body.User.Role != "admin" {
+		t.Errorf("user.role = %q, want %q", body.User.Role, "admin")
+	}
+}
+
 // TestStoreListMemberships_RefusesASuspendedMember (AUDIT-10 AC-6): every other
 // tenancy read stays gated -- D-5 rejected extending Me's exemption to
 // /v1/memberships.

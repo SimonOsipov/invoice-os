@@ -21,11 +21,12 @@ var ErrNotActiveMember = errors.New("db: caller's membership in this workspace i
 // in TypeScript; the mirror is pinned in AUDIT-10-07's wireMirrors.test.ts.
 const NotActiveMemberMessage = "your membership in this workspace is not active"
 
-// WithinRequestTenantTx is the HTTP-path convenience over WithinTenantTx: it pulls
-// the tenant from the verified Identity the auth middleware placed in ctx, so
-// handlers don't thread the tenant id by hand. It returns ErrNoTenant when no
-// identity is present — an unauthenticated request must never reach tenant-scoped
-// data.
+// WithinRequestTenantTx is the HTTP path's entry point: it pulls the tenant from
+// the verified Identity the auth middleware placed in ctx, so handlers don't thread
+// the tenant id by hand. It returns ErrNoTenant when no identity is present — an
+// unauthenticated request must never reach tenant-scoped data — and
+// ErrNotActiveMember when the caller's membership in that tenant is not active. It
+// no longer delegates to WithinTenantTx; see WithinRequestTenantTxOpts below.
 //
 // The core WithinTenantTx stays free of this auth dependency on purpose: the M5
 // worker has no request identity and calls WithinTenantTx directly with the job's

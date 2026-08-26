@@ -1280,7 +1280,7 @@ func TestWorkflowRole_UpdateValidatedBeforeTheCallerRoleIsRead(t *testing.T) {
 // TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead: the caller-role read
 // is the first statement and takes no target argument, so a non-admin is refused
 // identically whether the key exists or not — no 403-vs-404 existence oracle
-// (the house rule at internal/tenancy/store.go:96-118). The admin control proves 403
+// (the house rule on tenancy.Store.SetMembershipStatus). The admin control proves 403
 // is not simply the only error either method can reach.
 //
 // All four target classes a key can fall into are probed, and the refusal is compared as
@@ -1563,7 +1563,7 @@ func TestWorkflowRole_UpdateAuditsInSameTx(t *testing.T) {
 // non-empty name and nothing else (canSaveRole, roles.ts:386-388), so this is a routine
 // request, and it follows portfolio.Update, which logs the fields SENT
 // (portfolio/store.go:215-218). tenancy's 200-no-op-without-audit
-// (tenancy/store.go:183-186) does not transfer: that guard exists to stop a redundant
+// (SetMembershipStatus's already-at-target short-circuit) does not transfer: it exists to stop a redundant
 // transition tripping the last-active-admin 409, and this method has no such guard.
 func TestWorkflowRole_UpdateAuditsAnEditThatChangesNothing(t *testing.T) {
 	super, app := dbTestPools(t)

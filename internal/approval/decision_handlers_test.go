@@ -185,8 +185,8 @@ func TestRunHandler_NilCollectionsSerialiseAsArrays(t *testing.T) {
 	}
 }
 
-// AC-5: "authenticated" carries no membership/access-role — any caller holding a
-// tenant claim may read this route, no approver check.
+// AC-5: "authenticated" carries no membership/access-role — any caller the request
+// seam admits may read this route, no approver check.
 func TestRunHandler_NoRoleGate(t *testing.T) {
 	id := caller()
 	read := func(context.Context, string) (Run, error) {

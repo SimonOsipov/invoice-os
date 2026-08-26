@@ -52,7 +52,7 @@ parsing then runs fully before either route touches the database.
 | | |
 |---|---|
 | Gateway path | `GET /api/invoice/v1/evidence-bundle` |
-| Auth | bearer JWT; `authorize()` requires a tenant and nothing else — **no role gate**. Readable by every workspace member. |
+| Auth | bearer JWT; `authorize()` requires a tenant and nothing else — **no role gate**. Readable by every workspace member the read-path gate admits; a `suspended` or `invited` member is refused (AUDIT-10). |
 | `entity_id` | **required**, well-formed uuid. One company — not "the active entity". |
 | `from` | **required**, RFC3339. Inclusive. |
 | `to` | **required**, RFC3339. Inclusive. |

@@ -8,8 +8,8 @@
 //
 // audit_log is tenant-scoped under FORCE RLS and append-only (SELECT/INSERT grants only,
 // plus an owner-proof trigger); see migrations/20260708062657_audit_log.sql. tenant_id is
-// NOT a parameter here: the row defaults it from the app.current_tenant GUC that
-// db.WithinTenantTx already set on tx, and the table's RLS WITH CHECK refuses any row whose
+// NOT a parameter here: the row defaults it from the app.current_tenant GUC the
+// tenant-scoped seam already set on tx, and the table's RLS WITH CHECK refuses any row whose
 // tenant diverges — so Record cannot write to the wrong tenant, and a call outside a
 // tenant-scoped tx fails closed (NULL tenant_id fails the WITH CHECK, 42501, no row written).
 //
@@ -26,7 +26,8 @@ import (
 )
 
 // Record appends one audit event to audit_log on tx — the caller's tenant-scoped
-// transaction (db.WithinTenantTx), so the audit row shares that transaction's fate. It
+// transaction (db.WithinTenantTx or db.WithinRequestTenantTx), so the audit row shares
+// that transaction's fate. It
 // takes only pgx.Tx, so RECORD depends on nothing in internal/platform/db (no import
 // cycle). That is a claim about Record, not about the package: store.go imports it for
 // WithinRequestTenantTx and handlers.go for ErrNoTenant. The tenant is carried implicitly

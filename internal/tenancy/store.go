@@ -13,8 +13,9 @@ import (
 )
 
 // Store reads tenancy data as the invoice_app role. It holds the app-role pool
-// (DATABASE_URL); every read goes through db.WithinRequestTenantTx, so the
-// app.current_tenant GUC is set for the transaction and RLS enforces isolation.
+// (DATABASE_URL); every read sets the app.current_tenant GUC for its transaction
+// so RLS enforces isolation — through db.WithinRequestTenantTx, except Me, which
+// is exempt from that seam's membership gate (AUDIT-10 §5).
 type Store struct {
 	pool *pgxpool.Pool
 }

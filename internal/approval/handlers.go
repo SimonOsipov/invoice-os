@@ -31,7 +31,7 @@ func normalise(r Role) Role {
 }
 
 // ListRolesHandler returns GET /v1/workflow-roles. No access-role gate — any caller
-// holding a tenant claim may list, the same as GET /v1/memberships.
+// the request seam admits may list, the same as GET /v1/memberships.
 func ListRolesHandler(list RolesLister, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -308,8 +308,8 @@ func DecideHandler(decide Decider, log *slog.Logger) http.HandlerFunc {
 }
 
 // RunHandler returns GET /v1/invoices/{id}/approval: identity (401) -> path id ->
-// read -> 200. No body is read at all, and no role gate — any authenticated tenant
-// member may read a run (AC-5); the approver check belongs to the POST.
+// read -> 200. No body is read at all, and no role gate — any active tenant member may
+// read a run (AC-5); the approver check belongs to the POST.
 func RunHandler(read RunReader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()

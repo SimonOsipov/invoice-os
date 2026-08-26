@@ -493,3 +493,254 @@ func TestRLS_PlatformDBDependsOnlyOnAuthPackage(t *testing.T) {
 		t.Errorf("internal/platform/db imports %s — it may depend only on internal/platform/auth", dep)
 	}
 }
+
+// poisonedMembershipsPool shadows memberships with a pg_temp view that raises at
+// execution time, so the gate's SECOND batched statement fails server-side while the
+// set_config ahead of it succeeds. pg_temp is searched before public, so the shadow
+// lives and dies with this connection and touches no shared schema.
+func poisonedMembershipsPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	h := requireHarness(t)
+	cfg, err := pgxpool.ParseConfig(h.appURL)
+	if err != nil {
+		t.Fatalf("parse app url: %v", err)
+	}
+	cfg.MaxConns = 1
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		_, err := c.Exec(ctx, `CREATE TEMP VIEW memberships AS
+			SELECT (1/(random()*0)::int)::text::uuid AS user_id, 'active' AS status`)
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("new poisoned pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// TestRLS_RequestSeamWrapsAMembershipReadError: a server-side failure on the membership
+// select must surface as "read caller membership", never as the batch's close error.
+// br.Close() returns the batch's stored error first, so classifying closeErr ahead of
+// scanErr makes this wrap unreachable for every server-side error.
+func TestRLS_RequestSeamWrapsAMembershipReadError(t *testing.T) {
+	h := requireHarness(t)
+	pool := poisonedMembershipsPool(t)
+
+	ran := false
+	err := db.WithinRequestTenantTx(requestCtx(uuid.NewString(), h.tenantA), pool, func(pgx.Tx) error {
+		ran = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("the gate admitted a caller whose membership read failed server-side")
+	}
+	if ran {
+		t.Error("the closure ran after the membership read failed - a poisoned tx must never reach user code")
+	}
+	if errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("a read failure was reported as a suspension: %v", err)
+	}
+	// Control: prove the injection fired rather than the select quietly returning no
+	// rows, which would make the two assertions below vacuous.
+	if !strings.Contains(err.Error(), "division by zero") {
+		t.Fatalf("err = %v, want the injected division-by-zero - the shadow view never fired", err)
+	}
+	if !strings.Contains(err.Error(), "read caller membership") {
+		t.Errorf("err = %v, want it wrapped as \"db: read caller membership\"", err)
+	}
+	if strings.Contains(err.Error(), "close batch") {
+		t.Errorf("err = %v, want scanErr classified before closeErr", err)
+	}
+}
+
+// TestRLS_RequestSeamRefusalIsNotTheUnauthenticatedSentinel (D-3): AUDIT-10-03 maps
+// ErrNotActiveMember to 403 and ErrNoTenant to 401. Aliasing the two sentinels would
+// satisfy every errors.Is assertion in this file while shipping the wrong status code.
+func TestRLS_RequestSeamRefusalIsNotTheUnauthenticatedSentinel(t *testing.T) {
+	h := requireHarness(t)
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "suspended")
+
+	suspended := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error { return nil })
+	if !errors.Is(suspended, db.ErrNotActiveMember) {
+		t.Fatalf("suspended caller err = %v, want db.ErrNotActiveMember", suspended)
+	}
+	if errors.Is(suspended, db.ErrNoTenant) {
+		t.Errorf("the 403 refusal also satisfies db.ErrNoTenant (401): %v", suspended)
+	}
+
+	anon := db.WithinRequestTenantTx(context.Background(), h.app, func(pgx.Tx) error { return nil })
+	if !errors.Is(anon, db.ErrNoTenant) {
+		t.Fatalf("identity-free caller err = %v, want db.ErrNoTenant", anon)
+	}
+	if errors.Is(anon, db.ErrNotActiveMember) {
+		t.Errorf("the 401 refusal also satisfies db.ErrNotActiveMember (403): %v", anon)
+	}
+}
+
+// TestRLS_RequestSeamSkipsTheLookupForAnEmptySubject (AC-4): a gateway that forwards no
+// user id yields Subject "". Empty is not a uuid, so the lookup is skipped rather than
+// sent as the 22P02 that would poison the batch.
+func TestRLS_RequestSeamSkipsTheLookupForAnEmptySubject(t *testing.T) {
+	h := requireHarness(t)
+	pool, tr := tracedSeamPool(t)
+
+	ran := false
+	if err := db.WithinRequestTenantTx(requestCtx("", h.tenantA), pool, func(pgx.Tx) error {
+		ran = true
+		return nil
+	}); err != nil {
+		t.Fatalf("an empty subject must proceed, got %v", err)
+	}
+	if !ran {
+		t.Error("the closure never ran for an empty subject")
+	}
+
+	stmts := tr.allStmts()
+	if countContaining(stmts, "set_config") == 0 {
+		t.Fatalf("the tracer saw no set_config at all - it is not observing the seam: %q", stmts)
+	}
+	if n := countContaining(stmts, "memberships"); n != 0 {
+		t.Errorf("the seam issued %d memberships statement(s) for an empty subject, want 0: %q", n, stmts)
+	}
+}
+
+// TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted (D-6/D-17, NARROW): removing a
+// member is not suspending one - a deleted row leaves nothing to refuse and the former
+// member is still admitted. AUDIT-12 owns the strict flip.
+func TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("before deletion: %v", err)
+	}
+
+	tag, err := h.super.Exec(ctx, `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, h.tenantA, userID)
+	if err != nil {
+		t.Fatalf("delete membership: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("deleted %d row(s), want 1 - the fixture never landed", tag.RowsAffected())
+	}
+
+	ran := false
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		ran = true
+		return nil
+	}); err != nil {
+		t.Fatalf("after deletion: a caller with no row must proceed, got %v", err)
+	}
+	if !ran {
+		t.Error("the closure never ran for a removed member")
+	}
+}
+
+// TestRLS_RequestSeamRefusesAfterALiveSuspension (Core AC 4/5, D-2): status is read fresh
+// every request, so a suspension bites the very next call - no cache to flush, no new
+// JWT. TestRLS_RequestSeamAdmitsAReactivatedCaller is the other direction.
+func TestRLS_RequestSeamRefusesAfterALiveSuspension(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("before suspension: %v", err)
+	}
+
+	tag, err := h.super.Exec(ctx,
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, h.tenantA, userID)
+	if err != nil {
+		t.Fatalf("suspend membership: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("suspended %d row(s), want 1 - the fixture never landed", tag.RowsAffected())
+	}
+
+	ran := false
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		ran = true
+		return nil
+	}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("after suspension: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if ran {
+		t.Error("the closure ran for a caller suspended since their last request")
+	}
+}
+
+// TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow (AC-2): the lookup carries no
+// tenant_id - RLS supplies it. A row owned by another tenant must be invisible, so a
+// caller suspended elsewhere is admitted here on the no-row rule, not refused on a
+// leaked row.
+func TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow(t *testing.T) {
+	h := requireHarness(t)
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantB, userID, "admin", "suspended")
+
+	// Control: the row does refuse in the tenant that owns it. Without this the
+	// admission below could pass on a seed that never landed.
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantB), h.app, func(pgx.Tx) error {
+		return nil
+	}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("acting as the owning tenant: err = %v, want db.ErrNotActiveMember", err)
+	}
+
+	ran := false
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		ran = true
+		return nil
+	}); err != nil {
+		t.Fatalf("acting as a tenant the caller has no row in: want admission, got %v", err)
+	}
+	if !ran {
+		t.Error("the closure never ran in the tenant the caller has no row in")
+	}
+}
+
+// TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest: identity, tenant uuid and
+// subject uuid are all resolved before BeginTx, so a malformed request opens no
+// transaction at all. Red if BeginTx is hoisted above the checks.
+func TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest(t *testing.T) {
+	h := requireHarness(t)
+	pool, tr := tracedSeamPool(t)
+
+	if err := db.WithinRequestTenantTx(context.Background(), pool, func(pgx.Tx) error {
+		return nil
+	}); !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("no identity: err = %v, want db.ErrNoTenant", err)
+	}
+	if err := db.WithinRequestTenantTx(requestCtx(uuid.NewString(), "not-a-uuid"), pool, func(pgx.Tx) error {
+		return nil
+	}); !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("malformed tenant id: err = %v, want db.ErrNoTenant", err)
+	}
+	if got := tr.allStmts(); len(got) != 0 {
+		t.Errorf("a malformed request issued %d statement(s), want 0: %q", len(got), got)
+	}
+
+	// Control: the same pool and tracer DO record statements for a well-formed
+	// request, so the zero above is an observation and not a blind spot.
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), pool, func(pgx.Tx) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("control call: %v", err)
+	}
+	if countContaining(tr.allStmts(), "memberships") == 0 {
+		t.Fatal("the tracer recorded no memberships statement even for a well-formed request - it is not attached")
+	}
+}

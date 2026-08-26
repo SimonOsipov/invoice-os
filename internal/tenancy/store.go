@@ -13,8 +13,9 @@ import (
 )
 
 // Store reads tenancy data as the invoice_app role. It holds the app-role pool
-// (DATABASE_URL); every read goes through db.WithinRequestTenantTx, so the
-// app.current_tenant GUC is set for the transaction and RLS enforces isolation.
+// (DATABASE_URL); every read sets the app.current_tenant GUC for its transaction
+// so RLS enforces isolation — through db.WithinRequestTenantTx, except Me, which
+// is exempt from that seam's membership gate (AUDIT-10 §5).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -27,16 +28,25 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // Me returns the caller's tenant (id, name, kind) and their domain role, both
 // resolved under RLS: SELECT id, name, kind FROM tenants (bare — the
 // app.current_tenant GUC is the filter, not a WHERE clause) then SELECT role FROM
-// memberships WHERE user_id = $1 (identity.Subject, read inside the closure — RLS
-// scopes the row set to the current tenant). No visible tenant row maps to
+// memberships WHERE user_id = $1 (identity.Subject — RLS scopes the row set to
+// the current tenant). No visible tenant row maps to
 // ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
 //
-// Both queries run inside the SAME db.WithinRequestTenantTx call, so a missing
-// tenant row surfaces as ErrTenantNotFound before the membership query ever runs.
+// Both queries run inside the SAME transaction, so a missing tenant row surfaces
+// as ErrTenantNotFound before the membership query ever runs.
 func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
+	// AUDIT-10 §5: the ONE exemption from the request seam's membership gate.
+	// /v1/me is the SPA's boot call and auth.ts signIn throws on failure, so
+	// gating it would turn every suspended session into an unexplained sign-in
+	// failure with nothing able to say why (TestStoreMe_AnswersForASuspendedMember).
+	id, ok := auth.IdentityFromContext(ctx)
+	if !ok {
+		return Tenant{}, "", db.ErrNoTenant
+	}
+
 	var t Tenant
 	var role string
-	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrTenantNotFound
@@ -44,10 +54,6 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 			return err
 		}
 
-		// The identity is guaranteed present here: WithinRequestTenantTx already
-		// resolved it (as the tenant id) before this closure ran, returning
-		// db.ErrNoTenant otherwise.
-		id, _ := auth.IdentityFromContext(ctx)
 		if err := tx.QueryRow(ctx,
 			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
 		).Scan(&role); err != nil {

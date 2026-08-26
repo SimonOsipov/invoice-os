@@ -7,6 +7,7 @@ package invoice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- cross-tenant role resolution --------------------------------------------
@@ -335,10 +337,11 @@ func TestGetHandler_RealStore_SubmitGateResolvesRequestTenantRoleNotUserRole(t *
 	})
 }
 
-// callerRoleTx filters status = 'active', so a suspended or invited admin reads
-// "". Pinned at the store and at the transmit doors, never on GET's can_submit
-// -- where an enabled Submit button is exactly what suspension must stop.
-func TestGetHandler_RealStore_SuspendedAndInvitedApproverSeeRoleReason(t *testing.T) {
+// The request seam refuses a non-active caller before the store reads anything
+// (db.WithinRequestTenantTxOpts), so a suspended or invited admin gets no body at
+// all -- no flag, no reason, and no invoice. Pinned at the store and at the read
+// door, because an enabled Submit button is exactly what suspension must stop.
+func TestGetHandler_RealStore_SuspendedAndInvitedApproverRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	tenantID := seedTenant(t, super, "submit gate member status tenant")
@@ -365,10 +368,16 @@ func TestGetHandler_RealStore_SuspendedAndInvitedApproverSeeRoleReason(t *testin
 			id := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 
 			rec, resp := doInvoiceGetAs(t, store.Get, store.CallerRole, &id, invID)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			// The seam refuses the read, and the refusal reaches the wire as the
+			// 403 the mapper produces -- the same body every other handler gives.
+			assertNotActiveMember403(t, rec)
+			if resp.CanSubmit || resp.SubmitBlockedReason != nil {
+				t.Errorf("the refusal still published can_submit=%v submit_blocked_reason=%v, want neither key set",
+					resp.CanSubmit, resp.SubmitBlockedReason)
 			}
-			assertRoleReason(t, resp)
+			if _, err := store.Get(auth.WithIdentity(context.Background(), id), invID); !errors.Is(err, db.ErrNotActiveMember) {
+				t.Errorf("Store.Get err = %v, want db.ErrNotActiveMember -- the refusal, named", err)
+			}
 		})
 	}
 }

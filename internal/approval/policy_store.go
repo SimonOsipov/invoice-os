@@ -128,8 +128,8 @@ func readPolicyTrees(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[s
 // policies: the policies, every version, then every step of the top versions in ONE
 // query, grouped in Go.
 //
-// No access-role gate at all, the same as ListRoles: any caller holding a tenant claim
-// may list (TestPolicy_ReadNeedsNoAdminRoleWriteDoes).
+// No access-role gate of its own, the same as ListRoles: any caller the request seam
+// admits may list (TestPolicy_ReadNeedsNoAdminRoleWriteDoes).
 func (s *Store) ListPolicies(ctx context.Context) ([]Policy, error) {
 	policies := []Policy{}
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

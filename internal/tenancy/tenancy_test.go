@@ -304,8 +304,10 @@ func TestStoreMe_UnknownTenant(t *testing.T) {
 }
 
 // TestStoreMe_NoIdentityFailsClosed (AC #3): a context with no identity must
-// fail closed with db.ErrNoTenant before any statement runs (the
-// WithinRequestTenantTx contract).
+// fail closed with db.ErrNoTenant before any statement runs. Me reads the
+// identity itself (AUDIT-10 §5 exempts it from the request seam's membership
+// gate), so this pins the fail-closed behaviour independently of which db helper
+// Me happens to call.
 func TestStoreMe_NoIdentityFailsClosed(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
@@ -314,6 +316,99 @@ func TestStoreMe_NoIdentityFailsClosed(t *testing.T) {
 	_, _, err := store.Me(ctx)
 	if !errors.Is(err, db.ErrNoTenant) {
 		t.Fatalf("Me err = %v, want db.ErrNoTenant", err)
+	}
+}
+
+// TestStoreMe_AnswersForASuspendedMember (AUDIT-10 AC-5, D-5): /v1/me is the ONE
+// deliberate hole in the read-path gate. auth.ts signIn throws on failure, so
+// gating it turns every suspended session into an unexplained sign-in failure
+// with nothing able to say why. The body must be unchanged, not merely non-empty.
+func TestStoreMe_AnswersForASuspendedMember(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	const tenantName = "tenancy me-test suspended firm"
+	tenantID := seedTenant(t, super, tenantName)
+	userID := uuid.NewString()
+	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	tenant, role, err := store.Me(c)
+	if err != nil {
+		t.Fatalf("Me: a suspended member must still get their boot payload, got %v", err)
+	}
+	if tenant.ID != tenantID {
+		t.Errorf("tenant.ID = %q, want %q", tenant.ID, tenantID)
+	}
+	if tenant.Name != tenantName {
+		t.Errorf("tenant.Name = %q, want %q", tenant.Name, tenantName)
+	}
+	if tenant.Kind != "firm" {
+		t.Errorf("tenant.Kind = %q, want %q", tenant.Kind, "firm")
+	}
+	if role != "admin" {
+		t.Errorf("role = %q, want %q", role, "admin")
+	}
+}
+
+// TestMe_SuspendedMemberStillGets200 (AUDIT-10 AC-5, D-5): the store-level exemption
+// has to reach the wire. MeHandler runs over the REAL Store.Me here --
+// TestStoreMe_AnswersForASuspendedMember stops at the store and TestMe_OKShape uses a
+// fake loader, so neither sees a gated Me turn into a non-200.
+func TestMe_SuspendedMemberStillGets200(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	const tenantName = "tenancy me-handler suspended firm"
+	tenantID := seedTenant(t, super, tenantName)
+	userID := uuid.NewString()
+	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+
+	id := auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID}
+	rec, body := doMe(t, NewStore(app).Me, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if body.Error != "" {
+		t.Errorf("error = %q, want empty", body.Error)
+	}
+	if body.Tenant.ID != tenantID {
+		t.Errorf("tenant.id = %q, want %q", body.Tenant.ID, tenantID)
+	}
+	if body.Tenant.Name != tenantName {
+		t.Errorf("tenant.name = %q, want %q", body.Tenant.Name, tenantName)
+	}
+	if body.Tenant.Kind != "firm" {
+		t.Errorf("tenant.kind = %q, want %q", body.Tenant.Kind, "firm")
+	}
+	if body.User.ID != userID {
+		t.Errorf("user.id = %q, want %q", body.User.ID, userID)
+	}
+	if body.User.Role != "admin" {
+		t.Errorf("user.role = %q, want %q", body.User.Role, "admin")
+	}
+}
+
+// TestStoreListMemberships_RefusesASuspendedMember (AUDIT-10 AC-6): every other
+// tenancy read stays gated -- D-5 rejected extending Me's exemption to
+// /v1/memberships.
+func TestStoreListMemberships_RefusesASuspendedMember(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "tenancy list-memberships suspended firm")
+	userID := uuid.NewString()
+	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ListMemberships err = %v, want db.ErrNotActiveMember", err)
+	}
+	if got != nil {
+		t.Errorf("ListMemberships returned %d row(s) alongside the refusal, want none: %+v", len(got), got)
 	}
 }
 
@@ -978,7 +1073,10 @@ func TestStoreListMemberships_ReadsStatusAndIdentity(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: userSuspended, Role: "authenticated", TenantID: tenantID})
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so the caller is the active row and the
+	// suspended row stays the subject under test.
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userBare, Role: "authenticated", TenantID: tenantID})
 	got, err := store.ListMemberships(c)
 	if err != nil {
 		t.Fatalf("ListMemberships: %v", err)
@@ -1699,14 +1797,16 @@ func TestMembership_SuspendedAdminCannotAdminister(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: suspendedAdmin, Role: "authenticated", TenantID: tenantID})
 
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so the refusal is now the status sentinel.
 	t.Run("self reactivate", func(t *testing.T) {
-		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, ErrNotPermitted) {
-			t.Fatalf("SetMembershipStatus (suspended admin reactivates self) err = %v, want ErrNotPermitted -- suspension must not be self-undoable", err)
+		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, db.ErrNotActiveMember) {
+			t.Fatalf("SetMembershipStatus (suspended admin reactivates self) err = %v, want db.ErrNotActiveMember -- suspension must not be self-undoable", err)
 		}
 	})
 	t.Run("suspend another", func(t *testing.T) {
-		if _, err := store.SetMembershipStatus(c, otherAdmin, "suspended"); !errors.Is(err, ErrNotPermitted) {
-			t.Fatalf("SetMembershipStatus (suspended admin targets another) err = %v, want ErrNotPermitted", err)
+		if _, err := store.SetMembershipStatus(c, otherAdmin, "suspended"); !errors.Is(err, db.ErrNotActiveMember) {
+			t.Fatalf("SetMembershipStatus (suspended admin targets another) err = %v, want db.ErrNotActiveMember", err)
 		}
 	})
 }
@@ -2010,12 +2110,18 @@ func TestMembership_CallerGateRefusesEveryNonActiveAdmin(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(app)
 
-	cases := []struct{ name, role, status string }{
-		{"active reviewer", "reviewer", "active"},
-		{"suspended reviewer", "reviewer", "suspended"},
-		{"suspended preparer", "preparer", "suspended"},
-		{"suspended admin", "admin", "suspended"},
-		{"invited admin", "admin", "invited"},
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE non-admin is still a role refusal,
+	// and keeping the two sentinels apart is what this table exists to catch.
+	cases := []struct {
+		name, role, status string
+		want               error
+	}{
+		{"active reviewer", "reviewer", "active", ErrNotPermitted},
+		{"suspended reviewer", "reviewer", "suspended", db.ErrNotActiveMember},
+		{"suspended preparer", "preparer", "suspended", db.ErrNotActiveMember},
+		{"suspended admin", "admin", "suspended", db.ErrNotActiveMember},
+		{"invited admin", "admin", "invited", db.ErrNotActiveMember},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2029,8 +2135,8 @@ func TestMembership_CallerGateRefusesEveryNonActiveAdmin(t *testing.T) {
 			seedMembership(t, super, tenantID, uuid.NewString(), "admin", "active")
 
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
-			if _, err := store.SetMembershipStatus(c, targetID, "suspended"); !errors.Is(err, ErrNotPermitted) {
-				t.Fatalf("SetMembershipStatus (%s caller) err = %v, want ErrNotPermitted", tc.name, err)
+			if _, err := store.SetMembershipStatus(c, targetID, "suspended"); !errors.Is(err, tc.want) {
+				t.Fatalf("SetMembershipStatus (%s caller) err = %v, want %v", tc.name, err, tc.want)
 			}
 			if got := mustStatus(t, super, targetID); got != "active" {
 				t.Errorf("target status after a refused PATCH = %q, want unchanged %q", got, "active")
@@ -2055,13 +2161,18 @@ func TestMembership_ZeroActiveAdminsIsUnrecoverable(t *testing.T) {
 	reviewer := uuid.NewString()
 	seedMembership(t, super, tenantID, reviewer, "reviewer", "active")
 
-	for name, callerID := range map[string]string{
-		"the suspended admin themselves": suspendedAdmin,
-		"an active reviewer":             reviewer,
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); the active reviewer is still a role refusal.
+	for name, tc := range map[string]struct {
+		callerID string
+		want     error
+	}{
+		"the suspended admin themselves": {suspendedAdmin, db.ErrNotActiveMember},
+		"an active reviewer":             {reviewer, ErrNotPermitted},
 	} {
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
-		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, ErrNotPermitted) {
-			t.Errorf("reactivate by %s err = %v, want ErrNotPermitted", name, err)
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: tc.callerID, Role: "authenticated", TenantID: tenantID})
+		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, tc.want) {
+			t.Errorf("reactivate by %s err = %v, want %v", name, err, tc.want)
 		}
 	}
 	if got := mustStatus(t, super, suspendedAdmin); got != "suspended" {

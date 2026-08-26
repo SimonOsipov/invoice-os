@@ -418,12 +418,14 @@ One request, all inside **one** `db.WithinRequestTenantTx`:
 | Statements | When |
 |---|---|
 | 5 | always — the page, the three facet `GROUP BY`s, the count |
-| +1 | `actor.Resolve`, and only when some subject passes its uuid gate. It short-circuits `system` and any non-uuid subject in Go, so a page whose actors are all free text issues no `memberships` query at all |
+| +1 | the seam's own membership gate (AUDIT-10), whenever the caller's subject is a uuid. It rides `set_config` in one `pgx.Batch`, so it costs a statement but not a round trip |
+| +1 | `actor.Resolve`, and only when some subject passes its uuid gate. It short-circuits `system` and any non-uuid subject in Go, so a page whose actors are all free text issues no `memberships` query **of its own** — the gate's still runs |
 | +2 | free-text search only — the `memberships` and `business_entities` fold-ins |
 | +1 | the empty probe, and only when `total == 0` |
 
-So 5 to 9. Older drafts of this page said "six statements", which is the populated common case
-with resolvable actors, not a constant.
+So 5 to 10, and 6 to 10 for the real HTTP path, where the caller's subject is always a uuid.
+Older drafts of this page said "six statements", which is the populated common case with
+resolvable actors, not a constant.
 
 **One transaction is the load-bearing claim, not the count.** Split across transactions the
 page, the count and the facets would each see a different snapshot, so a row inserted

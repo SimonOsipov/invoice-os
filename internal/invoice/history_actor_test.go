@@ -405,14 +405,21 @@ func TestHistory_IssuesOneResolveQueryForManyRows(t *testing.T) {
 		t.Fatalf("the fixture carries %d distinct actors, want 9 -- a one-statement claim over one actor proves nothing", len(distinct))
 	}
 
+	// Two memberships statements, counted apart so neither hides the other: the
+	// store's own Resolve, and the request seam's batched gate
+	// (db.WithinRequestTenantTxOpts). Folding them into one number would let a
+	// per-row Resolve hide behind the gate's constant statement.
 	if n := len(rec.mentioning("memberships")); n != 1 {
 		t.Errorf("History over %d rows / %d distinct actors issued %d memberships statement(s), want exactly 1 (AC #3); all: %q",
 			len(got), len(distinct), n, rec.mentioning("memberships"))
 	}
+	if n := len(rec.seamMentioning("FROM memberships")); n != 1 {
+		t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1 -- the count above is scoped, not blind", n)
+	}
 	if n := len(rec.mentioning("invoice_status_history")); n != 1 {
 		t.Errorf("History issued %d invoice_status_history statement(s), want exactly 1 -- resolution must not re-read the rows", n)
 	}
-	if n := len(rec.mentioning("set_config('app.current_tenant'")); n != 1 {
+	if n := rec.tenantTxCount(); n != 1 {
 		t.Errorf("History opened %d tenant transactions, want exactly 1 -- Resolve must run on History's OWN tx, not a second one", n)
 	}
 

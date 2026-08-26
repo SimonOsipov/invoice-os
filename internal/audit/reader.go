@@ -232,7 +232,7 @@ type Filter struct {
 
 // Query reads one page of tx's tenant's audit log, newest first. It issues no tenant_id
 // predicate: audit_log and business_entities are both FORCE RLS on the same
-// app.current_tenant GUC that db.WithinTenantTx set on tx, so isolation is structural.
+// app.current_tenant GUC the tenant-scoped seam set on tx, so isolation is structural.
 //
 // This subtask (AUDIT-04-02) honours only Limit and Cursor; the other Filter fields are
 // composed by filterPredicates. ActorName/ActorKind stay empty until AUDIT-04-04 resolves

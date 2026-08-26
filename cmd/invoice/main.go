@@ -93,7 +93,7 @@ func main() {
 	// GET /v1/audit-log -- the workspace audit reader (AUDIT-04). Mounts here rather
 	// than on a new service: the gateway routes on the first segment under /api/, so
 	// this is reached as /api/invoice/v1/audit-log with no gateway change. authorize()
-	// requires only a tenant, so every member of the workspace can read it.
+	// requires only a tenant, so every active member of the workspace can read it.
 	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(audit.NewStore(pool).List, app.Logger))
 	// GET /v1/evidence-bundle(...) -- the evidence bundle download (AUDIT-05-08) and
 	// preview (AUDIT-05-09), sharing one Store so both routes agree by construction.
@@ -245,7 +245,7 @@ func main() {
 	app.Mux.HandleFunc("DELETE /v1/approval-policies/{id}", approval.DeletePolicyHandler(roleStore.DeletePolicy, app.Logger))
 
 	// GET /v1/invoices/{id}/approval -- the run read model (APPR-07). No role gate:
-	// any authenticated tenant member may read a run, same as the policy routes above.
+	// any active tenant member may read a run, same as the policy routes above.
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/approval", approval.RunHandler(roleStore.ApprovalRun, app.Logger))
 
 	// POST /v1/invoices/{id}/approvals -- approve/reject a pending step (APPR-07-06).

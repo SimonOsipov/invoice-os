@@ -202,8 +202,9 @@ with no configuration. That is why the M2-01 skeleton migration is a no-op.
 
 ### The helper (M2-06): `WithinTenantTx`
 
-Application code never issues `SET LOCAL` by hand. The single sanctioned entry point is
-`db.WithinTenantTx` in `internal/platform/db`:
+Application code never issues `SET LOCAL` by hand. The two sanctioned entry points are
+`db.WithinTenantTx` (workers, CLIs, `GET /v1/me`) and `db.WithinRequestTenantTx` (every
+other HTTP read), both in `internal/platform/db`. The core is:
 
 ```go
 db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
@@ -224,8 +225,18 @@ What it guarantees:
   input returns `ErrNoTenant` and issues **no** statement — the helper can never run an
   unscoped query.
 - **Explicit tenant, not context-derived.** The core helper takes the tenant as an
-  argument so it serves both the HTTP path and the worker (§8). `WithinRequestTenantTx`
-  is a thin wrapper that pulls the tenant from the request `auth.Identity` for handlers.
+  argument, so it serves the worker (§8), the `tools/*` CLIs and `GET /v1/me`.
+  `WithinRequestTenantTx` pulls the tenant from the request `auth.Identity` for handlers.
+
+`WithinRequestTenantTx` is **not** a thin wrapper over the core. It opens its own
+transaction and adds the read-path membership gate (AUDIT-10): a caller whose
+`memberships` row in the current tenant exists and is not `active` is refused with
+`db.ErrNotActiveMember` before the closure runs; a caller with no row at all still
+proceeds. The gate's `SELECT status FROM memberships WHERE user_id = $1` rides the
+`set_config` above in a single `pgx.Batch`, so on the HTTP path **neither statement is
+visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.BatchTracer`.
+A subject that is not a UUID skips the lookup and delegates to the core unchanged, and
+`GET /v1/me` is the one deliberate exemption (it calls `WithinTenantTx` directly).
 
 ---
 
@@ -343,8 +354,8 @@ is **not** special-cased against RLS:
 - It connects as **`invoice_app`** — the same `NOBYPASSRLS` runtime role, the same
   `DATABASE_URL`. No dedicated worker role, no superuser.
 - Every job payload carries its **`tenant_id`**, and the worker wraps each job's business
-  logic in `WithinTenantTx(ctx, pool, job.TenantID, …)` — the *same* helper as the HTTP
-  path, per-job `SET LOCAL`. `SET LOCAL` (not `SET SESSION`) is what keeps a pooled
+  logic in `WithinTenantTx(ctx, pool, job.TenantID, …)` — the identity-free core, per-job
+  `SET LOCAL`. (`WithinRequestTenantTx` is the HTTP path's separate, gated counterpart.) `SET LOCAL` (not `SET SESSION`) is what keeps a pooled
   connection from carrying one job's tenant into the next.
 - **River's own queue tables are infrastructure, not tenant data** — they have no
   `tenant_id` and no RLS; the worker operates them outside any tenant context. Only the

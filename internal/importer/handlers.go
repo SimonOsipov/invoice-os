@@ -25,6 +25,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // maxUploadBytes is the whole-request upload cap ([upload-cap]): a request
@@ -665,10 +666,13 @@ func SheetHandler(
 
 // statusForErr maps a service error to the HTTP status + message this
 // handler writes to the response, mirroring internal/invoice's own
-// statusForErr: ErrValidation is 400 with the wrapped message, ErrNotFound is
-// 404, anything else is 500 with a generic body (never leaking internals).
+// statusForErr: db.ErrNotActiveMember is 403, ErrValidation is 400 with the
+// wrapped message, ErrNotFound is 404, anything else is 500 with a generic
+// body (never leaking internals).
 func statusForErr(err error) (status int, msg string) {
 	switch {
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):

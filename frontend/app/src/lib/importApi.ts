@@ -40,8 +40,8 @@
 // silently disagree on auth/error shaping (IMPAPI-20 is the anti-fork guard, mirroring
 // PRV-16's role on the backend).
 //
-// makeImportAuth(session, onSignOut) mirrors makeAuthedFetch (authedFetch.ts:46) with
-// the same two parameters (D3): PlatformCtx (src/types.ts:239) exposes only
+// makeImportAuth(session, onSignOut, onSuspended) mirrors makeAuthedFetch with the same
+// three parameters (D3, AUDIT-10-07): PlatformCtx (src/types.ts:239) exposes only
 // `authedFetch`, so the raw token and onSignOut are otherwise unreachable here. Must
 // read `() => session.token` at CALL time, not construction time — a live re-sign-in
 // swaps the Session object under React state, so a captured token snapshot would go
@@ -66,6 +66,7 @@
 // import under this app's `verbatimModuleSyntax`.
 import { ApiError } from '@invoice-os/api-client'
 import type { Session } from '../auth'
+import { isSuspended, isUnauthorized } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 
 export interface ImportPreview {
@@ -160,6 +161,8 @@ export type XhrCtor = new () => XMLHttpRequest
 export interface ImportAuth {
   getToken: () => string | null
   onUnauthorized: () => void
+  // Optional for the same reason createAuthedFetch's third parameter is (authedFetch.ts).
+  onSuspended?: () => void
 }
 
 export interface CreateImportRequest {
@@ -175,14 +178,15 @@ export type UploadPhase =
   | { kind: 'done' }
   | { kind: 'error'; error: ApiError }
 
-// Mirrors makeAuthedFetch (authedFetch.ts:46) parameter for parameter so M4-08-06 can
-// instantiate both from the SAME pair in the SAME useMemo (App.tsx:91) — identical
-// inputs at one construction site make divergence structurally impossible (D3).
+// Mirrors makeAuthedFetch parameter for parameter so M4-08-06 can instantiate both from the
+// SAME arguments in the SAME useMemo (App.tsx) — identical inputs at one construction site
+// make divergence structurally impossible (D3).
 // `() => session.token` is read at CALL time, never captured (authedFetch.ts:38-45).
-export function makeImportAuth(session: Session, onSignOut: () => void): ImportAuth {
+export function makeImportAuth(session: Session, onSignOut: () => void, onSuspended?: () => void): ImportAuth {
   return {
     getToken: () => session.token,
     onUnauthorized: onSignOut,
+    onSuspended,
   }
 }
 
@@ -244,14 +248,19 @@ function xhrJson(
         return
       }
 
-      // A dead session signs out identically to the apiFetch path (authedFetch.ts:28).
-      if (status === 401) auth.onUnauthorized()
-
       let msg = xhr.statusText
       if (parsed && body && typeof body === 'object' && 'error' in body) {
         msg = String((body as { error: unknown }).error)
       }
-      fail(new ApiError('http', msg, status, parsed ? body : undefined))
+      const error = new ApiError('http', msg, status, parsed ? body : undefined)
+
+      // Both seams run the apiFetch path's own predicates (authedFetch.ts) rather than a
+      // status comparison of their own, so the two transports cannot disagree on which
+      // refusal is which — IMPAPI-19..23.
+      if (isUnauthorized(error)) auth.onUnauthorized()
+      else if (isSuspended(error)) auth.onSuspended?.()
+
+      fail(error)
     }
 
     xhr.onerror = () => fail(new ApiError('network', 'network error', null))

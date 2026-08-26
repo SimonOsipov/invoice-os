@@ -5,8 +5,9 @@
 //
 // The tenant is passed EXPLICITLY, not read from a request context, so the exact
 // same helper serves both the HTTP path (tenant from the verified JWT) and the M5
-// worker (tenant from the job payload). The thin request-scoped convenience wrapper
-// that bridges the HTTP path lives in tenant.go.
+// worker (tenant from the job payload). The HTTP path enters through
+// WithinRequestTenantTx in tenant.go, which reads the tenant from the request
+// identity and gates the caller's membership status; it no longer delegates here.
 package db
 
 import (

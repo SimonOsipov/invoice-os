@@ -245,7 +245,9 @@ func TestStoreApprovalFacts_OneTransaction(t *testing.T) {
 	if _, err := store.ApprovalFacts(fx.ctx, fx.invID); err != nil {
 		t.Fatalf("ApprovalFacts: %v", err)
 	}
-	if n := len(rec.mentioning("set_config('app.current_tenant'")); n != 1 {
+	// The request seam batches its set_config, which a QueryTracer alone cannot see —
+	// tenantTxCount() counts both routes (db.WithinRequestTenantTxOpts).
+	if n := rec.tenantTxCount(); n != 1 {
 		t.Errorf("ApprovalFacts opened %d tenant transactions, want exactly 1", n)
 	}
 }

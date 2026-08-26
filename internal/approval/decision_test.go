@@ -397,8 +397,10 @@ func TestApprove_SuspendedHolderRefused(t *testing.T) {
 	staffWorkflowRole(t, super, f.tenantID, f.roleID, suspendedID, 0)
 
 	_, err := approve(t, app, f.tenantID, suspendedID, f.invoiceID, nil)
-	if !errors.Is(err, ErrNotPermitted) {
-		t.Errorf("Decide(approved) as a suspended (but staffed) reviewer: err = %v, want ErrNotPermitted -- AXIS 1 refuses before AXIS 2 is even read", err)
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts) -- before AXIS 1, not merely before AXIS 2.
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("Decide(approved) as a suspended (but staffed) reviewer: err = %v, want db.ErrNotActiveMember -- the seam refuses before either axis is read", err)
 	}
 	assertNothingWritten(t, super, f)
 }

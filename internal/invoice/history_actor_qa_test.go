@@ -113,8 +113,13 @@ func TestHistory_MixedActorShapesResolveInOneCall(t *testing.T) {
 	if len(kinds) != 3 {
 		t.Fatalf("the response carried %d distinct ActorKinds (%v), want all 3 -- the mix is the point of this test", len(kinds), kinds)
 	}
+	// Two statements, counted apart so neither hides the other: the store's own
+	// Resolve, and the request seam's batched gate (db.WithinRequestTenantTxOpts).
 	if n := len(rec.mentioning("memberships")); n != 1 {
 		t.Errorf("a four-shape history issued %d memberships statement(s), want exactly 1", n)
+	}
+	if n := len(rec.seamMentioning("FROM memberships")); n != 1 {
+		t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1 -- the count above is scoped, not blind", n)
 	}
 }
 
@@ -131,6 +136,13 @@ func TestHistory_SuspendedMemberStillResolves(t *testing.T) {
 	const name = "Halima Yusuf"
 	seedMembershipNamedWithStatus(t, super, tenantID, subject, name, "suspended")
 
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so an ACTIVE bystander drives the reads and the
+	// suspended member is only ever the ACTOR -- a caller-scoped shortcut cannot pass.
+	bystander := uuid.NewString()
+	const bystanderName = "Chidi Nwosu"
+	seedMembershipNamed(t, super, tenantID, bystander, bystanderName)
+
 	if n := mustCount(t, super,
 		`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'suspended'`,
 		tenantID, subject); n != 1 {
@@ -138,24 +150,33 @@ func TestHistory_SuspendedMemberStillResolves(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: bystander, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "AUDIT-02-03-SUSPENDED"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	seedHistoryRow(t, super, tenantID, inv.ID, statusPtr(StatusDraft), StatusValidated, subject, time.Now())
 
 	got, err := store.History(c, inv.ID)
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("History returned %d rows, want 1 (the genesis row)", len(got))
+	if len(got) != 2 {
+		t.Fatalf("History returned %d rows, want 2 (the genesis row and the suspended member's)", len(got))
 	}
-	if got[0].ActorName != name {
-		t.Errorf("a suspended member's row rendered ActorName = %q, want %q (D-9: Resolve reads no status column)", got[0].ActorName, name)
+
+	suspendedRow := rowFor(t, got, subject)
+	if suspendedRow.ActorName != name {
+		t.Errorf("a suspended member's row rendered ActorName = %q, want %q (D-9: Resolve reads no status column)", suspendedRow.ActorName, name)
 	}
-	if got[0].ActorKind != kindPerson {
-		t.Errorf("a suspended member's row rendered ActorKind = %q, want %q", got[0].ActorKind, kindPerson)
+	if suspendedRow.ActorKind != kindPerson {
+		t.Errorf("a suspended member's row rendered ActorKind = %q, want %q", suspendedRow.ActorKind, kindPerson)
+	}
+	// The genesis row belongs to the bystander: a resolution that labelled every row
+	// with one name would satisfy the assertions above.
+	genesisRow := rowFor(t, got, bystander)
+	if genesisRow.ActorName != bystanderName {
+		t.Errorf("the bystander's genesis row rendered ActorName = %q, want %q", genesisRow.ActorName, bystanderName)
 	}
 }
 
@@ -193,8 +214,13 @@ func TestHistory_SingleRowResolvesThroughTheBatchPath(t *testing.T) {
 	if got[0].ActorName != callerName || got[0].ActorKind != kindPerson {
 		t.Errorf("the single row = {name:%q kind:%q}, want {%q,%q}", got[0].ActorName, got[0].ActorKind, callerName, kindPerson)
 	}
+	// Two statements, counted apart so neither hides the other: the store's own
+	// Resolve, and the request seam's batched gate (db.WithinRequestTenantTxOpts).
 	if n := len(rec.mentioning("memberships")); n != 1 {
 		t.Errorf("a one-row history issued %d memberships statement(s), want exactly 1", n)
+	}
+	if n := len(rec.seamMentioning("FROM memberships")); n != 1 {
+		t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1 -- the count above is scoped, not blind", n)
 	}
 }
 
@@ -237,6 +263,12 @@ func TestHistory_ErrorPathsIssueNoResolveQuery(t *testing.T) {
 			}
 			if stmts := rec.mentioning("memberships"); len(stmts) != 0 {
 				t.Errorf("the %s path issued %d memberships statement(s), want 0: %q", tc.name, len(stmts), stmts)
+			}
+			// The pair is the point: the store resolved nothing, and the request
+			// seam's batched gate ran anyway (db.WithinRequestTenantTxOpts), so the
+			// zero above is a refusal to resolve rather than an unwatched statement.
+			if n := len(rec.seamMentioning("FROM memberships")); n != 1 {
+				t.Errorf("the seam gate issued %d memberships statement(s), want exactly 1", n)
 			}
 		})
 	}

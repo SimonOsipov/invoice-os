@@ -30,14 +30,16 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // statusForErr maps a store/domain error to the HTTP status + message the
-// response body carries. db.ErrNoTenant is 401 (fail-closed); anything else
-// is 500 with a generic body -- this helper never leaks internals into the
-// response. Logging the unrecognized (500) case via slog is the caller's
+// response body carries. db.ErrNoTenant is 401 (fail-closed),
+// db.ErrNotActiveMember is 403; anything else is 500 with a generic body --
+// this helper never leaks internals into the response. Logging the unrecognized (500) case via slog is the caller's
 // responsibility, since only the caller knows the operation name to log.
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

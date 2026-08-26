@@ -21,7 +21,9 @@ export const POPOVER_EMPTY = 'No members to become — this workspace has one se
 // Sentence case, uppercased by CSS at the render site. e2e/envCopy.test.ts's forbidden-phrase
 // scan is case-insensitive by construction (envCopy.test.ts:62-63), so this string is safe as-is.
 export const SEAT_LABEL = 'Signed-in seat'
-export const SUSPENDED_REASON = 'Suspended — sign-in is blocked, so this person cannot be used in the demo.'
+// AUDIT-10-07 dropped "sign-in is blocked": that was only true of the hosted mint allowlist,
+// and it contradicted lib/members.ts's SUSPEND_EXPLANATION. The consequence is the whole point.
+export const SUSPENDED_REASON = 'Suspended — this person cannot be used in the demo.'
 export const RETURN_ROW = 'Return to the signed-in seat · {name}'
 
 export const TOAST_TITLE = 'You are now {full name}'

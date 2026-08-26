@@ -1094,8 +1094,10 @@ func TestStore_ResolveOutside_SuspendedApproverRefused(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	store := NewStore(app)
-	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("ResolveOutside (suspended admin) err = %v, want ErrNotPermitted", err)
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts).
+	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ResolveOutside (suspended admin) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	at, by, reason := mustKeptAsIsTriple(t, super, invID)
@@ -1121,8 +1123,10 @@ func TestStore_UnresolveOutside_SuspendedApproverRefused(t *testing.T) {
 	beforeAt, beforeBy, beforeReason := mustKeptAsIsTriple(t, super, invID)
 
 	store := NewStore(app)
-	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("UnresolveOutside (suspended reviewer) err = %v, want ErrNotPermitted", err)
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts).
+	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("UnresolveOutside (suspended reviewer) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	afterAt, afterBy, afterReason := mustKeptAsIsTriple(t, super, invID)
@@ -1135,12 +1139,12 @@ func TestStore_UnresolveOutside_SuspendedApproverRefused(t *testing.T) {
 	}
 }
 
-// TestStore_CallerRole_SuspendedReadsEmpty: a suspended member's role reads
-// as "" through CallerRole, the same fail-closed no-row shape as no
-// membership at all -- this is what makes the detail page's
-// can_resolve_outside gate agree with the store's refusal for a suspended
-// caller.
-func TestStore_CallerRole_SuspendedReadsEmpty(t *testing.T) {
+// TestStore_CallerRole_SuspendedIsRefused: a suspended member never carries a
+// role that could enable an action. The property is now doubly stated -- a named
+// refusal AND the zero value -- so a caller that ignores the error still fails
+// closed, which is what makes the detail page's can_resolve_outside gate agree
+// with the store's refusal for a suspended caller.
+func TestStore_CallerRole_SuspendedIsRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
@@ -1150,9 +1154,11 @@ func TestStore_CallerRole_SuspendedReadsEmpty(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	store := NewStore(app)
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts), so the silent "" becomes a named refusal.
 	role, err := store.CallerRole(c)
-	if err != nil {
-		t.Fatalf("CallerRole (suspended admin): %v", err)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("CallerRole (suspended admin) err = %v, want db.ErrNotActiveMember", err)
 	}
 	if role != "" {
 		t.Errorf("CallerRole (suspended admin) = %q, want \"\" (fail-closed, same as no membership)", role)

@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- the version list the PUT response carries ---------------------------------
@@ -88,13 +90,17 @@ func TestPutDraft_ResponseVersionsMatchTheNextGet(t *testing.T) {
 func TestPutDraft_PermissionCheckedBeforeAnyPolicyRow(t *testing.T) {
 	super, app := dbTestPools(t)
 
+	// The request seam refuses a non-active caller before the store reads anything
+	// (db.WithinRequestTenantTxOpts); an ACTIVE preparer is still a role refusal.
 	for _, tc := range []struct {
 		name   string
 		role   string
 		status string
+		want   error
+		bySeam bool
 	}{
-		{"preparer", "preparer", "active"},
-		{"suspended admin", "admin", "suspended"},
+		{"preparer", "preparer", "active", ErrNotPermitted, false},
+		{"suspended admin", "admin", "suspended", db.ErrNotActiveMember, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tenantID := policyTenant(t, super, "APPR-05 put-permission "+tc.name)
@@ -106,10 +112,17 @@ func TestPutDraft_PermissionCheckedBeforeAnyPolicyRow(t *testing.T) {
 			traced, rec := tracedAppPool(t)
 			rec.reset()
 			_, err := NewStore(traced, stubFingerprinter, nil).PutDraft(c, policyID, ptr("Hijacked"), nil, approvalStep("engagement-partner"))
-			if !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("PutDraft as a %s: err = %v, want ErrNotPermitted", tc.name, err)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("PutDraft as a %s: err = %v, want %v", tc.name, err, tc.want)
 			}
-			if sql := rec.mentioning("memberships"); len(sql) == 0 {
+			if tc.bySeam {
+				if sql := rec.seamMentioning("FROM memberships"); len(sql) == 0 {
+					t.Error("no memberships statement was issued — the seam gate did not run")
+				}
+				if sql := rec.mentioning("memberships"); len(sql) != 0 {
+					t.Errorf("the store read memberships itself despite the seam's refusal:\n%v", sql)
+				}
+			} else if sql := rec.mentioning("memberships"); len(sql) == 0 {
 				t.Error("no memberships statement was issued — requireActiveAdmin did not run")
 			}
 			if sql := rec.mentioning("approval_polic"); len(sql) != 0 {

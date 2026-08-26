@@ -58,7 +58,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
-import { createAuthedFetch } from './authedFetch'
+import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch } from './authedFetch'
 import {
   createImport,
   getImportBatch,
@@ -943,5 +943,81 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(500)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AUDIT-10-07 — the suspension seam, on the multipart transport.
+//
+// The XHR path is a second transport (D2), so authedFetch.ts's specs prove nothing about it.
+// IMPAPI-19/20's shape, one status down: the 403 seam refusal must reach onSuspended and the
+// rejection must be unchanged.
+// ---------------------------------------------------------------------------
+
+const SUSPENDED_BODY = { error: NOT_ACTIVE_MEMBER_MESSAGE }
+
+function suspendedAuth(onSuspended: () => void): ImportAuth {
+  return { getToken: () => 'tok', onUnauthorized: vi.fn(), onSuspended }
+}
+
+describe('AUDIT-10-07: a suspended member on the multipart transport', () => {
+  beforeEach(() => {
+    FakeXhr.reset()
+  })
+
+  it('IMPAPI-21: a seam 403 on createImport calls onSuspended exactly once and still rejects', async () => {
+    const onSuspended = vi.fn()
+    const promise = createImport(suspendedAuth(onSuspended), base, makeReq(), () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(403, JSON.stringify(SUSPENDED_BODY), 'Forbidden')
+
+    const err = await captureRejection(() => promise)
+
+    expect(onSuspended).toHaveBeenCalledTimes(1)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+    expect((err as ApiError).body).toEqual(SUSPENDED_BODY)
+  })
+
+  it('IMPAPI-22: a seam 403 on previewImport matches IMPAPI-21 field for field (anti-fork)', async () => {
+    const onSuspended = vi.fn()
+    const promise = previewImport(suspendedAuth(onSuspended), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(403, JSON.stringify(SUSPENDED_BODY), 'Forbidden')
+
+    const err = await captureRejection(() => promise)
+
+    expect(onSuspended).toHaveBeenCalledTimes(1)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+    expect((err as ApiError).body).toEqual(SUSPENDED_BODY)
+  })
+
+  it('IMPAPI-23: a 403 that is NOT the seam refusal fires neither callback', async () => {
+    const onSuspended = vi.fn()
+    const onUnauthorized = vi.fn()
+    const auth: ImportAuth = { getToken: () => 'tok', onUnauthorized, onSuspended }
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(403, JSON.stringify({ error: 'not permitted' }), 'Forbidden')
+
+    await captureRejection(() => promise)
+
+    expect(onSuspended).not.toHaveBeenCalled()
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('IMPAPI-24: an omitted onSuspended still rejects rather than throwing on the callback', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(403, JSON.stringify(SUSPENDED_BODY), 'Forbidden')
+
+    const err = await captureRejection(() => promise)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+  })
+
+  it('IMPAPI-25: makeImportAuth forwards its third argument', () => {
+    const onSuspended = vi.fn()
+    const auth = makeImportAuth(buildSession('tok'), vi.fn(), onSuspended)
+
+    expect(auth.onSuspended, 'the factory dropped onSuspended').toBe(onSuspended)
   })
 })

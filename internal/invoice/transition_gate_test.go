@@ -81,10 +81,20 @@ func runStateOf(t *testing.T, super *pgxpool.Pool, runID string) string {
 // sqlRecorder records the SQL of every statement its pool issues, so "no approval
 // statement was issued" is assertable. Ported from internal/approval/
 // workflow_roles_test.go, unexported and unreachable from this package.
+//
+// The request seam batches set_config + its membership read; pgx routes those
+// through BatchTracer. Recorded apart so mentioning() keeps meaning "the store's
+// own SQL".
 type sqlRecorder struct {
-	mu  sync.Mutex
-	sql []string
+	mu      sync.Mutex
+	sql     []string
+	batched []string
 }
+
+var (
+	_ pgx.QueryTracer = (*sqlRecorder)(nil)
+	_ pgx.BatchTracer = (*sqlRecorder)(nil)
+)
 
 func (r *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
 	r.mu.Lock()
@@ -95,17 +105,51 @@ func (r *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.Tr
 
 func (r *sqlRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (r *sqlRecorder) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	return ctx
+}
+
+func (r *sqlRecorder) TraceBatchQuery(_ context.Context, _ *pgx.Conn, d pgx.TraceBatchQueryData) {
+	r.mu.Lock()
+	r.batched = append(r.batched, d.SQL)
+	r.mu.Unlock()
+}
+
+func (r *sqlRecorder) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
 func (r *sqlRecorder) reset() {
 	r.mu.Lock()
 	r.sql = nil
+	r.batched = nil
 	r.mu.Unlock()
 }
 
 func (r *sqlRecorder) mentioning(substr string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return filterContaining(r.sql, substr)
+}
+
+// seamMentioning scans the batched statements only — the request seam's gate.
+func (r *sqlRecorder) seamMentioning(substr string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return filterContaining(r.batched, substr)
+}
+
+// tenantTxCount counts set_config('app.current_tenant') across both slices: the
+// request seam batches that statement, WithinTenantTx execs it plainly, and either
+// way there is exactly one per transaction.
+func (r *sqlRecorder) tenantTxCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	const needle = "set_config('app.current_tenant'"
+	return len(filterContaining(r.sql, needle)) + len(filterContaining(r.batched, needle))
+}
+
+func filterContaining(stmts []string, substr string) []string {
 	var out []string
-	for _, s := range r.sql {
+	for _, s := range stmts {
 		if strings.Contains(s, substr) {
 			out = append(out, s)
 		}

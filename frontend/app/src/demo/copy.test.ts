@@ -98,3 +98,14 @@ describe('no invited branch exists (AC-5 fence)', () => {
     expect(contents).not.toContain('Invitation not accepted')
   })
 })
+
+// AUDIT-10-07. SUSPENDED_REASON explained a suspended row by asserting that sign-in is
+// blocked. That was only ever true of the hosted mint allowlist, and it contradicted
+// lib/members.ts's SUSPEND_EXPLANATION, which says the opposite. The false half is gone; the
+// row still states the consequence the presenter needs, which is all it was there for.
+describe('SUSPENDED_REASON claims nothing about sign-in (AUDIT-10-07)', () => {
+  it('states the consequence without explaining it by sign-in', () => {
+    expect(copy.SUSPENDED_REASON).not.toMatch(/sign-?\s?in/i)
+    expect(copy.SUSPENDED_REASON).toContain('cannot be used in the demo')
+  })
+})

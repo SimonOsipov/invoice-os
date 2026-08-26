@@ -448,18 +448,24 @@ export function invitedNotice(count: number): string {
 // derivations into this module.
 //
 // Every string below was byte-checked against §8/§9 in the vault, not against the
-// subtask description that quotes them.
+// subtask description that quotes them — EXCEPT SUSPEND_EXPLANATION's middle sentence,
+// rewritten by AUDIT-10-07 because the read-path gate made §8's wording false. The vault
+// section still carries the old sentence.
 
 /**
- * What suspension actually does. It no longer claims to block sign-in — the membership
- * endpoint writes a status column and nothing in the auth path reads it yet.
+ * What suspension actually does, as of the read-path gate (AUDIT-10). Sign-in itself is
+ * still not blocked — GET /v1/me is the gate's one exemption — but every tenant-scoped read
+ * refuses, so the workspace is replaced by a notice.
  *
- * Rendered under the suspend control in BOTH of its states: it describes the STATE, not the
- * direction of travel, so it is equally true beside `Reactivate`. The closing clause is
- * shared byte-for-byte with `REMOVE_EXPLANATION`.
+ * Rendered under the suspend control only, never beside `Reactivate` (MemberDrawer.tsx). The
+ * closing clause is shared byte-for-byte with `REMOVE_EXPLANATION`.
+ *
+ * Four homes: here, its byte-pin in members.test.ts, e2e/topology/settingsFixtures.ts's
+ * transcription, and roles.spec.ts's assertion against that transcription. members.test.ts
+ * fails if the transcription drifts.
  */
 export const SUSPEND_EXPLANATION =
-  'Removes their approver rights and keeps all history. Sign-in is not blocked yet. Their name stays on every invoice they touched.'
+  'Removes their approver rights and keeps all history. They can still sign in, but the workspace will not open. Their name stays on every invoice they touched.'
 
 /**
  * §8's `Remove` explanation, verbatim.

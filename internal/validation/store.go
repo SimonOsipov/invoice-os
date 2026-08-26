@@ -182,7 +182,7 @@ func (s *Store) LoadActiveRuleSet(ctx context.Context) (RuleSet, error) {
 //
 // It is functionally REQUIRED, not a stylistic variant: db.WithinRequestTenantTx
 // returns db.ErrNoTenant when no identity is in context
-// (platform/db/tenant.go:21-27), so an identity-less s2s caller structurally
+// (platform/db/tenant.go, WithinRequestTenantTx), so an identity-less s2s caller structurally
 // cannot use LoadActiveRuleSet -- it would hard-fail every batch. Hence the
 // plain pool.Begin here.
 //

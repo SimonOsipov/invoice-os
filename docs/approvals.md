@@ -33,10 +33,11 @@ The API is six routes (`cmd/invoice/main.go:187-192`):
 | `POST` | `/v1/approval-policies/{id}/publish` | seal the draft and activate it |
 | `DELETE` | `/v1/approval-policies/{id}` | soft-delete the policy |
 
-Reads are open to any caller holding a tenant claim. Every **write** requires an
-**active admin** — `requireActiveAdmin` (`internal/approval/store.go:455`) is the first
-statement inside each write transaction, so a suspended or non-admin caller is refused
-with nothing written. It answers `403 only an admin can change approval policies`.
+Reads are open to any caller the request seam admits — since AUDIT-10 a `suspended` or
+`invited` member is refused there, before any handler runs. Every **write** additionally
+requires an **active admin** — `requireActiveAdmin` (`internal/approval/store.go:455`) is
+the first statement inside each write transaction, so a non-admin caller is refused with
+nothing written. It answers `403 only an admin can change approval policies`.
 
 **Arrived here from an error message?** Go straight to the [error
 reference](#appendix--error-reference) at the foot of this page, which lists every
@@ -300,7 +301,7 @@ waiting on.
 
 ### 2.1 `GET /v1/invoices/{id}/approval` — read a run
 
-Any caller holding a tenant claim may read a run — no role gate (`RunHandler`,
+Any caller the request seam admits may read a run — no role gate (`RunHandler`,
 `internal/approval/handlers.go:313-334`). Answers the invoice's most recent
 `approval_runs` row, its steps in `ord` order, and its full decision ledger.
 
@@ -308,6 +309,7 @@ Any caller holding a tenant claim may read a run — no role gate (`RunHandler`,
 |---|---|---|
 | `200` | — | the run, assembled fresh (steps + decisions) |
 | `401` | `unauthorized` | no verified identity / no tenant claim |
+| `403` | `your membership in this workspace is not active` | the read-path membership gate (AUDIT-10). A `suspended` or `invited` caller is refused at the request seam, before the handler runs |
 | `404` | `no approval run for this invoice` | unknown, cross-tenant, malformed-uuid and no-run-row invoice ids all answer alike, deliberately (the `GetPolicy` no-oracle rule, `read_model.go:77-79`) |
 
 The SPA maps this `404` to a no-run **empty state**, not an error: `getInvoiceApprovalRun`
@@ -335,6 +337,7 @@ must be non-blank for `rejected`, optional for `approved`; both are capped at 10
 | `400` | `reason is required` | a `rejected` decision with a blank/absent reason |
 | `400` | `reason exceeds the 1000-char bound` | `reason` over 1000 bytes, either decision |
 | `401` | `unauthorized` | no verified identity / no tenant claim |
+| `403` | `your membership in this workspace is not active` | the read-path membership gate (AUDIT-10). It fires at the request seam, before **either** axis below |
 | `403` | `only an approver can decide an approval step` | AXIS 1 refusal |
 | `403` | `you do not hold the workflow role this step is waiting on` | AXIS 2 refusal |
 | `404` | `no approval run for this invoice` | same no-oracle rule as the GET |
@@ -673,7 +676,7 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 | run validation | ✓ | ✓ | ✓ | not enforced |
 | approve in approval steps | ✓ | — | ✓ | **server-enforced** — `internal/approval/decision.go`'s two-axis check: AXIS 1 refuses any non-{admin,reviewer}; AXIS 2 refuses an approver who does not hold the pending step's workflow role. |
 | transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced, both doors** — `TransitionHandler` (single) and `BatchSubmitHandler` (batch, `POST /v1/invoices/submissions`), both `internal/invoice/handlers.go`. Both apply `isApprover` = admin or reviewer; a preparer gets `403` either way. **Role is only the first rung**: past it, the approval gate (`TransmitClear`) blocks an invoice whose run is still open, at `Store.Transition` and `Submitter.BatchSubmit` — subject to the flag (§11). |
-| invite and manage members | ✓ | — | — | **partly server-enforced** — the *manage* half is admin-only at `internal/tenancy/store.go:140` (`PATCH /v1/memberships/{user_id}`). The *invite* half has **no server surface**. |
+| invite and manage members | ✓ | — | — | **partly server-enforced** — the *manage* half is admin-only in `tenancy.Store.SetMembershipStatus` (`internal/tenancy/store.go`) (`PATCH /v1/memberships/{user_id}`). The *invite* half has **no server surface**. |
 | manage ERP connectors | ✓ | — | — | **no server surface** — no endpoint exists |
 | manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
 
@@ -688,8 +691,9 @@ above describes the role rung only. The code is the authority for this table; if
 disagree, the code is right and this table is stale.
 
 Separately, and not in the matrix: **every approval-policy write requires an active
-admin** (`internal/approval/store.go:455`). Reading policies requires only a tenant
-claim.
+admin** (`internal/approval/store.go:455`). Reading policies needs no admin role — only
+a tenant claim and a membership that is not `suspended` or `invited` (the read-path gate,
+AUDIT-10).
 
 ---
 
@@ -1093,7 +1097,8 @@ message, not the status: several distinct causes share a status code.
 | `400` | `invalid request body` (policy/staffing endpoints) | The JSON did not decode, or the body exceeded the 64 KiB cap (`maxPolicyBodyBytes`/`maxStaffBodyBytes`). | Check the payload is well-formed. A very large policy tree can genuinely hit the cap. |
 | `400` | `steps must be an array of approval steps` | A draft `PUT` omitted `steps` entirely. | Send `steps` explicitly. **`"steps": []` clears the tree** — that is a real operation, which is why an absent key is refused rather than treated as empty. |
 | `401` | `unauthorized` | No verified identity, or no tenant claim on the request. | An authentication problem, not a policy one. |
-| `403` | `only an admin can change approval policies` | The caller is not an **active** admin. A suspended admin and an invited-but-not-active admin are both refused. | Have an active admin perform the change, or reactivate the membership. Reads need no admin role. |
+| `403` | `your membership in this workspace is not active` | The caller's `memberships` row in this workspace is `suspended` or `invited`. The read-path membership gate (AUDIT-10) refuses at the request seam, so this fires **before** either `403` below and before any read or write reaches the database. Applies to reads as well as writes. | Have an admin reactivate the membership (`PATCH /v1/memberships/{user_id}`). No policy change will succeed until then, and neither will a read. |
+| `403` | `only an admin can change approval policies` | The caller is not an **active** admin: their membership role is not `admin`, or they hold no membership row at all. A `suspended` or `invited` caller is refused earlier still, by the read-path membership gate (AUDIT-10), and never reaches this check. | Have an active admin perform the change, or reactivate the membership. Reads need no admin role. |
 | `404` | `approval policy not found` | No such policy in this tenant — or it is soft-deleted, or the id is not a well-formed uuid. All three are deliberately one answer, so the endpoint cannot be used to probe which ids exist. | Confirm the id and that the policy is not deleted (`deleted_at IS NULL`). |
 | `409` | `this policy has no unpublished changes` | Either there was genuinely no open draft, **or** a concurrent publish of the same policy won the race. | Check `published_by` and `published_at` (§3) before assuming nothing happened — see §1. |
 | `409` | `an approval step names a workflow role that no longer exists` | An `approval` step references a workflow role that has been deleted, or carries no role key at all. | Restore the role, or edit the step to name a live one, then publish again. A role deleted *after* a publish leaves the sealed version active with that step unsatisfiable. |
@@ -1104,7 +1109,7 @@ message, not the status: several distinct causes share a status code.
 | `400` | `decision must be "approved" or "rejected"` | The POST body's `decision` field was missing or held a value other than the two legal ones. | Send exactly `"approved"` or `"rejected"`. |
 | `400` | `reason is required` | The decision was `rejected` but `reason` was absent or blank after trimming. | Supply a non-blank reason. |
 | `400` | `reason exceeds the 1000-char bound` | `reason` (either decision) was over 1000 bytes. | Shorten the reason. |
-| `403` | `only an approver can decide an approval step` | The caller's membership role is `preparer`, or the caller holds no active membership at all (AXIS 1). | Have an active `admin` or `reviewer` decide instead. |
+| `403` | `only an approver can decide an approval step` | The caller's membership role is `preparer`, or the caller holds no membership row at all (AXIS 1). A `suspended` or `invited` caller is refused earlier, by the read-path membership gate (AUDIT-10). | Have an active `admin` or `reviewer` decide instead. |
 | `403` | `you do not hold the workflow role this step is waiting on` | The caller is an approver but is not staffed to the pending step's `workflow_role_key` (AXIS 2). | Have a staffed holder of that role decide, or restaff the role. |
 | `404` | `no approval run for this invoice` | No run exists for this invoice id in this tenant — unknown id, cross-tenant id, malformed uuid, and no-run-row all answer alike by design. | Confirm the invoice id and that an approval policy was active when it validated. |
 | `409` | `this approval run is already closed` | The run's most recent decision already closed it (approved or rejected); no pending step remains to decide. | `GET` the run to see the final state; nothing left to decide. |

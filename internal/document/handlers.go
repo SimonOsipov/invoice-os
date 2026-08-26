@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // DownloadHandler is GET /v1/documents/{id}: identity-first 401 -> a
@@ -109,6 +110,8 @@ func contentDisposition(name *string) string {
 // package-internal "document: validation" string must not leak.
 func statusForErr(err error) (status int, msg string) {
 	switch {
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrRangeNotSatisfiable):

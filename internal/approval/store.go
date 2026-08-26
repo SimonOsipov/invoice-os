@@ -77,8 +77,9 @@ var (
 // role's own `ord` order. Two statements, constant in the number of roles: the roles,
 // then every role's staffing in ONE query, grouped in Go.
 //
-// No access-role gate and no memberships read at all — any caller holding a tenant
-// claim may list, the same as GET /v1/memberships
+// No access-role gate of its own — any caller the request seam admits may list, the
+// same as GET /v1/memberships. The seam refuses a non-active member first
+// (db.ErrNotActiveMember, AUDIT-10)
 // (TestWorkflowRole_ListNeedsNoAdminRole, TestWorkflowRole_ListRequiresNoMembershipRow).
 func (s *Store) ListRoles(ctx context.Context) ([]Role, error) {
 	roles := []Role{}

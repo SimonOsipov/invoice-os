@@ -781,7 +781,7 @@ func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
 // TestStore_LoadActiveRuleSetGlobalNoIdentity (VB-14, Stage-1 addendum G3's
 // required fix): LoadActiveRuleSetGlobal must succeed with NO identity in
 // ctx (auth.WithIdentity is never called here -- that is the whole point of
-// the tenant-free load, platform/db/tenant.go:21-27 is why this method must
+// the tenant-free load, platform/db/tenant.go's WithinRequestTenantTx is why it must
 // exist as something OTHER than a thin wrapper over LoadActiveRuleSet) --
 // rs.Version and rs.ID must match the live active row, and critically
 // len(rs.Rules) must equal that row's real rule count.
@@ -822,7 +822,8 @@ func TestStore_LoadActiveRuleSetGlobalNoIdentity(t *testing.T) {
 	rs, err := store.LoadActiveRuleSetGlobal(ctx)
 	if err != nil {
 		t.Fatalf("LoadActiveRuleSetGlobal with no identity: err = %v, want nil -- a db.ErrNoTenant here would mean "+
-			"the tenant-free load structurally cannot run without identity (platform/db/tenant.go:21-27 is why this "+
+			"the tenant-free load structurally cannot run without identity (platform/db/tenant.go's "+
+			"WithinRequestTenantTx is why this "+
 			"method must exist as something OTHER than a thin wrapper over LoadActiveRuleSet)", err)
 	}
 	if rs.Version != wantVersion {

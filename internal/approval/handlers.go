@@ -31,7 +31,7 @@ func normalise(r Role) Role {
 }
 
 // ListRolesHandler returns GET /v1/workflow-roles. No access-role gate — any caller
-// holding a tenant claim may list, the same as GET /v1/memberships.
+// the request seam admits may list, the same as GET /v1/memberships.
 func ListRolesHandler(list RolesLister, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -219,13 +219,15 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 
 // decisionStatusForErr is the run-read and decide seams' shared mapper. ErrRunNotFound
 // covers unknown, cross-tenant, malformed-uuid and no-run-row alike (read_model.go:
-// 77-79's sentinel), so its wording never names which. The two 403s name their own
+// 77-79's sentinel), so its wording never names which. The two RBAC 403s name their own
 // axis (AXIS 1: not an approver at all; AXIS 2: an approver but not this step's role
 // holder) so the two stay distinguishable on the wire.
 func decisionStatusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrNotPermitted):
 		return http.StatusForbidden, "only an approver can decide an approval step"
 	case errors.Is(err, ErrNotRoleHolder):
@@ -308,8 +310,8 @@ func DecideHandler(decide Decider, log *slog.Logger) http.HandlerFunc {
 }
 
 // RunHandler returns GET /v1/invoices/{id}/approval: identity (401) -> path id ->
-// read -> 200. No body is read at all, and no role gate — any authenticated tenant
-// member may read a run (AC-5); the approver check belongs to the POST.
+// read -> 200. No body is read at all, and no role gate — any active tenant member may
+// read a run (AC-5); the approver check belongs to the POST.
 func RunHandler(read RunReader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()

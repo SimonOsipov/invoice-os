@@ -167,15 +167,19 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, store StoreFunc, tenant
 	return res, nil
 }
 
-// tenantAdmin returns any admin member's subject, or "" when the tenant has
-// none — an absent demo tenant is skipped, not an error, because
+// tenantAdmin returns an active admin member's subject, or "" when the tenant
+// has none — an absent demo tenant is skipped, not an error, because
 // db/seed.dev.sql creates all four but only populates some.
+//
+// status = 'active' is load-bearing, not tidiness: seedTenant runs as this
+// subject through the gated WithinRequestTenantTx, which refuses a suspended or
+// invited caller (TestRLS_DemoDocsPrefersAnActiveAdminOverASuspendedOne).
 func tenantAdmin(ctx context.Context, pool *pgxpool.Pool, tenantID string) (string, error) {
 	var subject string
 	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT user_id::text FROM memberships
-			  WHERE tenant_id = $1 AND role = 'admin'
+			  WHERE tenant_id = $1 AND role = 'admin' AND status = 'active'
 			  ORDER BY user_id LIMIT 1`, tenantID,
 		).Scan(&subject)
 	})

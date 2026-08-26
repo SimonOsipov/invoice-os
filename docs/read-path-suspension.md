@@ -241,8 +241,9 @@ predicates it would previously have hit inside the transaction.
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
-These reach tenant data with no request identity at all, and are exempt from the gate because
-there is nothing to gate on. They are not endpoints and have no row in the table:
+These reach tenant data outside the request path. They are not endpoints and have no row in the
+table. Most carry no request identity at all, so there is nothing to gate on; `internal/demodocs`
+is the one exception and its row says so.
 
 | Caller | Why there is no identity |
 |---|---|
@@ -250,7 +251,8 @@ there is nothing to gate on. They are not endpoints and have no row in the table
 | `tools/revalidate-invoices` (`internal/invoice/revalidate.go`) | operator CLI; same |
 | the submission and poll workers (`internal/submission`) | River jobs; the job row carries the tenant |
 | the reconciliation sweep (`internal/reconciliation`) | scheduled worker; it also enumerates tenants as `invoice_tenant_reader` with no GUC set |
-| the demo seeders (`internal/demodocs`, `internal/demopolicy`) | boot-time, before the first request is served |
+| the demo approval-policy seeder (`internal/demopolicy`) | boot-time, before the first request is served |
+| the demo source-document seeder (`internal/demodocs`) | boot-time; its admin lookup carries none. **It is the exception**: `seedTenant` synthesizes an identity for the admin it found and writes through the gated seam, so the gate does apply to it. `tenantAdmin` therefore selects `AND status = 'active'` — without it a suspended admin sorting first would cost that tenant every source document, silently, since `cmd/invoice/main.go` logs a seeder failure and keeps serving (D-11) |
 | boot provisioning (`internal/platform/db`) | `bootstrap`, `provision`, `reset` and the demo purge run on a superuser connection before any tenant context exists |
 | migrations (`internal/platform/db/migrate.go`) | goose needs a `database/sql` handle, which no pgx pool can supply; it runs at boot on the migrator role |
 

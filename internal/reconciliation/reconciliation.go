@@ -47,6 +47,7 @@ const (
 // reconciler auto-heals it (Healable is true only for LostPoll — [drift-action]).
 type Finding struct {
 	InvoiceID       string
+	InvoiceNumber   string
 	SubmissionJobID *string
 	Kind            DriftKind
 	Healable        bool
@@ -82,7 +83,7 @@ WITH latest AS (
     FROM submission_jobs
     ORDER BY invoice_id, created_at DESC
 )
-SELECT i.id, j.id, 'lost_poll', true
+SELECT i.id, i.invoice_number, j.id, 'lost_poll', true
 FROM invoices i
 JOIN latest j ON j.invoice_id = i.id
 WHERE i.status = 'submitted'
@@ -98,21 +99,21 @@ WHERE i.status = 'submitted'
 
 UNION ALL
 
-SELECT i.id, j.id, 'pending_too_many_hops', false
+SELECT i.id, i.invoice_number, j.id, 'pending_too_many_hops', false
 FROM invoices i
 JOIN latest j ON j.invoice_id = i.id
 WHERE j.state = 'pending' AND j.attempts > $2
 
 UNION ALL
 
-SELECT i.id, j.id, 'pending_too_long', false
+SELECT i.id, i.invoice_number, j.id, 'pending_too_long', false
 FROM invoices i
 JOIN latest j ON j.invoice_id = i.id
 WHERE j.state = 'pending' AND j.created_at < $3
 
 UNION ALL
 
-SELECT i.id, j.id, 'submitting_orphan', false
+SELECT i.id, i.invoice_number, j.id, 'submitting_orphan', false
 FROM invoices i
 JOIN latest j ON j.invoice_id = i.id
 WHERE j.state = 'submitting'
@@ -126,7 +127,7 @@ WHERE j.state = 'submitting'
 
 UNION ALL
 
-SELECT i.id, j.id, 'queued_never_sent', false
+SELECT i.id, i.invoice_number, j.id, 'queued_never_sent', false
 FROM invoices i
 LEFT JOIN latest j ON j.invoice_id = i.id
 WHERE i.status = 'queued'
@@ -140,21 +141,21 @@ WHERE i.status = 'queued'
 
 UNION ALL
 
-SELECT i.id, j.id, 'irn_without_accepted', false
+SELECT i.id, i.invoice_number, j.id, 'irn_without_accepted', false
 FROM invoices i
 LEFT JOIN latest j ON j.invoice_id = i.id
 WHERE i.irn IS NOT NULL AND i.status <> 'accepted'
 
 UNION ALL
 
-SELECT i.id, j.id, 'accepted_without_irn', false
+SELECT i.id, i.invoice_number, j.id, 'accepted_without_irn', false
 FROM invoices i
 LEFT JOIN latest j ON j.invoice_id = i.id
 WHERE i.status = 'accepted' AND i.irn IS NULL
 
 UNION ALL
 
-SELECT i.id, j.id, 'verdict_not_routed', false
+SELECT i.id, i.invoice_number, j.id, 'verdict_not_routed', false
 FROM invoices i
 JOIN latest j ON j.invoice_id = i.id
 WHERE i.status = 'submitted' AND j.state IN ('accepted', 'rejected')
@@ -165,7 +166,7 @@ UNION ALL
 -- runs on a superuser pool with no app.current_tenant set (TestSeedTripsNoReconciliationDrift),
 -- where the unscoped form cross-joins tenants and drops real drift. A watchdog must not fail
 -- silent.
-SELECT i.id, NULL::uuid, 'approval_run_orphaned', false
+SELECT i.id, i.invoice_number, NULL::uuid, 'approval_run_orphaned', false
 FROM invoices i
 JOIN approval_runs r ON r.tenant_id = i.tenant_id AND r.invoice_id = i.id
 WHERE r.state = 'open'
@@ -176,7 +177,7 @@ UNION ALL
 -- LATERAL … LIMIT 1 picks the one current step, and NOT EXISTS (never LEFT JOIN … IS NULL)
 -- collapses the holders: a run with several pending steps or several holders must still
 -- produce exactly one finding.
-SELECT i.id, NULL::uuid, 'approval_blocked_unstaffed', false
+SELECT i.id, i.invoice_number, NULL::uuid, 'approval_blocked_unstaffed', false
 FROM invoices i
 JOIN approval_runs r ON r.tenant_id = i.tenant_id AND r.invoice_id = i.id AND r.state = 'open'
 JOIN LATERAL (
@@ -225,7 +226,7 @@ func Scan(ctx context.Context, tx pgx.Tx, th Thresholds) ([]Finding, error) {
 			kind  string
 			jobID *string
 		)
-		if err := rows.Scan(&f.InvoiceID, &jobID, &kind, &f.Healable); err != nil {
+		if err := rows.Scan(&f.InvoiceID, &f.InvoiceNumber, &jobID, &kind, &f.Healable); err != nil {
 			return nil, fmt.Errorf("reconciliation: scan row: %w", err)
 		}
 		f.SubmissionJobID = jobID
@@ -262,7 +263,7 @@ func ReArmPoll(ctx context.Context, tx pgx.Tx, q *queue.Client, tenantID string,
 
 // recordDriftAudit writes one reconciliation.drift_detected audit_log row for a flagged
 // (non-healable) finding, actor "system", summary-only payload
-// ({invoice_id, submission_job_id?, drift_kind} — [audit-drift-kind-payload]).
+// ({invoice_id, invoice_number, submission_job_id?, drift_kind} — [audit-drift-kind-payload]).
 func recordDriftAudit(ctx context.Context, tx pgx.Tx, f Finding) error {
 	return audit.Record(ctx, tx, "system", "reconciliation.drift_detected", driftPayload(f))
 }
@@ -276,13 +277,15 @@ func recordAutoFixAudit(ctx context.Context, tx pgx.Tx, f Finding) error {
 }
 
 // driftPayload builds the shared summary-only body — ids + drift_kind, never a wire body
-// (mirrors internal/submission/verdict_audit.go's recordVerdictAudit). submission_job_id
-// is included only when the finding carries one (Q1/C1/C2 can fire with no job row at
-// all), left absent from the map entirely rather than written as an empty string.
+// (mirrors internal/submission/verdict_audit.go's recordVerdictAudit). invoice_number is
+// written unconditionally, mirroring the NOT NULL column. submission_job_id is included
+// only when the finding carries one (Q1/C1/C2 can fire with no job row at all), left
+// absent from the map entirely rather than written as an empty string.
 func driftPayload(f Finding) map[string]any {
 	payload := map[string]any{
-		"invoice_id": f.InvoiceID,
-		"drift_kind": string(f.Kind),
+		"invoice_id":     f.InvoiceID,
+		"invoice_number": f.InvoiceNumber,
+		"drift_kind":     string(f.Kind),
 	}
 	if f.SubmissionJobID != nil {
 		payload["submission_job_id"] = *f.SubmissionJobID

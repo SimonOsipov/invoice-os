@@ -68,7 +68,7 @@ func TestRLS_ScanLostPollDetected(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
 	if len(got) != 1 || !findingEqual(got[0], want) {
 		t.Errorf("Scan findings = %+v, want exactly [%+v]", got, want)
 	}
@@ -91,7 +91,7 @@ func TestRLS_ScanLostPollSuppressedByLiveRiverJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan (before the live river_job exists): %v", err)
 	}
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
 	if len(before) != 1 || !findingEqual(before[0], want) {
 		t.Fatalf("Scan (no live river_job yet) findings = %+v, want exactly [%+v] — the positive "+
 			"control this suppression case is measured against", before, want)
@@ -129,7 +129,7 @@ func TestRLS_ScanLostPollSuppressedWhenNotOverdue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan (next_poll_at overdue): %v", err)
 	}
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: &jobID, Kind: LostPoll, Healable: true}
 	if len(before) != 1 || !findingEqual(before[0], want) {
 		t.Fatalf("Scan (next_poll_at overdue) findings = %+v, want exactly [%+v] — the positive "+
 			"control this suppression case is measured against", before, want)
@@ -164,7 +164,7 @@ func TestRLS_ScanQueuedNeverSent(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: QueuedNeverSent, Healable: false}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: nil, Kind: QueuedNeverSent, Healable: false}
 	if len(got) != 1 || !findingEqual(got[0], want) {
 		t.Errorf("Scan findings = %+v, want exactly [%+v]", got, want)
 	}
@@ -186,7 +186,7 @@ func TestRLS_ScanSubmittingOrphan(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: &jobID, Kind: SubmittingOrphan, Healable: false}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: &jobID, Kind: SubmittingOrphan, Healable: false}
 	if len(got) != 1 || !findingEqual(got[0], want) {
 		t.Errorf("Scan findings = %+v, want exactly [%+v]", got, want)
 	}
@@ -309,7 +309,7 @@ func TestRLS_ScanUsesLatestCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan (single old pending cycle): %v", err)
 	}
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: &oldJobID, Kind: LostPoll, Healable: true}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: &oldJobID, Kind: LostPoll, Healable: true}
 	if len(before) != 1 || !findingEqual(before[0], want) {
 		t.Fatalf("Scan (single old pending cycle) findings = %+v, want exactly [%+v] — the "+
 			"positive control this latest-cycle case is measured against", before, want)
@@ -397,7 +397,7 @@ func TestRLS_ScanApprovalRunOrphaned(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: rcApprovalRunOrphaned, Healable: false}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: nil, Kind: rcApprovalRunOrphaned, Healable: false}
 	if n := countForInvoice(got, invoiceID); n != 1 {
 		t.Fatalf("Scan findings for the draft-demoted invoice %q = %d (%+v), want exactly 1", invoiceID, n, got)
 	}
@@ -460,7 +460,7 @@ func TestRLS_ScanApprovalRunOrphanedIgnoresValidated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan (after draft demotion): %v", err)
 	}
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: rcApprovalRunOrphaned, Healable: false}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: nil, Kind: rcApprovalRunOrphaned, Healable: false}
 	if n := countForInvoice(after, invoiceID); n != 1 {
 		t.Fatalf("Scan (after draft demotion) findings for invoice %q = %d (%+v), want exactly "+
 			"1 — the positive control this ignores-validated case is measured against", invoiceID, n, after)
@@ -494,7 +494,7 @@ func TestRLS_ScanApprovalBlockedUnstaffed(t *testing.T) {
 		t.Fatalf("Scan: %v", err)
 	}
 
-	want := Finding{InvoiceID: invoiceID, SubmissionJobID: nil, Kind: rcApprovalBlockedUnstaffed, Healable: false}
+	want := Finding{InvoiceID: invoiceID, InvoiceNumber: rcInvoiceNumberFor(t, h, invoiceID), SubmissionJobID: nil, Kind: rcApprovalBlockedUnstaffed, Healable: false}
 	if n := countForInvoice(got, invoiceID); n != 1 {
 		t.Fatalf("Scan findings for invoice %q = %d (%+v), want exactly 1", invoiceID, n, got)
 	}

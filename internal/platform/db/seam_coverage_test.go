@@ -10,12 +10,14 @@
 // large instrument whose false-negative mode is silent.
 //
 // So these scans ask the complementary question, which IS locally decidable: can
-// HTTP-serving code reach the database WITHOUT the gate? Scan 1 says the only way
-// to get a pgx.Tx off a pool is through internal/platform/db. Scan 2 says the only
-// HTTP-path caller of the identity-free core is the one deliberate exemption.
-// Together they make the gated seam a monopoly, so every route that touches the
-// database is gated BY CONSTRUCTION. Scan 3 keeps the written enumeration
-// complete. Core AC 6 = 1 + 2 + 3.
+// HTTP-serving code reach the database WITHOUT the gate? Scan 1's invariant is
+// "no database HANDLE is acquired outside the allowlist" — a pool method, a bare
+// connection, a constructed pool and a database/sql handle all count, because a
+// monopoly with one named DSN hole left open is not a monopoly. Scan 2 says the
+// only HTTP-path caller of the identity-free core is the one deliberate
+// exemption. Together they make the gated seam a monopoly, so every route that
+// touches the database is gated BY CONSTRUCTION. Scan 3 keeps the written
+// enumeration complete. Core AC 6 = 1 + 2 + 3.
 //
 // All three assert an ABSENCE, which is the instrument class that reports
 // all-clear while examining nothing. So each carries planted control needles and
@@ -34,10 +36,15 @@
 // (TestCIRunFiltersReachEveryTestInThePackage). No scan touches a database.
 //
 // Known limits. Scan 1 cannot follow a pool passed as any or through an
-// interface. Scan 2 sees a direct db.WithinTenantTx selector call, not one reached
-// through a func value. Scan 3 sees only routes registered on app.Mux in the
-// walked roots, and resolves a non-literal route argument only when it is a
+// interface, and knows only the four handle packages named below — a fifth driver
+// would need adding. Scan 2 sees a direct db.WithinTenantTx selector call, not one
+// reached through a func value. Scan 3 sees only routes registered on app.Mux in
+// the walked roots, and resolves a non-literal route argument only when it is a
 // string const declared in the same directory.
+//
+// All three walk non-test .go files only: a fixture reaching a pool directly is
+// not a production hole, and admitting them would accrete exemptions that blur
+// the signal.
 package db_test
 
 import (
@@ -70,9 +77,21 @@ var scPoolMethods = map[string]bool{
 	"Exec": true, "Acquire": true, "SendBatch": true, "CopyFrom": true,
 }
 
-// scConnFuncs open a connection off a DSN, bypassing every pool. Without them the
-// monopoly scan 1 asserts has a hole the width of one pgx.Connect call.
-var scConnFuncs = map[string]bool{"Connect": true, "ConnectConfig": true}
+// scHandleFuncs are the package-level funcs that hand back a database handle off
+// a DSN, keyed by import path so an aliased import cannot hide one. Without them
+// the monopoly has two holes: pgx.Connect bypasses every pool, and a pool built
+// by pgxpool.New into a short-var local carries no declared type, so the pool
+// method called on it is invisible to the type-spelling pass. Construction IS the
+// acquisition, and that is where it must be caught.
+var scHandleFuncs = []struct {
+	path, def string
+	funcs     map[string]bool
+}{
+	{scPgxPath, "pgx", map[string]bool{"Connect": true, "ConnectConfig": true}},
+	{scPgxpoolPath, "pgxpool", map[string]bool{"New": true, "NewWithConfig": true}},
+	{"github.com/jackc/pgx/v5/pgconn", "pgconn", map[string]bool{"Connect": true, "ConnectConfig": true}},
+	{"database/sql", "sql", map[string]bool{"Open": true, "OpenDB": true}},
+}
 
 // scImportAlias returns the name path is bound to in f, or "" when f does not
 // import it. Resolving the alias keeps an aliased import from silently leaving a
@@ -118,13 +137,17 @@ func scParse(t *testing.T, fset *token.FileSet, root, rel string) *ast.File {
 // Scan 1 — no HTTP-serving code reaches a pool directly
 // ---------------------------------------------------------------------------
 
-// scPoolAllowlist is every file allowed a direct pool call.
+// scPoolAllowlist is every file allowed to reach the database without the seam.
 var scPoolAllowlist = []string{
-	"internal/platform/db/db.go",
-	"internal/platform/db/tenant.go",
-	"internal/validation/store.go",
-	"internal/importer/backfill.go",
-	"internal/invoice/revalidate.go",
+	"internal/platform/db/db.go",        // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	"internal/platform/db/tenant.go",    // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	"internal/platform/db/migrate.go",   // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	"internal/platform/db/bootstrap.go", // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	"internal/platform/db/provision.go", // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	"internal/validation/store.go",      // LoadActiveRuleSetGlobal is the S2S peer path, which has no caller identity at all to gate on
+	"internal/importer/backfill.go",     // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	"internal/invoice/revalidate.go",    // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	"internal/reconciliation/sweep.go",  // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on.
@@ -208,7 +231,13 @@ func scPoolNameFixpoint(names map[string]bool, aliases [][2]string) {
 // scPoolSitesIn finds every way f reaches the database without the seam: a pool
 // method called on a pool-typed name, or a connection opened straight off a DSN.
 func scPoolSitesIn(fset *token.FileSet, rel string, f *ast.File, names map[string]bool) []scPoolSite {
-	pgxAlias := scImportAlias(f, scPgxPath, "pgx")
+	// Resolve each handle package's alias once, so an aliased import is still seen.
+	handles := map[string]map[string]bool{}
+	for _, h := range scHandleFuncs {
+		if alias := scImportAlias(f, h.path, h.def); alias != "" {
+			handles[alias] = h.funcs
+		}
+	}
 	var out []scPoolSite
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -222,7 +251,7 @@ func scPoolSitesIn(fset *token.FileSet, rel string, f *ast.File, names map[strin
 		recv := scBaseName(sel.X)
 		switch {
 		case scPoolMethods[sel.Sel.Name] && recv != "" && names[recv]:
-		case scConnFuncs[sel.Sel.Name] && pgxAlias != "" && recv == pgxAlias:
+		case handles[recv][sel.Sel.Name]:
 		default:
 			return true
 		}
@@ -318,13 +347,14 @@ func (s *S) f(ctx context.Context) {
 }
 `
 
-// scNeedleBareConn is the boot-time provisioning shape: no pool anywhere, a
-// connection opened straight off a DSN. pgxpool.New beside it is construction,
-// not a read, and must not count.
+// scNeedleBareConn is every way to acquire a handle off a DSN with no pool in
+// sight. pgxpool.New is a site because the local it lands in carries no declared
+// type, so the pool method called on it would otherwise be invisible.
 const scNeedleBareConn = `package x
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -334,6 +364,23 @@ func f(ctx context.Context, dsn string) {
 	conn, _ := pgx.Connect(ctx, dsn)
 	_ = conn
 	p, _ := pgxpool.New(ctx, dsn)
+	_, _ = p.Query(ctx, "SELECT 1")
+	d, _ := sql.Open("pgx", dsn)
+	_ = d
+}
+`
+
+// scNeedleAliasedImport is the same acquisition behind a renamed import.
+const scNeedleAliasedImport = `package x
+
+import (
+	"context"
+
+	pp "github.com/jackc/pgx/v5/pgxpool"
+)
+
+func f(ctx context.Context, dsn string) {
+	p, _ := pp.New(ctx, dsn)
 	_ = p
 }
 `
@@ -373,13 +420,29 @@ func scPoolControlNeedles(t *testing.T) {
 		}
 	})
 
-	t.Run("N5 a bare pgx.Connect is a site, pgxpool.New is not", func(t *testing.T) {
+	t.Run("N5 every DSN entry point is a site", func(t *testing.T) {
 		sites := scFixturePoolSites(t, "n5.go", scNeedleBareConn)
-		if len(sites) != 1 {
-			t.Fatalf("found %d site(s) %v, want exactly 1 — a pool monopoly that does not watch pgx.Connect has a hole the width of one DSN, and pgxpool.New only builds a pool it never reads", len(sites), sites)
+		got := map[string]bool{}
+		for _, s := range sites {
+			got[s.recv+"."+s.method] = true
 		}
-		if sites[0].method != "Connect" {
-			t.Fatalf("site = %+v, want the pgx.Connect call", sites[0])
+		for _, want := range []string{"pgx.Connect", "pgxpool.New", "sql.Open"} {
+			if !got[want] {
+				t.Errorf("%s is not a site %v — a monopoly with one named DSN hole left open is not a monopoly", want, sites)
+			}
+		}
+		// The reason construction must be a site: p carries no declared type, so
+		// the type-spelling pass never learns it is a pool and the Query on it is
+		// invisible. Catching pgxpool.New is what closes that.
+		if got["p.Query"] {
+			t.Errorf("p.Query reads as a site %v — if the type-spelling pass has started resolving short-var locals, say so here; until then pgxpool.New is the only thing standing between this shape and an unseen read", sites)
+		}
+	})
+
+	t.Run("N6 an aliased import cannot hide an acquisition", func(t *testing.T) {
+		sites := scFixturePoolSites(t, "n6.go", scNeedleAliasedImport)
+		if len(sites) != 1 {
+			t.Fatalf("found %d site(s) %v for pp.New behind a renamed import, want 1 — resolving by import path is what keeps a rename from silently emptying the population", len(sites), sites)
 		}
 	})
 }
@@ -418,8 +481,8 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 	for _, s := range sites {
 		byFile[s.file] = append(byFile[s.file], s)
 	}
-	if len(sites) < 7 || len(byFile) < 7 {
-		t.Fatalf("found %d ungated database handle(s) across %d file(s) %v, want at least 7 across at least 7 (8 across 8 measured at AUDIT-10-04) — zero is what a broken scan and a clean repo both look like", len(sites), len(byFile), sortedKeys(byFile))
+	if len(sites) < 9 || len(byFile) < 8 {
+		t.Fatalf("found %d ungated database handle(s) across %d file(s) %v, want at least 9 across at least 8 (10 across 9 measured at AUDIT-10-04) — zero is what a broken scan and a clean repo both look like", len(sites), len(byFile), sortedKeys(byFile))
 	}
 
 	allowed := map[string]bool{}
@@ -476,12 +539,13 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 
 // scCoreAllowlist is every caller allowed to reach the identity-free core.
 var scCoreAllowlist = []scCoreExemption{
-	{pkg: "internal/platform/db"},
-	{pkg: "internal/submission"},
-	{pkg: "internal/reconciliation"},
-	{pkg: "internal/demodocs"},
-	{pkg: "internal/demopolicy"},
-	{file: "internal/tenancy/store.go"},
+	{pkg: "internal/submission"},                  // River job workers; the job row carries its tenant and there is no request identity to gate
+	{pkg: "internal/reconciliation"},              // the sweep worker, same shape: a schedule opened it, not a caller
+	{pkg: "internal/demodocs"},                    // boot-time document seeder; it runs to completion before the first request is served
+	{pkg: "internal/demopolicy"},                  // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/importer/backfill.go"},       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
+	{file: "internal/invoice/revalidate.go"},      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/tenancy/store.go", fn: "Me"}, // the one deliberate HTTP-path exemption; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -820,7 +884,7 @@ func scDocRows(doc string) (rows []scDocRow, found bool) {
 	}
 	for i := start + 1; i < len(lines); i++ {
 		t := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(t, "## ") {
+		if strings.HasPrefix(t, "#") { // any heading, including a sub-section's own table
 			break
 		}
 		if !strings.HasPrefix(t, "|") {
@@ -903,6 +967,16 @@ func scRouteControlNeedles(t *testing.T) {
 		}
 		if rows[0].verdict != "exempt" || len(rows[0].routes) != 1 || rows[0].routes[0] != "GET /v1/ping" {
 			t.Fatalf("row = %+v, want the ping route marked exempt", rows[0])
+		}
+
+		// A sub-section's own table is past the boundary: the endpoint table ends
+		// at the next heading of ANY level, or §8.1's non-HTTP callers read as
+		// routes nobody registers.
+		rows, _ = scDocRows(scNeedleDocHead +
+			"| `GET /v1/ping` | tenancy | exempt | no DB |\n\n" +
+			"### 8.1 The non-HTTP callers\n\n| `internal/submission` | River jobs |\n")
+		if len(rows) != 1 {
+			t.Fatalf("parsed %d row(s) %v, want 1 — the parse ran past the sub-heading", len(rows), rows)
 		}
 	})
 

@@ -309,6 +309,7 @@ Any caller the request seam admits may read a run — no role gate (`RunHandler`
 |---|---|---|
 | `200` | — | the run, assembled fresh (steps + decisions) |
 | `401` | `unauthorized` | no verified identity / no tenant claim |
+| `403` | `your membership in this workspace is not active` | the read-path membership gate (AUDIT-10). A `suspended` or `invited` caller is refused at the request seam, before the handler runs |
 | `404` | `no approval run for this invoice` | unknown, cross-tenant, malformed-uuid and no-run-row invoice ids all answer alike, deliberately (the `GetPolicy` no-oracle rule, `read_model.go:77-79`) |
 
 The SPA maps this `404` to a no-run **empty state**, not an error: `getInvoiceApprovalRun`
@@ -336,6 +337,7 @@ must be non-blank for `rejected`, optional for `approved`; both are capped at 10
 | `400` | `reason is required` | a `rejected` decision with a blank/absent reason |
 | `400` | `reason exceeds the 1000-char bound` | `reason` over 1000 bytes, either decision |
 | `401` | `unauthorized` | no verified identity / no tenant claim |
+| `403` | `your membership in this workspace is not active` | the read-path membership gate (AUDIT-10). It fires at the request seam, before **either** axis below |
 | `403` | `only an approver can decide an approval step` | AXIS 1 refusal |
 | `403` | `you do not hold the workflow role this step is waiting on` | AXIS 2 refusal |
 | `404` | `no approval run for this invoice` | same no-oracle rule as the GET |
@@ -1095,6 +1097,7 @@ message, not the status: several distinct causes share a status code.
 | `400` | `invalid request body` (policy/staffing endpoints) | The JSON did not decode, or the body exceeded the 64 KiB cap (`maxPolicyBodyBytes`/`maxStaffBodyBytes`). | Check the payload is well-formed. A very large policy tree can genuinely hit the cap. |
 | `400` | `steps must be an array of approval steps` | A draft `PUT` omitted `steps` entirely. | Send `steps` explicitly. **`"steps": []` clears the tree** — that is a real operation, which is why an absent key is refused rather than treated as empty. |
 | `401` | `unauthorized` | No verified identity, or no tenant claim on the request. | An authentication problem, not a policy one. |
+| `403` | `your membership in this workspace is not active` | The caller's `memberships` row in this workspace is `suspended` or `invited`. The read-path membership gate (AUDIT-10) refuses at the request seam, so this fires **before** either `403` below and before any read or write reaches the database. Applies to reads as well as writes. | Have an admin reactivate the membership (`PATCH /v1/memberships/{user_id}`). No policy change will succeed until then, and neither will a read. |
 | `403` | `only an admin can change approval policies` | The caller is not an **active** admin: their membership role is not `admin`, or they hold no membership row at all. A `suspended` or `invited` caller is refused earlier still, by the read-path membership gate (AUDIT-10), and never reaches this check. | Have an active admin perform the change, or reactivate the membership. Reads need no admin role. |
 | `404` | `approval policy not found` | No such policy in this tenant — or it is soft-deleted, or the id is not a well-formed uuid. All three are deliberately one answer, so the endpoint cannot be used to probe which ids exist. | Confirm the id and that the policy is not deleted (`deleted_at IS NULL`). |
 | `409` | `this policy has no unpublished changes` | Either there was genuinely no open draft, **or** a concurrent publish of the same policy won the race. | Check `published_by` and `published_at` (§3) before assuming nothing happened — see §1. |

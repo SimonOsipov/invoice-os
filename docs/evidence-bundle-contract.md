@@ -59,6 +59,7 @@ parsing then runs fully before either route touches the database.
 | 200 | `Content-Type: application/zip`, `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment; filename=…` (see §2.3 for the exact rendering), **no `Content-Length`** — see the framing note below. |
 | 400 | `{"error":"<message>"}` — malformed/absent param, `from` after `to`, or the invoice count over the cap (§5). Every 400 is raised **before the first ZIP byte**. |
 | 401 | `{"error":"unauthorized"}` — no identity, or the store's `db.ErrNoTenant`. |
+| **403** | `{"error":"your membership in this workspace is not active"}` — the read-path membership gate (AUDIT-10, `db.ErrNotActiveMember`). A `suspended` or `invited` member is refused at the request seam, before `parseRequest` and before the first ZIP byte. |
 | **404** | `{"error":"not found"}` — no **visible** `business_entities` row matches `entity_id`. Under FORCE RLS, "does not exist" and "belongs to another tenant" are the same answer, deliberately. |
 | 500 | `{"error":"internal server error"}` — only reachable before streaming starts. |
 | mid-stream failure | the response is **abandoned without a ZIP central directory** — see §7. |
@@ -73,7 +74,7 @@ wire never carries a length".
 
 ### 2.2 `GET /v1/evidence-bundle/preview` — what the drawer states before downloading
 
-Same params, same auth, same 400/401/404 rules as §2.1, run through the identical
+Same params, same auth, same 400/401/403/404 rules as §2.1, run through the identical
 `parseRequest`. Returns:
 
 ```json
@@ -426,9 +427,12 @@ rows and ~1.4 GB of raw bodies through deflate, inside one transaction.
 
 ## 6. The transaction guarantee — REPEATABLE READ, READ ONLY
 
-**`db.WithinRequestTenantTx` alone does NOT give one consistent snapshot.** The helper calls a
-bare `pool.Begin(ctx)` with no `pgx.TxOptions`, and this server's
-`default_transaction_isolation` is `read committed`. Under READ COMMITTED, **each statement
+**`db.WithinRequestTenantTx` alone does NOT give one consistent snapshot.** The helper delegates
+to `WithinRequestTenantTxOpts`, which calls `pool.BeginTx(ctx, opts)` and then sends its
+tenant-scoping `pgx.Batch`; called through `WithinRequestTenantTx` those `opts` are the zero
+value, so the transaction takes this server's `default_transaction_isolation`, which is
+`read committed` (AUDIT-10 added the batch; before it the helper called a bare `pool.Begin`, and
+the isolation was the same either way). Under READ COMMITTED, **each statement
 inside one transaction takes its own snapshot** — one transaction buys atomicity between
 statements, not a consistent read across them.
 
@@ -451,8 +455,9 @@ delegations passing the zero value, so every other caller in the repo is unaffec
 the wire.
 
 Measured for that exact option pair: `transaction_isolation` reads back `repeatable read` and
-`transaction_read_only` reads back `on`; the tenant-scoping helper's own `set_config` call is
-**accepted** under READ ONLY (a local GUC is not a data write); the drift reproduced above is
+`transaction_read_only` reads back `on`; **both** statements the tenant-scoping helper batches
+are **accepted** under READ ONLY — the `set_config` (a local GUC is not a data write) and
+AUDIT-10's `SELECT status FROM memberships` (a read); the drift reproduced above is
 gone (0 rows before a concurrent commit, 0 rows after, in the same transaction); and a write
 attempt inside the transaction is refused with `SQLSTATE 25006`
 (`cannot execute UPDATE in a read-only transaction`). READ ONLY is not decoration — the
@@ -475,7 +480,8 @@ same shape as any `pg_dump`. This repo sets no `statement_timeout`, so nothing e
 Three regimes, split by whether a response byte has been written yet.
 
 **Before the first byte** — parameter validation, identity, `selectEntity`, and the invoice
-count against the cap. Every failure here is an honest 400/401/404/500 JSON body.
+count against the cap, and the read-path membership gate the request seam applies before any of
+them. Every failure here is an honest 400/401/403/404/500 JSON body.
 
 **After the first byte** — the status line is already 200 and cannot be withdrawn. On any error
 after this point, the assembler returns without calling `bw.Close()`, so the response ends with

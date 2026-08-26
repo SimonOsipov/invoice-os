@@ -22,7 +22,7 @@ export const AUDIT_COPY = {
   // payload key; an email-only-resolved actor name is not. Placeholder stays neutral either way.
   searchPlaceholder: 'Search event details',
   searchHelper:
-    'Searches event details, invoice numbers, rule keys, IRNs, company names and member display names. An invoice number matches every event for that invoice, including older ones that do not list the number in their own details. It cannot find a member shown by their email address.',
+    'Searches event details, invoice numbers, rule keys, IRNs, company names and member display names. An invoice number matches that invoice\'s events, including older ones that do not list the number in their own details. It cannot find a member shown by their email address.',
   dateRangeInvalidReason: 'End date must be on or after the start date.',
   // D-7 / contract §3: the workspace bucket also holds events with no company to attribute.
   companyWorkspaceCaveat: 'Also includes events with no company to attribute them to.',

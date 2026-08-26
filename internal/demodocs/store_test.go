@@ -532,3 +532,156 @@ func TestRLS_DemoDocsSeedIgnoresNonDemoTenants(t *testing.T) {
 		t.Errorf("Seed stored %d documents for a non-allowlisted tenant", docs)
 	}
 }
+
+// demoInHouseTenantID is db/seed.dev.sql's second populated tenant, the sibling
+// of demoFirmTenantID above.
+const demoInHouseTenantID = "22222222-2222-2222-2222-222222222222"
+
+// The two halves fix ORDER BY user_id; the random tail keeps two tenants from
+// colliding on one id.
+const (
+	lowAdminPrefix  = "00000000-0000-0000-0000-"
+	highAdminPrefix = "ffffffff-ffff-ffff-ffff-"
+)
+
+func adminUUID(prefix string) string { return prefix + uuid.NewString()[24:] }
+
+func addAdmin(t *testing.T, super *pgxpool.Pool, tenantID, userID, status string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', $3)`,
+		tenantID, userID, status); err != nil {
+		t.Fatalf("seed %s admin: %v", status, err)
+	}
+}
+
+// seedTenant runs as the subject this returns, through the gated
+// WithinRequestTenantTx that refuses a non-active caller -- and
+// cmd/invoice/main.go logs a seeder failure and keeps serving, so picking the
+// suspended admin costs the tenant every source document in silence.
+func TestRLS_DemoDocsPrefersAnActiveAdminOverASuspendedOne(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, autoAdmin := newTenant(t, super, "demodocs suspended admin sorts first")
+	if _, err := super.Exec(ctx,
+		`DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, autoAdmin); err != nil {
+		t.Fatalf("drop the helper's random admin: %v", err)
+	}
+
+	suspended, active := adminUUID(lowAdminPrefix), adminUUID(highAdminPrefix)
+	if !(suspended < active) {
+		t.Fatalf("suspended %s does not sort before active %s; the test would pass without the predicate", suspended, active)
+	}
+	addAdmin(t, super, tenantID, suspended, "suspended")
+	addAdmin(t, super, tenantID, active, "active")
+
+	got, err := tenantAdmin(ctx, app, tenantID)
+	if err != nil {
+		t.Fatalf("tenantAdmin: %v", err)
+	}
+	if got != active {
+		t.Errorf("tenantAdmin = %s, want the active admin %s", got, active)
+	}
+
+	entity := newEntity(t, super, tenantID, "Adaeze Marine Supplies Ltd")
+	inv := newInvoice(t, super, tenantID, entity, "DEMO-T-7001", 1)
+	var bodies [][]byte
+	res, err := seedTenant(ctx, app, stubStore(t, super, &bodies), tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.InvoicesLinked != 1 {
+		t.Errorf("InvoicesLinked = %d, want 1", res.InvoicesLinked)
+	}
+	if doc, _ := sourceOf(t, super, inv); doc == nil {
+		t.Error("the invoice got no source document")
+	}
+}
+
+// A suspended sole admin is no honest actor either, so the tenant takes the same
+// skip as one with no admin row at all -- not the gate's refusal surfacing as a
+// seeder error from deeper in seedTenant.
+func TestRLS_DemoDocsSkipsATenantWhoseOnlyAdminIsSuspended(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, adminID := newTenant(t, super, "demodocs sole admin suspended")
+	if _, err := super.Exec(ctx,
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`,
+		tenantID, adminID); err != nil {
+		t.Fatalf("suspend the admin: %v", err)
+	}
+	entity := newEntity(t, super, tenantID, "Ifeanyi Cold Chain Ltd")
+	inv := newInvoice(t, super, tenantID, entity, "DEMO-T-7101", 1)
+
+	if got, err := tenantAdmin(ctx, app, tenantID); err != nil || got != "" {
+		t.Errorf("tenantAdmin = %q, %v; want an empty subject and no error", got, err)
+	}
+
+	var bodies [][]byte
+	res, err := seedTenant(ctx, app, stubStore(t, super, &bodies), tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.Note != "no admin membership; nothing to attribute an upload to" {
+		t.Errorf("Note = %q, want the existing no-admin note", res.Note)
+	}
+	if res.DocumentsStored != 0 || res.InvoicesLinked != 0 {
+		t.Errorf("stored %d / linked %d, want 0 / 0", res.DocumentsStored, res.InvoicesLinked)
+	}
+	if doc, _ := sourceOf(t, super, inv); doc != nil {
+		t.Error("an invoice was linked for a tenant whose only admin is suspended")
+	}
+}
+
+// demoLinkCounts reports, for one demo tenant, how many invoices have line items
+// and how many of those still carry no source document.
+func demoLinkCounts(t *testing.T, super *pgxpool.Pool, tenantID string) (withItems, unlinked int) {
+	t.Helper()
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(DISTINCT i.id),
+		        count(DISTINCT i.id) FILTER (WHERE i.source_document_id IS NULL)
+		   FROM invoices i JOIN line_items li ON li.invoice_id = i.id
+		  WHERE i.tenant_id = $1`, tenantID).Scan(&withItems, &unlinked); err != nil {
+		t.Fatalf("count links for %s: %v", tenantID, err)
+	}
+	return withItems, unlinked
+}
+
+// The predicate must not over-restrict: both seeded demo tenants' admins are
+// active, and both must still get their files. Unlinks first so Seed has work to
+// do -- on an already-linked database the assertion would hold without Seed
+// resolving an actor at all.
+func TestRLS_DemoDocsSeedStillCoversBothSeededDemoTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	demoTenants := []string{demoFirmTenantID, demoInHouseTenantID}
+
+	if err := db.Seed(ctx, os.Getenv("DATABASE_SUPERUSER_URL"), dbsql.FS); err != nil {
+		t.Fatalf("Seed (establish the real demo fixtures): %v", err)
+	}
+	var bodies [][]byte
+	store := stubStore(t, super, &bodies)
+	for _, tenantID := range demoTenants {
+		if _, err := super.Exec(ctx,
+			`UPDATE invoices SET source_document_id = NULL, source_rows = NULL WHERE tenant_id = $1`,
+			tenantID); err != nil {
+			t.Fatalf("unlink %s: %v", tenantID, err)
+		}
+	}
+	// Re-link whatever an aborted assertion leaves behind: the demo tenants are
+	// shared with the rest of this suite.
+	t.Cleanup(func() { _, _ = Seed(context.Background(), app, store, nil) })
+
+	if _, err := Seed(ctx, app, store, nil); err != nil {
+		t.Fatalf("demodocs.Seed: %v", err)
+	}
+	for _, tenantID := range demoTenants {
+		withItems, unlinked := demoLinkCounts(t, super, tenantID)
+		if withItems == 0 {
+			t.Fatalf("demo tenant %s has no invoice with line items; the check below would be vacuous", tenantID)
+		}
+		if unlinked != 0 {
+			t.Errorf("demo tenant %s left %d of %d invoice(s) unlinked", tenantID, unlinked, withItems)
+		}
+	}
+}

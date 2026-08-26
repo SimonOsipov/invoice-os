@@ -215,7 +215,7 @@ type auditNumberRow struct {
 }
 
 // readAuditNumberRow returns the newest audit_log row for tenantID+event and
-// how many rows that event has. ->> yields NULL for an absent key and ” for a
+// how many rows that event has. ->> yields NULL for an absent key and "" for a
 // present empty string, so number distinguishes the two.
 func readAuditNumberRow(t *testing.T, app *pgxpool.Pool, tenantID, event string) auditNumberRow {
 	t.Helper()

@@ -146,6 +146,10 @@ func TestAuditFilter_ActorKindEmitsNoBindParameter(t *testing.T) {
 // records at :663-666. Fragments join with AND, so an unparenthesised OR-group binds as
 // (everything AND first) OR rest — every other filter evaporates and the query goes
 // tenant-wide with a plausible-looking total.
+//
+// AUDIT-11-09 added a third fold-in arm, so the walk runs over every combination of
+// resolved lists: an arm appended after the closing paren is invisible to a case whose
+// list is nil, and the number arm is the one most recently added outside that guard.
 func TestAuditFilter_SearchFragmentIsParenthesised(t *testing.T) {
 	f := audit.Filter{
 		Limit:   50,
@@ -153,27 +157,45 @@ func TestAuditFilter_SearchFragmentIsParenthesised(t *testing.T) {
 		Events:  []string{"invoice.created"},
 		Company: audit.NamedCompany(uuid.NewString()),
 	}
-	where := fsqlBuild(t, f, []string{uuid.NewString()}, []string{uuid.NewString()}, nil)
+	one := func() []string { return []string{uuid.NewString()} }
 
-	or := strings.Index(where, " OR ")
-	if or == -1 {
-		t.Fatalf("where = %q, want a search fragment containing OR", where)
-	}
-	// Every OR in the built predicate must sit inside a parenthesised group: walk the
-	// text and require depth > 0 at each OR.
-	depth := 0
-	for i := 0; i < len(where); i++ {
-		switch where[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-		case 'O':
-			if strings.HasPrefix(where[i:], "OR ") && i > 0 && where[i-1] == ' ' && depth == 0 {
-				t.Errorf("where = %q has an OR at paren depth 0 (offset %d) — it will swallow every "+
-					"other filter", where, i)
+	for _, tc := range []struct {
+		label                         string
+		subjects, companies, invoices []string
+	}{
+		{"no fold-in resolves", nil, nil, nil},
+		{"subjects only", one(), nil, nil},
+		{"companies only", nil, one(), nil},
+		{"invoices only", nil, nil, one()},
+		{"all three fold-ins", one(), one(), one()},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			where := fsqlBuild(t, f, tc.subjects, tc.companies, tc.invoices)
+
+			or := strings.Index(where, " OR ")
+			if or == -1 {
+				t.Fatalf("where = %q, want a search fragment containing OR", where)
 			}
-		}
+			if len(tc.invoices) > 0 && !strings.Contains(where, "a.invoice_id = ANY(") {
+				t.Fatalf("where = %q carries no number arm, so this case cannot make its claim", where)
+			}
+			// Every OR in the built predicate must sit inside a parenthesised group: walk the
+			// text and require depth > 0 at each OR.
+			depth := 0
+			for i := 0; i < len(where); i++ {
+				switch where[i] {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				case 'O':
+					if strings.HasPrefix(where[i:], "OR ") && i > 0 && where[i-1] == ' ' && depth == 0 {
+						t.Errorf("where = %q has an OR at paren depth 0 (offset %d) — it will swallow every "+
+							"other filter", where, i)
+					}
+				}
+			}
+		})
 	}
 }
 

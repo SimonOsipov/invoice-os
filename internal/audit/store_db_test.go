@@ -100,7 +100,7 @@ func TestAuditStore_AllStatementsShareOneTransaction(t *testing.T) {
 	// above while doing nothing. Five statements read audit_log on a populated request —
 	// the page, the three facets and the count. actor.Resolve adds a memberships query
 	// only when a subject passes its uuid gate (these rows' actor does not), search adds
-	// two fold-ins, and the empty probe runs only when nothing matched.
+	// three fold-ins (AUDIT-11-09), and the empty probe runs only when nothing matched.
 	if n := stAuditLogCount(tr); n != 5 {
 		t.Errorf("the request issued %d statements against audit_log, want 5 (page, three facets, "+
 			"count): %v", n, tr.sqls)

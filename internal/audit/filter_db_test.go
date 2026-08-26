@@ -1,6 +1,7 @@
 // AUDIT-04-03: the five filters against a real Postgres — each alone, all composing, the
-// three company modes, free-text's four routes, and the two absence-shaped claims (no
-// event type is suppressed; search cannot match an invoice number).
+// three company modes, free-text's routes, and the absence-shaped claim that no event type
+// is suppressed. AUDIT-11-09 added the fifth route (an invoice number, resolved through
+// invoices) and turned the old "search cannot match a number" claim into its opposite.
 //
 // Helpers use a filt* prefix. Rows seed by raw INSERT with an explicit created_at grid:
 // audit_log.created_at defaults to now(), which Postgres freezes for a whole transaction,
@@ -469,7 +470,7 @@ func TestAuditFilter_CompanyPartitionsAreDisjointAndExhaustive(t *testing.T) {
 	}
 }
 
-// --- AC #5: free text's four routes ---------------------------------------------------------
+// --- AC #5: free text's routes (four here; AUDIT-11-09 added the number as a fifth) ---------
 
 func TestAuditSearch_MatchesEventPayloadActorNameAndCompanyName(t *testing.T) {
 	f := requireFixture(t)
@@ -1082,5 +1083,293 @@ func TestAuditSearch_NumberWildcardIsALiteral(t *testing.T) {
 				t.Errorf("q=%q reported total %d, want %d", tc.q, got.Total, len(want))
 			}
 		})
+	}
+}
+
+// --- AUDIT-11-09 QA: the fence's residues and its hostile inputs ---------------------------
+
+// filtRenameInvoice changes an invoice's number in place. No production path does this
+// (D-15), which is why the behaviour it pins below is latent rather than observed.
+func filtRenameInvoice(t *testing.T, f *fixture, p pageFixture, invoiceID, number string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, `UPDATE invoices SET invoice_number = $2 WHERE id = $1`, invoiceID, number)
+		if e == nil && tag.RowsAffected() != 1 {
+			return fmt.Errorf("renamed %d rows, want 1", tag.RowsAffected())
+		}
+		return e
+	}); err != nil {
+		t.Fatalf("rename invoice %s to %q: %v", invoiceID, number, err)
+	}
+}
+
+// filtDeleteInvoice removes an invoice as the migrator: invoice_app holds no DELETE grant
+// on invoices. Its audit rows survive — audit_log carries no FK to invoices, and
+// audit_log_no_update_delete forbids deleting them anyway.
+func filtDeleteInvoice(t *testing.T, f *fixture, p pageFixture, invoiceID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.mig, p.tenant, func(tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, `DELETE FROM invoices WHERE id = $1`, invoiceID)
+		if e == nil && tag.RowsAffected() != 1 {
+			return fmt.Errorf("deleted %d rows, want 1", tag.RowsAffected())
+		}
+		return e
+	}); err != nil {
+		t.Fatalf("delete invoice %s: %v", invoiceID, err)
+	}
+}
+
+// TestAuditSearch_NumberResolvesThroughTheLiveTableNotTheFrozenPayload pins CF-26 — the
+// residue the entity fence buys with reachability, recorded rather than fixed.
+//
+// The payload freezes the number at write time; the fence resolves the typed number through
+// the LIVE invoices table. So the search renders "now", not "then": after a rename the
+// frozen value is unreachable and the new number reaches the old event, and a deleted
+// invoice strands its rows. That inverts D-15's "frozen, so it renders then" for search
+// alone. It is the direct consequence of the user's Fork 2 choice (D-24), so it is pinned
+// here to make a future change to it deliberate — do NOT "fix" this without reopening D-24.
+//
+// The invoice-id control runs at every step: it separates "unreachable by number" from
+// "the row is gone", which is the only reading that would be a defect.
+func TestAuditSearch_NumberResolvesThroughTheLiveTableNotTheFrozenPayload(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Frozen Ledger Co")
+
+	const before, after = "INV-FROZEN-1", "INV-RENAMED-1"
+	invoice := filtSeedNumberedInvoice(t, f, p, entity, before)
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"invoice_number":%q}`, invoice, before), ageSeconds: 10},
+	})
+	want := []int64{rows[0].id}
+
+	landed, withInvoice, withNumberKey := filtPayloadShape(t, f, p)
+	if landed != 1 || withInvoice != 1 || withNumberKey != 1 {
+		t.Fatalf("fixture: %d rows landed, %d attributed, %d carry invoice_number; want 1, 1, 1 — "+
+			"the payload must freeze the number or the rename claim is vacuous", landed, withInvoice, withNumberKey)
+	}
+
+	ids := func(q string) []int64 { return pageIDs(t, pageQuery(t, f, p, audit.Filter{Limit: 20, Q: q})) }
+
+	// Before the rename both routes reach the row: the number resolves, and the id sits in
+	// the payload. Without this the zeroes below cannot be told from an unwired search.
+	if got := ids(before); !pageEqualIDs(got, want) {
+		t.Fatalf("q=%q matched %v before the rename, want %v; search is not working here", before, got, want)
+	}
+	if got := ids(invoice); !pageEqualIDs(got, want) {
+		t.Fatalf("q=<invoice id> matched %v, want %v", got, want)
+	}
+
+	filtRenameInvoice(t, f, p, invoice, after)
+
+	if got := ids(before); len(got) != 0 {
+		t.Errorf("after the rename q=%q still matched %v, want none — the payload's frozen value "+
+			"left the generic arm with the key, so it is unreachable by design (CF-26)", before, got)
+	}
+	if got := ids(after); !pageEqualIDs(got, want) {
+		t.Errorf("after the rename q=%q matched %v, want %v — the new number reaches the OLD event, "+
+			"because the arm resolves through the live table (CF-26)", after, got, want)
+	}
+	if got := ids(invoice); !pageEqualIDs(got, want) {
+		t.Fatalf("q=<invoice id> matched %v after the rename, want %v — the row itself must still "+
+			"be reachable, or this is a lost row rather than a reachability residue", got, want)
+	}
+
+	filtDeleteInvoice(t, f, p, invoice)
+
+	for _, q := range []string{before, after} {
+		if got := ids(q); len(got) != 0 {
+			t.Errorf("after the invoice was deleted q=%q matched %v, want none — a deleted invoice "+
+				"strands its audit rows from every number search (CF-26)", q, got)
+		}
+	}
+	if got := ids(invoice); !pageEqualIDs(got, want) {
+		t.Errorf("q=<invoice id> matched %v after the delete, want %v — the audit row outlives its "+
+			"invoice and stays reachable by id", got, want)
+	}
+}
+
+// TestAuditSearch_NumberArmUnionsWithTheGenericArm is the adversarial case AUDIT-11-09's own
+// specs skip: one term that is BOTH an invoice number and an unrelated payload value. The
+// arms are OR-ed, so all three shapes must come back. A fence written as an AND, or an
+// exclusion that dropped the whole EXISTS when the term resolves an invoice, would return a
+// strict subset while every single-shape case stayed green.
+func TestAuditSearch_NumberArmUnionsWithTheGenericArm(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Union Freight")
+
+	const term = "OCTOPUS-7"
+	invoice := filtSeedNumberedInvoice(t, f, p, entity, term)
+	if n := filtCountInvoices(t, f, p, term); n != 1 {
+		t.Fatalf("%d invoices bear %q, want exactly 1", n, term)
+	}
+
+	rows := filtInsert(t, f, p, []filtRow{
+		// Reachable only through the fold-in: no payload key holds the term.
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, invoice), ageSeconds: 30},
+		// Reachable only through the generic arm: an unrelated key, not invoice-scoped.
+		{event: "validation.rule.enabled", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"note":%q}`, term), ageSeconds: 20},
+		// Both routes at once, and the one shape AUDIT-11-01..04 actually writes.
+		{event: "invoice.updated", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"invoice_number":%q}`, invoice, term), ageSeconds: 10},
+	})
+
+	want := []int64{rows[2].id, rows[1].id, rows[0].id}
+	got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: term})
+	if ids := pageIDs(t, got); !pageEqualIDs(ids, want) {
+		t.Errorf("q=%q matched %v, want all three shapes %v — the arms OR, so a term that is both a "+
+			"number and a payload value reaches everything either arm reaches", term, ids, want)
+	}
+	if got.Total != len(want) {
+		t.Errorf("q=%q reported total %d, want %d", term, got.Total, len(want))
+	}
+}
+
+// TestAuditSearch_NumberThatIsASubstringOfAnInvoiceID is the adversarial collision: an
+// invoice numbered with eight hex characters lifted out of ANOTHER invoice's uuid. The
+// fold-in reaches the numbered invoice's rows and the generic arm reaches the uuid-bearing
+// row, and neither shadows the other.
+func TestAuditSearch_NumberThatIsASubstringOfAnInvoiceID(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Collision Ltd")
+
+	host := filtSeedNumberedInvoice(t, f, p, entity, "INV-HOST-1")
+	term := host[:8]
+	if strings.Contains("INV-HOST-1", term) {
+		t.Fatalf("the needle %q is part of the host invoice's own number; the two routes would not "+
+			"be separable", term)
+	}
+	numbered := filtSeedNumberedInvoice(t, f, p, entity, term)
+	if n := filtCountInvoices(t, f, p, term); n != 1 {
+		t.Fatalf("%d invoices bear %q as a number, want exactly 1 (the collision must be with an "+
+			"id, not with another number)", n, term)
+	}
+
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, host), ageSeconds: 20},
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, numbered), ageSeconds: 10},
+	})
+	if _, _, withNumberKey := filtPayloadShape(t, f, p); withNumberKey != 0 {
+		t.Fatalf("fixture: %d payloads carry invoice_number, want 0 — each row must be reachable by "+
+			"exactly one route", withNumberKey)
+	}
+
+	want := []int64{rows[1].id, rows[0].id}
+	got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: term})
+	if ids := pageIDs(t, got); !pageEqualIDs(ids, want) {
+		t.Errorf("q=%q matched %v, want %v — the host row through the generic arm (the needle is a "+
+			"substring of its uuid) and the numbered row through the fold-in", term, ids, want)
+	}
+	if got.Total != len(want) {
+		t.Errorf("q=%q reported total %d, want %d", term, got.Total, len(want))
+	}
+}
+
+// TestAuditSearch_HostileNeedlesReachTheFoldInAsData is the adversarial injection case. The
+// needle is a bind parameter in all three fold-ins and in both text arms, so a quote, a
+// comment marker or a statement separator is data. A needle that terminated the literal
+// would either error or widen the result to the whole tenant; both are asserted against.
+func TestAuditSearch_HostileNeedlesReachTheFoldInAsData(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Bobby Tables Ltd")
+	invoice := filtSeedNumberedInvoice(t, f, p, entity, "INV-SAFE-1")
+
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"note":"pangolin"}`, invoice), ageSeconds: 10},
+	})
+	want := []int64{rows[0].id}
+
+	for _, q := range []string{
+		`' OR 1=1 --`,
+		`'); DROP TABLE audit_log; --`,
+		`%' OR '1'='1`,
+		`' UNION SELECT id::text FROM invoices --`,
+		`\`,
+		`" OR ""="`,
+		`INV-SAFE-1'`,
+	} {
+		t.Run(q, func(t *testing.T) {
+			got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: q})
+			if ids := pageIDs(t, got); len(ids) != 0 {
+				t.Errorf("q=%q matched %v, want none — the needle is data, and no row here contains "+
+					"it literally", q, ids)
+			}
+			if got.Total != 0 {
+				t.Errorf("q=%q reported total %d, want 0", q, got.Total)
+			}
+		})
+	}
+
+	// The fixture survived every needle: nothing was dropped, and the ordinary routes still
+	// work. Without this the zeroes above would also pass on a search that had stopped
+	// working entirely.
+	for _, q := range []string{"INV-SAFE-1", "pangolin", invoice} {
+		if ids := pageIDs(t, pageQuery(t, f, p, audit.Filter{Limit: 20, Q: q})); !pageEqualIDs(ids, want) {
+			t.Errorf("after the hostile needles q=%q matched %v, want %v", q, ids, want)
+		}
+	}
+}
+
+// TestAuditSearch_ResolvedInvoiceListIsNotCapped pins the "no cap" rule the third fold-in
+// inherits from the two beside it. A cap would silently drop matches — the caller would see
+// a plausible page and a plausible total, both short. Total is asserted rather than the page
+// because it is exact at any Limit.
+func TestAuditSearch_ResolvedInvoiceListIsNotCapped(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	entity := pageSeedEntity(t, f, p, "Bulk Holdings")
+
+	const n = 600 // above every plausible LIMIT a future cap would reach for.
+	const prefix = "BULK-"
+	ctx := context.Background()
+	invoices := make([]string, 0, n)
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		for i := 0; i < n; i++ {
+			id := uuid.NewString()
+			if _, e := tx.Exec(ctx,
+				`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3, $4)`,
+				id, p.tenant, entity, fmt.Sprintf("%s%04d", prefix, i)); e != nil {
+				return e
+			}
+			invoices = append(invoices, id)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed %d invoices: %v", n, err)
+	}
+	if got := filtCountInvoices(t, f, p, prefix); got != n {
+		t.Fatalf("%d invoices bear %q, want %d", got, prefix, n)
+	}
+
+	seed := make([]filtRow, 0, n)
+	for i, inv := range invoices {
+		seed = append(seed, filtRow{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, inv), ageSeconds: i + 1})
+	}
+	filtInsert(t, f, p, seed)
+	landed, withInvoice, withNumberKey := filtPayloadShape(t, f, p)
+	if landed != n || withInvoice != n || withNumberKey != 0 {
+		t.Fatalf("fixture: %d rows landed, %d attributed, %d carry invoice_number; want %d, %d, 0",
+			landed, withInvoice, withNumberKey, n, n)
+	}
+
+	got := pageQuery(t, f, p, audit.Filter{Limit: 5, Q: prefix})
+	if got.Total != n {
+		t.Errorf("q=%q reported total %d, want %d — the resolved list is uncapped, so a cap at any "+
+			"k < %d would show here as a short total with a plausible page", prefix, got.Total, n, n)
+	}
+	if len(got.Events) != 5 {
+		t.Errorf("q=%q returned %d events at Limit 5, want 5", prefix, len(got.Events))
 	}
 }

@@ -309,27 +309,46 @@ rather than a property of each route.
   frontend-only commit to the Go job, so a Go assertion over them would be unreachable on the
   very commit it guards.
 
-## 10. The one hand-maintained mirror
+## 10. The hand-maintained mirror
 
 The wire message is written down **once** in Go — `db.NotActiveMemberMessage`,
 `internal/platform/db/tenant.go` — and `TestHandlerMappingMessageIsNeverRetyped` fails if any
-other Go file retypes the literal. That guard is live today.
+other Go file retypes the literal.
 
-**The TypeScript mirror does not exist yet.** Nothing in `frontend/app/src/lib/` pins
-`your membership in this workspace is not active`, so today the string can be reworded in Go
-and the SPA will not notice. **AUDIT-10-07 owns adding that mirror** along with the user-facing
-copy; until it lands, treat a reword as a two-repo-surface change to make by hand.
+That Go walk covers `internal/`, `cmd/` and `tools/` only. Two TypeScript copies live outside
+it and are pinned by `frontend/app/src/lib/wireMirrors.test.ts` (AUDIT-10-07), which extracts
+the Go literal from source and compares it to both:
+
+| Copy | Why it exists |
+|---|---|
+| `frontend/app/src/lib/authedFetch.ts` — `NOT_ACTIVE_MEMBER_MESSAGE` | `isSuspended` matches on the message, not the bare 403 |
+| `e2e/api/suspension.spec.ts` — `NOT_ACTIVE_MESSAGE` | the deployed-wire assertion |
+
+The extractor refuses a literal containing any backslash escape, and a zero-length extraction
+fails the run rather than comparing `'' === ''`. Reword all three in one commit.
 
 `GET /v1/me`'s wire shape does not change, so the three existing `Me` mirrors stay as they are.
+
+The SPA copy that describes suspension to a human is a separate matter and is NOT pinned to
+this literal: `lib/members.ts`'s `SUSPEND_EXPLANATION` and `App.tsx`'s `SUSPENDED_NOTICE`
+are product sentences, guarded by their own byte-pins.
 
 ## 11. Still unsettled, and who owns it
 
 **11.1 A caller with no membership row still reads.** §5. Owned by **AUDIT-12 Membership
 Presence on Reads**, with the 797-vs-22 measurement as its scope.
 
-**11.2 The TypeScript mirror.** §10. Owned by **AUDIT-10-07**, together with the shipped SPA
-copy that still reads "Sign-in is not blocked yet" and the `e2e/topology` fixture that mirrors
-it byte for byte.
+**11.2 The TypeScript mirror. SETTLED — it ships.** §10. AUDIT-10-07 added it, rewrote the SPA
+copy that read "Sign-in is not blocked yet" and the `e2e/topology` fixture that mirrors it byte
+for byte, and made `tenant.go`'s comment true.
+
+Two residues it did NOT close:
+
+- **The vault's MEMB-01 §8 still carries the old sentence.** `lib/members.ts` says so at its
+  docblock. The repo is now the more recent of the two.
+- **A suspended member has no way out of the notice.** `App.tsx`'s `SUSPENDED_NOTICE` renders
+  no control, per the subtask design ("no retry loop, no partial workspace"), so the only exit
+  is clearing site data. Nobody owns adding a sign-out.
 
 **11.3 A pre-existing full-suite flake.** `TestAudit_ComposedPageIsIndexServedAndUnsorted`
 (`internal/audit`) fails in a full-suite run and passes in isolation. It predates this story

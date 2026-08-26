@@ -68,6 +68,7 @@ import {
 } from './lib/policies'
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
+import { BrandMark } from './icons'
 import { DEMO_MODE } from './demo/flag'
 import { personaFromMember } from './demo/identity'
 import { BUSY_MS } from './demo/timing'
@@ -133,6 +134,40 @@ export const ENV_BANNER = {
 // needs a session and a live entities fetch.
 export const SANDBOX_DEFAULT = true
 
+// What a suspended member is told (AUDIT-10-07). The title states the server's own reason;
+// the body names the only person who can undo it. Exported for the same reason ENV_BANNER
+// is — a sentence inside JSX is a sentence no node spec can hold.
+//
+// NOT derived from NOT_ACTIVE_MEMBER_MESSAGE: that constant is pinned to a Go literal, and a
+// reword there must not silently retitle a screen.
+export const SUSPENDED_NOTICE = {
+  title: 'Your membership in this workspace is not active',
+  body: 'Contact a workspace admin to have your access restored.',
+} as const
+
+// Replaces the workspace outright, never overlays it: a suspended member can read nothing,
+// so a shell around this card would be chrome over an empty product. No control, either —
+// the gate re-reads status per request, and no answer here can change without an admin.
+function SuspendedNotice() {
+  return (
+    <div
+      className="asc-app"
+      style={{ minHeight: '100vh', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+    >
+      <div data-testid="suspended-notice" style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <BrandMark size={20} />
+          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
+        </div>
+        <div style={{ padding: '28px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{SUSPENDED_NOTICE.title}</div>
+          <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>{SUSPENDED_NOTICE.body}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // A remounted workspace cannot resume a half-built draft or a selected invoice, so both
 // collapse to the list they came from.
 const carryView = (view: View): View => (view === 'create' || view === 'detail' ? 'invoices' : view)
@@ -158,10 +193,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // in as the other persona). Under GoTrue (M8) this keys off the token's role/tenant.
   const mode: Mode = session.persona.mode
 
-  const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut), [session, onSignOut])
-  // Same (session, onSignOut) pair, one construction site — the multipart XHR transport
-  // cannot drift from the fetch path on auth or the 401 sign-out (importApi.ts D3).
-  const importAuth = useMemo(() => makeImportAuth(session, onSignOut), [session, onSignOut])
+  // Latched, never unlatched: the gate's answer cannot change without an admin, so there is
+  // nothing for a retry to discover (AUDIT-10-07).
+  const [suspended, setSuspended] = useState(false)
+  const onSuspended = useCallback(() => setSuspended(true), [])
+
+  const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut, onSuspended), [session, onSignOut, onSuspended])
+  // Same three arguments, one construction site — the multipart XHR transport cannot drift
+  // from the fetch path on auth, the 401 sign-out or the 403 suspension (importApi.ts D3).
+  const importAuth = useMemo(() => makeImportAuth(session, onSignOut, onSuspended), [session, onSignOut, onSuspended])
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
   // shared by the switcher below and ClientsView (via ctx.entities/entitiesState/
@@ -1258,6 +1298,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     returnToSeat,
     seatSubject,
   }
+
+  // Below every hook, so latching does not change the hook order. The whole workspace goes,
+  // not a screen inside it: every surface reads tenant-scoped data and all of it now refuses.
+  if (suspended) return <SuspendedNotice />
 
   return (
     <div

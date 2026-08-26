@@ -104,9 +104,12 @@ export const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else
  * What suspension actually does — and the copy `[suspend-copy-is-true]` flagged. It is
  * SUSPEND-ONLY: beside `Reactivate` it would assert the opposite of the button's effect, so
  * a suspended member's drawer must NOT carry it. Both halves are asserted.
+ *
+ * Middle sentence rewritten by AUDIT-10-07 with lib/members.ts's copy, in the same commit.
+ * A one-sided edit now fails in members.test.ts, not only on the deploy gate.
  */
 export const SUSPEND_EXPLANATION =
-  'Removes their approver rights and keeps all history. Sign-in is not blocked yet. Their name stays on every invoice they touched.'
+  'Removes their approver rights and keeps all history. They can still sign in, but the workspace will not open. Their name stays on every invoice they touched.'
 
 /** The drawer's amber note on a suspended person who is named in approval steps. */
 export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will block until someone else holds this role.'

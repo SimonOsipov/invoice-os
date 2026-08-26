@@ -18,8 +18,10 @@ import (
 var ErrNotActiveMember = errors.New("db: caller's membership in this workspace is not active")
 
 // NotActiveMemberMessage is the wire body for ErrNotActiveMember. Written down
-// once in Go — TestHandlerMappingMessageIsNeverRetyped. No TypeScript mirror
-// pins it yet; AUDIT-10-07 owns adding one (docs/read-path-suspension.md §10).
+// once in Go — TestHandlerMappingMessageIsNeverRetyped. Two TypeScript copies are
+// hand-maintained and pinned to this literal by frontend/app/src/lib/wireMirrors.test.ts:
+// lib/authedFetch.ts's NOT_ACTIVE_MEMBER_MESSAGE and e2e/api/suspension.spec.ts's
+// NOT_ACTIVE_MESSAGE. Reword all three together.
 const NotActiveMemberMessage = "your membership in this workspace is not active"
 
 // WithinRequestTenantTx is the HTTP path's entry point: it pulls the tenant from

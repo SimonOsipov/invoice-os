@@ -573,7 +573,17 @@ func TestAuditSearch_PercentIsALiteralNotAWildcard(t *testing.T) {
 	}
 }
 
-func TestAuditSearch_CannotMatchAnInvoiceNumberBecauseNoneIsRecorded(t *testing.T) {
+// TestAuditSearch_NumberReachesRowsOnlyThroughTheResolvedArm is AUDIT-11-09 AC #4's
+// inertness spec, and the rewrite of the case that asserted AUDIT-04 D-17's premise — no
+// writer records an invoice number — which this story deletes. Its own failure message
+// said that premise must be rewritten rather than re-asserted.
+//
+// The fixture is unchanged and is exactly what the new claim needs: 17 invoice-scoped
+// events whose payloads carry no invoice_number key, so the number can reach them only
+// through the fold-in. A whole-table count can no longer prove inertness — AUDIT-11-01..04
+// now write the key on most rows — so the assertion is fixture-local, with the
+// Q=<invoice id> positive control keeping it honest.
+func TestAuditSearch_NumberReachesRowsOnlyThroughTheResolvedArm(t *testing.T) {
 	f := requireFixture(t)
 	p := pageSeedTenant(t, f)
 	entity := pageSeedEntity(t, f, p, "Ledger Co")
@@ -605,17 +615,20 @@ func TestAuditSearch_CannotMatchAnInvoiceNumberBecauseNoneIsRecorded(t *testing.
 	if seeded != 17 {
 		t.Fatalf("population floor: %d rows landed, want 17", seeded)
 	}
+	// The inertness premise, asserted inside this tenant rather than over the table: no
+	// payload here holds the key, so the generic value arm can never reach these rows by
+	// number and the resolved arm is the only path left.
 	if withNumberKey != 0 {
-		t.Fatalf("%d payloads carry an invoice_number key; D-17's premise no longer holds and this "+
-			"AC must be rewritten rather than re-asserted", withNumberKey)
+		t.Fatalf("%d payloads carry an invoice_number key; this fixture must hold none, or the "+
+			"claim below cannot tell the two arms apart", withNumberKey)
 	}
 
-	// Positive control FIRST: without it, the zero-rows assertion below is
-	// indistinguishable from search being unwired, and would pass green on a stub.
+	// Positive control FIRST: without it, the assertion below is indistinguishable from
+	// search being unwired, and would pass green on a stub.
 	present := pageQuery(t, f, p, audit.Filter{Limit: 50, Q: invoice})
-	if len(present.Events) == 0 {
-		t.Fatalf("searching the invoice id %s returned 0 rows; search is not working, so the "+
-			"absence assertion below would prove nothing", invoice)
+	if len(present.Events) != seeded {
+		t.Fatalf("searching the invoice id %s returned %d rows, want all %d; search is not working, "+
+			"so the assertion below would prove nothing", invoice, len(present.Events), seeded)
 	}
 
 	// The full number including its INV- prefix: the bare 8 hex characters are also a
@@ -625,13 +638,14 @@ func TestAuditSearch_CannotMatchAnInvoiceNumberBecauseNoneIsRecorded(t *testing.
 	if strings.Contains(invoice, number) {
 		t.Fatalf("the invoice number %q is a substring of the invoice id; pick a needle that is not", number)
 	}
-	absent := pageQuery(t, f, p, audit.Filter{Limit: 50, Q: number})
-	if len(absent.Events) != 0 {
-		t.Errorf("searching the invoice number %q matched %d rows; no writer records an invoice "+
-			"number, so nothing should match", number, len(absent.Events))
+	got := pageQuery(t, f, p, audit.Filter{Limit: 50, Q: number})
+	if len(got.Events) != seeded {
+		t.Errorf("searching the invoice number %q matched %d rows, want all %d — the number now "+
+			"resolves to this invoice, and no payload here carries the key, so the resolved arm "+
+			"is the only way it can have reached them", number, len(got.Events), seeded)
 	}
-	if absent.Total != 0 {
-		t.Errorf("searching the invoice number %q reported total %d, want 0", number, absent.Total)
+	if got.Total != seeded {
+		t.Errorf("searching the invoice number %q reported total %d, want %d", number, got.Total, seeded)
 	}
 }
 
@@ -704,5 +718,369 @@ func TestAuditFilter_UnknownActorKindFailsTheQuery(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Query accepted ActorKind=\"person\"; an unrecognised kind must fail rather than " +
 			"silently return the unfiltered set")
+	}
+}
+
+// --- AUDIT-11-09: the number match is scoped by entity ------------------------------------
+
+// filtSeedNumberedInvoice commits one invoice with a chosen number. pageSeedInvoice derives
+// its number from the id, which cannot express two entities sharing one number.
+func filtSeedNumberedInvoice(t *testing.T, f *fixture, p pageFixture, entityID, number string) string {
+	t.Helper()
+	ctx := context.Background()
+	id := uuid.NewString()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3, $4)`,
+			id, p.tenant, entityID, number)
+		return e
+	}); err != nil {
+		t.Fatalf("seed invoice %q under %s: %v", number, entityID, err)
+	}
+	return id
+}
+
+// filtPayloadShape counts p's audit rows three ways: how many landed, how many the
+// generated column attributed to an invoice, and how many carry the invoice_number key.
+// Read in SQL rather than counted off the Go fixture: a row that failed to insert would
+// not show up in a slice length.
+func filtPayloadShape(t *testing.T, f *fixture, p pageFixture) (landed, withInvoice, withNumberKey int) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*),
+			       count(*) FILTER (WHERE invoice_id IS NOT NULL),
+			       count(*) FILTER (WHERE jsonb_exists(payload, 'invoice_number'))
+			  FROM audit_log`).Scan(&landed, &withInvoice, &withNumberKey)
+	}); err != nil {
+		t.Fatalf("payload shape: %v", err)
+	}
+	return landed, withInvoice, withNumberKey
+}
+
+// filtCountInvoices counts p's invoices whose number contains needle, under RLS.
+func filtCountInvoices(t *testing.T, f *fixture, p pageFixture, needle string) int {
+	t.Helper()
+	ctx := context.Background()
+	var n int
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT count(*) FROM invoices WHERE invoice_number ILIKE '%' || $1 || '%'`, needle).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count invoices matching %q: %v", needle, err)
+	}
+	return n
+}
+
+// TestAuditSearch_NumberScopedByCompanyMode is AUDIT-11-09 AC #3 and AC #8, and the reason
+// the subtask exists: the user rejected accepting the cross-entity conflation and chose to
+// fence it (D-24), then ruled on the residue the fence cannot reach (D-25). Both modes are
+// pinned rather than left emergent, because emergent is how a decision silently reverses.
+//
+// Each entity carries TWO row shapes: a payload without the key, reachable only through the
+// resolved arm, and one with it, the shape AUDIT-11-01..04 writes. Asserting only the
+// second shape would pass on today's generic arm and prove nothing.
+//
+// This is also the behavioural guard on the arm's parenthesisation. An arm appended outside
+// the OR-group makes every other predicate evaporate, so the two named-company cases would
+// come back with the other company's rows.
+func TestAuditSearch_NumberScopedByCompanyMode(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	const number = "INV-DUP-1"
+	const nameA, nameB = "Alpha Freight", "Beta Logistics"
+	entityA := pageSeedEntity(t, f, p, nameA)
+	entityB := pageSeedEntity(t, f, p, nameB)
+	// Legal: invoices_tenant_entity_number_uq is per-entity, which is exactly why the
+	// number is not a unique handle and the fence is needed.
+	invoiceA := filtSeedNumberedInvoice(t, f, p, entityA, number)
+	invoiceB := filtSeedNumberedInvoice(t, f, p, entityB, number)
+
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, invoiceA), ageSeconds: 40},
+		{event: "invoice.updated", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"invoice_number":%q}`, invoiceA, number), ageSeconds: 30},
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q}`, invoiceB), ageSeconds: 20},
+		{event: "invoice.updated", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"invoice_number":%q}`, invoiceB, number), ageSeconds: 10},
+	})
+
+	wantEntity, wantName := map[string]string{}, map[string]string{}
+	for i, r := range rows {
+		entity, name := entityA, nameA
+		if i >= 2 {
+			entity, name = entityB, nameB
+		}
+		// Read back what the BEFORE INSERT resolver stored rather than predicting it: an
+		// unattributed row could never reach the resolved arm.
+		if r.entity == nil || *r.entity != entity {
+			t.Fatalf("row %d resolved to entity %v, want %s — the fence would have nothing to scope by",
+				i, r.entity, entity)
+		}
+		key := fmt.Sprintf("%d", r.id)
+		wantEntity[key], wantName[key] = entity, name
+	}
+	if entityA == entityB || nameA == nameB {
+		t.Fatalf("the two companies are not distinct; D-25's label claim would be vacuous")
+	}
+	landed, withInvoice, withNumberKey := filtPayloadShape(t, f, p)
+	if landed != 4 || withInvoice != 4 {
+		t.Fatalf("fixture: %d rows landed and %d were attributed to an invoice, want 4 and 4",
+			landed, withInvoice)
+	}
+	if withNumberKey != 2 {
+		t.Fatalf("fixture: %d payloads carry invoice_number, want 2 — the fixture must hold both "+
+			"row shapes or half the claim is untested", withNumberKey)
+	}
+
+	cases := []struct {
+		label      string
+		company    audit.CompanyFilter
+		want       []int64
+		wantLabels int
+	}{
+		// The fence: filterPredicates ANDs a.entity_id = $1, so the named company's rows
+		// come back and the other company's do not — in both directions, so a predicate
+		// that always picks the first entity fails.
+		{"named company A", audit.NamedCompany(entityA), []int64{rows[1].id, rows[0].id}, 1},
+		{"named company B", audit.NamedCompany(entityB), []int64{rows[3].id, rows[2].id}, 1},
+		// D-25: the residue survives BY DECISION here. An explicit cross-company view is
+		// an explicit request to see across companies, and company_name is what tells the
+		// two same-numbered invoices apart. Do not "fix" this without reopening D-25.
+		{"all companies", audit.AllCompanies(), []int64{rows[3].id, rows[2].id, rows[1].id, rows[0].id}, 2},
+	}
+
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: number, Company: c.company})
+			if ids := pageIDs(t, got); !pageEqualIDs(ids, c.want) {
+				t.Errorf("%s: q=%q matched %v, want exactly %v", c.label, number, ids, c.want)
+			}
+			if got.Total != len(c.want) {
+				t.Errorf("%s: total = %d, want %d — the fence reached the page but not the count",
+					c.label, got.Total, len(c.want))
+			}
+
+			labels := map[string]bool{}
+			for _, e := range got.Events {
+				if e.EntityID == nil {
+					t.Errorf("%s: row %s came back with a null entity_id", c.label, e.ID)
+					continue
+				}
+				if *e.EntityID != wantEntity[e.ID] {
+					t.Errorf("%s: row %s carries entity_id %s, want its own invoice's entity %s",
+						c.label, e.ID, *e.EntityID, wantEntity[e.ID])
+				}
+				if e.CompanyName == nil || *e.CompanyName == "" {
+					t.Errorf("%s: row %s came back with no company_name; D-25 rests on that label",
+						c.label, e.ID)
+					continue
+				}
+				if *e.CompanyName != wantName[e.ID] {
+					t.Errorf("%s: row %s is labelled %q, want %q", c.label, e.ID, *e.CompanyName, wantName[e.ID])
+				}
+				labels[*e.CompanyName] = true
+			}
+			if len(labels) != c.wantLabels {
+				t.Errorf("%s: the returned rows carry %d distinct company labels (%v), want %d — "+
+					"\"both rows came back\" is not enough if the user cannot tell them apart",
+					c.label, len(labels), labels, c.wantLabels)
+			}
+		})
+	}
+
+	// D-25 bounds the residue to ModeAllCompanies alone: a workspace-only view cannot reach
+	// an invoice-scoped row at all.
+	ws := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: number, Company: audit.WorkspaceOnly()})
+	if len(ws.Events) != 0 || ws.Total != 0 {
+		t.Errorf("workspace-only: q=%q matched %d rows (total %d), want 0 — every row bearing the "+
+			"number is company-scoped", number, len(ws.Events), ws.Total)
+	}
+}
+
+// TestAuditSearch_NumberKeyIsNotReachableThroughTheGenericArm is AC #1's behavioural half,
+// and the only case in this file that fails when the resolved arm is added WITHOUT the
+// exclusion. The row's number resolves to no invoice, so after the fence nothing can reach
+// it by number while its other keys stay reachable. That unreachability is the design's
+// recorded consequence of resolving through the live table, not a defect.
+func TestAuditSearch_NumberKeyIsNotReachableThroughTheGenericArm(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	const ghost, note = "ZZ-GHOST-9", "quokka"
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "validation.rule.enabled", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"note":%q,"invoice_number":%q}`, note, ghost), ageSeconds: 10},
+	})
+	landed, _, withNumberKey := filtPayloadShape(t, f, p)
+	if landed != 1 || withNumberKey != 1 {
+		t.Fatalf("fixture: %d rows landed and %d carry invoice_number, want 1 and 1", landed, withNumberKey)
+	}
+	if n := filtCountInvoices(t, f, p, ghost); n != 0 {
+		t.Fatalf("%d invoices bear %q; the resolved arm would reach this row legitimately", n, ghost)
+	}
+
+	// Positive control FIRST: the same row's other key must stay reachable, or the zero
+	// below is indistinguishable from search being unwired — and it is what an over-broad,
+	// row-scoped exclusion would break.
+	want := []int64{rows[0].id}
+	present := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: note})
+	if ids := pageIDs(t, present); !pageEqualIDs(ids, want) {
+		t.Fatalf("q=%q matched %v, want %v — the exclusion must be keyed on kv.key, not applied to "+
+			"the whole row", note, ids, want)
+	}
+
+	got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: ghost})
+	if len(got.Events) != 0 {
+		t.Errorf("q=%q matched %d rows, want 0 — the number key must leave the generic value arm, "+
+			"or the resolved arm only widens what is already unscoped", ghost, len(got.Events))
+	}
+	if got.Total != 0 {
+		t.Errorf("q=%q reported total %d, want 0", ghost, got.Total)
+	}
+}
+
+// TestAuditSearch_OtherSixTargetsUnchanged is AC #4. The exclusion is keyed on kv.key, so
+// every other pair on the same row still yields its value. An over-broad form — skipping
+// the row, or filtering on kv.value instead of kv.key — silently breaks most of the search.
+// Case "an invoice row's other keys" is the sharpest: that row DOES carry the number.
+func TestAuditSearch_OtherSixTargetsUnchanged(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+
+	zanzibar := pageSeedEntity(t, f, p, "Zanzibar Trading")
+	keeper := pageSeedEntity(t, f, p, "Keeper Ltd")
+	invoice := filtSeedNumberedInvoice(t, f, p, keeper, "INV-KEEP-1")
+	named := uuid.NewString()
+	filtSeedMembership(t, f, p, named, "Wilhelmina Thorne")
+
+	// Each row is reachable by exactly one route: actors are pairwise distinct because the
+	// actor route folds to actor = ANY(...), and the same reasoning applies to entity_id.
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "validation.rule.enabled", actor: uuid.NewString(), payload: `{}`, ageSeconds: 80},
+		{event: "membership.suspended", actor: uuid.NewString(), payload: `{}`, ageSeconds: 70},
+		{event: "workflow_role.created", actor: uuid.NewString(), payload: `{"note":"quokka"}`, ageSeconds: 60},
+		{event: "approval_policy.published", actor: uuid.NewString(), payload: `{"key":"buyer_tin_present"}`, ageSeconds: 50},
+		{event: "document.created", actor: uuid.NewString(), payload: `{"reference":"IRN-77ZK"}`, ageSeconds: 40},
+		{event: "portfolio.entity.updated", actor: named, payload: `{}`, ageSeconds: 30},
+		{event: "portfolio.entity.created", actor: uuid.NewString(), payload: fmt.Sprintf(`{"id":%q}`, zanzibar), ageSeconds: 20},
+		{event: "invoice.created", actor: uuid.NewString(),
+			payload: fmt.Sprintf(`{"id":%q,"invoice_number":"INV-KEEP-1","note":"wombat"}`, invoice), ageSeconds: 10},
+	})
+
+	cases := []struct {
+		route string
+		term  string
+		row   int
+	}{
+		{"event fragment", "validation.rule", 0},
+		{"raw event type", "membership.suspended", 1},
+		{"reason text", "quokka", 2},
+		{"rule key", "buyer_tin_present", 3},
+		{"IRN reference", "IRN-77ZK", 4},
+		{"actor display name", "Wilhelmina", 5},
+		{"company name", "Zanzibar", 6},
+		{"an invoice row's other keys", "wombat", 7},
+	}
+	if len(cases) != len(rows) {
+		t.Fatalf("%d cases over %d seeded rows; every row must be claimed by exactly one route",
+			len(cases), len(rows))
+	}
+	landed, _, withNumberKey := filtPayloadShape(t, f, p)
+	if landed != len(rows) {
+		t.Fatalf("fixture: %d rows landed, want %d", landed, len(rows))
+	}
+	if withNumberKey != 1 {
+		t.Fatalf("fixture: %d payloads carry invoice_number, want exactly 1 — without it the "+
+			"over-broad-exclusion case cannot fail", withNumberKey)
+	}
+	if rows[6].entity == nil || *rows[6].entity != zanzibar {
+		t.Fatalf("the company row resolved to entity %v, want %s — its fold-in would have nothing "+
+			"to match", rows[6].entity, zanzibar)
+	}
+
+	for _, c := range cases {
+		t.Run(c.route, func(t *testing.T) {
+			got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: c.term})
+			want := []int64{rows[c.row].id}
+			if ids := pageIDs(t, got); !pageEqualIDs(ids, want) {
+				t.Errorf("q=%q matched %v, want exactly %v (the %s route's row and only it)",
+					c.term, ids, want, c.route)
+			}
+			if got.Total != 1 {
+				t.Errorf("q=%q reported total %d, want 1", c.term, got.Total)
+			}
+		})
+	}
+}
+
+// TestAuditSearch_NumberWildcardIsALiteral is AC #4's escaping half. Writers store the
+// number byte-for-byte, so the search side owns all escaping and the fold-in must reuse the
+// `like` filter.go already computed, under ESCAPE '\'. Measured three ways: unescaped,
+// q="%" resolves EVERY invoice in the tenant; with an empty ESCAPE clause, or a second
+// escapeLike call, it resolves none.
+//
+// TestAuditSearch_PercentIsALiteralNotAWildcard cannot make this claim — its tenant holds no
+// invoice, so its fold-in resolves nothing whatever the escaping.
+func TestAuditSearch_NumberWildcardIsALiteral(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	// The company name carries neither metacharacter, so the company fold-in stays out of
+	// every case below.
+	entity := pageSeedEntity(t, f, p, "Escape Holdings")
+
+	const hostile = `50%_OFF`
+	hot := filtSeedNumberedInvoice(t, f, p, entity, hostile)
+	cold1 := filtSeedNumberedInvoice(t, f, p, entity, "INV-PLAIN-1")
+	cold2 := filtSeedNumberedInvoice(t, f, p, entity, "INV-PLAIN-2")
+
+	rows := filtInsert(t, f, p, []filtRow{
+		{event: "invoice.created", actor: uuid.NewString(), payload: fmt.Sprintf(`{"id":%q}`, hot), ageSeconds: 30},
+		{event: "invoice.created", actor: uuid.NewString(), payload: fmt.Sprintf(`{"id":%q}`, cold1), ageSeconds: 20},
+		{event: "invoice.created", actor: uuid.NewString(), payload: fmt.Sprintf(`{"id":%q}`, cold2), ageSeconds: 10},
+	})
+	landed, withInvoice, withNumberKey := filtPayloadShape(t, f, p)
+	if landed != 3 || withInvoice != 3 {
+		t.Fatalf("fixture: %d rows landed and %d were attributed to an invoice, want 3 and 3",
+			landed, withInvoice)
+	}
+	if withNumberKey != 0 {
+		t.Fatalf("fixture: %d payloads carry invoice_number, want 0 — these rows must be reachable "+
+			"only through the fold-in", withNumberKey)
+	}
+	if n := filtCountInvoices(t, f, p, "INV-PLAIN"); n != 2 {
+		t.Fatalf("%d ordinary invoices in the tenant, want 2 — without them an unescaped fold-in "+
+			"would have nothing extra to sweep in", n)
+	}
+
+	want := []int64{rows[0].id}
+	// Positive control: the uuid reaches the same row through the generic arm, so a zero
+	// below cannot be search being unwired.
+	if ids := pageIDs(t, pageQuery(t, f, p, audit.Filter{Limit: 20, Q: hot})); !pageEqualIDs(ids, want) {
+		t.Fatalf("q=<invoice id> matched %v, want %v; search is not working here", ids, want)
+	}
+
+	for _, tc := range []struct{ label, q string }{
+		{"a bare percent", "%"},
+		{"a bare underscore", "_"},
+		// The whole hostile number: an escape that neutralises the metacharacters into
+		// matching nothing, or a second escapeLike call, returns 0 rows here.
+		{"the whole number", hostile},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			got := pageQuery(t, f, p, audit.Filter{Limit: 20, Q: tc.q})
+			if ids := pageIDs(t, got); !pageEqualIDs(ids, want) {
+				t.Errorf("q=%q matched %v, want exactly %v (the %s invoice's row) — unescaped, a "+
+					"metacharacter resolves every invoice in the tenant; double-escaped it resolves none",
+					tc.q, ids, want, hostile)
+			}
+			if got.Total != len(want) {
+				t.Errorf("q=%q reported total %d, want %d", tc.q, got.Total, len(want))
+			}
+		})
 	}
 }

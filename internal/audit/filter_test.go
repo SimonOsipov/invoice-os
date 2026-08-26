@@ -243,3 +243,42 @@ func TestAuditFilter_CursorIsNeverPartOfThePredicates(t *testing.T) {
 		}
 	}
 }
+
+// --- AUDIT-11-09: the number leaves the generic arm ----------------------------------------
+
+// TestAuditFilter_GenericValueArmSkipsTheNumberKey is AUDIT-11-09 AC #1. The generic arm
+// walks every payload key, so once the writers record invoice_number it matches the number
+// as an anonymous value — unscoped, and no added arm can fence that because an OR-group
+// only ever widens. The key must leave the generic arm before the resolved arm can fence it.
+func TestAuditFilter_GenericValueArmSkipsTheNumberKey(t *testing.T) {
+	where := fsqlBuild(t, audit.Filter{Limit: 50, Q: "INV-DUP-1"}, nil, nil)
+
+	open := strings.Index(where, "jsonb_each_text(a.payload) kv")
+	if open == -1 {
+		t.Fatalf("where = %q, want the generic value arm; this case cannot make its claim", where)
+	}
+	value := strings.Index(where, "kv.value ILIKE")
+	if value == -1 {
+		t.Fatalf("where = %q, want the generic arm to match payload VALUES", where)
+	}
+
+	// Inside the EXISTS and before the value comparison: an exclusion written anywhere
+	// else is not the generic arm's exclusion.
+	key := strings.Index(where, "kv.key <> 'invoice_number'")
+	if key == -1 {
+		t.Errorf("where = %q, want the generic arm to skip the invoice_number key — without the "+
+			"exclusion the number matches unscoped and AUDIT-11-09's fence is inert", where)
+	} else if key < open || key > value {
+		t.Errorf("where = %q has the invoice_number exclusion outside the jsonb_each_text EXISTS "+
+			"(offsets: EXISTS %d, exclusion %d, value %d)", where, open, key, value)
+	}
+
+	// Keyed, not row-scoped. Dropping the whole row would take note/key/reference with it,
+	// which is TestAuditSearch_OtherSixTargetsUnchanged's behavioural half.
+	for _, forbidden := range []string{"payload ? 'invoice_number'", "jsonb_exists(a.payload, 'invoice_number')"} {
+		if strings.Contains(where, forbidden) {
+			t.Errorf("where = %q contains %q — that excludes the whole ROW, so every other key on "+
+				"an invoice row stops matching", where, forbidden)
+		}
+	}
+}

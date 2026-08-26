@@ -656,10 +656,10 @@ func TestArm_WritesOneAuditRowWithSummaryPayload(t *testing.T) {
 		t.Fatal("payload is empty {} — want id/run_id/policy_version_id/steps populated")
 	}
 
-	allowed := map[string]bool{"id": true, "run_id": true, "policy_version_id": true, "steps": true}
+	allowed := map[string]bool{"id": true, "run_id": true, "policy_version_id": true, "steps": true, "invoice_number": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the summary-only allowlist {id, run_id, policy_version_id, steps} — no invoice content", k)
+			t.Errorf("payload key %q is not in the summary-only allowlist {id, run_id, policy_version_id, steps, invoice_number} — no invoice content", k)
 		}
 	}
 	for k := range allowed {

@@ -161,7 +161,7 @@ func cancelCarryingNumber(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID,
 	var cancelled bool
 	err := db.WithinTenantTx(context.Background(), pool, tenantID, func(tx pgx.Tx) error {
 		var err error
-		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, actor)
+		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, invoiceNumber, actor)
 		return err
 	})
 	return cancelled, err

@@ -14,6 +14,7 @@ package approval
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -31,15 +32,35 @@ type approvalCancelledPayload struct {
 // cancel runs CancelLiveRunTx inside a fresh tenant-scoped transaction -- mirrors
 // arm_test.go's own arm() helper. Every spec reads the committed (or rolled-back)
 // result back through the superuser pool.
+//
+// The number is read here rather than taken as an argument: production hands it to
+// CancelLiveRunTx as a parameter, which cancelCarryingNumber pins (audit_number_test.go).
 func cancel(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID, actor string) (bool, error) {
 	t.Helper()
 	var cancelled bool
 	err := db.WithinTenantTx(context.Background(), pool, tenantID, func(tx pgx.Tx) error {
-		var err error
-		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, actor)
+		invoiceNumber, err := invoiceNumberOnTx(context.Background(), tx, invoiceID)
+		if err != nil {
+			return err
+		}
+		cancelled, err = CancelLiveRunTx(context.Background(), tx, invoiceID, invoiceNumber, actor)
 		return err
 	})
 	return cancelled, err
+}
+
+// invoiceNumberOnTx refuses a blank rather than let a helper freeze one into an
+// append-only audit row (CF-10).
+func invoiceNumberOnTx(ctx context.Context, tx pgx.Tx, invoiceID string) (string, error) {
+	var number string
+	if err := tx.QueryRow(ctx,
+		`SELECT invoice_number FROM invoices WHERE id = $1`, invoiceID).Scan(&number); err != nil {
+		return "", err
+	}
+	if number == "" {
+		return "", fmt.Errorf("invoice %s carries a blank invoice_number", invoiceID)
+	}
+	return number, nil
 }
 
 // closeApprovalRunFor force-closes a run directly, for fixtures that need one already

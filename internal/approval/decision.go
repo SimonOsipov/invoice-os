@@ -128,10 +128,10 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 
 	// invoices -> approval_* lock order (policy_store.go:699-718) -- reversed, this
 	// opens the same deadlock class the publish sweep already hit once.
-	var status string
+	var status, invoiceNumber string
 	if err := tx.QueryRow(ctx,
-		`SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID,
-	).Scan(&status); err != nil {
+		`SELECT status, invoice_number FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID,
+	).Scan(&status, &invoiceNumber); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Run{}, ErrRunNotFound
 		}
@@ -186,7 +186,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 		return Run{}, ErrNotRoleHolder
 	}
 
-	if _, err := commitDecisionTx(ctx, tx, invoiceID, caller.TenantID, runID, stepID, stepOrd, decision, caller.Subject, reason, demoter); err != nil {
+	if _, err := commitDecisionTx(ctx, tx, invoiceID, invoiceNumber, caller.TenantID, runID, stepID, stepOrd, decision, caller.Subject, reason, demoter); err != nil {
 		return Run{}, err
 	}
 
@@ -216,7 +216,7 @@ func decideTx(ctx context.Context, tx pgx.Tx, invoiceID, decision string, reason
 // UPDATE, which makes "the UPDATE affects 0 rows" unreachable through the full
 // Decide seam under normal concurrency (the resolving SELECT would simply find no
 // pending row instead) -- this lets the guard be driven directly as its own unit.
-func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID, stepID string, stepOrd int, decision, actor string, reason *string, demoter Demoter) (satisfied bool, err error) {
+func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, tenantID, runID, stepID string, stepOrd int, decision, actor string, reason *string, demoter Demoter) (satisfied bool, err error) {
 	// approval_decisions holds only SELECT+INSERT for invoice_app (migrations/
 	// 20260809232011_approval_runs.sql:114) -- the UPDATE must claim the row FIRST,
 	// or a 0-row UPDATE would leave an unremovable phantom decision. Rejected is not
@@ -281,10 +281,11 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID
 		}
 
 		if err := audit.Record(ctx, tx, actor, "invoice.approval_approved", map[string]any{
-			"invoice_id": invoiceID,
-			"run_id":     runID,
-			"step_ord":   stepOrd,
-			"reason":     reason,
+			"invoice_id":     invoiceID,
+			"run_id":         runID,
+			"step_ord":       stepOrd,
+			"reason":         reason,
+			"invoice_number": invoiceNumber,
 		}); err != nil {
 			return false, err
 		}
@@ -309,10 +310,11 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, runID
 		}
 
 		if err := audit.Record(ctx, tx, actor, "invoice.approval_rejected", map[string]any{
-			"invoice_id": invoiceID,
-			"run_id":     runID,
-			"step_ord":   stepOrd,
-			"reason":     reason,
+			"invoice_id":     invoiceID,
+			"run_id":         runID,
+			"step_ord":       stepOrd,
+			"reason":         reason,
+			"invoice_number": invoiceNumber,
 		}); err != nil {
 			return false, err
 		}

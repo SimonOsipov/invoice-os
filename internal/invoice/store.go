@@ -1399,7 +1399,7 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 			// 8b. no run outlives the promotion it belonged to (APPR-06-07, D37).
 			// Hooked BELOW step 6's no-op return, so an unchanged edit cancels
 			// nothing (TestEdit_NoOpEditCancelsNothing).
-			if _, err := approval.CancelLiveRunTx(ctx, tx, id, callerID.Subject); err != nil {
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, before.InvoiceNumber, callerID.Subject); err != nil {
 				return err
 			}
 		}
@@ -1736,7 +1736,7 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		// approval_run_orphaned detector reads. The gate above narrows that window
 		// rather than closing it — the edge still passes when no policy is active.
 		if target == StatusDraft {
-			if _, err := approval.CancelLiveRunTx(ctx, tx, id, actorFromContext(ctx).Subject); err != nil {
+			if _, err := approval.CancelLiveRunTx(ctx, tx, id, inv.InvoiceNumber, actorFromContext(ctx).Subject); err != nil {
 				return err
 			}
 		}

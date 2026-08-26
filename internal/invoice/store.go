@@ -1034,7 +1034,7 @@ func strPtrEqual(a, b *string) bool {
 // itself, enough to earn a "supplier_tin"/"supplier_name" audit-fields
 // entry. But this is NOT "never audited" (product-advisor review, 2026-07-31):
 // audit.Record's "invoice.updated" payload is fields-ONLY, no from/to
-// snapshot (map[string]any{"id":..., "fields": changedFields}, below in
+// snapshot (map[string]any{"id":..., "fields": changedFields, ...}, below in
 // Store.Update/Store.Edit) -- if the override were unconditionally excluded
 // from changedFields, a REAL silent correction of a compliance-relevant
 // field (a fiscal invoice's own supplier identity) would leave literally NO
@@ -2066,7 +2066,7 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 //  3. UPDATE ... SET the triple, RETURNING <invoiceColumns> -- re-keeping an
 //     already-kept invoice is legal (a changed mind about the reason), overwriting the
 //     prior at/by/reason.
-//  4. audit.Record(ctx, tx, subject, "invoice.kept_as_is", {id, reason}) in the SAME
+//  4. audit.Record(ctx, tx, subject, "invoice.kept_as_is", {id, reason, invoice_number}) in the SAME
 //     transaction as the column write (this package's standing convention,
 //     invoice.go:1-9 / the audit_log CHECKs' own actor-length failure mode) -- a failed
 //     audit write rolls the column write back too.

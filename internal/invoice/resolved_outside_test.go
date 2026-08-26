@@ -339,7 +339,7 @@ func TestResolveOutside_NeverChangesStatusOrSubmission(t *testing.T) {
 }
 
 // T2-8: ResolveOutside files exactly one invoice.resolved_outside audit row,
-// payload {id, reason}, actor the caller subject.
+// payload {id, reason, invoice_number}, actor the caller subject.
 func TestResolveOutside_AuditsResolvedOutside(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

@@ -1,6 +1,6 @@
-// AUDIT-11-02 Mode A, CF-10: the blank-parameter guard for CancelLiveRunTx.
+// The blank-parameter guard for CancelLiveRunTx.
 //
-// Subtask 02 gives approval.CancelLiveRunTx an invoiceNumber PARAMETER -- the carrier
+// approval.CancelLiveRunTx takes the invoice number as a PARAMETER -- the carrier
 // form D-11 rejected for PollArgs. A caller that passes "" compiles silently and
 // freezes a blank into an immutable audit row, and a blank is indistinguishable from
 // "this invoice has no number". The other three approval writers are RETURNING-fed and

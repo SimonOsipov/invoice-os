@@ -1,5 +1,5 @@
-// AUDIT-11-02 Mode A: the acceptance tests for "the four invoice-scoped approval
-// writers carry invoice_number", authored RED before any writer emits the key.
+// The acceptance tests for "the four invoice-scoped approval writers carry
+// invoice_number".
 // Mirrors internal/invoice/audit_number_test.go (subtask 01) in shape and naming.
 //
 // Sites are addressed by EVENT NAME and function, never by line number alone
@@ -152,7 +152,7 @@ func driveApprovalDecision(t *testing.T, super, app *pgxpool.Pool, label, decisi
 // way its three production callers do -- holding the invoice's number already.
 // Deliberately NOT cancel_test.go's cancel(): CF-10 makes the number a PARAMETER, the
 // carrier form D-11 rejected, so these specs must be the ones that choose what value is
-// passed. Subtask 02 threads invoiceNumber into the CancelLiveRunTx call below.
+// passed.
 func cancelCarryingNumber(t *testing.T, pool *pgxpool.Pool, tenantID, invoiceID, invoiceNumber, actor string) (bool, error) {
 	t.Helper()
 	if invoiceNumber == "" {
@@ -554,7 +554,7 @@ func TestAuditNumber_DecideIssuesNoExtraInvoiceStatement(t *testing.T) {
 // TestAuditNumber_CancelTakesTheNumberFromItsCaller (AC-3): CancelLiveRunTx runs once
 // per demotion on the request path and must issue NO statement of its own against
 // invoices -- the number arrives as an argument. The number assertion is what makes the
-// zero-count meaningful: today the count is zero because nothing needs the number yet.
+// zero-count meaningful: a zero alone would also hold for a writer that emits no number.
 func TestAuditNumber_CancelTakesTheNumberFromItsCaller(t *testing.T) {
 	super, _ := dbTestPools(t)
 	traced, rec := tracedAppPool(t)

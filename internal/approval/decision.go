@@ -246,9 +246,8 @@ func commitDecisionTx(ctx context.Context, tx pgx.Tx, invoiceID, invoiceNumber, 
 		return false, err
 	}
 
-	// tenant_id has no DEFAULT (unlike audit_log) and commitDecisionTx's signature is
-	// pinned by its own unit test with no tenantID parameter, so it comes from the
-	// transaction-local GUC directly -- the RLS policy's own expression verbatim
+	// tenant_id has no DEFAULT (unlike audit_log), so the INSERT supplies it from the
+	// transaction-local GUC -- the RLS policy's own expression verbatim
 	// (migrations/20260809232011_approval_runs.sql:106).
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor, reason)

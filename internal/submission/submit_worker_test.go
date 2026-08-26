@@ -615,8 +615,14 @@ type testInvoicePort struct {
 	buyerTIN string
 }
 
+// InvoiceNumber is read off the row, mirroring the real *invoice.Store.Canonical, which
+// projects invoices.invoice_number. A double that returned "" here would freeze a blank into
+// an immutable audit_log row on every SubmitWorker branch (AUDIT-11-03).
 func (t testInvoicePort) Canonical(ctx context.Context, tx pgx.Tx, invoiceID string) (submission.Canonical, error) {
 	c := submission.Canonical{InvoiceID: invoiceID}
+	if err := tx.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, invoiceID).Scan(&c.InvoiceNumber); err != nil {
+		return submission.Canonical{}, err
+	}
 	if t.buyerTIN != "" {
 		tin := t.buyerTIN
 		c.Buyer = submission.Party{TIN: &tin}

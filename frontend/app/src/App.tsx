@@ -146,9 +146,11 @@ export const SUSPENDED_NOTICE = {
 } as const
 
 // Replaces the workspace outright, never overlays it: a suspended member can read nothing,
-// so a shell around this card would be chrome over an empty product. No control, either —
-// the gate re-reads status per request, and no answer here can change without an admin.
-function SuspendedNotice() {
+// so a shell around this card would be chrome over an empty product. Its one control is the
+// app's own sign-out — the callback the 401 seam fires, never a second one. Not a retry: the
+// gate's answer cannot change without an admin. Not nothing either: with no control at all,
+// the only way off this card would be clearing site data.
+function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div
       className="asc-app"
@@ -162,6 +164,13 @@ function SuspendedNotice() {
         <div style={{ padding: '28px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{SUSPENDED_NOTICE.title}</div>
           <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>{SUSPENDED_NOTICE.body}</div>
+          <button
+            onClick={onSignOut}
+            className="v2-btn v2-btn-ghost pf-btn"
+            style={{ alignSelf: 'flex-start', marginTop: 10, height: 34, padding: '0 12px', fontSize: 13 }}
+          >
+            Sign out
+          </button>
         </div>
       </div>
     </div>
@@ -1301,7 +1310,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // Below every hook, so latching does not change the hook order. The whole workspace goes,
   // not a screen inside it: every surface reads tenant-scoped data and all of it now refuses.
-  if (suspended) return <SuspendedNotice />
+  if (suspended) return <SuspendedNotice onSignOut={onSignOut} />
 
   return (
     <div

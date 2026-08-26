@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -30,12 +30,15 @@ const SEAM_REFUSAL = new ApiError('http', NOT_ACTIVE_MEMBER_MESSAGE, 403, { erro
 
 // The third argument App hands the factory. undefined here means App never wired it.
 let capturedOnSuspended: (() => void) | undefined
+// The SECOND argument — the 401 seam's callback, i.e. the app's one sign-out.
+let capturedOnSignOut: (() => void) | undefined
 
 vi.mock('./lib/authedFetch', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/authedFetch')>()
   return {
     ...actual,
-    makeAuthedFetch: (_session: Session, _onSignOut: () => void, onSuspended?: () => void) => {
+    makeAuthedFetch: (_session: Session, onSignOut: () => void, onSuspended?: () => void) => {
+      capturedOnSignOut = onSignOut
       capturedOnSuspended = onSuspended
       return async () => {
         if (actual.isSuspended(SEAM_REFUSAL)) onSuspended?.()
@@ -79,6 +82,7 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url))
 beforeEach(() => {
   capturedCtx = undefined
   capturedOnSuspended = undefined
+  capturedOnSignOut = undefined
   vi.stubGlobal('localStorage', createMemoryStorage())
 })
 
@@ -136,16 +140,44 @@ describe('AC-4: the suspended card replaces the workspace', () => {
     expect(text, 'the card must say who can fix it').toMatch(/workspace admin/i)
   })
 
-  it('appSuspended_theCardOffersNoRetry', async () => {
+  it('appSuspended_theCardOffersExactlyOneControlAndItIsSignOut', async () => {
     await renderApp()
     const ctx = requireCtx()
     await act(async () => {
       await ctx.authedFetch('/x').catch(() => {})
     })
 
-    // No retry loop (design): a control that re-fires the refused call would hammer a gate
-    // whose answer cannot change without an admin.
-    expect(screen.getByTestId('suspended-notice').querySelectorAll('button')).toHaveLength(0)
+    // Exactly one, and it is the exit. No retry loop (design): a control that re-fires the
+    // refused call would hammer a gate whose answer cannot change without an admin.
+    const controls = screen.getByTestId('suspended-notice').querySelectorAll('button')
+    expect(controls, 'the card must carry the sign-out control and nothing else').toHaveLength(1)
+    expect(controls[0].textContent ?? '', 'the one control must be sign-out, not a retry').toMatch(/sign out/i)
+  })
+
+  it('appSuspended_theControlRunsTheSameSignOutThe401SeamHolds', async () => {
+    await renderApp()
+    const ctx = requireCtx()
+
+    // One sign-out, not two: what Sidebar calls IS what the 401 seam fires, and the card is
+    // handed that same callback. A literal reference check on the button's handler is not
+    // reachable from here, so the click below proves it by its end state instead.
+    expect(capturedOnSignOut, 'App.tsx never passed onSignOut to makeAuthedFetch').toBeDefined()
+    expect(ctx.signOut, 'ctx.signOut and the 401 callback have diverged').toBe(capturedOnSignOut)
+
+    await act(async () => {
+      await ctx.authedFetch('/x').catch(() => {})
+    })
+    const control = screen.getByTestId('suspended-notice').querySelector('button')
+    await act(async () => {
+      fireEvent.click(control as HTMLButtonElement)
+    })
+
+    // App.signOut's whole observable contract: the persisted session goes, the in-memory one
+    // goes with it, and the user lands on a front door. VITE_LANDING_URL is unset here, so
+    // that front door is the app's own picker rather than a navigation to landing.
+    expect(localStorage.removeItem, 'the persisted session survived sign-out').toHaveBeenCalledWith(SESSION_KEY)
+    expect(screen.queryByTestId('suspended-notice'), 'the card must be gone after sign-out').toBeNull()
+    expect(screen.getByText('Choose an account'), 'sign-out must land on a front door').toBeTruthy()
   })
 
   it('appSuspended_theCardSurvivesAFurtherRefusal', async () => {

@@ -137,6 +137,8 @@ func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrEntityNotFound):
 		return http.StatusNotFound, "not found"
 	case errors.As(err, &tooMany):

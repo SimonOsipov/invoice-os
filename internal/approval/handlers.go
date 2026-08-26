@@ -219,13 +219,15 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 
 // decisionStatusForErr is the run-read and decide seams' shared mapper. ErrRunNotFound
 // covers unknown, cross-tenant, malformed-uuid and no-run-row alike (read_model.go:
-// 77-79's sentinel), so its wording never names which. The two 403s name their own
+// 77-79's sentinel), so its wording never names which. The two RBAC 403s name their own
 // axis (AXIS 1: not an approver at all; AXIS 2: an approver but not this step's role
 // holder) so the two stay distinguishable on the wire.
 func decisionStatusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrNotPermitted):
 		return http.StatusForbidden, "only an approver can decide an approval step"
 	case errors.Is(err, ErrNotRoleHolder):

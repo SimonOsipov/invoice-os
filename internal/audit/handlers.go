@@ -50,12 +50,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // statusForErr maps a store error to its status and body. db.ErrNoTenant is 401
-// (fail-closed); anything else is a 500 with a generic body, so no internal ever reaches
-// the response. Logging the 500 case is the caller's job — only it knows the operation.
+// (fail-closed), db.ErrNotActiveMember is 403; anything else is a 500 with a generic
+// body, so no internal ever reaches the response. Logging the 500 case is the caller's job — only it knows the operation.
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

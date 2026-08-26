@@ -1457,8 +1457,9 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in
 // practice since every handler checks identity first, but this is the
-// defense-in-depth mirror of portfolio's own statusForErr); ErrValidation is
-// 400 with the wrapped message; ErrNotFound is 404; ErrDuplicateNumber/
+// defense-in-depth mirror of portfolio's own statusForErr);
+// db.ErrNotActiveMember is 403; ErrValidation is 400 with the wrapped
+// message; ErrNotFound is 404; ErrDuplicateNumber/
 // ErrRedundantTransition/ErrIllegalTransition/ErrAwaitingApproval are 409;
 // the last answers with awaitingApprovalReason, the shared refusal sentence
 // (TestStatusForErr_AwaitingApprovalIs409); anything else
@@ -1480,6 +1481,8 @@ func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):

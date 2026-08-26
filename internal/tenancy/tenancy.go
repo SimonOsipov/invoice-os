@@ -69,7 +69,8 @@ type MeLoader func(ctx context.Context) (Tenant, string, error)
 // domain role via load, and returns them. A missing/invalid tenant is 401
 // (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
 // no membership row is 403 (ErrNoMembership, fail-closed — a role is never
-// defaulted); anything else is 500.
+// defaulted); a non-active membership is 403 (db.ErrNotActiveMember);
+// anything else is 500.
 func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -84,6 +85,12 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		switch {
 		case errors.Is(err, db.ErrNoTenant):
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		// Dead through Store.Me, which reads over the ungated seam (D-5);
+		// TestMe_SuspendedMemberStillGets200 is the oracle that keeps it dead.
+		// It stays because an exemption in the scan would rot where an arm cannot.
+		case errors.Is(err, db.ErrNotActiveMember):
+			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
 			return
 		case errors.Is(err, ErrTenantNotFound):
 			writeError(w, http.StatusNotFound, "tenant not found")
@@ -134,8 +141,9 @@ type MembershipsLoader func(ctx context.Context) ([]Membership, error)
 // fail-closed shape as MeHandler), then lists the caller's tenant's
 // memberships via load. Unlike MeHandler, this endpoint does NOT gate on the
 // caller holding a membership row: db.ErrNoTenant is 401 (fail-closed, no
-// tenant context at all); any other loader error is 500. Per A4 there is
-// deliberately no 403/404 mapping here. A nil/empty result is normalized to
+// tenant context at all); db.ErrNotActiveMember is 403; any other loader
+// error is 500. Per A4 there is deliberately no membership-based 403/404
+// mapping here. A nil/empty result is normalized to
 // an empty slice so the memberships field always serializes as `[]`, never
 // `null`.
 func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFunc {
@@ -151,6 +159,9 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 		switch {
 		case errors.Is(err, db.ErrNoTenant):
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		case errors.Is(err, db.ErrNotActiveMember):
+			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "tenancy: list memberships", slog.Any("err", err))
@@ -250,6 +261,8 @@ func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrInvalidStatus):
 		return http.StatusBadRequest, `status must be "active" or "suspended"`
 	case errors.Is(err, ErrNotPermitted):

@@ -290,8 +290,9 @@ func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error)
 
 // statusForErr maps a store/engine error to the HTTP status + message the
 // handlers write to the response. db.ErrNoTenant is 401 (fail-closed, mirroring
-// portfolio.statusForErr); ErrValidation is 400 with the wrapped message;
-// ErrNotFound is 404; ErrRedundantTransition is 409; ErrNoActiveRuleSet is 503
+// portfolio.statusForErr); db.ErrNotActiveMember is 403; ErrValidation is 400
+// with the wrapped message; ErrNotFound is 404; ErrRedundantTransition is 409;
+// ErrNoActiveRuleSet is 503
 // (the engine has no published version to evaluate against); anything else is
 // 500 with a generic body -- this helper never leaks internals into the
 // response. Logging the unrecognized (500) case via slog is the caller's
@@ -300,6 +301,8 @@ func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):

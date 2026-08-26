@@ -395,7 +395,8 @@ func OnboardHandler(setStatus func(ctx context.Context, id string) (Entity, erro
 
 // statusForErr maps a store/domain error to the HTTP status + message the
 // real handler bodies (added by the executor) write to the response.
-// db.ErrNoTenant is 401 (fail-closed); ErrInvalidTIN/ErrValidation are 400
+// db.ErrNoTenant is 401 (fail-closed); db.ErrNotActiveMember is 403;
+// ErrInvalidTIN/ErrValidation are 400
 // with the wrapped message; ErrNotFound is 404; ErrDuplicateTIN/
 // ErrRedundantTransition are 409; anything else is 500 with a generic body —
 // this helper never leaks internals into the response. Logging the
@@ -405,6 +406,8 @@ func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrInvalidTIN), errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):

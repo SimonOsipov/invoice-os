@@ -8,6 +8,20 @@ import { describe, expect, it } from 'vitest'
 
 import { AUDIT_COPY } from './auditView'
 
+// Three failure classes reintroduce the false belief CF-40 forbids: an explicit
+// exclusion ("other details only"), a reliability hedge ("older ... less reliably
+// matched"), and a plain temporal denial ("events before X cannot be found by
+// number"). Scoped so "before the number was recorded" (temporal narration, not
+// an exclusion claim) does not trip it. CUTOVER_CORPUS below pins the discrimination.
+const CUTOVER_EXCLUSION = /other details.{0,20}only|only.{0,20}other details/i
+const RELIABILITY_HEDGE =
+  /(older|earlier|past|historical).{0,40}(less reliably|less likely|not always|may not|might not|harder to find|inconsistently|unreliably|not as reliably|worse matched)/i
+const TEMPORAL_EXCLUSION =
+  /\b(older|earlier|before|prior to|past|historical)\b[^.]{0,80}\b(cannot|can't|could not|are not|is not|aren't|isn't|never|unsearchable|excluded)\b[^.]{0,40}(search|find|found|match|reach)/i
+
+const claimsOlderEventsAreUnsearchable = (s: string): boolean =>
+  CUTOVER_EXCLUSION.test(s) || RELIABILITY_HEDGE.test(s) || TEMPORAL_EXCLUSION.test(s)
+
 describe('AUDIT_COPY.searchHelper', () => {
   it('auditCopy_doesNotDenyInvoiceNumberSearch', () => {
     expect(AUDIT_COPY.searchHelper, 'must not deny invoice-number search').not.toMatch(
@@ -16,19 +30,40 @@ describe('AUDIT_COPY.searchHelper', () => {
   })
 
   it('auditCopy_doesNotClaimOlderEventsAreUnsearchableByNumber', () => {
-    // Two failure classes reintroduce the false belief CF-40 forbids: an explicit
-    // exclusion ("other details only") and a reliability hedge ("older ... less
-    // reliably matched"). Scoped so "before the number was recorded" (temporal
-    // narration, not an exclusion claim) does not trip it.
-    const cutoverExclusion = /other details.{0,20}only|only.{0,20}other details/i
-    const reliabilityHedge =
-      /(older|earlier|past|historical).{0,40}(less reliably|less likely|not always|may not|might not|harder to find|inconsistently|unreliably|not as reliably|worse matched)/i
-    expect(AUDIT_COPY.searchHelper, 'must not claim older events are excluded from number search').not.toMatch(
-      cutoverExclusion,
-    )
-    expect(AUDIT_COPY.searchHelper, 'must not hedge that older events are less reliably matched').not.toMatch(
-      reliabilityHedge,
-    )
+    expect(
+      claimsOlderEventsAreUnsearchable(AUDIT_COPY.searchHelper),
+      'must not claim older events are excluded from number search',
+    ).toBe(false)
+  })
+
+  const CUTOVER_CORPUS: ReadonlyArray<readonly [string, boolean]> = [
+    [
+      'Invoice numbers are recorded from August 2026 onward; events logged before then are searchable by their other details only.',
+      true,
+    ],
+    ['Older invoice numbers logged in the past are less reliably matched than current ones.', true],
+    [
+      'Invoice numbers are only recorded from August 2026 onward, so earlier events cannot be found by number.',
+      true,
+    ],
+    ['Events logged before August 2026 are not searchable by invoice number.', true],
+    ['Historical events are excluded from invoice-number search.', true],
+    ['Earlier events are never matched by an invoice number.', true],
+    [
+      'Invoice numbers are searchable for every event, including ones logged before the number was recorded in their own payload.',
+      false,
+    ],
+    [
+      "An invoice number matches that invoice's events, including older ones that do not list the number in their own details.",
+      false,
+    ],
+    ['Older events are found by invoice number even though they do not carry it.', false],
+    ['It cannot find a member shown by their email address.', false],
+    ['Events recorded before this release are still found by number, but do not show it in their own details.', false],
+  ]
+
+  it.each(CUTOVER_CORPUS)('auditCopy_cutoverGuardDiscriminates: %s', (sentence, isFalseClaim) => {
+    expect(claimsOlderEventsAreUnsearchable(sentence)).toBe(isFalseClaim)
   })
 
   it('auditCopy_statesTheDisplayGapNotASearchCutover', () => {

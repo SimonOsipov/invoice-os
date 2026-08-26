@@ -76,12 +76,12 @@ var planEventMix = []struct {
 	perMille int
 	payload  string // SQL expression, evaluated against the r CTE below
 }{
-	{"invoice.created", 300, `jsonb_build_object('id', r.invoice)`},
-	{"invoice.updated", 200, `jsonb_build_object('id', r.invoice)`},
-	{"invoice.validated", 150, `jsonb_build_object('id', r.invoice)`},
-	{"invoice.transitioned", 120, `jsonb_build_object('id', r.invoice)`},
-	{"submission.accepted", 80, `jsonb_build_object('invoice_id', r.invoice)`},
-	{"invoice.approval_approved", 50, `jsonb_build_object('invoice_id', r.invoice)`},
+	{"invoice.created", 300, `jsonb_build_object('id', r.invoice, 'invoice_number', r.number)`},
+	{"invoice.updated", 200, `jsonb_build_object('id', r.invoice, 'invoice_number', r.number)`},
+	{"invoice.validated", 150, `jsonb_build_object('id', r.invoice, 'invoice_number', r.number)`},
+	{"invoice.transitioned", 120, `jsonb_build_object('id', r.invoice, 'invoice_number', r.number)`},
+	{"submission.accepted", 80, `jsonb_build_object('invoice_id', r.invoice, 'invoice_number', r.number)`},
+	{"invoice.approval_approved", 50, `jsonb_build_object('invoice_id', r.invoice, 'invoice_number', r.number)`},
 	{"document.created", 30, `jsonb_build_object('id', gen_random_uuid())`},
 	{"portfolio.entity.updated", 30, `jsonb_build_object('id', r.entity)`},
 	{"approval_policy.published", 30, `jsonb_build_object('policy_id', gen_random_uuid())`},
@@ -210,12 +210,15 @@ func planCorpusInsertSQL() string {
 	// (g-1)*planTenants + slot, so the tenants interleave in time without colliding.
 	return `
 		WITH inv AS (
-			SELECT array_agg(id ORDER BY invoice_number) AS ids FROM invoices WHERE tenant_id = $1
+			SELECT array_agg(id ORDER BY invoice_number)             AS ids,
+			       array_agg(invoice_number ORDER BY invoice_number) AS numbers
+			  FROM invoices WHERE tenant_id = $1
 		), ent AS (
 			SELECT array_agg(id ORDER BY name) AS ids FROM business_entities WHERE tenant_id = $1
 		), r AS (
 			SELECT (g % 1000)::int                                        AS bucket,
-			       inv.ids[((g % ` + strconv.Itoa(planInvoices) + `) + 1)::int] AS invoice,
+			       inv.ids[((g % ` + strconv.Itoa(planInvoices) + `) + 1)::int]     AS invoice,
+			       inv.numbers[((g % ` + strconv.Itoa(planInvoices) + `) + 1)::int] AS number,
 			       ent.ids[((g % ` + strconv.Itoa(planEntities) + `) + 1)::int] AS entity,
 			       md5($1::text || 'actor' || (g % ` + strconv.Itoa(planActors) + `))::uuid::text AS actor,
 			       now() - (($4 - ((g - 1) * ` + strconv.Itoa(planTenants) + ` + $3)) * ` +
@@ -246,14 +249,15 @@ func assertCorpusShape(t *testing.T, f *fixture, p planFixture) {
 	}
 
 	counts := map[string]int{}
-	var rows, attributed, entities, actors int
+	var rows, attributed, entities, actors, numbered int
 	var oldest, newest time.Time
 	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
 		if e := tx.QueryRow(ctx, `
 			SELECT count(*), count(entity_id), count(DISTINCT entity_id), count(DISTINCT actor),
+			       count(*) FILTER (WHERE payload ? 'invoice_number'),
 			       min(created_at), max(created_at)
 			  FROM audit_log WHERE tenant_id = $1`, p.tenant).
-			Scan(&rows, &attributed, &entities, &actors, &oldest, &newest); e != nil {
+			Scan(&rows, &attributed, &entities, &actors, &numbered, &oldest, &newest); e != nil {
 			return e
 		}
 		cur, e := tx.Query(ctx,
@@ -293,6 +297,13 @@ func assertCorpusShape(t *testing.T, f *fixture, p planFixture) {
 	}
 	if attributed == rows {
 		t.Fatalf("every one of the %d rows carries an entity_id; the mix must leave the workspace-level events NULL", rows)
+	}
+	// AUDIT-11-07: the search pins below read a number out of the payload, so the widening
+	// is corpus shape too. TestAudit_PlanCorpusCarriesAnInvoiceNumber owns the per-event
+	// breakdown; this is the floor that runs before every EXPLAIN.
+	if want := planNumberedRowsPerTenant(); numbered != want {
+		t.Fatalf("corpus rows carrying invoice_number = %d, want %d — the invoice-scoped "+
+			"payloads are not the widened ones the number pins measure", numbered, want)
 	}
 	if span := newest.Sub(oldest); span < 80*24*time.Hour {
 		t.Fatalf("corpus spans %s, want ~90 days — a compressed span makes the date-range case select everything", span)
@@ -479,15 +490,21 @@ func assertIndexOnly(t *testing.T, plan string) {
 // = ...)`, so concatenating every node would let "tenant_id is in the Index Cond" pass on the
 // joined table alone even if audit_log had lost its tenant lead outright — which is the exact
 // regression this check exists to catch. TestAudit_IndexCondIgnoresTheJoinedTable holds it.
-func indexCond(plan string) string {
+func indexCond(plan string) string { return planCondLines(plan, "audit_log", "Index Cond:") }
+
+// planCondLines joins the marker lines emitted by nodes scanning a relation or index whose
+// name starts with relPrefix. The marker is matched against the TRIMMED line's prefix, not
+// as a substring, so a Nested Loop's "Join Filter:" never lands in a "Filter:" collection.
+func planCondLines(plan, relPrefix, marker string) string {
 	var out []string
-	onAuditLog := false
+	on := false
 	for _, line := range strings.Split(plan, "\n") {
 		if target, ok := scanTarget(line); ok {
-			onAuditLog = strings.HasPrefix(target, "audit_log")
+			on = strings.HasPrefix(target, relPrefix)
 		}
-		if onAuditLog && strings.Contains(line, "Index Cond:") {
-			out = append(out, strings.TrimSpace(line))
+		trimmed := strings.TrimSpace(line)
+		if on && strings.HasPrefix(trimmed, marker) {
+			out = append(out, trimmed)
 		}
 	}
 	return strings.Join(out, "\n")
@@ -581,10 +598,9 @@ const (
 	planKindFacetCompany = "facet-company"
 )
 
-// planCapture runs the real Query as the corpus tenant and returns the statements it issued
-// against audit_log, keyed by kind. It fails when a kind is missing, so a reader that stopped
-// issuing one cannot leave a case silently unasserted.
-func planCapture(t *testing.T, filter audit.Filter) map[string]planStmt {
+// planTrace runs the real Query as the corpus tenant on its own single-connection traced
+// pool and returns every statement it issued, in order.
+func planTrace(t *testing.T, filter audit.Filter) []planStmt {
 	t.Helper()
 	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -606,9 +622,16 @@ func planCapture(t *testing.T, filter audit.Filter) map[string]planStmt {
 	}); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	return tr.stmts
+}
 
+// planCapture runs the real Query as the corpus tenant and returns the statements it issued
+// against audit_log, keyed by kind. It fails when a kind is missing, so a reader that stopped
+// issuing one cannot leave a case silently unasserted.
+func planCapture(t *testing.T, filter audit.Filter) map[string]planStmt {
+	t.Helper()
 	out := map[string]planStmt{}
-	for _, s := range tr.stmts {
+	for _, s := range planTrace(t, filter) {
 		// The GROUP BY arms come FIRST and the count matches on `SELECT count(*)`, not on
 		// `count(*)`: every facet selects count(*) from audit_log too, so a looser count arm
 		// swallows all three and the missing-kind check below fires on the facets instead.
@@ -817,6 +840,15 @@ func TestAudit_ScopedInvoiceReadUsesTheInvoiceIndex(t *testing.T) {
 // that the reason still holds: under FORCE RLS a non-LEAKPROOF operator can never be pushed
 // down, and every text-matching operator is non-leakproof. If texticlike ever becomes
 // leakproof this test fails and the exception should be revisited.
+//
+// AUDIT-11-09 added a fourth arm, a.invoice_id = ANY(...), whose uuid_eq IS leakproof — so
+// non-leakproofness is now only half the reason. The other half: searchFragment always emits
+// the two text arms, so the leakproof arm can never stand alone, and an OR-group holding a
+// non-leakproof term is non-leakproof whole. That half is structural, not corpus-dependent.
+//
+// This case runs planSearchTerm, which resolves no invoice, so the resolved arm is dropped
+// and this pin speaks for two of the search's up-to-five arms.
+// TestAudit_NoArmOfTheSearchReachesAnIndexCond covers the group with the resolved arm present.
 func TestAudit_SearchIsTheOnlyPredicateNoIndexCanServe(t *testing.T) {
 	f, p := requirePlanCorpus(t)
 	stmts := planCapture(t, audit.Filter{Limit: 50, Q: planSearchTerm})
@@ -1084,6 +1116,298 @@ var planNumberedEvents = []string{
 	"invoice.transitioned",
 	"submission.accepted",
 	"invoice.approval_approved",
+}
+
+// planNumberedRowsPerTenant is how many of a tenant's rows planEventMix leaves numbered.
+func planNumberedRowsPerTenant() int {
+	numbered := map[string]bool{}
+	for _, ev := range planNumberedEvents {
+		numbered[ev] = true
+	}
+	n := 0
+	for _, m := range planEventMix {
+		if numbered[m.event] {
+			n += planRowsPerTenant * m.perMille / 1000
+		}
+	}
+	return n
+}
+
+// planNumberTerm derives the search term every number pin below uses: the invoice_number of
+// the NEWEST invoice-scoped row inside the date window.
+//
+// Derived, never hardcoded. planEventMix is laid out monotone in created_at, so the 7-day
+// window holds exactly one invoice-scoped row, and which invoice that is falls out of
+// planRowsPerTenant % planInvoices. A literal would be an accident of the geometry and would
+// silently strand the bounded-page comparison the moment any geometry constant moved.
+func planNumberTerm(t *testing.T, f *fixture, p planFixture, since time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+	var term string
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT i.invoice_number
+			  FROM audit_log a JOIN invoices i ON i.id = a.invoice_id
+			 WHERE a.tenant_id = $1 AND a.created_at >= $2
+			 ORDER BY a.created_at DESC, a.id DESC LIMIT 1`, p.tenant, since).Scan(&term)
+	}); err != nil {
+		t.Fatalf("no invoice-scoped row inside the window, so a bounded number search would "+
+			"match nothing and prove nothing: %v", err)
+	}
+	return term
+}
+
+// planSearchArms are the three arms searchFragment always emits for a term that resolves an
+// invoice. Matched as plan text: the two ILIKEs render as ~~*, the payload arm as a SubPlan
+// reference, and the resolved arm as an array comparison.
+var planSearchArms = []string{"~~*", "EXISTS(SubPlan", "invoice_id = ANY ("}
+
+// planArmsIn reports which of planSearchArms appear in a slice of plan text.
+func planArmsIn(section string) []string {
+	var out []string
+	for _, arm := range planSearchArms {
+		if strings.Contains(section, arm) {
+			out = append(out, arm)
+		}
+	}
+	return out
+}
+
+// TestAudit_NoArmOfTheSearchReachesAnIndexCond is AC #6, and it replaces a specified pin that
+// claimed the opposite. AUDIT-11-09's a.invoice_id = ANY(...) is leakproof and WOULD be
+// index-servable alone, but searchFragment always OR-s it with the two text arms, and an
+// OR-group holding a non-leakproof term is non-leakproof whole. So under FORCE RLS no part of
+// the group is ever pushed down: measured, all three arms land in one heap Filter on both the
+// page and the count.
+//
+// The assertion is on node SHAPE, never on an index name. The count plan picks a
+// tenant-leading index whichever way the corpus falls -- audit_log_tenant_invoice_created_idx
+// when this was specified, audit_log_tenant_entity_created_idx when it was built -- with
+// tenant_id alone in its Index Cond either way. TestAudit_IndexNameAloneCannotProveAnArmIsServed
+// holds that a name is not evidence.
+func TestAudit_NoArmOfTheSearchReachesAnIndexCond(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+	term := planNumberTerm(t, f, p, time.Now().Add(-planDateWindow))
+	stmts := planCapture(t, audit.Filter{Limit: 50, Q: term})
+
+	for _, kind := range []string{planKindPage, planKindCount} {
+		t.Run(kind, func(t *testing.T) {
+			st := stmts[kind]
+			if n := countAsApp(t, f, p.tenant, st.sql, st.args...); n == 0 {
+				t.Fatalf("the %s statement returns nothing for %q, so its plan proves nothing", kind, term)
+			}
+			plan := explainAsApp(t, f, p.tenant, st.sql, st.args...)
+
+			cond := indexCond(plan)
+			if got := planArmsIn(cond); len(got) != 0 {
+				t.Errorf("search arms %v reached audit_log's Index Cond. Under FORCE RLS that "+
+					"should be impossible while a non-leakproof term is OR-ed into the group -- "+
+					"re-measure pg_proc, and check the group still holds a text arm:\n%s", got, plan)
+			}
+			if !strings.Contains(cond, "tenant_id") {
+				t.Errorf("audit_log has no tenant_id in its Index Cond, so the scan reads more "+
+					"than the tenant:\n%s", plan)
+			}
+			// Vacuity floor, checked last so a real violation above is reported first: all three
+			// arms must be IN the heap filter, or the claim is about a plan with no arms at all.
+			if got := planArmsIn(planCondLines(plan, "audit_log", "Filter:")); len(got) != len(planSearchArms) {
+				t.Fatalf("audit_log's Filter carries only %v of the search arms %v; the checks "+
+					"above would prove nothing:\n%s", got, planSearchArms, plan)
+			}
+		})
+	}
+}
+
+// TestAudit_IndexNameAloneCannotProveAnArmIsServed is the planted control for the pin above.
+// The count plan the architect measured NAMES audit_log_tenant_invoice_created_idx while the
+// resolved arm sits in the heap Filter, so a pin asserting the index by name would have passed
+// on it while proving nothing. Synthetic on purpose: which tenant-leading index the planner
+// picks is an accident of corpus size, so the false green cannot be reproduced on demand.
+func TestAudit_IndexNameAloneCannotProveAnArmIsServed(t *testing.T) {
+	// Measured shape: the invoice index is named, tenant_id alone is the Index Cond.
+	const named = `Aggregate
+  ->  Bitmap Heap Scan on audit_log a
+        Recheck Cond: (tenant_id = 'deadbeef'::uuid)
+        Filter: ((event ~~* '%INV-x%'::text) OR EXISTS(SubPlan 1) OR (invoice_id = ANY ('{f0}'::uuid[])))
+        ->  Bitmap Index Scan on audit_log_tenant_invoice_created_idx
+              Index Cond: (tenant_id = 'deadbeef'::uuid)
+        SubPlan 1
+          ->  Function Scan on jsonb_each_text kv
+                Filter: ((key <> 'invoice_number'::text) AND (value ~~* '%INV-x%'::text))`
+
+	if !strings.Contains(named, planIdxInvoice) {
+		t.Fatalf("the control plan does not name %s, so it cannot demonstrate the false green", planIdxInvoice)
+	}
+	if got := planArmsIn(indexCond(named)); len(got) != 0 {
+		t.Errorf("planArmsIn found %v in an Index Cond that holds tenant_id alone; the shape "+
+			"check would red on the very plan the name-only check passes", got)
+	}
+	if got := planArmsIn(planCondLines(named, "audit_log", "Filter:")); len(got) != len(planSearchArms) {
+		t.Errorf("the arms are in the heap Filter but planArmsIn saw only %v; the vacuity floor "+
+			"cannot tell a served arm from a missing one", got)
+	}
+
+	// Served shape: the same arm folded INTO the Index Cond. Without this the check above
+	// passes on a helper that always returns nothing.
+	const served = `Aggregate
+  ->  Bitmap Heap Scan on audit_log a
+        Recheck Cond: ((tenant_id = 'deadbeef'::uuid) AND (invoice_id = ANY ('{f0}'::uuid[])))
+        ->  Bitmap Index Scan on audit_log_tenant_invoice_created_idx
+              Index Cond: ((tenant_id = 'deadbeef'::uuid) AND (invoice_id = ANY ('{f0}'::uuid[])))`
+
+	if got := planArmsIn(indexCond(served)); len(got) != 1 || got[0] != "invoice_id = ANY (" {
+		t.Errorf("planArmsIn = %v for a plan whose Index Cond carries the resolved arm, want "+
+			"exactly the resolved arm — the pin above cannot detect what it exists to catch", got)
+	}
+}
+
+// TestAudit_NumberTermReachesOnlyTheResolvedArm is AC #4. A number reaches the corpus through
+// a.invoice_id = ANY(...) and through nothing else: it is in no event name, and AUDIT-11-09
+// fenced the generic payload arm off the invoice_number key.
+//
+// The third count is the vacuity floor, and it is why AUDIT-11-01's widening was not
+// bookkeeping: before it, the term matched nothing through the generic arm with OR without
+// the fence, so "the fence holds" was a claim about an empty set. It now matches 12 rows
+// unfenced and none fenced.
+//
+// This pin measures the CORPUS, not filter.go. Removing the fence from searchFragment leaves
+// it green -- measured -- because the resolved arm already matches the same rows here. The
+// behavioural claim belongs to AUDIT-11-09: TestAuditSearch_NumberKeyIsNotReachableThroughTheGenericArm,
+// TestAuditSearch_NumberResolvesThroughTheLiveTableNotTheFrozenPayload and
+// TestAuditFilter_GenericValueArmSkipsTheNumberKey are the three that red on that mutation.
+func TestAudit_NumberTermReachesOnlyTheResolvedArm(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+	term := planNumberTerm(t, f, p, time.Now().Add(-planDateWindow))
+
+	var viaEvent, viaGeneric, viaGenericUnfenced int
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*) FILTER (WHERE a.event ILIKE '%' || $2 || '%' ESCAPE '\'),
+			       count(*) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_each_text(a.payload) kv
+			                                       WHERE kv.key <> 'invoice_number'
+			                                         AND kv.value ILIKE '%' || $2 || '%' ESCAPE '\')),
+			       count(*) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_each_text(a.payload) kv
+			                                       WHERE kv.value ILIKE '%' || $2 || '%' ESCAPE '\'))
+			  FROM audit_log a WHERE a.tenant_id = $1`, p.tenant, term).
+			Scan(&viaEvent, &viaGeneric, &viaGenericUnfenced)
+	}); err != nil {
+		t.Fatalf("count the arms a number term reaches: %v", err)
+	}
+
+	found := planQuery(t, f, p.tenant, audit.Filter{Limit: 50, Q: term})
+	if len(found.Events) == 0 {
+		t.Fatalf("searching %q returns nothing, so which arm carried it is not a question", term)
+	}
+	if viaEvent != 0 {
+		t.Errorf("%q matches %d corpus event names, so the event arm could carry it and this "+
+			"case no longer isolates the resolved arm", term, viaEvent)
+	}
+	if viaGeneric != 0 {
+		t.Errorf("%q matches %d rows through the fenced generic arm; AUDIT-11-09's exclusion "+
+			"is not holding", term, viaGeneric)
+	}
+	if viaGenericUnfenced == 0 {
+		t.Fatalf("%q matches nothing through the UNFENCED generic arm either, so the exclusion "+
+			"is vacuous here and the check above proves nothing", term)
+	}
+}
+
+// TestAudit_NumberSearchIsBoundedByTheDateRange is AC #4's other half, and the same claim
+// TestAudit_SearchScanIsBoundedByTheDateRange makes for a term that rides the event arm: the
+// only thing bounding a search no index can serve is the date range.
+func TestAudit_NumberSearchIsBoundedByTheDateRange(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+	since := time.Now().Add(-planDateWindow)
+	term := planNumberTerm(t, f, p, since)
+
+	wide := planRowsExamined(t, f, p.tenant, planCapture(t, audit.Filter{Limit: 50, Q: term})[planKindCount])
+	narrow := planRowsExamined(t, f, p.tenant,
+		planCapture(t, audit.Filter{Limit: 50, Q: term, From: since})[planKindCount])
+
+	if wide == 0 || narrow == 0 {
+		t.Fatalf("one of the runs examined no rows at all (wide=%d narrow=%d); a comparison "+
+			"between them proves nothing", wide, narrow)
+	}
+	if narrow >= wide {
+		t.Errorf("the 7-day bound examined %d rows and the unbounded number search %d; the date "+
+			"range is the only thing bounding it", narrow, wide)
+	}
+
+	// And the bound must not change the answer inside the window. The term is derived from the
+	// newest in-window invoice-scoped row precisely so this half has something to compare.
+	widePage := planQuery(t, f, p.tenant, audit.Filter{Limit: 50, Q: term})
+	narrowPage := planQuery(t, f, p.tenant, audit.Filter{Limit: 50, Q: term, From: since})
+
+	var expected []string
+	for _, e := range widePage.Events {
+		if !e.CreatedAt.Before(since) {
+			expected = append(expected, e.ID)
+		}
+	}
+	if len(expected) == 0 {
+		t.Fatalf("no row of the unbounded page falls inside the window, so there is nothing to "+
+			"compare (page held %d rows)", len(widePage.Events))
+	}
+	if len(narrowPage.Events) < len(expected) {
+		t.Fatalf("the bounded search returned %d rows but the unbounded page alone has %d inside "+
+			"the window; the bound is dropping matches", len(narrowPage.Events), len(expected))
+	}
+	for i, want := range expected {
+		if narrowPage.Events[i].ID != want {
+			t.Errorf("row %d differs: bounded %s, unbounded %s — bounding the scan changed the "+
+				"answer inside the window", i, narrowPage.Events[i].ID, want)
+		}
+	}
+}
+
+// TestAudit_NumberFoldInIsTenantLeadingWithTheIlikeAsAFilter is AC #7. The number fold-in is
+// the one lookup this story adds to the request path, and it is a per-tenant scan of invoices:
+// tenant_id leads the index, the ILIKE follows as a heap filter. Node type, buffer counts and
+// timings are deliberately unasserted -- a Bitmap plan over the same index is the same claim.
+//
+// EXPLAINs the statement resolveSearchTargets actually issued, captured off a tracer, not a
+// hand-written copy of it.
+func TestAudit_NumberFoldInIsTenantLeadingWithTheIlikeAsAFilter(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+	term := planNumberTerm(t, f, p, time.Now().Add(-planDateWindow))
+	st := planFoldInStmt(t, term)
+
+	if n := countAsApp(t, f, p.tenant, st.sql, st.args...); n == 0 {
+		t.Fatalf("the fold-in resolves no invoice for %q, so its plan proves nothing", term)
+	}
+	plan := explainAsApp(t, f, p.tenant, st.sql, st.args...)
+
+	if !strings.Contains(plan, "invoices_tenant_id_id_uq") {
+		t.Errorf("the fold-in does not use invoices_tenant_id_id_uq:\n%s", plan)
+	}
+	if strings.Contains(plan, "Seq Scan on invoices") {
+		t.Errorf("the fold-in Seq Scans invoices; the tenant lead is gone:\n%s", plan)
+	}
+	cond := planCondLines(plan, "invoices", "Index Cond:") + "\n" +
+		planCondLines(plan, "invoices", "Recheck Cond:")
+	if !strings.Contains(cond, "tenant_id") {
+		t.Errorf("tenant_id is not in the fold-in's Index or Recheck Cond, so the lookup reads "+
+			"past the tenant before filtering:\n%s", plan)
+	}
+	if filter := planCondLines(plan, "invoices", "Filter:"); !strings.Contains(filter, "invoice_number ~~*") {
+		t.Errorf("the invoice_number ILIKE is not a heap Filter on invoices; re-measure before "+
+			"believing it reached an index:\n%s", plan)
+	}
+}
+
+// planFoldInStmt captures the invoices lookup resolveSearchTargets issues for q. Keyed on
+// FROM invoices, so a rename that stops the lookup happening fails loudly here rather than
+// leaving the case silently unasserted.
+func planFoldInStmt(t *testing.T, q string) planStmt {
+	t.Helper()
+	for _, st := range planTrace(t, audit.Filter{Limit: 50, Q: q}) {
+		if strings.Contains(st.sql, "FROM invoices") {
+			return st
+		}
+	}
+	t.Fatalf("Query issued no statement against invoices for q=%q; the fold-in is not running", q)
+	return planStmt{}
 }
 
 // TestAudit_PlanCorpusCarriesAnInvoiceNumber is the floor under every pin below it. Before

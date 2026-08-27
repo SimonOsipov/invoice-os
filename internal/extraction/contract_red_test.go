@@ -9,10 +9,10 @@
 //   - TestContractSuite_RejectsNonConformingExtractors was red in that commit on a VACUITY
 //     GUARD -- zero rows for twelve laws -- and not on any law. That is not a law transition
 //     and must not be sold as one. From here on it is what drives all twenty rows.
-//   - The six TestRedCase_* specs are EXECUTABLE PROOF, green from their first run, and each
-//     is REDUNDANT with a table row: same factory, same want, same grading helper. Measured --
-//     no mutation moves a named spec without also moving its row. They buy a name in the test
-//     output and nothing else, so do not count them twice.
+//   - The six TestRedCase_* specs are EXECUTABLE PROOF, green from their first run. Measured:
+//     no single-site mutation moves one without also moving a table row, so they buy a name in
+//     the test output, not coverage -- do not count them twice. The E11 one carries the whole
+//     PDF-points box the table splits per axis, which is the only shape it does not share.
 //   - TestContractCorpusNeedsNoRestore is a DESIGN LOCK, never red-first.
 //
 // ONE ROW PER EMISSION SITE, measured rather than assumed. The runner holds 20 law-prefixed
@@ -324,6 +324,18 @@ func absoluteRegionY() []extraction.Field {
 	return fields
 }
 
+// absoluteRegion is the whole PDF-points box, both axes out at once. The table splits it per
+// axis so each site is guarded on its own; this is the shape the
+// extraction_field_results_bbox_normalised CHECK rejects, so the named spec below keeps it
+// literal rather than inferring it from the two halves.
+func newAbsoluteRegion() extraction.Extractor { return redFields{build: absoluteRegion} }
+
+func absoluteRegion() []extraction.Field {
+	fields := lawfulFields()
+	fields[0].Region = &extraction.Region{Page: 1, X0: 72, Y0: 720, X1: 540, Y1: 750}
+	return fields
+}
+
 // E11, page zero: the third site, and the only row in the table that reaches it. The box is
 // normalised and non-inverted, so both conjunctions are satisfied and this fires once per
 // corpus case rather than three times.
@@ -588,7 +600,7 @@ func TestRedCase_E05MutatingExtractIsRejected(t *testing.T) {
 // extraction_field_results_bbox_normalised CHECK, so PDF points in a Region are caught at both
 // layers.
 func TestRedCase_E11AbsoluteCoordinatesAreRejected(t *testing.T) {
-	assertExactLawIDs(t, "E11/absolute-x-coordinates", recordedLawIDs(newAbsoluteRegionX), lawSet("E11"))
+	assertExactLawIDs(t, "E11/absolute-coordinates", recordedLawIDs(newAbsoluteRegion), lawSet("E11"))
 }
 
 // TestRedCase_E11PageZeroIsRejected: pages are 1-based. This is the only row that reaches

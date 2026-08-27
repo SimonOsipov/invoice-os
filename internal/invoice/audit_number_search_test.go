@@ -26,7 +26,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -52,7 +51,7 @@ const auditSearchIDKey = "id"
 func auditSearchList(t *testing.T, app *pgxpool.Pool, tenantID, q string) audit.Response {
 	t.Helper()
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 	got, err := audit.NewStore(app).List(ctx, audit.Filter{Q: q, Limit: auditSearchLimit})
 	if err != nil {

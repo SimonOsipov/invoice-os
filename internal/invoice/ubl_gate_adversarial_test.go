@@ -14,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
@@ -179,7 +177,7 @@ func TestRLS_GetHandlerUBLGateAddsNoDatabaseRoundTrip(t *testing.T) {
 	tenantID := seedTenant(t, super, "BUG-04-03 QA cost tenant")
 	entityID := seedEntity(t, super, tenantID, "BUG-04-03 QA cost entity")
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	tenantCtx := auth.WithIdentity(ctx, identity)
 
 	issued := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
@@ -233,7 +231,7 @@ func TestRLS_GetHandlerUBLGateFlipsAfterAnEdit(t *testing.T) {
 	tenantID := seedTenant(t, super, "BUG-04-03 QA edit tenant")
 	entityID := seedEntity(t, super, tenantID, "BUG-04-03 QA edit entity")
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	tenantCtx := auth.WithIdentity(ctx, identity)
 
 	line := LineItemInput{
@@ -300,7 +298,7 @@ func TestRLS_GetHandlerCrossTenantUBLKeysNotLeaked(t *testing.T) {
 	entityB := seedEntity(t, super, tenantB, "BUG-04-03 QA cross B entity")
 	store := NewStore(app)
 
-	identityB := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB}
+	identityB := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB}
 	ctxB := auth.WithIdentity(ctx, identityB)
 	issued := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
 	invB, err := store.Create(ctxB, CreateInput{
@@ -325,7 +323,7 @@ func TestRLS_GetHandlerCrossTenantUBLKeysNotLeaked(t *testing.T) {
 		t.Fatalf("tenant B's own can_view_ubl raw = %q, want true (body=%s)", canView, recB.Body.String())
 	}
 
-	identityA := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA}
+	identityA := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invB.ID, nil)
 	r.SetPathValue("id", invB.ID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))

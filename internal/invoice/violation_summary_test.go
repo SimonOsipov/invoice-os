@@ -30,8 +30,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -55,7 +53,7 @@ func TestViolationSummary_CountsDistinctInvoicesPerRule(t *testing.T) {
 	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-COUNT-C", batchID, string(StatusValidated), `[]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
@@ -88,7 +86,7 @@ func TestViolationSummary_OneInvoiceTwiceOnOneRuleCountsOnce(t *testing.T) {
 		`[{"rule_key":"r1","severity":"error","message":"a"},{"rule_key":"r1","severity":"error","message":"b"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
@@ -128,7 +126,7 @@ func TestViolationSummary_MatchesRuleKeyFilterTotalIncludingWarnings(t *testing.
 		`[{"rule_key":"W","severity":"warning","message":"advisory only"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, listTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, RuleKey: "W", Limit: 50})
 	if err != nil {
@@ -176,7 +174,7 @@ func TestViolationSummary_NonArrayViolationsDoNotError(t *testing.T) {
 		`{"not":"array"}`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
@@ -212,7 +210,7 @@ func TestViolationSummary_EmptyOrMissingRuleKeyExcludedByNullifGuard(t *testing.
 		`[{"rule_key":"real-rule","severity":"error","message":"x"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
@@ -249,7 +247,7 @@ func TestRLS_ViolationSummaryTenantScopedAndNonVacuous(t *testing.T) {
 		`[{"rule_key":"r-other","severity":"error","message":"b"}]`)
 
 	store := NewStore(app)
-	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
+	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1})
 
 	// Cross-tenant: tenant 1 summarising tenant 2's batch must come back
 	// EMPTY -- never an error, never tenant 2's rows.
@@ -292,7 +290,7 @@ func TestViolationSummary_SpansSeveralBatches(t *testing.T) {
 		`[{"rule_key":"r1","severity":"error","message":"b"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.ViolationSummary(c, []string{batch1, batch2})
 	if err != nil {
@@ -331,7 +329,7 @@ func TestViolationSummary_SpansBatchesMatchesRuleKeyFilterWithWarnings(t *testin
 		`[{"rule_key":"W","severity":"warning","message":"advisory only"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, listTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch2}, RuleKey: "W", Limit: 50})
 	if err != nil {

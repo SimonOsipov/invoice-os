@@ -130,7 +130,7 @@ func TestBatchSubmit_PartialBatchEnqueuesValidatedSkipsRest(t *testing.T) {
 	submittedID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-1-submitted", StatusSubmitted)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{
 		InvoiceIDs:     []string{validatedID, draftID, submittedID},
@@ -192,7 +192,7 @@ func TestKeptAsIs_NotSubmittable(t *testing.T) {
 	}
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{
 		InvoiceIDs:     []string{keptID},
@@ -253,7 +253,7 @@ func TestBatchSubmit_AtomicityRollsBackOnInjectedFailureAfterLastEnqueue(t *test
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-2", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	requestKey := "T07-2-" + uuid.NewString()
 
 	_, err := submitter.BatchSubmit(c, BatchSubmitInput{
@@ -303,7 +303,7 @@ func TestBatchSubmit_ReplayIsExactlyOnce(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-3", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	in := BatchSubmitInput{InvoiceIDs: []string{invID}, IdempotencyKey: "T07-3-" + uuid.NewString()}
 
 	if _, err := submitter.BatchSubmit(c, in); err != nil {
@@ -346,7 +346,7 @@ func TestBatchSubmit_DuplicateIDWithinOneRequestEnqueuesOnce(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-4", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{
 		InvoiceIDs:     []string{invID, invID}, // same id twice in one request
@@ -399,7 +399,7 @@ func TestBatchSubmit_UnknownIDHardFailsWholeRequest(t *testing.T) {
 	unknownID := uuid.NewString() // well-formed uuid, no row anywhere
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := submitter.BatchSubmit(c, BatchSubmitInput{
 		InvoiceIDs:     []string{validID, unknownID},
@@ -435,7 +435,7 @@ func TestRLS_BatchSubmitCrossTenantNotFound(t *testing.T) {
 	invoiceA := seedInvoiceAtStatus(t, super, tenantA, entityA, "T07-6", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	_, err := submitter.BatchSubmit(cB, BatchSubmitInput{
 		InvoiceIDs:     []string{invoiceA},
@@ -471,7 +471,7 @@ func TestBatchSubmit_EnqueuedJobArgsCorrect(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-10", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	requestKey := "T07-10-" + uuid.NewString()
 
 	if _, err := submitter.BatchSubmit(c, BatchSubmitInput{InvoiceIDs: []string{invID}, IdempotencyKey: requestKey}); err != nil {
@@ -509,7 +509,7 @@ func TestBatchSubmit_TransitionActorIsJWTSubjectNotSystem(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-11", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	if _, err := submitter.BatchSubmit(c, BatchSubmitInput{InvoiceIDs: []string{invID}, IdempotencyKey: "T07-11-" + uuid.NewString()}); err != nil {
@@ -544,7 +544,7 @@ func TestBatchSubmit_SuccessPathInvoiceQueuedAndJobExistTogether(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T07-12", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	if _, err := submitter.BatchSubmit(c, BatchSubmitInput{InvoiceIDs: []string{invID}, IdempotencyKey: "T07-12-" + uuid.NewString()}); err != nil {
 		t.Fatalf("BatchSubmit: %v, want nil", err)

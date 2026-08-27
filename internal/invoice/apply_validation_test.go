@@ -149,7 +149,7 @@ func TestApplyValidation_CleanEvaluationPromotesAndStampsVersion(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-01 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-01 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-01"})
 	if err != nil {
@@ -214,7 +214,7 @@ func TestApplyValidation_ClearsKeepMarksOnPromotion(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "KEEP-GATE-CLEAR tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-GATE-CLEAR entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "KEEP-GATE-CLEAR"})
 	if err != nil {
@@ -270,7 +270,7 @@ func TestApplyValidation_CleanEvaluationWritesBothAuditRows(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-02 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-02"})
@@ -315,7 +315,7 @@ func TestApplyValidation_ErrorViolationStaysDraftNoHistoryRow(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-03 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-03"})
 	if err != nil {
@@ -361,7 +361,7 @@ func TestApplyValidation_WarningInfoOnlyPromotes(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-04 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-04 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-04"})
 	if err != nil {
@@ -401,7 +401,7 @@ func TestApplyValidation_MixedErrorWarningStaysDraftStoresBoth(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-05 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-05 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-05"})
 	if err != nil {
@@ -443,7 +443,7 @@ func TestApplyValidation_ValidatedInvoiceRefused(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-09 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-09 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-09"})
 	if err != nil {
@@ -476,7 +476,7 @@ func TestApplyValidation_QueuedInvoiceRefused(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-10 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-10 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-10"})
 	if err != nil {
@@ -525,7 +525,7 @@ func TestApplyValidation_NonDraftStatusesRefusedTable(t *testing.T) {
 		t.Run(string(status), func(t *testing.T) {
 			tenantID := seedTenant(t, super, "INV-03-T6 "+string(status)+" tenant")
 			entityID := seedEntity(t, super, tenantID, "INV-03-T6 entity")
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "INV-03-T6-"+string(status), status)
 
@@ -568,7 +568,7 @@ func TestApplyValidation_StaleFingerprintRefused(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-11 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-11 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-11"})
 	if err != nil {
@@ -607,7 +607,7 @@ func TestApplyValidation_FreshFingerprintAfterUpdateSucceeds(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-12 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-12 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-12"})
 	if err != nil {
@@ -648,7 +648,7 @@ func TestApplyValidation_LongActorRollsBackWholeTx(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-13 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-13 entity")
-	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-13"})
 	if err != nil {
@@ -700,7 +700,7 @@ func TestApplyValidation_CrossTenantNotFound(t *testing.T) {
 	entityB := seedEntity(t, super, tenantB, "GATE-14 B entity")
 	invoiceB := seedInvoice(t, super, tenantB, entityB, "GATE-14-B")
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	before := snapshotInvoiceGateState(t, super, invoiceB)
 
@@ -722,7 +722,7 @@ func TestApplyValidation_MalformedIDRejected(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "GATE-15 tenant")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	if _, err := store.ApplyValidation(c, "not-a-uuid", []Violation{}, uuid.NewString(), "irrelevant"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("ApplyValidation(malformed id) err = %v, want ErrValidation (22P02 invalid_text_representation)", err)
@@ -739,7 +739,7 @@ func TestApplyValidation_UnseededRuleSetVersionIDRefused(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-16 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-16 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-16"})
 	if err != nil {
@@ -785,7 +785,7 @@ func TestApplyValidation_ConcurrentSerializesToOneWinner(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GATE-17 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-17 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-17"})
 	if err != nil {
@@ -860,7 +860,7 @@ func TestApplyValidation_NilViolationsNormalizeToEmptyArrayNeverNull(t *testing.
 
 	tenantID := seedTenant(t, super, "GATE-18 tenant")
 	entityID := seedEntity(t, super, tenantID, "GATE-18 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GATE-18"})
 	if err != nil {
@@ -919,7 +919,7 @@ func TestApplyValidation_LinedDraftValidatesWithoutStaleFingerprint(t *testing.T
 	// tin, which now overrides gapiValidInvoiceInput's SupplierTIN with nil
 	// and fires supplier-tin-required).
 	entityID := seedEntityWithTIN(t, super, tenantID, "Acme Ltd", "12345678-0001")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// gapiValidInvoiceInput (gate_test.go) carries exactly 2 line items --
 	// the ">=2 line items" this spec calls for -- and is independently
@@ -976,7 +976,7 @@ func TestApplyValidation_LinedInvoiceStillTripsStaleGuard(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "INV-02-T11 tenant")
 	entityID := seedEntity(t, super, tenantID, "INV-02-T11 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	inv, err := store.Create(c, CreateInput{

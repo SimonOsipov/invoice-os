@@ -33,7 +33,7 @@ func TestDecideHandler_RejectOverHTTPDemotesThroughTheRealTransitionEdge(t *test
 
 	tenantID := seedTenant(t, super, "APPR-07-06 http-real-edge tenant")
 	entityID := seedEntity(t, super, tenantID, "APPR-07-06 http-real-edge entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	store := NewStore(app)
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "reject-http-real-edge-1"})

@@ -72,7 +72,7 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "LOOP-1 tenant")
 	entityID := seedEntity(t, super, tenantID, "LOOP-1 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	// Step 1: seed at queued -- seedInvoiceAtStatus force-seeds via a raw
@@ -289,7 +289,7 @@ func TestStoreEdit_RetainedReasonsSurviveRevalidate(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "REVAL-RETAIN tenant")
 	entityID := seedEntity(t, super, tenantID, "REVAL-RETAIN entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "REVAL-RETAIN", StatusRejected)
 	reasonsJSON := `[{"code":"TIN_MISMATCH","message":"supplier TIN does not match","path":"supplier_tin"}]`
@@ -411,7 +411,7 @@ func TestOutcomeLoop_ResubmitWithFreshKeyEnqueuesAgain(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "LOOP-2 tenant")
 	entityID := seedEntity(t, super, tenantID, "LOOP-2 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "LOOP-2", StatusValidated)
@@ -542,7 +542,7 @@ func TestOutcomeLoop_AcceptedInvoiceIsATrueDeadEnd(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "LOOP-3 tenant")
 	entityID := seedEntity(t, super, tenantID, "LOOP-3 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "LOOP-3", StatusQueued)

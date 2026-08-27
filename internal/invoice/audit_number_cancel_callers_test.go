@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -61,7 +60,7 @@ func cancelCallers() []cancelCaller {
 			drive: func(t *testing.T, super, app *pgxpool.Pool) (string, string) {
 				tenantID, invoiceID := seedInvoiceWithOpenRun(t, super, "edit", "AN-CANCEL-EDIT-1", StatusValidated)
 				c := auth.WithIdentity(context.Background(), auth.Identity{
-					Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+					Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 				})
 				buyer := "AN cancel-caller buyer"
 				got, err := NewStore(app).Edit(c, invoiceID, EditInput{UpdateInput: UpdateInput{BuyerName: &buyer}})
@@ -79,7 +78,7 @@ func cancelCallers() []cancelCaller {
 			drive: func(t *testing.T, super, app *pgxpool.Pool) (string, string) {
 				tenantID, invoiceID := seedInvoiceWithOpenRun(t, super, "transition", "AN-CANCEL-TRANSITION-1", StatusValidated)
 				c := auth.WithIdentity(context.Background(), auth.Identity{
-					Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+					Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 				})
 				got, err := NewStore(app).Transition(c, invoiceID, StatusDraft)
 				if err != nil {

@@ -87,6 +87,11 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
+// memberSubject is the caller every DB-backed test in this package acts as.
+// Its membership row is a no-op today (a rowless caller is still admitted)
+// but keeps these fixtures ready for the predicate's strict successor.
+const memberSubject = "d4a10005-0000-4000-8000-000000000001"
+
 // seedTenant inserts one throwaway tenants row (kind 'firm') as the
 // superuser and registers a cleanup that deletes it. A tenants delete
 // CASCADEs away every business_entities/invoices/line_items/
@@ -103,6 +108,12 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, label,
 	); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		id, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
@@ -275,7 +286,7 @@ func TestStoreCreate_PersistsDraftUnderCallerTenant(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-STORE-01 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-STORE-01"})
 	if err != nil {
@@ -312,7 +323,7 @@ func TestStoreCreate_LineItemsGetSystemOrdinals(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-STORE-02 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB, descC := "Widget A", "Widget B", "Widget C"
 	inv, err := store.Create(c, CreateInput{
@@ -401,7 +412,7 @@ func TestHydrateLinesTx_OrderedMatchingGetAndNilWhenLineless(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Get(c, invoiceID)
 	if err != nil {
@@ -477,7 +488,7 @@ func TestHydrateLinesTx_FingerprintMatchesStoreGet(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Get(c, invoiceID)
 	if err != nil {
@@ -511,7 +522,7 @@ func TestStoreCreate_WritesExactlyOneCreatedAuditActorIsSubject(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-STORE-03 entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "invoice.created"
@@ -541,7 +552,7 @@ func TestStoreCreate_WritesGenesisHistoryRow(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-STORE-04 entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-STORE-04"})
@@ -582,7 +593,7 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-STORE-05 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
@@ -640,7 +651,7 @@ func TestStoreCreate_DuplicateNumberRejectedAtomically(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-STORE-06 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const number = "INV-STORE-06-DUP"
 	if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); err != nil {
@@ -694,7 +705,7 @@ func TestStoreCreate_DuplicateRejectedRegardlessOfStoredRowState(t *testing.T) {
 	t.Run("draft sibling backstop (PAR-03a)", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "PAR-03a tenant")
 		entityID := seedEntity(t, super, tenantID, "PAR-03a entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		const number = "INV-M"
 		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); err != nil {
@@ -714,7 +725,7 @@ func TestStoreCreate_DuplicateRejectedRegardlessOfStoredRowState(t *testing.T) {
 	t.Run("non-draft stored row backstop (PAR-03b)", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "PAR-03b tenant")
 		entityID := seedEntity(t, super, tenantID, "PAR-03b entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		const number = "INV-M2"
 		invID := seedInvoice(t, super, tenantID, entityID, number)
@@ -843,7 +854,7 @@ func TestStoreGet_HydratesLineItemsOrdered(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Get(c, invoiceID)
 	if err != nil {
@@ -879,7 +890,7 @@ func TestStoreGet_PopulatesRuleSetVersion(t *testing.T) {
 	tenantID := seedTenant(t, super, "M4-09-01 tenant")
 	entityID := seedEntity(t, super, tenantID, "M4-09-01 entity")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Case 1: a stamped rule_set_version_id -> Get must resolve the
 	// rule_set_versions row's own `version` int.
@@ -934,7 +945,7 @@ func TestStoreGet_CrossTenantNotFound(t *testing.T) {
 	invoiceB := seedInvoice(t, super, tenantB, entityB, "INV-STORE-09-B")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	if _, err := store.Get(cA, invoiceB); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get(tenant B's invoice) as tenant A err = %v, want ErrNotFound", err)
@@ -958,7 +969,7 @@ func TestStoreList_TenantScopedAndPaginated(t *testing.T) {
 	seedInvoice(t, super, tenantB, entityB, "INV-STORE-10-B-0")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	items, total, err := store.List(cA, ListFilter{Limit: 2, Offset: 0})
 	if err != nil {
@@ -988,7 +999,7 @@ func TestStoreList_TenantScopedAndPaginated(t *testing.T) {
 	}
 
 	emptyTenant := seedTenant(t, super, "INV-STORE-10 empty tenant")
-	cEmpty := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: emptyTenant})
+	cEmpty := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: emptyTenant})
 	emptyItems, emptyTotal, err := store.List(cEmpty, ListFilter{Limit: 50, Offset: 0})
 	if err != nil {
 		t.Fatalf("List (empty tenant): %v", err)
@@ -1036,7 +1047,7 @@ func TestStoreList_ZeroFilterQueryUnchanged(t *testing.T) {
 	nullID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-NULL", nil, time.Now().UTC())
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 50})
 	if err != nil {
@@ -1073,7 +1084,7 @@ func TestStoreUpdate_PartialAndAudit_AllNilRejected(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "invoice.updated"
@@ -1122,7 +1133,7 @@ func TestStoreCrossTenant_UpdateGetListRefused(t *testing.T) {
 	invoiceB := seedInvoice(t, super, tenantB, entityB, "INV-STORE-12-B")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	if _, err := store.Get(cA, invoiceB); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get(B's invoice) as tenant A err = %v, want ErrNotFound", err)
@@ -1161,7 +1172,7 @@ func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 	tenantID := seedTenant(t, super, "INV-STORE-13 tenant")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	bogusEntityID := uuid.NewString()
 	_, err := store.Create(c, CreateInput{EntityID: bogusEntityID, InvoiceNumber: "INV-STORE-13"})
@@ -1208,7 +1219,7 @@ func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
 	entityB := seedEntity(t, super, tenantB, "M4-06-03 B entity")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	_, err := store.Create(cA, CreateInput{EntityID: entityB, InvoiceNumber: "INV-XT-1"})
 	if !errors.Is(err, ErrValidation) {
@@ -1243,7 +1254,7 @@ func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testi
 	entityB := seedEntity(t, super, tenantB, "M4-06-03 B entity (line items)")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	descA, descB := "Widget A", "Widget B"
 	_, err := store.Create(cA, CreateInput{

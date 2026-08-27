@@ -51,7 +51,7 @@ func TestBatchSubmit_MultipleDistinctValidatedInvoicesEachGetOwnKeyAndJob(t *tes
 	inv2 := seedInvoiceAtStatus(t, super, tenantID, entityID, "ADV-MULTI-2", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	requestKey := "ADV-MULTI-" + uuid.NewString()
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{
@@ -106,7 +106,7 @@ func TestBatchSubmit_DirectCallWithEmptyIDsMarshalsEmptyResultsNotNull(t *testin
 
 	tenantID := seedTenant(t, super, "ADV-EMPTY tenant")
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{InvoiceIDs: []string{}, IdempotencyKey: "ADV-EMPTY-" + uuid.NewString()})
 	if err != nil {
@@ -158,7 +158,7 @@ func TestBatchSubmit_218CharKeyBoundHoldsAgainstLiveCheckConstraint(t *testing.T
 		t.Fatalf("test setup: requestKey len = %d, want 218", len(requestKey))
 	}
 
-	identity := &auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := &auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	body := marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: []string{invID}, IdempotencyKey: requestKey})
 	rec, _ := doBatchSubmit(t, submitter.BatchSubmit, identity, body)
 
@@ -199,7 +199,7 @@ func TestBatchSubmit_SameIDThreeTimesOnlyFirstEnqueuesRestDuplicate(t *testing.T
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "ADV-3X", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{
 		InvoiceIDs:     []string{invID, invID, invID},
@@ -252,7 +252,7 @@ func TestBatchSubmit_ReplayAfterInvoiceIndependentlyAdvancedReportsNotValidatedC
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "ADV-ADVANCED", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	in := BatchSubmitInput{InvoiceIDs: []string{invID}, IdempotencyKey: "ADV-ADVANCED-" + uuid.NewString()}
 
 	if _, err := submitter.BatchSubmit(c, in); err != nil {
@@ -305,7 +305,7 @@ func TestBatchSubmit_ResultsPreserveInputOrderAndCardinality(t *testing.T) {
 	inv2 := seedInvoiceAtStatus(t, super, tenantID, entityID, "ADV-ORDER-2", StatusDraft)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	requestIDs := []string{inv1, inv2, inv1} // position 0 and 2 are the SAME id
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{InvoiceIDs: requestIDs, IdempotencyKey: "ADV-ORDER-" + uuid.NewString()})
@@ -353,7 +353,7 @@ func TestBatchSubmit_UnknownIDDominatesEvenWithEnqueueableAndSkippableSiblings(t
 	unknownID := uuid.NewString()
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := submitter.BatchSubmit(c, BatchSubmitInput{
 		InvoiceIDs:     []string{validID, draftID, unknownID},
@@ -406,7 +406,7 @@ func TestBatchSubmit_ExactlyAt200IDCapSucceeds(t *testing.T) {
 	}
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{InvoiceIDs: ids, IdempotencyKey: "ADV-CAP200-" + uuid.NewString()})
 	if err != nil {
@@ -447,7 +447,7 @@ func TestBatchSubmit_ConcurrentIdenticalBatchesRaceToExactlyOneJob(t *testing.T)
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "ADV-RACE", StatusValidated)
 
 	submitter := NewSubmitter(NewStore(app), q)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	in := BatchSubmitInput{InvoiceIDs: []string{invID}, IdempotencyKey: "ADV-RACE-" + uuid.NewString()}
 
 	const races = 8
@@ -511,7 +511,7 @@ func TestBatchSubmit_LineEditedInvoiceRefusedNotValidated(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T12 tenant")
 	entityID := seedEntity(t, super, tenantID, "T12 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "T12", LineItems: []LineItemInput{{Description: &descA}}})

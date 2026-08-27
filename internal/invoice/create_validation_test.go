@@ -14,8 +14,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -30,7 +28,7 @@ func TestStoreCreate_RequiresEntityIDAndNumber(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "VAL-01 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "invoice.created"
 
@@ -80,7 +78,7 @@ func TestStoreCreate_MalformedEntityIDIsValidationError(t *testing.T) {
 	tenantID := seedTenant(t, super, "VAL-02 tenant")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "invoice.created"
 	before := auditCount(t, app, tenantID, event)

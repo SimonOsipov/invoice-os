@@ -171,7 +171,7 @@ func TestStoreList_NeedsAttentionMatchesDashboardRollup(t *testing.T) {
 
 	invStore := NewStore(app)
 	dashStore := dashboard.NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := invStore.List(c, ListFilter{NeedsAttention: true, Limit: 100})
 	if err != nil {
@@ -257,7 +257,7 @@ func TestRLS_ListNeedsAttention_TenantIsolated(t *testing.T) {
 		`[{"rule_key":"x","severity":"error","message":"y"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	items, total, err := store.List(cA, ListFilter{NeedsAttention: true, Limit: 100})
 	if err != nil {
@@ -294,7 +294,7 @@ func TestStoreList_NeedsAttentionExcludesResolvedFailed(t *testing.T) {
 		`[{"rule_key":"x","severity":"error","message":"y"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{NeedsAttention: true, Limit: 100})
 	if err != nil {
@@ -327,7 +327,7 @@ func TestStoreList_NeedsFixUnaffectedByResolvedFailed(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T3-6 tenant")
 	entityID := seedEntity(t, super, tenantID, "T3-6 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 	store := NewStore(app)
 
@@ -562,7 +562,7 @@ func TestStoreList_ResolvedFailedStillInUnfilteredList(t *testing.T) {
 	resolvedID := seedResolvedFailed(t, super, tenantID, entityID, "T3-9-resolved", uuid.NewString(), "resolved outside")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 100})
 	if err != nil {
@@ -599,7 +599,7 @@ func TestRLS_ListNeedsAttention_ResolvedFailedIsolatedPerTenant(t *testing.T) {
 	unresolvedB := seedInvoiceWithViolations(t, super, tenantB, entityB, "T3-10-B-unresolved", string(StatusFailed), `[]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	items, total, err := store.List(cA, ListFilter{NeedsAttention: true, Limit: 100})
 	if err != nil {

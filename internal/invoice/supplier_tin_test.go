@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -43,7 +42,7 @@ import (
 func createEntityViaRealPortfolioStore(t *testing.T, super, app *pgxpool.Pool, tenantID, name, rawTIN string) (entityID, canonicalTIN string) {
 	t.Helper()
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 	ent, err := portfolio.NewStore(app).Create(ctx, portfolio.CreateInput{Name: name, TIN: rawTIN})
 	if err != nil {
@@ -98,7 +97,7 @@ func TestStoreCreate_SupplierTINAndNameDerivedFromEntityOverridingCaller(t *test
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "C7-01")
 	// Deliberately WRONG values -- proves Store.Create overrides the caller's
@@ -174,7 +173,7 @@ func TestStoreCreate_JTBEntityTINPassesThroughUnchanged(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "C7-02")
 	in.SupplierTIN = strPtr("this value must be ignored")
@@ -221,7 +220,7 @@ func TestStoreCreate_NilEntityTINOverridesCallerSuppliedValue(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, entityName)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
@@ -269,7 +268,7 @@ func TestStoreCreate_BuyerTINNotNormalized(t *testing.T) {
 	entityID, _ := createEntityViaRealPortfolioStore(t, super, app, tenantID, "C7-03 Supplier Co", c7FIRSTIN)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const bareBuyerTIN = "876543210002" // 12 bare digits -- canonicalFIRSTIN's own shape
 	in := gapiValidInvoiceInput(entityID, "C7-03")

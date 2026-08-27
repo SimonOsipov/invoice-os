@@ -561,7 +561,7 @@ func TestRLS_UBLHandlerServesTheOwningTenantsInvoiceFromTheRealStore(t *testing.
 
 	store := NewStore(app)
 	issued := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant}
 	c := auth.WithIdentity(ctx, identity)
 	created, err := store.Create(c, CreateInput{
 		EntityID:      entity,

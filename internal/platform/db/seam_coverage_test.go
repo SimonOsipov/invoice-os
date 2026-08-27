@@ -2418,7 +2418,6 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},             // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
 	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},           // same claim, the UnresolveOutside leg
 	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipSeesRoleReason"},      // same claim, GetHandler's role-reason leg
-	{file: "internal/invoice/approval_facts_test.go", fn: "seedApprovalFactsFixture"},                                    // Tier 2: seedMembership only runs when staffed, Subject: subject is unconditional -- unsound until staffed=false also seeds (Stage 3)
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

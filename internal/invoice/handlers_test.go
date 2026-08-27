@@ -1200,7 +1200,7 @@ func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(
 	}
 
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1}
 
 	doReal := func() (*httptest.ResponseRecorder, listInvoicesResponse) {
 		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+batchOther, nil)
@@ -4342,7 +4342,7 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-01-05-E2E-GET")
 
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
@@ -4380,10 +4380,12 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 	store := NewStore(app)
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-E2E-GET")
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
-	// can_submit is role-aware: without a membership row this caller resolves
-	// to "" and the assertions below would read the role gate, not the status one.
-	seedMembership(t, super, tenantID, identity.Subject, "admin")
+	// A fresh, role-specific caller: can_submit is role-aware, and this test
+	// asserts the STATUS gate, so the caller must clear the role one as admin
+	// (memberSubject's own row is 'preparer', seedTenant -- not what this needs).
+	subject := uuid.NewString()
+	seedMembership(t, super, tenantID, subject, "admin")
+	identity := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 
 	get := func() *httptest.ResponseRecorder {
@@ -4508,10 +4510,12 @@ func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T
 	store := NewStore(app)
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-QA-SEQ")
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
 	// Same reason as TestGetHandler_RealStore_ValidatedCanSubmit: the sequence
-	// below asserts the STATUS gate, so the caller must clear the role one.
-	seedMembership(t, super, tenantID, identity.Subject, "admin")
+	// below asserts the STATUS gate, so the caller must clear the role one as
+	// admin, via its own fresh identity (not memberSubject, which is preparer).
+	subject := uuid.NewString()
+	seedMembership(t, super, tenantID, subject, "admin")
+	identity := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 
 	get := func() *httptest.ResponseRecorder {
@@ -4559,12 +4563,12 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 	store := NewStore(app)
 
 	invoiceID := seedInvoice(t, super, tenantB, entityB, "INVED-02-01-QA-CROSS-B")
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	if _, err := store.Transition(cB, invoiceID, StatusValidated); err != nil {
 		t.Fatalf("Transition(tenant B draft->validated): %v", err)
 	}
 
-	identityA := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA}
+	identityA := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))
@@ -4848,7 +4852,7 @@ func TestEditHandler_RealStore_LineItemsThreeStates(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "INVED-01-05-e2e-patch tenant")
 	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-patch entity")
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	// seedLinedInvoiceAtStatus seeds via Store.Create, which -- like every
 	// Store method -- reads the caller's tenant off the context (db.
 	// WithinRequestTenantTx); it needs the SAME identity injected here, not
@@ -4957,7 +4961,7 @@ func TestEditHandler_RealStore_MalformedLineNumericIs400NotFrom500(t *testing.T)
 
 	tenantID := seedTenant(t, super, "INVED-01-05-e2e-malformed tenant")
 	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-malformed entity")
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 
 	seedLines := []LineItemInput{
@@ -5001,7 +5005,7 @@ func TestEditHandler_RealStore_LinesOnlyPatchDemotesValidatedInvoice(t *testing.
 
 	tenantID := seedTenant(t, super, "INVED-01-05-e2e-demote tenant")
 	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-demote entity")
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 
 	seedLines := []LineItemInput{
@@ -5164,7 +5168,7 @@ func TestEditHandler_RealStore_DuplicateContentLinesBothSurvive(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "INVED-01-05-e2e-dup tenant")
 	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-dup entity")
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "INVED-01-05-E2E-DUP", StatusDraft, nil)
@@ -5796,7 +5800,7 @@ func TestRLS_GetHandlerUBLGateFromTheRealStore(t *testing.T) {
 	tenantID := seedTenant(t, super, "BUG-04-03 UBL gate tenant")
 	entityID := seedEntity(t, super, tenantID, "BUG-04-03 UBL gate entity")
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	tenantCtx := auth.WithIdentity(ctx, identity)
 	issued := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
 

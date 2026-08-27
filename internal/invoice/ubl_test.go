@@ -36,7 +36,7 @@ func doUBL(t *testing.T, get func(ctx context.Context, id string) (Invoice, erro
 }
 
 func ublTestIdentity() auth.Identity {
-	return auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	return auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 }
 
 func ublStr(v string) *string { return &v }
@@ -260,7 +260,7 @@ func TestRLS_UBLHandlerCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 
 	store := NewStore(app)
 	issued := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	invA, err := store.Create(cA, CreateInput{
 		EntityID:      entityA,
 		InvoiceNumber: "BUG-04-02-RLS",
@@ -292,7 +292,7 @@ func TestRLS_UBLHandlerCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 		t.Fatalf("seeded invoice is not renderable: ubl.Missing = %v, want empty", m)
 	}
 
-	identityB := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB}
+	identityB := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB}
 	recCross := doUBL(t, store.Get, &identityB, invA.ID)
 	recUnknown := doUBL(t, store.Get, &identityB, uuid.NewString())
 

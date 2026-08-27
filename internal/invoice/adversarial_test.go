@@ -52,7 +52,7 @@ func TestStoreCreate_ZeroLineItemsSucceeds(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-01 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-01"})
 	if err != nil {
@@ -79,7 +79,7 @@ func TestStoreCreate_AuditPayloadCarriesInvoiceID(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-02 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-02"})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestStoreUpdate_NeverChangesStatus(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-03 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-03"})
 	if err != nil {
@@ -157,7 +157,7 @@ func TestStoreUpdate_NonExistentIDNotFound(t *testing.T) {
 	tenantID := seedTenant(t, super, "ADV-04 tenant")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "invoice.updated"
 	before := auditCount(t, app, tenantID, event)
@@ -188,7 +188,7 @@ func TestStoreCreate_NumericPrecisionRoundTripsExactly(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-05 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	subtotal := "123456789012.34" // 12 int digits + 2 decimal = 14 sig digits, numeric(14,2) ceiling
 	vat := "0.01"
@@ -299,7 +299,7 @@ func TestStoreList_TieBreaksByIDOnCollidingCreatedAt(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 10, Offset: 0})
 	if err != nil {

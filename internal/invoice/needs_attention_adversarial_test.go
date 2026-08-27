@@ -75,7 +75,7 @@ func TestStoreList_NeedsAttentionPredicateByteParityGuard(t *testing.T) {
 
 	invStore := NewStore(app)
 	dashStore := dashboard.NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := invStore.List(c, ListFilter{NeedsAttention: true, Limit: 100})
 	if err != nil {
@@ -142,7 +142,7 @@ func TestStoreList_NeedsAttentionPaginationReflectsFilteredCount(t *testing.T) {
 		`[{"rule_key":"x","severity":"warning","message":"y"}]`, at(8))
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Sanity: the unfiltered tenant total is 8 (proves the filtered total
 	// below isn't accidentally the tenant total in disguise).
@@ -203,7 +203,7 @@ func TestStoreList_NeedsAttentionEmptyResultNotNull(t *testing.T) {
 		`[{"rule_key":"x","severity":"warning","message":"y"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{NeedsAttention: true, Limit: 50})
 	if err != nil {
@@ -239,7 +239,7 @@ func TestStoreList_NeedsAttentionMixedSeverityViolations(t *testing.T) {
 		`[{"rule_key":"c","severity":"info","message":"fyi"},{"rule_key":"d","severity":"warning","message":"advisory"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{NeedsAttention: true, Limit: 50})
 	if err != nil {

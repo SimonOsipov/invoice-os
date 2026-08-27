@@ -33,10 +33,14 @@ func seedApprovalFactsFixture(t *testing.T, super *pgxpool.Pool, label string, s
 	t.Helper()
 	tenantID, entityID, versionID := seedOneStepActivePolicyTenant(t, super, label)
 	subject := uuid.NewString()
+	// Unconditional: subject is a real member either way, admin only when
+	// staffed also needs workflow_role_members_tenant_user_fk to resolve.
+	role := "preparer"
 	if staffed {
-		// Membership FIRST: workflow_role_members_tenant_user_fk points at
-		// memberships(tenant_id, user_id).
-		seedMembership(t, super, tenantID, subject, "admin")
+		role = "admin"
+	}
+	seedMembership(t, super, tenantID, subject, role)
+	if staffed {
 		roleID := seedWorkflowRoleFor(t, super, tenantID, "finance-lead", "Finance Lead")
 		staffWorkflowRoleFor(t, super, tenantID, roleID, subject, 0)
 	}

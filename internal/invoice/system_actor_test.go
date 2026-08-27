@@ -47,7 +47,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -208,7 +207,7 @@ func TestTransition_HTTPPathActorStaysJWTSubjectNotSystem(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T02-6 tenant")
 	entityID := seedEntity(t, super, tenantID, "T02-6 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "T02-6"})
@@ -988,7 +987,7 @@ func TestStoreEdit_ComposesWithRealMarkRejectedTxWriteAndRetains(t *testing.T) {
 		t.Fatalf("rejection_reasons after MarkRejectedTx = %q, want non-empty (the real write must have landed before Edit's retention is a meaningful test)", seededReasons)
 	}
 
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 	newVAT := "9.50"
 	got, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})

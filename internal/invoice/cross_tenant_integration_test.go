@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -32,7 +31,7 @@ func TestRLS_InvoicesStoreChildWritesTenantScoped(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-CHILD-SCOPE A Corp")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	desc := "line 1"
 	inv, err := store.Create(cA, CreateInput{
@@ -109,13 +108,13 @@ func TestRLS_InvoicesTransitionCrossTenantRefused(t *testing.T) {
 	entityB := seedEntity(t, super, tenantB, "INV-SM-RLS B entity")
 
 	store := NewStore(app)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	invB, err := store.Create(cB, CreateInput{EntityID: entityB, InvoiceNumber: "INV-SM-RLS-B"})
 	if err != nil {
 		t.Fatalf("Create (as tenant B): %v", err)
 	}
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	if _, err := store.Transition(cA, invB.ID, StatusValidated); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Transition(tenant B's invoice) as tenant A err = %v, want ErrNotFound", err)
 	}
@@ -158,7 +157,7 @@ func TestRLS_InvoiceHistory_ReturnsOrderedTransitions(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-HIST-01 entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
 
 	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-01"})
@@ -216,7 +215,7 @@ func TestRLS_InvoiceHistory_CrossTenantReturnsNothing(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-HIST-02 A entity")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	invA, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-02-A"})
 	if err != nil {
@@ -227,7 +226,7 @@ func TestRLS_InvoiceHistory_CrossTenantReturnsNothing(t *testing.T) {
 		t.Fatal("setup: no invoice_status_history rows exist for tenant A's invoice -- the cross-tenant refusal below would be vacuous")
 	}
 
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	got, err := store.History(cB, invA.ID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("History(tenant A's invoice) as tenant B err = %v, want ErrNotFound (not a 200 empty array)", err)
@@ -250,7 +249,7 @@ func TestRLS_InvoiceHistory_UnsetGUCFailsClosed(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-HIST-03 entity")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-03"})
 	if err != nil {
@@ -285,7 +284,7 @@ func TestRLS_InvoiceHistory_ScopedByInvoiceIDWithinSameTenant(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-HIST-04 entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
 
 	invA, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-04-A"})
@@ -337,7 +336,7 @@ func TestRLS_InvoiceHistory_LongChainOrderedAndComplete(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-HIST-05 entity")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-05"})
 	if err != nil {
@@ -392,7 +391,7 @@ func TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "INV-HIST-06 entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
 
 	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-06"})
@@ -452,7 +451,7 @@ func TestRLS_InvoicesEditRejectedCrossTenantRefused(t *testing.T) {
 		t.Fatalf("seed rejection_reasons: %v", err)
 	}
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	newVAT := "9.50"
 	if _, err := store.Edit(cA, invB, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Edit(tenant B's rejected invoice) as tenant A err = %v, want ErrNotFound", err)

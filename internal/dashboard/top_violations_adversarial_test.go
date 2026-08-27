@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -41,7 +39,7 @@ func TestStoreRollup_TopViolationsNullRuleKeyNeverPhantom(t *testing.T) {
 		`[{"rule_key":null,"severity":"error","message":"x"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -68,7 +66,7 @@ func TestStoreRollup_TopViolationsEmptyStringRuleKeyNeverPhantom(t *testing.T) {
 		`[{"rule_key":"","severity":"error","message":"x"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -99,7 +97,7 @@ func TestStoreRollup_TopViolationsScalarAndNestedArrayElementsAreSkipped(t *test
 		`[[1,2], {"rule_key":"y","severity":"error","message":"m"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -132,7 +130,7 @@ func TestStoreRollup_TopViolationsOddButValidElementShapesProduceNoEntries(t *te
 		`[{"rule_key":"orphan-rule"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -165,7 +163,7 @@ func TestStoreRollup_TopViolationsConsistentWithNeedsAttentionForSameInvoice(t *
 		`[{"rule_key":"r2","severity":"warning","message":"m"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -234,7 +232,7 @@ func TestStoreRollup_TopViolationsLargeFanoutOrderingStaysExactAndStable(t *test
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -265,7 +263,7 @@ func TestStoreRollup_TopViolationsSameRuleTwiceOnOneInvoiceCountsOnce(t *testing
 			`{"rule_key":"supplier-tin-required","severity":"error","message":"b"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -297,7 +295,7 @@ func TestStoreRollup_TopViolationsSameRuleTwiceOnEachOfTwoInvoicesCountsTwo(t *t
 	seedInvoiceWithViolations(t, super, tenantID, entityID, "SAMERULE-X2-2", "draft", twice)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {

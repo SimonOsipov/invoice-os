@@ -36,8 +36,8 @@ func TestRLS_DashboardRollupCrossTenantIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	// Direction 1: tenant A must see only its own row, none of B's.
 	gotA, err := store.Rollup(cA)
@@ -112,7 +112,7 @@ func TestRLS_DashboardRollupCrossTenantSortPoisonRefused(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -202,8 +202,8 @@ func TestRLS_DashboardTopViolationsCrossTenantIsolated(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantB, entityB, "DASH-27-B2", "draft", ruleX)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	// Direction 1: tenant A must see no trace of rule X.
 	gotA, err := store.Rollup(cA)
@@ -259,8 +259,8 @@ func TestRLS_DashboardTopViolationsCrossTenantSharedRuleKeyNotInflated(t *testin
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	gotA, err := store.Rollup(cA)
 	if err != nil {
@@ -318,8 +318,8 @@ func TestRLS_DashboardRollupAwaitingApprovalCrossTenantIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	gotA, err := store.Rollup(cA)
 	if err != nil {

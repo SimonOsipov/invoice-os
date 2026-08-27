@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -59,7 +58,7 @@ func seedInvoiceWithVAT(t *testing.T, super *pgxpool.Pool, tenantID, entityID, n
 func rollupFor(t *testing.T, app *pgxpool.Pool, tenantID string) Rollup {
 	t.Helper()
 	store := NewStore(app)
-	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	got, err := store.Rollup(cA)
 	if err != nil {
 		t.Fatalf("Rollup: %v", err)

@@ -759,6 +759,35 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
+// memberSubject is the caller every DB-backed test in this package acts as;
+// the request seam refuses a caller with no membership row.
+const memberSubject = "d4a10002-0000-4000-8000-000000000001"
+
+// seedTenant inserts one throwaway tenants row (kind 'firm') plus an active
+// membership for memberSubject, and registers a cleanup that deletes the
+// tenant (CASCADEs the membership too). Used only where no other tenant
+// literal already exists to attach the membership to.
+func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
+	t.Helper()
+	ctx := context.Background()
+	id := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, label,
+	); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		id, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
+	})
+	return id
+}
+
 // seedEntity inserts one business_entities row for tenantID as the superuser
 // (BYPASSRLS, so seeding needs no tenant context) and registers its own
 // cleanup. tin may be nil (the column is nullable).
@@ -849,10 +878,16 @@ func TestStoreCreate_PersistsAndAudits(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio create-test tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -909,10 +944,16 @@ func TestStoreCreate_FailedCreateWritesNoAudit(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio dup-tin-test tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -945,10 +986,16 @@ func TestStoreGetByID_OwnTenant(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio getbyid-test tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -984,6 +1031,12 @@ func TestStoreGetByID_CrossTenantNotFound(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantA, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -991,7 +1044,7 @@ func TestStoreGetByID_CrossTenantNotFound(t *testing.T) {
 	entityIDInB := seedEntity(t, super, tenantB, "B Corp", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	_, err := store.GetByID(c, entityIDInB)
 	if !errors.Is(err, ErrNotFound) {
@@ -1018,6 +1071,12 @@ func TestStoreCreate_TINUniquenessIsPerTenantNotGlobal(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		tenantA, tenantB, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller memberships: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -1025,7 +1084,7 @@ func TestStoreCreate_TINUniquenessIsPerTenantNotGlobal(t *testing.T) {
 	store := NewStore(app)
 	const tin = "1234567897"
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	entityA, err := store.Create(cA, CreateInput{Name: "Tenant A Co", TIN: tin})
 	if err != nil {
 		t.Fatalf("Create in tenant A: %v", err)
@@ -1034,7 +1093,7 @@ func TestStoreCreate_TINUniquenessIsPerTenantNotGlobal(t *testing.T) {
 		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, entityA.ID)
 	})
 
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	entityB, err := store.Create(cB, CreateInput{Name: "Tenant B Co", TIN: tin})
 	if err != nil {
 		t.Fatalf("Create in tenant B with the SAME canonical TIN as tenant A: %v (want success -- the unique index is per-tenant, not global)", err)
@@ -1071,12 +1130,18 @@ func TestStoreCreate_NullableOptionalFieldsRoundTrip(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio nullable-fields tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Omitted -> nil -> persisted as SQL NULL -> nil *string on read-back.
 	omitted, err := store.Create(c, CreateInput{Name: "Nil Fields Co", TIN: "1234567897"})
@@ -1138,12 +1203,18 @@ func TestStoreCreate_AuditRowIsTenantScoped(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantA, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
 
 	store := NewStore(app)
-	userID := uuid.NewString()
+	userID := memberSubject
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantA})
 
 	const event = "portfolio.entity.created"
@@ -1170,10 +1241,11 @@ func TestStoreCreate_AuditRowIsTenantScoped(t *testing.T) {
 // exist in ANY tenant (not merely a different tenant, per
 // TestStoreGetByID_CrossTenantNotFound) must resolve to ErrNotFound.
 func TestStoreGetByID_UnknownIDNotFound(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, app := dbTestPools(t)
 	ctx := context.Background()
+	tenantID := seedTenant(t, super, "portfolio unknown-id tenant")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.GetByID(c, uuid.NewString())
 	if !errors.Is(err, ErrNotFound) {
@@ -1189,10 +1261,11 @@ func TestStoreGetByID_UnknownIDNotFound(t *testing.T) {
 // for a malformed path param, distinct from the 404 a well-formed-but-absent
 // or cross-tenant id produces.
 func TestStoreGetByID_MalformedIDNotUUID(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, app := dbTestPools(t)
 	ctx := context.Background()
+	tenantID := seedTenant(t, super, "portfolio malformed-id tenant")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.GetByID(c, "not-a-uuid")
 	if err == nil {
@@ -1216,6 +1289,12 @@ func TestStoreCreate_InvalidTINRejectedAtStoreLayer(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio store-invalid-tin tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	// No business_entities cleanup registered: none is expected to exist (asserted
 	// below), and the FK's ON DELETE CASCADE would remove any surprise row anyway
 	// when this tenant is deleted.
@@ -1224,7 +1303,7 @@ func TestStoreCreate_InvalidTINRejectedAtStoreLayer(t *testing.T) {
 	})
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.created"
 	beforeAudit := auditCount(t, app, tenantID, event)
@@ -1297,6 +1376,12 @@ func TestStoreList_OwnTenantOnly(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantA, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -1308,7 +1393,7 @@ func TestStoreList_OwnTenantOnly(t *testing.T) {
 	seedEntity(t, super, tenantB, "B Co Two", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	items, total, err := store.List(c, ListFilter{Limit: 50})
 	if err != nil {
@@ -1338,6 +1423,12 @@ func TestStoreList_StatusFilter(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-status-filter tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1347,7 +1438,7 @@ func TestStoreList_StatusFilter(t *testing.T) {
 	archivedID := seedEntityStatus(t, super, tenantID, "Archived One", nil, "archived")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	status := "archived"
 	items, total, err := store.List(c, ListFilter{Status: &status, Limit: 50})
@@ -1377,6 +1468,12 @@ func TestStoreList_StatusOmittedReturnsBoth(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-status-omitted tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1386,7 +1483,7 @@ func TestStoreList_StatusOmittedReturnsBoth(t *testing.T) {
 	seedEntityStatus(t, super, tenantID, "Archived One", nil, "archived")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 50})
 	if err != nil {
@@ -1414,6 +1511,12 @@ func TestStoreList_SearchQ(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-q tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1422,7 +1525,7 @@ func TestStoreList_SearchQ(t *testing.T) {
 	seedEntity(t, super, tenantID, "Lagos Foods", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Q: "okaf", Limit: 50})
 	if err != nil {
@@ -1454,6 +1557,12 @@ func TestStoreList_SearchQMatchesTIN(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-tin tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1463,7 +1572,7 @@ func TestStoreList_SearchQMatchesTIN(t *testing.T) {
 	seedEntity(t, super, tenantID, "No Tin Co", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Q: "34567", Limit: 50})
 	if err != nil {
@@ -1495,6 +1604,12 @@ func TestStoreList_Pagination(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-pagination tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1505,7 +1620,7 @@ func TestStoreList_Pagination(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 2, Offset: 2})
 	if err != nil {
@@ -1536,12 +1651,18 @@ func TestStoreList_EmptyTenant(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-empty-tenant tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 50})
 	if err != nil {
@@ -1574,6 +1695,12 @@ func TestStoreList_ReverseCrossTenantIsolation(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantB, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -1585,7 +1712,7 @@ func TestStoreList_ReverseCrossTenantIsolation(t *testing.T) {
 	seedEntity(t, super, tenantB, "B Co Two", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	items, total, err := store.List(c, ListFilter{Limit: 50})
 	if err != nil {
@@ -1617,6 +1744,12 @@ func TestStoreList_CombinedStatusAndQFilter(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-combined-filter tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1625,7 +1758,7 @@ func TestStoreList_CombinedStatusAndQFilter(t *testing.T) {
 	seedEntityStatus(t, super, tenantID, "Okafor Foods", nil, "archived")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	status := "active"
 	items, total, err := store.List(c, ListFilter{Status: &status, Q: "okafor", Limit: 50})
@@ -1653,6 +1786,12 @@ func TestStoreList_SearchQNoMatch(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-nomatch tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1661,7 +1800,7 @@ func TestStoreList_SearchQNoMatch(t *testing.T) {
 	seedEntity(t, super, tenantID, "Acme Ltd", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Q: "zzz-no-such-substring", Limit: 50})
 	if err != nil {
@@ -1705,6 +1844,12 @@ func TestStoreList_SearchQWildcardIsNotEscaped(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-wildcard tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1714,7 +1859,7 @@ func TestStoreList_SearchQWildcardIsNotEscaped(t *testing.T) {
 	seedEntity(t, super, tenantID, "Acme Traders", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Q: "%", Limit: 50})
 	if err != nil {
@@ -1739,6 +1884,12 @@ func TestStoreList_PaginationPastEnd(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-pagination-past-end tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1748,7 +1899,7 @@ func TestStoreList_PaginationPastEnd(t *testing.T) {
 	seedEntity(t, super, tenantID, "Co C", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 10, Offset: 100})
 	if err != nil {
@@ -1780,6 +1931,12 @@ func TestStoreList_OrderingTieBreak(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-order-tiebreak tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1793,7 +1950,7 @@ func TestStoreList_OrderingTieBreak(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items1, _, err := store.List(c, ListFilter{Limit: 50})
 	if err != nil {
@@ -1830,6 +1987,12 @@ func TestStoreList_LargeLimitReturnsAllRows(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-large-limit tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1840,7 +2003,7 @@ func TestStoreList_LargeLimitReturnsAllRows(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Limit: 200})
 	if err != nil {
@@ -1873,10 +2036,16 @@ func TestStoreUpdate_PersistsAndAudits(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-persists tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -1932,6 +2101,12 @@ func TestStoreUpdate_InvalidTINNoWrite(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-invalid-tin tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1940,7 +2115,7 @@ func TestStoreUpdate_InvalidTINNoWrite(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "Untouched Co", strPtr(tinX))
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.updated"
 	before := auditCount(t, app, tenantID, event)
@@ -1980,6 +2155,12 @@ func TestStoreUpdate_DuplicateTINConflict(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-dup-tin tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -1990,7 +2171,7 @@ func TestStoreUpdate_DuplicateTINConflict(t *testing.T) {
 	seedEntity(t, super, tenantID, "Entity Two", strPtr(tinY))
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.updated"
 	before := auditCount(t, app, tenantID, event)
@@ -2027,6 +2208,12 @@ func TestStoreUpdate_ArchivedEntityAllowed(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-archived tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2034,7 +2221,7 @@ func TestStoreUpdate_ArchivedEntityAllowed(t *testing.T) {
 	entityID := seedEntityStatus(t, super, tenantID, "Archived Co", nil, "archived")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.updated"
 	before := auditCount(t, app, tenantID, event)
@@ -2078,6 +2265,12 @@ func TestStoreUpdate_CrossTenantNotFound(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		tenantA, tenantB, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller memberships: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -2085,7 +2278,7 @@ func TestStoreUpdate_CrossTenantNotFound(t *testing.T) {
 	entityIDInB := seedEntity(t, super, tenantB, "B Corp", nil)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	const event = "portfolio.entity.updated"
 	beforeA := auditCount(t, app, tenantA, event)
@@ -2096,7 +2289,7 @@ func TestStoreUpdate_CrossTenantNotFound(t *testing.T) {
 		t.Fatalf("Update(B's id) as tenant A err = %v, want ErrNotFound", err)
 	}
 
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	got, err := store.GetByID(cB, entityIDInB)
 	if err != nil {
 		t.Fatalf("GetByID(B's entity, as B) after cross-tenant Update attempt: %v", err)
@@ -2123,6 +2316,12 @@ func TestStoreUpdate_EmptyInputRejected(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-empty-input tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2130,7 +2329,7 @@ func TestStoreUpdate_EmptyInputRejected(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "Untouched Co", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.updated"
 	before := auditCount(t, app, tenantID, event)
@@ -2163,10 +2362,16 @@ func TestStoreOffboard_ArchivesAndRetains(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio offboard-retains tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -2213,10 +2418,16 @@ func TestStoreOnboard_Reactivates(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio onboard-reactivates tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -2259,6 +2470,12 @@ func TestStoreSetStatus_RedundantOffboard409(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio redundant-offboard tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2266,7 +2483,7 @@ func TestStoreSetStatus_RedundantOffboard409(t *testing.T) {
 	entityID := seedEntityStatus(t, super, tenantID, "Already Archived Co", nil, "archived")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.offboarded"
 	before := auditCount(t, app, tenantID, event)
@@ -2294,6 +2511,12 @@ func TestStoreSetStatus_RedundantOnboard409(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio redundant-onboard tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2301,7 +2524,7 @@ func TestStoreSetStatus_RedundantOnboard409(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "Already Active Co", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.onboarded"
 	before := auditCount(t, app, tenantID, event)
@@ -2330,6 +2553,12 @@ func TestStoreSetStatus_CrossTenantNotFound(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		tenantA, tenantB, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller memberships: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -2337,7 +2566,7 @@ func TestStoreSetStatus_CrossTenantNotFound(t *testing.T) {
 	entityIDInB := seedEntity(t, super, tenantB, "B Corp", nil)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	const event = "portfolio.entity.offboarded"
 	beforeA := auditCount(t, app, tenantA, event)
@@ -2347,7 +2576,7 @@ func TestStoreSetStatus_CrossTenantNotFound(t *testing.T) {
 		t.Fatalf("SetStatus(B's id) as tenant A err = %v, want ErrNotFound", err)
 	}
 
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	got, err := store.GetByID(cB, entityIDInB)
 	if err != nil {
 		t.Fatalf("GetByID(B's entity, as B) after cross-tenant SetStatus attempt: %v", err)
@@ -2377,10 +2606,16 @@ func TestStoreLifecycle_RoundTripAuditTrail(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := uuid.NewString()
-	userID := uuid.NewString()
+	userID := memberSubject
 	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio lifecycle-roundtrip tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
@@ -2435,6 +2670,12 @@ func TestStoreUpdate_TINToAnotherTenantsTINSucceeds(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantA, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -2445,7 +2686,7 @@ func TestStoreUpdate_TINToAnotherTenantsTINSucceeds(t *testing.T) {
 	seedEntity(t, super, tenantB, "B Corp", strPtr(tinY))
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	newTIN := tinY
 	updated, err := store.Update(cA, entityAID, UpdateInput{TIN: &newTIN})
@@ -2471,12 +2712,18 @@ func TestStoreUpdate_PartialUpdateLeavesOtherFieldsIntact(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-partial tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	sector, address := "Manufacturing", "12 Marina Rd, Lagos"
 	created, err := store.Create(c, CreateInput{Name: "Untouched Fields Co", TIN: "1234567897", Sector: &sector, Address: &address})
@@ -2524,6 +2771,12 @@ func TestStoreUpdate_ArchivedEntityTINChangeSucceeds(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-archived-tin tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2533,7 +2786,7 @@ func TestStoreUpdate_ArchivedEntityTINChangeSucceeds(t *testing.T) {
 	entityID := seedEntityStatus(t, super, tenantID, "Archived TIN Co", strPtr(oldTIN), "archived")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	newTINVal := newTIN
 	updated, err := store.Update(c, entityID, UpdateInput{TIN: &newTINVal})
@@ -2574,6 +2827,12 @@ func TestStoreSetStatus_InvalidTargetRejectedByCheckConstraint(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio setstatus-invalid-target tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2581,7 +2840,7 @@ func TestStoreSetStatus_InvalidTargetRejectedByCheckConstraint(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "Bogus Target Co", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	if _, err := store.SetStatus(c, entityID, "bogus"); err == nil {
 		t.Fatal(`SetStatus(id, "bogus") err = nil, want a non-nil error (status CHECK constraint violation)`)
@@ -2612,6 +2871,12 @@ func TestStoreSetStatus_DoubleOffboardIdempotencySemantics(t *testing.T) {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio double-offboard tenant', 'firm')`, tenantID); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
@@ -2619,7 +2884,7 @@ func TestStoreSetStatus_DoubleOffboardIdempotencySemantics(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "Double Offboard Co", nil)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const event = "portfolio.entity.offboarded"
 	before := auditCount(t, app, tenantID, event)
@@ -2664,6 +2929,12 @@ func TestStoreSetStatus_CrossTenantOnboardNotFound(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		tenantA, tenantB, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller memberships: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -2671,7 +2942,7 @@ func TestStoreSetStatus_CrossTenantOnboardNotFound(t *testing.T) {
 	entityIDInB := seedEntityStatus(t, super, tenantB, "B Archived Corp", nil, "archived")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	const event = "portfolio.entity.onboarded"
 	beforeA := auditCount(t, app, tenantA, event)
@@ -2681,7 +2952,7 @@ func TestStoreSetStatus_CrossTenantOnboardNotFound(t *testing.T) {
 		t.Fatalf("SetStatus(B's id, active) as tenant A err = %v, want ErrNotFound", err)
 	}
 
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	got, err := store.GetByID(cB, entityIDInB)
 	if err != nil {
 		t.Fatalf("GetByID(B's entity, as B) after cross-tenant Onboard attempt: %v", err)

@@ -38,8 +38,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -78,7 +76,7 @@ func TestStoreRollup_TopViolationsCountsInvoicesPerRule(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantID, entityID, "DASH-20-currency", "draft", currency)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -103,7 +101,7 @@ func TestStoreRollup_TopViolationsExcludesWarnings(t *testing.T) {
 		`[{"rule_key":"buyer-name-recommended","severity":"warning","message":"x"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -127,7 +125,7 @@ func TestStoreRollup_TopViolationsMixedSeverityOnOneInvoice(t *testing.T) {
 			`{"rule_key":"supplier-tin-required","severity":"error","message":"e"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -153,7 +151,7 @@ func TestStoreRollup_TopViolationsOneInvoiceCountsOncePerRule(t *testing.T) {
 			`{"rule_key":"supplier-tin-required","severity":"error","message":"r2"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -182,7 +180,7 @@ func TestStoreRollup_TopViolationsTieBreaksByRuleKeyAscending(t *testing.T) {
 		`[{"rule_key":"a-rule","severity":"error","message":"y"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -210,7 +208,7 @@ func TestStoreRollup_TopViolationsEmptyEverywhereMarshalsAsEmptyArray(t *testing
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -248,7 +246,7 @@ func TestStoreRollup_TopViolationsMalformedElementSkippedNotFatal(t *testing.T) 
 		`[{"severity":"error"},{"rule_key":"supplier-tin-required","severity":"error","message":"y"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -305,7 +303,7 @@ func TestStoreRollup_NonArrayViolationsDoNotBreakTopViolations(t *testing.T) {
 		`[{"rule_key":"supplier-tin-required","severity":"error","message":"z"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {

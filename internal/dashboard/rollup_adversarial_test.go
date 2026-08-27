@@ -16,8 +16,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -51,7 +49,7 @@ func TestStoreRollup_MalformedViolationsNeverErrorsOrFalselyFlags(t *testing.T) 
 			entityID := seedEntity(t, super, tenantID, "entity "+tc.name)
 			seedInvoiceWithViolations(t, super, tenantID, entityID, "MALFORMED-"+tc.name, "draft", tc.violations)
 
-			cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 			got, err := store.Rollup(cA)
 			if err != nil {
 				t.Fatalf("Rollup with violations=%s: %v", tc.violations, err)
@@ -93,7 +91,7 @@ func TestStoreRollup_UppercaseSeverityDoesNotMatchPredicate(t *testing.T) {
 		`[{"rule_key":"x","severity":"ERROR","message":"y"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -128,7 +126,7 @@ func TestStoreRollup_NonDraftWithErrorViolationDoesNotCountUnlessRejectedOrFaile
 	seedInvoiceWithViolations(t, super, tenantID, entityID, "NONDRAFT-1", "validated", broken)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -167,7 +165,7 @@ func TestStoreRollup_IdenticalNamesTieBreakByEntityIDAscending(t *testing.T) {
 	seedInvoice(t, super, tenantID, e3, "TIE-3")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -225,7 +223,7 @@ func TestStoreRollup_LargeFanoutOrderingStaysCorrect(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {

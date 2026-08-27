@@ -9,12 +9,14 @@
 //     red-to-green transition. TWO, not three: TestCorpusCoversTheDeclaredCases was planned
 //     as a third red and is not one. Stage 1 ships the complete newCorpus, so that spec passed
 //     from the moment it compiled.
-//   - TestCorpusCoversTheDeclaredCases and TestCorpusIsFreshPerLaw are DESIGN LOCKS and
-//     TestContractSuite_UsesNarrowT a REGRESSION GUARD. All three pass in this commit. Every
+//   - TestCorpusCoversTheDeclaredCases, TestCorpusIsFreshPerLaw and
+//     TestRunExtractorContract_BuildsAFreshCorpusPerLaw are DESIGN LOCKS and
+//     TestContractSuite_UsesNarrowT a REGRESSION GUARD. All four pass in this commit. Every
 //     assertion in them was instead shown to fire by breaking the thing it guards: a corpus
 //     case one byte under the ceiling, a spare-capacity blob, a second nil case, a blob hoisted
 //     to a package var behind a fresh outer slice, a whole corpus hoisted to a package var,
-//     a corpus with fewer than three cases carrying bytes, and a helper widened to *testing.T.
+//     a corpus with fewer than three cases carrying bytes, a helper widened to *testing.T, and
+//     a single corpus hoisted above the nine laws that read one.
 //   - TestContractSuite_RunsWithoutDatabase and TestReferenceExtractorPassesEveryLaw are
 //     CONFIRMATORY. A no-op runner records zero failures too, so their green says nothing yet
 //     about the law checks.
@@ -817,6 +819,64 @@ func TestCorpusIsFreshPerLaw(t *testing.T) {
 	c1[first].doc.Bytes[0] = ^orig
 	if got := c2[first].doc.Bytes[0]; got != orig {
 		t.Errorf("writing a sentinel into one corpus's %q blob changed the other's first byte to %#x; the corpora alias", c1[first].name, got)
+	}
+}
+
+// isNewCorpusCall reports whether n is a direct newCorpus() call.
+func isNewCorpusCall(n ast.Node) bool {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := call.Fun.(*ast.Ident)
+	return ok && id.Name == "newCorpus"
+}
+
+// TestRunExtractorContract_BuildsAFreshCorpusPerLaw (DESIGN LOCK -- not red-first, see this
+// file's header): every newCorpus call in the runner is a range expression, so no law can hand
+// the next one a blob a previous Extract mutated. TestCorpusIsFreshPerLaw locks the factory;
+// this locks the caller, which a hoisted corpus := newCorpus() would otherwise defeat with
+// every other spec here still green.
+func TestRunExtractorContract_BuildsAFreshCorpusPerLaw(t *testing.T) {
+	f, fset, err := parseContractSuite()
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	var runner *ast.FuncDecl
+	for _, fn := range nonTestFuncs(f) {
+		if fn.Recv == nil && fn.Name.Name == "RunExtractorContract" {
+			runner = fn
+		}
+	}
+	if runner == nil {
+		t.Fatalf("no RunExtractorContract declaration in %s; the scan below would pass vacuously", contractSuiteFile)
+	}
+
+	ranged := map[token.Pos]bool{}
+	ast.Inspect(runner, func(n ast.Node) bool {
+		if rs, ok := n.(*ast.RangeStmt); ok && isNewCorpusCall(rs.X) {
+			ranged[rs.X.Pos()] = true
+		}
+		return true
+	})
+
+	var calls int
+	ast.Inspect(runner, func(n ast.Node) bool {
+		if !isNewCorpusCall(n) {
+			return true
+		}
+		calls++
+		if !ranged[n.Pos()] {
+			t.Errorf("%s: RunExtractorContract binds newCorpus() to a name instead of ranging it; a corpus reachable from two laws carries one law's mutation into the next law's input",
+				fset.Position(n.Pos()))
+		}
+		return true
+	})
+
+	// E01-E03 read no documents; the other nine laws each build their own.
+	if calls != 9 {
+		t.Errorf("RunExtractorContract calls newCorpus %d time(s), want 9: one each for E04, E05, E06, E07, E08, E09, E10, E11 and E12", calls)
 	}
 }
 

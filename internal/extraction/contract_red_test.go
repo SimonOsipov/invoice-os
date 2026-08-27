@@ -14,20 +14,23 @@
 //     was shown by breaking the law each one names instead: see the mutation table below.
 //   - TestContractCorpusNeedsNoRestore is a DESIGN LOCK, never red-first.
 //
-// MEASURED ON THIS COMMIT -- every row watched failing, not merely watched passing. Each
-// mutation was applied to contract_test.go, the package run, and then reverted:
+// MEASURED ON THIS COMMIT -- every row watched FAILING, not merely watched passing. Each law
+// was disabled in contract_test.go one at a time, the package run, and the mutation reverted.
+// Every row moved when and only when its own half of a law went, and
+// TestAllLaws_IdsAreUniqueAndUsed stayed GREEN throughout: a static scan cannot tell a live law
+// from dead code, which is the limit contract_test.go:24-29 states and this file closes. Two of
+// those results are what earn a law its second row: deleting E04's ERROR arm leaves
+// TestRedCase_E04NilSliceIsRejected green, and deleting the E12 watchdog (:506) leaves the
+// whole repository green but the blocking row.
 //
-//	E04 success arm unsatisfiable  -> E04/nil-slice-on-success + its spec; NOTHING else
-//	E04 error arm deleted (:383)   -> E04/fields-alongside-an-error + its spec; the NIL-SLICE
-//	                                  SPEC STAYS GREEN, which is why there are two E04 rows
-//	E05 hash compare unsatisfiable -> E05/mutates-doc-bytes + its spec
-//	E10 condition unsatisfiable    -> E10/missing-with-a-value
-//	E12 watchdog Errorf deleted    -> E12/blocks-past-the-budget ALONE
-//	E11 page site deleted (:487)   -> E11/page-zero ALONE
-//
-// TestAllLaws_IdsAreUniqueAndUsed stayed GREEN under every one of those: a static scan cannot
-// tell a live law from dead code, which is the limit contract_test.go:24-29 states and this
-// file closes.
+// THE UNIT THIS TABLE GUARDS IS THE ROW, NOT THE EMISSION SITE, and the gap is measured rather
+// than assumed. Fifteen rows exercise all 20 of the runner's law-prefixed Errorf sites -- each
+// site attributed to exactly one row -- but only 10 of them are individually guarded. The other
+// ten are five PAIRS that a single row trips together: :358/:361, :364/:367, :370/:373,
+// :490/:493 and :514/:517. Disabling either half of a pair alone leaves the WHOLE REPOSITORY
+// GREEN; only the pair moves its row. Set equality grades law ids, so it cannot see half a law
+// go missing. Splitting those five rows would close it at twenty rows, one per site: a wider
+// table than this story asks for, left as a finding rather than built without one.
 //
 // THE FINGERPRINT HALF ONLY DISCRIMINATES IF THE E05 ROW'S WRITE IS NON-INVOLUTIVE. Measured
 // on this story: against a memoised newCorpus -- the shared corpus this locks out -- an E05 row

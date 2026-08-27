@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -366,6 +367,31 @@ func wkAssertJobAttempts(t *testing.T, ctx context.Context, jobID string, want i
 	}
 }
 
+// wkAssertJobExtractor pins the worker's own wiring: Name() and Version() reach their own
+// columns, in that order. store_db_test.go pins that ensureJobTx binds them; nothing else
+// pins which one the worker passes first.
+// wkStr renders a nullable text column for a failure message: %v on a *string prints an address.
+func wkStr(p *string) string {
+	if p == nil {
+		return "NULL"
+	}
+	return strconv.Quote(*p)
+}
+
+func wkAssertJobExtractor(t *testing.T, ctx context.Context, jobID string) {
+	t.Helper()
+	var name, version string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT extractor, extractor_version FROM extraction_jobs WHERE id = $1`, jobID).
+		Scan(&name, &version); err != nil {
+		t.Fatalf("read extractor columns for job %s: %v", jobID, err)
+	}
+	if name != wkExtractorName || version != wkExtractorVersion {
+		t.Errorf("extraction job %s stored {extractor %q, extractor_version %q}, want {%q, %q}",
+			jobID, name, version, wkExtractorName, wkExtractorVersion)
+	}
+}
+
 // --- specs ---------------------------------------------------------------------------
 
 // Core AC-9 on the wire: River applies cmp.Or(workUnit.Timeout(), clientJobTimeout), so
@@ -479,6 +505,16 @@ func TestRLS_ExtractJobIsFetchedByTheExtractionQueueClient(t *testing.T) {
 	stAssertJobState(t, ctx, xid, "succeeded")
 	stAssertFieldResultCount(t, ctx, xid, len(wkOneField()))
 	wkAssertJobAttempts(t, ctx, xid, 1)
+	wkAssertJobExtractor(t, ctx, xid)
+
+	// attempts follows River's attempt rather than a constant: a job that succeeds on a later
+	// attempt records that attempt. One run at attempt 1 cannot tell the two apart.
+	const secondAttemptRiverJobID = int64(909501)
+	if err := wkWorker(t, wkOK(), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(secondAttemptRiverJobID, 2, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work on attempt 2: %v", err)
+	}
+	wkAssertJobAttempts(t, ctx, wkExtractionJobID(t, ctx, tenantID, secondAttemptRiverJobID), 2)
 }
 
 // Core AC-8. extraction_field_results has no unique key on (extraction_job_id, field_name) and
@@ -510,6 +546,31 @@ func TestRLS_ExtractWorkerWritesOneResultSetPerJobOnReplay(t *testing.T) {
 
 	if n := wkExtractionJobCount(t, ctx, tenantID); n != 1 {
 		t.Errorf("the tenant holds %d extraction_jobs row(s) after a replay of one river job, want 1", n)
+	}
+
+	// dead_lettered is terminal on replay for the same reason succeeded is. The short-circuit
+	// covers both states, and the replay above exercises only one of them.
+	const deadRiverJobID = int64(909002)
+	boom := errors.New("extr-09 replay: the extractor always fails")
+	if err := wkWorker(t, wkFailing(boom), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on the final attempt returned %v, want the extractor's error", err)
+	}
+	did := wkExtractionJobID(t, ctx, tenantID, deadRiverJobID)
+	stAssertJobState(t, ctx, did, "dead_lettered")
+
+	replayExt, replayOp := wkOK(), wkNewOpener()
+	if err := wkWorker(t, replayExt, replayOp).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 4, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("replayed Work on a dead-lettered job: %v", err)
+	}
+	stAssertJobState(t, ctx, did, "dead_lettered")
+	stAssertFieldResultCount(t, ctx, did, 0)
+	if n := replayExt.count(); n != 0 {
+		t.Errorf("the replay of a dead-lettered job ran the extractor %d time(s), want 0", n)
+	}
+	if n := replayOp.count(); n != 0 {
+		t.Errorf("the replay of a dead-lettered job called OpenDocument %d time(s), want 0", n)
 	}
 }
 
@@ -571,6 +632,21 @@ func TestRLS_ExtractWorkerFailureIsTerminalAfterThreeAttempts(t *testing.T) {
 	tenantID, documentID := wkFixture(t, ctx)
 
 	boom := errors.New("extr-09: the extractor always fails")
+
+	// The non-terminal arm, driven directly: an attempt below the cap leaves the job "failed".
+	// The client path below settles on the terminal state and never observes this one.
+	const probeRiverJobID = int64(909401)
+	if err := wkWorker(t, wkFailing(boom), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(probeRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on attempt 1 of 3 returned %v, want the extractor's error", err)
+	}
+	pid := wkExtractionJobID(t, ctx, tenantID, probeRiverJobID)
+	stAssertJobState(t, ctx, pid, "failed")
+	wkAssertJobAttempts(t, ctx, pid, 1)
+	if got := stJobLastError(t, ctx, pid); got == nil || *got != boom.Error() {
+		t.Errorf("extraction job %s records last_error %s, want %q", pid, wkStr(got), boom.Error())
+	}
+
 	op := wkNewOpener()
 	ext := wkFailing(boom)
 	c := wkClient(t, wkWorker(t, ext, op), extraction.QueueName)
@@ -587,8 +663,8 @@ func TestRLS_ExtractWorkerFailureIsTerminalAfterThreeAttempts(t *testing.T) {
 	stAssertJobState(t, ctx, xid, "dead_lettered")
 	wkAssertJobAttempts(t, ctx, xid, 3)
 
-	if got := stJobLastError(t, ctx, xid); got == nil || *got == "" {
-		t.Errorf("extraction job %s records last_error %v, want the extractor's message", xid, got)
+	if got := stJobLastError(t, ctx, xid); got == nil || *got != boom.Error() {
+		t.Errorf("extraction job %s records last_error %s, want %q", xid, wkStr(got), boom.Error())
 	}
 	if n := op.count(); n != 3 {
 		t.Errorf("OpenDocument was called %d time(s) across 3 attempts, want 3", n)

@@ -95,7 +95,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	var fields []Field
 	doc, err := w.Open(octx, args.DocumentID)
 	if err == nil {
-		// The extractor is fenced from the database and has no use for a tenant identity.
+		// ctx, not octx: the extractor is fenced from the database and must not be handed a
+		// tenant identity.
 		fields, err = w.Extractor.Extract(ctx, doc)
 	}
 	if err != nil {

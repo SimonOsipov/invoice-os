@@ -4,18 +4,24 @@
 // app role (invoice_app) and re-establishes tenant context per job — the worker-role
 // pattern, docs/migrations.md §8. M5-04 wires the real handlers onto that spine:
 // SubmitWorker drives the tx1 / adapter / tx2 submit flow and PollWorker follows a
-// deferred verdict the same way (internal/submission/worker.go) — both registered via
-// submission.Workers(sw, pw) below.
+// deferred verdict the same way (internal/submission/worker.go) — both registered, with
+// ExtractWorker, on the single bundle workerBundle builds below.
 package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -48,6 +54,19 @@ func main() {
 
 	// /readyz now reflects the DB dependency the worker carries.
 	app.Ready("database", pool.Ping)
+
+	// The five DOCUMENT_* variables are required unconditionally, the way PORT and
+	// MockConfigFromEnv are: gating this on whether extraction ever runs would defer the
+	// failure to the moment a job first needs the store
+	// (TestSubmissionMain_FatalOnDocumentConfigError).
+	docCfg, err := document.ConfigFromEnv()
+	if err != nil {
+		log.Fatalf("submission: document config: %v", err)
+	}
+	docObjects, err := document.NewS3Store(docCfg, nil)
+	if err != nil {
+		log.Fatalf("submission: document object store: %v", err)
+	}
 
 	// M5-02-04: resolve the configured adapter against the fail-closed production
 	// allowlist before the queue starts.
@@ -98,11 +117,15 @@ func main() {
 		Logger:      app.Logger,
 	}
 
+	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill.
+	docSvc := document.NewService(document.NewStore(pool), docObjects)
+	ew := newExtractWorker(pool, extraction.NewMockExtractor(), newDocumentOpener(docSvc.Open), app.Logger)
+
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
 	q, err := queue.New(pool, queue.Config{
-		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 10}},
-		Workers: submission.Workers(sw, pw),
+		Queues:  queueConfigs(),
+		Workers: workerBundle(sw, pw, ew),
 		Logger:  app.Logger,
 	})
 	if err != nil {
@@ -120,4 +143,70 @@ func main() {
 	if err := app.Run(ctx); err != nil {
 		log.Fatalf("submission: %v", err)
 	}
+}
+
+// documents.size_bytes CHECKs <= this (migrations/20260802163544_documents.sql).
+const maxDocumentBytes = 15 << 20
+
+// documentOpen is document.Service.Open's shape, so a test can substitute one.
+type documentOpen func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error)
+
+// newDocumentOpener adapts the document service to the extraction seam: whole object, no
+// range, capped read, body closed exactly once on every path. ctx is forwarded untouched --
+// the worker has already put the job's tenant on it, and RLS scopes the row lookup by that
+// identity (TestNewDocumentOpener_ForwardsContextVerbatim).
+func newDocumentOpener(open documentOpen) extraction.OpenDocument {
+	return func(ctx context.Context, documentID string) (extraction.Document, error) {
+		doc, obj, err := open(ctx, documentID, "")
+		// Registered before the error branch: an open that hands back both a body and an
+		// error still closes (TestNewDocumentOpener_ClosesBodyWhenOpenErrors).
+		if obj.Body != nil {
+			defer func() { _ = obj.Body.Close() }()
+		}
+		if err != nil {
+			return extraction.Document{}, err
+		}
+		if obj.Body == nil {
+			return extraction.Document{}, fmt.Errorf("submission: document %s opened with no body", documentID)
+		}
+		// +1 so an at-the-cap document still reads whole and only an over-cap one is
+		// detectable. The cap bounds the READ, never obj.Size, which a ranged or lying
+		// store understates (TestNewDocumentOpener_CapsAtDocumentSizeCeiling).
+		b, err := io.ReadAll(io.LimitReader(obj.Body, maxDocumentBytes+1))
+		if err != nil {
+			return extraction.Document{}, err
+		}
+		if len(b) > maxDocumentBytes {
+			return extraction.Document{}, fmt.Errorf(
+				"submission: document %s exceeds the %d-byte ceiling", documentID, maxDocumentBytes)
+		}
+		var ct string
+		if doc.DeclaredContentType != nil {
+			ct = *doc.DeclaredContentType
+		}
+		return extraction.Document{Bytes: b, ContentType: ct}, nil
+	}
+}
+
+// newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails
+// only on the first job (TestNewExtractWorker_SetsEveryCollaborator).
+func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument, logger *slog.Logger) *extraction.ExtractWorker {
+	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Logger: logger}
+}
+
+// queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow
+// read cannot starve submission; river.NewClient refuses MaxWorkers < 1.
+func queueConfigs() map[string]river.QueueConfig {
+	return map[string]river.QueueConfig{
+		river.QueueDefault:   {MaxWorkers: 10},
+		extraction.QueueName: {MaxWorkers: 2},
+	}
+}
+
+// workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a
+// second bundle would leave its workers unfetched (TestWorkerBundle_CarriesAllThreeKinds).
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker) *river.Workers {
+	bundle := submission.Workers(sw, pw)
+	extraction.AddTo(bundle, ew)
+	return bundle
 }

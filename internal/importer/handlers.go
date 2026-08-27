@@ -250,8 +250,13 @@ func CreateHandler(
 			case errors.Is(err, document.ErrValidation):
 				writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
 			default:
-				log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
-				writeError(w, http.StatusInternalServerError, "internal server error")
+				// Everything else, including a suspended caller's
+				// db.ErrNotActiveMember, goes through statusForErr.
+				status, msg := statusForErr(err)
+				if status == http.StatusInternalServerError {
+					log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
+				}
+				writeError(w, status, msg)
 			}
 			return
 		}
@@ -392,8 +397,13 @@ func PreviewHandler(
 		// copies of a security coercion drift apart.
 		doc, err := store(r.Context(), fh.Filename, fh.Header.Get("Content-Type"), fh.Size, file)
 		if err != nil {
-			log.ErrorContext(r.Context(), "importer: store source document", slog.Any("err", err))
-			writeError(w, http.StatusInternalServerError, "internal server error")
+			// Same statusForErr idiom as GetHandler: a suspended caller's
+			// db.ErrNotActiveMember must not fall to the 500 default.
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: store source document", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
 			return
 		}
 		// Store leaves the reader at EOF; without this Decode reads zero bytes.
@@ -595,8 +605,13 @@ func SheetHandler(
 			case errors.Is(err, document.ErrValidation):
 				writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
 			default:
-				log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
-				writeError(w, http.StatusInternalServerError, "internal server error")
+				// Everything else, including a suspended caller's
+				// db.ErrNotActiveMember, goes through statusForErr.
+				status, msg := statusForErr(err)
+				if status == http.StatusInternalServerError {
+					log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
+				}
+				writeError(w, status, msg)
 			}
 			return
 		}

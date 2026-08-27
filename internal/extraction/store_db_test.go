@@ -168,6 +168,16 @@ func stAssertFieldResultCount(t *testing.T, ctx context.Context, jobID string, w
 	}
 }
 
+func stJobLastError(t *testing.T, ctx context.Context, jobID string) *string {
+	t.Helper()
+	var got *string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT last_error FROM extraction_jobs WHERE id = $1`, jobID).Scan(&got); err != nil {
+		t.Fatalf("read last_error for job %s: %v", jobID, err)
+	}
+	return got
+}
+
 // stAssertStoreNeverNamesUpdatedAt is the load-bearing half of
 // TestExtractionStore_AdvanceMovesStateAndUpdatedAt: the temporal assertion there cannot
 // tell the trigger firing from the writer naming the column.
@@ -214,6 +224,19 @@ func TestExtractionStore_EnsureJobIsIdempotentPerRiverJob(t *testing.T) {
 	}
 	if first.State != "queued" || first.Attempts != 0 {
 		t.Errorf("a new job reports {state %q, attempts %d}, want {queued, 0}", first.State, first.Attempts)
+	}
+
+	// Job carries neither column, so the insert's own extractor/extractor_version binding is
+	// only reachable from the row: both CHECKs admit any non-empty string, so a swap is legal.
+	var extractor, version string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT extractor, extractor_version FROM extraction_jobs WHERE id = $1`, first.ID).
+		Scan(&extractor, &version); err != nil {
+		t.Fatalf("read job %s extractor columns: %v", first.ID, err)
+	}
+	if extractor != stExtractor || version != stExtractorVersion {
+		t.Errorf("the new job stored {extractor %q, extractor_version %q}, want {%q, %q}",
+			extractor, version, stExtractor, stExtractorVersion)
 	}
 
 	// Move the row so the second call has something other than the insert defaults to report.
@@ -512,6 +535,20 @@ func TestExtractionStore_ReadReturnsEmptySliceNotNil(t *testing.T) {
 	if len(out) != 0 {
 		t.Errorf("FieldResults returned %d rows for a job with zero results", len(out))
 	}
+
+	// The error path is the other half of never-nil: db.WithinTenantTx refuses a non-UUID
+	// tenant before it issues a statement, so the helper's initialiser never runs and the
+	// exported wrapper's own is all that stands between a caller and a JSON null.
+	out, err = s.FieldResults(ctx, "not-a-uuid", job.ID)
+	if err == nil {
+		t.Fatal("FieldResults accepted a non-UUID tenant and reported no error")
+	}
+	if out == nil {
+		t.Errorf("FieldResults returned a nil slice alongside its error %v, want an empty slice", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("FieldResults returned %d rows alongside its error", len(out))
+	}
 }
 
 func TestExtractionStore_UsesTenantTxNotRequestTx(t *testing.T) {
@@ -535,5 +572,123 @@ func TestExtractionStore_UsesTenantTxNotRequestTx(t *testing.T) {
 	})
 	if tenantTx == 0 {
 		t.Fatal("store.go names no WithinTenantTx at all, so the scan above passed vacuously")
+	}
+}
+
+func TestExtractionStore_AdvanceClearsLastErrorToNull(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 900801)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	// The row must actually carry an error first, or the retry below proves nothing: a
+	// last_error that was NULL all along reads NULL whatever Advance binds.
+	if err := s.Advance(ctx, tenantID, job.ID, "failed", "boom", 1); err != nil {
+		t.Fatalf("Advance to failed: %v", err)
+	}
+	if got := stJobLastError(t, ctx, job.ID); got == nil || *got != "boom" {
+		t.Fatalf("after a failing advance last_error is %v, want boom", got)
+	}
+
+	// last_error is a bare text column with no CHECK, so binding lastErr unconditionally
+	// stores the empty string as a silent sentinel every reader would have to know about.
+	if err := s.Advance(ctx, tenantID, job.ID, "extracting", "", 2); err != nil {
+		t.Fatalf("Advance to extracting: %v", err)
+	}
+	if got := stJobLastError(t, ctx, job.ID); got != nil {
+		t.Errorf("an empty lastErr stored last_error %q, want SQL NULL", *got)
+	}
+	stAssertJobState(t, ctx, job.ID, "extracting")
+}
+
+func TestExtractionStore_FieldResultsRoundTripValueAndReason(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 900901)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	// created_at is now(), which is transaction-start time and so identical for every row one
+	// WriteFieldResults writes: field_name is what orders a batch, and these are in that order.
+	want := []extraction.Field{
+		{Name: "buyer_tin", Reason: extraction.ReasonMissing},
+		{Name: "invoice_number", Value: stPtr("INV-0003"), Reason: extraction.ReasonNone},
+		{Name: "total_amount", Value: stPtr("1000.00"), Reason: extraction.ReasonAmbiguous},
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, want); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != len(want) {
+		t.Fatalf("FieldResults returned %d rows, want %d", len(out), len(want))
+	}
+
+	for i, w := range want {
+		got := out[i]
+		if got.Name != w.Name {
+			t.Errorf("row %d is %q, want %q; the read is ORDER BY created_at, field_name", i, got.Name, w.Name)
+			continue
+		}
+		switch {
+		case w.Value == nil && got.Value != nil:
+			t.Errorf("%s came back with value %q, want nil", w.Name, *got.Value)
+		case w.Value != nil && got.Value == nil:
+			t.Errorf("%s came back with a nil value, want %q", w.Name, *w.Value)
+		case w.Value != nil && *got.Value != *w.Value:
+			t.Errorf("%s came back with value %q, want %q", w.Name, *got.Value, *w.Value)
+		}
+		if got.Reason != w.Reason {
+			t.Errorf("%s came back with reason %q, want %q", w.Name, got.Reason, w.Reason)
+		}
+	}
+}
+
+func TestExtractionStore_FieldResultsAreScopedToOneJob(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	// Two jobs on ONE tenant: row-level security scopes the read to the tenant, so only the
+	// query's own extraction_job_id predicate can keep the sibling job's rows out.
+	first, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 901001)
+	if err != nil {
+		t.Fatalf("EnsureJob first: %v", err)
+	}
+	second, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 901002)
+	if err != nil {
+		t.Fatalf("EnsureJob second: %v", err)
+	}
+
+	if err := s.WriteFieldResults(ctx, tenantID, first.ID, []extraction.Field{
+		{Name: "invoice_number", Value: stPtr("INV-FIRST"), Reason: extraction.ReasonNone},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults for the first job: %v", err)
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, second.ID, []extraction.Field{
+		{Name: "invoice_number", Value: stPtr("INV-SECOND"), Reason: extraction.ReasonNone},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults for the second job: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, first.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("FieldResults for job %s returned %d rows, want only its own 1", first.ID, len(out))
+	}
+	if out[0].Value == nil || *out[0].Value != "INV-FIRST" {
+		t.Errorf("FieldResults for job %s returned value %v, want INV-FIRST", first.ID, out[0].Value)
 	}
 }

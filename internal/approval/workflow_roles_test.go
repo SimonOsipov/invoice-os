@@ -105,6 +105,32 @@ func activeAdmin(t *testing.T, super *pgxpool.Pool, tenantID string) (context.Co
 	return callerCtx(t, super, tenantID, "admin", "active")
 }
 
+// TestApprovalFixture_CallerCtxSeedsAnActiveCallerMembership (AUDIT-12-05):
+// callerCtx must seed its own caller a membership row, active, with the
+// requested role -- the exact helper the sweep's fixture rewrite reuses for
+// staffing_test.go/workflow_roles_test.go's literal sites. Deleting the
+// seedMembership call must fail this test, not pass silently.
+func TestApprovalFixture_CallerCtxSeedsAnActiveCallerMembership(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "AUDIT-12-05 fixture-presence tenant")
+
+	_, userID := callerCtx(t, super, tenantID, "preparer", "active")
+
+	var role, status string
+	err := super.QueryRow(context.Background(),
+		`SELECT role, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, userID,
+	).Scan(&role, &status)
+	if err != nil {
+		t.Fatalf("callerCtx seeded no memberships row for its own caller: %v", err)
+	}
+	if role != "preparer" {
+		t.Fatalf("membership role = %q, want preparer", role)
+	}
+	if status != "active" {
+		t.Fatalf("membership status = %q, want active", status)
+	}
+}
+
 // seedWorkflowRole inserts one live role as the superuser and returns its id.
 func seedWorkflowRole(t *testing.T, super *pgxpool.Pool, tenantID, key, title string) string {
 	t.Helper()

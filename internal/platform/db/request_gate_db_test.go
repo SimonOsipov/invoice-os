@@ -39,6 +39,32 @@ func seedMembershipWithStatus(t *testing.T, tenantID, userID, role, status strin
 	})
 }
 
+// TestRLS_SeedMembershipWithStatusSeedsTheRequestedStatus (AUDIT-12-05): the
+// sweep's fixture for TestRLS_WithinRequestTenantTxStillBeginsAPlainTransaction
+// (userID := uuid.NewString(); seedMembershipWithStatus(t, tenantID, userID,
+// role, "active")) must leave a real, readable-back row -- not merely not
+// error. Deleting the INSERT must fail this test, not pass silently.
+func TestRLS_SeedMembershipWithStatusSeedsTheRequestedStatus(t *testing.T) {
+	h := requireHarness(t)
+	userID := uuid.NewString()
+
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+
+	var role, status string
+	err := h.super.QueryRow(context.Background(),
+		`SELECT role, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`, h.tenantA, userID,
+	).Scan(&role, &status)
+	if err != nil {
+		t.Fatalf("seedMembershipWithStatus seeded no memberships row: %v", err)
+	}
+	if role != "admin" {
+		t.Fatalf("membership role = %q, want admin", role)
+	}
+	if status != "active" {
+		t.Fatalf("membership status = %q, want active", status)
+	}
+}
+
 // seamTracer records BOTH standalone statements and batched ones. pgx assigns the
 // batch tracer by type-asserting ConnConfig.Tracer, so a QueryTracer-only type sees
 // nothing a SendBatch carries — TestRLS_RequestSeamSkipsTheLookupForANonUUIDSubject

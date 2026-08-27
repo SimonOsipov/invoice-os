@@ -158,6 +158,44 @@ func exChain(t *testing.T, f *effectsFixture) (tenantID, invoiceID, jobID string
 	}
 }
 
+// TestSubmissionFixture_MembershipSeedViaTenantTxIsActive (AUDIT-12-05):
+// effectsFixture carries no superuser pool and memberships is FORCE RLS, so
+// the sweep's fixture for TestAuditNumber_SearchFindsASubmissionWorkersRow
+// must seed via db.WithinTenantTx(ctx, f.mig, ...) -- exChain's own pattern
+// above -- never a bare Exec. Proves that pattern leaves a real active row,
+// readable back through the app role under tenant scope. Deleting the
+// INSERT must fail this test, not pass silently.
+func TestSubmissionFixture_MembershipSeedViaTenantTxIsActive(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantID)
+	userID := uuid.NewString()
+
+	if err := db.WithinTenantTx(ctx, f.mig, tenantID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+			tenantID, userID, "preparer", "active")
+		return e
+	}); err != nil {
+		t.Fatalf("seed membership via WithinTenantTx: %v", err)
+	}
+
+	var status string
+	err := db.WithinTenantTx(ctx, f.app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT status FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, userID,
+		).Scan(&status)
+	})
+	if err != nil {
+		t.Fatalf("read back membership row through the app role: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("membership status = %q, want active", status)
+	}
+}
+
 // exExchange builds a minimally valid Exchange for a seeded job. attempt is 1, not 0 —
 // app_exchange.attempt is 1-BASED (CHECK attempt >= 1) while submission_jobs.attempts is
 // 0-based, and a fixture that copies the job's value hits 23514.

@@ -395,12 +395,6 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
     'click:review-bulk-confirm',
     1,
   ],
-  [
-    INVOICE_SURFACES,
-    'test:detail surface: a history actor the server cannot name renders verbatim and is never clipped',
-    'click:batch-submit-confirm',
-    1,
-  ],
   [INVOICE_SURFACES, 'test:submission surface: a failed invoice is an honest dead end', 'transitionInvoice:queued', 1],
   [
     INVOICE_SURFACES,
@@ -524,15 +518,16 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
     // real submit site and stay green -- the same defect class as counting observers instead
     // of submits.
     //
-    // Re-measured 2026-08-25 (AUDIT-09-09): 14 = 8 submitSelected callers
+    // Re-measured 2026-08-26 (AUDIT-12-06): 13 = 7 submitSelected callers
     // (batch-submit-confirm) + 1 detail-submit-confirm + 1 review-bulk-confirm + 4
-    // transitionInvoice(..., 'queued'). 13 -> 14 is AUDIT-09-09's rail-order guard, whose
-    // accepted fixture needs a real browser submit. Manifesting a site and flooring it are
-    // two steps and the suite only enforces the first -- AUDIT-09-04 manifested its site and
-    // left the floor at 11 against a population of 12, so an "exact" floor sat a whole site
-    // slack until AUDIT-09-08 corrected it.
-    it('floor: at least 14 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
-      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 14`).toBeGreaterThanOrEqual(14)
+    // transitionInvoice(..., 'queued'). 14 -> 13 is D-9 dropping the un-membered-actor
+    // fixture's submit site (F-12): a sanctioned deletion, not a regression, so the floor
+    // moves with it. Manifesting a site and flooring it are two steps and the suite only
+    // enforces the first -- AUDIT-09-04 manifested its site and left the floor at 11 against
+    // a population of 12, so an "exact" floor sat a whole site slack until AUDIT-09-08
+    // corrected it.
+    it('floor: at least 13 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 13`).toBeGreaterThanOrEqual(13)
     })
 
     it('every submit-driving call site is in the manifest', () => {

@@ -2577,169 +2577,29 @@ test('detail surface: the armed decision block and approval card, plus their lay
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// AUDIT-02-04. One page, two facts the unit tests cannot reach:
-//
-// 1. LEAK. APP_PERSONAS (frontend/app/src/auth.ts:34-61) holds BOTH tenants' admin
-//    subjects, unscoped. Both rows below are actored by Honeywell's admin id inside the
-//    FIRM tenant, so the RLS-scoped memberships query (internal/actor/resolve.go:75-78)
-//    finds no row and answers kind 'raw'. Any client-side fall-through to that table
-//    prints "Ngozi Balogun · Honeywell Group" to an Okafor viewer.
-// 2. CLIPPING. The strip's captions are `white-space: nowrap` and the strip itself scrolls
-//    (StatusStrip.tsx), so a long actor must push the STRIP over its own client width and
-//    still render whole -- never get squeezed inside its caption box. A hyphenated uuid can
-//    break at its hyphens, so only a token with no hyphen at all applies real pressure.
-//
-// The two rows spell the SAME uuid two ways, which is what makes both facts testable from
-// one page. The verifier requires uuid.Parse to accept the JWT subject
-// (internal/platform/auth/verify.go:145), and uuid.Parse takes exactly four lengths: 32
-// bare hex, 36 hyphenated, 38 braced-hyphenated, 45 urn. Row 0 is the 36-char canonical
-// form -- byte-identical to the APP_PERSONAS key, so it is the leak oracle. Row 1 is the
-// 32-char bare-hex form, the one admitted spelling with no hyphen, so it is the clipping
-// oracle. actor.normalizeUUID (resolve.go:19) admits both, so both are really bound and
-// really queried under firm RLS: an absence here is the server's scoping as much as the
-// client's.
-//
-// The mock issuer mints for any subject on Preview posture (gateway.go:199), which is
-// what an earlier draft of this test read as permission to use the seeded 44-char email
-// (db/seed.dev.sql:45) as a subject. Minting is not admission: verify.go rejects every
-// non-uuid subject at the middleware, so that token 401'd on first use. Nor is that email
-// reachable as an actor by any other route -- actor.Name only falls to its email rung
-// when display_name is null, and all 13 seeded memberships fill it.
-// Needs `data-testid="strip-actor"` on every caption span (StatusStrip.tsx).
-test('detail surface: a history actor the server cannot name renders verbatim and is never clipped', async ({ page }) => {
-  test.setTimeout(120_000)
-  const errors = collectErrors(page)
-
-  const otherTenantAdmin = 'c0000000-0000-0000-0000-000000000002'
-  const unbreakableActor = 'c0000000000000000000000000000002'
-
-  const creatorToken = await login({ ...PERSONAS.A, subject: otherTenantAdmin })
-  const validatorToken = await login({ ...PERSONAS.A, subject: unbreakableActor })
-  const entity = await createEntity(creatorToken, { name: `AUDIT-02-04 actor ${Date.now()}`, tin: freshTin() })
-  const invoiceNumber = `INV-AUDIT0204-${Date.now()}`
-  // Driven all the way to `rejected` (the loop test's recipe verbatim: MOCK_TIN_REJECT
-  // converges synchronously). At `validated` the strip's node 2 is `current` and renders NO
-  // attribution, so the 32-char clipping oracle -- the only subject with no hyphen, and
-  // therefore the only one that can prove the bounds below are load-bearing -- would never
-  // reach the screen and both its assertions would pass vacuously.
-  const invoice = await createInvoice(creatorToken, {
-    entity_id: entity.id,
-    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
-  })
-  await validateInvoice(validatorToken, invoice.id)
-  await approveUntilClosed(invoice.id, await firmApproverTokens())
-
-  await signInFirm(page)
-  await selectEntity(page, entity.name)
-  await goToInvoices(page)
-
-  const row = invoiceRowByNumber(page, invoiceNumber)
-  await row.getByTestId('invoice-select').check()
-  await submitSelected(page)
-  await expect(row.getByTestId('invoice-status-badge')).toContainText('REJECTED')
-
-  await openInvoiceRow(page, invoiceNumber)
-
-  // Positive control before either absence assertion: both subjects render on their own
-  // node, byte for byte and flagged mono. Byte-for-byte matters twice over here -- it is
-  // also what stops the sweep below passing vacuously on a short name, which is what a
-  // client that re-normalised the bare-hex subject into APP_PERSONAS would render.
-  await expectStripStates(page, { draft: 'done', validated: 'done', accepted: 'failed' })
-  const creatorCell = stripCaption(page, 'draft')
-  const validatorCell = stripCaption(page, 'validated')
-  await expect(creatorCell).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${otherTenantAdmin}$`))
-  await expect(validatorCell).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${unbreakableActor}$`))
-  await expect(creatorCell).toHaveClass(/mono/)
-  await expect(validatorCell).toHaveClass(/mono/)
-
-  const strip = page.getByTestId('status-strip')
-  await expect(strip).not.toContainText('Ngozi Balogun')
-  await expect(strip).not.toContainText('Honeywell Group')
-
-  // Containment, never a width: a dimension bound passes on the very clipping it should
-  // catch (BUG-03-05, e2e/topology/layout.ts:4-8). Two relationships, both scroll-safe.
-  //
-  // gaps() is taken against each caption's OWN node block, not against the strip: the strip
-  // scrolls, so its far children legitimately sit outside its client box and a gaps() bound
-  // there would fail on correct layout. The node block is minWidth:'max-content', so it
-  // must contain its caption whole -- 1px, matching the approval-card check above.
-  //
-  // 1180 is swept after WIDE_WIDTHS (widest first, layout.ts:22) because it is the rail's
-  // 220px floor -- the narrowest the page is allowed to be, and so the rung where 32 mono
-  // characters have the least room. WIDE_WIDTHS alone would leave this oracle resting on
-  // 1280 by a couple of characters.
-  const entryViewport = page.viewportSize()
-  // Whether the STRIP overflowed its own client width, per swept width -- the non-vacuity
-  // control replacing the retired line-box count (the strip cannot wrap). If the strip
-  // never overflows, the no-clipping bound below is proving nothing.
-  const pressure: Array<{ width: number; scrollWidth: number; clientWidth: number }> = []
-  try {
-    for (const width of [...WIDE_WIDTHS, 1180]) {
-      await page.setViewportSize({ width, height: 1080 })
-      await expect(strip).toBeVisible()
-
-      for (const [name, cell] of [['creator', creatorCell], ['validator', validatorCell]] as const) {
-        const nodeBox = await cell.locator('xpath=../..').boundingBox()
-        const cellBox = await cell.boundingBox()
-        expect(nodeBox && cellBox, `the ${name} caption and its node must render at ${width}px`).toBeTruthy()
-        const g = gaps(cellBox!, nodeBox!)
-        expect(g.left, `${name} caption must not start left of its node at ${width}px`).toBeGreaterThanOrEqual(-1)
-        expect(g.right, `${name} caption must not extend right of its node at ${width}px`).toBeGreaterThanOrEqual(-1)
-        // The clipping oracle proper: a squeezed caption reports more scrollWidth than it
-        // can show, which no box comparison can see.
-        const fit = await cell.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-        // An unlaid-out caption reports 0/0 and satisfies the bound below vacuously.
-        expect(fit.clientWidth, `${name} caption must have a laid-out box at ${width}px`).toBeGreaterThan(0)
-        expect(fit.scrollWidth, `${name} caption must not be cut at ${width}px`).toBeLessThanOrEqual(fit.clientWidth + 1)
-      }
-      pressure.push({ width, ...(await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))) })
-    }
-  } finally {
-    if (entryViewport) await page.setViewportSize(entryViewport)
-  }
-
-  // Red here means the bound above went vacuous, not that the page regressed: the page
-  // grew, or the actor shrank, until the longest subject the auth verifier admits fits
-  // every swept width with room to spare. Widen the sweep or lengthen the actor -- do not
-  // delete this.
-  expect(
-    pressure.filter((w) => w.scrollWidth > w.clientWidth),
-    `the unbreakable actor must push the strip past its client width at some swept width, or nothing here can catch a clipped caption:\n${JSON.stringify(pressure)}`,
-  ).not.toHaveLength(0)
-
-  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
-})
-
 // arch §7 A-D: the four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
 // reads inline style PROPS -- it can prove the component ASKED for flex:none/max-content/nowrap,
 // never that a browser delivered them. These four are the only oracle for the delivered layout.
 //
-// The fixture is driven all the way to `failed` on purpose. Terminal, so nothing polls while a
-// viewport sweep measures; and every one of the five nodes is then attributed, two of them by
-// 32-char bare-hex subjects the RLS-scoped resolver cannot name -- which is what makes the strip
-// genuinely wider than its rail at the narrow end, and §7B's no-clipping bound non-vacuous.
+// The fixture is driven all the way to `failed` on purpose: terminal, so nothing polls while a
+// viewport sweep measures. Every node here is a named persona -- the unmembered fixtures this
+// suite used to mint (and B, the no-clipping geometry test they existed for) are gone by design.
 test.describe.serial("detail surface: the state strip's geometry", () => {
-  // 32 bare hex is one of the four lengths uuid.Parse admits (verify.go), so the mock issuer's
-  // token survives the middleware, and no membership names it -- the caption renders whole.
-  const STRIP_CREATOR = 'd4e5f60718293a4b5c6d7e8f90a1b2c3'
-  const STRIP_VALIDATOR = 'f60718293a4b5c6d7e8f90a1b2c3d4e5'
-
   let entityName = ''
   let invoiceNumber = ''
 
   test.beforeAll(async () => {
-    // The two long subjects only CREATE and VALIDATE, so they land on nodes 1 and 2. The
-    // transitions run on PERSONAS.A: the transmit door is role-gated, and an unmembered
-    // subject has no seat to drive it with.
-    const creatorToken = await login({ ...PERSONAS.A, subject: STRIP_CREATOR })
-    const validatorToken = await login({ ...PERSONAS.A, subject: STRIP_VALIDATOR })
+    // All three now log in as the same persona; kept as separate calls to keep the
+    // create/validate/transition call sites below unchanged.
+    const creatorToken = await login(PERSONAS.A)
+    const validatorToken = await login(PERSONAS.A)
     const token = await login(PERSONAS.A)
     entityName = `AUDIT-09 strip ${Date.now()}`
     const entity = await createEntity(creatorToken, { name: entityName, tin: freshTin() })
     invoiceNumber = `INV-AUDIT09-STRIP-${Date.now()}`
     const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
     await validateInvoice(validatorToken, invoice.id)
-    // TransmitClearTx gates the queued edge on a closed run, same as the dead-end fixture above.
+    // TransmitClearTx gates the queued edge on a closed run.
     await approveUntilClosed(invoice.id, await firmApproverTokens())
     await transitionInvoice(token, invoice.id, 'queued')
     await transitionInvoice(token, invoice.id, 'failed')
@@ -2783,43 +2643,6 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
     } finally {
       if (entryViewport) await page.setViewportSize(entryViewport)
     }
-
-    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
-  })
-
-  test('B: no caption is cut, and the strip itself is what overflows', async ({ page }) => {
-    test.setTimeout(90_000)
-    const errors = collectErrors(page)
-    const strip = await openStrip(page)
-    const captions = page.getByTestId('strip-actor')
-
-    // 1180 after WIDE_WIDTHS (widest first, layout.ts:22): the rail's own floor, the rung
-    // where the two 32-char subjects have the least room.
-    const entryViewport = page.viewportSize()
-    const pressure: Array<{ width: number; scrollWidth: number; clientWidth: number }> = []
-    try {
-      for (const width of [...WIDE_WIDTHS, 1180]) {
-        await resizeTo(page, width)
-        await expect(captions).toHaveCount(5)
-        for (const [i, caption] of (await captions.all()).entries()) {
-          const fit = await caption.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-          // An unlaid-out caption reports 0/0 and satisfies the bound below vacuously.
-          expect(fit.clientWidth, `caption ${i} must have a laid-out box at ${width}px`).toBeGreaterThan(0)
-          expect(fit.scrollWidth, `caption ${i} must not be cut at ${width}px`).toBeLessThanOrEqual(fit.clientWidth + 1)
-        }
-        pressure.push({ width, ...(await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))) })
-      }
-    } finally {
-      if (entryViewport) await page.setViewportSize(entryViewport)
-    }
-
-    // Red here means the bound above went vacuous, not that the page regressed: the page grew,
-    // or the captions shrank, until the strip fits every swept width with room to spare and no
-    // clipping is possible. Widen the sweep or lengthen the actors -- do not delete this.
-    expect(
-      pressure.filter((p) => p.scrollWidth > p.clientWidth),
-      `the strip must overflow its own client width at some swept width, or nothing above can catch a clipped caption:\n${JSON.stringify(pressure)}`,
-    ).not.toHaveLength(0)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

@@ -22,6 +22,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // sheetErrorBody is the shared {"error":"..."} envelope, decoded separately
@@ -390,6 +391,27 @@ func TestSheetHandler_NilObjectBodyIs500(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message")
+	}
+}
+
+// TestSheet_SuspendedCallerIs403NotAServerError: db.ErrNotActiveMember from
+// open must route through statusForErr, not the switch's default 500 arm.
+func TestSheet_SuspendedCallerIs403NotAServerError(t *testing.T) {
+	id := testIdentity()
+	open := newFakeDocOpen("data.csv", "text/csv", []byte("Inv No\nINV-1\n"))
+	open.err = db.ErrNotActiveMember
+
+	rec, raw := doSheetRequest(t, open.fn(), &id, open.doc.ID)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a caller the seam refuses (body=%s)", rec.Code, raw)
+	}
+	var resp sheetErrorBody
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("decode error response %s: %v", raw, err)
+	}
+	if resp.Error != db.NotActiveMemberMessage {
+		t.Errorf("error = %q, want %q (body=%s)", resp.Error, db.NotActiveMemberMessage, raw)
 	}
 }
 

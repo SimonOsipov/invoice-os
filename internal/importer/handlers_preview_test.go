@@ -53,6 +53,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // previewBody mirrors the POST /v1/imports/preview response wire shape
@@ -563,5 +564,28 @@ func TestPreviewHandler_ColumnsRowsTotalMatchDirectDecode(t *testing.T) {
 	}
 	if resp.RowsTotal != len(wantRows) {
 		t.Errorf("rows_total = %d, want %d (len of direct Decode's rows)", resp.RowsTotal, len(wantRows))
+	}
+}
+
+// --- AUDIT-12-01 AC-1: a caller the seam refuses gets 403, never 500 -------
+
+// TestPreview_SuspendedCallerIs403NotAServerError: db.ErrNotActiveMember from
+// store must route through statusForErr, not the flat if-err-500 fallback.
+// Mirrors TestPreview_StorageFailureIs500 (handlers_upload_once_test.go),
+// which stays as the regression guard that an unrelated store error still
+// 500s.
+func TestPreview_SuspendedCallerIs403NotAServerError(t *testing.T) {
+	id := testIdentity()
+	store := newFakeDocStore()
+	store.err = db.ErrNotActiveMember
+	body, ct := buildMultipartBody(t, "", "", "data.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+
+	rec, raw, resp := doPreviewUpload(t, store.fn(), &id, ct, body)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a caller the seam refuses (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != db.NotActiveMemberMessage {
+		t.Errorf("error = %q, want %q (body=%s)", resp.Error, db.NotActiveMemberMessage, raw)
 	}
 }

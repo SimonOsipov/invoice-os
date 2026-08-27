@@ -610,13 +610,28 @@ func TestRedCase_E12IgnoringCancellationIsRejected(t *testing.T) {
 
 const redSuiteFile = "contract_red_test.go"
 
+// fset positions both source scans below. Mode 0, so comments are out of the AST and neither
+// scan can be tripped by one.
+var fset = token.NewFileSet()
+
+func parseRedSuite(t *testing.T) *ast.File {
+	t.Helper()
+
+	f, err := parser.ParseFile(fset, redSuiteFile, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", redSuiteFile, err)
+	}
+	return f
+}
+
 // TestContractCorpusNeedsNoRestore (DESIGN LOCK -- see this file's header, including why the
 // fingerprint half needs a non-involutive E05 write and why it passes vacuously in this
 // commit): running every non-slow row leaves a freshly built corpus byte-identical, by SHA-256
 // per case, to one built before the loop; and no function in this file reaches for Cleanup.
 func TestContractCorpusNeedsNoRestore(t *testing.T) {
-	// The scan runs first so a vacuity Fatalf below can never suppress it.
+	// The scans run first so a vacuity Fatalf below can never suppress them.
 	assertNoCleanupCalls(t)
+	assertSlowRowReadsBytesOnlyForLength(t)
 
 	before := corpusFingerprint()
 	var carrying int
@@ -654,22 +669,79 @@ func TestContractCorpusNeedsNoRestore(t *testing.T) {
 	}
 }
 
+const slowRowType = "cancellationBlocking"
+
+// assertSlowRowReadsBytesOnlyForLength fails when the slow row's Extract touches doc.Bytes for
+// anything but len. Skipping that row above is only sound while it never writes: its goroutine
+// is stranded past the fingerprint, so a late write lands where nothing can attribute it --
+// measured on this commit, a deliberate one is caught by nothing, go test -race included. A
+// source scan is the only oracle there can be.
+func assertSlowRowReadsBytesOnlyForLength(t *testing.T) {
+	t.Helper()
+
+	fn := extractMethodOn(t, slowRowType)
+
+	lengths := map[ast.Node]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, isCall := n.(*ast.CallExpr)
+		if !isCall || len(call.Args) != 1 {
+			return true
+		}
+		if id, isID := call.Fun.(*ast.Ident); isID && id.Name == "len" {
+			lengths[call.Args[0]] = true
+		}
+		return true
+	})
+
+	var uses int
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		sel, isSel := n.(*ast.SelectorExpr)
+		if !isSel || sel.Sel.Name != "Bytes" {
+			return true
+		}
+		uses++
+		if !lengths[n] {
+			t.Errorf("%s: %s.Extract reaches doc.Bytes outside len(); its goroutine outlives the corpus fingerprint, so a write here is unattributable",
+				fset.Position(sel.Pos()), slowRowType)
+		}
+		return true
+	})
+	if uses == 0 {
+		t.Fatalf("%s.Extract never mentions doc.Bytes; it no longer keys on size and the scan above passes vacuously", slowRowType)
+	}
+}
+
+// extractMethodOn returns the Extract method declared on recvType in this file.
+func extractMethodOn(t *testing.T, recvType string) *ast.FuncDecl {
+	t.Helper()
+
+	for _, decl := range parseRedSuite(t).Decls {
+		fn, isFn := decl.(*ast.FuncDecl)
+		if !isFn || fn.Name.Name != "Extract" || fn.Recv == nil || len(fn.Recv.List) == 0 {
+			continue
+		}
+		typ := fn.Recv.List[0].Type
+		if star, isStar := typ.(*ast.StarExpr); isStar {
+			typ = star.X
+		}
+		if id, isID := typ.(*ast.Ident); isID && id.Name == recvType {
+			return fn
+		}
+	}
+	t.Fatalf("no Extract method on %s in %s", recvType, redSuiteFile)
+	return nil
+}
+
 // assertNoCleanupCalls fails when any function in this file reaches for Cleanup. The precedent
 // needed restoreL04Corpus (internal/submission/contract_red_test.go:284) because its corpus was
 // a package-level var; here newCorpus is a per-law factory, so no row can leak into another and
 // no hook is needed. Any Cleanup selector counts, not only a call, so a method value handed to
-// a helper is caught too. Mode 0, so comments are not in the AST and this one cannot trip it.
+// a helper is caught too.
 func assertNoCleanupCalls(t *testing.T) {
 	t.Helper()
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, redSuiteFile, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", redSuiteFile, err)
-	}
-
 	var fns int
-	for _, decl := range f.Decls {
+	for _, decl := range parseRedSuite(t).Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok {
 			continue

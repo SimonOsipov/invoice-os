@@ -56,7 +56,7 @@ changed, and it changed for the four tenants above only.
 
 ## What a deploy resets
 
-Eighteen tables, deleted leaf-first so every foreign key stays enforced. The order is the
+Nineteen tables, deleted leaf-first so every foreign key stays enforced. The order is the
 reverse of `db/seed.dev.sql`'s parent-first inserts.
 
 | # | Table | Why it is purged |
@@ -89,7 +89,7 @@ follows the purge inside the same `Provision` call and restores all three.
 `session_replication_role = 'replica'`. Its append-only trigger refuses a `DELETE` even
 from a superuser, and the bypass is transaction-wide while it is on, so the window opens
 around that one statement and closes again. Referential integrity stays enforced for the
-other seventeen deletes.
+other eighteen deletes.
 
 `TestPurgeTableListCoversEveryTenantOwnedTable` asserts that this list plus the four
 exclusions below equals the live schema's full set of `tenant_id`-bearing tables — so a

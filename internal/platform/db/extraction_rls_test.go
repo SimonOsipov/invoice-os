@@ -15,6 +15,8 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"math"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -1154,10 +1156,6 @@ func TestRLS_ExtractionJobsAppHoldsNoDeletePath(t *testing.T) {
 	}
 }
 
-// EJ-21: the Down is complete. DROP TABLE takes the policy, indexes, constraints, grants and
-// trigger with it, but NOT the trigger function — and a reversibility round-trip cannot see
-// the leak, because the Up re-runs CREATE OR REPLACE FUNCTION over the survivor. The shipped
-// Down text is executed for real, inside a transaction that is always rolled back.
 // shippedDownStatements returns the statements of one migration's real `-- +goose Down`
 // block, read from the embedded FS.
 func shippedDownStatements(t *testing.T, glob string) []string {
@@ -1193,6 +1191,10 @@ func shippedDownStatements(t *testing.T, glob string) []string {
 	return stmts
 }
 
+// EJ-21: the Down is complete. DROP TABLE takes the policy, indexes, constraints, grants and
+// trigger with it, but NOT the trigger function — and a reversibility round-trip cannot see
+// the leak, because the Up re-runs CREATE OR REPLACE FUNCTION over the survivor. The shipped
+// Down text is executed for real, inside a transaction that is always rolled back.
 func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -1236,7 +1238,8 @@ func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 
 	for _, s := range stmts {
 		if _, err := tx.Exec(ctx, s); err != nil {
-			t.Fatalf("execute the shipped Down statement %q: %v", s, err)
+			t.Fatalf("execute the shipped Down statement %q: %v — a 2BP01 here means a new table "+
+				"references extraction_jobs and its own migration's Down belongs in the child list above", s, err)
 		}
 	}
 
@@ -2517,5 +2520,371 @@ func TestRLS_ExtractionFieldResultsHasNoUpdatedAtColumnOrTrigger(t *testing.T) {
 	}
 	if triggers != 0 {
 		t.Errorf("non-internal triggers on extraction_field_results = %d, want 0", triggers)
+	}
+}
+
+// EFR-22: the whole column list, in order, with its types, nullability and defaults. The
+// four bbox columns are double precision by D-3 (numeric was rejected); nothing else pinned
+// the type, so a swap changed no test. A DeepEqual over the ordered list also catches a
+// column added, removed or renamed — including an updated_at that EFR-21 would see only as
+// a name.
+func TestRLS_ExtractionFieldResultsColumnShapeAndNullability(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	type column struct {
+		name     string
+		typ      string
+		notNull  bool
+		defaults string
+	}
+	want := []column{
+		{"id", "uuid", true, "gen_random_uuid()"},
+		{"tenant_id", "uuid", true, ""},
+		{"extraction_job_id", "uuid", true, ""},
+		{"field_name", "text", true, ""},
+		{"value", "text", false, ""},
+		{"page", "integer", false, ""},
+		{"bbox_x0", "double precision", false, ""},
+		{"bbox_y0", "double precision", false, ""},
+		{"bbox_x1", "double precision", false, ""},
+		{"bbox_y1", "double precision", false, ""},
+		{"reason_code", "text", false, ""},
+		{"created_at", "timestamp with time zone", true, "now()"},
+	}
+
+	rows, err := h.super.Query(ctx,
+		`SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+		        coalesce(pg_get_expr(d.adbin, d.adrelid), '')
+		   FROM pg_attribute a
+		   LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		  WHERE a.attrelid = 'public.extraction_field_results'::regclass
+		    AND a.attnum > 0 AND NOT a.attisdropped
+		  ORDER BY a.attnum`)
+	if failIfUndefinedFieldResults(t, "query pg_attribute for extraction_field_results", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query pg_attribute for extraction_field_results: %v", err)
+	}
+	defer rows.Close()
+
+	var got []column
+	for rows.Next() {
+		var c column
+		if e := rows.Scan(&c.name, &c.typ, &c.notNull, &c.defaults); e != nil {
+			t.Fatalf("scan pg_attribute row: %v", e)
+		}
+		got = append(got, c)
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate pg_attribute rows: %v", e)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("extraction_field_results columns =\n%v\nwant\n%v", got, want)
+	}
+
+	// The catalog half above says NOT NULL; this half proves it refuses at write time.
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id = ANY($1)`, probes)
+	}()
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-22/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	for _, c := range []struct {
+		col  string
+		cols string
+		vals string
+		args []any
+	}{
+		{"tenant_id", "id, tenant_id, extraction_job_id, field_name", "$1, NULL, $2, $3", nil},
+		{"extraction_job_id", "id, extraction_job_id, tenant_id, field_name", "$1, NULL, $2, $3", nil},
+		{"field_name", "id, field_name, tenant_id, extraction_job_id", "$1, NULL, $2, $3", nil},
+		{"created_at", "id, created_at, tenant_id, extraction_job_id, field_name", "$1, NULL, $2, $3, $4", nil},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		args := []any{id, h.tenantA, jobA, efrField}
+		switch c.col {
+		case "tenant_id":
+			args = []any{id, jobA, efrField}
+		case "extraction_job_id":
+			args = []any{id, h.tenantA, efrField}
+		case "field_name":
+			args = []any{id, h.tenantA, jobA}
+		}
+		_, err := h.super.Exec(ctx,
+			`INSERT INTO extraction_field_results (`+c.cols+`) VALUES (`+c.vals+`)`, args...)
+		if err == nil {
+			t.Errorf("INSERT with %s = NULL succeeded, want not_null_violation (SQLSTATE 23502)", c.col)
+			continue
+		}
+		if code := pgCode(err); code != "23502" {
+			t.Errorf("INSERT with %s = NULL: SQLSTATE = %q, want 23502 (not_null_violation): %v", c.col, code, err)
+		}
+	}
+
+	// The bare insert: every optional column may be omitted, and the two defaults fire.
+	bare := uuid.NewString()
+	probes = append(probes, bare)
+	var value, reason *string
+	var page *int
+	var x0 *float64
+	var created time.Time
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING value, reason_code, page, bbox_x0, created_at`,
+		bare, h.tenantA, jobA, efrField,
+	).Scan(&value, &reason, &page, &x0, &created); err != nil {
+		t.Fatalf("bare INSERT naming only the required columns: want success, got: %v", err)
+	}
+	if value != nil || reason != nil || page != nil || x0 != nil {
+		t.Errorf("bare insert left value=%v reason_code=%v page=%v bbox_x0=%v, want all NULL",
+			value, reason, page, x0)
+	}
+	if created.IsZero() {
+		t.Error("created_at on a bare insert is the zero time, want the transaction's now()")
+	}
+}
+
+// EFR-23: NaN and ±Infinity never reach a bbox column. Postgres orders NaN above every
+// float8, so a NaN that only ever met a `>= 0` conjunct would be stored; the ordering
+// conjuncts are what refuse it. An extractor dividing by a zero page width produces exactly
+// these values.
+func TestRLS_ExtractionFieldResultsNonFiniteBboxRejected(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-23/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	for _, bad := range []struct {
+		label string
+		v     float64
+	}{
+		{"NaN", math.NaN()},
+		{"+Inf", math.Inf(1)},
+		{"-Inf", math.Inf(-1)},
+	} {
+		for _, col := range []string{"bbox_x0", "bbox_y0", "bbox_x1", "bbox_y1"} {
+			r := efrBox()
+			switch col {
+			case "bbox_x0":
+				r.x0 = efrPtr(bad.v)
+			case "bbox_y0":
+				r.y0 = efrPtr(bad.v)
+			case "bbox_x1":
+				r.x1 = efrPtr(bad.v)
+			case "bbox_y1":
+				r.y1 = efrPtr(bad.v)
+			}
+			id := uuid.NewString()
+			err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				return insertFieldResult(ctx, tx, id, h.tenantA, jobA, efrField,
+					efrPtr(efrValue), r, nil)
+			})
+			if failIfUndefinedFieldResults(t, bad.label+" in "+col, err) {
+				return
+			}
+			if code := pgCode(err); code != "23514" {
+				t.Errorf("%s in %s: SQLSTATE = %q, want 23514 (check_violation): %v", bad.label, col, code, err)
+				continue
+			}
+			if name := pgConstraint(err); name != efrBboxNormalised {
+				t.Errorf("%s in %s was refused by %q, want %q", bad.label, col, name, efrBboxNormalised)
+			}
+		}
+	}
+
+	// The control: the same box with every column finite lands, so the twelve rejections
+	// above are about the value and not about the statement shape.
+	okID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, okID)
+	}()
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, okID, h.tenantA, jobA, efrField, efrPtr(efrValue), efrBox(), nil)
+	}); err != nil {
+		t.Fatalf("the same INSERT with a finite box: want success, got: %v", err)
+	}
+}
+
+// EFR-24: _bbox_normalised abstains whenever bbox_x0 IS NULL, so on its own it would let an
+// out-of-range y0 through. _region_complete is what closes that door, and the two are only
+// sound together. Relaxing _region_complete to allow a page-only region silently reopens it.
+func TestRLS_ExtractionFieldResultsHalfWrittenRegionCannotSmuggleABadBox(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-24/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	for _, c := range []struct {
+		label string
+		r     efrRegion
+	}{
+		{"y0 = 5.0", efrRegion{page: efrPtr(1), x0: nil, y0: efrPtr(5.0), x1: efrPtr(0.5), y1: efrPtr(0.5)}},
+		{"x1 = -3", efrRegion{page: efrPtr(1), x0: nil, y0: efrPtr(0.1), x1: efrPtr(-3.0), y1: efrPtr(0.5)}},
+		{"y1 = 42", efrRegion{page: efrPtr(1), x0: nil, y0: efrPtr(0.1), x1: efrPtr(0.5), y1: efrPtr(42.0)}},
+	} {
+		id := uuid.NewString()
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertFieldResult(ctx, tx, id, h.tenantA, jobA, efrField, efrPtr(efrValue), c.r, nil)
+		})
+		if failIfUndefinedFieldResults(t, "half-written region with "+c.label, err) {
+			return
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("bbox_x0 NULL with %s: SQLSTATE = %q, want 23514: %v", c.label, code, err)
+			continue
+		}
+		if name := pgConstraint(err); name != efrRegionComplete {
+			t.Errorf("bbox_x0 NULL with %s was refused by %q, want %q — _bbox_normalised short-circuits "+
+				"on a NULL bbox_x0, so _region_complete is the only thing refusing this row",
+				c.label, name, efrRegionComplete)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, id); n != 0 {
+			t.Errorf("rows after the refused half-written region (%s) = %d, want 0", c.label, n)
+		}
+	}
+}
+
+// EFR-25: one job may carry the same field_name twice. Q16 makes a correction a NEW row that
+// supersedes the old one, so a unique index over (extraction_job_id, field_name) would break
+// EXTR-14 before it is written. Nothing else pins the absence of that index.
+func TestRLS_ExtractionFieldResultsRepeatedFieldNameAccepted(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-25/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	first, second := uuid.NewString(), uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id = ANY($1)`, []string{first, second})
+	}()
+
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if e := insertFieldResult(ctx, tx, first, h.tenantA, jobA, efrField, efrPtr("100.00"), efrRegion{}, nil); e != nil {
+			return e
+		}
+		return insertFieldResult(ctx, tx, second, h.tenantA, jobA, efrField, efrPtr("120.00"), efrRegion{}, nil)
+	}); err != nil {
+		if failIfUndefinedFieldResults(t, "two rows with the same field_name", err) {
+			return
+		}
+		t.Fatalf("two rows with the same field_name on one job: want success (a correction supersedes "+
+			"rather than replaces), got: %v", err)
+	}
+
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM extraction_field_results WHERE extraction_job_id = $1 AND field_name = $2`,
+		jobA, efrField); n != 2 {
+		t.Errorf("rows for (%s, %s) = %d, want 2 — both the superseded value and its correction", jobA, efrField, n)
+	}
+
+	// The catalog half: no unique index reaches field_name at all.
+	n, err := scanCount(ctx, h.super,
+		`SELECT count(*) FROM pg_index x
+		   JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = ANY(x.indkey::int2[])
+		  WHERE x.indrelid = 'public.extraction_field_results'::regclass
+		    AND x.indisunique AND a.attname = 'field_name'`)
+	if err != nil {
+		t.Fatalf("query pg_index for a unique index over field_name: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("unique indexes covering field_name = %d, want 0 — a correction is a new row", n)
+	}
+}
+
+// EFR-26: the RLS half of the write posture. invoice_app holds no UPDATE or DELETE grant
+// (EFR-16), so the owner is the only role that can reach either statement — and FORCE RLS
+// must still confine it to its own tenant. This is what would hold if a later story granted
+// invoice_app UPDATE.
+func TestRLS_ExtractionFieldResultsOwnerCrossTenantWriteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFR-26/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFR-26/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	ownRow, cleanupOwn := seedFieldResult(t, h.tenantA, jobA, efrField)
+	defer cleanupOwn()
+	otherRow, cleanupOther := seedFieldResult(t, h.tenantB, jobB, efrField)
+	defer cleanupOther()
+
+	// B's row is invisible to A, so both statements match nothing rather than erroring.
+	for _, c := range []struct {
+		what string
+		sql  string
+	}{
+		{"UPDATE", `UPDATE extraction_field_results SET value = 'tampered' WHERE id = $1`},
+		{"DELETE", `DELETE FROM extraction_field_results WHERE id = $1`},
+	} {
+		if err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+			ct, e := tx.Exec(ctx, c.sql, otherRow)
+			if e != nil {
+				return e
+			}
+			if ct.RowsAffected() != 0 {
+				t.Errorf("the owner's cross-tenant %s affected %d row(s), want 0", c.what, ct.RowsAffected())
+			}
+			return nil
+		}); err != nil {
+			if failIfUndefinedFieldResults(t, "owner cross-tenant "+c.what, err) {
+				return
+			}
+			t.Fatalf("owner cross-tenant %s: %v", c.what, err)
+		}
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM extraction_field_results WHERE id = $1 AND value = $2`, otherRow, efrValue); n != 1 {
+		t.Errorf("B's row after A's owner-scoped UPDATE and DELETE = %d row(s) with the original value, want 1", n)
+	}
+
+	// Reassigning its own row into B is refused outright: the policy's USING doubles as the
+	// WITH CHECK, so the NEW row is tested too.
+	err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`UPDATE extraction_field_results SET tenant_id = $1 WHERE id = $2`, h.tenantB, ownRow)
+		return e
+	})
+	assertRLSViolation(t, err)
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM extraction_field_results WHERE id = $1 AND tenant_id = $2`, ownRow, h.tenantA); n != 1 {
+		t.Errorf("A's row after the refused reassignment is no longer A's, want 1 row still under tenant A (got %d)", n)
+	}
+
+	// The positive half: the same role CAN update its own row in its own tenant, so the
+	// zeros above are RLS and not a missing privilege.
+	if err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE extraction_field_results SET value = '1.00' WHERE id = $1`, ownRow)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 1 {
+			t.Errorf("the owner's in-tenant UPDATE affected %d row(s), want 1", ct.RowsAffected())
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("owner in-tenant UPDATE: want success, got: %v", err)
 	}
 }

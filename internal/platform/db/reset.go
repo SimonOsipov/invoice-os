@@ -195,10 +195,18 @@ func ResetEnabled(environment, flag string) bool {
 //	                          never be re-established. Truncated in the same
 //	                          statement as its RESTRICT dependents
 //	                          (invoices.source_document_id,
-//	                          import_batches.document_id), which is what makes
+//	                          import_batches.document_id,
+//	                          extraction_jobs.document_id), which is what makes
 //	                          it legal. Object-storage bytes are NOT deleted:
 //	                          they are content-hash keyed and simply re-PUT on
 //	                          the next upload of the same file.
+//	extraction_jobs           one row per document read (EXTR-01). Its
+//	                          composite FK (tenant_id, document_id) is ON
+//	                          DELETE RESTRICT against documents, so it is not
+//	                          optional here: omitting it makes TRUNCATE
+//	                          documents raise 0A000 and the gateway fail to
+//	                          boot in every PR environment
+//	                          (TestResetTruncatesEveryConfiguredTable).
 //	approval_runs,            the run-ledger tables (APPR-03). approval_runs'
 //	approval_run_steps,       (tenant_id, invoice_id) FK is ON DELETE RESTRICT
 //	approval_decisions        against invoices, so omitting it here is exactly

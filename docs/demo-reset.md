@@ -4,7 +4,7 @@
 know what the exception to it actually is, and any operator who has just deployed and is
 looking at a demo environment that does not look right.
 
-Every **gated gateway boot** deletes the four seeded demo tenants' rows from 17
+Every **gated gateway boot** deletes the four seeded demo tenants' rows from 18
 tenant-owned tables, then re-seeds them from `db/seed.dev.sql`. It runs inside
 `db.Provision`, between `Reset` and `Seed` (`internal/platform/db/provision.go`), and the
 primitive is `db.PurgeDemoTenants` (`internal/platform/db/demopurge.go`).

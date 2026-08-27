@@ -12,6 +12,11 @@ package db_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 // The provenance stamp every insert must supply: both columns are NOT NULL with a
@@ -880,5 +886,351 @@ func TestRLS_ExtractionJobsNoUniqueOnDocument(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("verify both jobs persist: %v", err)
+	}
+}
+
+// EJ-17: the state CHECK admits EXACTLY the five values, read off the catalog. EJ-07 probes
+// two near misses by hand, so it cannot see a sixth value added alongside the five.
+func TestRLS_ExtractionJobsStateCheckIsExactlyFiveValues(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	rows, err := h.super.Query(ctx,
+		`SELECT DISTINCT c.conname, pg_get_constraintdef(c.oid)
+		   FROM pg_constraint c
+		   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+		  WHERE c.conrelid = 'public.extraction_jobs'::regclass
+		    AND c.contype = 'c' AND a.attname = 'state'`)
+	if failIfUndefinedExtractionJobs(t, "query the state CHECK definition", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query the state CHECK definition: %v", err)
+	}
+	defer rows.Close()
+
+	var defs []string
+	for rows.Next() {
+		var name, def string
+		if e := rows.Scan(&name, &def); e != nil {
+			t.Fatalf("scan constraint definition: %v", e)
+		}
+		defs = append(defs, def)
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate constraint definitions: %v", e)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("CHECK constraints over extraction_jobs.state = %d (%v), want exactly 1 — a second one "+
+			"would make the value set below only half the story", len(defs), defs)
+	}
+
+	got := regexp.MustCompile(`'([^']*)'::text`).FindAllStringSubmatch(defs[0], -1)
+	var values []string
+	for _, m := range got {
+		values = append(values, m[1])
+	}
+	if len(values) == 0 {
+		t.Fatalf("no quoted values parsed out of %q — the parse is broken, so the comparison below "+
+			"would pass vacuously", defs[0])
+	}
+	sort.Strings(values)
+
+	want := []string{"dead_lettered", "extracting", "failed", "queued", "succeeded"}
+	if !slices.Equal(values, want) {
+		t.Errorf("extraction_jobs.state CHECK admits %v, want exactly %v — the vocabulary is closed, and "+
+			"a sixth value is a state the worker has no branch for\ndefinition: %s", values, want, defs[0])
+	}
+}
+
+// EJ-18: an UPDATE that names another tenant's row by id touches nothing. EJ-06 covers
+// reassigning an OWN row; this covers reaching a row RLS should have hidden from the scan.
+func TestRLS_ExtractionJobsCrossTenantUpdateRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EJ-18/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EJ-18/b.pdf")
+	defer cleanupDocB()
+
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	// Both ids in one predicate: RLS is the only thing that can exclude B's row, and the
+	// statement cannot reach any row this test did not seed.
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx,
+			`UPDATE extraction_jobs SET state = 'failed' WHERE id = ANY($1)`,
+			[]string{jobA, jobB})
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 1 {
+			t.Errorf("UPDATE naming both tenants' rows affected %d, want 1 (A's own row only)", ct.RowsAffected())
+		}
+		return nil
+	})
+	if failIfUndefinedExtractionJobs(t, "cross-tenant UPDATE", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("cross-tenant UPDATE: want silent no-op on B's row, got: %v", err)
+	}
+
+	for _, c := range []struct{ id, want string }{
+		{jobA, "failed"}, // positive half: the statement did land where it was allowed
+		{jobB, "queued"}, // B's row never moved
+	} {
+		var state string
+		if e := h.super.QueryRow(ctx, `SELECT state FROM extraction_jobs WHERE id = $1`, c.id).Scan(&state); e != nil {
+			t.Fatalf("read back state for %s: %v", c.id, e)
+		}
+		if state != c.want {
+			t.Errorf("state of %s after A's UPDATE = %q, want %q", c.id, state, c.want)
+		}
+	}
+}
+
+// EJ-19: which columns a row may omit. Probed as the superuser so NOT NULL is what refuses
+// and no policy is in the way. The nullable half stops this being a blanket "everything is
+// required", which would be a different (and wrong) schema.
+func TestRLS_ExtractionJobsColumnNullabilityAndDefaults(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EJ-19/a.pdf")
+	defer cleanupDoc()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = ANY($1)`, probes)
+	}()
+
+	// Each statement names its columns exactly once: the four required values are supplied
+	// positionally, and the column under test is the one carrying NULL.
+	for _, c := range []struct {
+		col  string
+		cols string
+		vals string
+	}{
+		{"tenant_id", "id, tenant_id, document_id, extractor, extractor_version", "$1, NULL, $2, $3, $4"},
+		{"document_id", "id, document_id, tenant_id, extractor, extractor_version", "$1, NULL, $2, $3, $4"},
+		{"extractor", "id, extractor, tenant_id, document_id, extractor_version", "$1, NULL, $2, $3, $4"},
+		{"extractor_version", "id, extractor_version, tenant_id, document_id, extractor", "$1, NULL, $2, $3, $4"},
+		{"state", "id, state, tenant_id, document_id, extractor, extractor_version", "$1, NULL, $2, $3, $4, $5"},
+		{"attempts", "id, attempts, tenant_id, document_id, extractor, extractor_version", "$1, NULL, $2, $3, $4, $5"},
+		{"created_at", "id, created_at, tenant_id, document_id, extractor, extractor_version", "$1, NULL, $2, $3, $4, $5"},
+		{"updated_at", "id, updated_at, tenant_id, document_id, extractor, extractor_version", "$1, NULL, $2, $3, $4, $5"},
+	} {
+		col := c.col
+		id := uuid.NewString()
+		probes = append(probes, id)
+		args := []any{id, h.tenantA, docA, ejExtractor, ejExtractorVersion}
+		if strings.Count(c.vals, "$") == 4 {
+			// tenant_id/document_id/extractor/extractor_version each drop their own value.
+			switch col {
+			case "tenant_id":
+				args = []any{id, docA, ejExtractor, ejExtractorVersion}
+			case "document_id":
+				args = []any{id, h.tenantA, ejExtractor, ejExtractorVersion}
+			case "extractor":
+				args = []any{id, h.tenantA, docA, ejExtractorVersion}
+			case "extractor_version":
+				args = []any{id, h.tenantA, docA, ejExtractor}
+			}
+		}
+		_, err := h.super.Exec(ctx,
+			`INSERT INTO extraction_jobs (`+c.cols+`) VALUES (`+c.vals+`)`, args...)
+		if failIfUndefinedExtractionJobs(t, "INSERT NULL "+col, err) {
+			return
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s = NULL succeeded, want not_null_violation (SQLSTATE 23502)", col)
+			continue
+		}
+		if code := pgCode(err); code != "23502" {
+			t.Errorf("INSERT with %s = NULL: SQLSTATE = %q, want 23502 (not_null_violation): %v", col, code, err)
+		}
+	}
+
+	// The two genuinely optional columns, plus the defaults a bare insert must produce.
+	bare := uuid.NewString()
+	probes = append(probes, bare)
+	var lastError *string
+	var riverJobID *int64
+	var state string
+	var attempts int
+	var created, updated time.Time
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING last_error, river_job_id, state, attempts, created_at, updated_at`,
+		bare, h.tenantA, docA, ejExtractor, ejExtractorVersion,
+	).Scan(&lastError, &riverJobID, &state, &attempts, &created, &updated); err != nil {
+		t.Fatalf("bare INSERT naming only the required columns: want success, got: %v", err)
+	}
+	if lastError != nil {
+		t.Errorf("last_error on a bare insert = %q, want NULL — a job that has not failed has no error", *lastError)
+	}
+	if riverJobID != nil {
+		t.Errorf("river_job_id on a bare insert = %d, want NULL — the row exists before the job is enqueued", *riverJobID)
+	}
+	if state != "queued" || attempts != 0 {
+		t.Errorf("bare insert defaults = state %q / attempts %d, want %q / 0", state, attempts, "queued")
+	}
+	if !created.Equal(updated) {
+		t.Errorf("created_at %s and updated_at %s differ on insert, want equal — both default to the same "+
+			"transaction now(), and EJ-12's strictly-later assertion depends on it", created, updated)
+	}
+
+	// The optional columns accept a value, and attempts is bounded below only.
+	filled := uuid.NewString()
+	probes = append(probes, filled)
+	var gotErr string
+	var gotRiver int64
+	var gotAttempts int
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version,
+		     last_error, river_job_id, attempts)
+		 VALUES ($1, $2, $3, $4, $5, 'boom', 4242, 2147483647)
+		 RETURNING last_error, river_job_id, attempts`,
+		filled, h.tenantA, docA, ejExtractor, ejExtractorVersion,
+	).Scan(&gotErr, &gotRiver, &gotAttempts); err != nil {
+		t.Fatalf("INSERT filling the optional columns: want success, got: %v", err)
+	}
+	if gotErr != "boom" || gotRiver != 4242 || gotAttempts != 2147483647 {
+		t.Errorf("optional columns round-tripped as %q/%d/%d, want %q/%d/%d",
+			gotErr, gotRiver, gotAttempts, "boom", 4242, 2147483647)
+	}
+}
+
+// EJ-20: the runtime consequence of the grant matrix. EJ-15 reads has_table_privilege; this
+// issues the DELETE the app would issue, so a future GRANT DELETE shows up as a behaviour
+// change and not only as a catalog diff.
+func TestRLS_ExtractionJobsAppHoldsNoDeletePath(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EJ-20/a.pdf")
+	defer cleanupDoc()
+	jobID, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM extraction_jobs WHERE id = $1`, jobID)
+		return e
+	})
+	if failIfUndefinedExtractionJobs(t, "app DELETE", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("invoice_app deleted an extraction_jobs row, want permission denied (SQLSTATE 42501) — " +
+			"the demo purge runs as superuser precisely because no request path may delete here")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("app DELETE: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, jobID); n != 1 {
+		t.Errorf("rows after the refused DELETE = %d, want 1", n)
+	}
+
+	// Positive half, own tx: the same role CAN update the same row, so the 42501 is about
+	// DELETE and not about the row being unreachable.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE extraction_jobs SET state = 'extracting' WHERE id = $1`, jobID)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 1 {
+			t.Errorf("in-tenant UPDATE affected %d rows, want 1", ct.RowsAffected())
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("in-tenant UPDATE by the same role: want success, got: %v", err)
+	}
+}
+
+// EJ-21: the Down is complete. DROP TABLE takes the policy, indexes, constraints, grants and
+// trigger with it, but NOT the trigger function — and a reversibility round-trip cannot see
+// the leak, because the Up re-runs CREATE OR REPLACE FUNCTION over the survivor. The shipped
+// Down text is executed for real, inside a transaction that is always rolled back.
+func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	matches, err := fs.Glob(migrations.FS, "*_extraction_jobs.sql")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("glob *_extraction_jobs.sql in migrations.FS = %v (err %v), want exactly one file", matches, err)
+	}
+	raw, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("read %s: %v", matches[0], err)
+	}
+	_, after, found := strings.Cut(string(raw), "-- +goose Down")
+	if !found {
+		t.Fatalf("%s has no `-- +goose Down` marker", matches[0])
+	}
+
+	// Comments come out line-wise BEFORE the split: a prose semicolon inside one would
+	// otherwise cut the block mid-sentence and leave the tail glued to the next statement.
+	var body []string
+	for _, line := range strings.Split(after, "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "--") {
+			body = append(body, l)
+		}
+	}
+	var stmts []string
+	for _, s := range strings.Split(strings.Join(body, " "), ";") {
+		if s := strings.TrimSpace(s); s != "" {
+			stmts = append(stmts, s)
+		}
+	}
+	if len(stmts) != 2 {
+		t.Fatalf("parsed %d statement(s) out of the Down block (%v), want 2 — DROP TABLE and DROP FUNCTION",
+			len(stmts), stmts)
+	}
+
+	const fn = "extraction_jobs_touch_updated_at"
+	if n := mustCount(t, h.super, `SELECT count(*) FROM pg_proc WHERE proname = $1`, fn); n != 1 {
+		t.Fatalf("pg_proc rows named %s before the Down = %d, want 1 — the assertion below would pass "+
+			"vacuously against a function that was never there", fn, n)
+	}
+
+	// The migrator owns both objects, so it is the identity goose runs the Down as.
+	tx, err := h.mig.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() {
+		if e := tx.Rollback(context.Background()); e != nil && !errors.Is(e, pgx.ErrTxClosed) {
+			t.Errorf("rollback the Down probe: %v", e)
+		}
+	}()
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
+		t.Fatalf("set lock_timeout: %v", err)
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(ctx, s); err != nil {
+			t.Fatalf("execute the shipped Down statement %q: %v", s, err)
+		}
+	}
+
+	var stillThere *string
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('public.extraction_jobs')::text`).Scan(&stillThere); err != nil {
+		t.Fatalf("to_regclass after the Down: %v", err)
+	}
+	if stillThere != nil {
+		t.Errorf("extraction_jobs still exists after the Down, want dropped")
+	}
+	var fnRows int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM pg_proc WHERE proname = $1`, fn).Scan(&fnRows); err != nil {
+		t.Fatalf("count pg_proc after the Down: %v", err)
+	}
+	if fnRows != 0 {
+		t.Errorf("%s survives the Down (%d row(s)), want 0 — DROP TABLE does not take the trigger "+
+			"function with it, so the Down must drop it explicitly", fn, fnRows)
 	}
 }

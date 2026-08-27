@@ -1,52 +1,47 @@
-// contract_red_test.go: the RED half of the twelve-law contract suite -- fifteen deliberately
+// contract_red_test.go: the RED half of the twelve-law contract suite -- twenty deliberately
 // broken extractors, graded by the EXACT set of law ids RunExtractorContract records. Nothing
 // in contract_test.go proves the suite REJECTS a bad extractor; this file is what does.
 //
 // HONEST FRAMING (do not relabel any spec below without re-reading this):
 //   - TestAllLaws_EveryLawHasADemonstratedRed was the ONE genuinely red-first spec here.
-//     Against the empty table the previous commit shipped, it failed on twelve assertions, one
-//     per orphaned law id. It is green from this commit because the table carries all twelve.
+//     Against the empty table an earlier commit shipped, it failed on twelve assertions, one
+//     per orphaned law id. It is green now because the table carries all twelve.
 //   - TestContractSuite_RejectsNonConformingExtractors was red in that commit on a VACUITY
 //     GUARD -- zero rows for twelve laws -- and not on any law. That is not a law transition
-//     and must not be sold as one. From here on it is what drives all fifteen rows.
-//   - The six TestRedCase_* specs are EXECUTABLE PROOF, green from their first run. They could
-//     not compile before the table existed, and a build failure is not a red test. Their value
-//     was shown by breaking the law each one names instead: see the mutation table below.
+//     and must not be sold as one. From here on it is what drives all twenty rows.
+//   - The six TestRedCase_* specs are EXECUTABLE PROOF, green from their first run, and each
+//     is REDUNDANT with a table row: same factory, same want, same grading helper. Measured --
+//     no mutation moves a named spec without also moving its row. They buy a name in the test
+//     output and nothing else, so do not count them twice.
 //   - TestContractCorpusNeedsNoRestore is a DESIGN LOCK, never red-first.
 //
-// MEASURED ON THIS COMMIT -- every row watched FAILING, not merely watched passing. Each law
-// was disabled in contract_test.go one at a time, the package run, and the mutation reverted.
-// Every row moved when and only when its own half of a law went, and
+// ONE ROW PER EMISSION SITE, measured rather than assumed. The runner holds 20 law-prefixed
+// Errorf sites. Each was disabled in turn, as an if false && guard rather than a deletion:
+// deleting a block orphans a local and fails to COMPILE, and a build failure greps identically
+// to nothing having gone red. All 20 moved EXACTLY ONE row and nothing else, and
 // TestAllLaws_IdsAreUniqueAndUsed stayed GREEN throughout: a static scan cannot tell a live law
-// from dead code, which is the limit contract_test.go:24-29 states and this file closes. Two of
-// those results are what earn a law its second row: deleting E04's ERROR arm leaves
-// TestRedCase_E04NilSliceIsRejected green, and deleting the E12 watchdog (:506) leaves the
-// whole repository green but the blocking row.
+// from dead code, which is the limit contract_test.go:24-29 states and this file closes.
 //
-// THE UNIT THIS TABLE GUARDS IS THE ROW, NOT THE EMISSION SITE, and the gap is measured rather
-// than assumed. Fifteen rows exercise all 20 of the runner's law-prefixed Errorf sites -- each
-// site attributed to exactly one row -- but only 10 of them are individually guarded. The other
-// ten are five PAIRS that a single row trips together: :358/:361, :364/:367, :370/:373,
-// :490/:493 and :514/:517. Disabling either half of a pair alone leaves the WHOLE REPOSITORY
-// GREEN; only the pair moves its row. Set equality grades law ids, so it cannot see half a law
-// go missing. Splitting those five rows would close it at twenty rows, one per site: a wider
-// table than this story asks for, left as a finding rather than built without one.
+// A LAW ID SET CANNOT SEE HALF A LAW GO MISSING. That is why E01, E02, E03, E11 and E12 carry a
+// row per site rather than one row tripping a pair: before the split, disabling either half of
+// a pair alone left the WHOLE REPOSITORY GREEN. It cannot see the WATCHDOG site at all --
+// disable contract_test.go:505 and callExtractCancelled hands back (nil, nil), so the nil-error
+// site records E12 in its place and the id set is identical either way. That one row is graded
+// on the recorded TEXT as well, through redCase.wantMessage.
 //
-// THE FINGERPRINT HALF ONLY DISCRIMINATES IF THE E05 ROW'S WRITE IS NON-INVOLUTIVE. Measured
-// on this story: against a memoised newCorpus -- the shared corpus this locks out -- an E05 row
-// writing doc.Bytes[0] ^= 0xFF leaves this test GREEN, because a SHARED blob then takes eight
-// live Extract calls and the XOR undoes itself before the second fingerprint is taken. (Under
-// the shipped factory each fresh blob takes exactly one, so the parity is a property of the
-// mutant, not of the runner.) The shipped row writes doc.Bytes[0]++ and the same mutant goes
-// red naming all four byte-carrying cases -- re-measured here, not inherited. Make that write
-// involutive and this test becomes decoration with nothing else to say so.
+// THE FINGERPRINT HALF ONLY DISCRIMINATES IF THE E05 ROW'S WRITE IS NON-INVOLUTIVE, re-measured
+// on this commit against a memoised newCorpus -- the shared corpus this locks out. The shipped
+// doc.Bytes[0]++ goes RED naming all four byte-carrying cases; doc.Bytes[0] ^= 0xFF leaves it
+// GREEN, because a shared blob takes eight live Extract calls and the XOR undoes itself before
+// the second fingerprint. Make that write involutive and this test becomes decoration.
 //
 // It ranges redCases itself rather than depending on running after the table. "After the full
 // red table runs" is not a property of a Go test: -run and -shuffle both change ordering, and a
 // filtered CI run would make it vacuous. The one slow row is excluded because it costs a full
-// cancelledExtractBudget. That row's Extract never indexes doc.Bytes, which is what makes the
-// exclusion sound: callExtractCancelled strands its goroutine for the binary's life, so a late
-// write through the bytes it still holds would land inside some other test entirely.
+// cancelledExtractBudget, which is sound only while that row never writes through doc.Bytes:
+// callExtractCancelled strands its goroutine past the fingerprint, and a deliberate late write
+// there is caught by nothing, go test -race included. assertSlowRowReadsBytesOnlyForLength is
+// that claim made executable, because a source scan is the only oracle there can be.
 //
 // OVERLAP, stated rather than implied: TestCorpusIsFreshPerLaw (contract_test.go) subsumes the
 // fingerprint half FOR CORPUS-ALIASING MUTATIONS, not entirely. It calls newCorpus twice back
@@ -109,8 +104,8 @@ type redCase struct {
 	wantMessage string
 
 	// slow marks the E12 watchdog row, which costs a full cancelledExtractBudget.
-	// TestContractCorpusNeedsNoRestore skips it, which is only sound while that row's Extract
-	// never indexes doc.Bytes -- see this file's header.
+	// TestContractCorpusNeedsNoRestore skips it and assertSlowRowReadsBytesOnlyForLength keeps
+	// that skip sound.
 	slow bool
 }
 

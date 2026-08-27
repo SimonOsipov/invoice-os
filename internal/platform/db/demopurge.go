@@ -24,7 +24,7 @@ var DemoTenants = []string{
 	"22222222-2222-2222-2222-222222222222",
 }
 
-// purgeTables is the delete order, leaf-first, so all sixteen FK-bearing
+// purgeTables is the delete order, leaf-first, so all seventeen FK-bearing
 // deletes succeed under full referential-integrity enforcement. It is the
 // reverse of seed.dev.sql's parent-first inserts, which deadlocks two
 // concurrent boots unless they are serialized (lockProvisionTail,
@@ -48,6 +48,7 @@ var purgeTables = []string{
 	"invoices",
 	"import_batches",
 	"business_entities",
+	"extraction_jobs",
 	"documents",
 	"idempotency_keys",
 	"submission_rate_limits",
@@ -81,7 +82,7 @@ const (
 )
 
 // purgeGuards open the purge transaction. 'origin' is set explicitly because
-// the bypass suppresses referential integrity transaction-wide: the sixteen
+// the bypass suppresses referential integrity transaction-wide: the seventeen
 // ordered deletes must stay checked, so a future reorder of purgeTables fails
 // loudly instead of silently orphaning rows. The purge runs at gateway boot, so
 // the two timeouts make it fail rather than hold the boot open behind someone
@@ -197,7 +198,7 @@ func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, er
 }
 
 // purgeWithin issues the whole purge inside a caller-owned transaction: the
-// three SET LOCAL guards, the sixteen FK-bearing deletes under 'origin', then
+// three SET LOCAL guards, the seventeen FK-bearing deletes under 'origin', then
 // the audit_log delete inside the 'replica' window. The seam exists so a test
 // can trace the statements and re-run the purge over an extended tenant list
 // inside a rolled-back transaction.

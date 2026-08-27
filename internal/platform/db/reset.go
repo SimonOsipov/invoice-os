@@ -286,7 +286,7 @@ func ResetEnabled(environment, flag string) bool {
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
-	documents,
+	documents, extraction_jobs,
 	approval_runs, approval_run_steps, approval_decisions,
 	river_job, river_leader, river_queue, river_notification
 RESTART IDENTITY`

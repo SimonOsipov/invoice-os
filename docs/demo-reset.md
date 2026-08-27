@@ -56,7 +56,7 @@ changed, and it changed for the four tenants above only.
 
 ## What a deploy resets
 
-Seventeen tables, deleted leaf-first so every foreign key stays enforced. The order is the
+Eighteen tables, deleted leaf-first so every foreign key stays enforced. The order is the
 reverse of `db/seed.dev.sql`'s parent-first inserts.
 
 | # | Table | Why it is purged |
@@ -71,13 +71,14 @@ reverse of `db/seed.dev.sql`'s parent-first inserts.
 | 8 | `invoices` | the demo register itself — the curated portfolio the seed re-creates |
 | 9 | `import_batches` | demo import runs; nothing re-links them, so a survivor would point at deleted invoices |
 | 10 | `business_entities` | the curated demo supplier portfolio, re-inserted by the seed |
-| 11 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
-| 12 | `idempotency_keys` | the demo dedupe ledger; a surviving key would make a re-run of a demo submission a silent no-op |
-| 13 | `submission_rate_limits` | the demo per-tenant rate window, which would otherwise carry the last demo's budget forward |
-| 14 | `invitations` | the seed inserts none, so **zero is their seeded state**; an invitation a demo created must not outlive it |
-| 15 | `workflow_role_members` | demo staffing; `db.Seed` restores all 13 rows in the same `Provision` call |
-| 16 | `workflow_roles` | demo seats; `db.Seed` restores all 14 under their literal seeded ids |
-| 17 | `audit_log` | every audit row the four demo tenants accumulated — see the reading note at the bottom of this page |
+| 11 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
+| 12 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
+| 13 | `idempotency_keys` | the demo dedupe ledger; a surviving key would make a re-run of a demo submission a silent no-op |
+| 14 | `submission_rate_limits` | the demo per-tenant rate window, which would otherwise carry the last demo's budget forward |
+| 15 | `invitations` | the seed inserts none, so **zero is their seeded state**; an invitation a demo created must not outlive it |
+| 16 | `workflow_role_members` | demo staffing; `db.Seed` restores all 13 rows in the same `Provision` call |
+| 17 | `workflow_roles` | demo seats; `db.Seed` restores all 14 under their literal seeded ids |
+| 18 | `audit_log` | every audit row the four demo tenants accumulated — see the reading note at the bottom of this page |
 
 This list is deliberately **wider** than `db.Reset`'s, which spares `invitations`,
 `workflow_roles` and `workflow_role_members`. It can be wider precisely because `db.Seed`
@@ -87,7 +88,7 @@ follows the purge inside the same `Provision` call and restores all three.
 `session_replication_role = 'replica'`. Its append-only trigger refuses a `DELETE` even
 from a superuser, and the bypass is transaction-wide while it is on, so the window opens
 around that one statement and closes again. Referential integrity stays enforced for the
-other sixteen deletes.
+other seventeen deletes.
 
 `TestPurgeTableListCoversEveryTenantOwnedTable` asserts that this list plus the four
 exclusions below equals the live schema's full set of `tenant_id`-bearing tables — so a

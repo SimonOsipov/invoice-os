@@ -84,12 +84,14 @@ func healthyMap() dsnMap {
 	for _, svc := range []string{"tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications"} {
 		m[svc] = map[string]string{"DATABASE_URL": app}
 	}
-	// The five DOCUMENT_* rows are Required since DOC-01-03, so a fleet without
-	// them is not healthy -- cmd/invoice/main.go fatals at boot on any one being
-	// unset. Absence is asserted on explicitly in
-	// TestCheckDSNs_DocumentVarsAreRequired, which deletes them again.
-	for k, v := range documentVars() {
-		m["invoice"][k] = v
+	// The five DOCUMENT_* rows are Required for both services that call
+	// document.ConfigFromEnv at boot, so a fleet without them is not healthy.
+	// Absence is asserted on explicitly in TestCheckDSNs_DocumentVarsAreRequired,
+	// which deletes them again.
+	for _, svc := range documentServices() {
+		for k, v := range documentVars() {
+			m[svc][k] = v
+		}
 	}
 	return m
 }

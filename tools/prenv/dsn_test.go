@@ -58,26 +58,34 @@ func documentVarNames() []string {
 	return names
 }
 
-// documentMap is healthyMap with the invoice service carrying all five rendered
-// DOCUMENT_* variables. Since the DOC-01-03 flip healthyMap already carries
-// them; kept because it names what the call sites below are about.
+// documentServices are the services whose main() calls document.ConfigFromEnv
+// at boot, so an absent DOCUMENT_* variable is a crash-loop rather than a
+// degraded mode. Named here, not derived from DSNRequirements: a table that
+// dropped a service would then silently drop its own coverage too.
+func documentServices() []string { return []string{"invoice", "submission"} }
+
+// documentMap is healthyMap with every document service carrying all five
+// rendered DOCUMENT_* variables. healthyMap already carries them; kept because
+// it names what the call sites below are about.
 func documentMap() dsnMap {
 	m := healthyMap()
-	for k, v := range documentVars() {
-		m["invoice"][k] = v
+	for _, svc := range documentServices() {
+		for k, v := range documentVars() {
+			m[svc][k] = v
+		}
 	}
 	return m
 }
 
 // requireDocumentRows fails the caller unless the severity table carries the
-// five invoice DOCUMENT_* rows. Without it every "this input is clean"
-// assertion in this file passes vacuously against today's table, which cannot
-// flag a variable it does not know exists.
-func requireDocumentRows(t *testing.T) {
+// five DOCUMENT_* rows for service. Without it every "this input is clean"
+// assertion in this file passes vacuously against a table that cannot flag a
+// variable it does not know exists.
+func requireDocumentRows(t *testing.T, service string) {
 	t.Helper()
 	have := map[string]bool{}
 	for _, req := range DSNRequirements {
-		if req.Service == "invoice" && strings.HasPrefix(req.Variable, "DOCUMENT_") {
+		if req.Service == service && strings.HasPrefix(req.Variable, "DOCUMENT_") {
 			have[req.Variable] = true
 		}
 	}
@@ -88,7 +96,7 @@ func requireDocumentRows(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("DSNRequirements carries no invoice row for %v. The DSNRequirements table in tools/prenv/dsn.go must gain the five DOCUMENT_* rows (Required, KindOpaque); until then this assertion passes for the wrong reason -- the table cannot flag a variable it does not know about.", missing)
+		t.Fatalf("DSNRequirements carries no %s row for %v. The DSNRequirements table in tools/prenv/dsn.go must gain the five DOCUMENT_* rows (Required, KindOpaque) for that service; until then this assertion passes for the wrong reason -- the table cannot flag a variable it does not know about.", service, missing)
 	}
 }
 
@@ -101,51 +109,55 @@ func offenderStrings(offenders []Offender) []string {
 	return out
 }
 
-// T-DOC-1. The five DOCUMENT_* rows are required, and it takes BOTH directions
-// to pin that -- same shape as T1-6/T1-7 for notifications.DATABASE_URL.
+// T-DOC-1. The five DOCUMENT_* rows are required for every service that boots
+// on them, and it takes BOTH directions to pin that -- same shape as T1-6/T1-7
+// for notifications.DATABASE_URL.
 //
-// Absent is an offender since DOC-01-03: cmd/invoice/main.go fatals at boot on
-// any one of the five being unset, so an absent variable is a crash-loop rather
-// than a degraded mode. Present-but-empty is the fork-rendering failure mode
-// itself.
+// Absent is an offender: the service main() fatals at boot on any one of the
+// five being unset, so an absent variable is a crash-loop rather than a degraded
+// mode. Present-but-empty is the fork-rendering failure mode itself.
 func TestCheckDSNs_DocumentVarsAreRequired(t *testing.T) {
-	t.Run("absent is an offender", func(t *testing.T) {
-		requireDocumentRows(t)
+	for _, svc := range documentServices() {
+		t.Run(svc, func(t *testing.T) {
+			t.Run("absent is an offender", func(t *testing.T) {
+				requireDocumentRows(t, svc)
 
-		// Built by walking the table so the expected order matches CheckDSNs'
-		// walk rather than documentVarNames' alphabetical sort.
-		var want []Offender
-		for _, req := range DSNRequirements {
-			if req.Service == "invoice" && strings.HasPrefix(req.Variable, "DOCUMENT_") {
-				want = append(want, Offender{"invoice", req.Variable, DefectMissing})
-			}
-		}
+				// Built by walking the table so the expected order matches
+				// CheckDSNs' walk rather than documentVarNames' alphabetical sort.
+				var want []Offender
+				for _, req := range DSNRequirements {
+					if req.Service == svc && strings.HasPrefix(req.Variable, "DOCUMENT_") {
+						want = append(want, Offender{svc, req.Variable, DefectMissing})
+					}
+				}
 
-		m := healthyMap()
-		for _, name := range documentVarNames() {
-			delete(m["invoice"], name)
-		}
-
-		offenders := CheckDSNs(m)
-		if !reflect.DeepEqual(offenders, want) {
-			t.Errorf("offenders = %v, want %v: a healthy fleet with no DOCUMENT_* variables must report all five -- cmd/invoice/main.go cannot boot without them.", offenderStrings(offenders), offenderStrings(want))
-		}
-	})
-
-	t.Run("present but empty is an offender", func(t *testing.T) {
-		for _, name := range documentVarNames() {
-			t.Run(name, func(t *testing.T) {
-				m := documentMap()
-				m["invoice"][name] = ""
+				m := healthyMap()
+				for _, name := range documentVarNames() {
+					delete(m[svc], name)
+				}
 
 				offenders := CheckDSNs(m)
-				want := []Offender{{"invoice", name, DefectEmptyValue}}
 				if !reflect.DeepEqual(offenders, want) {
-					t.Errorf("offenders = %v, want %v: an empty %s means the ${{source-documents.*}} reference resolved to nothing -- IfPresent never means 'do not check'.", offenderStrings(offenders), offenderStrings(want), name)
+					t.Errorf("offenders = %v, want %v: a healthy fleet with no %s DOCUMENT_* variables must report all five -- that service cannot boot without them.", offenderStrings(offenders), offenderStrings(want), svc)
 				}
 			})
-		}
-	})
+
+			t.Run("present but empty is an offender", func(t *testing.T) {
+				for _, name := range documentVarNames() {
+					t.Run(name, func(t *testing.T) {
+						m := documentMap()
+						m[svc][name] = ""
+
+						offenders := CheckDSNs(m)
+						want := []Offender{{svc, name, DefectEmptyValue}}
+						if !reflect.DeepEqual(offenders, want) {
+							t.Errorf("offenders = %v, want %v: an empty %s means the ${{source-documents.*}} reference resolved to nothing -- IfPresent never means \"do not check\".", offenderStrings(offenders), offenderStrings(want), name)
+						}
+					})
+				}
+			})
+		})
+	}
 }
 
 // T-DOC-2. An unrendered reference is its own defect with its own remedy (fix
@@ -173,7 +185,7 @@ func TestCheckDSNs_OpaqueUnrenderedIsOffender(t *testing.T) {
 // NON-VACUITY: each value goes through inspectDSN first and must be reported
 // BAD there, which is what proves the case discriminates the two kinds.
 func TestCheckDSNs_OpaqueSkipsURLChecks(t *testing.T) {
-	requireDocumentRows(t)
+	requireDocumentRows(t, "invoice")
 
 	cases := []struct {
 		variable string
@@ -315,47 +327,51 @@ func TestDSNRequirementKindIsTheStrictZeroValue(t *testing.T) {
 	}
 }
 
-// T-DOC-7. The table itself: exactly five invoice DOCUMENT_* rows, all
-// Required, all one and the same non-zero Kind.
-func TestDSNRequirementsCoverInvoiceDocumentVars(t *testing.T) {
+// T-DOC-7. The table itself: exactly five DOCUMENT_* rows per document service,
+// all Required, all one and the same non-zero Kind.
+func TestDSNRequirementsCoverDocumentVars(t *testing.T) {
 	if len(DSNRequirements) == 0 {
 		t.Fatalf("DSNRequirements is empty -- every check below would pass vacuously")
 	}
 
-	var documentRows []DSNRequirement
-	for _, req := range DSNRequirements {
-		if req.Service == "invoice" && strings.HasPrefix(req.Variable, "DOCUMENT_") {
-			documentRows = append(documentRows, req)
-		}
-	}
+	for _, svc := range documentServices() {
+		t.Run(svc, func(t *testing.T) {
+			var documentRows []DSNRequirement
+			for _, req := range DSNRequirements {
+				if req.Service == svc && strings.HasPrefix(req.Variable, "DOCUMENT_") {
+					documentRows = append(documentRows, req)
+				}
+			}
 
-	var gotNames []string
-	for _, req := range documentRows {
-		gotNames = append(gotNames, req.Variable)
-	}
-	sort.Strings(gotNames)
-	if !reflect.DeepEqual(gotNames, documentVarNames()) {
-		t.Fatalf("invoice DOCUMENT_* rows = %v, want exactly %v. These five are the complete set Railway exposes for a bucket; a missing row is a variable the gate never inspects, and an extra one is a variable that does not exist.", gotNames, documentVarNames())
-	}
+			var gotNames []string
+			for _, req := range documentRows {
+				gotNames = append(gotNames, req.Variable)
+			}
+			sort.Strings(gotNames)
+			if !reflect.DeepEqual(gotNames, documentVarNames()) {
+				t.Fatalf("%s DOCUMENT_* rows = %v, want exactly %v. These five are the complete set Railway exposes for a bucket; a missing row is a variable the gate never inspects, and an extra one is a variable that does not exist.", svc, gotNames, documentVarNames())
+			}
 
-	for _, req := range documentRows {
-		if req.Severity != Required {
-			t.Errorf("row %s %s has severity %v, want Required. cmd/invoice/main.go calls document.ConfigFromEnv at boot and fatals on any one of the five being unset (DOC-01-03), which is exactly what Required states; downgrading it would let the gate pass an environment the invoice service cannot boot in.", req.Service, req.Variable, req.Severity)
-		}
-	}
+			for _, req := range documentRows {
+				if req.Severity != Required {
+					t.Errorf("row %s %s has severity %v, want Required. That service main() calls document.ConfigFromEnv at boot and fatals on any one of the five being unset, which is exactly what Required states; downgrading it would let the gate pass an environment the service cannot boot in.", req.Service, req.Variable, req.Severity)
+				}
+			}
 
-	opaque := map[int64][]string{}
-	for _, req := range documentRows {
-		k := kindOf(t, req)
-		opaque[k] = append(opaque[k], req.Variable)
-	}
-	if len(opaque) != 1 {
-		t.Fatalf("the five DOCUMENT_* rows carry %d different Kind values (%v), want one shared KindOpaque", len(opaque), opaque)
-	}
-	for k, vars := range opaque {
-		if k == 0 {
-			t.Errorf("rows %v carry the zero Kind (KindDSN), want KindOpaque: an access key id is not a URL and has no password component, so the DSN checks would flag every healthy environment.", vars)
-		}
+			opaque := map[int64][]string{}
+			for _, req := range documentRows {
+				k := kindOf(t, req)
+				opaque[k] = append(opaque[k], req.Variable)
+			}
+			if len(opaque) != 1 {
+				t.Fatalf("the five %s DOCUMENT_* rows carry %d different Kind values (%v), want one shared KindOpaque", svc, len(opaque), opaque)
+			}
+			for k, vars := range opaque {
+				if k == 0 {
+					t.Errorf("rows %v carry the zero Kind (KindDSN), want KindOpaque: an access key id is not a URL and has no password component, so the DSN checks would flag every healthy environment.", vars)
+				}
+			}
+		})
 	}
 }
 

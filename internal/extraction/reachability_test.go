@@ -1,0 +1,332 @@
+// reachability_test.go: the two absence guards that fence the mock out of any live path. The
+// compiler already refuses to let another package name the unexported args type; these close
+// the routes it cannot -- a live file naming the type after a rename, and this package growing
+// its own exported enqueue surface.
+//
+// Both are green from the start. Their value is the control needle and the floor: an absence
+// scan that reached nothing reports all-clear, which reads exactly like a clean repo.
+//
+// Mode 0 parsing: comments are never attached to the AST, so a banned name inside a comment
+// cannot fail either scan. This file carries no skip call and no database-DSN variable name:
+// internal/tools/rlsgate/ci_registration_test.go classifies a package DB-gated when both appear
+// in one file raw bytes.
+package extraction_test
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// rxRepoRoot locates the worktree root. go test runs with cwd set to this package directory.
+func rxRepoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		t.Fatal("git reported an empty worktree root; the walk below would read nothing")
+	}
+	return root
+}
+
+// TestNoNonTestCodeNamesTheExtractionArgsType: AC #5, source half. Ident-only, because
+// ast.Walk visits SelectorExpr.Sel as an *ast.Ident -- so this one match catches a struct
+// field type, a var, a slice, a map value, a pointer, a composite literal, a type assertion, a
+// func parameter and a type alias alike. ast.File.Unresolved is the wrong instrument here: it
+// holds only bare identifiers unresolved in file scope, so every qualified reference
+// contributes the package identifier and never the selector.
+func TestNoNonTestCodeNamesTheExtractionArgsType(t *testing.T) {
+	root := rxRepoRoot(t)
+	banned := map[string]bool{"extractArgs": true, "ExtractArgs": true}
+	needles := map[string]bool{"SubmitArgs": true, "EnqueueTx": true}
+
+	const controlFile = "internal/invoice/batch_submit.go"
+
+	offenders := map[string][]string{}
+	needleHits := map[string]map[string]bool{}
+	var parsed []string
+
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch filepath.Base(path) {
+			case ".git", ".claude", "node_modules", "frontend", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "internal/extraction/") {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return perr
+		}
+		parsed = append(parsed, rel)
+		ast.Inspect(f, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if banned[id.Name] {
+				offenders[rel] = append(offenders[rel], id.Name)
+			}
+			if needles[id.Name] {
+				if needleHits[rel] == nil {
+					needleHits[rel] = map[string]bool{}
+				}
+				needleHits[rel][id.Name] = true
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+
+	cmdFiles := 0
+	inPopulation := false
+	for _, rel := range parsed {
+		if strings.HasPrefix(rel, "cmd/") {
+			cmdFiles++
+		}
+		if rel == controlFile {
+			inPopulation = true
+		}
+	}
+	if len(parsed) < 130 || cmdFiles < 1 {
+		t.Fatalf("the walk parsed %d non-test .go file(s), %d of them under cmd/, want at least 130 and at least 1 -- a clean report over a broken walk means nothing", len(parsed), cmdFiles)
+	}
+	if !inPopulation {
+		t.Fatalf("%s is not in the walked population; the control needle below cannot prove anything", controlFile)
+	}
+	// The control shares this walk and this ast.Inspect closure. Parsing it separately would
+	// prove the matcher compiles, not that the walk reached anything.
+	for name := range needles {
+		if !needleHits[controlFile][name] {
+			t.Fatalf("the walk did not find the identifier %s in %s; it can no longer find a planted hit, so the absence reported below means nothing", name, controlFile)
+		}
+	}
+
+	if len(offenders) > 0 {
+		files := make([]string, 0, len(offenders))
+		for rel := range offenders {
+			files = append(files, rel)
+		}
+		sort.Strings(files)
+		for _, rel := range files {
+			t.Errorf("%s names %v: the extraction args type is unexported so no live path can construct one, and a package that names it has either re-exported it or grown a second definition", rel, offenders[rel])
+		}
+	}
+}
+
+// rxExtractionFiles parses this package own non-test files. Returns them keyed by file name so
+// a failure can say where.
+func rxExtractionFiles(t *testing.T) map[string]*ast.File {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read internal/extraction: %v", err)
+	}
+	out := map[string]*ast.File{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, _ := mxParse(t, name)
+		out[name] = f
+	}
+	if len(out) < 4 {
+		t.Fatalf("scanned %d non-test file(s) in internal/extraction, want at least 4 (extractor.go, mock.go, store.go, worker.go) -- every absence below would be vacuous", len(out))
+	}
+	return out
+}
+
+// rxArgsTypeName reads the args type off ExtractWorker embedded river.WorkerDefaults[...], so
+// a rename cannot leave this guard scanning for a name nothing declares any more.
+func rxArgsTypeName(t *testing.T, files map[string]*ast.File) string {
+	t.Helper()
+	var found string
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != "ExtractWorker" {
+				return true
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				return false
+			}
+			for _, fld := range st.Fields.List {
+				if len(fld.Names) != 0 {
+					continue
+				}
+				ix, ok := fld.Type.(*ast.IndexExpr)
+				if !ok {
+					continue
+				}
+				sel, ok := ix.X.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "WorkerDefaults" {
+					continue
+				}
+				if id, ok := ix.Index.(*ast.Ident); ok {
+					found = id.Name
+				}
+			}
+			return false
+		})
+	}
+	if found == "" {
+		t.Fatal("no river.WorkerDefaults[...] embedded in ExtractWorker; the args type name is unknown and the result-list scan below would be vacuous")
+	}
+	return found
+}
+
+// rxResultNames renders every type name a result list mentions, unwrapping pointer, slice,
+// array and map-value so a helper cannot hide the args type behind one. A bare type yields
+// "Name"; a qualified one yields "pkg.Name".
+func rxResultNames(results *ast.FieldList) []string {
+	if results == nil {
+		return nil
+	}
+	var out []string
+	var walk func(ast.Expr)
+	walk = func(e ast.Expr) {
+		switch x := e.(type) {
+		case *ast.Ident:
+			out = append(out, x.Name)
+		case *ast.SelectorExpr:
+			if pkg, ok := x.X.(*ast.Ident); ok {
+				out = append(out, pkg.Name+"."+x.Sel.Name)
+			}
+		case *ast.StarExpr:
+			walk(x.X)
+		case *ast.ArrayType:
+			walk(x.Elt)
+		case *ast.MapType:
+			walk(x.Value)
+		case *ast.IndexExpr:
+			walk(x.X)
+		}
+	}
+	for _, fld := range results.List {
+		walk(fld.Type)
+	}
+	return out
+}
+
+// rxExportedFuncsReturning returns the exported funcs and methods whose result list mentions
+// want. Used for both the ban and its control needles.
+func rxExportedFuncsReturning(files map[string]*ast.File, want string) []string {
+	var out []string
+	for name, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || !fd.Name.IsExported() {
+				continue
+			}
+			for _, got := range rxResultNames(fd.Type.Results) {
+				if got == want {
+					out = append(out, name+":"+fd.Name.Name)
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestExtractionPackageDeclaresNoEnqueueHelper: AC #6 and AC #7. The unexported args type stops
+// another package constructing one; it does not stop THIS package handing one out. Three bans:
+// no enqueue selector, no exported func returning the args type, and no exported func returning
+// river.JobArgs -- the interface queue.EnqueueTx accepts, which the first two miss.
+//
+// InsertOpts is deliberately NOT banned: river.JobArgs requires it, so a no-Insert rule would
+// red-fail the shipped worker.
+func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
+	files := rxExtractionFiles(t)
+
+	banned := map[string]bool{"EnqueueTx": true, "Enqueue": true, "InsertTx": true}
+	// In-population control needles. internal/invoice/batch_submit.go, which the story names,
+	// sits OUTSIDE this walk, so it can only prove the matcher compiles.
+	control := map[string]bool{"OncePerJob": false, "WithinTenantTx": false}
+
+	offenders := map[string][]string{}
+	for name, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if banned[sel.Sel.Name] {
+				offenders[name] = append(offenders[name], sel.Sel.Name)
+			}
+			if _, tracked := control[sel.Sel.Name]; tracked {
+				control[sel.Sel.Name] = true
+			}
+			return true
+		})
+	}
+	for name, seen := range control {
+		if !seen {
+			t.Fatalf("the selector matcher did not find %s anywhere in internal/extraction non-test files; it can no longer find a planted hit, so the absences reported below mean nothing", name)
+		}
+	}
+	names := make([]string, 0, len(offenders))
+	for name := range offenders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		t.Errorf("internal/extraction/%s selects %v: this package must never enqueue, or the unexported args type fences nothing", name, offenders[name])
+	}
+
+	// Control for the result-list matcher, same files, same matcher: a bare local type, a
+	// slice of one, and a qualified one.
+	for want, mustFind := range map[string]string{
+		"MockExtractor": "mock.go:NewMockExtractor",
+		"MockFixture":   "mock.go:MockFixtures",
+		// The reason InsertOpts is not on the ban list, stated as a needle.
+		"river.InsertOpts": "worker.go:InsertOpts",
+	} {
+		got := rxExportedFuncsReturning(files, want)
+		found := false
+		for _, g := range got {
+			if g == mustFind {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the result-list matcher looking for %s found %v, want it to include %s; it can no longer find a planted hit, so the bans below mean nothing", want, got, mustFind)
+		}
+	}
+
+	argsType := rxArgsTypeName(t, files)
+	if got := rxExportedFuncsReturning(files, argsType); len(got) > 0 {
+		t.Errorf("%v hand a %s out through an exported result: an exported constructor is the one route the unexported type does not close", got, argsType)
+	}
+	if got := rxExportedFuncsReturning(files, "river.JobArgs"); len(got) > 0 {
+		t.Errorf("%v return river.JobArgs: an args value handed out through the interface queue.EnqueueTx accepts is an enqueue surface, whatever the concrete type is called", got)
+	}
+}

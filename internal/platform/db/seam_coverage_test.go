@@ -1254,6 +1254,79 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Scan 3b — the doc no longer claims the narrow rule (AUDIT-12-08)
+// ---------------------------------------------------------------------------
+//
+// AUDIT-10 wrote the narrow rule down in two places: the outcome table's
+// "does not exist" row and §5's heading. AUDIT-12 flips the rule to strict;
+// this scan stops the sentence outliving the behaviour it used to describe.
+//
+// Both phrases are scoped past the bare substring "runs the closure": the
+// outcome table's OTHER row (an active membership) legitimately keeps that
+// substring after the rewrite, so banning it bare would fail a correct doc.
+
+// scStaleNarrowRulePhrases are the exact substrings AUDIT-10 left behind
+// claiming a caller with no membership row is admitted. Neither may survive
+// the strict-rule rewrite.
+var scStaleNarrowRulePhrases = []string{
+	"does not exist | runs the closure",
+	"no membership row is still admitted",
+}
+
+func scStaleNarrowRuleControlNeedles(t *testing.T) {
+	t.Run("N1 the needle fires when planted", func(t *testing.T) {
+		fixture := "## 5. The narrow rule: a caller with no membership row is still admitted\n\n" +
+			"| does not exist | runs the closure — see §5 |\n"
+		for _, phrase := range scStaleNarrowRulePhrases {
+			if !strings.Contains(fixture, phrase) {
+				t.Errorf("fixture does not contain %q — the needle would not fire against the real doc's own wording either", phrase)
+			}
+		}
+	})
+
+	t.Run("N2 the legitimate active-row line is not a false positive", func(t *testing.T) {
+		// The active-membership row keeps "runs the closure" after the
+		// rewrite; the scan must not flag it.
+		fixture := "| exists, `status = 'active'` | runs the closure |\n"
+		for _, phrase := range scStaleNarrowRulePhrases {
+			if strings.Contains(fixture, phrase) {
+				t.Errorf("the legitimate active-row line matched %q — this scan would fail a doc that correctly keeps the row it must keep", phrase)
+			}
+		}
+	})
+}
+
+// TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim fails while
+// docs/read-path-suspension.md still asserts the AUDIT-10 narrow rule that
+// AUDIT-12 replaces: a caller with no membership row is no longer admitted.
+func TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim(t *testing.T) {
+	t.Run("control needles", scStaleNarrowRuleControlNeedles)
+
+	root := repoRootDir(t)
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scDocPath)))
+	if err != nil {
+		t.Fatalf("read %s: %v — a doc the scan cannot read is a doc it silently reports clean on", scDocPath, err)
+	}
+	doc := string(raw)
+
+	headings := 0
+	for _, l := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "## ") {
+			headings++
+		}
+	}
+	if headings < 10 {
+		t.Fatalf("%s parsed only %d top-level section heading(s), want at least 10 — a truncated or empty read would report clean while examining nothing", scDocPath, headings)
+	}
+
+	for _, phrase := range scStaleNarrowRulePhrases {
+		if strings.Contains(doc, phrase) {
+			t.Errorf("%s still contains %q — the narrow rule it describes was replaced by AUDIT-12's strict rule; rewrite the sentence", scDocPath, phrase)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Scan 4 — every swept package builds its DB-test identities off the seeded
 // member (AUDIT-12-02, D-7)
 // ---------------------------------------------------------------------------
@@ -3032,7 +3105,7 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantRefused"},           // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
 	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},                   // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
 	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},                 // same claim, the UnresolveOutside leg
-	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipRefused"},                   // same claim, GetHandler's role-reason leg
+	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipRefused"},                   // AUDIT-12-07 inverts this claim: a no-row caller now gets the seam's plain 403, not a role-specific reason
 	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},        // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
 	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                     // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
 	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusesACallerWithNoMembershipRow"},         // AUDIT-12-07's own inverted test (was TestRLS_RequestSeamAllowsACallerWithNoMembershipRow): the claim IS the no-row refusal

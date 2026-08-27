@@ -5,6 +5,11 @@
 # tests whose fixtures never modelled a membership. Counting them is the only
 # honest way to size such a change.
 #
+# To build a variant: copy tenant.go, edit WithinRequestTenantTxOpts's status
+# switch to the predicate you want to measure, keep the package and signature
+# unchanged (it is swapped in as a drop-in replacement, then restored via
+# trap), and pass its path.
+#
 #   scripts/dev/blast-radius.sh baseline            # stock tenant.go
 #   scripts/dev/blast-radius.sh path/to/variant.go  # swap that file in first
 #

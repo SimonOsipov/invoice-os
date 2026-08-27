@@ -289,6 +289,33 @@ func TestStoreMe_NoMembershipFailsClosed(t *testing.T) {
 	}
 }
 
+// TestStoreMe_ExemptFromTheSeamUnderTheStrictRule (AUDIT-12-07, D-5): Me reads over
+// db.WithinTenantTx, never the gated seam, so a caller with no row still resolves
+// through Me's OWN membership check to ErrNoMembership -- never db.ErrNotActiveMember
+// -- and the error carries no tenant name or kind.
+func TestStoreMe_ExemptFromTheSeamUnderTheStrictRule(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "tenancy me-test strict-rule exemption")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	tenant, role, err := store.Me(c)
+	if !errors.Is(err, ErrNoMembership) {
+		t.Fatalf("Me(no row) err = %v, want ErrNoMembership", err)
+	}
+	if errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("Me(no row) also satisfies db.ErrNotActiveMember: %v -- Me must never be answered by the seam", err)
+	}
+	if tenant != (Tenant{}) {
+		t.Errorf("tenant = %+v on a refusal, want the zero value -- no name or kind may leak", tenant)
+	}
+	if role != "" {
+		t.Errorf("role = %q on a refusal, want empty", role)
+	}
+}
+
 // TestStoreMe_UnknownTenant (AC #1): a well-formed tenant id with no visible row
 // (RLS makes it invisible / it does not exist) must resolve to ErrTenantNotFound.
 func TestStoreMe_UnknownTenant(t *testing.T) {
@@ -595,6 +622,25 @@ func TestMemberships_OK(t *testing.T) {
 func TestMemberships_Empty200(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
 	load := func(context.Context) ([]Membership, error) { return []Membership{}, nil }
+	rec, body := doMemberships(t, load, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if string(body.Memberships) != "[]" {
+		t.Errorf("memberships raw JSON = %s, want [] (not null)", body.Memberships)
+	}
+}
+
+// TestMembershipsHandler_NilLoaderResultSerializesAsEmptyArray (AUDIT-12-07): the
+// empty-vs-nil marshalling contract TestStoreListMemberships_EmptyTenantReturnsEmptySlice
+// used to pin at the store layer, now pinned here -- a nil loader result (the shape a
+// gated Store.ListMemberships can no longer produce for an admitted caller, but the
+// handler's own contract must still hold regardless of the loader) must still
+// serialize as a literal `[]`, never `null`.
+func TestMembershipsHandler_NilLoaderResultSerializesAsEmptyArray(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return nil, nil }
 	rec, body := doMemberships(t, load, &id)
 
 	if rec.Code != http.StatusOK {
@@ -946,14 +992,14 @@ func TestStoreListMemberships_ReverseIsolation(t *testing.T) {
 	}
 }
 
-// TestStoreListMemberships_EmptyTenantReturnsEmptySlice (AC #2/A4 adversarial,
-// QA-added task-30): a seeded, visible tenant with ZERO membership rows must
-// resolve to a non-nil, zero-length slice and a nil error at the SERVICE
-// LAYER -- complements the handler-level TestMemberships_Empty200 (which only
-// exercises a stubbed loader) by proving Store.ListMemberships itself, backed
-// by a real RLS-scoped query with no rows to return, never produces (nil, nil)
-// (which would defeat the handler's nil-normalization) nor a spurious error.
-func TestStoreListMemberships_EmptyTenantReturnsEmptySlice(t *testing.T) {
+// TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller (AUDIT-12-07): the
+// premise TestStoreListMemberships_EmptyTenantReturnsEmptySlice pinned is now
+// unreachable -- "empty tenant" and "the caller is a member" cannot both hold, since
+// ListMemberships runs over the gated seam. A caller with no row in a tenant that
+// itself has zero membership rows is refused before the query ever runs. The
+// empty-vs-nil marshalling contract that test also pinned moves to the handler layer:
+// TestMembershipsHandler_NilLoaderResultSerializesAsEmptyArray.
+func TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
@@ -970,14 +1016,11 @@ func TestStoreListMemberships_EmptyTenantReturnsEmptySlice(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 	got, err := store.ListMemberships(c)
-	if err != nil {
-		t.Fatalf("ListMemberships(empty tenant): %v", err)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ListMemberships(empty tenant, no-row caller) err = %v, want db.ErrNotActiveMember", err)
 	}
-	if got == nil {
-		t.Fatal("ListMemberships(empty tenant) = nil slice, want non-nil empty slice")
-	}
-	if len(got) != 0 {
-		t.Errorf("len(memberships) = %d, want 0: %+v", len(got), got)
+	if got != nil {
+		t.Errorf("ListMemberships returned %d row(s) alongside the refusal, want none: %+v", len(got), got)
 	}
 }
 

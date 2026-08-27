@@ -53,7 +53,7 @@ func TestReject_DemotesThroughTheRealTransitionEdge(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "APPR-07-05 real-edge tenant")
 	entityID := seedEntity(t, super, tenantID, "APPR-07-05 real-edge entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	store := NewStore(app)
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "reject-real-edge-1"})

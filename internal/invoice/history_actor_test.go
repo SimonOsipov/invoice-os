@@ -314,7 +314,7 @@ func TestHistory_ZeroResolvableActorsStillNamesEveryRow(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "AUDIT-02-03-NONAMES tenant")
 	entityID := seedEntity(t, super, tenantID, "AUDIT-02-03-NONAMES entity")
-	subject := uuid.NewString() // deliberately NOT a member of anything
+	subject := memberSubject
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
@@ -324,8 +324,10 @@ func TestHistory_ZeroResolvableActorsStillNamesEveryRow(t *testing.T) {
 	}
 	seedHistoryRow(t, super, tenantID, inv.ID, statusPtr(StatusDraft), StatusValidated, "backfill-source-rows", time.Now().UTC().Add(time.Second))
 
-	if n := mustCount(t, super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, tenantID); n != 0 {
-		t.Fatalf("setup: tenant has %d memberships rows, want 0 -- this test is about the nothing-resolves path", n)
+	// memberSubject now has a row (seedTenant), but no display_name/email, so
+	// it still can't resolve to a person -- that's what this test is about.
+	if n := mustCount(t, super, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND (display_name IS NOT NULL OR email IS NOT NULL)`, tenantID); n != 0 {
+		t.Fatalf("setup: tenant has %d memberships row(s) that could resolve to a name, want 0 -- this test is about the nothing-resolves path", n)
 	}
 
 	got, err := store.History(c, inv.ID)

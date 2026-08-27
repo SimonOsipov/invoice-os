@@ -58,7 +58,7 @@ func TestImport_DryRunStorageUnreachableIs500(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo dry-run fail-closed tenant")
 	entityID := seedEntity(t, super, tenantID, "uo dry-run fail-closed entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	doc := storeDocumentAs(t, docSvc, tenantID, "q.csv", "text/csv", csvBody(t, uoHeader, uoRows("UO-DRYDOWN", 2)))
 	objs.getErr = errOpenBoom
@@ -87,7 +87,7 @@ func TestImport_DryRunPersistsNothingButDecodesTheDocument(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo dry-run decode tenant")
 	entityID := seedEntity(t, super, tenantID, "uo dry-run decode entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := uoRows("UO-DRYOK", 3)
 	doc := storeDocumentAs(t, docSvc, tenantID, "q.csv", "text/csv", csvBody(t, uoHeader, rows))
@@ -160,7 +160,7 @@ func TestPreviewThenImport_OversizedExtensionResolvesSameFormat(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo oversized-ext tenant")
 	entityID := seedEntity(t, super, tenantID, "uo oversized-ext entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	// No explicit part Content-Type, so the multipart default is
 	// application/octet-stream and only the name could carry a format.

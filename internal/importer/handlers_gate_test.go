@@ -36,8 +36,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -98,7 +96,7 @@ func TestCreateHandler_RealResponseCarriesNewGateFields(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "IMPV-14 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMPV-14 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	srv := startInProcess04ForImporter(t, app)
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
@@ -143,7 +141,7 @@ func TestCreateHandler_DryRunResponseCarriesNewGateFieldsNoIDStatus(t *testing.T
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "IMPV-15 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMPV-15 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	srv := startInProcess04ForImporter(t, app)
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)

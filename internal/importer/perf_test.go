@@ -36,7 +36,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -70,7 +69,7 @@ func TestServiceImport_500InvoicePerfBudget(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "IMP-PERF-01 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const invoiceCount = 500
 	const linesPerInvoice = 3

@@ -61,15 +61,28 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
-// seedTenantWithID inserts one throwaway tenants row under a caller-chosen id.
-// The id has to be choosable so a test can let the documents FK fail first and
-// only then make the tenant real.
+// memberSubject is the caller every DB-backed test in this package acts as.
+// Its membership row is a no-op today (a rowless caller is still admitted)
+// but keeps these fixtures ready for the predicate's strict successor.
+const memberSubject = "d4a10003-0000-4000-8000-000000000001"
+
+// seedTenantWithID inserts one throwaway tenants row under a caller-chosen id,
+// plus an active membership for memberSubject. The id has to be choosable so
+// a test can let the documents FK fail first and only then make the tenant
+// real. seedTenant delegates here, so this is the only INSERT site.
 func seedTenantWithID(t *testing.T, super *pgxpool.Pool, id, label string) string {
 	t.Helper()
-	if _, err := super.Exec(context.Background(),
+	ctx := context.Background()
+	if _, err := super.Exec(ctx,
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, label,
 	); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		id, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
@@ -82,6 +95,40 @@ func seedTenantWithID(t *testing.T, super *pgxpool.Pool, id, label string) strin
 func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	t.Helper()
 	return seedTenantWithID(t, super, uuid.NewString(), label)
+}
+
+// docFixtureAssertActiveMembership fails unless tenantID has exactly one
+// active memberships row. Query is subject-agnostic on purpose: AUDIT-12-03
+// authors this test before the sweep names its own memberSubject constant.
+func docFixtureAssertActiveMembership(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	var status string
+	err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE tenant_id = $1`, tenantID,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("query caller membership: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("status = %q, want active", status)
+	}
+}
+
+// TestDocumentFixture_BothTenantHelpersSeedTheCaller (AUDIT-12-03 AC-1): both
+// seedTenant AND seedTenantWithID must seed a caller membership, or a test
+// that only calls the second one stays unswept. Fails today: neither helper
+// inserts a membership row yet.
+func TestDocumentFixture_BothTenantHelpersSeedTheCaller(t *testing.T) {
+	super, _ := dbTestPools(t)
+
+	t.Run("seedTenant", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "document fixture membership check (seedTenant)")
+		docFixtureAssertActiveMembership(t, super, tenantID)
+	})
+	t.Run("seedTenantWithID", func(t *testing.T) {
+		tenantID := seedTenantWithID(t, super, uuid.NewString(), "document fixture membership check (seedTenantWithID)")
+		docFixtureAssertActiveMembership(t, super, tenantID)
+	})
 }
 
 func mustCount(t *testing.T, super *pgxpool.Pool, query string, args ...any) int {
@@ -180,8 +227,8 @@ func TestStoreGet_CrossTenantIsNotFound(t *testing.T) {
 
 	tenantA := seedTenant(t, super, "doc get cross-tenant A")
 	tenantB := seedTenant(t, super, "doc get cross-tenant B")
-	cA := identity(ctx, tenantA, uuid.NewString())
-	cB := identity(ctx, tenantB, uuid.NewString())
+	cA := identity(ctx, tenantA, memberSubject)
+	cB := identity(ctx, tenantB, memberSubject)
 
 	stored, _, err := store.Upsert(cA, docFixture(tenantA, "cross-tenant", 11))
 	if err != nil {
@@ -213,7 +260,7 @@ func TestStoreGet_NonexistentIsNotFound(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc get nonexistent")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	stored, _, err := store.Upsert(c, docFixture(tenantID, "nonexistent-neighbour", 11))
 	if err != nil {
@@ -237,7 +284,7 @@ func TestStoreUpsert_WritesCreatedAuditInSameTx(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc created audit")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := identity(ctx, tenantID, subject)
 
 	stored, created, err := store.Upsert(c, docFixture(tenantID, "created-audit", 11))
@@ -268,7 +315,7 @@ func TestStoreUpsert_DedupeWritesReusedNotCreated(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc reused audit")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 	in := docFixture(tenantID, "reused-audit", 11)
 
 	first, created, err := store.Upsert(c, in)
@@ -304,7 +351,7 @@ func TestStoreGet_WritesReadAudit(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc read audit")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := identity(ctx, tenantID, subject)
 
 	stored, _, err := store.Upsert(c, docFixture(tenantID, "read-audit", 11))
@@ -334,8 +381,8 @@ func TestStoreGet_CrossTenantWritesNoAudit(t *testing.T) {
 
 	tenantA := seedTenant(t, super, "doc no-audit A")
 	tenantB := seedTenant(t, super, "doc no-audit B")
-	cA := identity(ctx, tenantA, uuid.NewString())
-	cB := identity(ctx, tenantB, uuid.NewString())
+	cA := identity(ctx, tenantA, memberSubject)
+	cB := identity(ctx, tenantB, memberSubject)
 
 	stored, _, err := store.Upsert(cA, docFixture(tenantA, "no-audit", 11))
 	if err != nil {
@@ -391,7 +438,7 @@ func TestStoreGet_MalformedUUIDIsValidationError(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc malformed uuid")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	got, err := store.Get(c, "not-a-uuid")
 	if !errors.Is(err, document.ErrValidation) {

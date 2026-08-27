@@ -68,7 +68,7 @@ func TestStoreGet_RuleSetVersionResolvesByID(t *testing.T) {
 	tenantID := seedTenant(t, super, "M4-09-01-adv tenant")
 	entityID := seedEntity(t, super, tenantID, "M4-09-01-adv entity")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows, err := super.Query(ctx, `SELECT id, version FROM rule_set_versions ORDER BY published_at LIMIT 2`)
 	if err != nil {
@@ -190,7 +190,7 @@ func TestGetHandler_RealStore_NeverValidatedEmitsExplicitNull(t *testing.T) {
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "M4-09-01-ADV-E2E")
 
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))

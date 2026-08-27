@@ -89,10 +89,15 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
+// memberSubject is the caller every DB-backed test in this package acts as.
+// Its membership row is a no-op today (a rowless caller is still admitted)
+// but keeps these fixtures ready for the predicate's strict successor.
+const memberSubject = "d4a10001-0000-4000-8000-000000000001"
+
 // seedTenant inserts one throwaway tenants row (kind 'firm') as the
 // superuser and registers a cleanup that deletes it. A tenants delete
-// CASCADEs away every business_entities/invoices row scoped to it, so
-// per-test cleanup never has to unwind child rows by hand.
+// CASCADEs away every business_entities/invoices/memberships row scoped to
+// it, so per-test cleanup never has to unwind child rows by hand.
 func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -102,10 +107,35 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		id, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
 	})
 	return id
+}
+
+// TestDashboardFixture_SeedTenantSeedsAnActiveCallerMembership fails if
+// seedTenant's membership INSERT is silently dropped.
+func TestDashboardFixture_SeedTenantSeedsAnActiveCallerMembership(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "fixture membership check")
+
+	var status string
+	err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		tenantID, memberSubject,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("query caller membership: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("status = %q, want active", status)
+	}
 }
 
 // seedEntity inserts one business_entities row for tenantID as the
@@ -343,7 +373,7 @@ func TestStoreRollup_AllSevenStatesReported(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -373,7 +403,7 @@ func TestStoreRollup_ZerosAreReportedNotOmitted(t *testing.T) {
 	seedInvoice(t, super, tenantID, entityID, "DASH-02-1")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -401,7 +431,7 @@ func TestStoreRollup_EmptyTenant(t *testing.T) {
 	tenantID := seedTenant(t, super, "DASH-03 tenant")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -462,7 +492,7 @@ func TestStoreRollup_TotalsEqualSumOfClients(t *testing.T) {
 	seedApprovalRun(t, super, tenantID, e3Validated, versionID, "approved")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -520,7 +550,7 @@ func TestStoreRollup_BrokenDraftCountsAsNeedsAttention(t *testing.T) {
 		`[{"rule_key":"supplier-tin-required","severity":"error","message":"x"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -550,7 +580,7 @@ func TestStoreRollup_WarningOnlyDraftIsNotNeedsAttention(t *testing.T) {
 		`[{"rule_key":"some-rule","severity":"warning","message":"y"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -575,7 +605,7 @@ func TestStoreRollup_CleanDraftIsNotNeedsAttention(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantID, entityID, "DASH-07-1", "draft", `[]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -602,7 +632,7 @@ func TestStoreRollup_RejectedAndFailedCountAsNeedsAttention(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantID, entityID, "DASH-08-2", "failed", `[]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -634,7 +664,7 @@ func TestStoreRollup_ExceptionsFirstOrdering(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantID, alpha, "DASH-09-A1", "draft", `[]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -668,7 +698,7 @@ func TestStoreRollup_NameTieBreakAtEqualNeed(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantID, alpha, "DASH-10-A1", "draft", broken)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -695,7 +725,7 @@ func TestStoreRollup_EntityNameIsJoinedNotLookedUp(t *testing.T) {
 	seedInvoice(t, super, tenantID, entityID, "DASH-11-1")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -725,7 +755,7 @@ func TestStoreRollup_EntityWithNoInvoicesIsAbsent(t *testing.T) {
 	seedInvoice(t, super, tenantID, e1, "DASH-12-1")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -754,7 +784,7 @@ func TestStoreRollup_LiveStateChangeIsReflected(t *testing.T) {
 		`[{"rule_key":"x","severity":"error","message":"x"}]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	before, err := store.Rollup(cA)
 	if err != nil {
@@ -817,7 +847,7 @@ func TestStoreRollup_ResolvedFailedIsNotNeedsAttention(t *testing.T) {
 	seedInvoiceAtStatus(t, super, tenantID, entityID, "T3-1-unresolved", "failed")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -881,7 +911,7 @@ func TestStoreRollup_KeptBlockedDraftStillCounts(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -964,7 +994,7 @@ func TestStoreRollup_ResolvedFailedIsolatedPerClient(t *testing.T) {
 	seedInvoiceAtStatus(t, super, tenantID, entity2, "T3-11-e2-unresolved", "failed")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1006,7 +1036,7 @@ func TestStoreRollup_AwaitingApprovalCountsValidatedUnderAnActivePolicy(t *testi
 	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-A-3", "draft")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1047,7 +1077,7 @@ func TestStoreRollup_AwaitingApprovalIsZeroWithNoActivePolicy(t *testing.T) {
 	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-B-2", "validated")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1086,7 +1116,7 @@ func TestStoreRollup_AwaitingApprovalExcludesAnApprovedRun(t *testing.T) {
 	seedApprovalRun(t, super, tenantID, approved, versionID, "approved")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1114,7 +1144,7 @@ func TestStoreRollup_AwaitingApprovalCountsAValidatedInvoiceWhoseOnlyRunWasRejec
 	seedApprovalRun(t, super, tenantID, rejected, versionID, "rejected")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1148,7 +1178,7 @@ func TestStoreRollup_AwaitingApprovalCountsAnUnarmedValidatedInvoice(t *testing.
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1214,7 +1244,7 @@ func TestStoreRollup_EveryNumericBucketFieldIsTheSumOfClients(t *testing.T) {
 		`[{"rule_key":"supplier-tin-required","severity":"error","message":"x"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1276,7 +1306,7 @@ func TestStoreRollup_NeedsAttentionIncludesApprovalRejected(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantID, entityID, "APPR-11-02-include-2", "draft", `[]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1322,7 +1352,7 @@ func TestStoreRollup_SupersededRejectionDoesNotFlag(t *testing.T) {
 	seedApprovalRunAt(t, super, tenantID, newest, versionID, "rejected", t1)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1370,7 +1400,7 @@ func TestStoreRollup_ApprovalRejectedArmIsMostRecentByOpenedAt(t *testing.T) {
 	seedApprovalRunAt(t, super, tenantID, control, versionID, "rejected", t0)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1412,7 +1442,7 @@ func TestStoreRollup_ApprovalRejectedArmIsDraftOnly(t *testing.T) {
 	seedApprovalRunAt(t, super, tenantID, draft, versionID, "rejected", t0)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1454,8 +1484,8 @@ func TestRLS_RollupApprovalRejectedIsTenantScoped(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantB, entityB, "APPR-11-02-RLS-B-1", "draft", `[]`)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	gotA, err := store.Rollup(cA)
 	if err != nil {
@@ -1590,7 +1620,7 @@ func TestStoreRollup_AwaitingApprovalReadsRunHistoryNotTheLatestRun(t *testing.T
 	seq("APPR-11-QA-h-c", "cancelled")              // never approved -- counts
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1620,7 +1650,7 @@ func TestStoreRollup_AwaitingApprovalIsZeroWithAnActivePolicyAndNoValidatedInvoi
 	seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-11-QA-nv-3", "queued")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1656,7 +1686,7 @@ func TestStoreRollup_AwaitingApprovalAndNeedsAttentionAreIndependentOverlays(t *
 	seedInvoiceAtStatus(t, super, tenantID, attentionOnly, "APPR-11-QA-ov-n3", "failed")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1717,7 +1747,7 @@ func TestStoreRollup_OnlyARejectedNewestRunFlagsTheDraft(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1754,7 +1784,7 @@ func TestStoreRollup_TwoRejectedRunsCountTheDraftOnce(t *testing.T) {
 	seedApprovalRunAt(t, super, tenantID, inv, versionID, "rejected", t0.Add(time.Hour))
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1786,7 +1816,7 @@ func TestStoreRollup_ApprovalRejectedArmFollowsTheCurrentStatus(t *testing.T) {
 	seedApprovalRunAt(t, super, tenantID, inv, versionID, "rejected", time.Now().Add(-time.Hour))
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	setStatus := func(status string) {
 		t.Helper()
@@ -1837,7 +1867,7 @@ func TestStoreRollup_OriginalArmsHoldWithNoApprovalRowsAtAll(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {
@@ -1871,7 +1901,7 @@ func TestStoreRollup_ApprovalRejectedDraftIsNotAwaitingApproval(t *testing.T) {
 	seedApprovalRunAt(t, super, tenantID, awaiting, versionID, "open", t0)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Rollup(c)
 	if err != nil {

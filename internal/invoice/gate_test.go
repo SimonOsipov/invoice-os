@@ -69,7 +69,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -175,7 +174,7 @@ func TestGate_ValidateOnNonDraftReturnsErrNotDraftWithoutCalling04(t *testing.T)
 
 	tenantID := seedTenant(t, super, "GAPI-11 tenant")
 	entityID := seedEntity(t, super, tenantID, "GAPI-11 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "GAPI-11"})
 	if err != nil {
@@ -258,7 +257,7 @@ func TestGate_ValidateRealDraftFailsVATStandardRate(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GAPI-12 tenant")
 	entityID := seedEntity(t, super, tenantID, "GAPI-12 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "GAPI-12")
 	in.VAT = strPtr("1.00") // wrong: 7.5% of 250.00 is 18.75, not 1.00
@@ -310,7 +309,7 @@ func TestGate_ValidateAfterUpdateFixToGreenRevalidatesToValidated(t *testing.T) 
 	// "Acme Ltd" fixture values, since Store.Create now derives supplier_tin/
 	// supplier_name from the entity rather than trusting CreateInput.
 	entityID := seedEntityWithTIN(t, super, tenantID, "Acme Ltd", "12345678-0001")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "GAPI-13")
 	in.VAT = strPtr("1.00") // wrong, same as GAPI-12 -- this test owns its own fixture (no cross-test ordering dependency)
@@ -376,7 +375,7 @@ func TestGate_ValidateZeroLineItemsStaysDraftWithLineItemsRequired(t *testing.T)
 
 	tenantID := seedTenant(t, super, "GAPI-14 tenant")
 	entityID := seedEntity(t, super, tenantID, "GAPI-14 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	issueDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	inv, err := store.Create(c, CreateInput{
@@ -434,7 +433,7 @@ func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "RSV tenant")
 	entityID := seedEntity(t, super, tenantID, "RSV entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "RSV-01")
 	inv, err := store.Create(c, in)

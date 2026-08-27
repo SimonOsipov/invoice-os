@@ -4,12 +4,14 @@
 tenant data. AUDIT-10 made membership status bite on **reads**, not only on writes: a caller
 whose `memberships` row in the current tenant exists and is not `active` is refused before the
 handler's closure runs. Before this story, a suspended member kept full read access to every
-screen until their token expired — the suspension was a label on a list.
+screen until their token expired — the suspension was a label on a list. AUDIT-12 closed the
+one gap AUDIT-10 shipped deliberately: a caller with no `memberships` row at all is refused the
+same way (§5).
 
 This page is the contract that change created: where the gate sits, what it costs, which
-endpoints it covers, which are exempt and why, and the one hole it deliberately leaves open.
-Every figure here was measured against Postgres 18.6 on Docker Desktop loopback at
-`929129f`; the reasoning behind each choice is in AUDIT-10's `## Decisions`.
+endpoints it covers, which are exempt and why, and the one hole it still leaves open. Every
+figure here was measured against Postgres 18.6 on Docker Desktop loopback; the reasoning behind
+each choice is in AUDIT-10's and AUDIT-12's `## Decisions`.
 
 **No migration.** The gate is a `SELECT` against an index that already existed
 (`memberships_tenant_user_uq`), so this story added no DDL. §7 is why that was never a close
@@ -36,15 +38,14 @@ sets, so queueing them the other way round would read across tenants —
 `TestRLS_RequestSeamIssuesOneRoundTripForTheGate` and
 `TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow` pin both halves of that.
 
-Three outcomes:
+Two outcomes:
 
 | The caller's `memberships` row in this tenant | The seam |
 |---|---|
 | exists, `status = 'active'` | runs the closure |
-| exists, any other status | returns `db.ErrNotActiveMember` before the closure |
-| does not exist | runs the closure — see §5 |
+| exists, any other status, or does not exist at all | returns `db.ErrNotActiveMember` before the closure — §5 is why the second case was ever a question |
 
-### 1.1 Two shapes skip the lookup entirely
+### 1.1 One shape skips the lookup entirely
 
 `memberships.user_id` is `uuid`. A subject that is not a well-formed uuid can match no row, and
 a failed statement would poison the batch's transaction — so a non-uuid subject falls through
@@ -53,12 +54,21 @@ to the ungated core with the tenant set and no membership read
 no identity, or with a malformed tenant id, is refused with `db.ErrNoTenant` before any
 statement is issued at all (`TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest`).
 
+**Why this is not a hole.** Over HTTP the arm above can never fire. `Verifier.validate`
+(`internal/platform/auth/verify.go:147`) rejects any token whose `sub` claim is not a
+well-formed uuid with `ErrUnauthorized` — a 401 at token verification, before an `Identity` is
+ever built, let alone reaches this seam. The only way to reach this arm at all is to construct
+an `auth.Identity` by hand, in-process — exactly what §8.1's operator CLIs and boot-time seeders
+do, on purpose, for callers the network never produced. So the arm is a worker/CLI boundary, not
+read-path coverage this gate is failing to provide, and AUDIT-12 leaves it exactly as AUDIT-10
+wrote it.
+
 ## 2. The three-way refusal, and why 403 is not 401
 
 | Status | Sentinel / message | Meaning |
 |---|---|---|
 | `401` | `db.ErrNoTenant` → `unauthorized` | no verified identity, or no tenant claim |
-| **`403`** | `db.ErrNotActiveMember` → `db.NotActiveMemberMessage` = `your membership in this workspace is not active` | authenticated, in the right tenant, membership not active |
+| **`403`** | `db.ErrNotActiveMember` → `db.NotActiveMemberMessage` = `your membership in this workspace is not active` | authenticated, in the right tenant, membership not active or absent |
 | `404` | handler's own not-found | authenticated and active, resource belongs to another tenant or does not exist |
 
 **Why 403 and not 401 is load-bearing, not taste.** `isUnauthorized`
@@ -72,8 +82,8 @@ never collapse.
 
 ## 3. `invited` is refused exactly like `suspended`
 
-One sentinel, one message, one predicate: `status != 'active'`. There is no separate
-"not yet accepted" path and no second wire message
+One sentinel, one message, one predicate: `status != 'active'` — or no row at all, since
+AUDIT-12 (§5). There is no separate "not yet accepted" path and no second wire message
 (`TestRLS_RequestSeamRefusesAnInvitedCaller`, `…RefusesASuspendedCaller`).
 
 Reads and writes now agree. Every write-path predicate in the tree already spelled
@@ -101,20 +111,85 @@ two file-mates, `ListMemberships` and `SetMembershipStatus`, are gated — which
 exemption is func-scoped: a method added beside `Me` inherits the gate, and the guard fails if
 anyone widens it.
 
-## 5. The narrow rule: a caller with no membership row is still admitted
+### 4.1 What the exemption discloses, named plainly
+
+`Store.Me` runs its own membership lookup (`SELECT role FROM memberships WHERE user_id = $1`)
+and never reads `status`. A caller holding a valid token for a tenant id they already know can
+therefore learn which of three cases they are in:
+
+| Tenant id names | `/v1/me` answers | What that reveals |
+|---|---|---|
+| no `tenants` row | `404 {"error":"tenant not found"}` | the id names no workspace |
+| a real tenant, caller has no `memberships` row | `403 {"error":"no membership"}` | the id names a workspace, the caller has never been a member |
+| a real tenant, caller's row exists, any status | `200` + their own tenant and role | the id names a workspace, the caller has a row — active, suspended, or invited alike |
+
+**The residue, stated honestly.** Everywhere else in this doc, a caller with no row and a
+suspended caller now answer identically — the same `403`, the same `db.NotActiveMemberMessage`
+(§5). `/v1/me` is the one place that still tells them apart: no row is `403 {"error":"no
+membership"}`, any row at all is `200`. A caller refused elsewhere can still learn which of the
+two cases they were in by calling this one exempt route. That is Core AC 2's purpose
+(indistinguishability) not fully met by its letter (the shared 403 sentinel elsewhere) — the
+exemption cannot be closed without breaking the sign-in flow described above, so the gap is
+accepted, not hidden.
+
+**Owned, with a reopen trigger.** Accepted at AUDIT-12's fork gate rather than fixed. Under
+today's mock login, every token holder was already provisioned by an operator, so this
+disclosure is one already-known user learning something about a workspace, not a stranger
+learning about one. **Reopen trigger: real authentication or self-signup exists** — the moment
+an unvetted party can obtain a token, the disclosure becomes reachable by strangers. No owner
+today.
+
+## 5. The strict rule: a caller with no membership row is refused, same as a suspended one
 
 **After this story, both of these are true:** suspension bites on reads, and a caller holding a
-valid token for a tenant they have no `memberships` row in can still read that tenant.
+valid token for a tenant they have no `memberships` row in is refused exactly like a suspended
+one — same sentinel (`db.ErrNotActiveMember`), same wire message, same status.
 
-That is deliberate, and it is owned: **AUDIT-12 Membership Presence on Reads** closes it. The
-cost of shipping the strict rule inside AUDIT-10 was measured, not estimated —
-**797 failing tests across 11 packages** for strict, against **22 across 3** for the narrow
-rule, because the seeded fixtures across the suite mint identities without membership rows.
+`TestRLS_RequestSeamRefusesACallerWithNoMembershipRow` pins the refusal where AUDIT-10's
+`TestRLS_RequestSeamAllowsACallerWithNoMembershipRow` used to pin the admission it replaces — the
+rename is the visible flip. `TestRLS_RequestSeamRefusesACallerWhoseRowWasDeleted` pins the same
+rule at its sharpest edge: deleting a membership now refuses exactly as suspending it does.
+`TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow` pins the two cases to one
+sentinel and one message, so nothing downstream of the gate — §4's exemption aside — can tell
+them apart.
 
-`TestRLS_RequestSeamAllowsACallerWithNoMembershipRow` pins the admitted case **deliberately**,
-so AUDIT-12's flip to strict lands as a visible test change rather than a silent behaviour
-change. `TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted` pins the same rule at its
-sharpest edge: deleting a membership does not revoke read access, suspending it does.
+**The cost was measured, not estimated: 723 failing tests across 9 packages**, against a
+baseline of **0** failing tests and **0** failing packages on the code as it stood before the
+fixture sweep:
+
+```
+$ DEV_DB_PORT=5433 bash scripts/dev/blast-radius.sh baseline
+failing tests:    0
+failing packages: 0
+```
+
+measured against a copy of `tenant.go` with one line widened —
+`scanErr == nil && status != "active"` becomes `scanErr != nil || status != "active"` — and
+nothing else:
+
+```
+failing tests:    723
+failing packages: 9
+  internal/approval  internal/dashboard  internal/document  internal/importer
+  internal/invoice   internal/platform/db  internal/portfolio  internal/submission
+  internal/tenancy
+```
+
+AUDIT-12's fixture sweep (subtasks 01–07) rebuilt every one of those packages' test callers off a
+real seeded membership row instead of a bare, rowless uuid. The same `baseline` command against
+the shipped `tenant.go` — see "Verify" in this story's PR — now reports **0 failing tests, 0
+failing packages**: the strict rule ships with no assertion left behind.
+
+**AUDIT-10's published estimate — 797 failing tests across 11 packages — was measuring a
+different predicate, not this one.** AUDIT-10's prototype had no non-uuid guard (§1.1), so
+widening its `status` predicate to "no row ⇒ refuse" refused a non-uuid subject too, a variant
+this repo never shipped. Re-measured against today's code, that variant costs **800 failing
+tests across 12 packages** — the same 9 above, plus `internal/archive`, `internal/audit` and
+`internal/validation`, whose fixtures build callers with `Subject: "system"`. 800/12 sits within
+3 tests and 1 package of AUDIT-10's 797/11; the small remaining gap is later commits, not a
+different rule. **723 across 9 is the cost of the rule this story actually ships**, and it is
+why `tenant.go:59`'s non-uuid arm (§1.1) stays exactly as AUDIT-10 wrote it: refusing that arm
+too buys nothing reachable over HTTP for +77 tests and +3 packages.
 
 ## 6. The gate is not free: +12 to +42 µs/op
 
@@ -137,7 +212,8 @@ one statement on a connection the seam had already opened.
 Every figure above is Docker Desktop loopback. Treat them as an **upper bound on this link**,
 not as a portable constant: a co-located production database will show a smaller absolute
 number, and a distant one a larger. The shape of the claim — B is a round trip, C is a
-statement — is what carries over.
+statement — is what carries over. AUDIT-12's predicate widening (§5) is one comparison inside
+the same `SELECT`, not a second statement, so this table is unchanged by it.
 
 ## 7. No test may assert the query plan for this predicate
 
@@ -175,7 +251,7 @@ tenant data is therefore gated by construction, and `covered` records that. `exe
 state their own reason.
 
 The gate applies to the whole request, so a `POST`/`PATCH`/`DELETE` route is covered too — a
-suspended caller is now refused at the seam, before the write-path `status = 'active'`
+refused caller is now refused at the seam, before the write-path `status = 'active'`
 predicates it would previously have hit inside the transaction.
 
 | Route | Service | Verdict | Reason |
@@ -257,24 +333,30 @@ is the one exception and its row says so.
 | boot provisioning (`internal/platform/db`) | `bootstrap`, `provision`, `reset` and the demo purge run on a superuser connection before any tenant context exists |
 | migrations (`internal/platform/db/migrate.go`) | goose needs a `database/sql` handle, which no pgx pool can supply; it runs at boot on the migrator role |
 
-## 9. The three guards that keep §8 true
+## 9. The four guards that keep §8 true
 
-All three live in `internal/platform/db/seam_coverage_test.go`, run under `ci.yml`'s existing
-`-run TestRLS` filter on this package, and touch no database. Each asserts an **absence**, so
-each carries planted control needles and a population floor: a scan that has stopped matching
-and a clean repo produce the same report, and the floor is what tells them apart. Every
-allowlist is matched **exactly** — an entry matching nothing fails with "delete it", so a stale
-exemption cannot outlive its reason.
+Three of the four live in `internal/platform/db/seam_coverage_test.go`, run under `ci.yml`'s
+existing `-run TestRLS` filter on this package, and touch no database. Each asserts an
+**absence**, so each carries planted control needles and a population floor: a scan that has
+stopped matching and a clean repo produce the same report, and the floor is what tells them
+apart. Every allowlist is matched **exactly** — an entry matching nothing fails with "delete
+it", so a stale exemption cannot outlive its reason.
 
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
 | `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside eight named files and one named func**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
 | `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
+| `TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim` | this page carries no sentence still asserting AUDIT-10's narrow rule (§5) | a fixture planting both stale phrases must be flagged; a fixture holding only the legitimate active-row line must not | this file parses to ≥10 top-level (`## `) section headings |
 
-A fourth, `TestRLS_EveryAllowlistEntryNamesItsReason`, reads the guard file's own source and
+A fifth, `TestRLS_EveryAllowlistEntryNamesItsReason`, reads the guard file's own source and
 fails any exemption whose line carries no trailing reason. Core AC 6 asks for a reason per
 exemption, not a category.
+
+**What the doc-accuracy guard cannot see.** It matches a named phrase list, so a stale claim
+written in different words would still pass. The rest of §1, §1.1, §4 and §5 reading true is a
+reviewer's read of this diff, not a mechanical property — there is no general "this prose is
+accurate" oracle, and none is attempted here.
 
 ### 9.1 Why the scans invert the question
 
@@ -317,8 +399,11 @@ rather than a property of each route.
   `TestHandlerMappingEveryRefusalSiteNamesNotActiveMember` (`handler_mapping_test.go`) draws its
   population from funcs that already map `db.ErrNoTenant` — named `statusForErr`/`*StatusForErr`,
   or calling `errors.Is(_, db.ErrNoTenant)`. A future handler mapping neither sentinel is outside
-  both populations, so it would fall to its `default` arm and answer a suspended caller `500`
+  both populations, so it would fall to its `default` arm and answer a refused caller `500`
   instead of the `403` §2 specifies. The seam still refuses the caller; only the status is wrong.
+- **The doc-accuracy guard (§9's fourth row) matches literal phrases**, not meaning: a future
+  edit that reintroduces the narrow rule in different words would pass it silently. It closes the
+  mechanical half of "this page describes the shipped behaviour"; the rest is reviewer read.
 
 ## 10. The hand-maintained mirror
 
@@ -346,8 +431,9 @@ are product sentences, guarded by their own byte-pins.
 
 ## 11. Still unsettled, and who owns it
 
-**11.1 A caller with no membership row still reads.** §5. Owned by **AUDIT-12 Membership
-Presence on Reads**, with the 797-vs-22 measurement as its scope.
+**11.1 A caller with no membership row still reads. CLOSED.** §5. **AUDIT-12 Membership
+Presence on Reads** shipped the strict rule: such a caller is now refused, identically to a
+suspended one.
 
 **11.2 The TypeScript mirror. SETTLED — it ships.** §10. AUDIT-10-07 added it, rewrote the SPA
 copy that read "Sign-in is not blocked yet" and the `e2e/topology` fixture that mirrors it byte
@@ -385,3 +471,56 @@ holds under either posture.
 `memberships` seed converges identity and status at each boot. That was harmless when
 suspension only blocked writes. It now means a suspended demo membership silently regains
 **read** access at the next deploy. Flagged, not owned.
+
+## 12. The layout oracle this story deleted, and why nothing replaces it
+
+AUDIT-12-06 deleted `e2e/topology/invoice-surfaces.spec.ts`'s **geometry B** and the
+`display_name`/cross-tenant-leak assertions that rode alongside it. This section is that
+deletion's finding, written where the next reader of this contract meets it.
+
+**The claim that is now unproven, precisely:** at every swept width down to the rail's 1180px
+floor, each `strip-actor` caption's `scrollWidth` stayed within 1px of its `clientWidth` — the
+caption rendered whole — while the strip itself was what overflowed. That claim depended on a
+caption long enough to put the node under width pressure, and the only such caption in this
+repo came from a caller resolved to an actor with no name: `resolve.go`'s fallback prints
+`user_id` truncated to 8 hex characters, which reliably overflows a fixed-width node in a way a
+real person's name does not.
+
+**Why no reachable actor can restore it.** Under the strict rule (§5), a caller with no
+membership row is refused at the seam before it can write anything — including the audit rows
+`invoice-surfaces.spec.ts` inspected to find that actor. The only way back to a name-shaped
+gap in the fixture is a `memberships` row with a NULL `display_name`, and the demo seed fills
+that column for every one of its 13 rows (`db/seed.dev.sql`). Producing the gap deliberately
+would mean seeding it — two nameless members in the demo tenant, purely to keep this one caption
+long. **The user declined that trade at AUDIT-12's fork gate (D-9): drop the fixtures, seed
+nothing.** The architect had recommended seeding; the user overrode it. Both sides of that
+reasoning are kept in AUDIT-12's decision log on purpose.
+
+**What still partially covers the strip.** The suite's other three geometries survive
+re-pointed and still measure the strip on a real browser: it stays above the fold at four
+swept widths, its nodes keep their width while the connectors between them absorb the slack,
+and its 96px band never overlaps the detail grid below it. So the strip's own layout is still
+proven; it is specifically **whether a long caption stays contained inside its node** that is
+not. `StatusStrip.test.tsx`'s jsdom suite still asserts the component *requests*
+`flex: none` / `max-content` / `nowrap` on that node — its own comment already states the
+limit: a browser is what turns a request into a rendered fact, and jsdom cannot prove that.
+
+**No substitute is offered, and none should be written.** A numeric width assertion is not a
+safe stand-in here — this repo has already shipped one that passed on the exact bug it was
+meant to catch (`[[layout-needs-rendered-verification]]`: a fixed-width check passed while 32%
+of a real screen sat dead). If this claim is ever reasserted, it must again compare rendered
+relationships — `scrollWidth` against `clientWidth`, on a real page at a real width — never a
+hardcoded pixel count.
+
+**Reopen triggers, any one of:**
+
+1. A `memberships` row with a NULL `display_name` and a non-null `email` becomes reachable.
+   `actor.Name` renders an email whole (no spaces to first-word), so a long enough address would
+   restore the pressure without a nameless row.
+2. Real authentication or self-signup lets a caller act before a membership names them —
+   producing exactly the un-membered, unnamed actor this claim used to depend on, without seeding
+   anything.
+3. Someone measures on a PR environment that the strip still overflows at 1180px with named
+   captions. If so, geometry B is restored verbatim from AUDIT-12-06's diff.
+
+No owner today.

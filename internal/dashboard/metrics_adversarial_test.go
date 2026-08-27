@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -53,8 +51,8 @@ func TestRLS_DashboardRollupCrossTenantMetricsIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	gotA, err := store.Rollup(cA)
 	if err != nil {

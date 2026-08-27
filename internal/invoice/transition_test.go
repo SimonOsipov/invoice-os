@@ -93,7 +93,7 @@ func TestTransition_LegalEdgesSucceedWithTripleWrite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tenantID := seedTenant(t, super, "INV-SM-01 "+tc.name+" tenant")
 			entityID := seedEntity(t, super, tenantID, "INV-SM-01 entity")
-			subject := uuid.NewString()
+			subject := memberSubject
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 			inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-01-" + tc.name})
@@ -200,7 +200,7 @@ func TestTransition_IllegalEdgesRejectedNoWrites(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tenantID := seedTenant(t, super, "INV-SM-02 "+tc.name+" tenant")
 			entityID := seedEntity(t, super, tenantID, "INV-SM-02 entity")
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-02-" + tc.name})
 			if err != nil {
@@ -267,7 +267,7 @@ func TestTransition_RedundantRejectedBeforeLegalityCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tenantID := seedTenant(t, super, "INV-SM-03 "+tc.name+" tenant")
 			entityID := seedEntity(t, super, tenantID, "INV-SM-03 entity")
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-03-" + tc.name})
 			if err != nil {
@@ -317,7 +317,7 @@ func TestTransition_NotFoundAndCrossTenant(t *testing.T) {
 
 	t.Run("nonexistent id", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "INV-SM-04 tenant")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		bogusID := uuid.NewString()
 		if _, err := store.Transition(c, bogusID, StatusValidated); !errors.Is(err, ErrNotFound) {
@@ -331,7 +331,7 @@ func TestTransition_NotFoundAndCrossTenant(t *testing.T) {
 		entityB := seedEntity(t, super, tenantB, "INV-SM-04 B entity")
 		invoiceB := seedInvoice(t, super, tenantB, entityB, "INV-SM-04-B")
 
-		cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+		cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 		beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invoiceB)
 
@@ -393,7 +393,7 @@ func TestTransition_AtomicityRollsBackOnActorCheckFailure(t *testing.T) {
 	t.Run("empty actor fails history CHECK before audit (23514)", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "INV-SM-05a tenant")
 		entityID := seedEntity(t, super, tenantID, "INV-SM-05a entity")
-		cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-05a"})
 		if err != nil {
@@ -418,7 +418,7 @@ func TestTransition_AtomicityRollsBackOnActorCheckFailure(t *testing.T) {
 	t.Run("256-char actor passes history CHECK but fails audit_log CHECK (23514)", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "INV-SM-05b tenant")
 		entityID := seedEntity(t, super, tenantID, "INV-SM-05b entity")
-		cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-05b"})
 		if err != nil {
@@ -457,7 +457,7 @@ func TestTransition_ConcurrentSameEdgeSerializesToOneWinner(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-SM-06 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-06"})
 	if err != nil {
@@ -520,7 +520,7 @@ func TestTransition_HistoryAndAuditActorMatchCallerSubject(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-SM-07 entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-07"})
@@ -560,7 +560,7 @@ func TestTransition_RejectedTransitionLeavesStatusByteIdentical(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-SM-SOLE-WRITER entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "INV-SM-SOLE-WRITER"})
 	if err != nil {
@@ -1048,7 +1048,7 @@ func TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons(t *testing
 
 	tenantID := seedTenant(t, super, "TR-ACC-CLR tenant")
 	entityID := seedEntity(t, super, tenantID, "TR-ACC-CLR entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TR-ACC-CLR", StatusQueued)
 	seededReasons := `[{"code":"APP-ERR-0417","message":"Supplier TIN not registered","path":"supplier_tin"}]`
@@ -1210,7 +1210,7 @@ func TestTransition_DemotionToDraftCancelsOpenRun(t *testing.T) {
 	t.Run("validated -> draft cancels the open run", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "TRANS-CANCEL-01 tenant")
 		entityID := seedEntity(t, super, tenantID, "TRANS-CANCEL-01 entity")
-		subject := uuid.NewString()
+		subject := memberSubject
 		c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TRANS-CANCEL-01"})
@@ -1254,7 +1254,7 @@ func TestTransition_DemotionToDraftCancelsOpenRun(t *testing.T) {
 	t.Run("validated -> queued leaves the open run untouched (D20/D30 boundary)", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "TRANS-CANCEL-02 tenant")
 		entityID := seedEntity(t, super, tenantID, "TRANS-CANCEL-02 entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TRANS-CANCEL-02"})
 		if err != nil {
@@ -1293,7 +1293,7 @@ func TestTransition_DemotionToDraftCancelsOpenRun(t *testing.T) {
 	t.Run("rejected -> draft cancels the open run too", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "TRANS-CANCEL-03 tenant")
 		entityID := seedEntity(t, super, tenantID, "TRANS-CANCEL-03 entity")
-		subject := uuid.NewString()
+		subject := memberSubject
 		c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 		invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TRANS-CANCEL-03", StatusRejected)

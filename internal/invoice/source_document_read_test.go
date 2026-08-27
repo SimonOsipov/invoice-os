@@ -69,7 +69,7 @@ func TestStoreSourceDocument_ReturnsDocumentAndRows(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{
 		EntityID: entityID, InvoiceNumber: "DOC-02-02-T1",
 		SourceDocumentID: &documentID, SourceRows: []int{2, 3, 4},
@@ -119,7 +119,7 @@ func TestStoreSourceDocument_ManualInvoiceHasNilDocument(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "DOC-02-02 T2 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T2"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -147,7 +147,7 @@ func TestStoreSourceDocument_UnknownIDIsNotFound(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "DOC-02-02 T3 tenant")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.SourceDocument(c, uuid.NewString())
 	if !errors.Is(err, ErrNotFound) {
@@ -162,7 +162,7 @@ func TestStoreSourceDocument_MalformedIDIsValidation(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "DOC-02-02 T4 tenant")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.SourceDocument(c, "not-a-uuid")
 	if !errors.Is(err, ErrValidation) {
@@ -181,13 +181,13 @@ func TestRLS_SourceDocumentCrossTenantIsNotFound(t *testing.T) {
 	entityB := seedEntity(t, super, tenantB, "DOC-02-02 T5 entity B")
 
 	store := NewStore(app)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	invB, err := store.Create(cB, CreateInput{EntityID: entityB, InvoiceNumber: "DOC-02-02-T5"})
 	if err != nil {
 		t.Fatalf("Create (as tenant B): %v", err)
 	}
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	got, err := store.SourceDocument(cA, invB.ID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SourceDocument (tenant A for tenant B's invoice) err = %v, want ErrNotFound", err)
@@ -213,7 +213,7 @@ func TestStoreSourceDocument_UploaderIsDocumentCreatedActor(t *testing.T) {
 	insertDocumentAuditRow(t, super, tenantID, "document.reused", reuser, documentID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T6", SourceDocumentID: &documentID})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -248,7 +248,7 @@ func TestStoreSourceDocument_NoAuditRowLeavesUploaderNil(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T7", SourceDocumentID: &documentID})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -276,7 +276,7 @@ func TestStoreSourceDocument_InvoicesCreatedCountsSiblings(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var last Invoice
 	for i, rows := range [][]int{{2}, {5}, {8}} {
@@ -312,7 +312,7 @@ func TestStoreSourceDocument_OtherInvoiceRowsExcludesSelfAndIsSorted(t *testing.
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T9-A", SourceDocumentID: &documentID, SourceRows: []int{2, 3}}); err != nil {
 		t.Fatalf("Create A: %v", err)
@@ -351,7 +351,7 @@ func TestStoreSourceDocument_OtherInvoiceRowsIsEmptySliceNotNil(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T10", SourceDocumentID: &documentID, SourceRows: []int{2}})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -383,7 +383,7 @@ func TestSourceDocumentHandler_OtherInvoiceRowsIsEmptyArrayNotNull(t *testing.T)
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T11", SourceDocumentID: &documentID, SourceRows: []int{2}})
 	if err != nil {
@@ -447,13 +447,13 @@ func TestRLS_SourceDocumentHandlerCrossTenantIs404AndIdenticalToUnknown(t *testi
 	entityB := seedEntity(t, super, tenantB, "DOC-02-02 T13 entity B")
 
 	store := NewStore(app)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	invB, err := store.Create(cB, CreateInput{EntityID: entityB, InvoiceNumber: "DOC-02-02-T13"})
 	if err != nil {
 		t.Fatalf("Create (as tenant B): %v", err)
 	}
 
-	identityA := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA}
+	identityA := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA}
 	recCross := doSourceDocument(t, store.SourceDocument, &identityA, invB.ID)
 	recUnknown := doSourceDocument(t, store.SourceDocument, &identityA, uuid.NewString())
 
@@ -507,7 +507,7 @@ func TestSourceDocumentRead_WritesNoAuditRow(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-T15", SourceDocumentID: &documentID})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

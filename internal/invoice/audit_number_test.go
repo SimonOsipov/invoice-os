@@ -48,7 +48,7 @@ type auditNumberSite struct {
 // auditNumberIdentity returns a request context for tenantID plus the subject
 // it carries (memberships-gated sites need to seed a row for that subject).
 func auditNumberIdentity(tenantID string) (context.Context, string) {
-	subject := uuid.NewString()
+	subject := memberSubject
 	return auth.WithIdentity(context.Background(), auth.Identity{
 		Subject: subject, Role: "authenticated", TenantID: tenantID,
 	}), subject
@@ -161,8 +161,11 @@ func auditNumberSites() []auditNumberSite {
 			label: "resolved_outside", site: "store.go:2210", event: "invoice.resolved_outside",
 			baseKeys: []string{"id", "reason"},
 			drive: func(t *testing.T, super, app *pgxpool.Pool, tenantID, entityID string) string {
-				c, subject := auditNumberIdentity(tenantID)
+				// ResolveOutside is admin-gated: memberSubject's own row is
+				// 'preparer' (seedTenant), so this needs its own caller.
+				subject := uuid.NewString()
 				seedMembership(t, super, tenantID, subject, "admin")
+				c := auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 				id := seedInvoiceAtStatus(t, super, tenantID, entityID, "AN-RESOLVE-1", StatusFailed)
 				if _, err := NewStore(app).ResolveOutside(c, id, "AN resolved offline"); err != nil {
 					t.Fatalf("ResolveOutside: %v", err)
@@ -174,8 +177,10 @@ func auditNumberSites() []auditNumberSite {
 			label: "unresolved_outside", site: "store.go:2267", event: "invoice.unresolved_outside",
 			baseKeys: []string{"id"},
 			drive: func(t *testing.T, super, app *pgxpool.Pool, tenantID, entityID string) string {
-				c, subject := auditNumberIdentity(tenantID)
+				// UnresolveOutside is admin-gated too; same reason as above.
+				subject := uuid.NewString()
 				seedMembership(t, super, tenantID, subject, "admin")
+				c := auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 				id := seedResolvedFailed(t, super, tenantID, entityID, "AN-UNRESOLVE-1", subject, "AN resolved offline")
 				if _, err := NewStore(app).UnresolveOutside(c, id); err != nil {
 					t.Fatalf("UnresolveOutside: %v", err)

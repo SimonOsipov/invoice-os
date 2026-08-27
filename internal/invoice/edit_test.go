@@ -60,7 +60,7 @@ func TestStoreEdit_NonFixableStateRejected(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-01 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-01 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-01"})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestStoreEdit_ValidatedContentChangeDemotes(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-02 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-02", VAT: strPtr("7.00")})
@@ -200,7 +200,7 @@ func TestStoreEdit_ContentAuditFailureRollsBackWholeEdit(t *testing.T) {
 	run := func(t *testing.T, label, craftedSubject string) {
 		tenantID := seedTenant(t, super, "EDIT-03 "+label+" tenant")
 		entityID := seedEntity(t, super, tenantID, "EDIT-03 entity")
-		cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-03-" + label, VAT: strPtr("7.00")})
 		if err != nil {
@@ -273,7 +273,7 @@ func TestStoreEdit_ValidatedNoOpStaysValidated(t *testing.T) {
 	// so MBSSupplierTIN leaves it untouched -- the derived value equals this
 	// placeholder byte-for-byte.
 	entityID := seedEntityWithTIN(t, super, tenantID, "Supplier Co", "SUP-TIN-1")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
@@ -336,7 +336,7 @@ func TestStoreEdit_NumericScaleNoOp(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-05 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-05 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-05", Total: strPtr("100.00")})
 	if err != nil {
@@ -377,7 +377,7 @@ func TestStoreEdit_DraftContentChangeNoDemotion(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-06 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-06 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-06"})
@@ -419,7 +419,7 @@ func TestStoreEdit_DraftNoOpWritesNothing(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-07 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-07 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-07", VAT: strPtr("7.00")})
 	if err != nil {
@@ -454,7 +454,7 @@ func TestStoreEdit_ClearsKeepMarks(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-KEEP-CLEAR tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-KEEP-CLEAR entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-KEEP-CLEAR", VAT: strPtr("7.00")})
 	if err != nil {
@@ -502,7 +502,7 @@ func TestStoreEdit_NoOpEditDoesNotClearKeepMarks(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-KEEP-NOOP tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-KEEP-NOOP entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-KEEP-NOOP", VAT: strPtr("7.00")})
 	if err != nil {
@@ -534,7 +534,7 @@ func TestStoreEdit_AllNilRejected(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-08 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-08 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-08"})
 	if err != nil {
@@ -563,7 +563,7 @@ func TestStoreEdit_GuardBeforeContentValidation(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-09 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-09 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-09"})
 	if err != nil {
@@ -594,7 +594,7 @@ func TestStoreEdit_NotFoundAndCrossTenant(t *testing.T) {
 
 	t.Run("nonexistent id", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "EDIT-10 tenant")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		bogusID := uuid.NewString()
 		if _, err := store.Edit(c, bogusID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}}); !errors.Is(err, ErrNotFound) {
@@ -608,7 +608,7 @@ func TestStoreEdit_NotFoundAndCrossTenant(t *testing.T) {
 		entityB := seedEntity(t, super, tenantB, "EDIT-10 B entity")
 		invoiceB := seedInvoice(t, super, tenantB, entityB, "EDIT-10-B")
 
-		cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+		cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 		if _, err := store.Edit(cA, invoiceB, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}}); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("Edit(tenant B's invoice) as tenant A err = %v, want ErrNotFound", err)
@@ -638,7 +638,7 @@ func TestStoreEdit_DemoteThenRevalidateSucceeds(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-11 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-11 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-11", VAT: strPtr("7.00")})
 	if err != nil {
@@ -723,7 +723,7 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 	// identical note above -- the entity now supplies the "SUP-TIN-1"/
 	// "Supplier Co" values the sibling-field assertions below expect.
 	entityID := seedEntityWithTIN(t, super, tenantID, "Supplier Co", "SUP-TIN-1")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
@@ -847,7 +847,7 @@ func TestStoreEdit_RejectedContentChangeDemotesAndRetainsReasons(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-13 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-13 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "EDIT-13", StatusRejected)
@@ -942,7 +942,7 @@ func TestStoreEdit_RejectedNoOpKeepsStatusAndReasons(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-14 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-14 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-14", VAT: strPtr("7.00")})
 	if err != nil {
@@ -1006,7 +1006,7 @@ func TestStoreEdit_AcceptedStaysNotFixable(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-15 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-15 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "EDIT-15", StatusAccepted)
 
@@ -1054,7 +1054,7 @@ func TestStoreEdit_NonFixableStatesRejectedTable(t *testing.T) {
 		t.Run(string(status), func(t *testing.T) {
 			tenantID := seedTenant(t, super, "INV-03-T5 "+string(status)+" tenant")
 			entityID := seedEntity(t, super, tenantID, "INV-03-T5 entity")
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "INV-03-T5-"+string(status), status)
 
@@ -1207,7 +1207,7 @@ func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *tes
 
 	tenantID := seedTenant(t, super, "EDIT-CONC tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-CONC entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "EDIT-CONC", StatusRejected)
 	reasonsJSON := `[{"code":"TIN_MISMATCH","message":"supplier TIN does not match","path":"supplier_tin"}]`
@@ -1317,7 +1317,7 @@ func TestStoreEdit_LinedInvoiceDemotesAndLeavesLinesUntouchedWithNilLineItems(t 
 
 	tenantID := seedTenant(t, super, "INV-02-EDIT-LINES tenant")
 	entityID := seedEntity(t, super, tenantID, "INV-02-EDIT-LINES entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	priceA, priceB := "10.00", "20.00"
@@ -1500,7 +1500,7 @@ func TestStoreEdit_LineChangeOnValidatedDemotesAndAuditsLineItemsField(t *testin
 
 	tenantID := seedTenant(t, super, "EDIT-T1 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T1 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	priceA, priceB := "10.00", "20.00"
@@ -1548,7 +1548,7 @@ func TestStoreEdit_ReplaceLinesAppendsAndRenumbers(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T2 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T2 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	desc1, desc2, desc3 := "Line1", "Line2", "Line3-appended"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T2", StatusValidated, []LineItemInput{
@@ -1586,7 +1586,7 @@ func TestStoreEdit_ReplaceLinesDropsAndRenumbers(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T3 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T3 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	desc1, desc2, desc3 := "Line1", "Line2-dropped", "Line3"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T3", StatusValidated, []LineItemInput{
@@ -1629,7 +1629,7 @@ func TestStoreEdit_NoOpReturnsFreshLineIDsNeverBeforeLines(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T4 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T4 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	priceA, priceB := "10.00", "20.00"
@@ -1682,7 +1682,7 @@ func TestStoreEdit_NumericScaleOnlyLineResendIsNoOp(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T5 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T5 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	price := "100.00"
@@ -1723,7 +1723,7 @@ func TestStoreEdit_RejectedLineChangeDemotesRetainsReasons(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T6 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T6 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T6", StatusRejected, []LineItemInput{
@@ -1773,7 +1773,7 @@ func TestStoreEdit_EmptyLineItemsRemovesAllLinesGuardWidened(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T7 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T7 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T7", StatusValidated, []LineItemInput{
@@ -1810,7 +1810,7 @@ func TestStoreEdit_LineChangeOnNonEditableStatusRefusedLinesUntouched(t *testing
 
 			tenantID := seedTenant(t, super, "EDIT-T9 tenant "+string(status))
 			entityID := seedEntity(t, super, tenantID, "EDIT-T9 entity")
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			descA := "Widget"
 			inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T9-"+string(status), status, []LineItemInput{
@@ -1851,7 +1851,7 @@ func TestStoreEdit_LineChangeContentAuditFailureRollsBackLineReplaceToo(t *testi
 
 	tenantID := seedTenant(t, super, "EDIT-T11 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T11 entity")
-	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, cNormal, entityID, "EDIT-T11", StatusValidated, []LineItemInput{
@@ -1901,7 +1901,7 @@ func TestStoreEdit_ConcurrentReplaceAllLastWriterWins(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T13 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T13 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T13", StatusValidated, []LineItemInput{
@@ -1968,14 +1968,14 @@ func TestStoreEdit_CrossTenantLineChangeRefusedLinesUntouched(t *testing.T) {
 
 	tenantB := seedTenant(t, super, "EDIT-T14 tenant B")
 	entityB := seedEntity(t, super, tenantB, "EDIT-T14 B entity")
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	descA := "Widget"
 	invB := seedLinedInvoiceAtStatus(t, super, store, cB, entityB, "EDIT-T14-B", StatusValidated, []LineItemInput{{Description: &descA}})
 	beforeLines := readLineItemsForTest(t, super, invB.ID)
 
 	tenantA := seedTenant(t, super, "EDIT-T14 tenant A")
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	newDesc := "Gadget"
 	if _, err := store.Edit(cA, invB.ID, EditInput{LineItems: &[]LineItemInput{{Description: &newDesc}}}); !errors.Is(err, ErrNotFound) {
@@ -1998,7 +1998,7 @@ func TestStoreEdit_DraftLineChangeNoDemotion(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T15 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T15 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-T15", LineItems: []LineItemInput{{Description: &descA}}})
@@ -2039,7 +2039,7 @@ func TestStoreEdit_LineChangeNeverRewritesTotals(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T16 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T16 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv, err := store.Create(c, CreateInput{
@@ -2088,7 +2088,7 @@ func TestStoreEdit_ReturnedLineItemsMatchStoredBothChangedAndNoOpPaths(t *testin
 	t.Run("changed", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "EDIT-T17 tenant changed")
 		entityID := seedEntity(t, super, tenantID, "EDIT-T17 entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		descA, descB := "Widget", "Gadget"
 		inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T17-CHANGED", StatusValidated, []LineItemInput{
@@ -2114,7 +2114,7 @@ func TestStoreEdit_ReturnedLineItemsMatchStoredBothChangedAndNoOpPaths(t *testin
 	t.Run("no-op", func(t *testing.T) {
 		tenantID := seedTenant(t, super, "EDIT-T17 tenant no-op")
 		entityID := seedEntity(t, super, tenantID, "EDIT-T17 entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		descA, descB := "Widget", "Gadget"
 		inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-T17-NOOP", StatusValidated, []LineItemInput{
@@ -2154,7 +2154,7 @@ func TestStoreEdit_DemoteThenRevalidateSucceedsWithLines(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T18 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T18 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	priceA := "10.00"
@@ -2221,7 +2221,7 @@ func TestStoreEdit_DemotionDerivedFromLegalTransitionsNotLiteral(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-T20 tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-T20 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	priceA := "10.00"
@@ -2263,7 +2263,7 @@ func TestStoreEdit_MalformedLineNumericValidationErrorZeroRowsWritten(t *testing
 
 		tenantID := seedTenant(t, super, "EDIT-T21 tenant draft")
 		entityID := seedEntity(t, super, tenantID, "EDIT-T21 entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		descA := "Widget"
 		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-T21-DRAFT", LineItems: []LineItemInput{{Description: &descA}}})
@@ -2292,7 +2292,7 @@ func TestStoreEdit_MalformedLineNumericValidationErrorZeroRowsWritten(t *testing
 
 		tenantID := seedTenant(t, super, "EDIT-T21 tenant queued")
 		entityID := seedEntity(t, super, tenantID, "EDIT-T21 entity")
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-T21-QUEUED"})
 		if err != nil {
@@ -2341,7 +2341,7 @@ func TestStoreEdit_ReorderOnlyLineChangeDemotesAndRenumbersByPosition(t *testing
 
 	tenantID := seedTenant(t, super, "EDIT-QA-REORDER tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-QA-REORDER entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-REORDER", StatusValidated, []LineItemInput{
@@ -2387,7 +2387,7 @@ func TestStoreEdit_LargeLineSetPersistsAllRenumbered1ToN(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-QA-LARGE tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-QA-LARGE entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descSeed := "Widget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-LARGE", StatusValidated, []LineItemInput{
@@ -2437,7 +2437,7 @@ func TestStoreEdit_AllNullNumericLineFieldsPersist(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-QA-NULLNUM tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-QA-NULLNUM entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descSeed := "Widget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-NULLNUM", StatusValidated, []LineItemInput{
@@ -2482,7 +2482,7 @@ func TestStoreEdit_HeaderAndLineChangeInOneCallSingleAuditSingleHistory(t *testi
 
 	tenantID := seedTenant(t, super, "EDIT-QA-COMBINED tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-QA-COMBINED entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-COMBINED", StatusValidated, []LineItemInput{
@@ -2539,7 +2539,7 @@ func TestStoreEdit_LinesRemovedOutOfBandThenHeaderOnlyEditSucceeds(t *testing.T)
 
 	tenantID := seedTenant(t, super, "EDIT-QA-OOB tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-QA-OOB entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-OOB", StatusValidated, []LineItemInput{
@@ -2585,7 +2585,7 @@ func TestStoreEdit_EmptyLineItemsFingerprintDiffersFromPreEdit(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "EDIT-QA-FP tenant")
 	entityID := seedEntity(t, super, tenantID, "EDIT-QA-FP entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA, descB := "Widget", "Gadget"
 	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-FP", StatusValidated, []LineItemInput{
@@ -2646,7 +2646,7 @@ func TestEdit_CancelsOpenRun(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "CANCEL-01 tenant")
 	entityID := seedEntity(t, super, tenantID, "CANCEL-01 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-01", VAT: strPtr("7.00")})
@@ -2721,7 +2721,7 @@ func TestEdit_NoOpEditCancelsNothing(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "CANCEL-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "CANCEL-02 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-02", VAT: strPtr("7.00")})
 	if err != nil {
@@ -2771,7 +2771,7 @@ func TestEdit_CancelsApprovedRunNotOnlyOpen(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "CANCEL-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "CANCEL-03 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-03", VAT: strPtr("7.00")})
@@ -2841,7 +2841,7 @@ func TestStoreEdit_DemoteThenRevalidateUnderActivePolicySucceeds(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID, entityID, _ := seedOneStepActivePolicyTenant(t, super, "DEMOTE-REVAL-ACTIVE")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DEMOTE-REVAL-ACTIVE", VAT: strPtr("7.00")})
 	if err != nil {
@@ -2940,7 +2940,7 @@ func TestEdit_CancelRollsBackWithTheEdit(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "CANCEL-05 tenant")
 	entityID := seedEntity(t, super, tenantID, "CANCEL-05 entity")
-	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "CANCEL-05", VAT: strPtr("7.00")})
 	if err != nil {

@@ -22,9 +22,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -87,9 +89,19 @@ func TestAuditNumber_SearchFindsASubmissionWorkersRow(t *testing.T) {
 		t.Fatalf("the needle %q occurs in the event name %q; the event arm would supply the match", want, event)
 	}
 
-	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
-	})
+	var ctx context.Context
+	if err := db.WithinTenantTx(context.Background(), f.mig, tenantID, func(tx pgx.Tx) error {
+		userID := uuid.NewString()
+		_, e := tx.Exec(context.Background(),
+			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+			tenantID, userID, "preparer", "active")
+		ctx = auth.WithIdentity(context.Background(), auth.Identity{
+			Subject: userID, Role: "authenticated", TenantID: tenantID,
+		})
+		return e
+	}); err != nil {
+		t.Fatalf("seed membership via WithinTenantTx: %v", err)
+	}
 	got, err := audit.NewStore(f.app).List(ctx, audit.Filter{Q: want, Limit: anSearchLimit})
 	if err != nil {
 		t.Fatalf("audit.Store.List(q=%q): %v", want, err)

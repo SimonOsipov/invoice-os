@@ -26,8 +26,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
-
-	"github.com/google/uuid"
 )
 
 // seedInvoiceAt is seedInvoice plus an explicit created_at overwrite -- same
@@ -77,7 +75,7 @@ func TestStoreList_EntityIDNarrowsBeforeLimit(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Sanity: an unfiltered Limit:3 tenant-wide window is entirely entityB's
 	// rows. If this fails, the fixture no longer exercises the trap this test
@@ -151,7 +149,7 @@ func TestStoreList_EntityIDAndNeedsAttentionAND(t *testing.T) {
 	_ = seedInvoiceWithViolations(t, super, tenantID, entityB, "ENTITY-FILTER-AND-B-rejected", string(StatusRejected), `[]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{EntityID: entityA, NeedsAttention: true, Limit: 50})
 	if err != nil {

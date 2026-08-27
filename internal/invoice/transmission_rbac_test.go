@@ -38,6 +38,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // wantNotApproverTransmitReason is the 403 copy both doors must emit, pinned
@@ -513,7 +514,7 @@ func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 //
 //	AC-1 TestGetHandler_SubmitBlockedReasonRoleArm,
 //	     TestGetHandler_RealStore_PreparerSeesRoleReason,
-//	     TestGetHandler_RealStore_NoMembershipSeesRoleReason
+//	     TestGetHandler_RealStore_NoMembershipRefused
 //	AC-2 TestSubmitGate_AdminAndReviewerUnchanged        (guard)
 //	AC-3 TestSubmitGate_RoleBeforeStatus
 //	AC-4 TestGetHandler_RoleResolvedOnValidatedStatus
@@ -768,10 +769,12 @@ func TestGetHandler_RealStore_PreparerSeesRoleReason(t *testing.T) {
 	assertRoleReason(t, preparerResp)
 }
 
-// TestGetHandler_RealStore_NoMembershipSeesRoleReason covers the shape several
-// other DB-backed GET tests run through the real resolver without asserting on:
-// an unseeded subject, which callerRoleTx answers ("", nil).
-func TestGetHandler_RealStore_NoMembershipSeesRoleReason(t *testing.T) {
+// TestGetHandler_RealStore_NoMembershipRefused (AUDIT-12-07): the refusal
+// moved earlier. Store.Get itself runs over db.WithinRequestTenantTx, so a caller
+// with no membership row is now refused (db.ErrNotActiveMember, 403) before
+// GetHandler ever calls callerRole -- this no longer reaches the ("", nil) role-
+// reason shape the name describes.
+func TestGetHandler_RealStore_NoMembershipRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	tenantID := seedTenant(t, super, "submit gate no-membership tenant")
@@ -781,10 +784,12 @@ func TestGetHandler_RealStore_NoMembershipSeesRoleReason(t *testing.T) {
 	store := NewStore(app)
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
 
-	rec, resp := doInvoiceGetAs(t, store.Get, store.CallerRole, &id, invID)
+	rec, _ := doInvoiceGetAs(t, store.Get, store.CallerRole, &id, invID)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
 	}
-	assertRoleReason(t, resp)
+	if !strings.Contains(rec.Body.String(), db.NotActiveMemberMessage) {
+		t.Errorf("body = %s, want it to carry db.NotActiveMemberMessage", rec.Body.String())
+	}
 }

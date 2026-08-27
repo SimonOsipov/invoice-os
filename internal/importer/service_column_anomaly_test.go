@@ -32,8 +32,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -53,7 +51,7 @@ func TestServiceImport_ColumnCountAnomaliesDegradeGracefully(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "M4-15-03 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// INV-WIDE: 11 valid cells (anomalyHeader order) + 2 EXTRA trailing
 	// cells beyond the header width. The extras must be silently ignored --
@@ -129,7 +127,7 @@ func TestServiceImport_DrasticallyShortRowNoPanic(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "M4-15-03 entity (short-row)")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// INV-TINY: ONE cell -- invoice_number only. Every other mapped field
 	// (issue_date, buyer_tin, buyer_name, currency, vat, total,

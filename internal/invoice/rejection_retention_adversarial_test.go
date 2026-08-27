@@ -63,7 +63,7 @@ func TestRLS_RetainedDemotedDraftReasonsCrossTenantRefused(t *testing.T) {
 	tenantB := seedTenant(t, super, "RETAIN-RLS tenant B")
 	entityA := seedEntity(t, super, tenantA, "RETAIN-RLS A entity")
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	invA := seedInvoiceAtStatus(t, super, tenantA, entityA, "RETAIN-RLS-A", StatusRejected)
 	reasonsJSON := `[{"code":"TIN_MISMATCH","message":"supplier TIN does not match","path":"supplier_tin"}]`
@@ -98,7 +98,7 @@ func TestRLS_RetainedDemotedDraftReasonsCrossTenantRefused(t *testing.T) {
 		t.Fatalf("precondition: Edit-returned rejection_reasons = %s, want %s (retained, not cleared)", edited.RejectionReasons, seededReasons)
 	}
 
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	if _, err := store.Get(cB, invA); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get(tenant A's demoted+retained-reasons invoice) as tenant B err = %v, want ErrNotFound", err)
@@ -149,7 +149,7 @@ func TestOutcomeLoop_SecondRejectionOverwritesNotAccumulates(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "LOOP-2X tenant")
 	entityID := seedEntity(t, super, tenantID, "LOOP-2X entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "LOOP-2X", StatusQueued)
 
@@ -245,7 +245,7 @@ func TestConcurrency_EditRacesMarkAcceptedTxLeavesNoReasonsOnAccepted(t *testing
 
 	tenantID := seedTenant(t, super, "CONC-ACC tenant")
 	entityID := seedEntity(t, super, tenantID, "CONC-ACC entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "CONC-ACC", StatusQueued)
 	staleReasons := `[{"code":"APP-ERR-0417","message":"Supplier TIN not registered","path":"supplier_tin"}]`
@@ -322,7 +322,7 @@ func TestOutcomeLoop_RejectEditValidateQueueFailRetainsReasons(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "LOOP-FAIL tenant")
 	entityID := seedEntity(t, super, tenantID, "LOOP-FAIL entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "LOOP-FAIL", StatusQueued)
 
@@ -572,7 +572,7 @@ func TestStoreTransition_RejectedViaHandlerPathCarriesPreviousCycleReasons_F3Cha
 
 	tenantID := seedTenant(t, super, "TR-F3 tenant")
 	entityID := seedEntity(t, super, tenantID, "TR-F3 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TR-F3", StatusQueued)
 	staleReasonsSeed := `[{"code":"APP-ERR-0417","message":"Supplier TIN not registered (FIRST cycle)","path":"supplier_tin"}]`

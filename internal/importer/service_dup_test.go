@@ -101,7 +101,7 @@ func TestServiceImport_StoreDuplicateReportedAsFirstClassViolation(t *testing.T)
 	seedInvoice(t, super, tenantID, entityID, "INV-DUP2")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP2", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem1", "1", "150.00"),    // sheet 2
@@ -171,7 +171,7 @@ func TestServiceImport_DryRunAndRealBothReportIdenticalEnrichedDuplicate(t *test
 	seedInvoice(t, super, tenantID, entityID, "INV-DUP3")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	beforeCount := countInvoicesForEntity(t, super, entityID)
 
@@ -228,7 +228,7 @@ func TestServiceImport_ConcurrentDuplicateLoserReportedAsFirstClassViolation(t *
 	entityID := seedEntity(t, super, tenantID, "DUP-04 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const racers = 4
 	results := make([]BatchResult, racers)
@@ -312,7 +312,7 @@ func TestServiceImport_ValidationCreateErrorRowErrorStaysBareNotRuleShaped(t *te
 	entityID := seedEntity(t, super, tenantID, "DUP-05 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP5-BADTOTAL", "2026-01-10", "T1", "B1", "NGN", "500.00", "0.00", "N/A", "BadItem", "1", "500.00"), // sheet 2
@@ -362,7 +362,7 @@ func TestServiceImport_MultipleStoreDuplicatesEachEnrichedIndependently(t *testi
 	seedInvoice(t, super, tenantID, entityID, "INV-DUP6-B")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP6-A", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "ItemA", "1", "10.00"), // sheet 2
@@ -465,7 +465,7 @@ func TestServiceImport_DuplicateNeverMixesWithContentViolation(t *testing.T) {
 	seedInvoice(t, super, tenantID, entityID, "INV-DUP7")
 
 	svc := newTestServiceWithGate(app, &contentViolationGate{targetNumber: "INV-DUP7-CONTENT"})
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP7", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupItem", "1", "10.00"),             // sheet 2
@@ -531,7 +531,7 @@ func TestImport_StoreDuplicate_CarriesCollidingInvoiceID(t *testing.T) {
 	wantID := seedInvoice(t, super, tenantID, entityID, "INV-DUP-1")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP-1", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
@@ -574,7 +574,7 @@ func TestImport_RacingInsertBackstop_OmitsInvoiceID(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "BUG-08-01 race entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const racers = 4
 	results := make([]BatchResult, racers)
@@ -647,7 +647,7 @@ func TestImport_StoreDuplicate_CountersUnchanged(t *testing.T) {
 	seedInvoice(t, super, tenantID, entityID, "INV-CTR-B")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-CTR-A", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "ItemA1", "1", "10.00"), // sheet 2

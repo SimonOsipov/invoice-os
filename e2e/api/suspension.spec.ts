@@ -191,17 +191,13 @@ test.describe('read-path suspension (API E2E, over the deployed gateway)', () =>
   })
 
   test('cross-tenant: the refusal is scoped to the tenant that suspended them', async () => {
-    // …0007 is suspended in tenant A and holds NO row at all in tenant B. Per §5 of
-    // docs/read-path-suspension.md the gate refuses a row that is not active and ADMITS a
-    // caller with no row — the narrow rule AUDIT-12 owns flipping. Pinned here so that flip
-    // lands as a visible diff rather than a silent behaviour change.
+    // …0007 is suspended in tenant A and holds NO row at all in tenant B. AUDIT-12 flips the
+    // gate to refuse a no-row caller exactly like a suspended one, so both now land on the
+    // SAME shared refusal.
     const inTenantB = await login({ ...PERSONAS.B, subject: SUSPENDED_SUBJECT })
 
     const read = await rawFetch(AUDIT_LOG, { headers: bearer(inTenantB) })
-    expect(
-      read.status,
-      'a non-member of tenant B still reads it (docs/read-path-suspension.md §5). A 403 here means AUDIT-12 landed — update this pin, do not delete it',
-    ).toBe(200)
+    assertSuspensionRefusal(read, 'a non-member of tenant B')
 
     // /v1/me is stricter than the gate: it does its own membership lookup, so the same token
     // is refused there — a DIFFERENT 403, with a different message.

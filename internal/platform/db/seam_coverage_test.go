@@ -1254,6 +1254,2184 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Scan 3b — the doc no longer claims the narrow rule (AUDIT-12-08)
+// ---------------------------------------------------------------------------
+//
+// AUDIT-10 wrote the narrow rule down in two places: the outcome table's
+// "does not exist" row and §5's heading. AUDIT-12 flips the rule to strict;
+// this scan stops the sentence outliving the behaviour it used to describe.
+//
+// Both phrases are scoped past the bare substring "runs the closure": the
+// outcome table's OTHER row (an active membership) legitimately keeps that
+// substring after the rewrite, so banning it bare would fail a correct doc.
+
+// scStaleNarrowRulePhrases are the exact substrings AUDIT-10 left behind
+// claiming a caller with no membership row is admitted. Neither may survive
+// the strict-rule rewrite.
+var scStaleNarrowRulePhrases = []string{
+	"does not exist | runs the closure",
+	"no membership row is still admitted",
+}
+
+func scStaleNarrowRuleControlNeedles(t *testing.T) {
+	t.Run("N1 the needle fires when planted", func(t *testing.T) {
+		fixture := "## 5. The narrow rule: a caller with no membership row is still admitted\n\n" +
+			"| does not exist | runs the closure — see §5 |\n"
+		for _, phrase := range scStaleNarrowRulePhrases {
+			if !strings.Contains(fixture, phrase) {
+				t.Errorf("fixture does not contain %q — the needle would not fire against the real doc's own wording either", phrase)
+			}
+		}
+	})
+
+	t.Run("N2 the legitimate active-row line is not a false positive", func(t *testing.T) {
+		// The active-membership row keeps "runs the closure" after the
+		// rewrite; the scan must not flag it.
+		fixture := "| exists, `status = 'active'` | runs the closure |\n"
+		for _, phrase := range scStaleNarrowRulePhrases {
+			if strings.Contains(fixture, phrase) {
+				t.Errorf("the legitimate active-row line matched %q — this scan would fail a doc that correctly keeps the row it must keep", phrase)
+			}
+		}
+	})
+}
+
+// TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim fails while
+// docs/read-path-suspension.md still asserts the AUDIT-10 narrow rule that
+// AUDIT-12 replaces: a caller with no membership row is no longer admitted.
+func TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim(t *testing.T) {
+	t.Run("control needles", scStaleNarrowRuleControlNeedles)
+
+	root := repoRootDir(t)
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scDocPath)))
+	if err != nil {
+		t.Fatalf("read %s: %v — a doc the scan cannot read is a doc it silently reports clean on", scDocPath, err)
+	}
+	doc := string(raw)
+
+	headings := 0
+	for _, l := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "## ") {
+			headings++
+		}
+	}
+	if headings < 10 {
+		t.Fatalf("%s parsed only %d top-level section heading(s), want at least 10 — a truncated or empty read would report clean while examining nothing", scDocPath, headings)
+	}
+
+	for _, phrase := range scStaleNarrowRulePhrases {
+		if strings.Contains(doc, phrase) {
+			t.Errorf("%s still contains %q — the narrow rule it describes was replaced by AUDIT-12's strict rule; rewrite the sentence", scDocPath, phrase)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scan 4 — every swept package builds its DB-test identities off the seeded
+// member (AUDIT-12-02, D-7)
+// ---------------------------------------------------------------------------
+//
+// The sweep (AUDIT-12 System Design §5.2) is behaviour-neutral against today's
+// predicate: an active membership row is admitted exactly like no row at all,
+// so ordinary `go test` cannot tell a swept package from a reverted one.
+// scSweepPopulationPackages scopes both scans to the 9 packages AUDIT-12's
+// blast radius actually names; scSweepUnsweptAllowlist then narrows that to
+// the ones not yet swept. Each AUDIT-12 sweep subtask deletes its own
+// unswept-allowlist entries, so a revert between subtasks fails on the commit
+// that causes it.
+//
+// The match is textual for two shapes and AST-based for a third:
+// `Subject: uuid.NewString()` directly, `x := uuid.NewString()` followed
+// anywhere in the same func by `Subject: x` (internal/portfolio spells ~9 of
+// its 41 sites the second way, AUDIT-12-02 Implementation Plan Correction 2),
+// and — AUDIT-12-03's finding — a fresh uuid passed POSITIONALLY into a local
+// test helper that itself builds the identity, e.g.
+// `identity(ctx, tenantID, uuid.NewString())` where `identity(ctx, tenantID,
+// subject string)` does `auth.Identity{Subject: subject, ...}` internally.
+// Neither text pattern ever appears at that call site — "Subject:" is inside
+// the helper, not the caller — so this shape needs a real value-flow answer:
+// scSweepFindIdentitySinks walks every local func for one that routes a
+// parameter into `Subject:` (directly, or by relaying a parameter into
+// another already-found sink — a fixed-point closure, so a chain of
+// wrappers is caught at any depth, not just one hop), and
+// scSweepHelperCallSitesIn then flags any call into a sink fed a fresh uuid
+// — inline or through a `:=`-assigned variable — at that parameter position.
+// This is deliberately structural (which parameter position feeds Subject),
+// not name-based (no hardcoded "identity" or "testIdentity"), so a
+// differently-named helper in the next swept package is still caught.
+//
+// A site that legitimately needs a fresh, unmembered subject inside an
+// already-swept package (the claim-changing set, AUDIT-12 System Design §5.4)
+// goes on scSweepSubjectAllowlist instead, always func-scoped — never a whole
+// file, matching scCoreAllowlist's `{file, fn: "Me"}` precedent — so a revert
+// of any OTHER site in that file still fails (Correction 1).
+//
+// Before any of that, a site is gated on whether its enclosing func's call
+// graph reaches a database call at all (scSweepFindDBReachingFuncs, resolved
+// the same base-case-then-fixed-point way as the two sinks above). A pure
+// mock stub building a fresh identity never touches Postgres, so asking
+// whether ITS caller holds a membership row is a false positive, not an
+// exemption — this is what keeps scSweepSubjectAllowlist to genuine policy
+// decisions instead of accreting a scan artifact per stub (AUDIT-12-07 review).
+//
+// Known limits. Attribution is to the innermost FuncDecl only: a site inside a
+// nested t.Run closure is attributed to the enclosing test func, not the
+// subtest — none of today's sites need finer scoping. A variable also fed to
+// its own explicit membership insert is still flagged; a later sweep subtask
+// that needs that shape extends the predicate or the allowlist, not this
+// comment. The helper-sink walk resolves calls by plain identifier only (a
+// local func called directly, not through a struct method or an interface
+// value) — every known helper in this package's population is a bare func.
+
+// scSweepFuncLineRanges maps every FuncDecl in f to its body's 1-based
+// [start,end] line range. AST supplies the boundary; the match itself is a
+// plain regex test over the raw lines inside it, never a type or call check.
+func scSweepFuncLineRanges(fset *token.FileSet, f *ast.File) map[string][2]int {
+	out := map[string][2]int{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		out[fn.Name.Name] = [2]int{fset.Position(fn.Body.Pos()).Line, fset.Position(fn.Body.End()).Line}
+		return true
+	})
+	return out
+}
+
+// scSweepSubjectSite is one place a _test.go file builds a caller identity
+// from a fresh, unmembered uuid rather than the package's seeded
+// memberSubject.
+type scSweepSubjectSite struct {
+	file string
+	line int
+	fn   string
+	kind string // "literal" (Subject: uuid.NewString()), "var" (x := uuid.NewString() ... Subject: x), or "helper" (a fresh uuid passed positionally into a local identity-building func)
+	name string // for "var" kind, the identifier assigned from uuid.NewString() -- the recognise-the-seeding rule below correlates it against a membership seed
+}
+
+func (s scSweepSubjectSite) String() string {
+	return s.file + ":" + strconv.Itoa(s.line) + " (" + s.fn + ", " + s.kind + ")"
+}
+
+var scSweepLiteralRE = regexp.MustCompile(`Subject:\s*uuid\.NewString\(\)`)
+var scSweepVarAssignRE = regexp.MustCompile(`(\w+)\s*:=\s*uuid\.NewString\(\)`)
+
+func scSweepVarUseRE(name string) *regexp.Regexp {
+	return regexp.MustCompile(`Subject:\s*` + regexp.QuoteMeta(name) + `\b`)
+}
+
+// scSweepTextualSubjectSitesIn finds the two textual shapes (literal,
+// var-mediated) in one parsed _test.go file. Both are self-contained inside
+// one func body, so per-file matching is correct for them.
+func scSweepTextualSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSubjectSite {
+	var out []scSweepSubjectSite
+	for fn, rng := range scSweepFuncLineRanges(fset, f) {
+		start, end := rng[0], rng[1]
+		if start < 1 || end > len(lines) {
+			continue
+		}
+		body := strings.Join(lines[start-1:end], "\n")
+		for i := start - 1; i < end; i++ {
+			line := lines[i]
+			switch {
+			case scSweepLiteralRE.MatchString(line):
+				out = append(out, scSweepSubjectSite{file: rel, line: i + 1, fn: fn, kind: "literal"})
+			case scSweepVarAssignRE.MatchString(line):
+				name := scSweepVarAssignRE.FindStringSubmatch(line)[1]
+				if scSweepVarUseRE(name).MatchString(body) {
+					out = append(out, scSweepSubjectSite{file: rel, line: i + 1, fn: fn, kind: "var", name: name})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// scSweepSubjectSitesIn is the single-file convenience the needle fixtures
+// below use, where the sink and its call always live in the same synthetic
+// file: textual shapes plus helper-shape sinks resolved from this file
+// alone. The real population scan does NOT call this — it resolves sinks
+// per PACKAGE (see TestRLS_SweptPackagesBuildIdentitiesFromASeededMember),
+// because a package's identity()-style helper is routinely declared in one
+// _test.go file and called from its siblings.
+func scSweepSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSubjectSite {
+	out := scSweepTextualSubjectSitesIn(fset, rel, f, lines)
+	decls := scSweepFuncDecls(f)
+	sinks := scSweepFindIdentitySinks(decls)
+	membershipSinks := scSweepFindMembershipSinks(decls)
+	out = append(out, scSweepHelperCallSitesInFile(fset, rel, f, lines, sinks, membershipSinks)...)
+	return out
+}
+
+// scSweepFuncDecls returns every top-level func with a body, in source order.
+func scSweepFuncDecls(f *ast.File) []*ast.FuncDecl {
+	var out []*ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+			out = append(out, fd)
+		}
+	}
+	return out
+}
+
+// scSweepFlattenParams returns a func's parameter names in call-site
+// positional order (`func f(ctx context.Context, tenantID, subject string)`
+// flattens to ["ctx", "tenantID", "subject"]) — an unnamed field contributes
+// a blank slot so later indices still line up with real call args.
+func scSweepFlattenParams(fl *ast.FieldList) []string {
+	if fl == nil {
+		return nil
+	}
+	var out []string
+	for _, field := range fl.List {
+		if len(field.Names) == 0 {
+			out = append(out, "")
+			continue
+		}
+		for _, n := range field.Names {
+			out = append(out, n.Name)
+		}
+	}
+	return out
+}
+
+// scSweepIdentitySink is one local func that routes one of its own
+// parameters (at paramIdx, positional) into auth.Identity{Subject: ...} —
+// directly, or by relaying that parameter into another sink.
+type scSweepIdentitySink struct {
+	paramIdx int
+}
+
+// scSweepFindIdentitySinks finds every local sink in one file. Base case: a
+// CompositeLit key `Subject` whose value is an Ident matching one of the
+// enclosing func's own parameters. Then a fixed-point pass: a func that
+// calls an already-found sink, passing one of ITS OWN parameters at the
+// sink's paramIdx position, becomes a sink itself — repeated until nothing
+// new is found, so a chain of wrapper helpers is resolved at any depth, not
+// just one hop. Resolution is by plain identifier call (`f(...)`), the only
+// shape any known local test helper uses.
+func scSweepFindIdentitySinks(decls []*ast.FuncDecl) map[string]scSweepIdentitySink {
+	sinks := map[string]scSweepIdentitySink{}
+
+	for _, fd := range decls {
+		if _, ok := sinks[fd.Name.Name]; ok {
+			continue
+		}
+		params := scSweepFlattenParams(fd.Type.Params)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			for _, elt := range cl.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok || key.Name != "Subject" {
+					continue
+				}
+				id, ok := kv.Value.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				for i, p := range params {
+					if p != "" && p == id.Name {
+						if _, exists := sinks[fd.Name.Name]; !exists {
+							sinks[fd.Name.Name] = scSweepIdentitySink{paramIdx: i}
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for _, fd := range decls {
+			if _, ok := sinks[fd.Name.Name]; ok {
+				continue
+			}
+			params := scSweepFlattenParams(fd.Type.Params)
+			found := -1
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if found != -1 {
+					return false
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee, ok := call.Fun.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				sink, ok := sinks[callee.Name]
+				if !ok || sink.paramIdx >= len(call.Args) {
+					return true
+				}
+				argID, ok := call.Args[sink.paramIdx].(*ast.Ident)
+				if !ok {
+					return true
+				}
+				for i, p := range params {
+					if p != "" && p == argID.Name {
+						found = i
+						return false
+					}
+				}
+				return true
+			})
+			if found != -1 {
+				sinks[fd.Name.Name] = scSweepIdentitySink{paramIdx: found}
+				changed = true
+			}
+		}
+	}
+	return sinks
+}
+
+// scSweepFreshVarNames returns every name assigned via `x := uuid.NewString()`
+// anywhere in body — the same shape scSweepVarAssignRE matches, reused here to
+// decide whether a variable fed into a helper call is a fresh uuid.
+func scSweepFreshVarNames(body string) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		if m := scSweepVarAssignRE.FindStringSubmatch(line); m != nil {
+			out[m[1]] = true
+		}
+	}
+	return out
+}
+
+// scSweepIsFreshValue reports whether e is a fresh uuid: an inline
+// `uuid.NewString()` call, or an Ident previously `:=`-assigned from one
+// (per fresh, scoped to the enclosing func).
+func scSweepIsFreshValue(e ast.Expr, fresh map[string]bool) bool {
+	switch v := e.(type) {
+	case *ast.CallExpr:
+		sel, ok := v.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		x, ok := sel.X.(*ast.Ident)
+		return ok && x.Name == "uuid" && sel.Sel.Name == "NewString"
+	case *ast.Ident:
+		return fresh[v.Name]
+	default:
+		return false
+	}
+}
+
+// scSweepHelperCallSitesInFile finds every call into a local identity sink
+// (scSweepFindIdentitySinks, precomputed by the caller — package-wide for
+// the real scan, single-file for the needle fixtures) fed a fresh uuid at
+// the parameter position that reaches Subject — the positional-helper shape
+// (`identity(ctx, tenantID, uuid.NewString())`), regardless of how the fresh
+// value is spelled at the call site. A sink's own body is walked like any
+// other func, so a wrapper that merely relays a parameter is not flagged for
+// relaying it — only the func that actually introduces the freshness is.
+//
+// membershipSinks (precomputed the same way as sinks) lets a var-mediated
+// call clear via the recognise-the-seeding rule below, exactly like a
+// var-kind Subject: site does — a fresh identifier fed to the helper is not
+// a violation if it is also seeded a membership row on every path reaching
+// this call. An inline uuid.NewString() literal has no name to correlate
+// against a seed and is never eligible, same restriction as var-kind sites.
+func scSweepHelperCallSitesInFile(fset *token.FileSet, rel string, f *ast.File, lines []string, sinks map[string]scSweepIdentitySink, membershipSinks map[string]scSweepMembershipSink) []scSweepSubjectSite {
+	if len(sinks) == 0 {
+		return nil
+	}
+	var out []scSweepSubjectSite
+	for _, fd := range scSweepFuncDecls(f) {
+		start := fset.Position(fd.Body.Pos()).Line
+		end := fset.Position(fd.Body.End()).Line
+		if start < 1 || end > len(lines) {
+			continue
+		}
+		fresh := scSweepFreshVarNames(strings.Join(lines[start-1:end], "\n"))
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			callee, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			sink, ok := sinks[callee.Name]
+			if !ok || sink.paramIdx >= len(call.Args) {
+				return true
+			}
+			arg := call.Args[sink.paramIdx]
+			if !scSweepIsFreshValue(arg, fresh) {
+				return true
+			}
+			if argID, ok := arg.(*ast.Ident); ok && scSweepRecogniseSeedingAt(fd, argID.Name, call.Pos(), membershipSinks) {
+				return true // recognise-the-seeding rule: this identifier is seeded a membership row on every path reaching this call
+			}
+			out = append(out, scSweepSubjectSite{
+				file: rel,
+				line: fset.Position(call.Pos()).Line,
+				fn:   fd.Name.Name,
+				kind: "helper",
+			})
+			return true
+		})
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Recognise-the-seeding: co-occurrence (Tier 1) + guard-sensitivity (Tier 2)
+// ---------------------------------------------------------------------------
+//
+// A blanket func-scoped exemption for every var-kind site that already seeds
+// its own caller a membership row (internal/invoice: 47 such functions)
+// would blind this scan across the package's own RBAC suites. Tier 1
+// answers "does this identifier also feed a membership INSERT's user_id
+// column" using the SAME sink-resolution + fixed-point closure as the
+// identity-sink walk above, retargeted at a second target. Tier 2 answers
+// the sharper question a co-occurrence check alone cannot: does the seed
+// run on EVERY path that reaches the identity use, or only some of them
+// (seedApprovalFactsFixture: seedMembership sits inside `if staffed {}`,
+// `Subject: subject` is unconditional). Only "var" kind sites are eligible:
+// a fresh `uuid.NewString()` literal is a different value on every
+// evaluation and can never be data-flow-matched to a separately generated
+// seed value.
+//
+// Known limits (beyond scSweepFindIdentitySinks' own, above): the guard-stack
+// walk does not merge "seeded in every branch of an if/else" into
+// "effectively unconditional" -- a seed split across a symmetric if/else is
+// flagged as still-unsound even though every path seeds. It also matches by
+// identifier NAME, not go/types object identity, so two different variables
+// sharing a name in sibling closures within one function are not
+// distinguished. Neither manifests in internal/invoice today. A sink whose
+// own body only conditionally reaches the INSERT (alwaysSeeds=false, see
+// TestN16) is never treated as a seed at its call site even in the branch
+// that would in fact insert -- sound but coarser than tracing actual
+// argument values into the guard condition.
+
+// scSweepMembershipSink is one local func that routes one of its own
+// parameters (at paramIdx, positional) into an `INSERT INTO memberships`
+// statement's user_id column -- directly, or by relaying that parameter
+// into another already-found membership sink.
+type scSweepMembershipSink struct {
+	paramIdx    int
+	alwaysSeeds bool // false if the INSERT (or the relay) is reached only along some conditional path inside the sink's own body
+}
+
+var scSweepMembershipInsertRE = regexp.MustCompile(`(?is)INSERT\s+INTO\s+memberships\s*\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)`)
+var scSweepPlaceholderRE = regexp.MustCompile(`^\$(\d+)$`)
+
+// scSweepMembershipColumnBindArg parses one `INSERT INTO memberships (...)
+// VALUES (...)` string and returns the 1-based bind position ($N) that
+// binds the user_id column -- or false if the column has no placeholder
+// there (a hardcoded literal like 'admin' for role, never observed for
+// user_id in this population, but the parse must not assume it).
+func scSweepMembershipColumnBindArg(sql string) (int, bool) {
+	m := scSweepMembershipInsertRE.FindStringSubmatch(sql)
+	if m == nil {
+		return 0, false
+	}
+	cols := strings.Split(m[1], ",")
+	vals := strings.Split(m[2], ",")
+	if len(cols) != len(vals) {
+		return 0, false
+	}
+	for i, c := range cols {
+		if strings.TrimSpace(c) != "user_id" {
+			continue
+		}
+		pm := scSweepPlaceholderRE.FindStringSubmatch(strings.TrimSpace(vals[i]))
+		if pm == nil {
+			return 0, false
+		}
+		n, err := strconv.Atoi(pm[1])
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// scSweepDBCallMethods is every Exec/Query-family method name scSweepIsDBCall
+// treats as DB-shaped. Matched on the callee's method name alone (not a
+// hardcoded receiver-variable list), so any differently-named pool/tx/conn
+// still qualifies.
+var scSweepDBCallMethods = map[string]bool{
+	"Exec": true, "ExecContext": true, "Query": true, "QueryRow": true, "QueryRowContext": true,
+}
+
+// scSweepIsDBCall reports whether call invokes a DB-shaped method. A t.Logf
+// or fmt.Sprintf that merely mentions SQL text is not (see TestN15).
+func scSweepIsDBCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && scSweepDBCallMethods[sel.Sel.Name]
+}
+
+// ---------------------------------------------------------------------------
+// The DB-reachability gate for subject sites (AUDIT-12-07 review): a func
+// whose call graph never reaches the database is asking a meaningless
+// question about a caller identity that never touches Postgres -- literal,
+// var, and helper kind sites are all gated by it alike.
+// ---------------------------------------------------------------------------
+
+// scSweepDBReachMethods is scSweepDBCallMethods (Exec/Query family) unioned
+// with scPoolMethods (Scan 1's pgxpool.Pool method set, above): Exec/Query
+// alone missed super.Begin(ctx), the shape every transaction-scoped DB test
+// opens with before its first statement (AUDIT-12-07 review found this the
+// hard way -- TestRequireActiveAdmin_NoMembershipRowIsNotPermitted opens a
+// tx and calls production code with it, never Exec/Query itself).
+var scSweepDBReachMethods = func() map[string]bool {
+	out := map[string]bool{}
+	for m := range scSweepDBCallMethods {
+		out[m] = true
+	}
+	for m := range scPoolMethods {
+		out[m] = true
+	}
+	return out
+}()
+
+// scSweepReachesDBDirectly reports whether call itself touches the database:
+// a DB-reaching method by name alone (scSweepIsDBCall's own looseness, no
+// receiver-type check), or a handle opened straight off a DSN --
+// pgxpool.New(ctx, url) is how every package's dbTestPools-style helper gets
+// its pool, so a test whose only DB touch is calling that helper never calls
+// Exec/Query/Begin itself (the same review finding: TestStoreMe_UnknownTenant
+// calls only dbTestPools then store.Me, a production method invisible to
+// this test-only AST corpus). Matched by literal package identifier, not
+// scImportAlias's import-path resolution: no file in this population aliases
+// these imports today.
+func scSweepReachesDBDirectly(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if scSweepDBReachMethods[sel.Sel.Name] {
+		return true
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch pkg.Name {
+	case "pgxpool":
+		return sel.Sel.Name == "New" || sel.Sel.Name == "NewWithConfig"
+	case "pgx", "pgconn":
+		return sel.Sel.Name == "Connect" || sel.Sel.Name == "ConnectConfig"
+	case "sql":
+		return sel.Sel.Name == "Open" || sel.Sel.Name == "OpenDB"
+	}
+	return false
+}
+
+// scSweepFuncOwnBodyReachesDB reports whether fd's own body invokes
+// scSweepReachesDBDirectly -- INCLUDING inside a nested func literal: a
+// closure argument (db.WithinRequestTenantTx(..., func(tx pgx.Tx) error {
+// tx.Exec(...) })) runs as part of fd when fd runs, not as a separate
+// callee, unlike the attribution scans above this deliberately does not
+// exclude literals.
+func scSweepFuncOwnBodyReachesDB(fd *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok && scSweepReachesDBDirectly(call) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// scSweepFindDBReachingFuncs resolves, package-wide, every local func whose
+// call graph reaches the database -- directly (scSweepFuncOwnBodyReachesDB),
+// or by calling (plain identifier, any depth) another local func already
+// known to reach it -- the same base-case-then-fixed-point shape
+// scSweepFindIdentitySinks and scSweepFindMembershipSinks use above.
+// Resolution is by plain identifier only, the same accepted limit those two
+// carry (a helper reached through a method or an interface value is
+// invisible here too, EXCEPT that dbTestPools-style pool getters are always
+// called as plain identifiers in this population, which is what the direct
+// check above exists to catch); every known helper in this package's
+// population is a bare func, so a func this pass clears has no route to the
+// database anywhere in its own reachable, locally-declared graph.
+func scSweepFindDBReachingFuncs(decls []*ast.FuncDecl) map[string]bool {
+	reach := map[string]bool{}
+	for _, fd := range decls {
+		if scSweepFuncOwnBodyReachesDB(fd) {
+			reach[fd.Name.Name] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, fd := range decls {
+			if reach[fd.Name.Name] {
+				continue
+			}
+			calls := false
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if calls {
+					return false
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if callee, ok := call.Fun.(*ast.Ident); ok && reach[callee.Name] {
+					calls = true
+					return false
+				}
+				return true
+			})
+			if calls {
+				reach[fd.Name.Name] = true
+				changed = true
+			}
+		}
+	}
+	return reach
+}
+
+// scSweepMembershipInsertCallBindArg finds an INSERT-into-memberships string
+// literal among call's own args and returns the arg expression bound to the
+// user_id column, or nil if call is not DB-shaped, carries no such literal,
+// or the column has no placeholder.
+func scSweepMembershipInsertCallBindArg(call *ast.CallExpr) ast.Expr {
+	if !scSweepIsDBCall(call) {
+		return nil
+	}
+	for k, arg := range call.Args {
+		lit, ok := arg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		val, err := strconv.Unquote(lit.Value)
+		if err != nil || !strings.Contains(val, "INSERT INTO memberships") {
+			continue
+		}
+		bindN, ok := scSweepMembershipColumnBindArg(val)
+		if !ok {
+			continue
+		}
+		pos := k + bindN
+		if pos >= len(call.Args) {
+			continue
+		}
+		return call.Args[pos]
+	}
+	return nil
+}
+
+// scSweepFindMembershipSinks finds every local func that seeds a
+// memberships row for one of its own parameters, package-wide (mirrors
+// scSweepFindIdentitySinks' base-case-then-fixed-point structure exactly).
+func scSweepFindMembershipSinks(decls []*ast.FuncDecl) map[string]scSweepMembershipSink {
+	sinks := map[string]scSweepMembershipSink{}
+
+	for _, fd := range decls {
+		params := scSweepFlattenParams(fd.Type.Params)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if _, ok := sinks[fd.Name.Name]; ok {
+				return false
+			}
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			target := scSweepMembershipInsertCallBindArg(call)
+			if target == nil {
+				return true
+			}
+			argID, ok := target.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			for i, p := range params {
+				if p != "" && p == argID.Name {
+					stack, _ := scSweepGuardStackTo(fd.Body, call.Pos(), nil)
+					sinks[fd.Name.Name] = scSweepMembershipSink{paramIdx: i, alwaysSeeds: len(stack) == 0}
+				}
+			}
+			return true
+		})
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for _, fd := range decls {
+			if _, ok := sinks[fd.Name.Name]; ok {
+				continue
+			}
+			params := scSweepFlattenParams(fd.Type.Params)
+			found := -1
+			var relayCall *ast.CallExpr
+			var calleeName string
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if found != -1 {
+					return false
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee, ok := call.Fun.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				sink, ok := sinks[callee.Name]
+				if !ok || sink.paramIdx >= len(call.Args) {
+					return true
+				}
+				argID, ok := call.Args[sink.paramIdx].(*ast.Ident)
+				if !ok {
+					return true
+				}
+				for i, p := range params {
+					if p != "" && p == argID.Name {
+						found = i
+						relayCall = call
+						calleeName = callee.Name
+						return false
+					}
+				}
+				return true
+			})
+			if found != -1 {
+				relayStack, _ := scSweepGuardStackTo(fd.Body, relayCall.Pos(), nil)
+				sinks[fd.Name.Name] = scSweepMembershipSink{
+					paramIdx:    found,
+					alwaysSeeds: len(relayStack) == 0 && sinks[calleeName].alwaysSeeds,
+				}
+				changed = true
+			}
+		}
+	}
+	return sinks
+}
+
+// scSweepFindSeedCall finds the call inside body that seeds identifier name a
+// membership row, and whether that seed is eligible to clear Tier 2 -- an
+// inline INSERT-into-memberships literal fed name at the user_id position is
+// always eligible; a call into a resolved membership sink fed name at its
+// paramIdx is eligible only when that sink's own body always reaches its
+// INSERT (sink.alwaysSeeds). A conditional sink's guard lives in a different
+// function's (sometimes different file's) AST, so it is never spliced into
+// the caller's own guard stack below -- it just makes the call ineligible.
+// Returns (nil, false) if body seeds no such row for name (Tier 1: no
+// co-occurrence at all).
+func scSweepFindSeedCall(body *ast.BlockStmt, name string, sinks map[string]scSweepMembershipSink) (*ast.CallExpr, bool) {
+	var found *ast.CallExpr
+	eligible := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if target := scSweepMembershipInsertCallBindArg(call); target != nil {
+			if id, ok := target.(*ast.Ident); ok && id.Name == name {
+				found = call
+				eligible = true
+				return false
+			}
+		}
+		if callee, ok := call.Fun.(*ast.Ident); ok {
+			if sink, ok := sinks[callee.Name]; ok && sink.paramIdx < len(call.Args) {
+				if id, ok := call.Args[sink.paramIdx].(*ast.Ident); ok && id.Name == name {
+					found = call
+					eligible = sink.alwaysSeeds
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found, eligible
+}
+
+// scSweepFindSubjectUse finds the `Subject: name` composite-literal value
+// inside body and returns that Ident node.
+func scSweepFindSubjectUse(body *ast.BlockStmt, name string) *ast.Ident {
+	var found *ast.Ident
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "Subject" {
+			return true
+		}
+		id, ok := kv.Value.(*ast.Ident)
+		if !ok || id.Name != name {
+			return true
+		}
+		found = id
+		return false
+	})
+	return found
+}
+
+// scSweepFuncByName returns the named top-level FuncDecl in f, or nil.
+func scSweepFuncByName(f *ast.File, name string) *ast.FuncDecl {
+	for _, fd := range scSweepFuncDecls(f) {
+		if fd.Name.Name == name {
+			return fd
+		}
+	}
+	return nil
+}
+
+// scSweepGuardEntry is one branch/loop/closure a position is nested inside,
+// identified by its own source position so sibling branches of the same
+// kind (two case clauses, an if's then vs else) are told apart.
+type scSweepGuardEntry struct {
+	kind string
+	pos  token.Pos
+}
+
+func scSweepContainsPos(n ast.Node, pos token.Pos) bool {
+	if n == nil {
+		return false
+	}
+	return n.Pos() <= pos && pos < n.End()
+}
+
+// scSweepGuardStackTo returns the guard stack at targetPos within n --
+// the ordered list of if/else/switch-case/for/range/closure entries a
+// position at targetPos is nested inside. Descends only into the child
+// subtree containing targetPos; an IfStmt's Init and Cond run unconditionally
+// (no push), its Body pushes "then" and its Else pushes "else". Handles the
+// statement/expression shapes this population's fixtures actually use;
+// falls through to "at this level" for anything else, which is the correct
+// terminal case once no more branch structure remains to descend into.
+func scSweepGuardStackTo(n ast.Node, targetPos token.Pos, stack []scSweepGuardEntry) ([]scSweepGuardEntry, bool) {
+	if !scSweepContainsPos(n, targetPos) {
+		return nil, false
+	}
+	switch v := n.(type) {
+	case *ast.IfStmt:
+		if v.Init != nil && scSweepContainsPos(v.Init, targetPos) {
+			return scSweepGuardStackTo(v.Init, targetPos, stack)
+		}
+		if v.Cond != nil && scSweepContainsPos(v.Cond, targetPos) {
+			return scSweepGuardStackTo(v.Cond, targetPos, stack)
+		}
+		if scSweepContainsPos(v.Body, targetPos) {
+			return scSweepGuardStackTo(v.Body, targetPos, append(append([]scSweepGuardEntry{}, stack...), scSweepGuardEntry{"then", v.Pos()}))
+		}
+		if v.Else != nil && scSweepContainsPos(v.Else, targetPos) {
+			return scSweepGuardStackTo(v.Else, targetPos, append(append([]scSweepGuardEntry{}, stack...), scSweepGuardEntry{"else", v.Pos()}))
+		}
+		return stack, true
+	case *ast.ForStmt:
+		if scSweepContainsPos(v.Body, targetPos) {
+			return scSweepGuardStackTo(v.Body, targetPos, append(append([]scSweepGuardEntry{}, stack...), scSweepGuardEntry{"for", v.Pos()}))
+		}
+		return stack, true
+	case *ast.RangeStmt:
+		if scSweepContainsPos(v.Body, targetPos) {
+			return scSweepGuardStackTo(v.Body, targetPos, append(append([]scSweepGuardEntry{}, stack...), scSweepGuardEntry{"range", v.Pos()}))
+		}
+		return stack, true
+	case *ast.SwitchStmt:
+		for _, stmt := range v.Body.List {
+			cc, ok := stmt.(*ast.CaseClause)
+			if !ok || !scSweepContainsPos(cc, targetPos) {
+				continue
+			}
+			for _, s := range cc.Body {
+				if scSweepContainsPos(s, targetPos) {
+					return scSweepGuardStackTo(s, targetPos, append(append([]scSweepGuardEntry{}, stack...), scSweepGuardEntry{"case", cc.Pos()}))
+				}
+			}
+		}
+		return stack, true
+	case *ast.BlockStmt:
+		for _, stmt := range v.List {
+			if scSweepContainsPos(stmt, targetPos) {
+				return scSweepGuardStackTo(stmt, targetPos, stack)
+			}
+		}
+		return stack, true
+	case *ast.ExprStmt:
+		return scSweepGuardStackTo(v.X, targetPos, stack)
+	case *ast.AssignStmt:
+		for _, e := range v.Rhs {
+			if scSweepContainsPos(e, targetPos) {
+				return scSweepGuardStackTo(e, targetPos, stack)
+			}
+		}
+		return stack, true
+	case *ast.ReturnStmt:
+		for _, e := range v.Results {
+			if scSweepContainsPos(e, targetPos) {
+				return scSweepGuardStackTo(e, targetPos, stack)
+			}
+		}
+		return stack, true
+	case *ast.CallExpr:
+		for _, a := range v.Args {
+			if scSweepContainsPos(a, targetPos) {
+				return scSweepGuardStackTo(a, targetPos, stack)
+			}
+		}
+		return stack, true
+	case *ast.FuncLit:
+		if scSweepContainsPos(v.Body, targetPos) {
+			return scSweepGuardStackTo(v.Body, targetPos, append(append([]scSweepGuardEntry{}, stack...), scSweepGuardEntry{"closure", v.Pos()}))
+		}
+		return stack, true
+	case *ast.CompositeLit:
+		for _, e := range v.Elts {
+			if scSweepContainsPos(e, targetPos) {
+				return scSweepGuardStackTo(e, targetPos, stack)
+			}
+		}
+		return stack, true
+	case *ast.KeyValueExpr:
+		if scSweepContainsPos(v.Value, targetPos) {
+			return scSweepGuardStackTo(v.Value, targetPos, stack)
+		}
+		return stack, true
+	default:
+		return stack, true
+	}
+}
+
+// scSweepGuardStackIsPrefix reports whether seed's guard stack is a prefix of
+// use's -- the seed must run on every path that reaches the use, so every
+// branch guarding the seed must also guard the use.
+func scSweepGuardStackIsPrefix(seed, use []scSweepGuardEntry) bool {
+	if len(seed) > len(use) {
+		return false
+	}
+	for i := range seed {
+		if seed[i] != use[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// scSweepRecogniseSeedingAt is scSweepRecogniseSeeding generalised to an
+// explicit use position: a var-kind site's use is the `Subject: name`
+// composite literal, but a helper-kind site's use is the call into the
+// identity-sink helper itself -- the literal `Subject: name` lives inside
+// the sink's own body, under the sink's OWN parameter name, not name.
+func scSweepRecogniseSeedingAt(fd *ast.FuncDecl, name string, usePos token.Pos, sinks map[string]scSweepMembershipSink) bool {
+	seedCall, eligible := scSweepFindSeedCall(fd.Body, name, sinks)
+	if seedCall == nil || !eligible {
+		return false
+	}
+	// The guard-stack-prefix rule alone does not see statement ORDER: a seed
+	// that runs after the use sits in the same (empty) stack as one that runs
+	// before it. scSweepFindSeedCall never leaves fd.Body, so seedCall and
+	// usePos are always positions in the SAME parsed file -- comparable even
+	// when the resolved sink's own body (used only for alwaysSeeds) lives in
+	// a sibling file, per TestN17. A future resolution path that attributed a
+	// position from outside fd.Body would have no ordering answer here; this
+	// check only ever sees same-file positions, so that limit never bites.
+	if seedCall.Pos() >= usePos {
+		return false
+	}
+	seedStack, ok := scSweepGuardStackTo(fd.Body, seedCall.Pos(), nil)
+	if !ok {
+		return false
+	}
+	useStack, ok := scSweepGuardStackTo(fd.Body, usePos, nil)
+	if !ok {
+		return false
+	}
+	return scSweepGuardStackIsPrefix(seedStack, useStack)
+}
+
+// scSweepRecogniseSeeding is the two-tier rule: Tier 1 requires fd to seed a
+// membership row for name somewhere in its body (else there is no
+// co-occurrence at all); Tier 2 requires that seed's guard stack to be a
+// prefix of the `Subject: name` use's -- unconditional relative to the use,
+// or in the exact same branch. seedApprovalFactsFixture fails Tier 2: its
+// seed is inside `if staffed {}`, its use is unconditional.
+func scSweepRecogniseSeeding(fd *ast.FuncDecl, name string, sinks map[string]scSweepMembershipSink) bool {
+	useIdent := scSweepFindSubjectUse(fd.Body, name)
+	if useIdent == nil {
+		return false
+	}
+	return scSweepRecogniseSeedingAt(fd, name, useIdent.Pos(), sinks)
+}
+
+func scSweepFixtureSubjectSites(t *testing.T, name, src string) []scSweepSubjectSite {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	return scSweepSubjectSitesIn(fset, name, f, strings.Split(src, "\n"))
+}
+
+const scSweepNeedleLiteral = `package x
+
+func TestN1(t *testing.T) {
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+	_ = c
+}
+`
+
+const scSweepNeedleVar = `package x
+
+func TestN2(t *testing.T) {
+	userID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleClean is the seeded shape the sweep produces: no site.
+const scSweepNeedleClean = `package x
+
+func TestN3(t *testing.T) {
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleTenantOnly proves the second hop is required: a fresh uuid
+// never read back as Subject is a tenant id, not a caller identity, and
+// flagging it would demand an exemption for every seedTenant call.
+const scSweepNeedleTenantOnly = `package x
+
+func TestN4(t *testing.T) {
+	tenantID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, TenantID: tenantID})
+	_ = c
+}
+`
+
+// scSweepNeedleHelper is the positional-helper shape (AUDIT-12-03
+// Implementation Plan §2, internal/document's identity()): the fresh uuid is
+// an inline call, never text-adjacent to "Subject:".
+const scSweepNeedleHelper = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN5(t *testing.T) {
+	c := identity(ctx, tenantID, uuid.NewString())
+	_ = c
+}
+`
+
+// scSweepNeedleHelperVar is the positional-helper shape spelled through a
+// variable (internal/importer's handlers_adversarial_test.go: `subject :=
+// uuid.NewString()` then passed as identity()'s 3rd arg, never `Subject:
+// subject`).
+const scSweepNeedleHelperVar = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN6(t *testing.T) {
+	subject := uuid.NewString()
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperClean proves a swept call into the same helper is not a
+// site: memberSubject is not a fresh uuid, however it is spelled.
+const scSweepNeedleHelperClean = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN7(t *testing.T) {
+	c := identity(ctx, tenantID, memberSubject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperTenantParam proves the sink is positional, not "any
+// fresh uuid anywhere in the call": a fresh uuid at the TENANT parameter,
+// with a swept subject, is not a site.
+const scSweepNeedleHelperTenantParam = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN8(t *testing.T) {
+	c := identity(ctx, uuid.NewString(), memberSubject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperChain proves the fixed-point resolves a two-hop wrapper
+// (identityFor relays its own "actor" param into identity's sink slot, so
+// identityFor becomes a sink too) — generality beyond the single hop the
+// shipped corpus needs today.
+const scSweepNeedleHelperChain = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func identityFor(ctx context.Context, tenantID, actor string) context.Context {
+	return identity(ctx, tenantID, actor)
+}
+
+func TestN9(t *testing.T) {
+	c := identityFor(ctx, tenantID, uuid.NewString())
+	_ = c
+}
+`
+
+// scSweepNeedleHelperSinkOnly and scSweepNeedleHelperCallerOnly are N10's
+// pair: the sink (identity()) and its call site live in TWO SEPARATE files,
+// as internal/document actually spells it (identity() in document_test.go,
+// every call in its four siblings, AUDIT-12-03 Implementation Plan §2). A
+// per-FILE-only sink resolution -- the first draft of this scan -- finds
+// nothing scanning the caller file alone, because the sink is declared
+// elsewhere; only per-PACKAGE resolution (pooling every sibling's FuncDecls
+// before resolving sinks) catches it. N1-N9 are all single-file, so none of
+// them would have caught a regression back to per-file resolution.
+const scSweepNeedleHelperSinkOnly = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+`
+
+const scSweepNeedleHelperCallerOnly = `package x
+
+func TestN10(t *testing.T) {
+	c := identity(ctx, tenantID, uuid.NewString())
+	_ = c
+}
+`
+
+// scSweepNeedleDBReachGate proves the DB-reachability gate's two halves at
+// once: TestN25MockStub builds a fresh identity and its call graph never
+// reaches a DB call, so its site must clear. TestN25DBTest builds the same
+// shape but reaches the DB only through seedFixture, a local helper it
+// calls -- a gate that checked only the test's own body, not its callees,
+// would wrongly clear this one too.
+const scSweepNeedleDBReachGate = `package x
+
+func TestN25MockStub(t *testing.T) {
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+	_ = c
+}
+
+func seedFixture(t *testing.T) {
+	_, _ = pool.Exec(ctx, "INSERT INTO rls_fixture (tenant_id) VALUES ($1)", tenantID)
+}
+
+func TestN25DBTest(t *testing.T) {
+	seedFixture(t)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+	_ = c
+}
+`
+
+func scSweepSubjectControlNeedles(t *testing.T) {
+	t.Run("N1 direct literal", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n1.go", scSweepNeedleLiteral)
+		if len(sites) != 1 || sites[0].kind != "literal" || sites[0].fn != "TestN1" {
+			t.Fatalf("sites = %v, want exactly one literal site in TestN1 — the scan cannot see the shape it exists to catch", sites)
+		}
+	})
+	t.Run("N2 variable-mediated", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n2.go", scSweepNeedleVar)
+		if len(sites) != 1 || sites[0].kind != "var" || sites[0].fn != "TestN2" {
+			t.Fatalf("sites = %v, want exactly one var-mediated site in TestN2 — a literal-only match misses ~9 of internal/portfolio's own sites", sites)
+		}
+	})
+	t.Run("N3 a seeded subject is not a site", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n3.go", scSweepNeedleClean)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — memberSubject is the seeded caller, not a fresh identity", sites)
+		}
+	})
+	t.Run("N4 a tenant id is not a subject", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n4.go", scSweepNeedleTenantOnly)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — a fresh uuid never read back as Subject is a tenant id", sites)
+		}
+	})
+	t.Run("N5 positional helper, inline literal", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n5.go", scSweepNeedleHelper)
+		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN5" {
+			t.Fatalf("sites = %v, want exactly one helper site in TestN5 — this is the shape a text-only scan cannot see (internal/document's identity())", sites)
+		}
+	})
+	t.Run("N6 positional helper, variable-mediated", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n6.go", scSweepNeedleHelperVar)
+		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN6" {
+			t.Fatalf("sites = %v, want exactly one helper site in TestN6 — a fresh var passed positionally is still a fresh subject", sites)
+		}
+	})
+	t.Run("N7 a swept helper call is not a site", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n7.go", scSweepNeedleHelperClean)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — memberSubject at the subject position is the seeded caller, not a fresh identity", sites)
+		}
+	})
+	t.Run("N8 a fresh tenant id at the helper's tenant slot is not a subject", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n8.go", scSweepNeedleHelperTenantParam)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — the sink is positional; a fresh value at the TENANT parameter is not the Subject parameter", sites)
+		}
+	})
+	t.Run("N9 a two-hop wrapper chain resolves to the origin call", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n9.go", scSweepNeedleHelperChain)
+		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN9" {
+			t.Fatalf("sites = %v, want exactly one helper site in TestN9, attributed to the caller that introduces the freshness — not to the relaying wrapper identityFor", sites)
+		}
+	})
+	t.Run("N10 a sink declared in one file is resolved when called from a sibling", func(t *testing.T) {
+		sinkFset := token.NewFileSet()
+		sinkFile, err := parser.ParseFile(sinkFset, "n10_sink.go", scSweepNeedleHelperSinkOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n10_sink.go: %v", err)
+		}
+		callerFset := token.NewFileSet()
+		callerFile, err := parser.ParseFile(callerFset, "n10_caller.go", scSweepNeedleHelperCallerOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n10_caller.go: %v", err)
+		}
+		callerLines := strings.Split(scSweepNeedleHelperCallerOnly, "\n")
+
+		// Per-file-only resolution (the first draft): resolving sinks from the
+		// caller file alone must find NOTHING, or this needle proves nothing.
+		fileOnlySinks := scSweepFindIdentitySinks(scSweepFuncDecls(callerFile))
+		fileOnlySites := scSweepHelperCallSitesInFile(callerFset, "n10_caller.go", callerFile, callerLines, fileOnlySinks, nil)
+		if len(fileOnlySites) != 0 {
+			t.Fatalf("per-file-only sites = %v, want none — this needle is meaningless unless scanning the caller file alone (without its sibling) misses the call", fileOnlySites)
+		}
+
+		// Per-package resolution (the real population scan's approach, see
+		// TestRLS_SweptPackagesBuildIdentitiesFromASeededMember): pool both
+		// files' FuncDecls before resolving sinks, exactly as document's real
+		// identity()/siblings split requires.
+		pkgDecls := append(scSweepFuncDecls(sinkFile), scSweepFuncDecls(callerFile)...)
+		pkgSinks := scSweepFindIdentitySinks(pkgDecls)
+		pkgSites := scSweepHelperCallSitesInFile(callerFset, "n10_caller.go", callerFile, callerLines, pkgSinks, nil)
+		if len(pkgSites) != 1 || pkgSites[0].kind != "helper" || pkgSites[0].fn != "TestN10" {
+			t.Fatalf("per-package sites = %v, want exactly one helper site in TestN10 — a sink declared in a SIBLING file must still be resolved", pkgSites)
+		}
+	})
+	t.Run("N25 a DB-free func clears the gate, one reaching DB only through a helper does not", func(t *testing.T) {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "n25.go", scSweepNeedleDBReachGate, 0)
+		if err != nil {
+			t.Fatalf("parse n25.go: %v", err)
+		}
+		lines := strings.Split(scSweepNeedleDBReachGate, "\n")
+		decls := scSweepFuncDecls(f)
+		dbReach := scSweepFindDBReachingFuncs(decls)
+
+		if dbReach["TestN25MockStub"] {
+			t.Fatalf("TestN25MockStub read as DB-reaching — it calls nothing and its own body has no Exec/Query call")
+		}
+		if !dbReach["seedFixture"] {
+			t.Fatalf("seedFixture read as DB-free — it calls pool.Exec directly, the base case this whole gate rests on")
+		}
+		if !dbReach["TestN25DBTest"] {
+			t.Fatalf("TestN25DBTest read as DB-free — it reaches the database only by calling seedFixture, and the gate must resolve through that helper call, not just the test's own body")
+		}
+
+		var sites []scSweepSubjectSite
+		for _, s := range scSweepTextualSubjectSitesIn(fset, "n25.go", f, lines) {
+			if dbReach[s.fn] {
+				sites = append(sites, s)
+			}
+		}
+		if len(sites) != 1 || sites[0].fn != "TestN25DBTest" {
+			t.Fatalf("gated sites = %v, want exactly one site in TestN25DBTest — TestN25MockStub reaches no DB call anywhere and must clear, while TestN25DBTest reaches one only through its own local helper and must still be flagged", sites)
+		}
+	})
+}
+
+// scSweepNeedleSeedThroughHelperClean mirrors internal/invoice's
+// seedGatedTenantAsAdmin: a fresh var passed to a local seedMembership
+// helper, unconditionally, then read back as Subject -- Tier 1+2 must clear
+// it.
+const scSweepNeedleSeedThroughHelperClean = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func TestN11(t *testing.T) {
+	subject := uuid.NewString()
+	seedMembership(t, super, tenantID, subject, "admin")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleSeedGuardedUnsound mirrors internal/invoice's
+// seedApprovalFactsFixture exactly: the seedMembership call sits inside
+// `if staffed {}`, the Subject use is unconditional. Tier 1 alone would
+// clear this (the identifier co-occurs); Tier 2 must reject it.
+const scSweepNeedleSeedGuardedUnsound = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func seedFixtureLike(t *testing.T, super *pgxpool.Pool, staffed bool) fixture {
+	subject := uuid.NewString()
+	if staffed {
+		seedMembership(t, super, tenantID, subject, "admin")
+	}
+	return fixture{
+		ctx: auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"}),
+	}
+}
+`
+
+// scSweepNeedleSeedDirectInsertClean mirrors internal/invoice's
+// seedActiveAdminFor: the INSERT is inline (no helper), and sits in an
+// `if _, err := ...; err != nil {}` idiom -- the seed call is in the
+// IfStmt's Init, which runs unconditionally, not its Body. Tier 1+2 must
+// clear it.
+const scSweepNeedleSeedDirectInsertClean = `package x
+
+func TestN13(t *testing.T) {
+	userID := uuid.NewString()
+	if _, err := super.Exec(ctx, "INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')", tenantID, userID); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleSeedUnrelatedSubject proves Tier 1 does not over-clear: the
+// function mentions INSERT INTO memberships, but seeds a DIFFERENT
+// identifier than the one read back as Subject.
+const scSweepNeedleSeedUnrelatedSubject = `package x
+
+func TestN14(t *testing.T) {
+	subject := uuid.NewString()
+	otherUserID := uuid.NewString()
+	super.Exec(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)", tenantID, otherUserID, "admin")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleCosmeticMention proves Tier 1 must not match on string
+// content alone: the INSERT-into-memberships text sits inside a t.Logf
+// call, never a real DB seed.
+const scSweepNeedleCosmeticMention = `package x
+
+func TestN15(t *testing.T) {
+	subject := uuid.NewString()
+	t.Logf("would run: INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)", tenantID, subject, "preparer")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleHiddenConditionalWrapper proves a resolved sink must not
+// count as unconditional just because its call site is: seedIfAdmin only
+// seeds when role=="admin", called here with "guest" -- no row is ever
+// inserted, yet the call site itself is unconditional.
+const scSweepNeedleHiddenConditionalWrapper = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func seedIfAdmin(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	if role == "admin" {
+		return seedMembership(t, super, tenantID, userID, role)
+	}
+	return ""
+}
+
+func TestN16(t *testing.T) {
+	subject := uuid.NewString()
+	seedIfAdmin(t, super, tenantID, subject, "guest")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleSeedTwoHopSinkOnly and scSweepNeedleSeedTwoHopCallerOnly are
+// N17's pair: seedMembership and its two-hop relay seedViaWrapper live in one
+// file, the call site in a sibling that declares neither -- proving the
+// MEMBERSHIP sink walk resolves cross-file exactly like the identity sink
+// walk N10 already proves for the other mechanism.
+const scSweepNeedleSeedTwoHopSinkOnly = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func seedViaWrapper(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	return seedMembership(t, super, tenantID, userID, role)
+}
+`
+
+const scSweepNeedleSeedTwoHopCallerOnly = `package x
+
+func TestN17(t *testing.T) {
+	subject := uuid.NewString()
+	seedViaWrapper(t, super, tenantID, subject, "admin")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleSeedUseBeforeSeed is N24: subject is read back as Subject BEFORE
+// seedMembership ever runs, in the same unconditional block -- the
+// guard-stack-prefix rule alone cannot see this, since an empty stack is a
+// prefix of an empty stack either way. Must stay flagged: no row exists yet
+// when the identity is built.
+const scSweepNeedleSeedUseBeforeSeed = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func TestN24(t *testing.T) {
+	subject := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	seedMembership(t, super, tenantID, subject, "admin")
+	_ = c
+}
+`
+
+// scSweepNeedleHelperSeedThroughHelperClean is N18: the helper-kind mirror of
+// N11 -- a fresh var seeded via a local seedMembership helper, unconditionally,
+// then passed positionally into identity(). Tier 1+2 must clear it exactly as
+// it does for the var-kind Subject: shape.
+const scSweepNeedleHelperSeedThroughHelperClean = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func TestN18(t *testing.T) {
+	subject := uuid.NewString()
+	seedMembership(t, super, tenantID, subject, "admin")
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperNoSeed is N19: a membership sink exists in the package,
+// but the var fed to identity() is never seeded at all -- Tier 1's
+// co-occurrence check must not clear on the sink's mere presence.
+const scSweepNeedleHelperNoSeed = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func TestN19(t *testing.T) {
+	subject := uuid.NewString()
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperSeedGuardedUnsound is N20: the helper-kind mirror of
+// N12 -- seedMembership sits inside `if staffed {}`, the call into identity()
+// is unconditional. Tier 2 must reject it on the new path too.
+const scSweepNeedleHelperSeedGuardedUnsound = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func helperFixtureLike(t *testing.T, super *pgxpool.Pool, staffed bool) context.Context {
+	subject := uuid.NewString()
+	if staffed {
+		seedMembership(t, super, tenantID, subject, "admin")
+	}
+	return identity(ctx, tenantID, subject)
+}
+`
+
+// scSweepNeedleHelperCosmeticMention is N21: the helper-kind mirror of N15 --
+// the INSERT-into-memberships text sits inside a t.Logf call, never a real
+// DB seed. Confirms the DB-call gate (scSweepIsDBCall) still binds when the
+// use is a helper call rather than a `Subject:` literal.
+const scSweepNeedleHelperCosmeticMention = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN21(t *testing.T) {
+	subject := uuid.NewString()
+	t.Logf("would run: INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)", tenantID, subject, "preparer")
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperHiddenConditionalWrapper is N22: the helper-kind mirror
+// of N16 -- seedIfAdmin only seeds when role=="admin", called here with
+// "guest", so no row is ever inserted even though the call site itself is
+// unconditional.
+const scSweepNeedleHelperHiddenConditionalWrapper = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func seedIfAdmin(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	if role == "admin" {
+		return seedMembership(t, super, tenantID, userID, role)
+	}
+	return ""
+}
+
+func TestN22(t *testing.T) {
+	subject := uuid.NewString()
+	seedIfAdmin(t, super, tenantID, subject, "guest")
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperSeedUnrelatedSubject is N23: the helper-kind mirror of
+// N14 -- the INSERT seeds a DIFFERENT identifier than the one passed into
+// identity(). Tier 1 must not over-clear on the sink's mere presence.
+const scSweepNeedleHelperSeedUnrelatedSubject = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN23(t *testing.T) {
+	subject := uuid.NewString()
+	otherUserID := uuid.NewString()
+	super.Exec(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)", tenantID, otherUserID, "admin")
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepFixtureHelperSiteCleared mirrors scSweepFixtureVarSiteCleared for
+// the "helper" kind: it first confirms the fixture genuinely produces a raw
+// (unextended) helper-kind site in fn -- so a malformed needle fails loudly
+// rather than passing vacuously -- then reports whether the extended
+// (membership-sink-aware) walk clears it.
+func scSweepFixtureHelperSiteCleared(t *testing.T, name, src, fn string) bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	lines := strings.Split(src, "\n")
+	decls := scSweepFuncDecls(f)
+	sinks := scSweepFindIdentitySinks(decls)
+
+	raw := scSweepHelperCallSitesInFile(fset, name, f, lines, sinks, nil)
+	found := false
+	for _, s := range raw {
+		if s.fn == fn {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no raw helper-kind site found in %s — fixture is malformed", fn)
+	}
+
+	membershipSinks := scSweepFindMembershipSinks(decls)
+	sites := scSweepHelperCallSitesInFile(fset, name, f, lines, sinks, membershipSinks)
+	for _, s := range sites {
+		if s.fn == fn {
+			return false
+		}
+	}
+	return true
+}
+
+func scSweepHelperRecogniseSeedingControlNeedles(t *testing.T) {
+	t.Run("N18 helper-kind, seed through a local helper, unconditional -- clears", func(t *testing.T) {
+		if !scSweepFixtureHelperSiteCleared(t, "n18.go", scSweepNeedleHelperSeedThroughHelperClean, "TestN18") {
+			t.Fatalf("TestN18 not cleared — a helper-kind site must clear exactly like a var-kind Subject: site when its argument is unconditionally seeded")
+		}
+	})
+	t.Run("N19 helper-kind, no seed at all -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureHelperSiteCleared(t, "n19.go", scSweepNeedleHelperNoSeed, "TestN19") {
+			t.Fatalf("TestN19 cleared — a membership sink existing SOMEWHERE in the package must not clear a site whose argument is never fed to it")
+		}
+	})
+	t.Run("N20 helper-kind, seed inside if staffed{}, use unconditional -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureHelperSiteCleared(t, "n20.go", scSweepNeedleHelperSeedGuardedUnsound, "helperFixtureLike") {
+			t.Fatalf("helperFixtureLike cleared — Tier 2 must reject a seed that does not run on every path reaching the helper call, on the helper-kind path too")
+		}
+	})
+	t.Run("N21 helper-kind, cosmetic mention in a t.Logf -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureHelperSiteCleared(t, "n21.go", scSweepNeedleHelperCosmeticMention, "TestN21") {
+			t.Fatalf("TestN21 cleared — a t.Logf call merely containing INSERT-INTO-memberships text is not a real DB seed; the DB-call gate must still bind on the helper-kind path")
+		}
+	})
+	t.Run("N22 helper-kind, seed hidden inside a two-hop wrapper's own guard -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureHelperSiteCleared(t, "n22.go", scSweepNeedleHelperHiddenConditionalWrapper, "TestN22") {
+			t.Fatalf("TestN22 cleared — seedIfAdmin's own if role==\"admin\" guard means no row is ever inserted for \"guest\", on the helper-kind path too")
+		}
+	})
+	t.Run("N23 helper-kind, INSERT seeds a different identifier -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureHelperSiteCleared(t, "n23.go", scSweepNeedleHelperSeedUnrelatedSubject, "TestN23") {
+			t.Fatalf("TestN23 cleared — Tier 1 over-cleared: the seeded identifier (otherUserID) is not the one passed into identity() (subject)")
+		}
+	})
+}
+
+// scSweepFixtureVarSiteCleared parses src, locates its lone "var" kind
+// subject site in fn, and reports whether the recognise-the-seeding rule
+// clears it -- the same package-wide membership-sink resolution the real
+// scan uses, scoped to this one fixture file.
+func scSweepFixtureVarSiteCleared(t *testing.T, name, src, fn string) bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	lines := strings.Split(src, "\n")
+	var site *scSweepSubjectSite
+	for _, s := range scSweepTextualSubjectSitesIn(fset, name, f, lines) {
+		if s.kind == "var" && s.fn == fn {
+			s := s
+			site = &s
+		}
+	}
+	if site == nil {
+		t.Fatalf("no var-kind site found in %s — fixture is malformed", fn)
+	}
+	fd := scSweepFuncByName(f, fn)
+	if fd == nil {
+		t.Fatalf("no FuncDecl named %s in fixture", fn)
+	}
+	sinks := scSweepFindMembershipSinks(scSweepFuncDecls(f))
+	return scSweepRecogniseSeeding(fd, site.name, sinks)
+}
+
+func scSweepRecogniseSeedingControlNeedles(t *testing.T) {
+	t.Run("N11 seed through a local helper, unconditional -- clears", func(t *testing.T) {
+		if !scSweepFixtureVarSiteCleared(t, "n11.go", scSweepNeedleSeedThroughHelperClean, "TestN11") {
+			t.Fatalf("TestN11 not cleared — Tier 1+2 must recognise an unconditional seedMembership call for the same identifier")
+		}
+	})
+	t.Run("N12 seed inside if staffed{}, use unconditional -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n12.go", scSweepNeedleSeedGuardedUnsound, "seedFixtureLike") {
+			t.Fatalf("seedFixtureLike cleared — this is seedApprovalFactsFixture's exact shape: Tier 2 must reject a seed that does not run on every path reaching the use")
+		}
+	})
+	t.Run("N13 direct inline INSERT in an if-err Init -- clears", func(t *testing.T) {
+		if !scSweepFixtureVarSiteCleared(t, "n13.go", scSweepNeedleSeedDirectInsertClean, "TestN13") {
+			t.Fatalf("TestN13 not cleared — an if-err Init runs unconditionally and must not be treated as a guard")
+		}
+	})
+	t.Run("N14 INSERT seeds a different identifier -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n14.go", scSweepNeedleSeedUnrelatedSubject, "TestN14") {
+			t.Fatalf("TestN14 cleared — Tier 1 over-cleared: the seeded identifier (otherUserID) is not the one read back as Subject (subject)")
+		}
+	})
+	t.Run("N15 cosmetic mention in a t.Logf, not a real seed -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n15.go", scSweepNeedleCosmeticMention, "TestN15") {
+			t.Fatalf("TestN15 cleared — a t.Logf call merely containing INSERT-INTO-memberships text is not a real DB seed; scSweepMembershipInsertCallBindArg must require an Exec/Query-shaped callee")
+		}
+	})
+	t.Run("N16 seed hidden inside a two-hop wrapper's own guard -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n16.go", scSweepNeedleHiddenConditionalWrapper, "TestN16") {
+			t.Fatalf("TestN16 cleared — seedIfAdmin's own if role==\"admin\" guard means no row is ever inserted for \"guest\"; a relay must only count as unconditional when the resolved sink's own body always reaches its INSERT")
+		}
+	})
+	t.Run("N17 two-hop membership wrapper, sibling file, genuinely unconditional -- clears", func(t *testing.T) {
+		fset := token.NewFileSet()
+		sinkFile, err := parser.ParseFile(fset, "n17_sink.go", scSweepNeedleSeedTwoHopSinkOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n17_sink.go: %v", err)
+		}
+		callerFset := token.NewFileSet()
+		callerFile, err := parser.ParseFile(callerFset, "n17_caller.go", scSweepNeedleSeedTwoHopCallerOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n17_caller.go: %v", err)
+		}
+		callerLines := strings.Split(scSweepNeedleSeedTwoHopCallerOnly, "\n")
+		var site *scSweepSubjectSite
+		for _, s := range scSweepTextualSubjectSitesIn(callerFset, "n17_caller.go", callerFile, callerLines) {
+			if s.kind == "var" && s.fn == "TestN17" {
+				s := s
+				site = &s
+			}
+		}
+		if site == nil {
+			t.Fatalf("no var-kind site found in TestN17 — fixture is malformed")
+		}
+		fd := scSweepFuncByName(callerFile, "TestN17")
+		if fd == nil {
+			t.Fatalf("no FuncDecl named TestN17 in fixture")
+		}
+
+		// Per-file-only: the caller file alone declares neither seedMembership
+		// nor seedViaWrapper, so this needle is meaningless unless resolving
+		// sinks from the caller file alone finds nothing.
+		fileOnlySinks := scSweepFindMembershipSinks(scSweepFuncDecls(callerFile))
+		if scSweepRecogniseSeeding(fd, site.name, fileOnlySinks) {
+			t.Fatalf("fixture meaningless: per-file-only resolution cleared the site with no sink visible in that file")
+		}
+
+		// Per-package: pool both files' decls first, as the real population
+		// scan does -- N11-N14 never exercise this for the MEMBERSHIP sink
+		// walk (all single-file), only N10 exercises it for the identity walk.
+		pkgDecls := append(scSweepFuncDecls(sinkFile), scSweepFuncDecls(callerFile)...)
+		pkgSinks := scSweepFindMembershipSinks(pkgDecls)
+		if !scSweepRecogniseSeeding(fd, site.name, pkgSinks) {
+			t.Fatalf("TestN17 not cleared — a genuine two-hop, always-unconditional seed via a sibling-file wrapper " +
+				"must clear; package-wide membership-sink resolution is required for this shape")
+		}
+	})
+	t.Run("N24 seed runs AFTER the use in the same unconditional block -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n24.go", scSweepNeedleSeedUseBeforeSeed, "TestN24") {
+			t.Fatalf("TestN24 cleared — the guard-stack-prefix rule alone cannot see statement order; a seed that runs after the use does not support the claim that the caller is already seeded")
+		}
+	})
+}
+
+// scSweepPopulationPackages is every internal/ package the AUDIT-12 blast
+// radius names (System Design, package table): the 9 packages whose _test.go
+// files build an identity that today's narrow predicate admits and the strict
+// one refuses. A package outside this set — internal/actor, internal/audit,
+// and the rest — has its own reasons to skip a DB test and is not this
+// story's concern; walking it too would make both scans below noisy with
+// findings that have nothing to do with the sweep.
+var scSweepPopulationPackages = []string{
+	"internal/invoice", "internal/importer", "internal/dashboard", "internal/portfolio",
+	"internal/document", "internal/approval", "internal/platform/db", "internal/submission",
+	"internal/tenancy",
+}
+
+func scSweepInPopulation(pkg string) bool {
+	for _, p := range scSweepPopulationPackages {
+		if p == pkg {
+			return true
+		}
+	}
+	return false
+}
+
+// scSweepUnsweptAllowlist is every population package this scan does not yet
+// hold for. Each AUDIT-12 sweep subtask deletes its own entries. Empty as of
+// AUDIT-12-07 -- every population package is now swept.
+var scSweepUnsweptAllowlist = []string{}
+
+func scSweepPackageAllowed(pkg string) bool {
+	for _, p := range scSweepUnsweptAllowlist {
+		if p == pkg {
+			return true
+		}
+	}
+	return false
+}
+
+// scSweepSubjectExemption is one func allowed to keep building a fresh,
+// unmembered identity inside an already-swept package. Always func-scoped.
+type scSweepSubjectExemption struct {
+	file, fn string
+}
+
+func (e scSweepSubjectExemption) covers(s scSweepSubjectSite) bool {
+	return s.file == e.file && s.fn == e.fn
+}
+
+// scSweepSubjectAllowlist is every func exempted from an already-swept
+// package's rule.
+var scSweepSubjectAllowlist = []scSweepSubjectExemption{
+	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantRefused"},           // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
+	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},                   // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
+	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},                 // same claim, the UnresolveOutside leg
+	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipRefused"},                   // AUDIT-12-07 inverts this claim: a no-row caller now gets the seam's plain 403, not a role-specific reason
+	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},        // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                     // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusesACallerWithNoMembershipRow"},         // AUDIT-12-07's own inverted test (was TestRLS_RequestSeamAllowsACallerWithNoMembershipRow): the claim IS the no-row refusal
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow"}, // AUDIT-12-07's own test: needs a genuinely unmembered caller to compare against a suspended one
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamWrapsAMembershipReadError"},                 // the membership SELECT itself is poisoned to error; seeding would not prevent the forced failure
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest"},     // the malformed tenant id short-circuits before any membership lookup; seeding would not matter
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestRequireActiveAdmin_NoMembershipRowIsNotPermitted"},             // deliberately rowless caller: proves requireActiveAdmin's own no-row branch, store.go:489
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_NoMembershipFailsClosed"},                                      // Store.Me is exempt from the request seam (D-5); its claim is unaffected by AUDIT-12-07
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_ExemptFromTheSeamUnderTheStrictRule"},                          // same exemption, AUDIT-12-07's own test naming it
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
+}
+
+// scSweepTestFiles returns every _test.go file under internal/ (repo-relative,
+// forward-slashed), skipping the same directories scSeamFiles skips.
+func scSweepTestFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == "testdata" || name == "node_modules" || name == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/: %v", err)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// scSweepParsedTestFile is one already-read, already-parsed _test.go file,
+// kept around so the population scan below can resolve identity sinks
+// per-package (one AST walk over every sibling file) before scanning any
+// single file's calls against them.
+type scSweepParsedTestFile struct {
+	rel   string
+	fset  *token.FileSet
+	file  *ast.File
+	lines []string
+}
+
+func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
+	t.Run("control needles", scSweepSubjectControlNeedles)
+	t.Run("recognise-the-seeding control needles", scSweepRecogniseSeedingControlNeedles)
+	t.Run("helper-kind recognise-the-seeding control needles", scSweepHelperRecogniseSeedingControlNeedles)
+
+	root := repoRootDir(t)
+	files := scSweepTestFiles(t, root)
+	if len(files) < 350 {
+		t.Fatalf("walk found %d _test.go file(s) under internal/, want at least 350 (408 measured at AUDIT-12-02) — a clean report over a broken walk means nothing", len(files))
+	}
+
+	byPkg := map[string][]scSweepParsedTestFile{}
+	swept := 0
+	for _, rel := range files {
+		pkg := filepath.Dir(rel)
+		if !scSweepInPopulation(pkg) || scSweepPackageAllowed(pkg) {
+			continue
+		}
+		swept++
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, rel, raw, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v — the scan cannot report on a file it cannot parse", rel, err)
+		}
+		byPkg[pkg] = append(byPkg[pkg], scSweepParsedTestFile{rel: rel, fset: fset, file: f, lines: strings.Split(string(raw), "\n")})
+	}
+	if swept < 15 {
+		t.Fatalf("walked %d _test.go file(s) in a swept population package, want at least 15 (19 measured at AUDIT-12-02: portfolio's 4 plus dashboard's 15) — the population floor is meant to catch exactly this", swept)
+	}
+
+	// Sinks (the positional-helper shape) are resolved per PACKAGE, not per
+	// file — internal/document's identity() is declared in document_test.go
+	// and called from service_test.go/store_adversarial_test.go/etc, none of
+	// which declare it themselves (AUDIT-12-03 Implementation Plan §2).
+	var sites []scSweepSubjectSite
+	for _, pfs := range byPkg {
+		var pkgDecls []*ast.FuncDecl
+		for _, pf := range pfs {
+			pkgDecls = append(pkgDecls, scSweepFuncDecls(pf.file)...)
+		}
+		sinks := scSweepFindIdentitySinks(pkgDecls)
+		membershipSinks := scSweepFindMembershipSinks(pkgDecls)
+		dbReach := scSweepFindDBReachingFuncs(pkgDecls)
+		for _, pf := range pfs {
+			for _, s := range scSweepTextualSubjectSitesIn(pf.fset, pf.rel, pf.file, pf.lines) {
+				if !dbReach[s.fn] {
+					continue // DB-reachability gate: this func's call graph never reaches the database, so its identity construction is not a fixture to seed
+				}
+				if s.kind == "var" {
+					if fd := scSweepFuncByName(pf.file, s.fn); fd != nil && scSweepRecogniseSeeding(fd, s.name, membershipSinks) {
+						continue // recognise-the-seeding rule: this identifier is seeded a membership row on every path that reaches its use
+					}
+				}
+				sites = append(sites, s)
+			}
+			for _, s := range scSweepHelperCallSitesInFile(pf.fset, pf.rel, pf.file, pf.lines, sinks, membershipSinks) {
+				if !dbReach[s.fn] {
+					continue // same DB-reachability gate, helper-kind sites
+				}
+				sites = append(sites, s)
+			}
+		}
+	}
+
+	for _, s := range sites {
+		covered := false
+		for _, e := range scSweepSubjectAllowlist {
+			if e.covers(s) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s builds a caller identity from a fresh, unmembered uuid in a swept package — use memberSubject, or exempt this func with its reason", s)
+		}
+	}
+	// Anti-rot: every exemption must still be earning its place.
+	for _, e := range scSweepSubjectAllowlist {
+		used := false
+		for _, s := range sites {
+			if e.covers(s) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			t.Errorf("subject allowlist entry %s func %s matched nothing — delete it; a stale exemption is an open door nobody is looking at", e.file, e.fn)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scan 5 — no swept package gains a t.Skip( the sweep did not put there
+// (AUDIT-12-02, Core AC 4)
+// ---------------------------------------------------------------------------
+//
+// The sweep must land green (D-7): a test that cannot be made to pass by
+// seeding its caller a real membership row is a defect in the plan, not
+// license to skip it. This scan pins the t.Skip( census of every swept
+// package so a fixture subtask cannot quietly turn a hard fixture into a
+// skipped one, and a later revert of a fix cannot reintroduce one either.
+//
+// scSweepSkipAllowlist starts holding exactly the pre-existing, env-gated
+// dbTestPools skip in each of this subtask's two packages — present before
+// AUDIT-12 and unrelated to the sweep. A later sweep subtask adds its own
+// package's pre-existing skips the same way; it never grows because of a new
+// one.
+
+type scSweepSkipSite struct {
+	file string
+	line int
+	fn   string
+}
+
+func (s scSweepSkipSite) String() string {
+	return s.file + ":" + strconv.Itoa(s.line) + " (" + s.fn + ")"
+}
+
+// scSweepIsSkipCall reports whether call is a real `t.Skip(...)` invocation --
+// AST, never text: seam_coverage_test.go's OWN Errorf/Fatalf messages below
+// mention the phrase "t.Skip(" in prose, and a line-regex over raw text
+// flags those once this file's own package leaves scSweepUnsweptAllowlist.
+func scSweepIsSkipCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Skip" {
+		return false
+	}
+	recv, ok := sel.X.(*ast.Ident)
+	return ok && recv.Name == "t"
+}
+
+func scSweepSkipSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSkipSite {
+	var out []scSweepSkipSite
+	for _, fd := range scSweepFuncDecls(f) {
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || !scSweepIsSkipCall(call) {
+				return true
+			}
+			out = append(out, scSweepSkipSite{file: rel, line: fset.Position(call.Pos()).Line, fn: fd.Name.Name})
+			return true
+		})
+	}
+	return out
+}
+
+func scSweepFixtureSkipSites(t *testing.T, name, src string) []scSweepSkipSite {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	return scSweepSkipSitesIn(fset, name, f, strings.Split(src, "\n"))
+}
+
+const scSweepNeedleSkip = `package x
+
+func TestSkipsWhenUnconfigured(t *testing.T) {
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("db-integration test skipped")
+	}
+}
+`
+
+func scSweepSkipControlNeedle(t *testing.T) {
+	sites := scSweepFixtureSkipSites(t, "skip.go", scSweepNeedleSkip)
+	if len(sites) != 1 || sites[0].fn != "TestSkipsWhenUnconfigured" {
+		t.Fatalf("sites = %v, want exactly one t.Skip( site in TestSkipsWhenUnconfigured — the scan cannot see the shape it exists to catch", sites)
+	}
+}
+
+// scSweepSkipExemption is one known, pre-existing t.Skip( site inside a swept
+// package. A new one is what this scan exists to catch.
+type scSweepSkipExemption struct {
+	file, fn string
+}
+
+func (e scSweepSkipExemption) covers(s scSweepSkipSite) bool {
+	return s.file == e.file && s.fn == e.fn
+}
+
+var scSweepSkipAllowlist = []scSweepSkipExemption{
+	{file: "internal/portfolio/portfolio_test.go", fn: "dbTestPools"},                                         // env-gated: skips when DATABASE_URL/DATABASE_SUPERUSER_URL are unset, the same guard every DB-backed package uses
+	{file: "internal/dashboard/store_test.go", fn: "dbTestPools"},                                             // same guard, dashboard's own pool helper
+	{file: "internal/document/document_test.go", fn: "dbTestPools"},                                           // same guard, document's own pool helper
+	{file: "internal/importer/store_test.go", fn: "dbTestPools"},                                              // same guard, importer's own pool helper
+	{file: "internal/invoice/store_test.go", fn: "dbTestPools"},                                               // same guard, invoice's own pool helper
+	{file: "internal/invoice/payload_engine_test.go", fn: "rulesAppPool"},                                     // same guard, PAY-18's app-role-only pool helper
+	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"}, // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
+	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                               // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                     // same guard, approval's own pool helper
+	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                             // same guard, tenancy's own pool helper
+	{file: "internal/platform/db/bootstrap_test.go", fn: "requireSuperuserDSN"},                               // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
+	{file: "internal/platform/db/migrate_test.go", fn: "TestMigrateUpFromEmbedded"},                           // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/platform/db/provision_test.go", fn: "requireProvisionDSNs"},                              // pre-existing: skips without DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/platform/db/provision_test.go", fn: "TestSuperuserDSNNotRetainedForRequestPath"},         // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/platform/db/rls_harness_test.go", fn: "requireHarness"},                                  // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL/DATABASE_SUPERUSER_URL, unrelated to the sweep
+	{file: "internal/platform/db/workflow_roles_seed_store_test.go", fn: "requireAppDSN"},                     // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/submission/exchange_db_test.go", fn: "requireExchangeDB"},                                // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/submission/failure_modes_test.go", fn: "requireEffects"},                                 // same guard, the M2-09 exactly-once suite's own gate
+	{file: "internal/submission/seed_evidence_honesty_test.go", fn: "sehRequireSuperuserDSN"},                 // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
+	{file: "internal/submission/verdict_audit_test.go", fn: "vaRequireAppPool"},                               // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/submission/worker_smoke_test.go", fn: "requireDB"},                                       // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+}
+
+func TestRLS_NoNewSkipsInASweptPackage(t *testing.T) {
+	t.Run("control needle", scSweepSkipControlNeedle)
+
+	root := repoRootDir(t)
+	files := scSweepTestFiles(t, root)
+
+	var sites []scSweepSkipSite
+	swept := 0
+	for _, rel := range files {
+		pkg := filepath.Dir(rel)
+		if !scSweepInPopulation(pkg) || scSweepPackageAllowed(pkg) {
+			continue
+		}
+		swept++
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, rel, raw, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", rel, err)
+		}
+		sites = append(sites, scSweepSkipSitesIn(fset, rel, f, strings.Split(string(raw), "\n"))...)
+	}
+	if swept < 15 {
+		t.Fatalf("walked %d _test.go file(s) in a swept population package, want at least 15 (19 measured at AUDIT-12-02) — the population floor is meant to catch exactly this", swept)
+	}
+	if len(sites) < 2 {
+		t.Fatalf("found %d t.Skip( site(s) outside the unswept-package allowlist, want at least 2 (portfolio's and dashboard's own dbTestPools, measured at AUDIT-12-02) — a clean report over a broken walk means nothing", len(sites))
+	}
+
+	for _, s := range sites {
+		covered := false
+		for _, e := range scSweepSkipAllowlist {
+			if e.covers(s) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s is a new t.Skip( in a swept package — fix the fixture, never skip the test; a genuine new env-gated skip is added to scSweepSkipAllowlist with its reason, not left bare", s)
+		}
+	}
+	// Anti-rot: every exemption must still be earning its place.
+	for _, e := range scSweepSkipAllowlist {
+		used := false
+		for _, s := range sites {
+			if e.covers(s) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			t.Errorf("skip allowlist entry %s func %s matched nothing — delete it; a stale exemption is an open door nobody is looking at", e.file, e.fn)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Every exemption carries its own reason
 // ---------------------------------------------------------------------------
 
@@ -1272,7 +3450,7 @@ func TestRLS_EveryAllowlistEntryNamesItsReason(t *testing.T) {
 		t.Fatalf("parse %s: %v", scSelfPath, err)
 	}
 
-	want := len(scPoolAllowlist) + len(scCoreAllowlist)
+	want := len(scPoolAllowlist) + len(scCoreAllowlist) + len(scSweepUnsweptAllowlist) + len(scSweepSubjectAllowlist) + len(scSweepSkipAllowlist)
 	found := 0
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
@@ -1284,7 +3462,9 @@ func TestRLS_EveryAllowlistEntryNamesItsReason(t *testing.T) {
 			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
 				continue
 			}
-			if vs.Names[0].Name != "scPoolAllowlist" && vs.Names[0].Name != "scCoreAllowlist" {
+			switch vs.Names[0].Name {
+			case "scPoolAllowlist", "scCoreAllowlist", "scSweepUnsweptAllowlist", "scSweepSubjectAllowlist", "scSweepSkipAllowlist":
+			default:
 				continue
 			}
 			cl, ok := vs.Values[0].(*ast.CompositeLit)

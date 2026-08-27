@@ -1,6 +1,7 @@
-// AUDIT-10-01: the request-seam membership gate. WithinRequestTenantTxOpts refuses a
-// caller whose memberships row in the current tenant exists and is not 'active'
-// (ErrNotActiveMember); no row at all still proceeds (D-17, NARROW).
+// AUDIT-10-01/AUDIT-12-07: the request-seam membership gate. WithinRequestTenantTxOpts
+// refuses a caller with no membership row in the current tenant, or one whose row
+// exists and is not 'active', identically (ErrNotActiveMember) -- the strict rule;
+// D-17's NARROW no-row exception is gone.
 //
 // Named TestRLS_ so ci.yml:331's `-run TestRLS` step reaches every case here —
 // ci_filter_coverage_test.go fails any name no filter reaches.
@@ -37,6 +38,32 @@ func seedMembershipWithStatus(t *testing.T, tenantID, userID, role, status strin
 	t.Cleanup(func() {
 		_, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id)
 	})
+}
+
+// TestRLS_SeedMembershipWithStatusSeedsTheRequestedStatus (AUDIT-12-05): the
+// sweep's fixture for TestRLS_WithinRequestTenantTxStillBeginsAPlainTransaction
+// (userID := uuid.NewString(); seedMembershipWithStatus(t, tenantID, userID,
+// role, "active")) must leave a real, readable-back row -- not merely not
+// error. Deleting the INSERT must fail this test, not pass silently.
+func TestRLS_SeedMembershipWithStatusSeedsTheRequestedStatus(t *testing.T) {
+	h := requireHarness(t)
+	userID := uuid.NewString()
+
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+
+	var role, status string
+	err := h.super.QueryRow(context.Background(),
+		`SELECT role, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`, h.tenantA, userID,
+	).Scan(&role, &status)
+	if err != nil {
+		t.Fatalf("seedMembershipWithStatus seeded no memberships row: %v", err)
+	}
+	if role != "admin" {
+		t.Fatalf("membership role = %q, want admin", role)
+	}
+	if status != "active" {
+		t.Fatalf("membership status = %q, want active", status)
+	}
 }
 
 // seamTracer records BOTH standalone statements and batched ones. pgx assigns the
@@ -260,10 +287,10 @@ func TestRLS_RequestSeamAdmitsAReactivatedCaller(t *testing.T) {
 	}
 }
 
-// TestRLS_RequestSeamAllowsACallerWithNoMembershipRow (AC-3) pins D-6/D-17's NARROW
-// rule: no row is NOT a refusal. AUDIT-12 owns the strict flip, and flipping it must
-// show up as a change to this test.
-func TestRLS_RequestSeamAllowsACallerWithNoMembershipRow(t *testing.T) {
+// TestRLS_RequestSeamRefusesACallerWithNoMembershipRow (AC-3, AUDIT-12): the strict
+// rule -- no row is now refused exactly like a suspended one. Was
+// TestRLS_RequestSeamAllowsACallerWithNoMembershipRow under D-6/D-17's NARROW rule.
+func TestRLS_RequestSeamRefusesACallerWithNoMembershipRow(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
@@ -282,11 +309,11 @@ func TestRLS_RequestSeamAllowsACallerWithNoMembershipRow(t *testing.T) {
 	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
 		ran = true
 		return nil
-	}); err != nil {
-		t.Fatalf("WithinRequestTenantTx: a caller with no membership row must proceed, got %v", err)
+	}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("WithinRequestTenantTx: a caller with no membership row must be refused, got %v", err)
 	}
-	if !ran {
-		t.Error("the closure never ran for a caller with no membership row")
+	if ran {
+		t.Error("the closure ran for a caller with no membership row")
 	}
 }
 
@@ -607,10 +634,10 @@ func TestRLS_RequestSeamSkipsTheLookupForAnEmptySubject(t *testing.T) {
 	}
 }
 
-// TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted (D-6/D-17, NARROW): removing a
-// member is not suspending one - a deleted row leaves nothing to refuse and the former
-// member is still admitted. AUDIT-12 owns the strict flip.
-func TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted(t *testing.T) {
+// TestRLS_RequestSeamRefusesACallerWhoseRowWasDeleted (AUDIT-12): removing a member
+// now refuses exactly like suspending one. Was
+// TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted under D-6/D-17's NARROW rule.
+func TestRLS_RequestSeamRefusesACallerWhoseRowWasDeleted(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
@@ -635,11 +662,11 @@ func TestRLS_RequestSeamStillAdmitsACallerWhoseRowWasDeleted(t *testing.T) {
 	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
 		ran = true
 		return nil
-	}); err != nil {
-		t.Fatalf("after deletion: a caller with no row must proceed, got %v", err)
+	}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("after deletion: a caller with no row must be refused, got %v", err)
 	}
-	if !ran {
-		t.Error("the closure never ran for a removed member")
+	if ran {
+		t.Error("the closure ran for a removed member")
 	}
 }
 
@@ -680,10 +707,11 @@ func TestRLS_RequestSeamRefusesAfterALiveSuspension(t *testing.T) {
 	}
 }
 
-// TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow (AC-2): the lookup carries no
-// tenant_id - RLS supplies it. A row owned by another tenant must be invisible, so a
-// caller suspended elsewhere is admitted here on the no-row rule, not refused on a
-// leaked row.
+// TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow (AC-2, AUDIT-12): the lookup
+// carries no tenant_id - RLS supplies it. A row owned by another tenant must be
+// invisible, so a caller suspended elsewhere is refused here on the no-row rule, not
+// admitted on a leaked row. The claim strengthens from admitted to refused under the
+// strict rule; the name still fits.
 func TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow(t *testing.T) {
 	h := requireHarness(t)
 
@@ -691,7 +719,7 @@ func TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow(t *testing.T) {
 	seedMembershipWithStatus(t, h.tenantB, userID, "admin", "suspended")
 
 	// Control: the row does refuse in the tenant that owns it. Without this the
-	// admission below could pass on a seed that never landed.
+	// refusal below could pass on a seed that never landed.
 	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantB), h.app, func(pgx.Tx) error {
 		return nil
 	}); !errors.Is(err, db.ErrNotActiveMember) {
@@ -702,11 +730,11 @@ func TestRLS_RequestSeamDoesNotSeeAnotherTenantsMembershipRow(t *testing.T) {
 	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
 		ran = true
 		return nil
-	}); err != nil {
-		t.Fatalf("acting as a tenant the caller has no row in: want admission, got %v", err)
+	}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("acting as a tenant the caller has no row in: err = %v, want db.ErrNotActiveMember", err)
 	}
-	if !ran {
-		t.Error("the closure never ran in the tenant the caller has no row in")
+	if ran {
+		t.Error("the closure ran in the tenant the caller has no row in -- B's suspended row must not leak in as an admission either")
 	}
 }
 
@@ -742,5 +770,62 @@ func TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest(t *testing.T) {
 	}
 	if countContaining(tr.allStmts(), "memberships") == 0 {
 		t.Fatal("the tracer recorded no memberships statement even for a well-formed request - it is not attached")
+	}
+}
+
+// TestRLS_RequestSeamRefusesACallerActiveOnlyInAnotherTenant (AUDIT-12): active in A,
+// acting as B, is refused -- A's row is invisible under RLS, and B has none.
+func TestRLS_RequestSeamRefusesACallerActiveOnlyInAnotherTenant(t *testing.T) {
+	h := requireHarness(t)
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+
+	ran := false
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantB), h.app, func(pgx.Tx) error {
+		ran = true
+		return nil
+	}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("acting as tenant B (active only in A): err = %v, want db.ErrNotActiveMember", err)
+	}
+	if ran {
+		t.Error("the closure ran for a caller active only in another tenant")
+	}
+
+	// Control: the same caller IS admitted in the tenant they are actually active in.
+	ranA := false
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		ranA = true
+		return nil
+	}); err != nil {
+		t.Errorf("acting as tenant A (active there): unexpected error %v", err)
+	}
+	if !ranA {
+		t.Error("the closure never ran in the tenant the caller is active in")
+	}
+}
+
+// TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow (Core AC 2): the two
+// refusal paths are indistinguishable -- both wrap ErrNotActiveMember AND their error
+// strings are byte-equal, so nothing downstream can tell a no-row caller from a
+// suspended one.
+func TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow(t *testing.T) {
+	h := requireHarness(t)
+
+	suspendedID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, suspendedID, "admin", "suspended")
+	noRowID := uuid.NewString() // never seeded
+
+	suspendedErr := db.WithinRequestTenantTx(requestCtx(suspendedID, h.tenantA), h.app, func(pgx.Tx) error { return nil })
+	noRowErr := db.WithinRequestTenantTx(requestCtx(noRowID, h.tenantA), h.app, func(pgx.Tx) error { return nil })
+
+	if !errors.Is(suspendedErr, db.ErrNotActiveMember) {
+		t.Fatalf("suspended caller err = %v, want db.ErrNotActiveMember", suspendedErr)
+	}
+	if !errors.Is(noRowErr, db.ErrNotActiveMember) {
+		t.Fatalf("no-row caller err = %v, want db.ErrNotActiveMember", noRowErr)
+	}
+	if suspendedErr.Error() != noRowErr.Error() {
+		t.Errorf("error strings differ: suspended=%q no-row=%q, want byte-identical", suspendedErr.Error(), noRowErr.Error())
 	}
 }

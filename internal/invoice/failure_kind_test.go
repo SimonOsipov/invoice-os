@@ -10,7 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -739,7 +738,7 @@ func TestFailureKind_ProjectionRoundTripsThroughStoreGet(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	got, err := store.Get(c, invID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -789,7 +788,7 @@ func TestFailureKind_ListProjectionMixedRowsNoCrossBleed(t *testing.T) {
 		t.Fatalf("MarkFailedTx(queued->failed): %v, want nil", err)
 	}
 
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	items, total, err := store.List(c, ListFilter{Limit: 50, Offset: 0})
 	if err != nil {
 		t.Fatalf("List: %v", err)

@@ -156,8 +156,8 @@ func TestRLS_KeepAsIsCrossTenantIs404(t *testing.T) {
 	entity2 := seedEntity(t, super, tenant2, "KEEP-RLS entity 2")
 
 	store := NewStore(app)
-	id1 := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1}
-	c2 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant2})
+	id1 := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1}
+	c2 := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant2})
 
 	// --- leg 1: POST against a not-yet-kept tenant-2 invoice ---
 	invB := seedDraftWithBlockingViolation(t, super, tenant2, entity2, "KEEP-RLS-POST")
@@ -307,7 +307,7 @@ func TestKeptAsIs_ProjectionRoundTrips(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "KEEP-PROJ entity")
 
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	invID := seedDraftWithBlockingViolation(t, super, tenantID, entityID, "KEEP-PROJ")
@@ -385,7 +385,7 @@ func TestKeepAsIsHandler_CleanInvoice409(t *testing.T) {
 	tenantID := seedTenant(t, super, "KEEP-CLEAN tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-CLEAN entity")
 	store := NewStore(app)
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	invID := seedInvoiceWithViolations(t, super, tenantID, entityID, "KEEP-CLEAN", string(StatusDraft), `[]`)
 
@@ -422,7 +422,7 @@ func TestKeepAsIsHandler_ActorIsIdentityNotBody(t *testing.T) {
 	tenantID := seedTenant(t, super, "KEEP-ACTOR tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-ACTOR entity")
 	store := NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	id := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 
 	invID := seedDraftWithBlockingViolation(t, super, tenantID, entityID, "KEEP-ACTOR")
@@ -454,7 +454,7 @@ func TestKeepAsIsHandler_EmptyReason400(t *testing.T) {
 	tenantID := seedTenant(t, super, "KEEP-EMPTY tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-EMPTY entity")
 	store := NewStore(app)
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	invID := seedDraftWithBlockingViolation(t, super, tenantID, entityID, "KEEP-EMPTY")
 
@@ -486,7 +486,7 @@ func TestKeepAsIsHandler_OversizedReason400(t *testing.T) {
 	tenantID := seedTenant(t, super, "KEEP-OVERSIZE tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-OVERSIZE entity")
 	store := NewStore(app)
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	invID := seedDraftWithBlockingViolation(t, super, tenantID, entityID, "KEEP-OVERSIZE")
 
@@ -582,7 +582,7 @@ func TestKeepAsIsHandler_UnkeepClearsMarksAndAudits(t *testing.T) {
 	tenantID := seedTenant(t, super, "KEEP-UNKEEP tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-UNKEEP entity")
 	store := NewStore(app)
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, id)
 
 	invID := seedDraftWithBlockingViolation(t, super, tenantID, entityID, "KEEP-UNKEEP")
@@ -624,7 +624,7 @@ func TestKeepAsIsHandler_UnkeepAlreadyUnkeptIsNoop(t *testing.T) {
 	tenantID := seedTenant(t, super, "KEEP-UNKEEP-NOOP tenant")
 	entityID := seedEntity(t, super, tenantID, "KEEP-UNKEEP-NOOP entity")
 	store := NewStore(app)
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	invID := seedDraftWithBlockingViolation(t, super, tenantID, entityID, "KEEP-UNKEEP-NOOP")
 

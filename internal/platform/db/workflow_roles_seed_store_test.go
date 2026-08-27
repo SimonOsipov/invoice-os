@@ -33,13 +33,15 @@ func requireAppDSN(t *testing.T) string {
 	return dsn
 }
 
-// asTenant returns a context carrying a verified Identity for tenantID, the cheap
-// stub auth.WithIdentity documents for "run as this tenant" without minting a
-// token. ListRoles applies no access-role gate (store.go:53-55), so the caller's
-// role only needs to be a plausible one, not a real membership row.
-func asTenant(tenantID string) context.Context {
+// asTenant returns a context carrying a verified Identity for tenantID, backed by a
+// real seeded membership row. ListRoles applies no access-role gate (store.go:53-55),
+// so the row's role only needs to be a plausible one.
+func asTenant(t *testing.T, tenantID string) context.Context {
+	t.Helper()
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, tenantID, userID, "preparer", "active")
 	return auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: userID, Role: "authenticated", TenantID: tenantID,
 	})
 }
 
@@ -68,7 +70,7 @@ func TestSeedFiveHolderStatesReachableThroughTheRealStore(t *testing.T) {
 
 	holdersOf := func(tenantID, roleKey string) []holderMembership {
 		t.Helper()
-		roles, err := store.ListRoles(asTenant(tenantID))
+		roles, err := store.ListRoles(asTenant(t, tenantID))
 		if err != nil {
 			t.Fatalf("ListRoles(%s): %v", tenantID, err)
 		}

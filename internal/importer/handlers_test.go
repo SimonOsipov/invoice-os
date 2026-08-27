@@ -38,11 +38,18 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +60,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // xlsxContentType is the canonical MIME type for an .xlsx upload -- set
@@ -273,7 +281,7 @@ func TestCreateHandler_201(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IMP-API-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-02 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"IMP-API-02-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -317,7 +325,7 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IMP-API-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-03 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"IMP-API-03-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -367,7 +375,7 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 // wire, so the padding rides in an unrelated part: the cap bounds the WHOLE
 // request, not one part.
 func TestCreateHandler_OversizedBody413(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run when the request body exceeds the upload cap")
 		return BatchResult{}, nil
@@ -404,7 +412,7 @@ func TestCreateHandler_BadMapping400(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when mapping is missing or malformed")
 				return BatchResult{}, nil
@@ -435,7 +443,7 @@ func TestCreateHandler_EntityNotFound404(t *testing.T) {
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "IMP-API-06 tenant")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No"}
 	rows := [][]string{{"IMP-API-06-1"}}
@@ -469,7 +477,7 @@ func TestCreateHandler_XLSX201(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IMP-API-07 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-07 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"IMP-API-07-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -492,6 +500,290 @@ func TestCreateHandler_XLSX201(t *testing.T) {
 	}
 	if resp.Status != "completed" {
 		t.Errorf("status = %q, want %q", resp.Status, "completed")
+	}
+}
+
+// --- AUDIT-12-01 AC-1: a caller the seam refuses gets 403, never 500 -------
+
+// TestImport_SuspendedCallerIs403NotAServerError: db.ErrNotActiveMember from
+// open must route through statusForErr, not the switch's default 500 arm.
+// imp must never run -- the refusal happens in open(), before imp exists.
+func TestImport_SuspendedCallerIs403NotAServerError(t *testing.T) {
+	id := testIdentity()
+	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		t.Fatal("imp must not run for a caller the seam refuses")
+		return BatchResult{}, nil
+	}
+	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
+	if err != nil {
+		t.Fatalf("marshal mapping: %v", err)
+	}
+	body, contentType, open := storedUpload(t, uuid.NewString(), string(mappingJSON), "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	open.err = db.ErrNotActiveMember
+	rec, resp := doImportCreate(t, imp, open.fn(), &id, "", contentType, body)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a caller the seam refuses (body=%v)", rec.Code, resp)
+	}
+	if resp.Error != db.NotActiveMemberMessage {
+		t.Errorf("error = %q, want %q", resp.Error, db.NotActiveMemberMessage)
+	}
+}
+
+// --- AUDIT-12-01 AC-4: no second sentinel, one mapper -----------------------
+
+// imhmAlias returns the name f binds importPath to, or defaultName when the
+// import has no explicit alias, or "" when f does not import it at all.
+func imhmAlias(f *ast.File, importPath, defaultName string) string {
+	for _, imp := range f.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != importPath {
+			continue
+		}
+		if imp.Name != nil {
+			return imp.Name.Name
+		}
+		return defaultName
+	}
+	return ""
+}
+
+// imhmIsSelector reports whether e is exactly x.sel.
+func imhmIsSelector(e ast.Expr, x, sel string) bool {
+	s, ok := e.(*ast.SelectorExpr)
+	if !ok || s.Sel.Name != sel {
+		return false
+	}
+	id, ok := s.X.(*ast.Ident)
+	return ok && id.Name == x
+}
+
+// imhmIsErrorsIsCall reports whether e is errorsAlias.Is(_, sentinelAlias.sentinelName).
+func imhmIsErrorsIsCall(e ast.Expr, errorsAlias, sentinelAlias, sentinelName string) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != 2 {
+		return false
+	}
+	return imhmIsSelector(call.Fun, errorsAlias, "Is") && imhmIsSelector(call.Args[1], sentinelAlias, sentinelName)
+}
+
+// imhmBodyHasArm reports whether body consults db.ErrNotActiveMember, either
+// through a bare call to statusForErr or an inline errors.Is arm.
+func imhmBodyHasArm(body ast.Node, errorsAlias, dbAlias string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found || n == nil {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "statusForErr" {
+			found = true
+			return false
+		}
+		if imhmIsErrorsIsCall(call, errorsAlias, dbAlias, "ErrNotActiveMember") {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// imhmSwitchArmed finds the tagless switch inside fnBody that maps
+// document.ErrNotFound (CreateHandler's and SheetHandler's open-error
+// switch) and reports whether its default arm now also consults
+// db.ErrNotActiveMember. siteFound is false when no such switch exists --
+// a renamed or restructured site, distinct from an unarmed one.
+func imhmSwitchArmed(fnBody *ast.BlockStmt, errorsAlias, dbAlias, docAlias string) (siteFound, armed bool) {
+	ast.Inspect(fnBody, func(n ast.Node) bool {
+		sw, ok := n.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		isDocSwitch := false
+		for _, stmt := range sw.Body.List {
+			cc, ok := stmt.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			for _, expr := range cc.List {
+				if imhmIsErrorsIsCall(expr, errorsAlias, docAlias, "ErrNotFound") {
+					isDocSwitch = true
+				}
+			}
+		}
+		if !isDocSwitch {
+			return true
+		}
+		siteFound = true
+		if imhmBodyHasArm(sw.Body, errorsAlias, dbAlias) {
+			armed = true
+		}
+		return true
+	})
+	return
+}
+
+// imhmStoreErrArmed finds `_, err := store(...)` inside fnBody (PreviewHandler)
+// and reports whether the `if err != nil` block right after it now consults
+// db.ErrNotActiveMember.
+func imhmStoreErrArmed(fnBody *ast.BlockStmt, errorsAlias, dbAlias string) (siteFound, armed bool) {
+	ast.Inspect(fnBody, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, stmt := range blk.List {
+			assign, ok := stmt.(*ast.AssignStmt)
+			if !ok || assign.Tok != token.DEFINE || len(assign.Rhs) != 1 || len(assign.Lhs) == 0 {
+				continue
+			}
+			call, ok := assign.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			fnIdent, ok := call.Fun.(*ast.Ident)
+			if !ok || fnIdent.Name != "store" {
+				continue
+			}
+			errIdent, ok := assign.Lhs[len(assign.Lhs)-1].(*ast.Ident)
+			if !ok {
+				continue
+			}
+			siteFound = true
+			if i+1 >= len(blk.List) {
+				continue
+			}
+			ifs, ok := blk.List[i+1].(*ast.IfStmt)
+			if !ok || ifs.Init != nil {
+				continue
+			}
+			bin, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || bin.Op != token.NEQ {
+				continue
+			}
+			x, xOK := bin.X.(*ast.Ident)
+			y, yOK := bin.Y.(*ast.Ident)
+			matches := (xOK && x.Name == errIdent.Name && yOK && y.Name == "nil") ||
+				(yOK && y.Name == errIdent.Name && xOK && x.Name == "nil")
+			if !matches {
+				continue
+			}
+			if imhmBodyHasArm(ifs.Body, errorsAlias, dbAlias) {
+				armed = true
+			}
+		}
+		return true
+	})
+	return
+}
+
+// imhmIsErrorsNewCall reports whether e is errorsAlias.New(...).
+func imhmIsErrorsNewCall(e ast.Expr, errorsAlias string) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	return imhmIsSelector(call.Fun, errorsAlias, "New")
+}
+
+// TestImporterHandlers_NoSecondSentinel (AC-4): db.ErrNotActiveMember is
+// reached at each of the three sites ONLY through statusForErr or an inline
+// errors.Is arm, and no new top-level error var joins the three the package
+// already declares (ErrBackfillPrivilegedRole, ErrValidation, ErrNotFound).
+// AST, not text, mirroring internal/platform/db/handler_mapping_test.go's
+// scan -- scoped to one package and the three named sites rather than a
+// generic per-function population, because CreateHandler already calls
+// statusForErr for Service.Import's own error (handlers.go:303): a
+// whole-function-body scan would find that call and pass vacuously without
+// ever touching the broken open()-error switch this test exists to catch.
+func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+
+	const dbImportPath = "github.com/SimonOsipov/invoice-os/internal/platform/db"
+	const docImportPath = "github.com/SimonOsipov/invoice-os/internal/document"
+	allowedSentinels := map[string]bool{
+		"ErrBackfillPrivilegedRole": true,
+		"ErrValidation":             true,
+		"ErrNotFound":               true,
+	}
+
+	found := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}
+	armed := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}
+	var newSentinels []string
+
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		errorsAlias := imhmAlias(f, "errors", "errors")
+		dbAlias := imhmAlias(f, dbImportPath, "db")
+		docAlias := imhmAlias(f, docImportPath, "document")
+
+		for _, decl := range f.Decls {
+			switch d := decl.(type) {
+			case *ast.GenDecl:
+				if d.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, vname := range vs.Names {
+						if i >= len(vs.Values) {
+							continue
+						}
+						if imhmIsErrorsNewCall(vs.Values[i], errorsAlias) && !allowedSentinels[vname.Name] {
+							newSentinels = append(newSentinels, name+":"+vname.Name)
+						}
+					}
+				}
+			case *ast.FuncDecl:
+				if d.Recv != nil {
+					continue
+				}
+				if _, want := found[d.Name.Name]; !want {
+					continue
+				}
+				found[d.Name.Name] = true
+				var siteFound, isArmed bool
+				if d.Name.Name == "PreviewHandler" {
+					siteFound, isArmed = imhmStoreErrArmed(d.Body, errorsAlias, dbAlias)
+				} else {
+					siteFound, isArmed = imhmSwitchArmed(d.Body, errorsAlias, dbAlias, docAlias)
+				}
+				if !siteFound {
+					t.Errorf("%s: expected error-handling site not found -- scan needs updating for a restructured handler", d.Name.Name)
+				}
+				armed[d.Name.Name] = isArmed
+			}
+		}
+	}
+
+	for _, name := range [...]string{"CreateHandler", "PreviewHandler", "SheetHandler"} {
+		if !found[name] {
+			t.Fatalf("%s: not found in internal/importer -- scan target renamed or moved", name)
+		}
+		if !armed[name] {
+			t.Errorf("%s: the refused-caller path never consults statusForErr or errors.Is(_, db.ErrNotActiveMember) -- a caller the seam refuses still gets a 500 here", name)
+		}
+	}
+	if len(newSentinels) > 0 {
+		t.Errorf("unexpected new sentinel var(s) %v -- AC-4 forbids a second sentinel for db.ErrNotActiveMember", newSentinels)
 	}
 }
 
@@ -626,7 +918,7 @@ func TestCreateHandler_PassesSanitizedPartFilenameToImp(t *testing.T) {
 		capturedFilename = filename
 		return BatchResult{}, nil
 	}
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
@@ -666,7 +958,7 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 		capturedDryRun = dryRun
 		return BatchResult{RowsTotal: len(rows), RowsValid: len(rows)}, nil
 	}
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
@@ -694,7 +986,7 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "BULK-01-10 tenant")
 	entityID := seedEntity(t, super, tenantID, "BULK-01-10 entity")
-	realID := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	realID := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"BULK-01-10-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}

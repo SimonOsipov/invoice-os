@@ -19,8 +19,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -46,7 +44,7 @@ func TestStoreUpdate_SupplierTINAndNameDerivedFromEntityOverridingCaller(t *test
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "C7-EDIT-01"))
 	if err != nil {
@@ -133,7 +131,7 @@ func TestStoreEdit_SupplierTINOverriddenOnRealPATCHPathClosesLoopOnGateValidate(
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "C7-EDIT-02"))
 	if err != nil {
@@ -190,7 +188,7 @@ func TestStoreUpdate_JTBEntityTINPassesThroughUnchanged(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "C7-EDIT-03"))
 	if err != nil {
@@ -218,7 +216,7 @@ func TestStoreUpdate_BuyerTINNotNormalized(t *testing.T) {
 	entityID, _ := createEntityViaRealPortfolioStore(t, super, app, tenantID, "C7-EDIT-04 Supplier Co", c7FIRSTIN)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "C7-EDIT-04"))
 	if err != nil {
@@ -286,7 +284,7 @@ func TestStoreEdit_PreExistingWrongSupplierTINGenuinelyChangesAndDemotesOnFirstP
 	const entityName = "C7-EDIT-05 Legacy Supplier Co"
 	entityID := seedEntityWithTIN(t, super, tenantID, entityName, entityTIN)
 
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	// Simulate a pre-C7-fix invoice: raw-inserted (bypassing Store.Create's
@@ -396,7 +394,7 @@ func TestStoreUpdate_AuditFieldsOmitSupplierWhenUnchangedButNameItWhenCorrected(
 		entityID, _ := createEntityViaRealPortfolioStore(t, super, app, tenantID, "C7-EDIT-06 Supplier Co", c7FIRSTIN)
 
 		store := NewStore(app)
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "C7-EDIT-06"))
 		if err != nil {
@@ -425,7 +423,7 @@ func TestStoreUpdate_AuditFieldsOmitSupplierWhenUnchangedButNameItWhenCorrected(
 		entityID := seedEntityWithTIN(t, super, tenantID, entityName, entityTIN)
 
 		store := NewStore(app)
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 		// A pre-fix-shaped invoice: raw-inserted with a supplier_tin/name that
 		// DISAGREE with the entity above (simulating a stale stored value), same

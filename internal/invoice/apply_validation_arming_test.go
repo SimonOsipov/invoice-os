@@ -230,7 +230,7 @@ func TestApplyValidation_PromotionArmsARun(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID, entityID, versionID := seedOneStepActivePolicyTenant(t, super, "ARM-01")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ARM-01"})
 	if err != nil {
@@ -295,7 +295,7 @@ func TestApplyValidation_ArmedRowSitsBetweenTransitionedAndValidated(t *testing.
 	store := NewStore(app)
 
 	tenantID, entityID, _ := seedOneStepActivePolicyTenant(t, super, "ARM-02")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ARM-02"})
@@ -352,7 +352,7 @@ func TestApplyValidation_BlockedVerdictArmsNothing(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID, entityID, _ := seedOneStepActivePolicyTenant(t, super, "ARM-03")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	ruleSetVersionID := seedRuleSetVersionID(t, super)
 
 	control, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ARM-03-control"})
@@ -425,7 +425,7 @@ func TestArm_FailureRollsBackPromotion(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID, entityID, versionID := seedOneStepActivePolicyTenant(t, super, "ARM-04")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ARM-04"})
 	if err != nil {
@@ -504,7 +504,7 @@ func TestApplyValidation_NoActivePolicyLeavesTheTrailUnchanged(t *testing.T) {
 
 	assertUnarmed := func(t *testing.T, label, tenantID, entityID string) {
 		t.Helper()
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: label})
 		if err != nil {
 			t.Fatalf("%s: Create: %v", label, err)

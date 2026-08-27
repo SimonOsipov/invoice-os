@@ -74,11 +74,10 @@ import (
 // state-machine walk (Decision [spine-known-subject]): every genesis /
 // transition / validate row Store.Create, transitionTx and ApplyValidation
 // write derives its actor from ctx.Subject, so pinning a single subject lets
-// SPINE-03/05 assert actor equality on every history and audit row. A plain
-// UUID string -- audit_log.actor / invoice_status_history.actor are free-text
-// (char_length>0, <=255), never FK'd to a users table, so any non-empty value
-// works; a fixed sentinel just makes the equality assertion legible.
-const spineKnownSubject = "11111111-1111-1111-1111-111111111111"
+// SPINE-03/05 assert actor equality on every history and audit row. Aliased
+// to memberSubject (AUDIT-12-03) so this caller has the seeded membership
+// row too, rather than a second unmembered identity.
+const spineKnownSubject = memberSubject
 
 // spineAuditRow is one audit_log row read back under tenant RLS (actor +
 // event + the raw jsonb payload, the only columns any SPINE assertion needs).

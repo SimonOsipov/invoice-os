@@ -241,7 +241,7 @@ func doImportUpload(t *testing.T, imp importFunc, open openSpec, id *auth.Identi
 
 // testIdentity is a throwaway authenticated caller.
 func testIdentity() auth.Identity {
-	return auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	return auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 }
 
 // mustMappingJSON renders the canonical one-field mapping used by the fake-driven

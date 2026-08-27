@@ -51,7 +51,7 @@ func TestStoreCreate_PersistsSourceDocumentID(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:         entityID,
@@ -76,7 +76,7 @@ func TestManualCreate_LeavesSourceDocumentNull(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "DOC-06 manual-create entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-06-SRC-2"})
 	if err != nil {

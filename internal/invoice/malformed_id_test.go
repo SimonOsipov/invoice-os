@@ -17,8 +17,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -37,7 +35,7 @@ func TestStore_MalformedIDIsValidationError(t *testing.T) {
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "MALFORMED-ID-baseline")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const malformed = "not-a-uuid"
 

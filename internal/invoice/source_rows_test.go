@@ -83,7 +83,7 @@ func TestStoreCreate_PersistsSourceRows(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:         entityID,
@@ -115,7 +115,7 @@ func TestStoreCreate_NilSourceRowsIsNull(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:         entityID,
@@ -145,7 +145,7 @@ func TestStoreCreate_EmptyNonNilSourceRowsRejected(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const invoiceNumber = "DOC-02-01-ROWS-3"
 	_, err := store.Create(c, CreateInput{
@@ -182,7 +182,7 @@ func TestStoreCreate_SourceRowsWithoutDocumentRejected(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "DOC-02-01 no-doc-rows entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
@@ -209,7 +209,7 @@ func TestStoreCreate_SourceRowBelowTwoRejected(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.Create(c, CreateInput{
 		EntityID:         entityID,
@@ -281,7 +281,7 @@ func TestRLS_InvoicesSourceRowsCrossTenantRefused(t *testing.T) {
 	documentB := seedDocument(t, super, tenantB)
 
 	store := NewStore(app)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	invB, err := store.Create(cB, CreateInput{
 		EntityID:         entityB,
 		InvoiceNumber:    "DOC-02-01-RLS-B",
@@ -369,7 +369,7 @@ func TestRLS_InvoicesSourceRowsUnknownIDIndistinguishableFromCrossTenant(t *test
 	documentB := seedDocument(t, super, tenantB)
 
 	store := NewStore(app)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	invB, err := store.Create(cB, CreateInput{
 		EntityID:         entityB,
 		InvoiceNumber:    "DOC-02-01-QA-ORACLE-B",
@@ -424,7 +424,7 @@ func TestStoreCreate_SourceRowAtTwoAccepted(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:         entityID,
@@ -458,7 +458,7 @@ func TestStoreCreate_DescendingSourceRowsAccepted(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:         entityID,
@@ -488,7 +488,7 @@ func TestStoreCreate_LargeSparseSourceRowsAccepted(t *testing.T) {
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := make([]int, 0, 335)
 	for i := 2; i < 1000; i += 3 { // sparse: every third sheet row

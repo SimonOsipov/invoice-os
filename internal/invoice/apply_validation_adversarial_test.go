@@ -38,8 +38,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -63,7 +61,7 @@ func TestApplyValidation_AuditOutcomePromotedOnCleanEvaluation(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "ADV-OUTCOME-01 tenant")
 	entityID := seedEntity(t, super, tenantID, "ADV-OUTCOME-01 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-OUTCOME-01"})
 	if err != nil {
@@ -101,7 +99,7 @@ func TestApplyValidation_AuditOutcomeBlockedOnErrorViolation(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "ADV-OUTCOME-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "ADV-OUTCOME-02 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-OUTCOME-02"})
 	if err != nil {
@@ -140,7 +138,7 @@ func TestApplyValidation_AuditOutcomePromotedWithWarningOnlyViolations(t *testin
 
 	tenantID := seedTenant(t, super, "ADV-OUTCOME-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "ADV-OUTCOME-03 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-OUTCOME-03"})
 	if err != nil {
@@ -201,7 +199,7 @@ func TestApplyValidation_BlockedPathLongActorRollsBackWholeTx(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "ADV-GATE13B tenant")
 	entityID := seedEntity(t, super, tenantID, "ADV-GATE13B entity")
-	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cNormal := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(cNormal, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-GATE13B"})
 	if err != nil {
@@ -263,7 +261,7 @@ func TestApplyValidation_StatusCheckPrecedesFingerprintCheckWhenBothStale(t *tes
 
 	tenantID := seedTenant(t, super, "ADV-ORDER tenant")
 	entityID := seedEntity(t, super, tenantID, "ADV-ORDER entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-ORDER"})
 	if err != nil {
@@ -329,7 +327,7 @@ func TestEdit_AmountRaisedAboveThresholdLeavesNoStaleApprovedRun(t *testing.T) {
 	// this test's precondition needs.
 	activateApprovalPolicyVersionFor(t, super, versionID)
 
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "ADV-THRESHOLD", Total: strPtr("100000000.00")})
 	if err != nil {

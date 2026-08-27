@@ -53,6 +53,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // previewBody mirrors the POST /v1/imports/preview response wire shape
@@ -148,7 +149,7 @@ func TestPreviewHandler_NoIdentityOversizedBody401(t *testing.T) {
 // order, and Content-Type: application/json. RED against the 501 stub:
 // status assertion fails (got 501, want 200).
 func TestPreviewHandler_CSV200(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No", "Issue Date", "Buyer TIN"}
 	rows := [][]string{{"INV-2041", "2026-06-03", "TIN-1"}}
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", csvBody(t, header, rows))
@@ -172,7 +173,7 @@ func TestPreviewHandler_CSV200(t *testing.T) {
 // report format:"csv", delimiter:";", encoding:"utf-8". RED against the 501
 // stub: status assertion fails (got 501, want 200).
 func TestPreviewHandler_SemicolonDelimiter(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	raw := []byte("Invoice No;Issue Date;Buyer TIN\nINV-1;2026-06-03;TIN-1\n")
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
 	rec, rawBody, resp := doPreviewRequest(t, &id, contentType, body)
@@ -200,7 +201,7 @@ func TestPreviewHandler_SemicolonDelimiter(t *testing.T) {
 // leaves both "" for xlsx, and nilIfEmpty("") is nil). RED against the 501
 // stub: status assertion fails (got 501, want 200).
 func TestPreviewHandler_XLSXNullDelimiterEncoding(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No", "Issue Date"}
 	rows := [][]string{{"INV-1", "2026-06-03"}}
 	body, contentType := buildMultipartBody(t, "", "", "data.xlsx", xlsxContentType, xlsxBody(t, header, rows))
@@ -227,7 +228,7 @@ func TestPreviewHandler_XLSXNullDelimiterEncoding(t *testing.T) {
 // entries. RED against the 501 stub: status assertion fails (got 501, want
 // 200).
 func TestPreviewHandler_SampleRowsCappedAtFive(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No"}
 	var rows [][]string
 	for i := 0; i < 9; i++ {
@@ -252,7 +253,7 @@ func TestPreviewHandler_SampleRowsCappedAtFive(t *testing.T) {
 // floor (no padding up to 5). RED against the 501 stub: status assertion
 // fails (got 501, want 200).
 func TestPreviewHandler_SampleRowsBelowCap(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No"}
 	rows := [][]string{{"INV-1"}, {"INV-2"}}
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", csvBody(t, header, rows))
@@ -276,7 +277,7 @@ func TestPreviewHandler_SampleRowsBelowCap(t *testing.T) {
 // rows_total:0. RED against the 501 stub: status assertion fails (got 501,
 // want 200).
 func TestPreviewHandler_HeaderOnlyCSV(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No", "Issue Date"}
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", csvBody(t, header, nil))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
@@ -306,7 +307,7 @@ func TestPreviewHandler_HeaderOnlyCSV(t *testing.T) {
 // utf8.Valid(nil) is true) -- NOT null, so those are asserted too. RED
 // against the 501 stub: status assertion fails (got 501, want 200).
 func TestPreviewHandler_EmptyCSVEmptyArraysNotNull(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", []byte{})
 	rec, raw, _ := doPreviewRequest(t, &id, contentType, body)
 
@@ -335,7 +336,7 @@ func TestPreviewHandler_EmptyCSVEmptyArraysNotNull(t *testing.T) {
 // length -- never padded out to the header's length. RED against the 501
 // stub: status assertion fails (got 501, want 200).
 func TestPreviewHandler_RaggedRowUnpadded(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	raw := []byte("Invoice No,Issue Date,Buyer TIN\nINV-1,2026-06-03\n")
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
 	rec, rawBody, resp := doPreviewRequest(t, &id, contentType, body)
@@ -358,7 +359,7 @@ func TestPreviewHandler_RaggedRowUnpadded(t *testing.T) {
 // {"error":"..."} envelope carrying the exact message CreateHandler uses.
 // RED against the 501 stub: status assertion fails (got 501, want 413).
 func TestPreviewHandler_OversizedBodyWithIdentity413(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	oversized := bytes.Repeat([]byte("x"), maxUploadBytes+1024)
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", oversized)
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
@@ -378,7 +379,7 @@ func TestPreviewHandler_OversizedBodyWithIdentity413(t *testing.T) {
 // required". RED against the 501 stub: status assertion fails (got 501,
 // want 400).
 func TestPreviewHandler_MissingFilePart400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	body, contentType := buildMultipartBody(t, "", "", "", "", nil)
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
 
@@ -398,7 +399,7 @@ func TestPreviewHandler_MissingFilePart400(t *testing.T) {
 // default) must 400 "unrecognized file format". RED against the 501 stub:
 // status assertion fails (got 501, want 400).
 func TestPreviewHandler_UnrecognizedFormat400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	body, contentType := buildMultipartBody(t, "", "", "data.txt", "application/octet-stream", []byte("whatever"))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
 
@@ -417,7 +418,7 @@ func TestPreviewHandler_UnrecognizedFormat400(t *testing.T) {
 // file". RED against the 501 stub: status assertion fails (got 501, want
 // 400).
 func TestPreviewHandler_UndecodableXLSX400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	body, contentType := buildMultipartBody(t, "", "", "data.xlsx", xlsxContentType, []byte("not a zip file"))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
 
@@ -444,7 +445,7 @@ func TestPreviewHandler_UndecodableXLSX400(t *testing.T) {
 // This is a characterization pin: the behavior already ships (handlers.go
 // already maps any Decode error to 400), so this test starts GREEN.
 func TestPreviewHandler_MalformedCSV400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	raw := []byte("invoice_number,total\nINV-1,\"unterminated\n")
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
 	rec, rawBody, resp := doPreviewRequest(t, &id, contentType, body)
@@ -473,7 +474,7 @@ func TestPreviewHandler_MalformedCSV400(t *testing.T) {
 // post-decode control-byte gate untouched, proving the 400 comes from
 // ReadAll, not the gate.
 func TestPreviewHandler_BareQuoteInUnquotedField400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	raw := []byte("invoice_number,total\nINV-1,12\"34\n")
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
 	rec, rawBody, resp := doPreviewRequest(t, &id, contentType, body)
@@ -493,7 +494,7 @@ func TestPreviewHandler_BareQuoteInUnquotedField400(t *testing.T) {
 // "invalid multipart form". RED against the 501 stub: status assertion
 // fails (got 501, want 400).
 func TestPreviewHandler_InvalidMultipart400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	rec, raw, resp := doPreviewRequest(t, &id, "application/json", bytes.NewReader([]byte(`{"not":"multipart"}`)))
 
 	if rec.Code != http.StatusBadRequest {
@@ -513,7 +514,7 @@ func TestPreviewHandler_InvalidMultipart400(t *testing.T) {
 // mapping derivation against a preview that silently rewrites headers. RED
 // against the 501 stub: status assertion fails (got 501, want 200).
 func TestPreviewHandler_DuplicateBlankHeaderPreservedVerbatim(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Total", "Total", "", "Net"}
 	rows := [][]string{{"10", "20", "x", "30"}}
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", csvBody(t, header, rows))
@@ -541,7 +542,7 @@ func TestPreviewHandler_DuplicateBlankHeaderPreservedVerbatim(t *testing.T) {
 // hardcode the expected header/count. RED against the 501 stub: status
 // assertion fails (got 501, want 200).
 func TestPreviewHandler_ColumnsRowsTotalMatchDirectDecode(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	fixture := csvBody(t, []string{"Invoice No", "Issue Date", "Buyer TIN"}, [][]string{
 		{"INV-1", "2026-06-03", "TIN-1"},
 		{"INV-2", "2026-06-04", "TIN-2"},
@@ -563,5 +564,28 @@ func TestPreviewHandler_ColumnsRowsTotalMatchDirectDecode(t *testing.T) {
 	}
 	if resp.RowsTotal != len(wantRows) {
 		t.Errorf("rows_total = %d, want %d (len of direct Decode's rows)", resp.RowsTotal, len(wantRows))
+	}
+}
+
+// --- AUDIT-12-01 AC-1: a caller the seam refuses gets 403, never 500 -------
+
+// TestPreview_SuspendedCallerIs403NotAServerError: db.ErrNotActiveMember from
+// store must route through statusForErr, not the flat if-err-500 fallback.
+// Mirrors TestPreview_StorageFailureIs500 (handlers_upload_once_test.go),
+// which stays as the regression guard that an unrelated store error still
+// 500s.
+func TestPreview_SuspendedCallerIs403NotAServerError(t *testing.T) {
+	id := testIdentity()
+	store := newFakeDocStore()
+	store.err = db.ErrNotActiveMember
+	body, ct := buildMultipartBody(t, "", "", "data.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+
+	rec, raw, resp := doPreviewUpload(t, store.fn(), &id, ct, body)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a caller the seam refuses (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != db.NotActiveMemberMessage {
+		t.Errorf("error = %q, want %q (body=%s)", resp.Error, db.NotActiveMemberMessage, raw)
 	}
 }

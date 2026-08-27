@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -52,7 +51,7 @@ func seedGatedTenant(t *testing.T, super *pgxpool.Pool, label string, status Sta
 
 func gateCtx(tenantID string) context.Context {
 	return auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 }
 

@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -105,7 +104,7 @@ func TestTransition_ExhaustiveMatrixLocksLegalEdgeTable(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				tenantID := seedTenant(t, super, "MATRIX "+name+" tenant")
 				entityID := seedEntity(t, super, tenantID, "MATRIX entity")
-				c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+				c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 				invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "MATRIX-"+name, from)
 
@@ -210,7 +209,7 @@ func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				tenantID := seedTenant(t, super, "TERMINAL "+name+" tenant")
 				entityID := seedEntity(t, super, tenantID, "TERMINAL entity")
-				c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+				c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 				invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TERMINAL-"+name, from)
 
@@ -255,7 +254,7 @@ func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				tenantID := seedTenant(t, super, "REJECTED-EDGE "+name+" tenant")
 				entityID := seedEntity(t, super, tenantID, "REJECTED-EDGE entity")
-				c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+				c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 				invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "REJECTED-EDGE-"+name, StatusRejected)
 
@@ -290,7 +289,7 @@ func TestTransition_MultiHopHistoryIntegrityChain(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "MULTIHOP tenant")
 	entityID := seedEntity(t, super, tenantID, "MULTIHOP entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "MULTIHOP"})
@@ -393,7 +392,7 @@ func TestTransition_LineEditedInvoiceIllegalDraftToQueued(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T19 tenant")
 	entityID := seedEntity(t, super, tenantID, "T19 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	descA := "Widget"
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "T19", LineItems: []LineItemInput{{Description: &descA}}})

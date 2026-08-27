@@ -90,7 +90,7 @@ func TestStoreSourceDocument_OrphanedDocumentReferenceIsInternalError(t *testing
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-QA1", SourceDocumentID: &documentID})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestSourceDocumentHandler_UploadedByIsCreatorOnWire(t *testing.T) {
 	insertDocumentAuditRow(t, super, tenantID, "document.reused", reuser, documentID)
 
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-QA2", SourceDocumentID: &documentID})
 	if err != nil {
@@ -184,7 +184,7 @@ func TestStoreSourceDocument_OnlyReusedEventLeavesUploaderNil(t *testing.T) {
 	insertDocumentAuditRow(t, super, tenantID, "document.reused", uuid.NewString(), documentID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-QA3", SourceDocumentID: &documentID})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -220,7 +220,7 @@ func TestRLS_SourceDocumentSiblingCountsExcludeCrossTenantLeak(t *testing.T) {
 	entityB := seedEntity(t, super, tenantB, "DOC-02-02 QA4 entity B")
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	inv1, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "DOC-02-02-QA4-1", SourceDocumentID: &documentID, SourceRows: []int{2}})
 	if err != nil {
 		t.Fatalf("Create inv1: %v", err)
@@ -259,7 +259,7 @@ func TestStoreSourceDocument_DocumentSetButSourceRowsNeverRecorded(t *testing.T)
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-QA5", SourceDocumentID: &documentID})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -288,7 +288,7 @@ func TestStoreSourceDocument_OtherInvoiceRowsStableOrderAcrossManySiblings(t *te
 	documentID := seedDocument(t, super, tenantID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var target Invoice
 	firsts := [][]int{{50}, {3}, {27}, {9}, {41}, {15}}
@@ -330,7 +330,7 @@ func TestSourceDocumentHandler_NullFilenameRendersExplicitlyOnWire(t *testing.T)
 	documentID := seedDocument(t, super, tenantID) // filename left NULL
 
 	store := NewStore(app)
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	c := auth.WithIdentity(ctx, identity)
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "DOC-02-02-QA7", SourceDocumentID: &documentID})
 	if err != nil {

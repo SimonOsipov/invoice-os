@@ -41,7 +41,7 @@ func TestStoreCreateBatch_BogusEntityIDReturnsValidationNoOrphanRow(t *testing.T
 	tenantID := seedTenant(t, super, "adversarial bogus-entity tenant")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	bogusEntityID := uuid.NewString() // well-formed uuid, no such business_entities row
 	id, err := store.CreateBatch(c, bogusEntityID, "", "")
@@ -75,7 +75,7 @@ func TestStoreFinalize_InvalidStatusRejectedByCheckConstraint(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "adversarial bad-status entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -103,7 +103,7 @@ func TestStoreFinalize_NegativeCountRejectedByCheckConstraint(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "adversarial negative-count entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -132,7 +132,7 @@ func TestStoreCreateBatch_VisibleViaAppPoolSameTenant(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "adversarial app-pool round-trip entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -174,7 +174,7 @@ func TestStoreEntitySupplier_ReturnsNameAndNonNilTIN(t *testing.T) {
 	})
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	name, tin, err := store.EntitySupplier(c, entityID)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestStoreExistingNumbers_DuplicateAndSpecialCharacterInputsHandledSafely(t 
 	idA := seedInvoice(t, super, tenantID, entityID, "INV-A")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	crafted := `INV,"B'; DROP TABLE invoices;--`
 	got, err := store.ExistingNumbers(c, entityID, []string{"INV-A", "INV-A", crafted})
@@ -247,7 +247,7 @@ func TestStoreFinalize_UnknownIDReturnsNotFoundNoRowsAffected(t *testing.T) {
 	tenantID := seedTenant(t, super, "adversarial finalize-not-found tenant")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	err := store.Finalize(c, uuid.NewString(), 1, 1, 0, nil, "completed")
 	if !errors.Is(err, ErrNotFound) {

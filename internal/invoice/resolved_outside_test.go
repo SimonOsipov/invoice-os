@@ -211,9 +211,11 @@ func TestResolveOutside_NoMembershipIsNotPermitted(t *testing.T) {
 	subject := uuid.NewString() // no seedMembership call: no row at all
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
+	// AUDIT-12-07: the refusal moved earlier -- the seam now refuses a no-row caller
+	// (db.ErrNotActiveMember) before ResolveOutside's own approver check ever runs.
 	store := NewStore(app)
-	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("ResolveOutside (no membership) err = %v, want ErrNotPermitted", err)
+	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ResolveOutside (no membership) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	at, by, reason := mustKeptAsIsTriple(t, super, invID)
@@ -638,9 +640,11 @@ func TestUnresolveOutside_NoMembershipIsNotPermitted(t *testing.T) {
 
 	beforeAt, beforeBy, beforeReason := mustKeptAsIsTriple(t, super, invID)
 
+	// AUDIT-12-07: the refusal moved earlier -- the seam now refuses a no-row caller
+	// (db.ErrNotActiveMember) before UnresolveOutside's own approver check ever runs.
 	store := NewStore(app)
-	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("UnresolveOutside (no membership) err = %v, want ErrNotPermitted", err)
+	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("UnresolveOutside (no membership) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	afterAt, afterBy, afterReason := mustKeptAsIsTriple(t, super, invID)
@@ -665,7 +669,7 @@ func TestUnkeepAsIs_LeavesResolvedFailedMarkAlone(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T2-13 tenant")
 	entityID := seedEntity(t, super, tenantID, "T2-13 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	invID := seedResolvedFailed(t, super, tenantID, entityID, "T2-13", subject, "resolved outside")
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
@@ -699,7 +703,7 @@ func TestUnkeepAsIs_DraftBehaviourUnchanged(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T2-14 tenant")
 	entityID := seedEntity(t, super, tenantID, "T2-14 entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 	store := NewStore(app)
 
@@ -749,7 +753,7 @@ func TestKeepAsIs_RefusesFailedInvoice(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "T2-15 entity")
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T2-15", StatusFailed)
 
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	store := NewStore(app)
@@ -1050,7 +1054,7 @@ func TestUnkeepAsIs_NoopAcrossEveryNonDraftStatusWithNoMark(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "T2-UNKEEP-SURFACE tenant")
 	entityID := seedEntity(t, super, tenantID, "T2-UNKEEP-SURFACE entity")
-	subject := uuid.NewString()
+	subject := memberSubject
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 	store := NewStore(app)
 

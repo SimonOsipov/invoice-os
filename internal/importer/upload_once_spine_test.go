@@ -82,7 +82,7 @@ func uoRows(prefix string, n int) [][]string {
 func storeDocumentAs(t *testing.T, svc *document.Service, tenantID, filename, contentType string, content []byte) document.Document {
 	t.Helper()
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 	doc, err := svc.Store(ctx, filename, contentType, int64(len(content)), bytes.NewReader(content))
 	if err != nil {
@@ -139,7 +139,7 @@ func TestImport_BatchCarriesDocumentID(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo batch pointer tenant")
 	entityID := seedEntity(t, super, tenantID, "uo batch pointer entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := uoRows("UO-BATCH", 1)
 	doc := storeDocumentAs(t, docSvc, tenantID, "q.csv", "text/csv", csvBody(t, uoHeader, rows))
@@ -169,7 +169,7 @@ func TestImport_InvoicesCarrySourceDocumentID(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo invoice pointer tenant")
 	entityID := seedEntity(t, super, tenantID, "uo invoice pointer entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := uoRows("UO-INV", 3)
 	doc := storeDocumentAs(t, docSvc, tenantID, "three.csv", "text/csv", csvBody(t, uoHeader, rows))
@@ -204,7 +204,7 @@ func TestCreateBatch_EmptyDocumentIDPersistsNull(t *testing.T) {
 	tenantID := seedTenant(t, super, "uo createbatch null tenant")
 	entityID := seedEntity(t, super, tenantID, "uo createbatch null entity")
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 
 	id, err := NewStore(app).CreateBatch(ctx, entityID, "x.csv", "")
@@ -229,7 +229,7 @@ func TestImport_StorageUnreachableWritesNothing(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo fail-closed tenant")
 	entityID := seedEntity(t, super, tenantID, "uo fail-closed entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	doc := storeDocumentAs(t, docSvc, tenantID, "q.csv", "text/csv", csvBody(t, uoHeader, uoRows("UO-DOWN", 2)))
 	objs.getErr = errOpenBoom
@@ -264,7 +264,7 @@ func TestImport_CrossTenantDocumentIDIs404(t *testing.T) {
 	ownerTenant := seedTenant(t, super, "uo cross-tenant owner")
 	callerTenant := seedTenant(t, super, "uo cross-tenant caller")
 	entityID := seedEntity(t, super, callerTenant, "uo cross-tenant entity")
-	caller := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: callerTenant}
+	caller := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: callerTenant}
 
 	doc := storeDocumentAs(t, docSvc, ownerTenant, "theirs.csv", "text/csv", csvBody(t, uoHeader, uoRows("UO-XT", 1)))
 
@@ -293,7 +293,7 @@ func TestImport_NotFoundBodiesAreByteIdentical(t *testing.T) {
 	ownerTenant := seedTenant(t, super, "uo oracle owner")
 	callerTenant := seedTenant(t, super, "uo oracle caller")
 	entityID := seedEntity(t, super, callerTenant, "uo oracle entity")
-	caller := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: callerTenant}
+	caller := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: callerTenant}
 
 	doc := storeDocumentAs(t, docSvc, ownerTenant, "theirs.csv", "text/csv", csvBody(t, uoHeader, uoRows("UO-ORACLE", 1)))
 	mapping := mustMappingJSON(t, uoMapping)
@@ -325,7 +325,7 @@ func TestPreviewThenImportDecodeIdenticalBytes(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo parity tenant")
 	entityID := seedEntity(t, super, tenantID, "uo parity entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := uoRows("UO-PARITY", 3)
 	content := csvBody(t, uoHeader, rows)
@@ -376,7 +376,7 @@ func TestPreviewThenImport_LongFilenameResolvesSameFormat(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "uo long-name tenant")
 	entityID := seedEntity(t, super, tenantID, "uo long-name entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := uoRows("UO-LONG", 2)
 	// No explicit part Content-Type: the multipart default is
@@ -416,7 +416,7 @@ func TestPreviewThenImport_UnsanitizableFilenameResolvesSameFormat(t *testing.T)
 
 	tenantID := seedTenant(t, super, "uo blank-name tenant")
 	entityID := seedEntity(t, super, tenantID, "uo blank-name entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := uoRows("UO-BLANK", 2)
 	pBody, previewCT := buildMultipartBody(t, "", "", "   ", "text/csv", csvBody(t, uoHeader, rows))

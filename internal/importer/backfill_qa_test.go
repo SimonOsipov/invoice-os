@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -56,7 +55,7 @@ func TestBackfill_SymmetricTrimDoesNotMisattributeWhitespaceVariants(t *testing.
 	doc := storeDocumentAs(t, docSvc, tenantID, "symmetric.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -214,8 +213,8 @@ func TestBackfill_DuplicateWithAnAlreadyPopulatedSiblingIsAmbiguous(t *testing.T
 	doc := storeDocumentAs(t, docSvc, tenantID, "dup-pop.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
-	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(cA, entityA, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
@@ -256,7 +255,7 @@ func TestBackfill_SingleInvoiceSingleRowDocument(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "solo.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -289,7 +288,7 @@ func TestBackfill_PATCHReplacedLineItemsIsARealMismatch(t *testing.T) {
 	fx := newBFTwoInvoiceFixture(t, super, app, "patch-mismatch")
 	nullSourceRows(t, super, fx.invA, fx.invB)
 
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: fx.tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: fx.tenantID})
 	descA1, descA2 := "Replaced 1", "Replaced 2"
 	priceA1, priceA2 := "50.00", "60.00"
 	if _, err := invoice.NewStore(app).Edit(c, fx.invA, invoice.EditInput{LineItems: &[]invoice.LineItemInput{
@@ -341,7 +340,7 @@ func TestBackfill_XLSXGapRowDoesNotShiftRecoveredRowNumbers(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "gap.xlsx", xlsxContentType, xlsxBytes)
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, decodedRows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -511,7 +510,7 @@ func TestBackfill_RowNumberingMatchesImporterAcrossBlankLinesAndQuotedNewlines(t
 	doc := storeDocumentAs(t, docSvc, tenantID, "multiline.csv", "text/csv", content)
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, decodedRows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}

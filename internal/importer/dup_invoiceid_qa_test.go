@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -32,7 +30,7 @@ func TestStoreExistingNumbers_CrossTenantSameNumberNeverLeaksForeignID(t *testin
 	idB := seedInvoice(t, super, tenantB, entityB, "INV-XTENANT-COLLIDE")
 
 	store := NewStore(app)
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	got, err := store.ExistingNumbers(cB, entityB, []string{"INV-XTENANT-COLLIDE"})
 	if err != nil {
@@ -67,7 +65,7 @@ func TestStoreExistingNumbers_EntityScopedWithinTenantNeverLeaksSiblingID(t *tes
 	idB := seedInvoice(t, super, tenantID, entityB, "INV-ENTITY-COLLIDE")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	gotA, err := store.ExistingNumbers(c, entityA, []string{"INV-ENTITY-COLLIDE"})
 	if err != nil {
@@ -109,7 +107,7 @@ func TestImport_StoreDuplicate_MultiRowGroupCarriesSingleCorrectInvoiceID(t *tes
 	wantID := seedInvoice(t, super, tenantID, entityID, "INV-MULTIROW")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-MULTIROW", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
@@ -147,7 +145,7 @@ func TestImport_StoreDuplicate_MultipleGroupsEachCarryOwnDistinctInvoiceID(t *te
 	idC := seedInvoice(t, super, tenantID, entityID, "INV-MULTI-C")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-MULTI-A", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "ItemA", "1", "10.00"), // sheet 2
@@ -208,7 +206,7 @@ func TestImport_StoreDuplicate_UnusualInvoiceNumberSurvivesRoundTrip(t *testing.
 			wantID := seedInvoice(t, super, tenantID, entityID, tc.number)
 
 			svc := newTestService(app)
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			rows := [][]string{
 				mkRow(tc.number, "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2

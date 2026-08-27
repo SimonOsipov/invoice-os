@@ -139,7 +139,7 @@ func TestGetBatch_ReturnsFrozenCountsAndErrors(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "GETBATCH-FROZEN entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	batchID, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -208,7 +208,7 @@ func TestGetBatch_RuleSetVersionIsMinNotArbitrary(t *testing.T) {
 	want := lo.version
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	batchID, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -250,7 +250,7 @@ func TestGetBatch_ZeroInvoicesVersionIsNullAndBodyRendersNull(t *testing.T) {
 	rowA, _ := twoRuleSetVersionRows(t, super)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Leg A -- stamped: the genuine leg.
 	stampedBatch, err := store.CreateBatch(c, entityID, "", "")
@@ -345,8 +345,8 @@ func TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 	entity2 := seedEntity(t, super, tenant2, "GETBATCH-RLS entity 2")
 
 	store := NewStore(app)
-	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
-	c2 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant2})
+	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1})
+	c2 := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant2})
 
 	batch1, err := store.CreateBatch(c1, entity1, "", "")
 	if err != nil {
@@ -411,7 +411,7 @@ func TestGetBatch_ProcessingStatusUnfinalizedBatchReturns200(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "GETBATCH-PROCESSING entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	batchID, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -463,7 +463,7 @@ func TestGetBatch_RowsInvalidAgreesWithErrorRowCount(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "GETBATCH-ROWCOUNT entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-OK", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),        // sheet 2 -- ready
@@ -517,7 +517,7 @@ func TestGetBatch_ServesFilenameViaStoreAndWire(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "BULK-01-2 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "branch-lagos.csv"
 	batchID, err := store.CreateBatch(c, entityID, wantFilename, "")
@@ -611,7 +611,7 @@ func TestGetBatch_DirectMalformedIDReturnsErrValidationNot500(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "GETBATCH-MALFORMED tenant")
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, err := store.GetBatch(c, "not-a-uuid")
 	if err == nil {
@@ -637,7 +637,7 @@ func TestImport_PersistedErrorsRoundTripInvoiceID(t *testing.T) {
 	wantID := seedInvoice(t, super, tenantID, entityID, "INV-RT-DUP")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-RT-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2

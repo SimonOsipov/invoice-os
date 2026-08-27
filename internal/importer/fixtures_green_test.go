@@ -14,7 +14,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -51,7 +50,7 @@ func importGreenFixture(t *testing.T, path, tenantLabel, entityName string) (res
 	svc := newTestServiceWithGate(app, invoice.NewGate(invoice.NewStore(app), validator))
 
 	c := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 
 	res, err = svc.Import(c, entityID, "", "", stdMapping, header, rows, false)

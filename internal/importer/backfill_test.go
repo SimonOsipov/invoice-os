@@ -10,11 +10,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fixture helpers ---------------------------------------------------
@@ -106,7 +107,7 @@ func newBFTwoInvoiceFixture(t *testing.T, super, app *pgxpool.Pool, label string
 	doc := storeDocumentAs(t, docSvc, tenantID, label+".csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestBackfill_TiedColumnIsAmbiguous(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "tied.csv", "text/csv", csvBody(t, header, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, header, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -294,8 +295,8 @@ func TestBackfill_DuplicateInvoiceNumberInOneDocumentIsAmbiguous(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "dup.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
-	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(cA, entityA, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
@@ -338,7 +339,7 @@ func TestBackfill_MatchesRawUntrimmedCellValue(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "raw.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -446,8 +447,8 @@ func TestRLS_BackfillDoesNotCrossTenants(t *testing.T) {
 	docA := storeDocumentAs(t, docSvc, tenantA, "a.csv", "text/csv", csvBody(t, stdHeader, rowsA))
 	docB := storeDocumentAs(t, docSvc, tenantB, "b.csv", "text/csv", csvBody(t, stdHeader, rowsB))
 
-	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	if _, err := svc.Import(cA, entityA, "", docA.ID, stdMapping, stdHeader, rowsA, false); err != nil {
 		t.Fatalf("import tenant A: %v", err)
 	}
@@ -539,7 +540,7 @@ func TestBackfill_UndecodableOrMissingDocumentIsSkippedNotFatal(t *testing.T) {
 	}
 	cleanDoc := storeDocumentAs(t, docSvc, tenantID, "clean.csv", "text/csv", csvBody(t, stdHeader, cleanRows))
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", cleanDoc.ID, stdMapping, stdHeader, cleanRows, false); err != nil {
 		t.Fatalf("import clean fixture: %v", err)
 	}
@@ -571,5 +572,38 @@ func TestBackfill_UndecodableOrMissingDocumentIsSkippedNotFatal(t *testing.T) {
 	}
 	if got := sourceRowsOf(t, super, cleanInv); !intSliceEqual(got, wantClean) {
 		t.Errorf("clean invoice source_rows = %v, want %v — a bad sibling document must not block it", got, wantClean)
+	}
+}
+
+// TestBackfill_RunsAsANonUUIDActorAndIsNotGated (AUDIT-12-03 AC-4): the
+// caller's own setup identity is irrelevant -- BackfillSourceRows
+// unconditionally overwrites ctx with the non-uuid backfillActor
+// (backfill.go:70), which db.WithinRequestTenantTxOpts admits without a
+// membership lookup (a non-uuid Subject short-circuits past the gate).
+// Sweeping this file's setup identities to memberSubject must not disturb
+// that arm.
+func TestBackfill_RunsAsANonUUIDActorAndIsNotGated(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := newBFTwoInvoiceFixture(t, super, app, "backfill actor")
+	nullSourceRows(t, super, fx.invA, fx.invB)
+
+	res, err := BackfillSourceRows(context.Background(), app, fx.open, fx.tenantID, false)
+	if err != nil {
+		t.Fatalf("BackfillSourceRows: %v", err)
+	}
+	if res.InvoicesWritten == 0 {
+		t.Fatalf("InvoicesWritten = 0, want > 0 — a gated actor would have written nothing")
+	}
+
+	var actor string
+	if err := db.WithinTenantTx(context.Background(), app, fx.tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT actor FROM audit_log WHERE event = 'document.read' ORDER BY created_at DESC, id DESC LIMIT 1`,
+		).Scan(&actor)
+	}); err != nil {
+		t.Fatalf("read audit_log actor: %v", err)
+	}
+	if actor != backfillActor {
+		t.Fatalf("actor = %q, want %q", actor, backfillActor)
 	}
 }

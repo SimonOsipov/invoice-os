@@ -49,8 +49,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -180,7 +178,7 @@ func TestGate_ValidateBatchCallsValidatorExactlyOnceForMultipleInvoices(t *testi
 
 	tenantID := seedTenant(t, super, "gate-qa one-call tenant")
 	entityID := seedEntity(t, super, tenantID, "gate-qa one-call entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var invs []Invoice
 	for i := 0; i < 3; i++ {
@@ -257,7 +255,7 @@ func TestGate_ValidateBatchWarningOnlyInvoicePromotesAndCountsAsCleanNotWithViol
 
 	tenantID := seedTenant(t, super, "gate-qa warning-only tenant")
 	entityID := seedEntity(t, super, tenantID, "gate-qa warning-only entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "gate-qa-warning-only"})
 	if err != nil {

@@ -66,7 +66,7 @@ func TestStoreCreate_ImportBatchIDPersistsAndRoundTrips(t *testing.T) {
 	batchID := seedImportBatch(t, super, tenantID, entityID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
@@ -112,7 +112,7 @@ func TestStoreCreate_NilImportBatchIDPersistsNull(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-IMPBATCH-02 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
@@ -152,7 +152,7 @@ func TestStoreCreate_NonExistentImportBatchIDRejected(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-IMPBATCH-03 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	bogusBatchID := uuid.NewString()
 	_, err := store.Create(c, CreateInput{
@@ -217,7 +217,7 @@ func TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS(t *testing.T) {
 	batchB := seedImportBatch(t, super, tenantB, entityB)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	inv, err := store.Create(cA, CreateInput{
 		EntityID:      entityA,
@@ -281,7 +281,7 @@ func TestStoreCreate_EmptyStringImportBatchIDRejected(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "INV-IMPBATCH-EMPTY entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	empty := ""
 	_, err := store.Create(c, CreateInput{

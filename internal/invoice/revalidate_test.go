@@ -949,7 +949,7 @@ func TestRevalidateActive_EvaluatesHydratedLineItems(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "AC8 tenant")
 	entityID := seedEntity(t, super, tenantID, "AC8 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID: entityID, InvoiceNumber: "AC8-INV",
@@ -1364,7 +1364,7 @@ func TestRevalidate_CancelsThenRearms(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID, entityID, _ := seedOneStepActivePolicyTenant(t, super, "REVAL-CANCEL-REARM")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "REVAL-CANCEL-REARM"})
 	if err != nil {

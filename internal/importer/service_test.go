@@ -45,7 +45,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -282,7 +281,7 @@ func TestServiceImport_NonContiguousRowsGroupIntoOneInvoiceWithOrderedLineItems(
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-01 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget A", "1", "100.00"),  // sheet 2
@@ -351,7 +350,7 @@ func TestServiceImport_GroupDisagreeingOnTotalQuarantinedOthersCommit(t *testing
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-02 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-CLEAN", "2026-01-10", "TIN-C", "Clean Co", "NGN", "300.00", "30.00", "330.00", "Item1", "1", "100.00"), // sheet 2
@@ -412,7 +411,7 @@ func TestServiceImport_CollidesWithPreSeededStoredInvoiceQuarantinedSiblingCommi
 	seedInvoice(t, super, tenantID, entityID, "INV-DUP")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem1", "1", "150.00"),    // sheet 2
@@ -464,7 +463,7 @@ func TestServiceImport_HeaderFieldConflictRowErrorCitesExactSheetRows(t *testing
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-04 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-1", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),                    // sheet 2
@@ -517,7 +516,7 @@ func TestServiceImport_SubtotalPersistsVerbatimNotDerivedFromLineItems(t *testin
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-05 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-NODERIVE", "2026-01-10", "TIN-G", "NoDerive Co", "NGN", "100", "0", "100", "LineA", "1", "40.00"), // sheet 2
@@ -599,7 +598,7 @@ func TestServiceImport_DryRunClassifiesOnlyDBUnchanged(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-06 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, mixedFileFixture(), true)
 	if err != nil {
@@ -630,7 +629,7 @@ func TestServiceImport_SameMixedFileRealImportMatchesDryRunVerdict(t *testing.T)
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-07 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, mixedFileFixture(), false)
 	if err != nil {
@@ -673,7 +672,7 @@ func TestServiceImport_BlankInvoiceNumberRowQuarantinedUngroupableScalarRow(t *t
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-08 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-OK", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
@@ -722,7 +721,7 @@ func TestServiceImport_MappingMissingInvoiceNumberValidationBeforeAnyWrite(t *te
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-09 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	mapping := cloneMapping(stdMapping)
 	delete(mapping, "invoice_number")
@@ -760,7 +759,7 @@ func TestServiceImport_MappingReferencesAbsentHeaderValidationBeforeAnyWrite(t *
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-10 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	mapping := cloneMapping(stdMapping)
 	mapping["buyer_name"] = "Nonexistent Column" // not in stdHeader
@@ -803,7 +802,7 @@ func TestServiceImport_MappingUnknownKeyValidationBeforeAnyWrite(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-10b entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	mapping := cloneMapping(stdMapping)
 	delete(mapping, "total")
@@ -845,7 +844,7 @@ func TestServiceImport_TinLessEntityCommitsWithNilSupplierTIN(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, entityName)
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-TINLESS", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
@@ -905,7 +904,7 @@ func TestServiceImport_ConcurrentDuplicateAtCreateTimeQuarantinesLoser(t *testin
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-12 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const racers = 4
 	results := make([]BatchResult, racers+1)
@@ -985,7 +984,7 @@ func TestServiceImport_AllInvalidSourcesMixedCountersExactNoDoubleCount(t *testi
 	seedInvoice(t, super, tenantID, entityID, "INV-STORED")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-CLEAN", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),                  // sheet 2
@@ -1069,7 +1068,7 @@ func TestServiceImport_AccountingFormattedSubtotalNormalizesAndCommits(t *testin
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-14 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-ACCTFMT", "2026-01-10", "T1", "B1", "NGN", "1,058,875.00", "0.00", "1,058,875.00", "BigItem", "1", "1058875.00"),
@@ -1107,7 +1106,7 @@ func TestServiceImport_NonNumericTotalQuarantinesViaCreateErrorOthersCommit(t *t
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-15 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-BADTOTAL", "2026-01-10", "T1", "B1", "NGN", "500.00", "0.00", "N/A", "BadItem", "1", "500.00"), // sheet 2
@@ -1171,7 +1170,7 @@ func TestServiceImport_EntityScopedDedupSameNumberUnderDifferentEntityNotDuplica
 	seedInvoice(t, super, tenantID, entityB, "INV-DUP")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
@@ -1251,7 +1250,7 @@ func TestServiceImport_DryRunExactVerdictForNonNumericField(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "IMP-SVC-DRYNUM entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	dryRes, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, nonNumericTotalFixture(), true)
 	if err != nil {

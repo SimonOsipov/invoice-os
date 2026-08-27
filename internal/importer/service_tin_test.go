@@ -35,7 +35,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -61,7 +60,7 @@ const tinFixJTBTIN = "1001230000"
 func createEntityViaRealPortfolioStore(t *testing.T, super, app *pgxpool.Pool, tenantID, name, rawTIN string) (entityID, canonicalTIN string) {
 	t.Helper()
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 	ent, err := portfolio.NewStore(app).Create(ctx, portfolio.CreateInput{Name: name, TIN: rawTIN})
 	if err != nil {
@@ -98,7 +97,7 @@ func importCleanFileForEntity(t *testing.T, app *pgxpool.Pool, tenantID, entityI
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	svc := newTestServiceWithGate(app, invoice.NewGate(invoice.NewStore(app), validator))
 	c := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, tinFixCleanFile(), false)
 	if err != nil {

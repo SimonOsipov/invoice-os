@@ -2,12 +2,14 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // TestRLS_DashboardRollupCrossTenantIsolated (DASH-14, Test Specs table,
@@ -36,8 +38,8 @@ func TestRLS_DashboardRollupCrossTenantIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	// Direction 1: tenant A must see only its own row, none of B's.
 	gotA, err := store.Rollup(cA)
@@ -112,7 +114,7 @@ func TestRLS_DashboardRollupCrossTenantSortPoisonRefused(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	got, err := store.Rollup(cA)
 	if err != nil {
@@ -134,23 +136,19 @@ func TestRLS_DashboardRollupCrossTenantSortPoisonRefused(t *testing.T) {
 	}
 }
 
-// TestRLS_DashboardRollupUnknownTenantSeesNothing: an identity carrying a
-// syntactically-valid tenant id that was never seeded (no `tenants` row, no
-// business_entities, no invoices) must see a fully-empty rollup -- not an
-// error, and NOT another tenant's data -- even while a DIFFERENT, real
-// tenant in the same database has data. Proves RLS's tenant_isolation
-// policy is strict equality against app.current_tenant, not a fallback that
-// could ever expose "any known tenant" when the caller's own tenant id has
-// no matching rows. db.WithinTenantTx (internal/platform/db/db.go) only
-// requires tenantID to parse as a UUID -- it does not require a matching row
-// in `tenants` -- so this is a real, reachable code path (e.g. a stale or
-// forged JWT tenant claim), not a hypothetical.
-func TestRLS_DashboardRollupUnknownTenantSeesNothing(t *testing.T) {
+// TestRLS_DashboardRollupUnknownTenantRefused (AUDIT-12-07): the refusal moved
+// earlier. Rollup runs over db.WithinRequestTenantTx, so a caller carrying a
+// syntactically-valid tenant id that was never seeded is now refused
+// (db.ErrNotActiveMember) before the rollup query ever runs -- a membership row
+// cannot be seeded here, since `tenants` itself has no row for this id (FK). Proves
+// the same "unregistered tenant sees nothing" property, just earlier and as a
+// refusal rather than an empty success.
+func TestRLS_DashboardRollupUnknownTenantRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	// A real tenant WITH data, to prove the empty result isn't just "the DB
-	// happens to be empty."
+	// A real tenant WITH data, to prove the refusal isn't just "the DB happens to be
+	// empty."
 	tenantWithData := seedTenant(t, super, "DASH-adversarial has-data tenant")
 	entity := seedEntity(t, super, tenantWithData, "Has Data Corp")
 	broken := `[{"rule_key":"x","severity":"error","message":"y"}]`
@@ -162,14 +160,11 @@ func TestRLS_DashboardRollupUnknownTenantSeesNothing(t *testing.T) {
 	cUnknown := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: unknownTenantID})
 
 	got, err := store.Rollup(cUnknown)
-	if err != nil {
-		t.Fatalf("Rollup(unknown tenant id): %v", err)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("Rollup(unknown tenant id): err = %v, want db.ErrNotActiveMember", err)
 	}
 	if len(got.Clients) != 0 {
-		t.Fatalf("Clients = %d rows, want 0 (an unregistered tenant id must never surface another tenant's rows)", len(got.Clients))
-	}
-	if got.Totals.Counts != (Counts{}) || got.Totals.NeedsAttention != 0 {
-		t.Errorf("Totals = %+v, want all-zero", got.Totals)
+		t.Errorf("Clients = %d rows alongside the refusal, want none (an unregistered tenant id must never surface another tenant's rows)", len(got.Clients))
 	}
 }
 
@@ -202,8 +197,8 @@ func TestRLS_DashboardTopViolationsCrossTenantIsolated(t *testing.T) {
 	seedInvoiceWithViolations(t, super, tenantB, entityB, "DASH-27-B2", "draft", ruleX)
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	// Direction 1: tenant A must see no trace of rule X.
 	gotA, err := store.Rollup(cA)
@@ -259,8 +254,8 @@ func TestRLS_DashboardTopViolationsCrossTenantSharedRuleKeyNotInflated(t *testin
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	gotA, err := store.Rollup(cA)
 	if err != nil {
@@ -318,8 +313,8 @@ func TestRLS_DashboardRollupAwaitingApprovalCrossTenantIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	gotA, err := store.Rollup(cA)
 	if err != nil {

@@ -57,7 +57,7 @@ import (
 // tenantCtx is the one-liner every case below opens with.
 func tenantCtx(tenantID string) context.Context {
 	return auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 }
 

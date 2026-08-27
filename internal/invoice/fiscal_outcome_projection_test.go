@@ -77,7 +77,7 @@ func TestStoreGet_ProjectsFiscalOutcomeColumns(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.Get(c, invoiceID)
 	if err != nil {
@@ -127,7 +127,7 @@ func TestStoreList_ProjectsFiscalOutcomeColumns(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, _, err := store.List(c, ListFilter{Limit: 50, Offset: 0})
 	if err != nil {
@@ -312,7 +312,7 @@ func TestGetHandler_RealStore_NeverSubmittedRendersOutcomeDefaults(t *testing.T)
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "M5-05-02-E2E-DEFAULTS")
 
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
@@ -356,7 +356,7 @@ func TestGetHandler_RealStore_SeededOutcomeRendersVerbatim(t *testing.T) {
 		t.Fatalf("seed fiscal outcome columns: %v", err)
 	}
 
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
@@ -404,7 +404,7 @@ func TestListHandler_RealStore_SeededOutcomeRendersVerbatim(t *testing.T) {
 		t.Fatalf("seed fiscal outcome columns: %v", err)
 	}
 
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("GET", "/v1/invoices", nil)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
@@ -498,7 +498,7 @@ func TestStoreGet_CrossTenantFiscalOutcomeIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	asTenantA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	asTenantA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	// Tenant A reading its OWN invoice sees only its own outcome.
 	got, err := store.Get(asTenantA, invA)
@@ -551,7 +551,7 @@ func TestStoreList_CrossTenantFiscalOutcomeIsolated(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	asTenantA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	asTenantA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	items, _, err := store.List(asTenantA, ListFilter{Limit: 50, Offset: 0})
 	if err != nil {
@@ -599,7 +599,7 @@ func TestStoreList_MixedOutcomesNoBleedBetweenRows(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, _, err := store.List(c, ListFilter{Limit: 50, Offset: 0})
 	if err != nil {
@@ -697,7 +697,7 @@ func TestGetHandler_RealStore_RejectionReasonsOrderAndContentPreservedVerbatim(t
 		t.Fatalf("seed rejection_reasons: %v", err)
 	}
 
-	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	identity := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identity))

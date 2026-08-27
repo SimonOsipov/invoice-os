@@ -128,7 +128,7 @@ func TestCreateHandler_StoreDuplicateWireShapeAndStructuralOmitsRuleFields(t *te
 	tenantID := seedTenant(t, super, "ADV-DUP-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "ADV-DUP-02 entity")
 	seedInvoice(t, super, tenantID, entityID, "INV-HTTP-DUP")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := [][]string{
 		mkRow("INV-HTTP-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupItem", "1", "10.00"),     // sheet 2
@@ -215,7 +215,7 @@ func TestServiceImport_RaceBackstopLoserCountersIncrementByExactlyOne(t *testing
 	entityID := seedEntity(t, super, tenantID, "ADV-DUP-03 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const racers = 5
 	results := make([]BatchResult, racers)
@@ -307,7 +307,7 @@ func TestServiceImport_StoreDuplicateNeverReachesGateEvaluation(t *testing.T) {
 		},
 	}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-ADV4-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupItem", "1", "10.00"),     // sheet 2
@@ -367,7 +367,7 @@ func TestServiceImport_NonContiguousMultiRowDuplicateGroupCitesAllRowsSorted(t *
 	seedInvoice(t, super, tenantID, entityID, "INV-ADV5-DUP")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-ADV5-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupA", "1", "10.00"),      // sheet 2
@@ -427,7 +427,7 @@ func TestServiceImport_NoStoreDuplicateNoRuleKeyEntriesEvenAlongsideStructuralQu
 	entityID := seedEntity(t, super, tenantID, "ADV-DUP-06 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-ADV6-CLEAN", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),    // sheet 2
@@ -473,7 +473,7 @@ func TestImport_StructuralError_OmitsInvoiceID(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "BUG-08-01 structural entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-STRUCT", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
@@ -517,7 +517,7 @@ func TestImportHTTP_StoreDuplicate_WireCarriesInvoiceID(t *testing.T) {
 	tenantID := seedTenant(t, super, "BUG-08-01 HTTP tenant")
 	entityID := seedEntity(t, super, tenantID, "BUG-08-01 HTTP entity")
 	wantID := seedInvoice(t, super, tenantID, entityID, "INV-HTTP-DUP2")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	rows := [][]string{
 		mkRow("INV-HTTP-DUP2", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupItem", "1", "10.00"), // sheet 2

@@ -36,6 +36,12 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		tenantA, tenantB, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller memberships: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
@@ -46,12 +52,12 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 	bEntityID := seedEntity(t, super, tenantB, "B Corp", strPtr(bTIN))
 
 	store := NewStore(app)
-	subjA := uuid.NewString()
+	subjA := memberSubject
 	ctxA := auth.WithIdentity(ctx, auth.Identity{Subject: subjA, Role: "authenticated", TenantID: tenantA})
 	// ctxB is created up front (not just at the final re-read) so the
 	// reverse-direction isolation check in step 2b can use it too --
 	// isolation must be symmetric, not just proven A-sees-none-of-B.
-	ctxB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	ctxB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 
 	// --- 1. Create: A's own entity, produced live (not pre-seeded) -------
 	const aTIN = "1234567897"

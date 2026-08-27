@@ -182,7 +182,7 @@ func TestStoreList_ImportBatchIDNarrowsBeforePaging(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Sanity: an unfiltered Limit:50 tenant-wide window is entirely "other"
 	// rows. If this fails, the fixture no longer exercises the trap this
@@ -253,7 +253,7 @@ func TestRLS_ListImportBatchIDCrossTenantIsEmptyNot404(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
+	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1})
 
 	// Cross-tenant: tenant 1 filtering by tenant 2's batch id must return an
 	// empty page with total 0 -- never 404, never tenant 2's rows.
@@ -306,7 +306,7 @@ func TestStoreList_FiltersAreANDed(t *testing.T) {
 	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "BATCH-FILTER-AND-B-validated", batchB, string(StatusValidated), `[]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Status: StatusValidated, Limit: 50})
 	if err != nil {
@@ -349,7 +349,7 @@ func TestStoreList_NeedsFixIsDraftWithBlockingViolation(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{NeedsFix: true, Limit: 50})
 	if err != nil {
@@ -397,7 +397,7 @@ func TestStoreList_NeedsFixExcludesKept(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{NeedsFix: true, Limit: 50})
 	if err != nil {
@@ -440,7 +440,7 @@ func TestStoreList_KeptAsIsFilterMatchesColumn(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{KeptAsIs: true, Limit: 50})
 	if err != nil {
@@ -481,7 +481,7 @@ func TestStoreList_KeptAsIsExcludesResolvedFailed(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{KeptAsIs: true, Limit: 50})
 	if err != nil {
@@ -520,7 +520,7 @@ func TestStoreList_RuleKeyFilterIsParameterised(t *testing.T) {
 		`[{"rule_key":"currency-allowed","severity":"error","message":"bad currency"}]`)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{RuleKey: "vat-standard-rate", Limit: 50})
 	if err != nil {
@@ -567,7 +567,7 @@ func TestStoreList_QueryMatchesNumberOrBuyer(t *testing.T) {
 	buyerMatch := seedInvoiceWithBuyer(t, super, tenantID, entityID, "BATCHQ-XYZ-002", "Acme Imports")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// invoice_number arm.
 	items, total, err := store.List(c, ListFilter{Query: "zebra", Limit: 50})
@@ -616,7 +616,7 @@ func TestStoreList_QueryMatchesTINs(t *testing.T) {
 	supplierTinMatch := seedInvoiceWithTINs(t, super, tenantID, entityID, "BATCHQ-TIN-SUPPLIER-002", "", "99988877-0006")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{Query: "20033344-0003", Limit: 50})
 	if err != nil {
@@ -681,7 +681,7 @@ func TestStoreList_QueryANDsWithImportBatchID(t *testing.T) {
 	seedInvoiceWithBatchAndBuyer(t, super, tenantID, entityID, "BATCHQ-AND-OUTOFBATCH", nil, "Acme Distributors")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Query: "acme", Limit: 50})
 	if err != nil {
@@ -714,7 +714,7 @@ func TestStoreList_QueryANDsWithEntityID(t *testing.T) {
 	seedInvoiceWithTINs(t, super, tenantID, entityB, "BATCHQ-AND-ENTITY-B", tin, "")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{EntityID: entityA, Query: tin, Limit: 50})
 	if err != nil {
@@ -748,7 +748,7 @@ func TestStoreList_EmptyBatchReturnsEmptySliceNotNil(t *testing.T) {
 	// tenant is otherwise completely empty.
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Limit: 50})
 	if err != nil {
@@ -792,7 +792,7 @@ func TestStoreList_SeveralImportBatchIDsUnion(t *testing.T) {
 	wantIDs = append(wantIDs, seedInvoiceWithBatchAt(t, super, tenantID, entityID, "UNION-B3-0", &batch3, time.Now().UTC()))
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch3}, Limit: 50})
 	if err != nil {
@@ -836,7 +836,7 @@ func TestStoreList_OneImportBatchIDUnchanged(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Limit: 50})
 	if err != nil {
@@ -878,7 +878,7 @@ func TestStoreList_EmptyOrNilImportBatchIDsIsAbsent(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	nilItems, nilTotal, err := store.List(c, ListFilter{ImportBatchIDs: nil, Limit: 50})
 	if err != nil {
@@ -925,7 +925,7 @@ func TestStoreList_SeveralImportBatchIDsNarrowBeforePaging(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Sanity: the tenant-wide unfiltered total really is 180.
 	_, unfilteredTotal, err := store.List(c, ListFilter{Limit: 50})
@@ -971,7 +971,7 @@ func TestStoreList_MalformedImportBatchIDMemberIsValidationError(t *testing.T) {
 	valid := seedImportBatch(t, super, tenantID, entityID)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	_, _, err := store.List(c, ListFilter{ImportBatchIDs: []string{valid, "not-a-uuid"}, Limit: 50})
 	if !errors.Is(err, ErrValidation) {
@@ -1009,7 +1009,7 @@ func TestRLS_SeveralImportBatchIDsCrossTenantMemberIsInvisible(t *testing.T) {
 	}
 
 	store := NewStore(app)
-	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
+	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1})
 
 	items, total, err := store.List(c1, ListFilter{ImportBatchIDs: []string{batchB, batchA}, Limit: 50})
 	if err != nil {

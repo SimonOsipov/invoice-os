@@ -1,6 +1,6 @@
-// mock_test.go: MockExtractor's seven specs -- the twelve-law contract run, determinism in three
-// shapes, distinct inputs, AC-3's reason matrix, the ambient-dependency scan, non-mutation, and
-// fresh memory per call.
+// mock_test.go: MockExtractor's nine specs -- the twelve-law contract run, determinism in three
+// shapes, distinct inputs, AC-3's reason matrix, the ambient-dependency scan, non-mutation,
+// fresh memory per call, the pinned Name/Version literals, and MockFixtures handing back a copy.
 //
 // HONEST FRAMING (do not relabel a spec without re-reading this):
 //   - Before mock.go exists NOTHING here is red. The package does not compile, which is a BUILD
@@ -14,6 +14,11 @@
 //     CONFIRMATORY: the stub passes both. TestMockExtractor_HasNoAmbientDependency is a
 //     REGRESSION GUARD, shown to fire by planting time.Now, a sibling func and a sibling var in
 //     mock.go rather than by a red-to-green transition.
+//   - TestMockExtractor_PinsNameAndVersion and TestMockFixtures_HandsBackACopy arrived with the
+//     real mock.go and are GREEN from their first run. Neither is a transition. The pin closes
+//     laws E01/E02, which require only a non-empty value that is stable within one run and so
+//     cannot see a rename. The copy guard fires against a memoised MockFixtures, not against
+//     anything the current source does.
 //
 // THE GAP THE AMBIENT SCAN DOES NOT CLOSE. A method on a sibling type -- doc.stamp() where
 // stamp reads the clock -- is invisible to it: doc resolves locally and stamp is a selector,
@@ -444,5 +449,87 @@ func TestMockExtractor_ReturnsFreshMemoryPerCall(t *testing.T) {
 	}
 	if seen != len(pristineValues) {
 		t.Errorf("the third call carries %d Value(s), the first carried %d", seen, len(pristineValues))
+	}
+}
+
+// TestMockExtractor_PinsNameAndVersion (PIN): laws E01 and E02 accept any non-empty string that
+// does not change within one run, so a rename passes all twelve laws and all seven behavioural
+// specs while silently rewriting what extraction_jobs.extractor and .extractor_version mean for
+// every row already stored under the old value.
+func TestMockExtractor_PinsNameAndVersion(t *testing.T) {
+	ext := extraction.NewMockExtractor()
+	if got := ext.Name(); got != "mock" {
+		t.Errorf("Name() = %q, want %q; the value is persisted as extraction_jobs.extractor and changing it orphans every existing row", got, "mock")
+	}
+	if got := ext.Version(); got != "v1" {
+		t.Errorf("Version() = %q, want %q; the value is persisted as extraction_jobs.extractor_version", got, "v1")
+	}
+}
+
+// TestMockFixtures_HandsBackACopy (REGRESSION GUARD): spec 7 covers Extract's results, nothing
+// covers MockFixtures. A caller clobbering a returned fx.Bytes must not reach the fixture table,
+// or the NEXT caller gets bytes that hash to no key and silently falls to the default result.
+// Measured: the current source cannot fail this, because each body is an immutable string and
+// []byte(body) allocates per call. It fires against a MockFixtures that memoises its return.
+func TestMockFixtures_HandsBackACopy(t *testing.T) {
+	first := extraction.MockFixtures()
+	if len(first) < 2 {
+		t.Fatalf("MockFixtures returned %d fixture(s), want at least 2", len(first))
+	}
+
+	ext := extraction.NewMockExtractor()
+	def := mxExtract(t, ext, mxUnknown("no fixture claims these bytes"))
+
+	originals := make([][]byte, len(first))
+	pristine := make([][]extraction.Field, len(first))
+	for i, fx := range first {
+		if len(fx.Bytes) == 0 {
+			t.Fatalf("fixture %d (%q) carries no bytes; the clobber below would write nothing", i, fx.Name)
+		}
+		originals[i] = make([]byte, len(fx.Bytes))
+		copy(originals[i], fx.Bytes)
+		pristine[i] = mxExtract(t, ext, extraction.Document{Bytes: fx.Bytes, ContentType: "application/pdf"})
+		// Without this a fixture whose result equals the default would make the arm clause below vacuous.
+		if reflect.DeepEqual(pristine[i], def) {
+			t.Fatalf("fixture %q produces the default result; the fixture-arm clause below would pass on a lookup miss", fx.Name)
+		}
+	}
+
+	var clobbered int
+	for _, fx := range first {
+		for j := range fx.Bytes {
+			fx.Bytes[j] = 'X'
+			clobbered++
+		}
+	}
+	if clobbered == 0 {
+		t.Fatalf("the clobber wrote %d byte(s); the assertions below would prove nothing", clobbered)
+	}
+
+	second := extraction.MockFixtures()
+	if len(second) != len(first) {
+		t.Fatalf("two MockFixtures calls returned %d and %d fixture(s)", len(first), len(second))
+	}
+	for i := range second {
+		if second[i].Name != first[i].Name {
+			t.Errorf("fixture %d: Name %q then %q", i, first[i].Name, second[i].Name)
+			continue
+		}
+		// Address inequality is only a proxy; the two clauses after it are the oracle.
+		if len(second[i].Bytes) > 0 && len(first[i].Bytes) > 0 && &second[i].Bytes[0] == &first[i].Bytes[0] {
+			t.Errorf("fixture %q: two MockFixtures calls returned ONE backing array at %p", second[i].Name, &second[i].Bytes[0])
+		}
+		if !reflect.DeepEqual(second[i].Bytes, originals[i]) {
+			t.Errorf("fixture %q: clobbering the first call's Bytes changed the second call's to %q, want %q", second[i].Name, second[i].Bytes, originals[i])
+			continue
+		}
+		got := mxExtract(t, ext, extraction.Document{Bytes: second[i].Bytes, ContentType: "application/pdf"})
+		if reflect.DeepEqual(got, def) {
+			t.Errorf("fixture %q: Extract on the second call's Bytes fell to the DEFAULT result; the lookup no longer recognises it", second[i].Name)
+			continue
+		}
+		if !reflect.DeepEqual(got, pristine[i]) {
+			t.Errorf("fixture %q: Extract on the second call's Bytes returned a different result than on the first", second[i].Name)
+		}
 	}
 }

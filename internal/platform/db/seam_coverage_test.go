@@ -1254,6 +1254,474 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Scan 4 — every swept package builds its DB-test identities off the seeded
+// member (AUDIT-12-02, D-7)
+// ---------------------------------------------------------------------------
+//
+// The sweep (AUDIT-12 System Design §5.2) is behaviour-neutral against today's
+// predicate: an active membership row is admitted exactly like no row at all,
+// so ordinary `go test` cannot tell a swept package from a reverted one.
+// scSweepPopulationPackages scopes both scans to the 9 packages AUDIT-12's
+// blast radius actually names; scSweepUnsweptAllowlist then narrows that to
+// the ones not yet swept. Each AUDIT-12 sweep subtask deletes its own
+// unswept-allowlist entries, so a revert between subtasks fails on the commit
+// that causes it.
+//
+// The match is textual, not type-aware — it does not ask whether a site can
+// reach the gated seam, only whether the shape is still there. Two shapes
+// count: `Subject: uuid.NewString()` directly, and `x := uuid.NewString()`
+// followed anywhere in the same func by `Subject: x` — internal/portfolio
+// spells ~9 of its 41 sites the second way (AUDIT-12-02 Implementation Plan,
+// Correction 2), and a literal-only match would certify a sweep that missed
+// them.
+//
+// A site that legitimately needs a fresh, unmembered subject inside an
+// already-swept package (the claim-changing set, AUDIT-12 System Design §5.4)
+// goes on scSweepSubjectAllowlist instead, always func-scoped — never a whole
+// file, matching scCoreAllowlist's `{file, fn: "Me"}` precedent — so a revert
+// of any OTHER site in that file still fails (Correction 1).
+//
+// Known limits. Attribution is to the innermost FuncDecl only: a site inside a
+// nested t.Run closure is attributed to the enclosing test func, not the
+// subtest — none of today's sites need finer scoping. A variable also fed to
+// its own explicit membership insert is still flagged; a later sweep subtask
+// that needs that shape extends the predicate or the allowlist, not this
+// comment.
+
+// scSweepFuncLineRanges maps every FuncDecl in f to its body's 1-based
+// [start,end] line range. AST supplies the boundary; the match itself is a
+// plain regex test over the raw lines inside it, never a type or call check.
+func scSweepFuncLineRanges(fset *token.FileSet, f *ast.File) map[string][2]int {
+	out := map[string][2]int{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		out[fn.Name.Name] = [2]int{fset.Position(fn.Body.Pos()).Line, fset.Position(fn.Body.End()).Line}
+		return true
+	})
+	return out
+}
+
+// scSweepSubjectSite is one place a _test.go file builds a caller identity
+// from a fresh, unmembered uuid rather than the package's seeded
+// memberSubject.
+type scSweepSubjectSite struct {
+	file string
+	line int
+	fn   string
+	kind string // "literal" (Subject: uuid.NewString()) or "var" (x := uuid.NewString() ... Subject: x)
+}
+
+func (s scSweepSubjectSite) String() string {
+	return s.file + ":" + strconv.Itoa(s.line) + " (" + s.fn + ", " + s.kind + ")"
+}
+
+var scSweepLiteralRE = regexp.MustCompile(`Subject:\s*uuid\.NewString\(\)`)
+var scSweepVarAssignRE = regexp.MustCompile(`(\w+)\s*:=\s*uuid\.NewString\(\)`)
+
+func scSweepVarUseRE(name string) *regexp.Regexp {
+	return regexp.MustCompile(`Subject:\s*` + regexp.QuoteMeta(name) + `\b`)
+}
+
+// scSweepSubjectSitesIn finds every fresh-subject site in one parsed
+// _test.go file.
+func scSweepSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSubjectSite {
+	var out []scSweepSubjectSite
+	for fn, rng := range scSweepFuncLineRanges(fset, f) {
+		start, end := rng[0], rng[1]
+		if start < 1 || end > len(lines) {
+			continue
+		}
+		body := strings.Join(lines[start-1:end], "\n")
+		for i := start - 1; i < end; i++ {
+			line := lines[i]
+			switch {
+			case scSweepLiteralRE.MatchString(line):
+				out = append(out, scSweepSubjectSite{file: rel, line: i + 1, fn: fn, kind: "literal"})
+			case scSweepVarAssignRE.MatchString(line):
+				name := scSweepVarAssignRE.FindStringSubmatch(line)[1]
+				if scSweepVarUseRE(name).MatchString(body) {
+					out = append(out, scSweepSubjectSite{file: rel, line: i + 1, fn: fn, kind: "var"})
+				}
+			}
+		}
+	}
+	return out
+}
+
+func scSweepFixtureSubjectSites(t *testing.T, name, src string) []scSweepSubjectSite {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	return scSweepSubjectSitesIn(fset, name, f, strings.Split(src, "\n"))
+}
+
+const scSweepNeedleLiteral = `package x
+
+func TestN1(t *testing.T) {
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+	_ = c
+}
+`
+
+const scSweepNeedleVar = `package x
+
+func TestN2(t *testing.T) {
+	userID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleClean is the seeded shape the sweep produces: no site.
+const scSweepNeedleClean = `package x
+
+func TestN3(t *testing.T) {
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleTenantOnly proves the second hop is required: a fresh uuid
+// never read back as Subject is a tenant id, not a caller identity, and
+// flagging it would demand an exemption for every seedTenant call.
+const scSweepNeedleTenantOnly = `package x
+
+func TestN4(t *testing.T) {
+	tenantID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, TenantID: tenantID})
+	_ = c
+}
+`
+
+func scSweepSubjectControlNeedles(t *testing.T) {
+	t.Run("N1 direct literal", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n1.go", scSweepNeedleLiteral)
+		if len(sites) != 1 || sites[0].kind != "literal" || sites[0].fn != "TestN1" {
+			t.Fatalf("sites = %v, want exactly one literal site in TestN1 — the scan cannot see the shape it exists to catch", sites)
+		}
+	})
+	t.Run("N2 variable-mediated", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n2.go", scSweepNeedleVar)
+		if len(sites) != 1 || sites[0].kind != "var" || sites[0].fn != "TestN2" {
+			t.Fatalf("sites = %v, want exactly one var-mediated site in TestN2 — a literal-only match misses ~9 of internal/portfolio's own sites", sites)
+		}
+	})
+	t.Run("N3 a seeded subject is not a site", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n3.go", scSweepNeedleClean)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — memberSubject is the seeded caller, not a fresh identity", sites)
+		}
+	})
+	t.Run("N4 a tenant id is not a subject", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n4.go", scSweepNeedleTenantOnly)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — a fresh uuid never read back as Subject is a tenant id", sites)
+		}
+	})
+}
+
+// scSweepPopulationPackages is every internal/ package the AUDIT-12 blast
+// radius names (System Design, package table): the 9 packages whose _test.go
+// files build an identity that today's narrow predicate admits and the strict
+// one refuses. A package outside this set — internal/actor, internal/audit,
+// and the rest — has its own reasons to skip a DB test and is not this
+// story's concern; walking it too would make both scans below noisy with
+// findings that have nothing to do with the sweep.
+var scSweepPopulationPackages = []string{
+	"internal/invoice", "internal/importer", "internal/dashboard", "internal/portfolio",
+	"internal/document", "internal/approval", "internal/platform/db", "internal/submission",
+	"internal/tenancy",
+}
+
+func scSweepInPopulation(pkg string) bool {
+	for _, p := range scSweepPopulationPackages {
+		if p == pkg {
+			return true
+		}
+	}
+	return false
+}
+
+// scSweepUnsweptAllowlist is every population package this scan does not yet
+// hold for. Each AUDIT-12 sweep subtask deletes its own entries.
+var scSweepUnsweptAllowlist = []string{
+	"internal/invoice",     // the largest package in the blast radius, 395 failing tests; its own subtask, AUDIT-12-04
+	"internal/importer",    // shares its sweep subtask, AUDIT-12-03, with internal/document
+	"internal/document",    // shares its sweep subtask, AUDIT-12-03, with internal/importer
+	"internal/approval",    // one of the tail's three packages swept together in AUDIT-12-05
+	"internal/platform/db", // one of the tail's three packages swept together in AUDIT-12-05
+	"internal/submission",  // one of the tail's three packages swept together in AUDIT-12-05
+	"internal/tenancy",     // never swept: its one failing test's claim is about a no-row caller, inverted rather than fixtured, in AUDIT-12-07
+}
+
+func scSweepPackageAllowed(pkg string) bool {
+	for _, p := range scSweepUnsweptAllowlist {
+		if p == pkg {
+			return true
+		}
+	}
+	return false
+}
+
+// scSweepSubjectExemption is one func allowed to keep building a fresh,
+// unmembered identity inside an already-swept package. Always func-scoped.
+type scSweepSubjectExemption struct {
+	file, fn string
+}
+
+func (e scSweepSubjectExemption) covers(s scSweepSubjectSite) bool {
+	return s.file == e.file && s.fn == e.fn
+}
+
+// scSweepSubjectAllowlist is every func exempted from an already-swept
+// package's rule.
+var scSweepSubjectAllowlist = []scSweepSubjectExemption{
+	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantSeesNothing"}, // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
+}
+
+// scSweepTestFiles returns every _test.go file under internal/ (repo-relative,
+// forward-slashed), skipping the same directories scSeamFiles skips.
+func scSweepTestFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == "testdata" || name == "node_modules" || name == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/: %v", err)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
+	t.Run("control needles", scSweepSubjectControlNeedles)
+
+	root := repoRootDir(t)
+	files := scSweepTestFiles(t, root)
+	if len(files) < 350 {
+		t.Fatalf("walk found %d _test.go file(s) under internal/, want at least 350 (408 measured at AUDIT-12-02) — a clean report over a broken walk means nothing", len(files))
+	}
+
+	var sites []scSweepSubjectSite
+	swept := 0
+	for _, rel := range files {
+		pkg := filepath.Dir(rel)
+		if !scSweepInPopulation(pkg) || scSweepPackageAllowed(pkg) {
+			continue
+		}
+		swept++
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, rel, raw, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v — the scan cannot report on a file it cannot parse", rel, err)
+		}
+		sites = append(sites, scSweepSubjectSitesIn(fset, rel, f, strings.Split(string(raw), "\n"))...)
+	}
+	if swept < 15 {
+		t.Fatalf("walked %d _test.go file(s) in a swept population package, want at least 15 (19 measured at AUDIT-12-02: portfolio's 4 plus dashboard's 15) — the population floor is meant to catch exactly this", swept)
+	}
+
+	for _, s := range sites {
+		covered := false
+		for _, e := range scSweepSubjectAllowlist {
+			if e.covers(s) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s builds a caller identity from a fresh, unmembered uuid in a swept package — use memberSubject, or exempt this func with its reason", s)
+		}
+	}
+	// Anti-rot: every exemption must still be earning its place.
+	for _, e := range scSweepSubjectAllowlist {
+		used := false
+		for _, s := range sites {
+			if e.covers(s) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			t.Errorf("subject allowlist entry %s func %s matched nothing — delete it; a stale exemption is an open door nobody is looking at", e.file, e.fn)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scan 5 — no swept package gains a t.Skip( the sweep did not put there
+// (AUDIT-12-02, Core AC 4)
+// ---------------------------------------------------------------------------
+//
+// The sweep must land green (D-7): a test that cannot be made to pass by
+// seeding its caller a real membership row is a defect in the plan, not
+// license to skip it. This scan pins the t.Skip( census of every swept
+// package so a fixture subtask cannot quietly turn a hard fixture into a
+// skipped one, and a later revert of a fix cannot reintroduce one either.
+//
+// scSweepSkipAllowlist starts holding exactly the pre-existing, env-gated
+// dbTestPools skip in each of this subtask's two packages — present before
+// AUDIT-12 and unrelated to the sweep. A later sweep subtask adds its own
+// package's pre-existing skips the same way; it never grows because of a new
+// one.
+
+type scSweepSkipSite struct {
+	file string
+	line int
+	fn   string
+}
+
+func (s scSweepSkipSite) String() string {
+	return s.file + ":" + strconv.Itoa(s.line) + " (" + s.fn + ")"
+}
+
+var scSweepSkipRE = regexp.MustCompile(`\bt\.Skip\(`)
+
+func scSweepSkipSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSkipSite {
+	var out []scSweepSkipSite
+	for fn, rng := range scSweepFuncLineRanges(fset, f) {
+		start, end := rng[0], rng[1]
+		if start < 1 || end > len(lines) {
+			continue
+		}
+		for i := start - 1; i < end; i++ {
+			if scSweepSkipRE.MatchString(lines[i]) {
+				out = append(out, scSweepSkipSite{file: rel, line: i + 1, fn: fn})
+			}
+		}
+	}
+	return out
+}
+
+func scSweepFixtureSkipSites(t *testing.T, name, src string) []scSweepSkipSite {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	return scSweepSkipSitesIn(fset, name, f, strings.Split(src, "\n"))
+}
+
+const scSweepNeedleSkip = `package x
+
+func TestSkipsWhenUnconfigured(t *testing.T) {
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("db-integration test skipped")
+	}
+}
+`
+
+func scSweepSkipControlNeedle(t *testing.T) {
+	sites := scSweepFixtureSkipSites(t, "skip.go", scSweepNeedleSkip)
+	if len(sites) != 1 || sites[0].fn != "TestSkipsWhenUnconfigured" {
+		t.Fatalf("sites = %v, want exactly one t.Skip( site in TestSkipsWhenUnconfigured — the scan cannot see the shape it exists to catch", sites)
+	}
+}
+
+// scSweepSkipExemption is one known, pre-existing t.Skip( site inside a swept
+// package. A new one is what this scan exists to catch.
+type scSweepSkipExemption struct {
+	file, fn string
+}
+
+func (e scSweepSkipExemption) covers(s scSweepSkipSite) bool {
+	return s.file == e.file && s.fn == e.fn
+}
+
+var scSweepSkipAllowlist = []scSweepSkipExemption{
+	{file: "internal/portfolio/portfolio_test.go", fn: "dbTestPools"}, // env-gated: skips when DATABASE_URL/DATABASE_SUPERUSER_URL are unset, the same guard every DB-backed package uses
+	{file: "internal/dashboard/store_test.go", fn: "dbTestPools"},     // same guard, dashboard's own pool helper
+}
+
+func TestRLS_NoNewSkipsInASweptPackage(t *testing.T) {
+	t.Run("control needle", scSweepSkipControlNeedle)
+
+	root := repoRootDir(t)
+	files := scSweepTestFiles(t, root)
+
+	var sites []scSweepSkipSite
+	swept := 0
+	for _, rel := range files {
+		pkg := filepath.Dir(rel)
+		if !scSweepInPopulation(pkg) || scSweepPackageAllowed(pkg) {
+			continue
+		}
+		swept++
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, rel, raw, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", rel, err)
+		}
+		sites = append(sites, scSweepSkipSitesIn(fset, rel, f, strings.Split(string(raw), "\n"))...)
+	}
+	if swept < 15 {
+		t.Fatalf("walked %d _test.go file(s) in a swept population package, want at least 15 (19 measured at AUDIT-12-02) — the population floor is meant to catch exactly this", swept)
+	}
+	if len(sites) < 2 {
+		t.Fatalf("found %d t.Skip( site(s) outside the unswept-package allowlist, want at least 2 (portfolio's and dashboard's own dbTestPools, measured at AUDIT-12-02) — a clean report over a broken walk means nothing", len(sites))
+	}
+
+	for _, s := range sites {
+		covered := false
+		for _, e := range scSweepSkipAllowlist {
+			if e.covers(s) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s is a new t.Skip( in a swept package — fix the fixture, never skip the test; a genuine new env-gated skip is added to scSweepSkipAllowlist with its reason, not left bare", s)
+		}
+	}
+	// Anti-rot: every exemption must still be earning its place.
+	for _, e := range scSweepSkipAllowlist {
+		used := false
+		for _, s := range sites {
+			if e.covers(s) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			t.Errorf("skip allowlist entry %s func %s matched nothing — delete it; a stale exemption is an open door nobody is looking at", e.file, e.fn)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Every exemption carries its own reason
 // ---------------------------------------------------------------------------
 
@@ -1272,7 +1740,7 @@ func TestRLS_EveryAllowlistEntryNamesItsReason(t *testing.T) {
 		t.Fatalf("parse %s: %v", scSelfPath, err)
 	}
 
-	want := len(scPoolAllowlist) + len(scCoreAllowlist)
+	want := len(scPoolAllowlist) + len(scCoreAllowlist) + len(scSweepUnsweptAllowlist) + len(scSweepSubjectAllowlist) + len(scSweepSkipAllowlist)
 	found := 0
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
@@ -1284,7 +1752,9 @@ func TestRLS_EveryAllowlistEntryNamesItsReason(t *testing.T) {
 			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
 				continue
 			}
-			if vs.Names[0].Name != "scPoolAllowlist" && vs.Names[0].Name != "scCoreAllowlist" {
+			switch vs.Names[0].Name {
+			case "scPoolAllowlist", "scCoreAllowlist", "scSweepUnsweptAllowlist", "scSweepSubjectAllowlist", "scSweepSkipAllowlist":
+			default:
 				continue
 			}
 			cl, ok := vs.Values[0].(*ast.CompositeLit)

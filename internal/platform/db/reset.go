@@ -206,7 +206,15 @@ func ResetEnabled(environment, flag string) bool {
 //	                          optional here: omitting it makes TRUNCATE
 //	                          documents raise 0A000 and the gateway fail to
 //	                          boot in every PR environment
-//	                          (TestResetTruncatesEveryConfiguredTable).
+//	                          (TestResetTruncatesEveryConfiguredTable). It now
+//	                          has a dependent of its own,
+//	                          extraction_field_results, so the same rule
+//	                          applies one level down.
+//	extraction_field_results  the per-field results of a read (EXTR-01). Its
+//	                          composite FK (tenant_id, extraction_job_id) is
+//	                          ON DELETE CASCADE against extraction_jobs, but
+//	                          TRUNCATE does not follow a CASCADE: omitting it
+//	                          makes TRUNCATE extraction_jobs raise 0A000.
 //	approval_runs,            the run-ledger tables (APPR-03). approval_runs'
 //	approval_run_steps,       (tenant_id, invoice_id) FK is ON DELETE RESTRICT
 //	approval_decisions        against invoices, so omitting it here is exactly
@@ -294,7 +302,7 @@ func ResetEnabled(environment, flag string) bool {
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
-	documents, extraction_jobs,
+	documents, extraction_jobs, extraction_field_results,
 	approval_runs, approval_run_steps, approval_decisions,
 	river_job, river_leader, river_queue, river_notification
 RESTART IDENTITY`

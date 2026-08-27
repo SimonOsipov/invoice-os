@@ -1158,13 +1158,14 @@ func TestRLS_ExtractionJobsAppHoldsNoDeletePath(t *testing.T) {
 // trigger with it, but NOT the trigger function — and a reversibility round-trip cannot see
 // the leak, because the Up re-runs CREATE OR REPLACE FUNCTION over the survivor. The shipped
 // Down text is executed for real, inside a transaction that is always rolled back.
-func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
-	h := requireHarness(t)
-	ctx := context.Background()
+// shippedDownStatements returns the statements of one migration's real `-- +goose Down`
+// block, read from the embedded FS.
+func shippedDownStatements(t *testing.T, glob string) []string {
+	t.Helper()
 
-	matches, err := fs.Glob(migrations.FS, "*_extraction_jobs.sql")
+	matches, err := fs.Glob(migrations.FS, glob)
 	if err != nil || len(matches) != 1 {
-		t.Fatalf("glob *_extraction_jobs.sql in migrations.FS = %v (err %v), want exactly one file", matches, err)
+		t.Fatalf("glob %s in migrations.FS = %v (err %v), want exactly one file", glob, matches, err)
 	}
 	raw, err := fs.ReadFile(migrations.FS, matches[0])
 	if err != nil {
@@ -1189,6 +1190,14 @@ func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 			stmts = append(stmts, s)
 		}
 	}
+	return stmts
+}
+
+func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	stmts := shippedDownStatements(t, "*_extraction_jobs.sql")
 	if len(stmts) != 2 {
 		t.Fatalf("parsed %d statement(s) out of the Down block (%v), want 2 — DROP TABLE and DROP FUNCTION",
 			len(stmts), stmts)
@@ -1213,6 +1222,18 @@ func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
 		t.Fatalf("set lock_timeout: %v", err)
 	}
+
+	// goose unwinds newest-first, so every dependent table's own Down has already run by
+	// the time this one does. Reproduce that order rather than dropping the children by
+	// hand — a later child migration only has to be listed here.
+	for _, child := range []string{"*_extraction_field_results.sql"} {
+		for _, s := range shippedDownStatements(t, child) {
+			if _, err := tx.Exec(ctx, s); err != nil {
+				t.Fatalf("execute the shipped Down statement %q from %s: %v", s, child, err)
+			}
+		}
+	}
+
 	for _, s := range stmts {
 		if _, err := tx.Exec(ctx, s); err != nil {
 			t.Fatalf("execute the shipped Down statement %q: %v", s, err)

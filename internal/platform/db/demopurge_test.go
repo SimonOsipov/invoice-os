@@ -210,6 +210,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	entityID := uuid.NewString()
 	documentID := uuid.NewString()
 	extractionJobID := uuid.NewString()
+	fieldResultID := uuid.NewString()
 	batchID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
@@ -250,6 +251,10 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version)
 		 VALUES ($1,$2,$3,'mock','v1')`,
 		extractionJobID, tenantID, documentID)
+	plant("extraction_field_results", "id", fieldResultID,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1,$2,$3,'total_amount','100.00')`,
+		fieldResultID, tenantID, extractionJobID)
 	plant("import_batches", "id", batchID,
 		`INSERT INTO import_batches (id, tenant_id, entity_id, status, rows_total, rows_valid, rows_invalid, filename, document_id)
 		 VALUES ($1,$2,$3,'completed',1,1,0,'doc.csv',$4)`,

@@ -4,7 +4,7 @@
 know what the exception to it actually is, and any operator who has just deployed and is
 looking at a demo environment that does not look right.
 
-Every **gated gateway boot** deletes the four seeded demo tenants' rows from 18
+Every **gated gateway boot** deletes the four seeded demo tenants' rows from 19
 tenant-owned tables, then re-seeds them from `db/seed.dev.sql`. It runs inside
 `db.Provision`, between `Reset` and `Seed` (`internal/platform/db/provision.go`), and the
 primitive is `db.PurgeDemoTenants` (`internal/platform/db/demopurge.go`).
@@ -71,14 +71,15 @@ reverse of `db/seed.dev.sql`'s parent-first inserts.
 | 8 | `invoices` | the demo register itself — the curated portfolio the seed re-creates |
 | 9 | `import_batches` | demo import runs; nothing re-links them, so a survivor would point at deleted invoices |
 | 10 | `business_entities` | the curated demo supplier portfolio, re-inserted by the seed |
-| 11 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
-| 12 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
-| 13 | `idempotency_keys` | the demo dedupe ledger; a surviving key would make a re-run of a demo submission a silent no-op |
-| 14 | `submission_rate_limits` | the demo per-tenant rate window, which would otherwise carry the last demo's budget forward |
-| 15 | `invitations` | the seed inserts none, so **zero is their seeded state**; an invitation a demo created must not outlive it |
-| 16 | `workflow_role_members` | demo staffing; `db.Seed` restores all 13 rows in the same `Provision` call |
-| 17 | `workflow_roles` | demo seats; `db.Seed` restores all 14 under their literal seeded ids |
-| 18 | `audit_log` | every audit row the four demo tenants accumulated — see the reading note at the bottom of this page |
+| 11 | `extraction_field_results` | the per-field results of a demo document read, meaningless once their job is gone. Purged **before** `extraction_jobs`: the foreign key is `ON DELETE CASCADE`, so purging the parent first would take these rows silently and report a count of 0 |
+| 12 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
+| 13 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
+| 14 | `idempotency_keys` | the demo dedupe ledger; a surviving key would make a re-run of a demo submission a silent no-op |
+| 15 | `submission_rate_limits` | the demo per-tenant rate window, which would otherwise carry the last demo's budget forward |
+| 16 | `invitations` | the seed inserts none, so **zero is their seeded state**; an invitation a demo created must not outlive it |
+| 17 | `workflow_role_members` | demo staffing; `db.Seed` restores all 13 rows in the same `Provision` call |
+| 18 | `workflow_roles` | demo seats; `db.Seed` restores all 14 under their literal seeded ids |
+| 19 | `audit_log` | every audit row the four demo tenants accumulated — see the reading note at the bottom of this page |
 
 This list is deliberately **wider** than `db.Reset`'s, which spares `invitations`,
 `workflow_roles` and `workflow_role_members`. It can be wider precisely because `db.Seed`

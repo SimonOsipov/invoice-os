@@ -284,12 +284,21 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed documents fixture: %v", err)
 	}
 
-	if _, err := pool.Exec(ctx,
+	var extractionJobID string
+	if err := pool.QueryRow(ctx,
 		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version)
-		 VALUES ($1, $2, 'mock', 'v1')`,
+		 VALUES ($1, $2, 'mock', 'v1') RETURNING id`,
 		tenantID, documentID,
-	); err != nil {
+	).Scan(&extractionJobID); err != nil {
 		t.Fatalf("seed extraction_jobs fixture: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_field_results (tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1, $2, 'total_amount', '100.00')`,
+		tenantID, extractionJobID,
+	); err != nil {
+		t.Fatalf("seed extraction_field_results fixture: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx,

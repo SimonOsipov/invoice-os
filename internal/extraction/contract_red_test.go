@@ -11,8 +11,9 @@
 //     and must not be sold as one. From here on it is what drives all twenty rows.
 //   - The six TestRedCase_* specs are EXECUTABLE PROOF, green from their first run. Measured:
 //     no single-site mutation moves one without also moving a table row, so they buy a name in
-//     the test output, not coverage -- do not count them twice. The E11 one carries the whole
-//     PDF-points box the table splits per axis, which is the only shape it does not share.
+//     the test output, not coverage -- do not count them twice. The E11 one moves on no single
+//     mutation at all: both axes are out at once, so either site alone still records E11. It
+//     holds the whole PDF-points box, which is the shape the DB CHECK rejects.
 //   - TestContractCorpusNeedsNoRestore is a DESIGN LOCK, never red-first.
 //
 // ONE ROW PER EMISSION SITE, measured rather than assumed. The runner holds 20 law-prefixed

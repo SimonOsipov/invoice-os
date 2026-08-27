@@ -759,8 +759,9 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
-// memberSubject is the caller every DB-backed test in this package acts as;
-// the request seam refuses a caller with no membership row.
+// memberSubject is the caller every DB-backed test in this package acts as.
+// Its membership row is a no-op today (a rowless caller is still admitted)
+// but keeps these fixtures ready for the predicate's strict successor.
 const memberSubject = "d4a10002-0000-4000-8000-000000000001"
 
 // seedTenant inserts one throwaway tenants row (kind 'firm') plus an active
@@ -786,6 +787,25 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
 	})
 	return id
+}
+
+// TestPortfolioFixture_SeedTenantSeedsAnActiveCallerMembership fails if
+// seedTenant's membership INSERT is silently dropped.
+func TestPortfolioFixture_SeedTenantSeedsAnActiveCallerMembership(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "fixture membership check")
+
+	var status string
+	err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		tenantID, memberSubject,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("query caller membership: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("status = %q, want active", status)
+	}
 }
 
 // seedEntity inserts one business_entities row for tenantID as the superuser

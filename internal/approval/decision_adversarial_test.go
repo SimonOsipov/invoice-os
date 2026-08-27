@@ -170,17 +170,18 @@ func TestApprove_ApproverGetsIdenticalRunNotFoundAcrossUnknownCrossTenantMalform
 	assertNothingWritten(t, super, fA)
 }
 
-// TestApprove_CallerWithNoMembershipRowIsNotPermitted: requireApprover's Scan hits
-// pgx.ErrNoRows for a subject the memberships table has never heard of, not merely a
-// wrong-role or suspended row -- fails closed the same as every other refusal.
+// TestApprove_CallerWithNoMembershipRowIsNotPermitted (AUDIT-12-07): the refusal moved
+// earlier. Decide runs over db.WithinRequestTenantTx, so a subject the memberships
+// table has never heard of is now refused at the seam (db.ErrNotActiveMember) before
+// requireApprover's own Scan ever hits pgx.ErrNoRows.
 func TestApprove_CallerWithNoMembershipRowIsNotPermitted(t *testing.T) {
 	super, app := dbTestPools(t)
 	f := newApproveFixture(t, super, app, "APPR-07 no-membership-row", "no-membership-row-role")
 
 	ghostID := uuid.NewString() // no seedMembership call at all
 	_, err := approve(t, app, f.tenantID, ghostID, f.invoiceID, nil)
-	if !errors.Is(err, ErrNotPermitted) {
-		t.Errorf("Decide(approved) as a subject with no membership row at all: err = %v, want ErrNotPermitted", err)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("Decide(approved) as a subject with no membership row at all: err = %v, want db.ErrNotActiveMember", err)
 	}
 	assertNothingWritten(t, super, f)
 }

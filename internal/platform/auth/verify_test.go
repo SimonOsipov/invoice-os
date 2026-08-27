@@ -161,6 +161,20 @@ func TestVerify_Rejections(t *testing.T) {
 	}
 }
 
+// TestVerify_NonUUIDSubjectIsUnauthorized: a validly signed token whose subject is
+// not a uuid must never reach the seam. This is why
+// WithinRequestTenantTxOpts's non-uuid skip (tenant.go:57) is not a hole -- no such
+// Identity is ever produced.
+func TestVerify_NonUUIDSubjectIsUnauthorized(t *testing.T) {
+	iss := mustIssuer(t)
+	v, _ := jwksServer(t, iss)
+
+	tok := mustMint(t, iss, MintOptions{Subject: "backfill-source-rows"})
+	if _, err := v.Verify(context.Background(), tok); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Verify(non-uuid subject): err = %v, want ErrUnauthorized", err)
+	}
+}
+
 func TestVerify_JWKSFetchError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

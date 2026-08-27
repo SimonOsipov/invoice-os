@@ -2814,10 +2814,9 @@ func scSweepInPopulation(pkg string) bool {
 }
 
 // scSweepUnsweptAllowlist is every population package this scan does not yet
-// hold for. Each AUDIT-12 sweep subtask deletes its own entries.
-var scSweepUnsweptAllowlist = []string{
-	"internal/tenancy", // never swept: its one failing test's claim is about a no-row caller, inverted rather than fixtured, in AUDIT-12-07
-}
+// hold for. Each AUDIT-12 sweep subtask deletes its own entries. Empty as of
+// AUDIT-12-07 -- every population package is now swept.
+var scSweepUnsweptAllowlist = []string{}
 
 func scSweepPackageAllowed(pkg string) bool {
 	for _, p := range scSweepUnsweptAllowlist {
@@ -2841,17 +2840,29 @@ func (e scSweepSubjectExemption) covers(s scSweepSubjectSite) bool {
 // scSweepSubjectAllowlist is every func exempted from an already-swept
 // package's rule.
 var scSweepSubjectAllowlist = []scSweepSubjectExemption{
-	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantSeesNothing"},   // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
-	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},               // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
-	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},             // same claim, the UnresolveOutside leg
-	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipSeesRoleReason"},        // same claim, GetHandler's role-reason leg
-	{file: "internal/approval/handlers_test.go", fn: "caller"},                                                             // pure mock stub, 21 call sites, zero DB calls -- never reaches db.WithinRequestTenantTxOpts
-	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},    // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
-	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                 // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamAllowsACallerWithNoMembershipRow"},      // AUDIT-12-07 inverts this claim: Core AC 5's own no-row-caller test
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamWrapsAMembershipReadError"},             // the membership SELECT itself is poisoned to error; seeding would not prevent the forced failure
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest"}, // the malformed tenant id short-circuits before any membership lookup; seeding would not matter
-	{file: "internal/approval/workflow_roles_test.go", fn: "TestRequireActiveAdmin_NoMembershipRowIsNotPermitted"},         // deliberately rowless caller: proves requireActiveAdmin's own no-row branch, store.go:489
+	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantSeesNothing"},       // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
+	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},                   // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
+	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},                 // same claim, the UnresolveOutside leg
+	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipSeesRoleReason"},            // same claim, GetHandler's role-reason leg
+	{file: "internal/approval/handlers_test.go", fn: "caller"},                                                                 // pure mock stub, 21 call sites, zero DB calls -- never reaches db.WithinRequestTenantTxOpts
+	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},        // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                     // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusesACallerWithNoMembershipRow"},         // AUDIT-12-07's own inverted test (was TestRLS_RequestSeamAllowsACallerWithNoMembershipRow): the claim IS the no-row refusal
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow"}, // AUDIT-12-07's own test: needs a genuinely unmembered caller to compare against a suspended one
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamWrapsAMembershipReadError"},                 // the membership SELECT itself is poisoned to error; seeding would not prevent the forced failure
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest"},     // the malformed tenant id short-circuits before any membership lookup; seeding would not matter
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestRequireActiveAdmin_NoMembershipRowIsNotPermitted"},             // deliberately rowless caller: proves requireActiveAdmin's own no-row branch, store.go:489
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_NoMembershipFailsClosed"},                                      // Store.Me is exempt from the request seam (D-5); its claim is unaffected by AUDIT-12-07
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_ExemptFromTheSeamUnderTheStrictRule"},                          // same exemption, AUDIT-12-07's own test naming it
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_InvalidStatusRejected"},                                     // pure mock stub (SetMembershipStatusHandler with a fake setter), zero DB calls -- never reaches db.WithinRequestTenantTx
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_BodyOverCapRejected"},                                       // same shape: pure mock stub, zero DB calls
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_PathIDAndBodyOrdering"},                                     // same shape: pure mock stub, zero DB calls
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_StatusForErrTable"},                                         // same shape: pure mock stub, zero DB calls
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_OKBodyIsFiveKeyShape"},                                      // same shape: pure mock stub, zero DB calls
+	{file: "internal/tenancy/not_active_member_403_test.go", fn: "TestMeHandler_NotActiveMemberIs403"},                         // pure mock stub (an injected MeLoader), zero DB calls -- never reaches db.WithinRequestTenantTx
+	{file: "internal/tenancy/not_active_member_403_test.go", fn: "TestMembershipsHandler_NotActiveMemberIs403"},                // same shape: pure mock stub, zero DB calls
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,
@@ -3084,6 +3095,7 @@ var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"}, // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
 	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                               // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                     // same guard, approval's own pool helper
+	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                             // same guard, tenancy's own pool helper
 	{file: "internal/platform/db/bootstrap_test.go", fn: "requireSuperuserDSN"},                               // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
 	{file: "internal/platform/db/migrate_test.go", fn: "TestMigrateUpFromEmbedded"},                           // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/platform/db/provision_test.go", fn: "requireProvisionDSNs"},                              // pre-existing: skips without DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL, unrelated to the sweep

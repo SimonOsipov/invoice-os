@@ -211,9 +211,11 @@ func TestResolveOutside_NoMembershipIsNotPermitted(t *testing.T) {
 	subject := uuid.NewString() // no seedMembership call: no row at all
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
+	// AUDIT-12-07: the refusal moved earlier -- the seam now refuses a no-row caller
+	// (db.ErrNotActiveMember) before ResolveOutside's own approver check ever runs.
 	store := NewStore(app)
-	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("ResolveOutside (no membership) err = %v, want ErrNotPermitted", err)
+	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ResolveOutside (no membership) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	at, by, reason := mustKeptAsIsTriple(t, super, invID)
@@ -638,9 +640,11 @@ func TestUnresolveOutside_NoMembershipIsNotPermitted(t *testing.T) {
 
 	beforeAt, beforeBy, beforeReason := mustKeptAsIsTriple(t, super, invID)
 
+	// AUDIT-12-07: the refusal moved earlier -- the seam now refuses a no-row caller
+	// (db.ErrNotActiveMember) before UnresolveOutside's own approver check ever runs.
 	store := NewStore(app)
-	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, ErrNotPermitted) {
-		t.Fatalf("UnresolveOutside (no membership) err = %v, want ErrNotPermitted", err)
+	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("UnresolveOutside (no membership) err = %v, want db.ErrNotActiveMember", err)
 	}
 
 	afterAt, afterBy, afterReason := mustKeptAsIsTriple(t, super, invID)

@@ -721,6 +721,10 @@ func TestRequireActiveAdmin_NoMembershipRowIsNotPermitted(t *testing.T) {
 // carries no tenant predicate, so RLS on memberships is the only thing keeping one
 // human's admin row in tenant B out of a tenant-A create. Widen that policy and this
 // is the test that goes red; nothing else in the package would notice.
+//
+// AUDIT-12-07: "no row in A" moved from ErrNotPermitted to db.ErrNotActiveMember --
+// the seam now refuses that caller before requireActiveAdmin ever runs. "preparer in
+// A" still has a row, so the seam admits and requireActiveAdmin still refuses it.
 func TestWorkflowRole_CreateCallerRoleIsScopedToTheCallersTenant(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantA := seedTenant(t, super, "APPR-02 caller-scope A")
@@ -734,15 +738,19 @@ func TestWorkflowRole_CreateCallerRoleIsScopedToTheCallersTenant(t *testing.T) {
 	stranger := uuid.NewString() // admin in B, unknown to A
 	seedMembership(t, super, tenantB, stranger, "admin", "active")
 
-	for name, subject := range map[string]string{
-		"admin in B, preparer in A": dual,
-		"admin in B, no row in A":   stranger,
-	} {
+	cases := map[string]struct {
+		subject string
+		want    error
+	}{
+		"admin in B, preparer in A": {dual, ErrNotPermitted},
+		"admin in B, no row in A":   {stranger, db.ErrNotActiveMember},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			c := auth.WithIdentity(context.Background(),
-				auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
-			if _, err := store.CreateRole(c, "Engagement Partner", ""); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("CreateRole into A as %s: err = %v, want ErrNotPermitted", name, err)
+				auth.Identity{Subject: tc.subject, Role: "authenticated", TenantID: tenantA})
+			if _, err := store.CreateRole(c, "Engagement Partner", ""); !errors.Is(err, tc.want) {
+				t.Errorf("CreateRole into A as %s: err = %v, want %v", name, err, tc.want)
 			}
 		})
 	}
@@ -1133,10 +1141,11 @@ func TestWorkflowRole_ListNeedsNoAdminRole(t *testing.T) {
 	}
 }
 
-// TestWorkflowRole_ListRequiresNoMembershipRow pins observed behaviour, not a
-// decision: ListRoles reads no memberships row, so a valid tenant claim with no
-// membership can list — the same as the shipped GET /v1/memberships. Here so a
-// silent "hardening" has to argue with a failing test first.
+// TestWorkflowRole_ListRequiresNoMembershipRow (AUDIT-12-07): the refusal moved
+// earlier. ListRoles runs over db.WithinRequestTenantTx, so a caller with no
+// membership row is now refused at the seam before ListRoles' own no-gate logic
+// ever runs — the parity with GET /v1/memberships this test used to pin no longer
+// holds for a no-row caller (GET /v1/memberships is gated the same way).
 func TestWorkflowRole_ListRequiresNoMembershipRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 list-no-membership")
@@ -1144,12 +1153,9 @@ func TestWorkflowRole_ListRequiresNoMembershipRow(t *testing.T) {
 	c := auth.WithIdentity(context.Background(),
 		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	roles, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
-	if err != nil {
-		t.Fatalf("ListRoles with no membership row: %v, want the roles — parity with GET /v1/memberships", err)
-	}
-	if got := keysOf(roles); !reflect.DeepEqual(got, []string{"tax-reviewer"}) {
-		t.Errorf("keys = %v, want [tax-reviewer]", got)
+	_, err := NewStore(app, stubFingerprinter, nil).ListRoles(c)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("ListRoles with no membership row: err = %v, want db.ErrNotActiveMember", err)
 	}
 }
 

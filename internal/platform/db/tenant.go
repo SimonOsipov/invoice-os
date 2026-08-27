@@ -12,9 +12,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// ErrNotActiveMember refuses a request whose caller holds a membership row in
-// this tenant that is not 'active'. Distinct from ErrNoTenant (401) on purpose:
-// the caller IS authenticated and IS in the right tenant (D-3).
+// ErrNotActiveMember refuses a request whose caller holds no membership row in
+// this tenant, or one that is not 'active'. Distinct from ErrNoTenant (401) on
+// purpose: the caller IS authenticated and IS in the right tenant (D-3).
 var ErrNotActiveMember = errors.New("db: caller's membership in this workspace is not active")
 
 // NotActiveMemberMessage is the wire body for ErrNotActiveMember. Written down
@@ -42,10 +42,10 @@ func WithinRequestTenantTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.
 // options, passed straight through to pool.BeginTx (D-33, AUDIT-05-07) —
 // TestRLS_RequestSeamHonoursTxOptionsWhileGating.
 //
-// It also gates the read path on membership status: a caller whose row in the
-// current tenant exists and is not 'active' is refused with ErrNotActiveMember
-// before the closure runs. No row at all still proceeds (D-17, NARROW) —
-// TestRLS_RequestSeamAllowsACallerWithNoMembershipRow.
+// It also gates the read path on membership status: a caller with no row in the
+// current tenant, or whose row exists and is not 'active', is refused with
+// ErrNotActiveMember before the closure runs (AUDIT-12; supersedes D-17's NARROW
+// no-row exception) — TestRLS_RequestSeamRefusesACallerWithNoMembershipRow.
 func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx.TxOptions, fn func(pgx.Tx) error) error {
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
@@ -55,7 +55,9 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		return ErrNoTenant
 	}
 	// memberships.user_id is uuid: a non-uuid subject can match no row, and a
-	// failed statement would poison the batch's transaction.
+	// failed statement would poison the batch's transaction. Not a hole: verify.go:147
+	// already rejects any token whose subject is not a uuid before an Identity is ever
+	// built, so no caller reaches this arm with one.
 	if _, err := uuid.Parse(id.Subject); err != nil {
 		return WithinTenantTxOpts(ctx, pool, id.TenantID, opts, fn)
 	}
@@ -87,7 +89,7 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		return fmt.Errorf("db: read caller membership: %w", scanErr)
 	case closeErr != nil:
 		return fmt.Errorf("db: close batch: %w", closeErr)
-	case scanErr == nil && status != "active":
+	case scanErr != nil || status != "active": // ErrNoRows here means no membership row at all
 		return ErrNotActiveMember
 	}
 

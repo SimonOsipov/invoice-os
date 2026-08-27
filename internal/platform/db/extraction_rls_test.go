@@ -1,5 +1,6 @@
-// RLS, grant and constraint suite for `extraction_jobs`. Written before the migration
-// exists, so every case here fails with an explicit 42P01 until it lands.
+// RLS, grant and constraint suites for `extraction_jobs` and `extraction_field_results`.
+// Each was written before its migration exists, so every case fails with an explicit
+// 42P01 until that migration lands.
 //
 // Rows are seeded per test, never in harness.seed(): a missing table must fail only these
 // cases, not the whole package. Each rejected statement gets its own db.WithinTenantTx,
@@ -1232,5 +1233,1268 @@ func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 	if fnRows != 0 {
 		t.Errorf("%s survives the Down (%d row(s)), want 0 — DROP TABLE does not take the trigger "+
 			"function with it, so the Down must drop it explicitly", fn, fnRows)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extraction_field_results (EXTR-01-02). Same RED-first shape as the block above:
+// every case here fails 42P01 until Migration B lands.
+// ---------------------------------------------------------------------------
+
+// The names every rejection case asserts. Postgres aborts on the FIRST violated CHECK in
+// constraint-OID order, so SQLSTATE 23514 alone does not say which constraint refused —
+// and a case asserting only the code would silently stop testing its subject if the DDL
+// order changed.
+const (
+	efrRegionComplete  = "extraction_field_results_region_complete"
+	efrBboxNormalised  = "extraction_field_results_bbox_normalised"
+	efrPageCheck       = "extraction_field_results_page_check"
+	efrFieldNameCheck  = "extraction_field_results_field_name_check"
+	efrValueCheck      = "extraction_field_results_value_check"
+	efrReasonCodeCheck = "extraction_field_results_reason_code_check"
+	efrTenantJobFK     = "extraction_field_results_tenant_job_fk"
+	efrTenantIDIDUq    = "extraction_field_results_tenant_id_id_uq"
+	efrTenantJobIdx    = "extraction_field_results_tenant_job_idx"
+)
+
+// The field_name/value pair supplied whenever neither column is the subject.
+const (
+	efrField = "total_amount"
+	efrValue = "100.00"
+)
+
+// The canonical INSERT. Every column the constraint cases vary is bound, so one statement
+// shape serves them all and no case can differ by accident.
+const efrInsert = `INSERT INTO extraction_field_results
+	(id, tenant_id, extraction_job_id, field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+
+// efrPtr returns a pointer to v. A nil pointer is how these cases write SQL NULL.
+func efrPtr[T any](v T) *T { return &v }
+
+// efrRegion is the five all-or-nothing region columns. The zero value is all-NULL, which
+// _region_complete accepts.
+type efrRegion struct {
+	page           *int
+	x0, y0, x1, y1 *float64
+}
+
+// efrBox is the canonical complete region: page 1 and a box well inside [0,1].
+func efrBox() efrRegion {
+	return efrRegion{page: efrPtr(1), x0: efrPtr(0.1), y0: efrPtr(0.2), x1: efrPtr(0.3), y1: efrPtr(0.4)}
+}
+
+// failIfUndefinedFieldResults turns the pre-migration failure mode into a self-explaining
+// message instead of a raw driver error. Returns true when it fired.
+func failIfUndefinedFieldResults(t *testing.T, what string, err error) bool {
+	t.Helper()
+	if pgCode(err) == "42P01" {
+		t.Fatalf("%s: undefined_table (42P01) — the extraction_field_results migration is not applied yet: %v", what, err)
+		return true
+	}
+	return false
+}
+
+// seedFieldResult inserts one row as the superuser (BYPASSRLS, so seeding needs neither
+// tenant context nor an INSERT grant) and returns its id plus a cleanup func. Seed the
+// document and then the extraction job first: this row's composite FK needs both.
+func seedFieldResult(t *testing.T, tenantID, jobID, fieldName string) (id string, cleanup func()) {
+	t.Helper()
+	ctx := context.Background()
+	id = uuid.NewString()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, tenantID, jobID, fieldName, efrValue,
+	); err != nil {
+		if pgCode(err) == "42P01" {
+			t.Fatalf("seed extraction_field_results: undefined_table (42P01) — extraction_field_results "+
+				"migration not applied yet: %v", err)
+		}
+		t.Fatalf("seed extraction_field_results: %v", err)
+	}
+	return id, func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, id)
+	}
+}
+
+// insertFieldResult issues the canonical INSERT on tx and returns the driver error
+// unchanged, so each caller asserts its own SQLSTATE and constraint name.
+func insertFieldResult(ctx context.Context, tx pgx.Tx, id, tenantID, jobID, fieldName string,
+	value *string, r efrRegion, reasonCode *string) error {
+	_, err := tx.Exec(ctx, efrInsert,
+		id, tenantID, jobID, fieldName, value, r.page, r.x0, r.y0, r.x1, r.y1, reasonCode)
+	return err
+}
+
+// EFR-01: the catalog half of the isolation posture. ENABLE alone would let the owner
+// bypass the policy, and a TO clause on tenant_isolation would leave unnamed roles unbound.
+func TestRLS_ExtractionFieldResultsForceRLSAndPolicyDeclared(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var enabled, forced bool
+	err := h.super.QueryRow(ctx,
+		`SELECT relrowsecurity, relforcerowsecurity
+		   FROM pg_class WHERE oid = 'public.extraction_field_results'::regclass`,
+	).Scan(&enabled, &forced)
+	if failIfUndefinedFieldResults(t, "read pg_class for extraction_field_results", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("read pg_class for extraction_field_results: %v", err)
+	}
+	if !enabled || !forced {
+		t.Errorf("extraction_field_results relrowsecurity/relforcerowsecurity = %v/%v, want true/true "+
+			"(ENABLE alone would let the migrator/owner bypass the policy)", enabled, forced)
+	}
+
+	type policy struct {
+		roles []string
+		cmd   string
+		qual  string
+	}
+	got := map[string]policy{}
+	rows, err := h.super.Query(ctx,
+		`SELECT policyname, roles::text[], cmd, coalesce(qual, '')
+		   FROM pg_policies WHERE schemaname = 'public' AND tablename = 'extraction_field_results'`)
+	if err != nil {
+		t.Fatalf("query pg_policies for extraction_field_results: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var p policy
+		if e := rows.Scan(&name, &p.roles, &p.cmd, &p.qual); e != nil {
+			t.Fatalf("scan pg_policies row: %v", e)
+		}
+		got[name] = p
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate pg_policies rows: %v", e)
+	}
+
+	if len(got) != 1 {
+		t.Errorf("policies on extraction_field_results = %d (%v), want exactly 1 (tenant_isolation) — "+
+			"this table has no cross-tenant enumeration reader", len(got), got)
+	}
+
+	iso, ok := got["tenant_isolation"]
+	if !ok {
+		t.Fatal("no tenant_isolation policy on extraction_field_results — the migration is not applied yet")
+	}
+	if strings.Join(iso.roles, ",") != "public" {
+		t.Errorf("tenant_isolation roles = %v, want [public] (no TO clause — it must bind every role)", iso.roles)
+	}
+	if iso.cmd != "ALL" {
+		t.Errorf("tenant_isolation cmd = %q, want %q (its USING must double as the INSERT WITH CHECK)", iso.cmd, "ALL")
+	}
+	if !strings.Contains(iso.qual, "app.current_tenant") {
+		t.Errorf("tenant_isolation qual = %q, want a comparison against the app.current_tenant GUC", iso.qual)
+	}
+}
+
+// EFR-02: cross-tenant SELECT is refused. The unfiltered count is the load-bearing half — a
+// tenant_id-filtered query would come out right even if RLS did nothing.
+func TestRLS_ExtractionFieldResultsCrossTenantSelectRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFR-02/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFR-02/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	resultA, cleanupResultA := seedFieldResult(t, h.tenantA, jobA, efrField)
+	defer cleanupResultA()
+	resultB1, cleanupResultB1 := seedFieldResult(t, h.tenantB, jobB, efrField)
+	defer cleanupResultB1()
+	resultB2, cleanupResultB2 := seedFieldResult(t, h.tenantB, jobB, "vendor_name")
+	defer cleanupResultB2()
+
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		// By id, not by tenant_id: a tenant_id predicate would prove nothing about RLS.
+		if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, resultA); n != 1 {
+			t.Errorf("A's own field result visible to A = %d, want 1", n)
+		}
+		for _, id := range []string{resultB1, resultB2} {
+			if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, id); n != 0 {
+				t.Errorf("B's field result %s visible to A = %d, want 0", id, n)
+			}
+		}
+		// RLS is the only thing narrowing this one: B seeded two more rows.
+		if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_results`); n != 1 {
+			t.Errorf("unfiltered count under A's RLS = %d, want 1 (A's own row only; B seeded 2 more)", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}
+
+// EFR-03: an INSERT naming tenant B while scoped to A is refused with 42501 and lands no
+// row. The positive half stops this passing against a policy written USING (false).
+func TestRLS_ExtractionFieldResultsCrossTenantInsertRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFR-03/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFR-03/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	crossID := uuid.NewString()
+	ownID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id IN ($1, $2)`, crossID, ownID)
+	}()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, crossID, h.tenantB, jobB, efrField,
+			efrPtr(efrValue), efrRegion{}, nil)
+	})
+	if failIfUndefinedFieldResults(t, "cross-tenant INSERT", err) {
+		return
+	}
+	assertRLSViolation(t, err)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, crossID); n != 0 {
+		t.Errorf("rows after the refused cross-tenant INSERT = %d, want 0", n)
+	}
+
+	// Positive half, own tx: the same statement shape succeeds for A's own tenant.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, ownID, h.tenantA, jobA, efrField,
+			efrPtr(efrValue), efrRegion{}, nil)
+	}); err != nil {
+		t.Fatalf("own-tenant INSERT of the same shape: want success, got: %v", err)
+	}
+}
+
+// EFR-04: with app.current_tenant unset the isolation predicate is NULL, so the connection
+// reads nothing and writes nothing. The positive re-read stops "zero rows" being an
+// artefact of an empty table.
+func TestRLS_ExtractionFieldResultsMissingContextFailsClosed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-04/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+	resultID, cleanupResult := seedFieldResult(t, h.tenantA, jobA, efrField)
+	defer cleanupResult()
+
+	strayID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, strayID)
+	}()
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_results`); n != 0 {
+		t.Errorf("extraction_field_results visible with no tenant set = %d, want 0", n)
+	}
+	err = insertFieldResult(ctx, tx, strayID, h.tenantA, jobA, efrField, efrPtr(efrValue), efrRegion{}, nil)
+	if err == nil {
+		t.Fatal("INSERT with no tenant context succeeded, want RLS WITH CHECK violation (SQLSTATE 42501)")
+	}
+	assertRLSViolation(t, err)
+
+	// The row genuinely exists and is genuinely readable — with the GUC set.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, resultID); n != 1 {
+			t.Errorf("seeded row visible WITH tenant context = %d, want 1 (the zero above must come "+
+				"from the missing GUC, not from an empty table)", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithinTenantTx (positive half): %v", err)
+	}
+}
+
+// EFR-05: the table owner (invoice_migrator) is bound by the policy too. This is the case
+// only FORCE ROW LEVEL SECURITY makes pass; ENABLE alone lets the owner straight through.
+func TestRLS_ExtractionFieldResultsOwnerInsertRefusedUnderForce(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFR-05/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFR-05/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	crossID := uuid.NewString()
+	ownID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id IN ($1, $2)`, crossID, ownID)
+	}()
+
+	err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, crossID, h.tenantB, jobB, efrField,
+			efrPtr(efrValue), efrRegion{}, nil)
+	})
+	if failIfUndefinedFieldResults(t, "owner cross-tenant INSERT", err) {
+		return
+	}
+	assertRLSViolation(t, err)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, crossID); n != 0 {
+		t.Errorf("rows after the owner's refused cross-tenant INSERT = %d, want 0", n)
+	}
+
+	// Positive half, own tx: the owner's own-tenant INSERT succeeds, so the 42501 above is
+	// the policy binding the owner and not a missing privilege.
+	if err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, ownID, h.tenantA, jobA, efrField,
+			efrPtr(efrValue), efrRegion{}, nil)
+	}); err != nil {
+		t.Fatalf("owner own-tenant INSERT: want success, got: %v", err)
+	}
+}
+
+// EFR-06: the composite FK is the whole point. Referential checks run with RLS bypassed, so
+// a bare extraction_job_id FK would accept another tenant's job. Attempted as the superuser
+// on purpose, so no policy is in the way and the FK is what refuses.
+func TestRLS_ExtractionFieldResultsCrossTenantJobRefRejected(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFR-06/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFR-06/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	danglingID := uuid.NewString()
+	okID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id IN ($1, $2)`, danglingID, okID)
+	}()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		danglingID, h.tenantA, jobB, efrField, efrValue)
+	if failIfUndefinedFieldResults(t, "cross-tenant job reference", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("INSERT of a tenant-A field result pointing at tenant B's job succeeded, want " +
+			"foreign_key_violation (SQLSTATE 23503) — a single-column extraction_job_id FK would let " +
+			"this through, which is the bug the composite FK exists to close")
+	}
+	if code := pgCode(err); code != "23503" {
+		t.Fatalf("cross-tenant job reference: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != efrTenantJobFK {
+		t.Errorf("cross-tenant job reference: constraint = %q, want %q", name, efrTenantJobFK)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, danglingID); n != 0 {
+		t.Errorf("rows after the refused cross-tenant job reference = %d, want 0", n)
+	}
+
+	// Positive half: A's own job is accepted by the very same FK.
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		okID, h.tenantA, jobA, efrField, efrValue); err != nil {
+		t.Fatalf("same-tenant job reference: want success, got: %v", err)
+	}
+}
+
+// EFR-07: the reason vocabulary. All four codes AND NULL insert and read back, so a CHECK
+// that silently coerced would not pass. "low_confidence" is the pointed negative: it is the
+// obvious fifth code an extractor would invent, and the review screen has no string for it.
+func TestRLS_ExtractionFieldResultsReasonCodeCheck(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-07/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = ANY($1)`, probes)
+	}()
+
+	for _, code := range []*string{
+		efrPtr("unreadable"), efrPtr("ambiguous"), efrPtr("inconsistent"), efrPtr("missing"), nil,
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		var got *string
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx,
+				`INSERT INTO extraction_field_results
+				   (id, tenant_id, extraction_job_id, field_name, value, reason_code)
+				 VALUES ($1, $2, $3, $4, $5, $6) RETURNING reason_code`,
+				id, h.tenantA, jobA, efrField, efrValue, code).Scan(&got)
+		})
+		if failIfUndefinedFieldResults(t, "INSERT reason_code", err) {
+			return
+		}
+		if err != nil {
+			t.Errorf("INSERT with reason_code %v: want success (NULL and the four codes are legal), got: %v", code, err)
+			continue
+		}
+		switch {
+		case code == nil && got != nil:
+			t.Errorf("reason_code round-trip = %q, want NULL (there is no none sentinel)", *got)
+		case code != nil && (got == nil || *got != *code):
+			t.Errorf("reason_code round-trip = %v, want %q", got, *code)
+		}
+	}
+
+	// The near miss, its own tx: a fifth code costs a migration by design.
+	bogusID := uuid.NewString()
+	probes = append(probes, bogusID)
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, bogusID, h.tenantA, jobA, efrField,
+			efrPtr(efrValue), efrRegion{}, efrPtr("low_confidence"))
+	})
+	if err == nil {
+		t.Fatal("INSERT with reason_code \"low_confidence\" succeeded, want CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("INSERT with reason_code \"low_confidence\": SQLSTATE = %q, want 23514: %v", code, err)
+	}
+	if name := pgConstraint(err); name != efrReasonCodeCheck {
+		t.Errorf("INSERT with reason_code \"low_confidence\": constraint = %q, want %q", name, efrReasonCodeCheck)
+	}
+}
+
+// EFR-08: the reason CHECK admits EXACTLY the four values, read off the catalog. EFR-07
+// probes one near miss by hand, so it cannot see a FIFTH code added alongside the four.
+func TestRLS_ExtractionFieldResultsReasonCodeIsExactlyFourValues(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	rows, err := h.super.Query(ctx,
+		`SELECT DISTINCT c.conname, pg_get_constraintdef(c.oid)
+		   FROM pg_constraint c
+		   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+		  WHERE c.conrelid = 'public.extraction_field_results'::regclass
+		    AND c.contype = 'c' AND a.attname = 'reason_code'`)
+	if failIfUndefinedFieldResults(t, "query the reason_code CHECK definition", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query the reason_code CHECK definition: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var name, def string
+		if e := rows.Scan(&name, &def); e != nil {
+			t.Fatalf("scan constraint definition: %v", e)
+		}
+		got[name] = def
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate constraint definitions: %v", e)
+	}
+	if len(got) != 1 {
+		t.Fatalf("CHECK constraints over extraction_field_results.reason_code = %d (%v), want exactly 1 — "+
+			"a second one would make the comparison below only half the story", len(got), got)
+	}
+
+	def, ok := got[efrReasonCodeCheck]
+	if !ok {
+		t.Fatalf("the reason_code CHECK is named %v, want %q — the auto-name is deterministic and the "+
+			"assertion below is keyed on it", got, efrReasonCodeCheck)
+	}
+
+	// The rendered text, exactly. Hand-sampling values cannot see a fifth code added
+	// alongside the four; this can.
+	const want = `CHECK (((reason_code IS NULL) OR (reason_code = ANY ` +
+		`(ARRAY['unreadable'::text, 'ambiguous'::text, 'inconsistent'::text, 'missing'::text]))))`
+	if def != want {
+		t.Errorf("reason_code CHECK definition:\n got: %s\nwant: %s", def, want)
+	}
+}
+
+// EFR-09: a region is all five columns or none of them — a half-written box points nowhere.
+// All ten half-written combinations are enumerated: sampling two of them would leave a
+// dropped IS NOT NULL conjunct alive.
+func TestRLS_ExtractionFieldResultsRegionAllOrNothing(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-09/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(what string, r efrRegion) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertFieldResult(ctx, tx, id, h.tenantA, jobA, efrField, efrPtr(efrValue), r, nil)
+		})
+	}
+
+	// Positive halves first: both complete forms are accepted, so the ten refusals below
+	// are about half-writing and not about the columns being unusable.
+	for _, c := range []struct {
+		what string
+		r    efrRegion
+	}{
+		{"all five region columns set", efrBox()},
+		{"all five region columns NULL", efrRegion{}},
+	} {
+		err := insert(c.what, c.r)
+		if failIfUndefinedFieldResults(t, "INSERT with "+c.what, err) {
+			return
+		}
+		if err != nil {
+			t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+		}
+	}
+
+	// The five columns, each addressable, so every conjunct of the CHECK is load-bearing.
+	cols := []struct {
+		name  string
+		set   func(*efrRegion)
+		clear func(*efrRegion)
+	}{
+		{"page", func(r *efrRegion) { r.page = efrPtr(1) }, func(r *efrRegion) { r.page = nil }},
+		{"bbox_x0", func(r *efrRegion) { r.x0 = efrPtr(0.1) }, func(r *efrRegion) { r.x0 = nil }},
+		{"bbox_y0", func(r *efrRegion) { r.y0 = efrPtr(0.2) }, func(r *efrRegion) { r.y0 = nil }},
+		{"bbox_x1", func(r *efrRegion) { r.x1 = efrPtr(0.3) }, func(r *efrRegion) { r.x1 = nil }},
+		{"bbox_y1", func(r *efrRegion) { r.y1 = efrPtr(0.4) }, func(r *efrRegion) { r.y1 = nil }},
+	}
+
+	type halfWritten struct {
+		what string
+		r    efrRegion
+	}
+	var cases []halfWritten
+	for i := range cols {
+		r := efrBox()
+		cols[i].clear(&r)
+		cases = append(cases, halfWritten{cols[i].name + " NULL, the other four set", r})
+	}
+	for i := range cols {
+		var r efrRegion
+		cols[i].set(&r)
+		cases = append(cases, halfWritten{cols[i].name + " set, the other four NULL", r})
+	}
+	if len(cases) != 10 {
+		t.Fatalf("built %d half-written combinations, want 10 — an empty or short list would satisfy "+
+			"every assertion in the loop below vacuously", len(cases))
+	}
+
+	for _, c := range cases {
+		err := insert(c.what, c.r)
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514) on %s", c.what, efrRegionComplete)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514 (check_violation): %v", c.what, code, err)
+			continue
+		}
+		if name := pgConstraint(err); name != efrRegionComplete {
+			t.Errorf("INSERT with %s: constraint = %q, want %q — another CHECK fired, so this case is "+
+				"not testing its subject", c.what, name, efrRegionComplete)
+		}
+	}
+}
+
+// EFR-10: the box is normalised to [0,1] with x0 <= x1 and y0 <= y1. One rejection per
+// conjunct, each with page set so _region_complete cannot fire instead.
+func TestRLS_ExtractionFieldResultsBboxNormalised(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-10/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(r efrRegion) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertFieldResult(ctx, tx, id, h.tenantA, jobA, efrField, efrPtr(efrValue), r, nil)
+		})
+	}
+	box := func(x0, y0, x1, y1 float64) efrRegion {
+		return efrRegion{page: efrPtr(1), x0: efrPtr(x0), y0: efrPtr(y0), x1: efrPtr(x1), y1: efrPtr(y1)}
+	}
+
+	for _, c := range []struct {
+		what string
+		r    efrRegion
+	}{
+		{"the full page (0,0,1,1)", box(0, 0, 1, 1)},
+		{"an interior box (0.1,0.2,0.3,0.4)", box(0.1, 0.2, 0.3, 0.4)},
+	} {
+		err := insert(c.r)
+		if failIfUndefinedFieldResults(t, "INSERT "+c.what, err) {
+			return
+		}
+		if err != nil {
+			t.Errorf("INSERT %s: want success (the bounds are inclusive), got: %v", c.what, err)
+		}
+	}
+
+	rejects := []struct {
+		what string
+		r    efrRegion
+	}{
+		{"bbox_x0 below 0", box(-0.0001, 0.2, 0.3, 0.4)},
+		{"bbox_x1 above 1", box(0.1, 0.2, 1.0001, 0.4)},
+		{"bbox_x0 greater than bbox_x1", box(0.9, 0.2, 0.1, 0.4)},
+		{"bbox_y0 below 0", box(0.1, -0.0001, 0.3, 0.4)},
+		{"bbox_y1 above 1", box(0.1, 0.2, 0.3, 1.0001)},
+		{"bbox_y0 greater than bbox_y1", box(0.1, 0.9, 0.3, 0.2)},
+	}
+	if len(rejects) != 6 {
+		t.Fatalf("built %d rejection cases, want 6 — one per conjunct of %s", len(rejects), efrBboxNormalised)
+	}
+	for _, c := range rejects {
+		err := insert(c.r)
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514) on %s", c.what, efrBboxNormalised)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514 (check_violation): %v", c.what, code, err)
+			continue
+		}
+		if name := pgConstraint(err); name != efrBboxNormalised {
+			t.Errorf("INSERT with %s: constraint = %q, want %q — another CHECK fired, so this case is "+
+				"not testing its subject", c.what, name, efrBboxNormalised)
+		}
+	}
+}
+
+// EFR-11: the literal unconverted-PDF-point case. A US-Letter box in points fails at write
+// time rather than rendering off-screen two stories later.
+func TestRLS_ExtractionFieldResultsAbsoluteCoordinateRejected(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-11/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	absID := uuid.NewString()
+	okID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id IN ($1, $2)`, absID, okID)
+	}()
+
+	absolute := efrRegion{page: efrPtr(1), x0: efrPtr(72.0), y0: efrPtr(720.0), x1: efrPtr(540.0), y1: efrPtr(750.0)}
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, absID, h.tenantA, jobA, efrField, efrPtr(efrValue), absolute, nil)
+	})
+	if failIfUndefinedFieldResults(t, "INSERT an absolute-point box", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("INSERT of the absolute-point box (72,720,540,750) succeeded, want CHECK violation " +
+			"(SQLSTATE 23514) — normalisation is a contract, not a convention")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("absolute-point box: SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != efrBboxNormalised {
+		t.Errorf("absolute-point box: constraint = %q, want %q", name, efrBboxNormalised)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, absID); n != 0 {
+		t.Errorf("rows after the refused absolute-point INSERT = %d, want 0", n)
+	}
+
+	// Positive half: the same box divided by a 612x792 page is accepted.
+	normalised := efrRegion{
+		page: efrPtr(1),
+		x0:   efrPtr(72.0 / 612.0), y0: efrPtr(720.0 / 792.0),
+		x1: efrPtr(540.0 / 612.0), y1: efrPtr(750.0 / 792.0),
+	}
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, okID, h.tenantA, jobA, efrField, efrPtr(efrValue), normalised, nil)
+	}); err != nil {
+		t.Fatalf("the same box normalised against a 612x792 page: want success, got: %v", err)
+	}
+}
+
+// EFR-12: the bbox inequalities are non-strict, so a zero-area box is LEGAL. Pins the
+// decision against a later story tightening <= to <: a collapsed box is undrawable, not
+// wrong, and rejecting it would dead-letter a whole extraction over one field.
+func TestRLS_ExtractionFieldResultsZeroAreaBoxAccepted(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-12/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	id := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, id)
+	}()
+
+	var page int
+	var x0, y0, x1, y1 float64
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO extraction_field_results
+			   (id, tenant_id, extraction_job_id, field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1)
+			 VALUES ($1, $2, $3, $4, $5, 1, 0.5, 0.5, 0.5, 0.5)
+			 RETURNING page, bbox_x0, bbox_y0, bbox_x1, bbox_y1`,
+			id, h.tenantA, jobA, efrField, efrValue).Scan(&page, &x0, &y0, &x1, &y1)
+	})
+	if failIfUndefinedFieldResults(t, "INSERT a zero-area box", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("INSERT of the zero-area box (0.5,0.5,0.5,0.5): want success, got: %v — the CHECK is "+
+			"non-strict on purpose (x0 <= x1, y0 <= y1)", err)
+	}
+	if page != 1 || x0 != 0.5 || y0 != 0.5 || x1 != 0.5 || y1 != 0.5 {
+		t.Errorf("zero-area box round-trip = page %d (%v,%v,%v,%v), want page 1 (0.5,0.5,0.5,0.5)",
+			page, x0, y0, x1, y1)
+	}
+}
+
+// EFR-13: page is 1-based. All four bbox columns are set so _region_complete is satisfied
+// and only _page_check can refuse; the constraint name is asserted because Postgres aborts
+// on the first violated CHECK in creation order, not on the one this case aims at.
+func TestRLS_ExtractionFieldResultsPageIsOneBased(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-13/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	zeroID := uuid.NewString()
+	oneID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_results WHERE id IN ($1, $2)`, zeroID, oneID)
+	}()
+
+	zero := efrBox()
+	zero.page = efrPtr(0)
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, zeroID, h.tenantA, jobA, efrField, efrPtr(efrValue), zero, nil)
+	})
+	if failIfUndefinedFieldResults(t, "INSERT page = 0", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("INSERT with page = 0 succeeded, want CHECK violation (SQLSTATE 23514) — pages are 1-based")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("INSERT page = 0: SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != efrPageCheck {
+		t.Errorf("INSERT page = 0: constraint = %q, want %q — %q fired instead, so this case is not "+
+			"testing its subject", name, efrPageCheck, name)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, zeroID); n != 0 {
+		t.Errorf("rows after the refused page = 0 INSERT = %d, want 0", n)
+	}
+
+	// Positive half: the same box on page 1 is accepted, so the refusal is about the page
+	// number and not about the box.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, oneID, h.tenantA, jobA, efrField, efrPtr(efrValue), efrBox(), nil)
+	}); err != nil {
+		t.Fatalf("INSERT with page = 1 and the same box: want success, got: %v", err)
+	}
+}
+
+// EFR-14: field_name is bounded at both ends. NOT NULL alone would let "" through, and an
+// unbounded name is a review-screen column header nothing can render.
+func TestRLS_ExtractionFieldResultsFieldNameBounds(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-14/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(fieldName string) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertFieldResult(ctx, tx, id, h.tenantA, jobA, fieldName, efrPtr(efrValue), efrRegion{}, nil)
+		})
+	}
+
+	// Each rejection gets its own tx: a failed statement poisons the surrounding one.
+	for _, c := range []struct {
+		what      string
+		fieldName string
+	}{
+		{"a blank field_name", ""},
+		{"a 129-character field_name", strings.Repeat("f", 129)},
+	} {
+		err := insert(c.fieldName)
+		if failIfUndefinedFieldResults(t, "INSERT "+c.what, err) {
+			return
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514)", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514 (check_violation): %v", c.what, code, err)
+			continue
+		}
+		if name := pgConstraint(err); name != efrFieldNameCheck {
+			t.Errorf("INSERT with %s: constraint = %q, want %q", c.what, name, efrFieldNameCheck)
+		}
+	}
+
+	// Positive half: the boundary length and an ordinary name are both accepted, so the
+	// two refusals bound the column rather than pinning it.
+	for _, c := range []struct {
+		what      string
+		fieldName string
+	}{
+		{"an ordinary field_name", efrField},
+		{"a 128-character field_name", strings.Repeat("f", 128)},
+	} {
+		if err := insert(c.fieldName); err != nil {
+			t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+		}
+	}
+}
+
+// EFR-15: value is nullable but never blank. NULL means the extractor found nothing; "" is
+// the same claim in a second encoding, which the review screen would render as a field that
+// was read and came back empty.
+func TestRLS_ExtractionFieldResultsValueNotBlank(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-15/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(value *string) (string, error) {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return id, db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertFieldResult(ctx, tx, id, h.tenantA, jobA, efrField, value, efrRegion{}, nil)
+		})
+	}
+
+	blankID, err := insert(efrPtr(""))
+	if failIfUndefinedFieldResults(t, "INSERT a blank value", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("INSERT with a blank value succeeded, want CHECK violation (SQLSTATE 23514) — NULL is the " +
+			"one encoding of nothing")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("INSERT a blank value: SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != efrValueCheck {
+		t.Errorf("INSERT a blank value: constraint = %q, want %q", name, efrValueCheck)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, blankID); n != 0 {
+		t.Errorf("rows after the refused blank-value INSERT = %d, want 0", n)
+	}
+
+	// Positive half: NULL and a non-empty string both round-trip, so the 23514 is about
+	// blankness and not about the column being unwritable.
+	for _, c := range []struct {
+		what  string
+		value *string
+	}{
+		{"a NULL value", nil},
+		{"a non-empty value", efrPtr(efrValue)},
+	} {
+		id, err := insert(c.value)
+		if err != nil {
+			t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			continue
+		}
+		var got *string
+		if e := h.super.QueryRow(ctx, `SELECT value FROM extraction_field_results WHERE id = $1`, id).
+			Scan(&got); e != nil {
+			t.Errorf("read back %s: %v", c.what, e)
+			continue
+		}
+		switch {
+		case c.value == nil && got != nil:
+			t.Errorf("value round-trip for %s = %q, want NULL", c.what, *got)
+		case c.value != nil && (got == nil || *got != *c.value):
+			t.Errorf("value round-trip for %s = %v, want %q", c.what, got, *c.value)
+		}
+	}
+}
+
+// EFR-16: the runtime consequence of the grant matrix. EFR-17 reads has_table_privilege;
+// this issues the statements the app would issue, so a future GRANT UPDATE or GRANT DELETE
+// shows up as a behaviour change and not only as a catalog diff.
+func TestRLS_ExtractionFieldResultsAppUpdateAndDeleteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-16/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+	resultID, cleanupResult := seedFieldResult(t, h.tenantA, jobA, efrField)
+	defer cleanupResult()
+
+	insertID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, insertID)
+	}()
+
+	// Each refused statement gets its own tx.
+	for _, c := range []struct {
+		what string
+		sql  string
+	}{
+		{"UPDATE", `UPDATE extraction_field_results SET value = 'tampered' WHERE id = $1`},
+		{"DELETE", `DELETE FROM extraction_field_results WHERE id = $1`},
+	} {
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, c.sql, resultID)
+			return e
+		})
+		if failIfUndefinedFieldResults(t, "app "+c.what, err) {
+			return
+		}
+		if err == nil {
+			t.Errorf("invoice_app ran %s on extraction_field_results, want permission denied (SQLSTATE 42501) — "+
+				"these rows are append-only by grant and a correction is a new row", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "42501" {
+			t.Errorf("app %s: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", c.what, code, err)
+		}
+	}
+
+	var value *string
+	if err := h.super.QueryRow(ctx,
+		`SELECT value FROM extraction_field_results WHERE id = $1`, resultID).Scan(&value); err != nil {
+		t.Fatalf("read back the row after the refused UPDATE and DELETE: %v", err)
+	}
+	if value == nil || *value != efrValue {
+		t.Errorf("value after the refused UPDATE = %v, want unchanged %q", value, efrValue)
+	}
+
+	// Positive half, own tx: the same role CAN insert, so the two 42501s are about UPDATE
+	// and DELETE and not about the table being unreachable.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertFieldResult(ctx, tx, insertID, h.tenantA, jobA, "vendor_name",
+			efrPtr("ACME LTD"), efrRegion{}, nil)
+	}); err != nil {
+		t.Fatalf("INSERT by the same role: want success, got: %v", err)
+	}
+}
+
+// EFR-17: least privilege, asked as the superuser on purpose —
+// information_schema.role_table_grants shows only the current role's own grants, so the
+// "reader holds nothing" half cannot be proven from the app pool. The two `true` rows make
+// this notice a MISSING grant, not only a forbidden present one.
+func TestRLS_ExtractionFieldResultsGrantMatrix(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		role string
+		priv string
+		want bool
+	}{
+		{"invoice_app", "SELECT", true},
+		{"invoice_app", "INSERT", true},
+		{"invoice_app", "UPDATE", false},
+		{"invoice_app", "DELETE", false},
+		{"invoice_app", "TRUNCATE", false},
+		{"invoice_app", "REFERENCES", false},
+		{"invoice_tenant_reader", "SELECT", false},
+		{"invoice_tenant_reader", "INSERT", false},
+		{"invoice_tenant_reader", "UPDATE", false},
+		{"invoice_tenant_reader", "DELETE", false},
+		{"invoice_tenant_reader", "TRUNCATE", false},
+		{"invoice_tenant_reader", "REFERENCES", false},
+	} {
+		var got bool
+		err := h.super.QueryRow(ctx,
+			`SELECT has_table_privilege($1, 'public.extraction_field_results', $2)`, c.role, c.priv,
+		).Scan(&got)
+		if failIfUndefinedFieldResults(t, "has_table_privilege("+c.role+", "+c.priv+")", err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("has_table_privilege(%q, extraction_field_results, %q): %v", c.role, c.priv, err)
+		}
+		if got != c.want {
+			t.Errorf("has_table_privilege(%q, extraction_field_results, %q) = %v, want %v — the grant is "+
+				"exactly SELECT, INSERT to invoice_app and nothing to invoice_tenant_reader",
+				c.role, c.priv, got, c.want)
+		}
+	}
+}
+
+// EFR-18: the composite-FK target. A bare CREATE UNIQUE INDEX leaves no pg_constraint row
+// and cannot be referenced, so contype and the column order are both asserted. PG18 stores
+// NOT NULLs in pg_constraint as contype 'n', which makes the filter mandatory.
+func TestRLS_ExtractionFieldResultsTenantIdIdUniqueConstraintExists(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	n, err := scanCount(ctx, h.super,
+		`SELECT count(*) FROM pg_constraint
+		  WHERE conrelid = 'public.extraction_field_results'::regclass
+		    AND contype = 'u' AND conname = 'extraction_field_results_tenant_id_id_uq'`)
+	if failIfUndefinedFieldResults(t, "query pg_constraint for "+efrTenantIDIDUq, err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query pg_constraint for %s: %v", efrTenantIDIDUq, err)
+	}
+	if n != 1 {
+		t.Fatalf("UNIQUE constraints on extraction_field_results named %s = %d, want 1 — not found; the "+
+			"migration is not applied yet, or it declared a bare CREATE UNIQUE INDEX (no pg_constraint "+
+			"row, unusable as a composite-FK target)", efrTenantIDIDUq, n)
+	}
+
+	rows, err := h.super.Query(ctx,
+		`SELECT a.attname
+		   FROM pg_constraint c
+		   CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+		   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+		  WHERE c.conrelid = 'public.extraction_field_results'::regclass
+		    AND c.contype = 'u' AND c.conname = 'extraction_field_results_tenant_id_id_uq'
+		  ORDER BY k.ord`)
+	if err != nil {
+		t.Fatalf("query the constraint's columns: %v", err)
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var col string
+		if e := rows.Scan(&col); e != nil {
+			t.Fatalf("scan constraint column: %v", e)
+		}
+		cols = append(cols, col)
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate constraint columns: %v", e)
+	}
+
+	want := []string{"tenant_id", "id"}
+	if len(cols) != len(want) {
+		t.Fatalf("%s columns = %v, want %v", efrTenantIDIDUq, cols, want)
+	}
+	for i := range want {
+		if cols[i] != want[i] {
+			t.Errorf("%s column %d = %q, want %q (order is load-bearing: a composite FK must name "+
+				"(tenant_id, id) in this order)", efrTenantIDIDUq, i+1, cols[i], want[i])
+		}
+	}
+}
+
+// EFR-19: every non-primary index leads with tenant_id, so no lookup path can plan across
+// tenants. The primary key is on (id) and is excluded on purpose — including it would fail
+// against a correct migration. The non-empty check comes first: an empty list satisfies
+// every assertion inside the loop. Both expected indexes are named, so a later added index
+// does not go red but a dropped one does.
+func TestRLS_ExtractionFieldResultsEveryIndexLeadsWithTenantId(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	rows, err := h.super.Query(ctx,
+		`SELECT i.relname, a.attname
+		   FROM pg_index x
+		   JOIN pg_class i ON i.oid = x.indexrelid
+		   JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = x.indkey[0]
+		  WHERE x.indrelid = 'public.extraction_field_results'::regclass
+		    AND NOT x.indisprimary
+		  ORDER BY i.relname`)
+	if failIfUndefinedFieldResults(t, "query pg_index for extraction_field_results", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query pg_index for extraction_field_results: %v", err)
+	}
+	defer rows.Close()
+
+	firstCol := map[string]string{}
+	for rows.Next() {
+		var index, col string
+		if e := rows.Scan(&index, &col); e != nil {
+			t.Fatalf("scan pg_index row: %v", e)
+		}
+		firstCol[index] = col
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate pg_index rows: %v", e)
+	}
+
+	if len(firstCol) == 0 {
+		t.Fatalf("non-primary indexes on extraction_field_results = 0, want 2 — the migration is not "+
+			"applied yet, or it shipped neither %s nor %s: %v", efrTenantIDIDUq, efrTenantJobIdx, firstCol)
+	}
+	for _, want := range []string{efrTenantIDIDUq, efrTenantJobIdx} {
+		if _, ok := firstCol[want]; !ok {
+			t.Errorf("no index named %q on extraction_field_results; got %v", want, firstCol)
+		}
+	}
+	for index, col := range firstCol {
+		if col != "tenant_id" {
+			t.Errorf("index %q leads with %q, want tenant_id — a lookup path that does not lead with "+
+				"tenant_id plans across tenants", index, col)
+		}
+	}
+}
+
+// EFR-20: deleting a job takes its field results with it. Run as the superuser: the same
+// DELETE as the owner with the GUC unset removes 0 rows and the children survive, because
+// FORCE RLS hides the PARENT from the owner — correct behaviour, not a cascade failure.
+// The sibling job's rows are the control.
+func TestRLS_ExtractionFieldResultsJobDeleteCascades(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFR-20/a.pdf")
+	defer cleanupDoc()
+	doomedJob, cleanupDoomed := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupDoomed() // no-op once the DELETE below removes it
+	survivingJob, cleanupSurviving := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupSurviving()
+
+	doomedChild, cleanupDoomedChild := seedFieldResult(t, h.tenantA, doomedJob, efrField)
+	defer cleanupDoomedChild()
+	survivingChild, cleanupSurvivingChild := seedFieldResult(t, h.tenantA, survivingJob, efrField)
+	defer cleanupSurvivingChild()
+
+	// Both children exist first, so the zero below cannot come from a seed that never landed.
+	for _, id := range []string{doomedChild, survivingChild} {
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, id); n != 1 {
+			t.Fatalf("field result %s before the DELETE = %d, want 1", id, n)
+		}
+	}
+
+	ct, err := h.super.Exec(ctx, `DELETE FROM extraction_jobs WHERE id = $1`, doomedJob)
+	if err != nil {
+		t.Fatalf("delete the parent job: want success (the FK is ON DELETE CASCADE), got: %v", err)
+	}
+	if ct.RowsAffected() != 1 {
+		t.Fatalf("delete of the parent job affected %d rows, want 1", ct.RowsAffected())
+	}
+
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM extraction_field_results WHERE id = $1`, doomedChild); n != 0 {
+		t.Errorf("field results of the deleted job = %d, want 0 — a field result has no meaning without "+
+			"its job", n)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM extraction_field_results WHERE id = $1`, survivingChild); n != 1 {
+		t.Errorf("field results of the sibling job = %d, want 1 — the cascade must reach only the "+
+			"deleted job's children", n)
+	}
+}
+
+// EFR-21: this table has no updated_at and no trigger; SELECT and INSERT are the only
+// grants, so there is nothing to touch. extraction_jobs carries both, and pinning their
+// absence here stops a later story copying that shape in by reflex.
+func TestRLS_ExtractionFieldResultsHasNoUpdatedAtColumnOrTrigger(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	cols, err := scanCount(ctx, h.super,
+		`SELECT count(*) FROM pg_attribute
+		  WHERE attrelid = 'public.extraction_field_results'::regclass
+		    AND attname = 'updated_at' AND NOT attisdropped`)
+	if failIfUndefinedFieldResults(t, "query pg_attribute for extraction_field_results.updated_at", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query pg_attribute for extraction_field_results.updated_at: %v", err)
+	}
+	if cols != 0 {
+		t.Errorf("updated_at columns on extraction_field_results = %d, want 0 — the rows are append-only "+
+			"by grant, so a maintained timestamp would never move", cols)
+	}
+
+	// The control: created_at IS there, so the zero above is a real absence and not a
+	// broken catalog query.
+	created, err := scanCount(ctx, h.super,
+		`SELECT count(*) FROM pg_attribute
+		  WHERE attrelid = 'public.extraction_field_results'::regclass
+		    AND attname = 'created_at' AND NOT attisdropped`)
+	if err != nil {
+		t.Fatalf("query pg_attribute for extraction_field_results.created_at: %v", err)
+	}
+	if created != 1 {
+		t.Fatalf("created_at columns on extraction_field_results = %d, want 1 — the query above would "+
+			"report 0 for any column name, so its result proves nothing", created)
+	}
+
+	triggers, err := scanCount(ctx, h.super,
+		`SELECT count(*) FROM pg_trigger
+		  WHERE tgrelid = 'public.extraction_field_results'::regclass AND NOT tgisinternal`)
+	if err != nil {
+		t.Fatalf("query pg_trigger for extraction_field_results: %v", err)
+	}
+	if triggers != 0 {
+		t.Errorf("non-internal triggers on extraction_field_results = %d, want 0", triggers)
 	}
 }

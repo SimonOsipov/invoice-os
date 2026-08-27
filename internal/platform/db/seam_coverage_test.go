@@ -2030,6 +2030,17 @@ func scSweepRecogniseSeedingAt(fd *ast.FuncDecl, name string, usePos token.Pos, 
 	if seedCall == nil || !eligible {
 		return false
 	}
+	// The guard-stack-prefix rule alone does not see statement ORDER: a seed
+	// that runs after the use sits in the same (empty) stack as one that runs
+	// before it. scSweepFindSeedCall never leaves fd.Body, so seedCall and
+	// usePos are always positions in the SAME parsed file -- comparable even
+	// when the resolved sink's own body (used only for alwaysSeeds) lives in
+	// a sibling file, per TestN17. A future resolution path that attributed a
+	// position from outside fd.Body would have no ordering answer here; this
+	// check only ever sees same-file positions, so that limit never bites.
+	if seedCall.Pos() >= usePos {
+		return false
+	}
 	seedStack, ok := scSweepGuardStackTo(fd.Body, seedCall.Pos(), nil)
 	if !ok {
 		return false
@@ -2439,6 +2450,27 @@ func TestN17(t *testing.T) {
 }
 `
 
+// scSweepNeedleSeedUseBeforeSeed is N24: subject is read back as Subject BEFORE
+// seedMembership ever runs, in the same unconditional block -- the
+// guard-stack-prefix rule alone cannot see this, since an empty stack is a
+// prefix of an empty stack either way. Must stay flagged: no row exists yet
+// when the identity is built.
+const scSweepNeedleSeedUseBeforeSeed = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func TestN24(t *testing.T) {
+	subject := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	seedMembership(t, super, tenantID, subject, "admin")
+	_ = c
+}
+`
+
 // scSweepNeedleHelperSeedThroughHelperClean is N18: the helper-kind mirror of
 // N11 -- a fresh var seeded via a local seedMembership helper, unconditionally,
 // then passed positionally into identity(). Tier 1+2 must clear it exactly as
@@ -2752,6 +2784,11 @@ func scSweepRecogniseSeedingControlNeedles(t *testing.T) {
 				"must clear; package-wide membership-sink resolution is required for this shape")
 		}
 	})
+	t.Run("N24 seed runs AFTER the use in the same unconditional block -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n24.go", scSweepNeedleSeedUseBeforeSeed, "TestN24") {
+			t.Fatalf("TestN24 cleared — the guard-stack-prefix rule alone cannot see statement order; a seed that runs after the use does not support the claim that the caller is already seeded")
+		}
+	})
 }
 
 // scSweepPopulationPackages is every internal/ package the AUDIT-12 blast
@@ -2814,6 +2851,7 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamAllowsACallerWithNoMembershipRow"},      // AUDIT-12-07 inverts this claim: Core AC 5's own no-row-caller test
 	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamWrapsAMembershipReadError"},             // the membership SELECT itself is poisoned to error; seeding would not prevent the forced failure
 	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest"}, // the malformed tenant id short-circuits before any membership lookup; seeding would not matter
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestRequireActiveAdmin_NoMembershipRowIsNotPermitted"},         // deliberately rowless caller: proves requireActiveAdmin's own no-row branch, store.go:489
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

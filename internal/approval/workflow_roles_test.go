@@ -695,6 +695,28 @@ func TestWorkflowRole_CreateRequiresActiveAdmin(t *testing.T) {
 	}
 }
 
+// TestRequireActiveAdmin_NoMembershipRowIsNotPermitted (AUDIT-12-05 fix): the sweep
+// above replaced this test's and its two siblings' no-row arm with a seeded
+// non-admin member, leaving requireActiveAdmin's own no-row branch (store.go:489)
+// with zero coverage anywhere in the package. Calls requireActiveAdmin directly,
+// below db.WithinRequestTenantTxOpts, so this stays valid once AUDIT-12-07 makes
+// that seam refuse a rowless caller earlier -- a caller built through CreateRole
+// would then be refused at the seam and never reach this branch at all.
+func TestRequireActiveAdmin_NoMembershipRowIsNotPermitted(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	ghost := auth.Identity{Subject: uuid.NewString(), Role: "authenticated"} // no seedMembership call at all
+	if err := requireActiveAdmin(ctx, tx, ghost.Subject); !errors.Is(err, ErrNotPermitted) {
+		t.Errorf("requireActiveAdmin(no membership row) = %v, want ErrNotPermitted", err)
+	}
+}
+
 // TestWorkflowRole_CreateCallerRoleIsScopedToTheCallersTenant: the caller-role read
 // carries no tenant predicate, so RLS on memberships is the only thing keeping one
 // human's admin row in tenant B out of a tenant-A create. Widen that policy and this

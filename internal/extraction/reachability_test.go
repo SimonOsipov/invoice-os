@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -202,11 +203,11 @@ func rxArgsTypeName(t *testing.T, files map[string]*ast.File) string {
 	return found
 }
 
-// rxResultNames renders every type name a result list mentions, unwrapping pointer, slice,
-// array and map-value so a helper cannot hide the args type behind one. A bare type yields
-// "Name"; a qualified one yields "pkg.Name".
-func rxResultNames(results *ast.FieldList) []string {
-	if results == nil {
+// rxTypeNames renders every type name a field list mentions, unwrapping pointer, slice, array,
+// map-value, variadic, channel and NESTED FUNC SIGNATURE so a helper cannot hide a type one
+// level down. A bare type yields "Name"; a qualified one yields "pkg.Name".
+func rxTypeNames(fields *ast.FieldList) []string {
+	if fields == nil {
 		return nil
 	}
 	var out []string
@@ -227,17 +228,31 @@ func rxResultNames(results *ast.FieldList) []string {
 			walk(x.Value)
 		case *ast.IndexExpr:
 			walk(x.X)
+		case *ast.Ellipsis:
+			walk(x.Elt)
+		case *ast.ChanType:
+			walk(x.Value)
+		case *ast.FuncType:
+			// An injected inserter hides river.JobArgs inside a parameter's own signature.
+			for _, sub := range []*ast.FieldList{x.Params, x.Results} {
+				if sub == nil {
+					continue
+				}
+				for _, fld := range sub.List {
+					walk(fld.Type)
+				}
+			}
 		}
 	}
-	for _, fld := range results.List {
+	for _, fld := range fields.List {
 		walk(fld.Type)
 	}
 	return out
 }
 
-// rxExportedFuncsReturning returns the exported funcs and methods whose result list mentions
-// want. Used for both the ban and its control needles.
-func rxExportedFuncsReturning(files map[string]*ast.File, want string) []string {
+// rxExportedFuncs returns the exported funcs and methods whose result list -- or, when params
+// is true, whose parameter list -- mentions want. Used for both the bans and their controls.
+func rxExportedFuncs(files map[string]*ast.File, want string, params bool) []string {
 	var out []string
 	for name, f := range files {
 		for _, decl := range f.Decls {
@@ -245,7 +260,11 @@ func rxExportedFuncsReturning(files map[string]*ast.File, want string) []string 
 			if !ok || !fd.Name.IsExported() {
 				continue
 			}
-			for _, got := range rxResultNames(fd.Type.Results) {
+			list := fd.Type.Results
+			if params {
+				list = fd.Type.Params
+			}
+			for _, got := range rxTypeNames(list) {
 				if got == want {
 					out = append(out, name+":"+fd.Name.Name)
 					break
@@ -257,23 +276,49 @@ func rxExportedFuncsReturning(files map[string]*ast.File, want string) []string 
 	return out
 }
 
+func rxExportedFuncsReturning(files map[string]*ast.File, want string) []string {
+	return rxExportedFuncs(files, want, false)
+}
+
+func rxExportedFuncsAccepting(files map[string]*ast.File, want string) []string {
+	return rxExportedFuncs(files, want, true)
+}
+
 // TestExtractionPackageDeclaresNoEnqueueHelper: AC #6 and AC #7. The unexported args type stops
-// another package constructing one; it does not stop THIS package handing one out. Three bans:
-// no enqueue selector, no exported func returning the args type, and no exported func returning
-// river.JobArgs -- the interface queue.EnqueueTx accepts, which the first two miss.
+// another package constructing one; it does not stop THIS package handing one out. Five bans:
+// no enqueue SELECTOR, no enqueue FUNC DECLARATION of the same name, no exported func returning
+// the args type, and no exported func returning or ACCEPTING river.JobArgs -- the interface
+// river.Client.Insert and queue.EnqueueTx both take, which the name bans alone miss.
 //
-// InsertOpts is deliberately NOT banned: river.JobArgs requires it, so a no-Insert rule would
+// Exact-match, never a prefix: river.JobArgs requires InsertOpts, so a no-Insert* rule would
 // red-fail the shipped worker.
+//
+// rxTypeNames' nested-func-signature descent has no in-population needle -- this package
+// declares no exported func that takes a func -- so it is mutation-proven, not needle-proven.
 func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
 	files := rxExtractionFiles(t)
 
-	banned := map[string]bool{"EnqueueTx": true, "Enqueue": true, "InsertTx": true}
+	banned := map[string]bool{
+		"Enqueue": true, "EnqueueTx": true,
+		"Insert": true, "InsertTx": true, "InsertMany": true, "InsertManyTx": true,
+	}
 	// In-population control needles. internal/invoice/batch_submit.go, which the story names,
 	// sits OUTSIDE this walk, so it can only prove the matcher compiles.
 	control := map[string]bool{"OncePerJob": false, "WithinTenantTx": false}
 
 	offenders := map[string][]string{}
+	declared := map[string][]string{}
 	for name, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			declared[name] = append(declared[name], fd.Name.Name)
+			if banned[fd.Name.Name] {
+				offenders[name] = append(offenders[name], "func "+fd.Name.Name)
+			}
+		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
@@ -293,13 +338,18 @@ func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
 			t.Fatalf("the selector matcher did not find %s anywhere in internal/extraction non-test files; it can no longer find a planted hit, so the absences reported below mean nothing", name)
 		}
 	}
+	// Control for the declaration-name matcher: a selector scan cannot see a func DECLARED with
+	// a banned name, which is the route an enqueue helper walked through.
+	if !slices.Contains(declared["worker.go"], "AddTo") {
+		t.Fatalf("the declaration-name matcher collected %v from worker.go, want it to include AddTo; it can no longer find a planted hit, so the name bans mean nothing", declared["worker.go"])
+	}
 	names := make([]string, 0, len(offenders))
 	for name := range offenders {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		t.Errorf("internal/extraction/%s selects %v: this package must never enqueue, or the unexported args type fences nothing", name, offenders[name])
+		t.Errorf("internal/extraction/%s names %v: this package must never enqueue, or the unexported args type fences nothing", name, offenders[name])
 	}
 
 	// Control for the result-list matcher, same files, same matcher: a bare local type, a
@@ -322,11 +372,26 @@ func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
 		}
 	}
 
+	// Control for the parameter matcher, same files: it must find a planted hit through a
+	// pointer and through a generic index, or the accepting ban below is vacuous.
+	for want, mustFind := range map[string]string{
+		"river.Workers": "worker.go:AddTo",
+		"river.Job":     "worker.go:Work",
+	} {
+		got := rxExportedFuncsAccepting(files, want)
+		if !slices.Contains(got, mustFind) {
+			t.Fatalf("the parameter matcher looking for %s found %v, want it to include %s; it can no longer find a planted hit, so the accepting ban below means nothing", want, got, mustFind)
+		}
+	}
+
 	argsType := rxArgsTypeName(t, files)
 	if got := rxExportedFuncsReturning(files, argsType); len(got) > 0 {
 		t.Errorf("%v hand a %s out through an exported result: an exported constructor is the one route the unexported type does not close", got, argsType)
 	}
 	if got := rxExportedFuncsReturning(files, "river.JobArgs"); len(got) > 0 {
 		t.Errorf("%v return river.JobArgs: an args value handed out through the interface queue.EnqueueTx accepts is an enqueue surface, whatever the concrete type is called", got)
+	}
+	if got := rxExportedFuncsAccepting(files, "river.JobArgs"); len(got) > 0 {
+		t.Errorf("%v accept river.JobArgs: a helper that builds the args and hands them to an injected inserter enqueues just as surely as one that calls the client itself", got)
 	}
 }

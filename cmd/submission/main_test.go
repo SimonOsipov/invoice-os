@@ -15,16 +15,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -389,8 +390,7 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	}
 
 	var configs []*ast.CompositeLit
-	var addWorkerHits, extractWorkerCalls int
-	var extractWorkerArgs []ast.Expr
+	addWorkerHits := 0
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.CompositeLit:
@@ -401,11 +401,6 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 			if x.Sel.Name == "AddWorker" {
 				addWorkerHits++
 			}
-		case *ast.CallExpr:
-			if wtCallName(x.Fun) == "newExtractWorker" {
-				extractWorkerCalls++
-				extractWorkerArgs = x.Args
-			}
 		}
 		return true
 	})
@@ -414,6 +409,7 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 		t.Fatalf("cmd/submission/main.go builds %d queue.Config literal(s), want exactly 1 -- with none, every assertion below is vacuous; with two, the one queue.New reads is ambiguous", len(configs))
 	}
 	seams := map[string]string{"Queues": "queueConfigs", "Workers": "workerBundle"}
+	var bundleArgs []ast.Expr
 	for _, elt := range configs[0].Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -431,6 +427,10 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 		call, ok := kv.Value.(*ast.CallExpr)
 		if !ok || wtCallName(call.Fun) != want {
 			t.Errorf("queue.Config.%s is not a %s(...) call (%T) -- an inline literal here is not the value the seam test above inspects, so the two can disagree", key.Name, want, kv.Value)
+			continue
+		}
+		if key.Name == "Workers" {
+			bundleArgs = call.Args
 		}
 	}
 	for key, want := range seams {
@@ -458,75 +458,104 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 		t.Fatalf("the AddWorker matcher found %d hit(s) in internal/submission/worker.go, want at least 2 -- the absence found in main.go above is the matcher being broken, not a clean file", controlHits)
 	}
 
-	if extractWorkerCalls != 1 {
-		t.Fatalf("cmd/submission/main.go calls newExtractWorker %d time(s), want exactly 1", extractWorkerCalls)
+	// Every seam above can be called correctly and still be handed something else. These three
+	// follow the identifiers: the worker queue.New registers, the opener that worker reads
+	// through, and the store that opener reaches.
+	poolName, _ := wtOneCall(t, f, "db.NewPool")
+	objName, _ := wtOneCall(t, f, "document.NewS3Store")
+	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
+	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
+
+	if len(ewArgs) != 4 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 4 (pool, extractor, opener, logger)", len(ewArgs))
 	}
-	if len(extractWorkerArgs) != 4 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 4 (pool, extractor, opener, logger)", len(extractWorkerArgs))
-	}
-	for i, arg := range extractWorkerArgs {
+	for i, arg := range ewArgs {
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
 			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and panics on the first job", i)
 		}
 	}
+
+	// 1. The worker on the bundle is the one newExtractWorker built. A bare
+	//    &extraction.ExtractWorker{} here compiles, registers the kind, and panics on job one.
+	if len(bundleArgs) != 3 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 3 (sw, pw, ew)", len(bundleArgs))
+	}
+	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
+		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and panics on its first job", wtRender(bundleArgs[2]), ewName)
+	}
+
+	// 2. That worker reads through an opener built over the document service's own Open.
+	if call, ok := ewArgs[2].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newDocumentOpener" {
+		t.Errorf("newExtractWorker's opener argument is %s, want a newDocumentOpener(...) call: the capped, always-closing closure is only reached if main() builds it", wtRender(ewArgs[2]))
+	} else if len(call.Args) != 1 {
+		t.Errorf("newDocumentOpener is called with %d argument(s), want 1", len(call.Args))
+	} else if sel, ok := call.Args[0].(*ast.SelectorExpr); !ok || wtCallName(sel) != svcName+".Open" {
+		t.Errorf("newDocumentOpener is built over %s, want %s.Open: an opener over anything else reads no document, and nothing else in this file would notice", wtRender(call.Args[0]), svcName)
+	}
+
+	// 3. That service is built over the shared pool and the object store AC #8 fatals on. Without
+	//    this, document.ConfigFromEnv can fatal at boot over a store nothing ever reaches.
+	if len(svcArgs) != 2 {
+		t.Fatalf("document.NewService is called with %d argument(s), want 2 (row store, object store)", len(svcArgs))
+	}
+	if store, ok := svcArgs[0].(*ast.CallExpr); !ok || wtCallName(store.Fun) != "document.NewStore" {
+		t.Errorf("document.NewService's row store is %s, want a document.NewStore(...) call", wtRender(svcArgs[0]))
+	} else if len(store.Args) != 1 {
+		t.Errorf("document.NewStore is called with %d argument(s), want 1 (the pool)", len(store.Args))
+	} else if id, ok := store.Args[0].(*ast.Ident); !ok || id.Name != poolName {
+		t.Errorf("document.NewStore is given %s, want the shared pool %s that db.NewPool returned", wtRender(store.Args[0]), poolName)
+	}
+	if id, ok := svcArgs[1].(*ast.Ident); !ok || id.Name != objName {
+		t.Errorf("document.NewService's object store is %s, want %s -- the store document.NewS3Store built and main() already fatals on", wtRender(svcArgs[1]), objName)
+	}
 }
 
-// wtMainPackageImporters walks every non-test .go file in the module and returns, per import
-// path of interest, the package-main files that import it. Also returns the parsed population
-// so a caller can floor it.
-func wtMainPackageImporters(t *testing.T, root string, paths []string) (map[string][]string, []string) {
+// wtMainPackageDeps runs go list once over the module and returns, per import path of interest,
+// the package-main packages whose TRANSITIVE dependencies include it. A library-level import
+// links a package into a binary just as surely as a direct one, which a file's own import block
+// cannot show. Also returns the package-main population so a caller can floor it.
+func wtMainPackageDeps(t *testing.T, root string, paths []string) (map[string][]string, []string) {
 	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-f", "{{.ImportPath}}|{{.Name}}|{{join .Deps \" \"}}", "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("go list ./... in %s: %v: %s -- a failed listing reads exactly like a clean one", root, err, ee.Stderr)
+		}
+		t.Fatalf("go list ./... in %s: %v", root, err)
+	}
+
 	want := map[string]bool{}
 	for _, p := range paths {
 		want[p] = true
 	}
 	hits := map[string][]string{}
-	var parsed []string
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	var mains []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 || parts[1] != "main" {
+			continue
 		}
-		if d.IsDir() {
-			switch filepath.Base(path) {
-			case ".git", ".claude", "node_modules", "frontend", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if perr != nil {
-			return perr
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		parsed = append(parsed, rel)
-		if f.Name.Name != "main" {
-			return nil
-		}
-		for _, imp := range f.Imports {
-			p, uerr := strconv.Unquote(imp.Path.Value)
-			if uerr == nil && want[p] {
-				hits[p] = append(hits[p], rel)
+		mains = append(mains, parts[0])
+		for _, dep := range strings.Fields(parts[2]) {
+			if want[dep] {
+				hits[dep] = append(hits[dep], parts[0])
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
 	}
 	for p := range hits {
 		sort.Strings(hits[p])
 	}
-	return hits, parsed
+	sort.Strings(mains)
+	return hits, mains
 }
 
 // TestSubmissionMain_AddsNoNewBinary: Core AC-8. The directory check alone is evaded by any
 // name other than "extraction", so the second half asserts that the submission binary is the
-// only one that reaches internal/extraction at all.
+// only one that LINKS internal/extraction -- transitively, since a library-level import reaches
+// a binary that names neither package.
 func TestSubmissionMain_AddsNoNewBinary(t *testing.T) {
 	entries, err := os.ReadDir("..")
 	if err != nil {
@@ -548,30 +577,29 @@ func TestSubmissionMain_AddsNoNewBinary(t *testing.T) {
 	}
 
 	const (
-		extractionPkg = "github.com/SimonOsipov/invoice-os/internal/extraction"
-		submissionPkg = "github.com/SimonOsipov/invoice-os/internal/submission"
+		modulePkg     = "github.com/SimonOsipov/invoice-os/"
+		extractionPkg = modulePkg + "internal/extraction"
+		submissionPkg = modulePkg + "internal/submission"
 	)
-	hits, parsed := wtMainPackageImporters(t, wtRepoRoot(t), []string{extractionPkg, submissionPkg})
+	hits, mains := wtMainPackageDeps(t, wtRepoRoot(t), []string{extractionPkg, submissionPkg})
 
-	cmdFiles := 0
-	for _, rel := range parsed {
-		if strings.HasPrefix(rel, "cmd/") {
-			cmdFiles++
+	if len(mains) < 10 {
+		t.Fatalf("go list reported %d package-main package(s) in this module, want at least 10 -- a clean report over an empty listing means nothing", len(mains))
+	}
+
+	// Control needle, same listing and same matcher. internal/submission is imported directly by
+	// cmd/submission alone but LINKED into five binaries; cmd/invoice reaches it only through
+	// internal/invoice. Its presence here is what proves this check follows the whole graph
+	// rather than one file's import block -- the difference the extraction assertion rests on.
+	control := hits[submissionPkg]
+	for _, want := range []string{modulePkg + "cmd/invoice", modulePkg + "cmd/submission"} {
+		if !slices.Contains(control, want) {
+			t.Fatalf("the dependency matcher reports internal/submission linked into %v, want that to include %s; cmd/invoice reaches it only transitively, so its absence means this check no longer follows the graph and the extraction assertion below would pass having examined nothing", control, want)
 		}
 	}
-	if len(parsed) < 130 || cmdFiles < 8 {
-		t.Fatalf("the walk parsed %d non-test .go file(s), %d under cmd/, want at least 130 and at least 8 -- a clean report over a broken walk means nothing", len(parsed), cmdFiles)
-	}
 
-	// Control needle, same walk and same matcher: internal/submission has exactly one
-	// package-main importer today, so an empty extraction result below cannot be the import
-	// matcher having stopped working.
-	wantOne := []string{"cmd/submission/main.go"}
-	if !reflect.DeepEqual(hits[submissionPkg], wantOne) {
-		t.Fatalf("the package-main importers of internal/submission are %v, want %v -- the import matcher is broken, so the extraction assertion below would pass having examined nothing", hits[submissionPkg], wantOne)
-	}
-	if !reflect.DeepEqual(hits[extractionPkg], wantOne) {
-		t.Errorf("the package-main importers of internal/extraction are %v, want %v: extraction must be reachable from the submission binary and from no other", hits[extractionPkg], wantOne)
+	if want := []string{modulePkg + "cmd/submission"}; !reflect.DeepEqual(hits[extractionPkg], want) {
+		t.Errorf("internal/extraction is linked into %v, want exactly %v: the mock extractor ships inside the submission binary and no other, and one library-level import is enough to put it in a binary nobody provisioned", hits[extractionPkg], want)
 	}
 }
 
@@ -743,20 +771,69 @@ func TestNewDocumentOpener_ForwardsContextVerbatim(t *testing.T) {
 	}
 }
 
+// wtMainBody returns main()'s top-level statements. Fatal on no main(), so a rename fails
+// loudly rather than emptying every scan below.
+func wtMainBody(t *testing.T, f *ast.File) []ast.Stmt {
+	t.Helper()
+	for _, decl := range f.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "main" {
+			return fd.Body.List
+		}
+	}
+	t.Fatal("cmd/submission/main.go declares no main(); every assertion below would be vacuous")
+	return nil
+}
+
+// wtOneCall requires exactly one top-level `x := want(...)` in main(), returning x and the
+// call's arguments. Two call sites make "the value main built" ambiguous.
+func wtOneCall(t *testing.T, f *ast.File, want string) (string, []ast.Expr) {
+	t.Helper()
+	var lhs string
+	var args []ast.Expr
+	calls := 0
+	for _, stmt := range wtMainBody(t, f) {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || wtCallName(call.Fun) != want {
+			continue
+		}
+		calls++
+		args = call.Args
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			lhs = id.Name
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("cmd/submission/main.go assigns from %s at the top level of main() %d time(s), want exactly 1", want, calls)
+	}
+	if lhs == "" {
+		t.Fatalf("the %s call assigns to no identifier, so nothing below can follow the value it built", want)
+	}
+	return lhs, args
+}
+
+// wtRender names an expression for a failure message.
+func wtRender(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.CallExpr:
+		return wtCallName(x.Fun) + "(...)"
+	case *ast.SelectorExpr:
+		return wtCallName(x)
+	}
+	return fmt.Sprintf("%T", e)
+}
+
 // wtFatalAfter reports whether main() assigns from a call named want as a TOP-LEVEL statement
 // (so it is unconditional) and whether the statement right after it is an `if err != nil` that
 // terminates the process. calls counts the call sites found, so a zero can be told from a miss.
 func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool) {
 	t.Helper()
-	var body []ast.Stmt
-	for _, decl := range f.Decls {
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "main" {
-			body = fd.Body.List
-		}
-	}
-	if body == nil {
-		t.Fatal("cmd/submission/main.go declares no main(); every assertion below would be vacuous")
-	}
+	body := wtMainBody(t, f)
 	for i, stmt := range body {
 		as, ok := stmt.(*ast.AssignStmt)
 		if !ok || len(as.Rhs) != 1 {

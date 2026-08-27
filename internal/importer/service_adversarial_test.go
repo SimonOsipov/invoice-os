@@ -56,8 +56,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -78,7 +76,7 @@ func TestServiceImport_BlankSubtotalCellCommitsAsNullNotQuarantined(t *testing.T
 	entityID := seedEntity(t, super, tenantID, "ADV-B1 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-BLANKSUB", "2026-01-10", "T1", "B1", "NGN", "", "0.00", "0.00", "Item1", "1", "10.00"), // sheet 2 -- blank subtotal
@@ -140,7 +138,7 @@ func TestServiceImport_UnparseableIssueDateQuarantines(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-B2 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-BADDATE1", "03/06/2026", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2 -- DD/MM/YYYY, not YYYY-MM-DD
@@ -206,7 +204,7 @@ func TestServiceImport_BlankIssueDateCommitsAsNull(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-B2-companion entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-NODATE", "", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2 -- blank issue_date
@@ -247,7 +245,7 @@ func TestServiceImport_ZeroDataRowsRealImportFinalizesFailed(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "ADV-B3 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, [][]string{}, false)
 	if err != nil {
@@ -285,7 +283,7 @@ func TestServiceImport_WhitespaceOnlyInvoiceNumberTreatedAsBlankUngroupable(t *t
 	entityID := seedEntity(t, super, tenantID, "ADV-C1 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-OK", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
@@ -332,7 +330,7 @@ func TestServiceImport_LineFieldsVaryAcrossGroupRowsNoConflictCommitsWithDistinc
 	entityID := seedEntity(t, super, tenantID, "ADV-C2 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		// Header fields (issue_date/buyer_tin/buyer_name/currency/subtotal/vat/total) agree.
@@ -374,7 +372,7 @@ func TestServiceImport_HeaderSubtotalNormalizedBeforeConflictCompareNoSpuriousCo
 	entityID := seedEntity(t, super, tenantID, "ADV-C3 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-NORMSYM", "2026-01-10", "T1", "B1", "NGN", "1,000", "0.00", "1000.00", "Item1", "1", "500.00"), // sheet 2 -- subtotal "1,000"
@@ -419,7 +417,7 @@ func TestServiceImport_HeaderIssueDateTrimmedBeforeConflictCompareNoSpuriousConf
 	entityID := seedEntity(t, super, tenantID, "ADV-C4 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-DATETRIM", " 2026-01-10 ", "T1", "B1", "NGN", "100.00", "0.00", "100.00", "Item1", "1", "50.00"), // sheet 2 -- surrounding whitespace

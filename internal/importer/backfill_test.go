@@ -10,7 +10,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -108,7 +107,7 @@ func newBFTwoInvoiceFixture(t *testing.T, super, app *pgxpool.Pool, label string
 	doc := storeDocumentAs(t, docSvc, tenantID, label+".csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -202,7 +201,7 @@ func TestBackfill_TiedColumnIsAmbiguous(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "tied.csv", "text/csv", csvBody(t, header, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, header, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -296,8 +295,8 @@ func TestBackfill_DuplicateInvoiceNumberInOneDocumentIsAmbiguous(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "dup.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
-	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(cA, entityA, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
@@ -340,7 +339,7 @@ func TestBackfill_MatchesRawUntrimmedCellValue(t *testing.T) {
 	doc := storeDocumentAs(t, docSvc, tenantID, "raw.csv", "text/csv", csvBody(t, stdHeader, rows))
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
@@ -448,8 +447,8 @@ func TestRLS_BackfillDoesNotCrossTenants(t *testing.T) {
 	docA := storeDocumentAs(t, docSvc, tenantA, "a.csv", "text/csv", csvBody(t, stdHeader, rowsA))
 	docB := storeDocumentAs(t, docSvc, tenantB, "b.csv", "text/csv", csvBody(t, stdHeader, rowsB))
 
-	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
 	if _, err := svc.Import(cA, entityA, "", docA.ID, stdMapping, stdHeader, rowsA, false); err != nil {
 		t.Fatalf("import tenant A: %v", err)
 	}
@@ -541,7 +540,7 @@ func TestBackfill_UndecodableOrMissingDocumentIsSkippedNotFatal(t *testing.T) {
 	}
 	cleanDoc := storeDocumentAs(t, docSvc, tenantID, "clean.csv", "text/csv", csvBody(t, stdHeader, cleanRows))
 	svc := newTestService(app)
-	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	if _, err := svc.Import(c, entityID, "", cleanDoc.ID, stdMapping, stdHeader, cleanRows, false); err != nil {
 		t.Fatalf("import clean fixture: %v", err)
 	}

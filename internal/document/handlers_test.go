@@ -191,8 +191,8 @@ func TestRLS_DownloadCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 	tenant1 := seedTenant(t, super, "DOC-DL-RLS tenant 1")
 	tenant2 := seedTenant(t, super, "DOC-DL-RLS tenant 2")
 	store := document.NewStore(app)
-	c1 := identity(ctx, tenant1, uuid.NewString())
-	c2 := identity(ctx, tenant2, uuid.NewString())
+	c1 := identity(ctx, tenant1, memberSubject)
+	c2 := identity(ctx, tenant2, memberSubject)
 
 	doc1, _, err := store.Upsert(c1, docFixture(tenant1, "download-rls-1", 11))
 	if err != nil {
@@ -206,7 +206,7 @@ func TestRLS_DownloadCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 	payload := []byte("tenant-1 document bytes")
 	objs := &fakeObjects{getObject: nopObject(payload)}
 	svc := document.NewService(store, objs)
-	id1 := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1}
+	id1 := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant1}
 
 	own := doDownload(t, svc.Open, &id1, doc1.ID, "")
 	if own.Code != http.StatusOK {

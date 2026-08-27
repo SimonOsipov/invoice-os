@@ -50,7 +50,7 @@ func importEdgeFixture(t *testing.T, path, tenantLabel, entityName string) (res 
 	svc := newTestServiceWithGate(app, invoice.NewGate(invoice.NewStore(app), validator))
 
 	c := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
+		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 
 	res, err = svc.Import(c, entityID, "", "", stdMapping, header, rows, false)
@@ -306,7 +306,7 @@ func TestFixtures_OversizedRejected413(t *testing.T) {
 	open := newFakeDocOpen("green_500.csv", "", data)
 	body, contentType := buildImportForm(t, uuid.NewString(), string(mappingJSON), open.doc.ID,
 		importPart{field: "pad", filename: "green_500_inflated.csv", content: big.Bytes()})
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	rec, resp := doImportCreate(t, stubImp, open.fn(), &id, "", contentType, body)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {

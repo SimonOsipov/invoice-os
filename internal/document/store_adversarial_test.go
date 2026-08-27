@@ -15,7 +15,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -67,7 +66,7 @@ func TestStoreUpsert_EmptyNullableValuesPersistAsNULL(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc nullif")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	// Positive half first: a real value survives verbatim, so a NULL below is the
 	// nullif and not a binding that drops both columns.
@@ -110,7 +109,7 @@ func TestStoreUpsert_NilNullableValuesPersistAsNULL(t *testing.T) {
 	store := document.NewStore(app)
 
 	tenantID := seedTenant(t, super, "doc nil nullable")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	in := docFixture(tenantID, "nil-nullable", 11)
 	in.Filename, in.DeclaredContentType = nil, nil
@@ -134,7 +133,7 @@ func TestServiceStore_SanitizesFilenameAtStoreTime(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc sanitize filename")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
@@ -163,7 +162,7 @@ func TestServiceStore_FilenameSanitizingToEmptyPersistsAsNULL(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc filename to empty")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
@@ -212,7 +211,7 @@ func TestServiceStore_ZeroByteDocumentIsStored(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc zero byte")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
@@ -245,7 +244,7 @@ func TestServiceStore_UnderDeclaredSizeIsOverridden(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc under-declared size")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
@@ -278,7 +277,7 @@ func TestServiceStore_AuditPayloadsCiteTheDocumentID(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc audit payload")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
@@ -309,7 +308,7 @@ func TestServiceStore_DedupeWritesNoReadAudit(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc dedupe no read audit")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
@@ -337,7 +336,7 @@ func TestServiceStore_CancellationMidStoreCommitsNothing(t *testing.T) {
 	defer cancel()
 
 	tenantID := seedTenant(t, super, "svc cancel mid-store")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	objs := &fakeObjects{}
 	objs.onPut = cancel // cancel after the bytes are in, before the row
@@ -368,7 +367,7 @@ func TestServiceStore_ConcurrentIdenticalStoresYieldOneRow(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc concurrent identical")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 
@@ -428,7 +427,7 @@ func TestServiceStore_EveryCommittedRowHasAStoredObject(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc no dangling pointer")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
@@ -487,7 +486,7 @@ func TestServiceOpen_FetchesTheStoredKeyAndForwardsRange(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc open happy")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{getObject: document.Object{
@@ -532,8 +531,8 @@ func TestServiceOpen_CrossTenantRefusedBeforeAnyObjectFetch(t *testing.T) {
 
 	tenantA := seedTenant(t, super, "svc open cross A")
 	tenantB := seedTenant(t, super, "svc open cross B")
-	cA := identity(ctx, tenantA, uuid.NewString())
-	cB := identity(ctx, tenantB, uuid.NewString())
+	cA := identity(ctx, tenantA, memberSubject)
+	cB := identity(ctx, tenantB, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{getObject: document.Object{Body: io.NopCloser(strings.NewReader("leak")), Size: 4}}
@@ -571,7 +570,7 @@ func TestServiceOpen_MalformedIDIsValidationErrorAndFetchesNothing(t *testing.T)
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc open malformed")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
@@ -592,7 +591,7 @@ func TestServiceOpen_ObjectFailureReturnsNoDocument(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc open object failure")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{getErr: document.ErrRangeNotSatisfiable}

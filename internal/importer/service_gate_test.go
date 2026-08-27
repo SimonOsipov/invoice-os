@@ -61,7 +61,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -255,7 +254,7 @@ func runIMPVCleanFile(t *testing.T, dryRun bool) (res BatchResult, super, app *p
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	realGate := invoice.NewGate(invoice.NewStore(app), validator)
 	svc := newTestServiceWithGate(app, realGate)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var err error
 	res, err = svc.Import(c, entityID, "", "", stdMapping, stdHeader, impvCleanFileFixture(), dryRun)
@@ -279,7 +278,7 @@ func runIMPVConflictMix(t *testing.T) (res BatchResult, super, app *pgxpool.Pool
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	realGate := invoice.NewGate(invoice.NewStore(app), validator)
 	svc := newTestServiceWithGate(app, realGate)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var err error
 	res, err = svc.Import(c, entityID, "", "", stdMapping, stdHeader, impvConflictMixFixture(), false)
@@ -515,7 +514,7 @@ func TestServiceImport_GateValidateBatchCalledExactlyOnceWithAllCreated(t *testi
 
 	fg := &fakeGate{}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	if _, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("Import: %v", err)
@@ -549,7 +548,7 @@ func TestServiceImport_QuarantinedInvoiceNeverReachesGate(t *testing.T) {
 
 	fg := &fakeGate{}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err != nil {
@@ -601,7 +600,7 @@ func TestServiceImport_ApplyValidationDBFaultAbortsRunNotLaunderedIntoRowErrors(
 
 	fg := &fakeGate{validateBatchErr: fmt.Errorf("apply validation to invoice %s: %w", "fake-id", errIMPVFakeDBFault)}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err == nil {
@@ -649,7 +648,7 @@ func TestServiceImport_ValidatorErrUpstreamAbortsRun(t *testing.T) {
 
 	fg := &fakeGate{validateBatchErr: fmt.Errorf("%w: fake 04 outage", invoice.ErrUpstream)}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err == nil {
@@ -690,7 +689,7 @@ func TestServiceImport_TinLessEntityCleanFileStaysDraftWithSupplierTinRequired(t
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	realGate := invoice.NewGate(invoice.NewStore(app), validator)
 	svc := newTestServiceWithGate(app, realGate)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("IMPV12-CLEAN", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50", "Item1", "1", "100.00"),
@@ -769,7 +768,7 @@ func TestServiceImport_NoLineRowsMappedStaysDraftViaLineItemsSumSubtotal(t *test
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	realGate := invoice.NewGate(invoice.NewStore(app), validator)
 	svc := newTestServiceWithGate(app, realGate)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		{"IMPV13-NOLINES", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50"},
@@ -856,7 +855,7 @@ func TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate(t *testing.T
 
 			fg := &fakeGate{}
 			svc := newTestServiceWithGate(app, fg)
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, impvAllQuarantinedFixture(), tc.dryRun)
 			if err != nil {

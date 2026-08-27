@@ -38,8 +38,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -101,7 +99,7 @@ func TestPredicateParity_StateBlindImporterIndexParitySweep(t *testing.T) {
 				t.Fatalf("seed status=%s: %v", state, err)
 			}
 
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 			// (i) the importer precheck flags it, regardless of the stored
 			// row's status.
@@ -192,7 +190,7 @@ func TestPredicateParity_CrossTenantNoFalseCollision(t *testing.T) {
 
 	seedInvoice(t, super, tenantB, entityB, "INV-X") // tenant B's own "INV-X"
 
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	// (i) the importer precheck does not see tenant B's row.
 	ibStore := NewStore(app)
@@ -256,7 +254,7 @@ func TestPredicateParity_SelfExclusionReimportLeavesStoredRowUntouched(t *testin
 	seedInvoice(t, super, tenantID, entityID, "INV-SELF")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
 		mkRow("INV-SELF", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "SelfItem", "1", "10.00"), // sheet 2

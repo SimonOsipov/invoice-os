@@ -89,7 +89,7 @@ func TestServiceStore_PutPrecedesRowInsert(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc put-precedes-insert")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	rowsAtPut := -1
@@ -123,7 +123,7 @@ func TestServiceStore_PutFailureWritesNoRow(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc put-failure")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{putErr: errPutBoom}
@@ -149,7 +149,7 @@ func TestServiceStore_ComputesHashAndSizeServerSide(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc server-side hash")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world") // 11 bytes
 	const wantHash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
@@ -194,7 +194,7 @@ func TestServiceStore_RewindsBodyBeforePut(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc rewind")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}
@@ -219,7 +219,7 @@ func TestServiceStore_UpsertFailureAfterSuccessfulPutReturnsErrorNoID(t *testing
 	ctx := context.Background()
 
 	tenantID := uuid.NewString() // deliberately never seeded into tenants
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}
@@ -250,7 +250,7 @@ func TestServiceStore_RetryAfterUpsertFailureSucceedsWithNoDuplicateObject(t *te
 	ctx := context.Background()
 
 	tenantID := uuid.NewString() // not seeded yet — the first attempt must fail
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}
@@ -290,7 +290,7 @@ func TestServiceStore_IdenticalBytesSameTenantDedupes(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc same-tenant dedupe")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}
@@ -330,7 +330,7 @@ func TestServiceStore_DedupeReturnsExistingRowNotZeroValue(t *testing.T) {
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "svc dedupe returns row")
-	c := identity(ctx, tenantID, uuid.NewString())
+	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
@@ -370,8 +370,8 @@ func TestServiceStore_IdenticalBytesDifferentTenantsDoNotDedupe(t *testing.T) {
 
 	tenantA := seedTenant(t, super, "svc cross-tenant no-dedupe A")
 	tenantB := seedTenant(t, super, "svc cross-tenant no-dedupe B")
-	cA := identity(ctx, tenantA, uuid.NewString())
-	cB := identity(ctx, tenantB, uuid.NewString())
+	cA := identity(ctx, tenantA, memberSubject)
+	cB := identity(ctx, tenantB, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}

@@ -44,8 +44,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -70,7 +68,7 @@ func TestServiceImport_DryRunErrUpstreamAbortsRunNoWrites(t *testing.T) {
 
 	fg := &fakeGate{evaluateErr: fmt.Errorf("%w: fake 04 outage", invoice.ErrUpstream)}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, true) // dryRun=true
 	if err == nil {
@@ -128,7 +126,7 @@ func TestServiceImport_ReadyInvoicesCountMatchesGateReceivedCount(t *testing.T) 
 
 	fg := &fakeGate{}
 	svc := newTestServiceWithGate(app, fg)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err != nil {
@@ -180,7 +178,7 @@ func TestServiceImport_LeadingZeroSubtotalDryRunOverReportsNeverUnderReportsReal
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	realGate := invoice.NewGate(invoice.NewStore(app), validator)
 	svc := newTestServiceWithGate(app, realGate)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// subtotal carries a LEADING ZERO. vat/total/unit_price carry none, so
 	// they round-trip identically on both paths -- the ONLY divergence this

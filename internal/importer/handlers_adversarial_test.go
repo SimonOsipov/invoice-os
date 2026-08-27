@@ -106,7 +106,7 @@ func TestCreateHandler_FormatDetection_BadInputNoDBWrite400(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when the uploaded file can't be recognized/decoded")
 				return BatchResult{}, nil
@@ -154,7 +154,7 @@ func TestCreateHandler_FormatDetection_ActualMapping201(t *testing.T) {
 
 			tenantID := seedTenant(t, super, "format-detection tenant")
 			entityID := seedEntity(t, super, tenantID, "format-detection entity")
-			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 			header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 			rows := [][]string{{"FMT-" + uuid.NewString(), "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -188,7 +188,7 @@ func TestCreateHandler_FormatDetection_ActualMapping201(t *testing.T) {
 // must 400 -- never panic, never 500. The "no document_id at all" half of the
 // old case is TestImport_RequiresDocumentID.
 func TestCreateHandler_DocumentWithNoFormatHints400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run when the document's format cannot be resolved")
 		return BatchResult{}, nil
@@ -235,7 +235,7 @@ func TestCreateHandler_DryRunQueryParamVariants(t *testing.T) {
 
 			tenantID := seedTenant(t, super, "dry-run-variant tenant")
 			entityID := seedEntity(t, super, tenantID, "dry-run-variant entity")
-			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 			header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 			rows := [][]string{{"DRV-" + uuid.NewString(), "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -317,7 +317,7 @@ func TestCreateHandler_SemicolonCSVEnvelope(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "semicolon-csv tenant")
 	entityID := seedEntity(t, super, tenantID, "semicolon-csv entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"SEMI-" + uuid.NewString(), "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -357,7 +357,7 @@ func TestCreateHandler_MappingMissingInvoiceNumber400(t *testing.T) {
 	_, app := dbTestPools(t)
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 
 	header := []string{"Inv No", "Buyer"}
 	rows := [][]string{{"MAP-1", "Acme Ltd"}}

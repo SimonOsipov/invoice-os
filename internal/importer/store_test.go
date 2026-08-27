@@ -82,10 +82,16 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
-// seedTenant inserts one throwaway tenants row (kind 'firm') as the
-// superuser and registers a cleanup that deletes it. A tenants delete
-// CASCADEs away every business_entities/invoices/import_batches row scoped
-// to it, so per-test cleanup never has to unwind child rows by hand.
+// memberSubject is the caller every DB-backed test in this package acts as.
+// Its membership row is a no-op today (a rowless caller is still admitted)
+// but keeps these fixtures ready for the predicate's strict successor.
+const memberSubject = "d4a10004-0000-4000-8000-000000000001"
+
+// seedTenant inserts one throwaway tenants row (kind 'firm') plus an active
+// membership for memberSubject, as the superuser, and registers a cleanup
+// that deletes the tenant. A tenants delete CASCADEs away every
+// business_entities/invoices/import_batches/memberships row scoped to it,
+// so per-test cleanup never has to unwind child rows by hand.
 func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -94,6 +100,12 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, label,
 	); err != nil {
 		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		id, memberSubject,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
@@ -174,7 +186,7 @@ func TestStoreCreateBatchFinalize_RoundTripsCountsStatusAndErrors(t *testing.T) 
 	entityID := seedEntity(t, super, tenantID, "IB-STORE-01 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -237,7 +249,7 @@ func TestStoreFinalize_EmptyErrorsMarshalsToEmptyArrayNotNull(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "IB-STORE-02 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
@@ -277,7 +289,7 @@ func TestStoreExistingNumbers_ReturnsExactSubsetStoredForEntity(t *testing.T) {
 	idB := seedInvoice(t, super, tenantID, entityID, "INV-B")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	got, err := store.ExistingNumbers(c, entityID, []string{"INV-A", "INV-B", "INV-C"})
 	if err != nil {
@@ -318,7 +330,7 @@ func TestStoreExistingNumbers_TenantScoped(t *testing.T) {
 	seedInvoice(t, super, tenantB, entityB, "INV-A") // tenant B's own "INV-A"
 
 	store := NewStore(app)
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	got, err := store.ExistingNumbers(cA, entityA, []string{"INV-A-OWN", "INV-A"})
 	if err != nil {
@@ -348,7 +360,7 @@ func TestStoreEntitySupplier_ReturnsNameAndNilTIN(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, entityName)
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	name, tin, err := store.EntitySupplier(c, entityID)
 	if err != nil {
@@ -372,7 +384,7 @@ func TestStoreEntitySupplier_NotFoundOutsideTenant(t *testing.T) {
 	tenantID := seedTenant(t, super, "IB-STORE-06 tenant")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	bogusEntityID := uuid.NewString()
 	if _, _, err := store.EntitySupplier(c, bogusEntityID); !errors.Is(err, ErrNotFound) {
@@ -397,7 +409,7 @@ func TestStoreCreateBatch_PersistsEntityIDAndFilenameTogetherNotTransposed(t *te
 	entityID := seedEntity(t, super, tenantID, "BULK-01-1 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "branch-lagos.csv"
 	id, err := store.CreateBatch(c, entityID, wantFilename, "")
@@ -437,7 +449,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 	entityID := seedEntity(t, super, tenantID, "BULK-01-5 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Positive control: an ordinary filename persists verbatim -- guards
 	// against a vacuous pass below (if CreateBatch never wrote ANY filename,
@@ -495,7 +507,7 @@ func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *test
 	entityID := seedEntity(t, super, tenantID, "BULK-01-8 entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	// Positive control: a normal, usable filename persists as itself, never
 	// NULL -- guards against a vacuous pass on the unusable leg below (a
@@ -548,7 +560,7 @@ func TestServiceImport_ZeroRowEarlyFinalizePathPersistsFilename(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "BULK-01-11 entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "header-only.csv"
 	res, err := svc.Import(c, entityID, wantFilename, "", stdMapping, stdHeader, nil, false)
@@ -592,7 +604,7 @@ func TestStoreGetBatch_FilenamePopulatesBatchStructDirectly(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "QA-DIRECT-FILENAME entity")
 
 	store := NewStore(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "direct-field-check.csv"
 	batchID, err := store.CreateBatch(c, entityID, wantFilename, "")
@@ -645,7 +657,7 @@ func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T
 	entityID := seedEntity(t, super, tenantID, "QA-DRYRUN-HEADERONLY entity")
 
 	svc := newTestService(app)
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", "", stdMapping, stdHeader, nil, true)
 	if err != nil {

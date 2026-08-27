@@ -240,7 +240,7 @@ func TestRLS_DownloadConcurrentRequestsAuditExactlyOncePerRequest(t *testing.T) 
 
 	tenantID := seedTenant(t, super, "DOC-DL concurrent read audit")
 	store := document.NewStore(app)
-	subject := uuid.NewString()
+	subject := memberSubject
 	doc, _, err := store.Upsert(identity(ctx, tenantID, subject), docFixture(tenantID, "download-concurrent", 23))
 	if err != nil {
 		t.Fatalf("Upsert: %v", err)

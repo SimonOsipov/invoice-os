@@ -116,7 +116,7 @@ func twoFilePartsBody(t *testing.T, filename1 string, content1 []byte, filename2
 // Pinned so a client bug (accidentally appending "file" twice) has a known,
 // tested outcome rather than an assumed one.
 func TestPreviewHandler_TwoFilePartsFirstWins(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	first := csvBody(t, []string{"First Col"}, [][]string{{"F1"}})
 	second := csvBody(t, []string{"Second Col"}, [][]string{{"S1"}})
 	body, contentType := twoFilePartsBody(t, "first.csv", first, "second.csv", second)
@@ -169,7 +169,7 @@ func emptyFilenamePartBody(t *testing.T, content []byte) (io.Reader, string) {
 // behavior, load-bearing for any client that might send filename="" for a
 // pasted/clipboard file.
 func TestPreviewHandler_EmptyFilenamePart400(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	body, contentType := emptyFilenamePartBody(t, []byte("Invoice No\nINV-1\n"))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
 
@@ -192,7 +192,7 @@ func TestPreviewHandler_EmptyFilenamePart400(t *testing.T) {
 // anywhere in this package -- it is metadata, never a filesystem path. The
 // uploaded BYTES (not any file on disk) are what gets previewed.
 func TestPreviewHandler_PathTraversalFilenameNeverTouchesFilesystem(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No"}
 	rows := [][]string{{"INV-1"}}
 	body, contentType := buildMultipartBody(t, "", "", "../../etc/passwd.csv", "", csvBody(t, header, rows))
@@ -214,7 +214,7 @@ func TestPreviewHandler_PathTraversalFilenameNeverTouchesFilesystem(t *testing.T
 // away -- consistent with PRV-15's "no filtering" guarantee, just pushed to
 // the extreme where EVERY cell is blank rather than just one.
 func TestPreviewHandler_AllBlankHeaderCells(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"", "", "", ""}
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", csvBody(t, header, nil))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
@@ -240,7 +240,7 @@ func TestPreviewHandler_AllBlankHeaderCells(t *testing.T) {
 // these column names, and a stray BOM on columns[0] would silently break
 // every header match on that first column for any BOM-prefixed upload.
 func TestPreviewHandler_UTF8BOMStrippedFromFirstColumn(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	bom := []byte{0xEF, 0xBB, 0xBF}
 	raw := append(append([]byte{}, bom...), []byte("Invoice No,Issue Date\nINV-1,2026-06-03\n")...)
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
@@ -267,7 +267,7 @@ func TestPreviewHandler_UTF8BOMStrippedFromFirstColumn(t *testing.T) {
 // parse identically to \n -- columns carry no stray trailing \r, and the one
 // data row comes back with its own two verbatim fields.
 func TestPreviewHandler_CRLFLineEndings(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	raw := []byte("Invoice No,Issue Date\r\nINV-1,2026-06-03\r\n")
 	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
 	rec, rawBody, resp := doPreviewRequest(t, &id, contentType, body)
@@ -295,7 +295,7 @@ func TestPreviewHandler_CRLFLineEndings(t *testing.T) {
 // 300 entries -- no silent truncation of the column axis (only sample_rows'
 // ROW count is capped at maxSampleRows, never a row's own field count).
 func TestPreviewHandler_VeryWideHeader(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	const width = 300
 	header := make([]string, width)
 	row := make([]string, width)
@@ -333,7 +333,7 @@ func TestPreviewHandler_VeryWideHeader(t *testing.T) {
 // can send an inaccurate Content-Type header while the filename stays
 // truthful.
 func TestPreviewHandler_ExtensionWinsOverContentType(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 
 	t.Run(".csv name, xlsx content-type, real csv bytes", func(t *testing.T) {
 		header := []string{"Invoice No"}
@@ -379,7 +379,7 @@ func TestPreviewHandler_ExtensionWinsOverContentType(t *testing.T) {
 // part is silently ignored, not rejected -- since M4-08-02's client may
 // evolve to send it defensively/consistently with the create-import call.
 func TestPreviewHandler_ExtraUnexpectedPartIgnored(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Invoice No"}
 	body, contentType := buildMultipartBody(t, uuid.NewString(), "", "data.csv", "", csvBody(t, header, [][]string{{"INV-1"}}))
 	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
@@ -415,7 +415,7 @@ func TestPreviewHandler_ExtraUnexpectedPartIgnored(t *testing.T) {
 // mechanism). Confirmed by mutation: this test goes red against the same
 // hand-rolled-split mutant PRV-16 missed; reverted before commit.
 func TestPreviewHandler_ColumnsMatchDirectDecode_QuotedEmbeddedComma(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	header := []string{"Buyer, Ltd", "Total"}
 	rows := [][]string{{"Acme, Inc", "100"}}
 	fixture := csvBody(t, header, rows)
@@ -455,7 +455,7 @@ func TestPreviewHandler_ConcurrentRequestsIsolated(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 			col := fmt.Sprintf("Col-%d", i)
 			val := fmt.Sprintf("Val-%d", i)
 			body, contentType := buildMultipartBody(t, "", "", "data.csv", "", csvBody(t, []string{col}, [][]string{{val}}))

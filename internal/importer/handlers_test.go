@@ -281,7 +281,7 @@ func TestCreateHandler_201(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IMP-API-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-02 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"IMP-API-02-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -325,7 +325,7 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IMP-API-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-03 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"IMP-API-03-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -375,7 +375,7 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 // wire, so the padding rides in an unrelated part: the cap bounds the WHOLE
 // request, not one part.
 func TestCreateHandler_OversizedBody413(t *testing.T) {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run when the request body exceeds the upload cap")
 		return BatchResult{}, nil
@@ -412,7 +412,7 @@ func TestCreateHandler_BadMapping400(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when mapping is missing or malformed")
 				return BatchResult{}, nil
@@ -443,7 +443,7 @@ func TestCreateHandler_EntityNotFound404(t *testing.T) {
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "IMP-API-06 tenant")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No"}
 	rows := [][]string{{"IMP-API-06-1"}}
@@ -477,7 +477,7 @@ func TestCreateHandler_XLSX201(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IMP-API-07 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-07 entity")
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"IMP-API-07-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
@@ -918,7 +918,7 @@ func TestCreateHandler_PassesSanitizedPartFilenameToImp(t *testing.T) {
 		capturedFilename = filename
 		return BatchResult{}, nil
 	}
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
@@ -958,7 +958,7 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 		capturedDryRun = dryRun
 		return BatchResult{RowsTotal: len(rows), RowsValid: len(rows)}, nil
 	}
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
 	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
@@ -986,7 +986,7 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "BULK-01-10 tenant")
 	entityID := seedEntity(t, super, tenantID, "BULK-01-10 entity")
-	realID := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	realID := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 
 	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
 	rows := [][]string{{"BULK-01-10-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}

@@ -1,38 +1,49 @@
-// contract_red_test.go: the RED half of the twelve-law contract suite -- deliberately broken
-// extractors, one per law, graded by the EXACT set of law ids RunExtractorContract records.
-// Nothing in contract_test.go proves the suite REJECTS a bad extractor; this file is what does.
-//
-// STAGE 1 (this commit) ships the MACHINERY and an EMPTY redCases table. Stage 2 fills the
-// table with fifteen rows and adds the per-law TestRedCase_* specs.
+// contract_red_test.go: the RED half of the twelve-law contract suite -- fifteen deliberately
+// broken extractors, graded by the EXACT set of law ids RunExtractorContract records. Nothing
+// in contract_test.go proves the suite REJECTS a bad extractor; this file is what does.
 //
 // HONEST FRAMING (do not relabel any spec below without re-reading this):
-//   - Before this file existed the package compiled and all 32 of its tests passed. So the red
-//     recorded here is a real assertion failure, not a build failure standing in for one --
-//     that is what the empty table buys.
-//   - TestAllLaws_EveryLawHasADemonstratedRed is the ONE genuinely red-first spec in this
-//     commit. Against the empty table it fails on twelve assertions, one per orphaned law id.
-//   - TestContractSuite_RejectsNonConformingExtractors is RED here on a VACUITY GUARD -- zero
-//     rows for twelve laws -- and not on any law. It is not a law transition and must not be
-//     sold as one. From Stage 2 on it is what drives every broken extractor.
-//   - TestContractCorpusNeedsNoRestore is a DESIGN LOCK, never red-first. Its fingerprint half
-//     passes VACUOUSLY here: the loop runs zero rows, so it compares two fresh corpora with no
-//     extractor in between. Its no-Cleanup scan is live from this commit.
+//   - TestAllLaws_EveryLawHasADemonstratedRed was the ONE genuinely red-first spec here.
+//     Against the empty table the previous commit shipped, it failed on twelve assertions, one
+//     per orphaned law id. It is green from this commit because the table carries all twelve.
+//   - TestContractSuite_RejectsNonConformingExtractors was red in that commit on a VACUITY
+//     GUARD -- zero rows for twelve laws -- and not on any law. That is not a law transition
+//     and must not be sold as one. From here on it is what drives all fifteen rows.
+//   - The six TestRedCase_* specs are EXECUTABLE PROOF, green from their first run. They could
+//     not compile before the table existed, and a build failure is not a red test. Their value
+//     was shown by breaking the law each one names instead: see the mutation table below.
+//   - TestContractCorpusNeedsNoRestore is a DESIGN LOCK, never red-first.
 //
-// THE FINGERPRINT HALF ONLY DISCRIMINATES IF THE E05 ROW'S WRITE IS NON-INVOLUTIVE. Measured on
-// this story: against a memoised newCorpus -- the shared corpus this locks out -- an E05 row
-// writing doc.Bytes[0] ^= 0xFF leaves this test GREEN, because the document laws then call
-// Extract an even number of times per blob and the XOR undoes itself before the second
-// fingerprint is taken. The same test against doc.Bytes[0]++ goes red naming all four
-// byte-carrying cases. Stage 2 ships that row; if it is ever made involutive this test becomes
-// decoration and nothing else will say so.
+// MEASURED ON THIS COMMIT -- every row watched failing, not merely watched passing. Each
+// mutation was applied to contract_test.go, the package run, and then reverted:
+//
+//	E04 success arm unsatisfiable  -> E04/nil-slice-on-success + its spec; NOTHING else
+//	E04 error arm deleted (:383)   -> E04/fields-alongside-an-error + its spec; the NIL-SLICE
+//	                                  SPEC STAYS GREEN, which is why there are two E04 rows
+//	E05 hash compare unsatisfiable -> E05/mutates-doc-bytes + its spec
+//	E10 condition unsatisfiable    -> E10/missing-with-a-value
+//	E12 watchdog Errorf deleted    -> E12/blocks-past-the-budget ALONE
+//	E11 page site deleted (:487)   -> E11/page-zero ALONE
+//
+// TestAllLaws_IdsAreUniqueAndUsed stayed GREEN under every one of those: a static scan cannot
+// tell a live law from dead code, which is the limit contract_test.go:24-29 states and this
+// file closes.
+//
+// THE FINGERPRINT HALF ONLY DISCRIMINATES IF THE E05 ROW'S WRITE IS NON-INVOLUTIVE. Measured
+// on this story: against a memoised newCorpus -- the shared corpus this locks out -- an E05 row
+// writing doc.Bytes[0] ^= 0xFF leaves this test GREEN, because a SHARED blob then takes eight
+// live Extract calls and the XOR undoes itself before the second fingerprint is taken. (Under
+// the shipped factory each fresh blob takes exactly one, so the parity is a property of the
+// mutant, not of the runner.) The shipped row writes doc.Bytes[0]++ and the same mutant goes
+// red naming all four byte-carrying cases -- re-measured here, not inherited. Make that write
+// involutive and this test becomes decoration with nothing else to say so.
 //
 // It ranges redCases itself rather than depending on running after the table. "After the full
 // red table runs" is not a property of a Go test: -run and -shuffle both change ordering, and a
 // filtered CI run would make it vacuous. The one slow row is excluded because it costs a full
-// cancelledExtractBudget. Stage 2 must keep that row's Extract clear of doc.Bytes, or the
-// exclusion silently loses coverage: callExtractCancelled strands that goroutine for the
-// binary's life, so a late write through the bytes it still holds would land inside some other
-// test entirely.
+// cancelledExtractBudget. That row's Extract never indexes doc.Bytes, which is what makes the
+// exclusion sound: callExtractCancelled strands its goroutine for the binary's life, so a late
+// write through the bytes it still holds would land inside some other test entirely.
 //
 // OVERLAP, stated rather than implied: TestCorpusIsFreshPerLaw (contract_test.go) subsumes the
 // fingerprint half FOR CORPUS-ALIASING MUTATIONS, not entirely. It calls newCorpus twice back
@@ -43,10 +54,11 @@
 // absent rather than merely designed out.
 //
 // refExtractor is embedded BY VALUE. There is no *refExtractor: refExtractor is a struct{} with
-// value receivers and newRefExtractor returns a value (contract_test.go:216-224). Re-probed on
-// this subtask, all three shapes: a value embed works; newRefExtractor().(*refExtractor) panics
-// on the interface conversion; and a zero *refExtractor panics on the first promoted call even
-// though the type is zero-width, because Go emits the nil check regardless.
+// value receivers and newRefExtractor returns a value (contract_test.go:216-224). Re-probed by
+// COMPILING all three shapes on this subtask: a value embed works; newRefExtractor().(*refExtractor)
+// panics on the interface conversion; and a zero *refExtractor satisfies the interface, returns
+// fine from an OVERRIDDEN method, and panics on the first PROMOTED one even though the type is
+// zero-width, because Go emits the nil check regardless. That last shape gets no compiler help.
 //
 // Package extraction_test (external). Imports are stdlib plus internal/extraction only
 // (deps_test.go scan B sees test imports). No test here skips and no database environment
@@ -55,11 +67,15 @@
 package extraction_test
 
 import (
+	"context"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
@@ -88,10 +104,258 @@ type redCase struct {
 	slow bool
 }
 
-// redCases is EMPTY in Stage 1, which is what makes TestAllLaws_EveryLawHasADemonstratedRed a
-// genuine red against a package that already compiles. Stage 2 fills it with fifteen rows:
-// E01, E02, E03, E04 twice, E05, E06, E07, E08, E09, E10, E11 twice, E12 twice.
-var redCases = []redCase{}
+// Every broken extractor below embeds refExtractor BY VALUE and overrides the least it can, so
+// whatever the suite records is attributable to the override and not to the scaffolding.
+
+const redValue = "RED-0001"
+
+// errRedUnreadable is the lawful error for a document an extractor cannot read.
+var errRedUnreadable = errors.New("red extractor: document unreadable")
+
+// lawfulFields is the reference result: one named field, a non-empty value, a normalised
+// region, a declared reason. Each row's defect is a single departure from this. A fresh Value
+// pointer per call, matching refExtractor.
+func lawfulFields() []extraction.Field {
+	value := redValue
+	return []extraction.Field{{
+		Name:   "invoice_number",
+		Value:  &value,
+		Region: &extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20},
+		Reason: extraction.ReasonNone,
+	}}
+}
+
+// redFields carries every row whose defect is in the RESULT. It reads nothing out of doc and
+// honours cancellation, so build is the only variable and no such row can trip E05 or E12.
+type redFields struct {
+	refExtractor
+	build func() []extraction.Field
+}
+
+func (e redFields) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.build(), nil
+}
+
+// driftingName trips BOTH E01 sites in one row: empty on an instance's first call, then
+// something else. E03 stays clear because the runner compares each instance's FIRST call
+// (contract_test.go:345-355), and every instance's first call returns the same empty string.
+type driftingName struct {
+	refExtractor
+	calls int
+}
+
+func newDriftingName() extraction.Extractor { return &driftingName{} }
+
+func (e *driftingName) Name() string {
+	e.calls++
+	if e.calls == 1 {
+		return ""
+	}
+	return "drifted"
+}
+
+// driftingVersion is driftingName's twin, on E02's two sites.
+type driftingVersion struct {
+	refExtractor
+	calls int
+}
+
+func newDriftingVersion() extraction.Extractor { return &driftingVersion{} }
+
+func (e *driftingVersion) Version() string {
+	e.calls++
+	if e.calls == 1 {
+		return ""
+	}
+	return "drifted"
+}
+
+// instanceStampedIdentity stamps Name and Version with a sequence number, so two instances
+// disagree and BOTH E03 sites fire while each instance stays stable across its own calls.
+type instanceStampedIdentity struct {
+	refExtractor
+	seq int
+}
+
+// newInstanceStampedIdentity keeps the counter PER FACTORY. Per instance it would trip E01 and
+// E02 instead; process-wide it would leak across rows and across repeat runs of one row.
+func newInstanceStampedIdentity() func() extraction.Extractor {
+	seq := 0
+	return func() extraction.Extractor {
+		seq++
+		return instanceStampedIdentity{seq: seq}
+	}
+}
+
+func (e instanceStampedIdentity) Name() string    { return fmt.Sprintf("stamped-name-%d", e.seq) }
+func (e instanceStampedIdentity) Version() string { return fmt.Sprintf("stamped-version-%d", e.seq) }
+
+// E04, success half: a nil slice alongside a nil error -- the []T to JSON null hazard.
+func newNilSliceOnSuccess() extraction.Extractor { return redFields{build: nilSliceOnSuccess} }
+
+func nilSliceOnSuccess() []extraction.Field { return nil }
+
+// fieldsWithError is E04's error half: a non-nil slice smuggled out alongside an error. It
+// takes doc as a blank so it cannot touch doc.Bytes -- E05 does not skip a live-context error,
+// so a row that both errored and mutated would record E04 and E05 and fail the exact-set
+// binding. This row is what keeps the error arm alive: with it deleted the success-half spec
+// stays green.
+type fieldsWithError struct{ refExtractor }
+
+func newFieldsWithError() extraction.Extractor { return fieldsWithError{} }
+
+func (fieldsWithError) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return lawfulFields(), errRedUnreadable
+}
+
+// bytesMutating writes through the caller's bytes. The write is NON-INVOLUTIVE on purpose --
+// see this file's header; an XOR leaves TestContractCorpusNeedsNoRestore green against the
+// shared corpus it exists to lock out. The length guard is required: two corpus cases carry
+// zero bytes and doc.Bytes[0] would panic.
+type bytesMutating struct{ refExtractor }
+
+func newBytesMutating() extraction.Extractor { return bytesMutating{} }
+
+func (bytesMutating) Extract(ctx context.Context, doc extraction.Document) ([]extraction.Field, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(doc.Bytes) > 0 {
+		doc.Bytes[0]++
+	}
+	return lawfulFields(), nil
+}
+
+// E06: one field with an empty Name beside a lawful one. E07 skips empty names by design, so
+// this stays a singleton.
+func newEmptyFieldName() extraction.Extractor { return redFields{build: emptyFieldName} }
+
+func emptyFieldName() []extraction.Field {
+	return append(lawfulFields(), extraction.Field{Reason: extraction.ReasonNone})
+}
+
+// E07: two fields sharing a Name, each otherwise lawful.
+func newDuplicateFieldNames() extraction.Extractor { return redFields{build: duplicateFieldNames} }
+
+func duplicateFieldNames() []extraction.Field {
+	second := lawfulFields()[0]
+	value := "RED-0002"
+	second.Value = &value
+	return append(lawfulFields(), second)
+}
+
+// E08: a non-nil Value pointing at an empty string. Region is nil, so E11 skips the field.
+func newEmptyValuePointer() extraction.Extractor { return redFields{build: emptyValuePointer} }
+
+func emptyValuePointer() []extraction.Field {
+	value := ""
+	return []extraction.Field{{Name: "invoice_number", Value: &value, Reason: extraction.ReasonNone}}
+}
+
+// E09: a Reason outside the five contract_test.go writes out. Not ReasonMissing, so E10 stays
+// clear.
+func newUndeclaredReason() extraction.Extractor { return redFields{build: undeclaredReason} }
+
+func undeclaredReason() []extraction.Field {
+	fields := lawfulFields()
+	fields[0].Reason = extraction.Reason("bogus")
+	return fields
+}
+
+// E10: ReasonMissing carrying a Value. The value stays non-empty so E08 stays clear, and
+// ReasonMissing is declared so E09 does.
+func newMissingWithValue() extraction.Extractor { return redFields{build: missingWithValue} }
+
+func missingWithValue() []extraction.Field {
+	fields := lawfulFields()
+	fields[0].Reason = extraction.ReasonMissing
+	return fields
+}
+
+// E11, absolute coordinates: PDF points where the contract wants a normalised box. Page 1 is
+// lawful, so this reaches the X and Y sites only -- two of E11's three.
+func newAbsoluteRegion() extraction.Extractor { return redFields{build: absoluteRegion} }
+
+func absoluteRegion() []extraction.Field {
+	fields := lawfulFields()
+	fields[0].Region = &extraction.Region{Page: 1, X0: 72, Y0: 720, X1: 540, Y1: 750}
+	return fields
+}
+
+// E11, page zero: the third site, and the only row in the table that reaches it. The box is
+// normalised and non-inverted, so both conjunctions are satisfied and this fires once per
+// corpus case rather than three times.
+func newPageZeroRegion() extraction.Extractor { return redFields{build: pageZeroRegion} }
+
+func pageZeroRegion() []extraction.Field {
+	fields := lawfulFields()
+	fields[0].Region = &extraction.Region{Page: 0, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20}
+	return fields
+}
+
+// cancellationIgnoring never reads ctx, so it returns a result where the contract wants an
+// error and a nil slice. It reaches E12's two return-value sites.
+type cancellationIgnoring struct{ refExtractor }
+
+func newCancellationIgnoring() extraction.Extractor { return cancellationIgnoring{} }
+
+func (cancellationIgnoring) Extract(context.Context, extraction.Document) ([]extraction.Field, error) {
+	return lawfulFields(), nil
+}
+
+// cancellationBlocking reaches E12's third site, the watchdog, which nothing else in the
+// repository exercises. Two conditions carry the whole row:
+//
+//	ctx.Err() != nil        -- a live-context wait would hang law E04 forever, because
+//	                           callExtract runs Extract synchronously with no timer
+//	len(doc.Bytes) > 1<<20  -- only the ceiling case is that large, so exactly one of the six
+//	                           E12 probes pays the budget instead of all six
+//
+// It never indexes doc.Bytes: callExtractCancelled strands this goroutine for the binary's
+// life still holding doc, so a write here would land inside some later test with nothing to
+// attribute it.
+type cancellationBlocking struct{ refExtractor }
+
+func newCancellationBlocking() extraction.Extractor { return cancellationBlocking{} }
+
+func (cancellationBlocking) Extract(ctx context.Context, doc extraction.Document) ([]extraction.Field, error) {
+	if err := ctx.Err(); err != nil {
+		if len(doc.Bytes) > 1<<20 {
+			time.Sleep(cancelledExtractBudget + time.Second)
+		}
+		return nil, err
+	}
+	return lawfulFields(), nil
+}
+
+// redCases is fifteen rows for twelve laws. E04, E11 and E12 carry a second row each because
+// one broken extractor cannot reach every emission site those laws own: the runner holds 20
+// Errorf sites, and these fifteen rows exercise all 20. Fourteen rows cost about 13ms apiece;
+// the slow one costs a full cancelledExtractBudget and is the only thing in the repository
+// that goes red when the watchdog stops reporting.
+var redCases = []redCase{
+	{lawID: "E01", name: "name-empty-then-drifting", want: lawSet("E01"), newExtractor: newDriftingName},
+	{lawID: "E02", name: "version-empty-then-drifting", want: lawSet("E02"), newExtractor: newDriftingVersion},
+	{lawID: "E03", name: "identity-stamped-per-instance", want: lawSet("E03"), newExtractor: newInstanceStampedIdentity()},
+	{lawID: "E04", name: "nil-slice-on-success", want: lawSet("E04"), newExtractor: newNilSliceOnSuccess},
+	{lawID: "E04", name: "fields-alongside-an-error", want: lawSet("E04"), newExtractor: newFieldsWithError},
+	{lawID: "E05", name: "mutates-doc-bytes", want: lawSet("E05"), newExtractor: newBytesMutating},
+	{lawID: "E06", name: "empty-field-name", want: lawSet("E06"), newExtractor: newEmptyFieldName},
+	{lawID: "E07", name: "duplicate-field-names", want: lawSet("E07"), newExtractor: newDuplicateFieldNames},
+	{lawID: "E08", name: "empty-value-pointer", want: lawSet("E08"), newExtractor: newEmptyValuePointer},
+	{lawID: "E09", name: "undeclared-reason", want: lawSet("E09"), newExtractor: newUndeclaredReason},
+	{lawID: "E10", name: "missing-with-a-value", want: lawSet("E10"), newExtractor: newMissingWithValue},
+	{lawID: "E11", name: "absolute-coordinates", want: lawSet("E11"), newExtractor: newAbsoluteRegion},
+	{lawID: "E11", name: "page-zero", want: lawSet("E11"), newExtractor: newPageZeroRegion},
+	{lawID: "E12", name: "ignores-cancellation", want: lawSet("E12"), newExtractor: newCancellationIgnoring},
+	{lawID: "E12", name: "blocks-past-the-budget", want: lawSet("E12"), newExtractor: newCancellationBlocking, slow: true},
+}
 
 // lawSet builds a want value from a list of ids.
 func lawSet(ids ...string) map[string]bool {
@@ -197,6 +461,51 @@ func TestContractSuite_RejectsNonConformingExtractors(t *testing.T) {
 			assertExactLawIDs(t, tc.lawID+"/"+tc.name, recordedLawIDs(tc.newExtractor), tc.want)
 		})
 	}
+}
+
+// The six TestRedCase_* specs below are EXECUTABLE PROOF, not red-first -- see this file's
+// header, including which law mutation moves each one. They name the property in the test
+// output, which the table's generated subtest names do not.
+//
+// The blocking E12 row deliberately gets no named spec: it costs a full cancelledExtractBudget,
+// and running it twice takes the package from about 6s to about 11s and the repository wall
+// time off its plateau. It is graded once, by the table.
+
+// TestRedCase_E04NilSliceIsRejected: the []T to JSON null guard made executable.
+func TestRedCase_E04NilSliceIsRejected(t *testing.T) {
+	assertExactLawIDs(t, "E04/nil-slice-on-success", recordedLawIDs(newNilSliceOnSuccess), lawSet("E04"))
+}
+
+// TestRedCase_E04FieldsAlongsideAnErrorAreRejected covers E04's OTHER half. Without it the
+// error arm can be deleted with the nil-slice spec above still green and the repository still
+// green -- measured, and the reason E04 carries two rows.
+func TestRedCase_E04FieldsAlongsideAnErrorAreRejected(t *testing.T) {
+	assertExactLawIDs(t, "E04/fields-alongside-an-error", recordedLawIDs(newFieldsWithError), lawSet("E04"))
+}
+
+// TestRedCase_E05MutatingExtractIsRejected: an in-place write through the caller's bytes is
+// recorded, and recorded as E05 alone.
+func TestRedCase_E05MutatingExtractIsRejected(t *testing.T) {
+	assertExactLawIDs(t, "E05/mutates-doc-bytes", recordedLawIDs(newBytesMutating), lawSet("E05"))
+}
+
+// TestRedCase_E11AbsoluteCoordinatesAreRejected pairs with the
+// extraction_field_results_bbox_normalised CHECK, so PDF points in a Region are caught at both
+// layers.
+func TestRedCase_E11AbsoluteCoordinatesAreRejected(t *testing.T) {
+	assertExactLawIDs(t, "E11/absolute-coordinates", recordedLawIDs(newAbsoluteRegion), lawSet("E11"))
+}
+
+// TestRedCase_E11PageZeroIsRejected: pages are 1-based. This is the only row that reaches
+// E11's page site, so deleting that site moves this and nothing else.
+func TestRedCase_E11PageZeroIsRejected(t *testing.T) {
+	assertExactLawIDs(t, "E11/page-zero", recordedLawIDs(newPageZeroRegion), lawSet("E11"))
+}
+
+// TestRedCase_E12IgnoringCancellationIsRejected: an extractor that returns a result for an
+// already-cancelled context is recorded. The watchdog half of E12 is graded by the slow row.
+func TestRedCase_E12IgnoringCancellationIsRejected(t *testing.T) {
+	assertExactLawIDs(t, "E12/ignores-cancellation", recordedLawIDs(newCancellationIgnoring), lawSet("E12"))
 }
 
 const redSuiteFile = "contract_red_test.go"

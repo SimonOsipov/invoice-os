@@ -29,11 +29,18 @@ func goListDeps(t *testing.T, extra ...string) []string {
 	return strings.Split(strings.TrimSpace(string(out)), "\n")
 }
 
+// fenceT is the narrow t assertFenced needs. *testing.T satisfies it; so does the recorder
+// in extractor_edge_test.go that proves the fence reports anything at all.
+type fenceT interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
 // assertFenced flags every in-module dependency outside this package and
 // internal/platform/*. It matches on the full module path: the stdlib ships
 // packages literally named internal/abi, internal/platform and internal/goroot,
 // so a bare "internal/" prefix test fires on Go's own runtime internals.
-func assertFenced(t *testing.T, scan string, lines []string) {
+func assertFenced(t fenceT, scan string, lines []string) {
 	t.Helper()
 
 	for _, raw := range lines {

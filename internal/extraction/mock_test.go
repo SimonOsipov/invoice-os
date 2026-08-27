@@ -1,6 +1,7 @@
-// mock_test.go: MockExtractor's nine specs -- the twelve-law contract run, determinism in three
-// shapes, distinct inputs, AC-3's reason matrix, the ambient-dependency scan, non-mutation,
-// fresh memory per call, the pinned Name/Version literals, and MockFixtures handing back a copy.
+// mock_test.go: MockExtractor's ten specs -- the twelve-law contract run, pointer-only interface
+// satisfaction, determinism in three shapes, distinct inputs, AC-3's reason matrix, the
+// ambient-dependency scan, non-mutation, fresh memory per call on BOTH arms, the pinned
+// Name/Version literals, and MockFixtures handing back a copy.
 //
 // HONEST FRAMING (do not relabel a spec without re-reading this):
 //   - Before mock.go exists NOTHING here is red. The package does not compile, which is a BUILD
@@ -14,6 +15,11 @@
 //     CONFIRMATORY: the stub passes both. TestMockExtractor_HasNoAmbientDependency is a
 //     REGRESSION GUARD, shown to fire by planting time.Now, a sibling func and a sibling var in
 //     mock.go rather than by a red-to-green transition.
+//   - TestMockExtractor_OnlyThePointerSatisfiesExtractor is a REGRESSION GUARD added in QA:
+//     moving all four methods to value receivers left every other spec green, so the var _
+//     Extractor line documented the aliasing hazard without defending it.
+//   - TestMockExtractor_ReturnsFreshMemoryPerCall probes BOTH arms. Dropping cloneFields from
+//     the FIXTURE arm alone left all thirty-one specs green until it did.
 //   - TestMockExtractor_PinsNameAndVersion and TestMockFixtures_HandsBackACopy arrived with the
 //     real mock.go and are GREEN from their first run. Neither is a transition. The pin closes
 //     laws E01/E02, which require only a non-empty value that is stable within one run and so
@@ -89,6 +95,36 @@ func mxSortedReasons(m map[extraction.Reason]bool) []string {
 // satisfies ContractT, so a violation is reported at its own law's message.
 func TestMockExtractor_PassesTheContract(t *testing.T) {
 	RunExtractorContract(t, func() extraction.Extractor { return extraction.NewMockExtractor() })
+}
+
+// TestMockExtractor_OnlyThePointerSatisfiesExtractor (REGRESSION GUARD): var _ Extractor =
+// (*MockExtractor)(nil) is satisfied whether or not the value type also implements, so it cannot
+// see a receiver change. A value satisfying the seam is the aliasing hazard
+// internal/submission/mock_adapter.go:150-153 documents.
+func TestMockExtractor_OnlyThePointerSatisfiesExtractor(t *testing.T) {
+	iface := reflect.TypeOf((*extraction.Extractor)(nil)).Elem()
+	if iface.NumMethod() == 0 {
+		t.Fatalf("extraction.Extractor declares no method; Implements would be true of every type")
+	}
+
+	ptr := reflect.TypeOf(extraction.NewMockExtractor())
+	if ptr.Kind() != reflect.Ptr {
+		t.Fatalf("NewMockExtractor returned %s, want a pointer", ptr)
+	}
+	if !ptr.Implements(iface) {
+		t.Fatalf("%s does not satisfy Extractor; the %d method(s) it needs are %v", ptr, iface.NumMethod(), mxMethodNames(iface))
+	}
+	if val := ptr.Elem(); val.Implements(iface) {
+		t.Errorf("the VALUE type %s satisfies Extractor too; every method must take a POINTER receiver, or a copied MockExtractor silently satisfies the seam", val)
+	}
+}
+
+func mxMethodNames(t reflect.Type) []string {
+	out := make([]string, t.NumMethod())
+	for i := range out {
+		out[i] = t.Method(i).Name
+	}
+	return out
 }
 
 // TestMockExtractor_IsDeterministic (CONFIRMATORY on its DeepEqual clauses): reflect.DeepEqual
@@ -374,47 +410,71 @@ func TestMockExtractor_DoesNotMutateInput(t *testing.T) {
 }
 
 // TestMockExtractor_ReturnsFreshMemoryPerCall (RED-FIRST): no law catches a mock that hands every
-// caller the table's own memory, so a caller mutating one result would corrupt the next. Address
-// inequality is only a proxy; the clobber-and-ask-again below is the oracle, and it covers the
-// slice backing array as well as the pointers.
+// caller the table's own memory, so a caller mutating one result would corrupt the next. Both
+// arms: dropping cloneFields from the FIXTURE arm alone left every other spec green.
 func TestMockExtractor_ReturnsFreshMemoryPerCall(t *testing.T) {
 	ext := extraction.NewMockExtractor()
-	doc := mxUnknown("freshness probe")
+
+	type freshProbe struct {
+		label string
+		doc   extraction.Document
+	}
+	probes := []freshProbe{{"<default>", mxUnknown("freshness probe")}}
+	for _, fx := range extraction.MockFixtures() {
+		probes = append(probes, freshProbe{fx.Name, extraction.Document{Bytes: fx.Bytes, ContentType: "application/pdf"}})
+	}
+	if len(probes) < 2 {
+		t.Fatalf("only the default arm is probed; MockFixtures returned %d fixture(s)", len(probes)-1)
+	}
+
+	var values, regions int
+	for _, p := range probes {
+		v, r := mxAssertFreshMemory(t, ext, p.doc, p.label)
+		values += v
+		regions += r
+	}
+	if values == 0 {
+		t.Fatalf("no probed result carries a Value; the *string mutations proved nothing")
+	}
+	if regions == 0 {
+		t.Fatalf("no probed result carries a Region; the *Region mutations proved nothing")
+	}
+}
+
+// mxAssertFreshMemory clobbers one result and asserts a later call comes back pristine. Address
+// inequality is only a proxy; the clobber-and-ask-again is the oracle, and it covers the slice
+// backing array as well as the pointers. Returns how many Values and Regions it clobbered so the
+// caller can reject a run that examined neither.
+func mxAssertFreshMemory(t *testing.T, ext extraction.Extractor, doc extraction.Document, label string) (int, int) {
+	t.Helper()
 
 	first := mxExtract(t, ext, doc)
 	if len(first) == 0 {
-		t.Fatalf("the default result is empty; the mutations below would prove nothing")
+		t.Fatalf("%s: the result is empty; the mutations below would prove nothing", label)
 	}
 
 	pristine := make([]extraction.Field, len(first))
 	copy(pristine, first)
-	var pristineValues []string
-	var pristineRegions int
+	var pristineValues, pristineRegions int
 	for _, f := range first {
 		if f.Value != nil {
-			pristineValues = append(pristineValues, *f.Value)
+			pristineValues++
 		}
 		if f.Region != nil {
 			pristineRegions++
 		}
 	}
-	if len(pristineValues) == 0 {
-		t.Fatalf("no field in the default result carries a Value; the *string mutation below would prove nothing")
-	}
-	if pristineRegions == 0 {
-		t.Fatalf("no field in the default result carries a Region; the *Region mutation below would prove nothing")
-	}
 
 	second := mxExtract(t, ext, doc)
 	if len(second) != len(first) {
-		t.Fatalf("two calls on one instance returned %d and %d field(s)", len(first), len(second))
+		t.Fatalf("%s: two calls returned %d and %d field(s)", label, len(first), len(second))
 	}
 	for i := range first {
 		if first[i].Value != nil && first[i].Value == second[i].Value {
-			t.Errorf("field %d: two calls returned ONE *string at %p", i, first[i].Value)
+			t.Errorf("%s: field %d: two calls returned ONE *string at %p", label, i, first[i].Value)
 		}
 		if first[i].Region != nil && first[i].Region == second[i].Region {
-			t.Errorf("field %d: two calls returned ONE *Region at %p", i, first[i].Region)
+			t.Errorf("%s: field %d: two calls returned ONE *Region at %p", label, i, first[i].Region)
 		}
 	}
 
@@ -430,31 +490,32 @@ func TestMockExtractor_ReturnsFreshMemoryPerCall(t *testing.T) {
 
 	third := mxExtract(t, ext, doc)
 	if len(third) != len(pristine) {
-		t.Fatalf("the third call returned %d field(s), the first returned %d", len(third), len(pristine))
+		t.Fatalf("%s: the third call returned %d field(s), the first returned %d", label, len(third), len(pristine))
 	}
 	if third[0].Name != pristine[0].Name {
-		t.Errorf("mutating a returned Field.Name changed the next call's field 0 to %q, want %q", third[0].Name, pristine[0].Name)
+		t.Errorf("%s: mutating a returned Field.Name changed the next call's field 0 to %q, want %q", label, third[0].Name, pristine[0].Name)
 	}
 	var seen int
 	for _, f := range third {
 		if f.Value != nil {
 			if *f.Value == "CLOBBERED" {
-				t.Errorf("mutating a returned *string changed the next call's %q to %q", f.Name, *f.Value)
+				t.Errorf("%s: mutating a returned *string changed the next call's %q to %q", label, f.Name, *f.Value)
 			}
 			seen++
 		}
 		if f.Region != nil && f.Region.Page == 9999 {
-			t.Errorf("mutating a returned *Region changed the next call's %q to Page %d", f.Name, f.Region.Page)
+			t.Errorf("%s: mutating a returned *Region changed the next call's %q to Page %d", label, f.Name, f.Region.Page)
 		}
 	}
-	if seen != len(pristineValues) {
-		t.Errorf("the third call carries %d Value(s), the first carried %d", seen, len(pristineValues))
+	if seen != pristineValues {
+		t.Errorf("%s: the third call carries %d Value(s), the first carried %d", label, seen, pristineValues)
 	}
+	return pristineValues, pristineRegions
 }
 
 // TestMockExtractor_PinsNameAndVersion (PIN): laws E01 and E02 accept any non-empty string that
-// does not change within one run, so a rename passes all twelve laws and all seven behavioural
-// specs while silently rewriting what extraction_jobs.extractor and .extractor_version mean for
+// does not change within one run, so a rename passes all twelve laws and every behavioural
+// spec while silently rewriting what extraction_jobs.extractor and .extractor_version mean for
 // every row already stored under the old value.
 func TestMockExtractor_PinsNameAndVersion(t *testing.T) {
 	ext := extraction.NewMockExtractor()
@@ -462,7 +523,7 @@ func TestMockExtractor_PinsNameAndVersion(t *testing.T) {
 		t.Errorf("Name() = %q, want %q; the value is persisted as extraction_jobs.extractor and changing it orphans every existing row", got, "mock")
 	}
 	if got := ext.Version(); got != "v1" {
-		t.Errorf("Version() = %q, want %q; the value is persisted as extraction_jobs.extractor_version", got, "v1")
+		t.Errorf("Version() = %q, want %q; a deliberate bump edits BOTH the mockExtractorVersion const in mock.go and this literal, and every extraction_jobs.extractor_version row already written keeps the old value", got, "v1")
 	}
 }
 

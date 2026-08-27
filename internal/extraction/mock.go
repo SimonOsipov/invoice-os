@@ -17,8 +17,7 @@ const (
 // MockExtractor holds no field: no clock, no counter, no cache, no state of any kind.
 type MockExtractor struct{}
 
-// Asserted on the POINTER type alone. A value and a pointer both satisfying Extractor is the
-// aliasing hazard internal/submission/mock_adapter.go:150-153 documents.
+// Pointer only; TestMockExtractor_OnlyThePointerSatisfiesExtractor rejects a value receiver.
 var _ Extractor = (*MockExtractor)(nil)
 
 func NewMockExtractor() *MockExtractor { return &MockExtractor{} }

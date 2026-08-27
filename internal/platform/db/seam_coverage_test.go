@@ -1614,14 +1614,19 @@ func scSweepHelperCallSitesInFile(fset *token.FileSet, rel string, f *ast.File, 
 // flagged as still-unsound even though every path seeds. It also matches by
 // identifier NAME, not go/types object identity, so two different variables
 // sharing a name in sibling closures within one function are not
-// distinguished. Neither manifests in internal/invoice today.
+// distinguished. Neither manifests in internal/invoice today. A sink whose
+// own body only conditionally reaches the INSERT (alwaysSeeds=false, see
+// TestN16) is never treated as a seed at its call site even in the branch
+// that would in fact insert -- sound but coarser than tracing actual
+// argument values into the guard condition.
 
 // scSweepMembershipSink is one local func that routes one of its own
 // parameters (at paramIdx, positional) into an `INSERT INTO memberships`
 // statement's user_id column -- directly, or by relaying that parameter
 // into another already-found membership sink.
 type scSweepMembershipSink struct {
-	paramIdx int
+	paramIdx    int
+	alwaysSeeds bool // false if the INSERT (or the relay) is reached only along some conditional path inside the sink's own body
 }
 
 var scSweepMembershipInsertRE = regexp.MustCompile(`(?is)INSERT\s+INTO\s+memberships\s*\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)`)
@@ -1659,11 +1664,29 @@ func scSweepMembershipColumnBindArg(sql string) (int, bool) {
 	return 0, false
 }
 
+// scSweepDBCallMethods is every Exec/Query-family method name scSweepIsDBCall
+// treats as DB-shaped. Matched on the callee's method name alone (not a
+// hardcoded receiver-variable list), so any differently-named pool/tx/conn
+// still qualifies.
+var scSweepDBCallMethods = map[string]bool{
+	"Exec": true, "ExecContext": true, "Query": true, "QueryRow": true, "QueryRowContext": true,
+}
+
+// scSweepIsDBCall reports whether call invokes a DB-shaped method. A t.Logf
+// or fmt.Sprintf that merely mentions SQL text is not (see TestN15).
+func scSweepIsDBCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && scSweepDBCallMethods[sel.Sel.Name]
+}
+
 // scSweepMembershipInsertCallBindArg finds an INSERT-into-memberships string
 // literal among call's own args and returns the arg expression bound to the
-// user_id column, or nil if call carries no such literal or the column has
-// no placeholder.
+// user_id column, or nil if call is not DB-shaped, carries no such literal,
+// or the column has no placeholder.
 func scSweepMembershipInsertCallBindArg(call *ast.CallExpr) ast.Expr {
+	if !scSweepIsDBCall(call) {
+		return nil
+	}
 	for k, arg := range call.Args {
 		lit, ok := arg.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
@@ -1712,7 +1735,8 @@ func scSweepFindMembershipSinks(decls []*ast.FuncDecl) map[string]scSweepMembers
 			}
 			for i, p := range params {
 				if p != "" && p == argID.Name {
-					sinks[fd.Name.Name] = scSweepMembershipSink{paramIdx: i}
+					stack, _ := scSweepGuardStackTo(fd.Body, call.Pos(), nil)
+					sinks[fd.Name.Name] = scSweepMembershipSink{paramIdx: i, alwaysSeeds: len(stack) == 0}
 				}
 			}
 			return true
@@ -1727,6 +1751,8 @@ func scSweepFindMembershipSinks(decls []*ast.FuncDecl) map[string]scSweepMembers
 			}
 			params := scSweepFlattenParams(fd.Type.Params)
 			found := -1
+			var relayCall *ast.CallExpr
+			var calleeName string
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
 				if found != -1 {
 					return false
@@ -1750,13 +1776,19 @@ func scSweepFindMembershipSinks(decls []*ast.FuncDecl) map[string]scSweepMembers
 				for i, p := range params {
 					if p != "" && p == argID.Name {
 						found = i
+						relayCall = call
+						calleeName = callee.Name
 						return false
 					}
 				}
 				return true
 			})
 			if found != -1 {
-				sinks[fd.Name.Name] = scSweepMembershipSink{paramIdx: found}
+				relayStack, _ := scSweepGuardStackTo(fd.Body, relayCall.Pos(), nil)
+				sinks[fd.Name.Name] = scSweepMembershipSink{
+					paramIdx:    found,
+					alwaysSeeds: len(relayStack) == 0 && sinks[calleeName].alwaysSeeds,
+				}
 				changed = true
 			}
 		}
@@ -1764,13 +1796,19 @@ func scSweepFindMembershipSinks(decls []*ast.FuncDecl) map[string]scSweepMembers
 	return sinks
 }
 
-// scSweepFindSeedCall finds the call inside body that seeds identifier name
-// a membership row -- an inline INSERT-into-memberships literal fed name at
-// the user_id position, or a call into a resolved membership sink fed name
-// at its paramIdx. Returns nil if body seeds no such row for name (Tier 1:
-// no co-occurrence at all).
-func scSweepFindSeedCall(body *ast.BlockStmt, name string, sinks map[string]scSweepMembershipSink) *ast.CallExpr {
+// scSweepFindSeedCall finds the call inside body that seeds identifier name a
+// membership row, and whether that seed is eligible to clear Tier 2 -- an
+// inline INSERT-into-memberships literal fed name at the user_id position is
+// always eligible; a call into a resolved membership sink fed name at its
+// paramIdx is eligible only when that sink's own body always reaches its
+// INSERT (sink.alwaysSeeds). A conditional sink's guard lives in a different
+// function's (sometimes different file's) AST, so it is never spliced into
+// the caller's own guard stack below -- it just makes the call ineligible.
+// Returns (nil, false) if body seeds no such row for name (Tier 1: no
+// co-occurrence at all).
+func scSweepFindSeedCall(body *ast.BlockStmt, name string, sinks map[string]scSweepMembershipSink) (*ast.CallExpr, bool) {
 	var found *ast.CallExpr
+	eligible := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found != nil {
 			return false
@@ -1782,6 +1820,7 @@ func scSweepFindSeedCall(body *ast.BlockStmt, name string, sinks map[string]scSw
 		if target := scSweepMembershipInsertCallBindArg(call); target != nil {
 			if id, ok := target.(*ast.Ident); ok && id.Name == name {
 				found = call
+				eligible = true
 				return false
 			}
 		}
@@ -1789,13 +1828,14 @@ func scSweepFindSeedCall(body *ast.BlockStmt, name string, sinks map[string]scSw
 			if sink, ok := sinks[callee.Name]; ok && sink.paramIdx < len(call.Args) {
 				if id, ok := call.Args[sink.paramIdx].(*ast.Ident); ok && id.Name == name {
 					found = call
+					eligible = sink.alwaysSeeds
 					return false
 				}
 			}
 		}
 		return true
 	})
-	return found
+	return found, eligible
 }
 
 // scSweepFindSubjectUse finds the `Subject: name` composite-literal value
@@ -1973,8 +2013,8 @@ func scSweepGuardStackIsPrefix(seed, use []scSweepGuardEntry) bool {
 // or in the exact same branch. seedApprovalFactsFixture fails Tier 2: its
 // seed is inside `if staffed {}`, its use is unconditional.
 func scSweepRecogniseSeeding(fd *ast.FuncDecl, name string, sinks map[string]scSweepMembershipSink) bool {
-	seedCall := scSweepFindSeedCall(fd.Body, name, sinks)
-	if seedCall == nil {
+	seedCall, eligible := scSweepFindSeedCall(fd.Body, name, sinks)
+	if seedCall == nil || !eligible {
 		return false
 	}
 	useIdent := scSweepFindSubjectUse(fd.Body, name)
@@ -2310,10 +2350,7 @@ func TestN14(t *testing.T) {
 
 // scSweepNeedleCosmeticMention proves Tier 1 must not match on string
 // content alone: the INSERT-into-memberships text sits inside a t.Logf
-// call, never a real DB seed. KNOWN DEFECT (QA, AUDIT-12-04): the scan does
-// not check the call's callee, so this clears today -- t.Fatalf below fires
-// until scSweepMembershipInsertCallBindArg is restricted to an Exec/Query-
-// shaped call.
+// call, never a real DB seed.
 const scSweepNeedleCosmeticMention = `package x
 
 func TestN15(t *testing.T) {
@@ -2324,14 +2361,10 @@ func TestN15(t *testing.T) {
 }
 `
 
-// scSweepNeedleHiddenConditionalWrapper proves Tier 2's guard check must
-// reach into a called sink's own body: seedIfAdmin only seeds when
-// role=="admin", called here with "guest" -- no row is ever inserted, yet
-// the call site itself is unconditional. KNOWN DEFECT (QA, AUDIT-12-04):
-// scSweepFindMembershipSinks marks a func a sink whenever it relays its
-// param to another sink, regardless of what guards that relay -- t.Fatalf
-// below fires until sink resolution also propagates the sink's own
-// internal guard stack.
+// scSweepNeedleHiddenConditionalWrapper proves a resolved sink must not
+// count as unconditional just because its call site is: seedIfAdmin only
+// seeds when role=="admin", called here with "guest" -- no row is ever
+// inserted, yet the call site itself is unconditional.
 const scSweepNeedleHiddenConditionalWrapper = `package x
 
 func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
@@ -2434,20 +2467,15 @@ func scSweepRecogniseSeedingControlNeedles(t *testing.T) {
 			t.Fatalf("TestN14 cleared — Tier 1 over-cleared: the seeded identifier (otherUserID) is not the one read back as Subject (subject)")
 		}
 	})
-	t.Run("N15 cosmetic mention in a t.Logf, not a real seed -- KNOWN DEFECT, wrongly clears", func(t *testing.T) {
-		if !scSweepFixtureVarSiteCleared(t, "n15.go", scSweepNeedleCosmeticMention, "TestN15") {
-			t.Fatalf("TestN15 stayed flagged — the cosmetic-mention defect is fixed; drop this needle's inverted assertion and its KNOWN DEFECT comment")
+	t.Run("N15 cosmetic mention in a t.Logf, not a real seed -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n15.go", scSweepNeedleCosmeticMention, "TestN15") {
+			t.Fatalf("TestN15 cleared — a t.Logf call merely containing INSERT-INTO-memberships text is not a real DB seed; scSweepMembershipInsertCallBindArg must require an Exec/Query-shaped callee")
 		}
-		t.Errorf("DEFECT: TestN15 cleared via a t.Logf call that merely CONTAINS INSERT-INTO-memberships text — " +
-			"Tier 1 matches any CallExpr's string-literal args, not just an actual DB Exec/QueryRow; see scSweepMembershipInsertCallBindArg")
 	})
-	t.Run("N16 seed hidden inside a two-hop wrapper's own guard -- KNOWN DEFECT, wrongly clears", func(t *testing.T) {
-		if !scSweepFixtureVarSiteCleared(t, "n16.go", scSweepNeedleHiddenConditionalWrapper, "TestN16") {
-			t.Fatalf("TestN16 stayed flagged — the hidden-conditional-wrapper defect is fixed; drop this needle's inverted assertion and its KNOWN DEFECT comment")
+	t.Run("N16 seed hidden inside a two-hop wrapper's own guard -- stays flagged", func(t *testing.T) {
+		if scSweepFixtureVarSiteCleared(t, "n16.go", scSweepNeedleHiddenConditionalWrapper, "TestN16") {
+			t.Fatalf("TestN16 cleared — seedIfAdmin's own if role==\"admin\" guard means no row is ever inserted for \"guest\"; a relay must only count as unconditional when the resolved sink's own body always reaches its INSERT")
 		}
-		t.Errorf("DEFECT: TestN16 cleared via seedIfAdmin(..., \"guest\") — the outer call site is unconditional but the " +
-			"wrapper's OWN if role==\"admin\" guard means no row was ever inserted; scSweepFindMembershipSinks resolves a " +
-			"relay as an unconditional sink without checking what guards the relay inside the sink's own body")
 	})
 	t.Run("N17 two-hop membership wrapper, sibling file, genuinely unconditional -- clears", func(t *testing.T) {
 		fset := token.NewFileSet()

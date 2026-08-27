@@ -481,6 +481,11 @@ jobs:
         # DATABASE_* URLs, all already in this job's env; each DB-backed test self-skips
         # without them, so a missing DSN silently SKIPping is turned into a failed step here.
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS ./internal/reconciliation/...
+      - name: Run the extraction store suite (extraction_jobs / extraction_field_results as invoice_app) + per-test visibility & skip gate
+        # EXTR-01: this package's first DB-backed tests. -count=1 disables the test cache; no
+        # -run filter, so later tests are picked up with no workflow edit. Needs DATABASE_URL
+        # (app) and DATABASE_SUPERUSER_URL (fixtures), both already in this job's env.
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/extraction/...
 
   # M2-10 audit suite: proves audit_log rows are append-only (UPDATE/DELETE/TRUNCATE rejected
   # for the app by the missing grant and for the table owner by the append-only trigger) and

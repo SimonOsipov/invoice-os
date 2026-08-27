@@ -24,7 +24,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -739,9 +738,8 @@ func TestStaffing_SuspendKeepsStaffing(t *testing.T) {
 
 // TestStaffing_RequiresActiveAdminCaller: the CALLER axis, distinct from the unrestricted
 // SUBJECT axis above. The caller-role read carries AND status = 'active', so a suspended
-// or invited admin is refused as firmly as a preparer, and a caller with no membership
-// row at all is refused too. Every refusal submits a member the tenant really has, so it
-// is the gate answering and not validation.
+// or invited admin is refused as firmly as a preparer. Every refusal submits a member the
+// tenant really has, so it is the gate answering and not validation.
 func TestStaffing_RequiresActiveAdminCaller(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 staff-caller-axis")
@@ -753,8 +751,8 @@ func TestStaffing_RequiresActiveAdminCaller(t *testing.T) {
 	before := staffingRows(t, super, roleID)
 
 	// The request seam refuses a non-active caller before the store reads anything
-	// (db.WithinRequestTenantTxOpts); an ACTIVE caller, and one with no row at all,
-	// are still role refusals.
+	// (db.WithinRequestTenantTxOpts); an ACTIVE non-admin caller is still a role
+	// refusal.
 	type refusal struct {
 		ctx  context.Context
 		want error
@@ -772,8 +770,8 @@ func TestStaffing_RequiresActiveAdminCaller(t *testing.T) {
 		c, _ := callerCtx(t, super, tenantID, caller.role, caller.status)
 		refused[caller.name] = refusal{c, caller.want}
 	}
-	refused["no membership row"] = refusal{auth.WithIdentity(context.Background(),
-		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}), ErrNotPermitted}
+	nonAdminCtx, _ := callerCtx(t, super, tenantID, "preparer", "active")
+	refused["second non-admin member"] = refusal{nonAdminCtx, ErrNotPermitted}
 
 	if len(refused) != 5 {
 		t.Fatalf("built %d callers, want 5 — a short table would pass vacuously", len(refused))

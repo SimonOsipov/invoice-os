@@ -79,7 +79,9 @@ func TestRLS_WithinRequestTenantTxStillBeginsAPlainTransaction(t *testing.T) {
 	h := requireHarness(t)
 	pool, tr := tracedAppPool(t)
 
-	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), TenantID: h.tenantA})
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: userID, TenantID: h.tenantA})
 	if err := db.WithinRequestTenantTx(ctx, pool, func(pgx.Tx) error { return nil }); err != nil {
 		t.Fatalf("WithinRequestTenantTx: unexpected error: %v", err)
 	}

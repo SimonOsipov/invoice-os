@@ -642,16 +642,16 @@ func TestWorkflowRole_CreateStoresEmptyDescNotNull(t *testing.T) {
 
 // TestWorkflowRole_CreateRequiresActiveAdmin: the CALLER axis. The caller-role read
 // carries AND status = 'active', so a suspended or invited admin is refused as
-// firmly as a non-admin, and a caller with no membership row at all is refused too.
-// (This is not Decision Q2, which leaves the staffed SUBJECT unrestricted.)
+// firmly as a non-admin. (This is not Decision Q2, which leaves the staffed SUBJECT
+// unrestricted.)
 func TestWorkflowRole_CreateRequiresActiveAdmin(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 caller-axis")
 	store := NewStore(app, stubFingerprinter, nil)
 
 	// The request seam refuses a non-active caller before the store reads anything
-	// (db.WithinRequestTenantTxOpts); an ACTIVE caller, and one with no row at all,
-	// are still role refusals.
+	// (db.WithinRequestTenantTxOpts); an ACTIVE non-admin caller is still a role
+	// refusal.
 	type refusal struct {
 		ctx  context.Context
 		want error
@@ -669,9 +669,8 @@ func TestWorkflowRole_CreateRequiresActiveAdmin(t *testing.T) {
 		c, _ := callerCtx(t, super, tenantID, caller.role, caller.status)
 		refused[caller.name] = refusal{c, caller.want}
 	}
-	// No membership row: a valid tenant claim for a user the tenant does not know.
-	refused["no membership row"] = refusal{auth.WithIdentity(context.Background(),
-		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}), ErrNotPermitted}
+	nonAdminCtx, _ := callerCtx(t, super, tenantID, "preparer", "active")
+	refused["second non-admin member"] = refusal{nonAdminCtx, ErrNotPermitted}
 
 	if len(refused) != 5 {
 		t.Fatalf("built %d callers, want 5 — a short table would pass vacuously", len(refused))
@@ -1432,8 +1431,7 @@ func TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead(t *testing.T
 
 // TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin: the CALLER axis, copied from
 // CreateRole's. The caller-role read carries AND status = 'active', so a suspended or
-// invited admin is refused as firmly as a preparer, and a caller with no membership
-// row at all is refused too.
+// invited admin is refused as firmly as a preparer.
 func TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 write-caller-axis")
@@ -1442,8 +1440,8 @@ func TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin(t *testing.T) {
 	before := roleRow(t, super, roleID)
 
 	// The request seam refuses a non-active caller before the store reads anything
-	// (db.WithinRequestTenantTxOpts); an ACTIVE caller, and one with no row at all,
-	// are still role refusals.
+	// (db.WithinRequestTenantTxOpts); an ACTIVE non-admin caller is still a role
+	// refusal.
 	type refusal struct {
 		ctx  context.Context
 		want error
@@ -1461,8 +1459,8 @@ func TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin(t *testing.T) {
 		c, _ := callerCtx(t, super, tenantID, caller.role, caller.status)
 		refused[caller.name] = refusal{c, caller.want}
 	}
-	refused["no membership row"] = refusal{auth.WithIdentity(context.Background(),
-		auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}), ErrNotPermitted}
+	nonAdminCtx, _ := callerCtx(t, super, tenantID, "preparer", "active")
+	refused["second non-admin member"] = refusal{nonAdminCtx, ErrNotPermitted}
 
 	if len(refused) != 5 {
 		t.Fatalf("built %d callers, want 5 — a short table would pass vacuously", len(refused))

@@ -514,7 +514,7 @@ func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 //
 //	AC-1 TestGetHandler_SubmitBlockedReasonRoleArm,
 //	     TestGetHandler_RealStore_PreparerSeesRoleReason,
-//	     TestGetHandler_RealStore_NoMembershipSeesRoleReason
+//	     TestGetHandler_RealStore_NoMembershipRefused
 //	AC-2 TestSubmitGate_AdminAndReviewerUnchanged        (guard)
 //	AC-3 TestSubmitGate_RoleBeforeStatus
 //	AC-4 TestGetHandler_RoleResolvedOnValidatedStatus
@@ -769,12 +769,12 @@ func TestGetHandler_RealStore_PreparerSeesRoleReason(t *testing.T) {
 	assertRoleReason(t, preparerResp)
 }
 
-// TestGetHandler_RealStore_NoMembershipSeesRoleReason (AUDIT-12-07): the refusal
+// TestGetHandler_RealStore_NoMembershipRefused (AUDIT-12-07): the refusal
 // moved earlier. Store.Get itself runs over db.WithinRequestTenantTx, so a caller
 // with no membership row is now refused (db.ErrNotActiveMember, 403) before
 // GetHandler ever calls callerRole -- this no longer reaches the ("", nil) role-
 // reason shape the name describes.
-func TestGetHandler_RealStore_NoMembershipSeesRoleReason(t *testing.T) {
+func TestGetHandler_RealStore_NoMembershipRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	tenantID := seedTenant(t, super, "submit gate no-membership tenant")

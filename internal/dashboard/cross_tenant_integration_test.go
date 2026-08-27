@@ -136,14 +136,14 @@ func TestRLS_DashboardRollupCrossTenantSortPoisonRefused(t *testing.T) {
 	}
 }
 
-// TestRLS_DashboardRollupUnknownTenantSeesNothing (AUDIT-12-07): the refusal moved
+// TestRLS_DashboardRollupUnknownTenantRefused (AUDIT-12-07): the refusal moved
 // earlier. Rollup runs over db.WithinRequestTenantTx, so a caller carrying a
 // syntactically-valid tenant id that was never seeded is now refused
 // (db.ErrNotActiveMember) before the rollup query ever runs -- a membership row
 // cannot be seeded here, since `tenants` itself has no row for this id (FK). Proves
 // the same "unregistered tenant sees nothing" property, just earlier and as a
 // refusal rather than an empty success.
-func TestRLS_DashboardRollupUnknownTenantSeesNothing(t *testing.T) {
+func TestRLS_DashboardRollupUnknownTenantRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 

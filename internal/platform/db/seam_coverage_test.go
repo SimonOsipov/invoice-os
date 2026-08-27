@@ -1293,6 +1293,14 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 // file, matching scCoreAllowlist's `{file, fn: "Me"}` precedent — so a revert
 // of any OTHER site in that file still fails (Correction 1).
 //
+// Before any of that, a site is gated on whether its enclosing func's call
+// graph reaches a database call at all (scSweepFindDBReachingFuncs, resolved
+// the same base-case-then-fixed-point way as the two sinks above). A pure
+// mock stub building a fresh identity never touches Postgres, so asking
+// whether ITS caller holds a membership row is a false positive, not an
+// exemption — this is what keeps scSweepSubjectAllowlist to genuine policy
+// decisions instead of accreting a scan artifact per stub (AUDIT-12-07 review).
+//
 // Known limits. Attribution is to the innermost FuncDecl only: a site inside a
 // nested t.Run closure is attributed to the enclosing test func, not the
 // subtest — none of today's sites need finer scoping. A variable also fed to
@@ -1691,6 +1699,133 @@ var scSweepDBCallMethods = map[string]bool{
 func scSweepIsDBCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	return ok && scSweepDBCallMethods[sel.Sel.Name]
+}
+
+// ---------------------------------------------------------------------------
+// The DB-reachability gate for subject sites (AUDIT-12-07 review): a func
+// whose call graph never reaches the database is asking a meaningless
+// question about a caller identity that never touches Postgres -- literal,
+// var, and helper kind sites are all gated by it alike.
+// ---------------------------------------------------------------------------
+
+// scSweepDBReachMethods is scSweepDBCallMethods (Exec/Query family) unioned
+// with scPoolMethods (Scan 1's pgxpool.Pool method set, above): Exec/Query
+// alone missed super.Begin(ctx), the shape every transaction-scoped DB test
+// opens with before its first statement (AUDIT-12-07 review found this the
+// hard way -- TestRequireActiveAdmin_NoMembershipRowIsNotPermitted opens a
+// tx and calls production code with it, never Exec/Query itself).
+var scSweepDBReachMethods = func() map[string]bool {
+	out := map[string]bool{}
+	for m := range scSweepDBCallMethods {
+		out[m] = true
+	}
+	for m := range scPoolMethods {
+		out[m] = true
+	}
+	return out
+}()
+
+// scSweepReachesDBDirectly reports whether call itself touches the database:
+// a DB-reaching method by name alone (scSweepIsDBCall's own looseness, no
+// receiver-type check), or a handle opened straight off a DSN --
+// pgxpool.New(ctx, url) is how every package's dbTestPools-style helper gets
+// its pool, so a test whose only DB touch is calling that helper never calls
+// Exec/Query/Begin itself (the same review finding: TestStoreMe_UnknownTenant
+// calls only dbTestPools then store.Me, a production method invisible to
+// this test-only AST corpus). Matched by literal package identifier, not
+// scImportAlias's import-path resolution: no file in this population aliases
+// these imports today.
+func scSweepReachesDBDirectly(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if scSweepDBReachMethods[sel.Sel.Name] {
+		return true
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch pkg.Name {
+	case "pgxpool":
+		return sel.Sel.Name == "New" || sel.Sel.Name == "NewWithConfig"
+	case "pgx", "pgconn":
+		return sel.Sel.Name == "Connect" || sel.Sel.Name == "ConnectConfig"
+	case "sql":
+		return sel.Sel.Name == "Open" || sel.Sel.Name == "OpenDB"
+	}
+	return false
+}
+
+// scSweepFuncOwnBodyReachesDB reports whether fd's own body invokes
+// scSweepReachesDBDirectly -- INCLUDING inside a nested func literal: a
+// closure argument (db.WithinRequestTenantTx(..., func(tx pgx.Tx) error {
+// tx.Exec(...) })) runs as part of fd when fd runs, not as a separate
+// callee, unlike the attribution scans above this deliberately does not
+// exclude literals.
+func scSweepFuncOwnBodyReachesDB(fd *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok && scSweepReachesDBDirectly(call) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// scSweepFindDBReachingFuncs resolves, package-wide, every local func whose
+// call graph reaches the database -- directly (scSweepFuncOwnBodyReachesDB),
+// or by calling (plain identifier, any depth) another local func already
+// known to reach it -- the same base-case-then-fixed-point shape
+// scSweepFindIdentitySinks and scSweepFindMembershipSinks use above.
+// Resolution is by plain identifier only, the same accepted limit those two
+// carry (a helper reached through a method or an interface value is
+// invisible here too, EXCEPT that dbTestPools-style pool getters are always
+// called as plain identifiers in this population, which is what the direct
+// check above exists to catch); every known helper in this package's
+// population is a bare func, so a func this pass clears has no route to the
+// database anywhere in its own reachable, locally-declared graph.
+func scSweepFindDBReachingFuncs(decls []*ast.FuncDecl) map[string]bool {
+	reach := map[string]bool{}
+	for _, fd := range decls {
+		if scSweepFuncOwnBodyReachesDB(fd) {
+			reach[fd.Name.Name] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, fd := range decls {
+			if reach[fd.Name.Name] {
+				continue
+			}
+			calls := false
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if calls {
+					return false
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if callee, ok := call.Fun.(*ast.Ident); ok && reach[callee.Name] {
+					calls = true
+					return false
+				}
+				return true
+			})
+			if calls {
+				reach[fd.Name.Name] = true
+				changed = true
+			}
+		}
+	}
+	return reach
 }
 
 // scSweepMembershipInsertCallBindArg finds an INSERT-into-memberships string
@@ -2219,6 +2354,30 @@ func TestN10(t *testing.T) {
 }
 `
 
+// scSweepNeedleDBReachGate proves the DB-reachability gate's two halves at
+// once: TestN25MockStub builds a fresh identity and its call graph never
+// reaches a DB call, so its site must clear. TestN25DBTest builds the same
+// shape but reaches the DB only through seedFixture, a local helper it
+// calls -- a gate that checked only the test's own body, not its callees,
+// would wrongly clear this one too.
+const scSweepNeedleDBReachGate = `package x
+
+func TestN25MockStub(t *testing.T) {
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+	_ = c
+}
+
+func seedFixture(t *testing.T) {
+	_, _ = pool.Exec(ctx, "INSERT INTO rls_fixture (tenant_id) VALUES ($1)", tenantID)
+}
+
+func TestN25DBTest(t *testing.T) {
+	seedFixture(t)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+	_ = c
+}
+`
+
 func scSweepSubjectControlNeedles(t *testing.T) {
 	t.Run("N1 direct literal", func(t *testing.T) {
 		sites := scSweepFixtureSubjectSites(t, "n1.go", scSweepNeedleLiteral)
@@ -2304,6 +2463,36 @@ func scSweepSubjectControlNeedles(t *testing.T) {
 		pkgSites := scSweepHelperCallSitesInFile(callerFset, "n10_caller.go", callerFile, callerLines, pkgSinks, nil)
 		if len(pkgSites) != 1 || pkgSites[0].kind != "helper" || pkgSites[0].fn != "TestN10" {
 			t.Fatalf("per-package sites = %v, want exactly one helper site in TestN10 — a sink declared in a SIBLING file must still be resolved", pkgSites)
+		}
+	})
+	t.Run("N25 a DB-free func clears the gate, one reaching DB only through a helper does not", func(t *testing.T) {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "n25.go", scSweepNeedleDBReachGate, 0)
+		if err != nil {
+			t.Fatalf("parse n25.go: %v", err)
+		}
+		lines := strings.Split(scSweepNeedleDBReachGate, "\n")
+		decls := scSweepFuncDecls(f)
+		dbReach := scSweepFindDBReachingFuncs(decls)
+
+		if dbReach["TestN25MockStub"] {
+			t.Fatalf("TestN25MockStub read as DB-reaching — it calls nothing and its own body has no Exec/Query call")
+		}
+		if !dbReach["seedFixture"] {
+			t.Fatalf("seedFixture read as DB-free — it calls pool.Exec directly, the base case this whole gate rests on")
+		}
+		if !dbReach["TestN25DBTest"] {
+			t.Fatalf("TestN25DBTest read as DB-free — it reaches the database only by calling seedFixture, and the gate must resolve through that helper call, not just the test's own body")
+		}
+
+		var sites []scSweepSubjectSite
+		for _, s := range scSweepTextualSubjectSitesIn(fset, "n25.go", f, lines) {
+			if dbReach[s.fn] {
+				sites = append(sites, s)
+			}
+		}
+		if len(sites) != 1 || sites[0].fn != "TestN25DBTest" {
+			t.Fatalf("gated sites = %v, want exactly one site in TestN25DBTest — TestN25MockStub reaches no DB call anywhere and must clear, while TestN25DBTest reaches one only through its own local helper and must still be flagged", sites)
 		}
 	})
 }
@@ -2840,11 +3029,10 @@ func (e scSweepSubjectExemption) covers(s scSweepSubjectSite) bool {
 // scSweepSubjectAllowlist is every func exempted from an already-swept
 // package's rule.
 var scSweepSubjectAllowlist = []scSweepSubjectExemption{
-	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantSeesNothing"},       // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
+	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantRefused"},           // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
 	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},                   // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
 	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},                 // same claim, the UnresolveOutside leg
-	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipSeesRoleReason"},            // same claim, GetHandler's role-reason leg
-	{file: "internal/approval/handlers_test.go", fn: "caller"},                                                                 // pure mock stub, 21 call sites, zero DB calls -- never reaches db.WithinRequestTenantTxOpts
+	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipRefused"},                   // same claim, GetHandler's role-reason leg
 	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},        // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
 	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                     // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
 	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusesACallerWithNoMembershipRow"},         // AUDIT-12-07's own inverted test (was TestRLS_RequestSeamAllowsACallerWithNoMembershipRow): the claim IS the no-row refusal
@@ -2856,13 +3044,6 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_ExemptFromTheSeamUnderTheStrictRule"},                          // same exemption, AUDIT-12-07's own test naming it
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_InvalidStatusRejected"},                                     // pure mock stub (SetMembershipStatusHandler with a fake setter), zero DB calls -- never reaches db.WithinRequestTenantTx
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_BodyOverCapRejected"},                                       // same shape: pure mock stub, zero DB calls
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_PathIDAndBodyOrdering"},                                     // same shape: pure mock stub, zero DB calls
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_StatusForErrTable"},                                         // same shape: pure mock stub, zero DB calls
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestMembership_OKBodyIsFiveKeyShape"},                                      // same shape: pure mock stub, zero DB calls
-	{file: "internal/tenancy/not_active_member_403_test.go", fn: "TestMeHandler_NotActiveMemberIs403"},                         // pure mock stub (an injected MeLoader), zero DB calls -- never reaches db.WithinRequestTenantTx
-	{file: "internal/tenancy/not_active_member_403_test.go", fn: "TestMembershipsHandler_NotActiveMemberIs403"},                // same shape: pure mock stub, zero DB calls
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,
@@ -2954,8 +3135,12 @@ func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
 		}
 		sinks := scSweepFindIdentitySinks(pkgDecls)
 		membershipSinks := scSweepFindMembershipSinks(pkgDecls)
+		dbReach := scSweepFindDBReachingFuncs(pkgDecls)
 		for _, pf := range pfs {
 			for _, s := range scSweepTextualSubjectSitesIn(pf.fset, pf.rel, pf.file, pf.lines) {
+				if !dbReach[s.fn] {
+					continue // DB-reachability gate: this func's call graph never reaches the database, so its identity construction is not a fixture to seed
+				}
 				if s.kind == "var" {
 					if fd := scSweepFuncByName(pf.file, s.fn); fd != nil && scSweepRecogniseSeeding(fd, s.name, membershipSinks) {
 						continue // recognise-the-seeding rule: this identifier is seeded a membership row on every path that reaches its use
@@ -2963,7 +3148,12 @@ func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
 				}
 				sites = append(sites, s)
 			}
-			sites = append(sites, scSweepHelperCallSitesInFile(pf.fset, pf.rel, pf.file, pf.lines, sinks, membershipSinks)...)
+			for _, s := range scSweepHelperCallSitesInFile(pf.fset, pf.rel, pf.file, pf.lines, sinks, membershipSinks) {
+				if !dbReach[s.fn] {
+					continue // same DB-reachability gate, helper-kind sites
+				}
+				sites = append(sites, s)
+			}
 		}
 	}
 

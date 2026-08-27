@@ -1,8 +1,6 @@
 // contract_test.go: the reusable, database-free, network-free extractor contract suite --
 // ContractT, the twelve-law id list, the per-law corpus factory, the reference extractor, and
-// (Stage 2, executor) the real twelve-law RunExtractorContract. Stage 1 ships the declarations
-// and a RunExtractorContract with an EMPTY body, so the red-first specs below fail on an
-// assertion rather than on a compile error.
+// the twelve-law RunExtractorContract itself.
 //
 // HONEST FRAMING (do not relabel any spec below without re-reading this):
 //   - TestAllLaws_IdsAreUniqueAndUsed and TestRunExtractorContract_CallsNewExtractorMoreThanOnce
@@ -32,9 +30,9 @@
 // package-level var (internal/submission/contract_test.go:99) from a RunAdapterContract that
 // takes no corpus parameter (:205). An extractor is handed Document.Bytes it must not retain
 // or mutate, so a shared corpus would carry one law's mutation into the next law's input and
-// turn a real violation into a passing run somewhere else. Twelve fresh corpora cost about
-// 20 ms measured here, and the migration rescan in documentSizeLimit is three quarters of it,
-// not the 15 MiB allocation -- cache the ceiling if EXTR-01-07 ever makes that matter.
+// turn a real violation into a passing run somewhere else. Nine laws build one each; the
+// migration rescan that used to dominate that cost is now memoised on documentSizeLimit,
+// leaving the 15 MiB allocation at about 161us apiece.
 //
 // Package extraction_test (external), matching every other test file here. The imports are
 // stdlib plus internal/extraction only: deps_test.go scan B sees test imports and reports any
@@ -45,6 +43,7 @@ package extraction_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -52,11 +51,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	// unsafe is the first use in this repo. TestCorpusIsFreshPerLaw needs a slice's data
 	// pointer, and &b[0] panics on the empty and nil corpus cases.
 	"unsafe"
@@ -162,10 +164,17 @@ func newCorpus() []documentCase {
 // does not match, so the one file carrying size_bytes yields exactly one limit.
 var documentSizeLimitRE = regexp.MustCompile(`size_bytes\s*<=\s*(\d+)`)
 
-// documentSizeLimit reads the ceiling out of the migrations rather than repeating the number,
-// and errors when more than one migration carries it -- a later ALTER that moved the ceiling
-// elsewhere would otherwise leave the corpus pinned to a limit the database no longer enforces.
-func documentSizeLimit() (int, error) {
+// documentSizeLimit is memoised. newCorpus runs once per law, and one glob-and-read of all 50
+// migrations measures about 755us against about 161us for the 15 MiB blob beside it. Only the
+// parsed integer is cached: TestCorpusIsFreshPerLaw compares blobs, and newCorpus still
+// allocates every one of those per call.
+var documentSizeLimit = sync.OnceValues(scanDocumentSizeLimit)
+
+// scanDocumentSizeLimit reads the ceiling out of the migrations rather than repeating the
+// number, and errors when more than one migration carries it -- a later ALTER that moved the
+// ceiling elsewhere would otherwise leave the corpus pinned to a limit the database no longer
+// enforces.
+func scanDocumentSizeLimit() (int, error) {
 	all, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
 	if err != nil {
 		return 0, fmt.Errorf("glob migrations: %w", err)
@@ -247,10 +256,264 @@ func (r *lawRecorder) lawIDs() map[string]bool {
 	return ids
 }
 
+// cancelledExtractBudget bounds the E12 probe. An extractor that ignores cancellation and
+// blocks would otherwise run into the test binary's own timeout and be reported as a stack
+// dump rather than as E12. Six orders of magnitude above a conforming return, so it cannot
+// flake.
+const cancelledExtractBudget = 5 * time.Second
+
+// declaredReasons is the Reason set E09 admits, written out rather than derived from the
+// package: a sixth constant added to extractor.go should fail E09 until someone decides it
+// belongs to the contract.
+var declaredReasons = map[extraction.Reason]bool{
+	extraction.ReasonNone:         true,
+	extraction.ReasonUnreadable:   true,
+	extraction.ReasonAmbiguous:    true,
+	extraction.ReasonInconsistent: true,
+	extraction.ReasonMissing:      true,
+}
+
+// callExtract runs one Extract on a LIVE context, which it builds itself so no cancelled
+// context can reach the value laws -- E12's probe must contaminate no other law, since
+// EXTR-01-07 grades each red extractor by set equality rather than containment.
+//
+// ok is false when the extractor returned an error, which E04 and E06-E11 then skip for that
+// case: erroring on a document it cannot read is lawful. E05 does not skip, because mutating
+// the caller's bytes on the way out is still a mutation.
+func callExtract(ext extraction.Extractor, doc extraction.Document) ([]extraction.Field, bool) {
+	fields, err := ext.Extract(context.Background(), doc)
+	if err != nil {
+		return nil, false
+	}
+	return fields, true
+}
+
+// cancelledOutcome carries one E12 probe back off its goroutine. panicked is the formatted
+// panic value and stack, empty when Extract returned.
+type cancelledOutcome struct {
+	fields   []extraction.Field
+	err      error
+	panicked string
+}
+
+// callExtractCancelled runs Extract under an already-cancelled context, bounded by
+// cancelledExtractBudget. The channel is buffered, so a goroutine that returns after the
+// deadline still sends and exits; one that never returns is leaked for the binary's life.
+//
+// A panic is carried back and re-raised on the caller's goroutine, never reported: E01-E12
+// hold no panic law to attribute one to, and a non-law Errorf would break the emissions
+// invariant TestAllLaws_IdsAreUniqueAndUsed enforces. Re-raising only buys attribution -- it
+// makes a panic here fail the running test the way a panic under the other eleven laws does,
+// instead of killing the binary from an anonymous goroutine.
+func callExtractCancelled(ext extraction.Extractor, doc extraction.Document) (fields []extraction.Field, err error, timedOut bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan cancelledOutcome, 1)
+	go func() {
+		var out cancelledOutcome
+		defer func() {
+			if p := recover(); p != nil {
+				out = cancelledOutcome{panicked: fmt.Sprintf("%v\n\n%s", p, debug.Stack())}
+			}
+			done <- out
+		}()
+		out.fields, out.err = ext.Extract(ctx, doc)
+	}()
+
+	timer := time.NewTimer(cancelledExtractBudget)
+	defer timer.Stop()
+
+	select {
+	case got := <-done:
+		if got.panicked != "" {
+			panic("E12 probe: Extract panicked: " + got.panicked)
+		}
+		return got.fields, got.err, false
+	case <-timer.C:
+		return nil, nil, true
+	}
+}
+
 // RunExtractorContract drives one extractor through all twelve laws, reporting each violation
-// as an Errorf whose format string begins with the law id and a colon. Stage 1 leaves the body
-// EMPTY on purpose: everything compiles, so the red-first specs fail on assertions.
+// as an Errorf whose format string begins with the law id and a colon.
+//
+// Every law that needs documents calls newCorpus for itself, so no law can hand the next one a
+// blob a previous extractor mutated -- this file's header on why that is a factory. A panic out
+// of Extract propagates rather than being recorded, which callExtractCancelled documents.
 func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor) {
+	t.Helper()
+
+	first := newExtractor()
+	second := newExtractor()
+
+	// E01-E03. The cross-instance comparison reads each instance's FIRST call, so an
+	// extractor whose Name varies per call trips E01 alone rather than E01 and E03 together.
+	name := first.Name()
+	nameAgain := first.Name()
+	version := first.Version()
+	versionAgain := first.Version()
+	secondName := second.Name()
+	secondVersion := second.Version()
+
+	if name == "" {
+		t.Errorf("E01: Name() returned an empty string")
+	}
+	if name != nameAgain {
+		t.Errorf("E01: Name() returned %q then %q on one instance", name, nameAgain)
+	}
+	if version == "" {
+		t.Errorf("E02: Version() returned an empty string")
+	}
+	if version != versionAgain {
+		t.Errorf("E02: Version() returned %q then %q on one instance", version, versionAgain)
+	}
+	if name != secondName {
+		t.Errorf("E03: Name() returned %q on one instance and %q on another", name, secondName)
+	}
+	if version != secondVersion {
+		t.Errorf("E03: Version() returned %q on one instance and %q on another", version, secondVersion)
+	}
+
+	// E04: a successful Extract returns a non-nil slice.
+	for _, c := range newCorpus() {
+		if fields, ok := callExtract(first, c.doc); ok && fields == nil {
+			t.Errorf("E04: %s: Extract returned a nil []Field alongside a nil error; success is an empty non-nil slice", c.name)
+		}
+	}
+
+	// E05: Extract does not mutate doc.Bytes, on the error path too. Document is passed by
+	// value but Bytes shares its backing array, so an in-place write is visible to these
+	// hashes; the corpus asserts cap == len, which forces any append to reallocate rather
+	// than clobber spare capacity nothing would hash.
+	for _, c := range newCorpus() {
+		before := sha256.Sum256(c.doc.Bytes)
+		callExtract(first, c.doc)
+		if after := sha256.Sum256(c.doc.Bytes); after != before {
+			t.Errorf("E05: %s: Extract mutated doc.Bytes: SHA-256 %x before the call, %x after", c.name, before, after)
+		}
+	}
+
+	// E06: every Field.Name is non-empty.
+	for _, c := range newCorpus() {
+		fields, ok := callExtract(first, c.doc)
+		if !ok {
+			continue
+		}
+		for i, f := range fields {
+			if f.Name == "" {
+				t.Errorf("E06: %s: field %d has an empty Name", c.name, i)
+			}
+		}
+	}
+
+	// E07: Field.Name values are unique within one result.
+	for _, c := range newCorpus() {
+		fields, ok := callExtract(first, c.doc)
+		if !ok {
+			continue
+		}
+		at := map[string]int{}
+		for i, f := range fields {
+			// E06 owns emptiness. Leaving empty names out keeps the two laws disjoint for
+			// EXTR-01-07's set equality; a duplicated empty name still fails E06 once per field.
+			if f.Name == "" {
+				continue
+			}
+			if prev, dup := at[f.Name]; dup {
+				t.Errorf("E07: %s: fields %d and %d share the Name %q", c.name, prev, i, f.Name)
+				continue
+			}
+			at[f.Name] = i
+		}
+	}
+
+	// E08: a non-nil Value points at a non-empty string.
+	for _, c := range newCorpus() {
+		fields, ok := callExtract(first, c.doc)
+		if !ok {
+			continue
+		}
+		for i, f := range fields {
+			if f.Value != nil && *f.Value == "" {
+				t.Errorf("E08: %s: field %d (%q) has a non-nil Value pointing at an empty string", c.name, i, f.Name)
+			}
+		}
+	}
+
+	// E09: every Reason is one of the five declared values.
+	for _, c := range newCorpus() {
+		fields, ok := callExtract(first, c.doc)
+		if !ok {
+			continue
+		}
+		for i, f := range fields {
+			if !declaredReasons[f.Reason] {
+				t.Errorf("E09: %s: field %d (%q) carries the undeclared Reason %q", c.name, i, f.Name, f.Reason)
+			}
+		}
+	}
+
+	// E10: ReasonMissing implies a nil Value.
+	for _, c := range newCorpus() {
+		fields, ok := callExtract(first, c.doc)
+		if !ok {
+			continue
+		}
+		for i, f := range fields {
+			if f.Reason == extraction.ReasonMissing && f.Value != nil {
+				t.Errorf("E10: %s: field %d (%q) is ReasonMissing but carries the Value %q", c.name, i, f.Name, *f.Value)
+			}
+		}
+	}
+
+	// E11: a non-nil Region is a 1-based page and a normalised, non-inverted box. The bounds
+	// are a NEGATED CONJUNCTION, not a disjunction of violations: every comparison against a
+	// NaN coordinate is false, which the disjunctive form reads as lawful -- measured.
+	for _, c := range newCorpus() {
+		fields, ok := callExtract(first, c.doc)
+		if !ok {
+			continue
+		}
+		for i, f := range fields {
+			r := f.Region
+			if r == nil {
+				continue
+			}
+			if r.Page < 1 {
+				t.Errorf("E11: %s: field %d (%q) has Region.Page %d, want 1 or greater", c.name, i, f.Name, r.Page)
+			}
+			if !(r.X0 >= 0 && r.X0 <= r.X1 && r.X1 <= 1) {
+				t.Errorf("E11: %s: field %d (%q) has X0=%v X1=%v, want 0 <= X0 <= X1 <= 1", c.name, i, f.Name, r.X0, r.X1)
+			}
+			if !(r.Y0 >= 0 && r.Y0 <= r.Y1 && r.Y1 <= 1) {
+				t.Errorf("E11: %s: field %d (%q) has Y0=%v Y1=%v, want 0 <= Y0 <= Y1 <= 1", c.name, i, f.Name, r.Y0, r.Y1)
+			}
+		}
+	}
+
+	// E12: an already-cancelled context yields an error AND a nil slice, checked
+	// independently so (nil, nil) trips the first and (fields, err) the second. Over the whole
+	// corpus, because an extractor testing ctx.Err() only inside a scan loop passes the
+	// 21-byte case and fails the 15 MiB one.
+	probe := first
+	for _, c := range newCorpus() {
+		fields, err, timedOut := callExtractCancelled(probe, c.doc)
+		if timedOut {
+			t.Errorf("E12: %s: Extract did not return within %s of a call on an already-cancelled context", c.name, cancelledExtractBudget)
+			// That call is still running inside probe. Hand the remaining cases a fresh
+			// instance so a stateful extractor cannot race the goroutine it just stranded.
+			// Only a timeout constructs one, so a conforming extractor is still built twice.
+			probe = newExtractor()
+			continue
+		}
+		if err == nil {
+			t.Errorf("E12: %s: Extract returned a nil error for an already-cancelled context", c.name)
+		}
+		if fields != nil {
+			t.Errorf("E12: %s: Extract returned a non-nil %d-field slice for an already-cancelled context", c.name, len(fields))
+		}
+	}
 }
 
 const contractSuiteFile = "contract_test.go"

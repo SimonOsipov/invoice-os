@@ -2308,6 +2308,81 @@ func TestN14(t *testing.T) {
 }
 `
 
+// scSweepNeedleCosmeticMention proves Tier 1 must not match on string
+// content alone: the INSERT-into-memberships text sits inside a t.Logf
+// call, never a real DB seed. KNOWN DEFECT (QA, AUDIT-12-04): the scan does
+// not check the call's callee, so this clears today -- t.Fatalf below fires
+// until scSweepMembershipInsertCallBindArg is restricted to an Exec/Query-
+// shaped call.
+const scSweepNeedleCosmeticMention = `package x
+
+func TestN15(t *testing.T) {
+	subject := uuid.NewString()
+	t.Logf("would run: INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)", tenantID, subject, "preparer")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleHiddenConditionalWrapper proves Tier 2's guard check must
+// reach into a called sink's own body: seedIfAdmin only seeds when
+// role=="admin", called here with "guest" -- no row is ever inserted, yet
+// the call site itself is unconditional. KNOWN DEFECT (QA, AUDIT-12-04):
+// scSweepFindMembershipSinks marks a func a sink whenever it relays its
+// param to another sink, regardless of what guards that relay -- t.Fatalf
+// below fires until sink resolution also propagates the sink's own
+// internal guard stack.
+const scSweepNeedleHiddenConditionalWrapper = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func seedIfAdmin(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	if role == "admin" {
+		return seedMembership(t, super, tenantID, userID, role)
+	}
+	return ""
+}
+
+func TestN16(t *testing.T) {
+	subject := uuid.NewString()
+	seedIfAdmin(t, super, tenantID, subject, "guest")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
+// scSweepNeedleSeedTwoHopSinkOnly and scSweepNeedleSeedTwoHopCallerOnly are
+// N17's pair: seedMembership and its two-hop relay seedViaWrapper live in one
+// file, the call site in a sibling that declares neither -- proving the
+// MEMBERSHIP sink walk resolves cross-file exactly like the identity sink
+// walk N10 already proves for the other mechanism.
+const scSweepNeedleSeedTwoHopSinkOnly = `package x
+
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	var id string
+	super.QueryRow(ctx, "INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id", tenantID, userID, role).Scan(&id)
+	return id
+}
+
+func seedViaWrapper(t *testing.T, super *pgxpool.Pool, tenantID, userID, role string) string {
+	return seedMembership(t, super, tenantID, userID, role)
+}
+`
+
+const scSweepNeedleSeedTwoHopCallerOnly = `package x
+
+func TestN17(t *testing.T) {
+	subject := uuid.NewString()
+	seedViaWrapper(t, super, tenantID, subject, "admin")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated"})
+	_ = c
+}
+`
+
 // scSweepFixtureVarSiteCleared parses src, locates its lone "var" kind
 // subject site in fn, and reports whether the recognise-the-seeding rule
 // clears it -- the same package-wide membership-sink resolution the real
@@ -2357,6 +2432,66 @@ func scSweepRecogniseSeedingControlNeedles(t *testing.T) {
 	t.Run("N14 INSERT seeds a different identifier -- stays flagged", func(t *testing.T) {
 		if scSweepFixtureVarSiteCleared(t, "n14.go", scSweepNeedleSeedUnrelatedSubject, "TestN14") {
 			t.Fatalf("TestN14 cleared — Tier 1 over-cleared: the seeded identifier (otherUserID) is not the one read back as Subject (subject)")
+		}
+	})
+	t.Run("N15 cosmetic mention in a t.Logf, not a real seed -- KNOWN DEFECT, wrongly clears", func(t *testing.T) {
+		if !scSweepFixtureVarSiteCleared(t, "n15.go", scSweepNeedleCosmeticMention, "TestN15") {
+			t.Fatalf("TestN15 stayed flagged — the cosmetic-mention defect is fixed; drop this needle's inverted assertion and its KNOWN DEFECT comment")
+		}
+		t.Errorf("DEFECT: TestN15 cleared via a t.Logf call that merely CONTAINS INSERT-INTO-memberships text — " +
+			"Tier 1 matches any CallExpr's string-literal args, not just an actual DB Exec/QueryRow; see scSweepMembershipInsertCallBindArg")
+	})
+	t.Run("N16 seed hidden inside a two-hop wrapper's own guard -- KNOWN DEFECT, wrongly clears", func(t *testing.T) {
+		if !scSweepFixtureVarSiteCleared(t, "n16.go", scSweepNeedleHiddenConditionalWrapper, "TestN16") {
+			t.Fatalf("TestN16 stayed flagged — the hidden-conditional-wrapper defect is fixed; drop this needle's inverted assertion and its KNOWN DEFECT comment")
+		}
+		t.Errorf("DEFECT: TestN16 cleared via seedIfAdmin(..., \"guest\") — the outer call site is unconditional but the " +
+			"wrapper's OWN if role==\"admin\" guard means no row was ever inserted; scSweepFindMembershipSinks resolves a " +
+			"relay as an unconditional sink without checking what guards the relay inside the sink's own body")
+	})
+	t.Run("N17 two-hop membership wrapper, sibling file, genuinely unconditional -- clears", func(t *testing.T) {
+		fset := token.NewFileSet()
+		sinkFile, err := parser.ParseFile(fset, "n17_sink.go", scSweepNeedleSeedTwoHopSinkOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n17_sink.go: %v", err)
+		}
+		callerFset := token.NewFileSet()
+		callerFile, err := parser.ParseFile(callerFset, "n17_caller.go", scSweepNeedleSeedTwoHopCallerOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n17_caller.go: %v", err)
+		}
+		callerLines := strings.Split(scSweepNeedleSeedTwoHopCallerOnly, "\n")
+		var site *scSweepSubjectSite
+		for _, s := range scSweepTextualSubjectSitesIn(callerFset, "n17_caller.go", callerFile, callerLines) {
+			if s.kind == "var" && s.fn == "TestN17" {
+				s := s
+				site = &s
+			}
+		}
+		if site == nil {
+			t.Fatalf("no var-kind site found in TestN17 — fixture is malformed")
+		}
+		fd := scSweepFuncByName(callerFile, "TestN17")
+		if fd == nil {
+			t.Fatalf("no FuncDecl named TestN17 in fixture")
+		}
+
+		// Per-file-only: the caller file alone declares neither seedMembership
+		// nor seedViaWrapper, so this needle is meaningless unless resolving
+		// sinks from the caller file alone finds nothing.
+		fileOnlySinks := scSweepFindMembershipSinks(scSweepFuncDecls(callerFile))
+		if scSweepRecogniseSeeding(fd, site.name, fileOnlySinks) {
+			t.Fatalf("fixture meaningless: per-file-only resolution cleared the site with no sink visible in that file")
+		}
+
+		// Per-package: pool both files' decls first, as the real population
+		// scan does -- N11-N14 never exercise this for the MEMBERSHIP sink
+		// walk (all single-file), only N10 exercises it for the identity walk.
+		pkgDecls := append(scSweepFuncDecls(sinkFile), scSweepFuncDecls(callerFile)...)
+		pkgSinks := scSweepFindMembershipSinks(pkgDecls)
+		if !scSweepRecogniseSeeding(fd, site.name, pkgSinks) {
+			t.Fatalf("TestN17 not cleared — a genuine two-hop, always-unconditional seed via a sibling-file wrapper " +
+				"must clear; package-wide membership-sink resolution is required for this shape")
 		}
 	})
 }

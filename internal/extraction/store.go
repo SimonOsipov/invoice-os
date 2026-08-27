@@ -1,12 +1,6 @@
-// store.go: extraction_jobs and extraction_field_results reads and writes.
-//
-// The extraction worker has no request identity, so the tenant is always passed, never read
-// from ctx -- TestExtractionStore_UsesTenantTxNotRequestTx. The exported methods own one
-// transaction each; the tx-taking helpers exist so EXTR-01-09 can compose them inside a
-// single queue.OncePerJob, which needs its marker and its effect in the same transaction.
-//
-// updated_at is trigger-maintained; nothing here writes it --
-// stAssertStoreNeverNamesUpdatedAt.
+// store.go: the worker has no request identity, so the tenant is passed, never read from ctx
+// (TestExtractionStore_UsesTenantTxNotRequestTx). The tx-taking helpers exist so EXTR-01-09 can
+// compose them inside one queue.OncePerJob, whose marker and effect must share a transaction.
 package extraction
 
 import (

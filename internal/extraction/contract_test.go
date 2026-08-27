@@ -279,15 +279,11 @@ var declaredReasons = map[extraction.Reason]bool{
 // context can reach the value laws -- E12's probe must contaminate no other law, since
 // EXTR-01-07 grades each red extractor by set equality rather than containment.
 //
-// ok is false when the extractor returned an error, which E04 and E06-E11 then skip for that
-// case: erroring on a document it cannot read is lawful. E05 does not skip, because mutating
-// the caller's bytes on the way out is still a mutation.
-func callExtract(ext extraction.Extractor, doc extraction.Document) ([]extraction.Field, bool) {
-	fields, err := ext.Extract(context.Background(), doc)
-	if err != nil {
-		return nil, false
-	}
-	return fields, true
+// Erroring on a document it cannot read is lawful, and the fields are meaningless then, so
+// E06-E11 skip that case. E04 owns the error path and E05 hashes either way: mutating the
+// caller's bytes on the way out is still a mutation.
+func callExtract(ext extraction.Extractor, doc extraction.Document) ([]extraction.Field, error) {
+	return ext.Extract(context.Background(), doc)
 }
 
 // cancelledOutcome carries one E12 probe back off its goroutine. panicked is the formatted
@@ -377,10 +373,15 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 		t.Errorf("E03: Version() returned %q on one instance and %q on another", version, secondVersion)
 	}
 
-	// E04: a successful Extract returns a non-nil slice.
+	// E04: on success the slice is non-nil, on error it is nil (extractor.go:28). Both halves,
+	// so no error can smuggle a slice past E06-E11, which skip the case an error was returned for.
 	for _, c := range newCorpus() {
-		if fields, ok := callExtract(first, c.doc); ok && fields == nil {
+		fields, err := callExtract(first, c.doc)
+		switch {
+		case err == nil && fields == nil:
 			t.Errorf("E04: %s: Extract returned a nil []Field alongside a nil error; success is an empty non-nil slice", c.name)
+		case err != nil && fields != nil:
+			t.Errorf("E04: %s: Extract returned a non-nil %d-field slice alongside the error %v; on error the slice is nil", c.name, len(fields), err)
 		}
 	}
 
@@ -398,8 +399,8 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 
 	// E06: every Field.Name is non-empty.
 	for _, c := range newCorpus() {
-		fields, ok := callExtract(first, c.doc)
-		if !ok {
+		fields, err := callExtract(first, c.doc)
+		if err != nil {
 			continue
 		}
 		for i, f := range fields {
@@ -411,8 +412,8 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 
 	// E07: Field.Name values are unique within one result.
 	for _, c := range newCorpus() {
-		fields, ok := callExtract(first, c.doc)
-		if !ok {
+		fields, err := callExtract(first, c.doc)
+		if err != nil {
 			continue
 		}
 		at := map[string]int{}
@@ -432,8 +433,8 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 
 	// E08: a non-nil Value points at a non-empty string.
 	for _, c := range newCorpus() {
-		fields, ok := callExtract(first, c.doc)
-		if !ok {
+		fields, err := callExtract(first, c.doc)
+		if err != nil {
 			continue
 		}
 		for i, f := range fields {
@@ -445,8 +446,8 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 
 	// E09: every Reason is one of the five declared values.
 	for _, c := range newCorpus() {
-		fields, ok := callExtract(first, c.doc)
-		if !ok {
+		fields, err := callExtract(first, c.doc)
+		if err != nil {
 			continue
 		}
 		for i, f := range fields {
@@ -458,8 +459,8 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 
 	// E10: ReasonMissing implies a nil Value.
 	for _, c := range newCorpus() {
-		fields, ok := callExtract(first, c.doc)
-		if !ok {
+		fields, err := callExtract(first, c.doc)
+		if err != nil {
 			continue
 		}
 		for i, f := range fields {
@@ -473,8 +474,8 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 	// are a NEGATED CONJUNCTION, not a disjunction of violations: every comparison against a
 	// NaN coordinate is false, which the disjunctive form reads as lawful -- measured.
 	for _, c := range newCorpus() {
-		fields, ok := callExtract(first, c.doc)
-		if !ok {
+		fields, err := callExtract(first, c.doc)
+		if err != nil {
 			continue
 		}
 		for i, f := range fields {

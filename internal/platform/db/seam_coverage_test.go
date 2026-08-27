@@ -1718,6 +1718,30 @@ func TestN9(t *testing.T) {
 }
 `
 
+// scSweepNeedleHelperSinkOnly and scSweepNeedleHelperCallerOnly are N10's
+// pair: the sink (identity()) and its call site live in TWO SEPARATE files,
+// as internal/document actually spells it (identity() in document_test.go,
+// every call in its four siblings, AUDIT-12-03 Implementation Plan §2). A
+// per-FILE-only sink resolution -- the first draft of this scan -- finds
+// nothing scanning the caller file alone, because the sink is declared
+// elsewhere; only per-PACKAGE resolution (pooling every sibling's FuncDecls
+// before resolving sinks) catches it. N1-N9 are all single-file, so none of
+// them would have caught a regression back to per-file resolution.
+const scSweepNeedleHelperSinkOnly = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+`
+
+const scSweepNeedleHelperCallerOnly = `package x
+
+func TestN10(t *testing.T) {
+	c := identity(ctx, tenantID, uuid.NewString())
+	_ = c
+}
+`
+
 func scSweepSubjectControlNeedles(t *testing.T) {
 	t.Run("N1 direct literal", func(t *testing.T) {
 		sites := scSweepFixtureSubjectSites(t, "n1.go", scSweepNeedleLiteral)
@@ -1771,6 +1795,38 @@ func scSweepSubjectControlNeedles(t *testing.T) {
 		sites := scSweepFixtureSubjectSites(t, "n9.go", scSweepNeedleHelperChain)
 		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN9" {
 			t.Fatalf("sites = %v, want exactly one helper site in TestN9, attributed to the caller that introduces the freshness — not to the relaying wrapper identityFor", sites)
+		}
+	})
+	t.Run("N10 a sink declared in one file is resolved when called from a sibling", func(t *testing.T) {
+		sinkFset := token.NewFileSet()
+		sinkFile, err := parser.ParseFile(sinkFset, "n10_sink.go", scSweepNeedleHelperSinkOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n10_sink.go: %v", err)
+		}
+		callerFset := token.NewFileSet()
+		callerFile, err := parser.ParseFile(callerFset, "n10_caller.go", scSweepNeedleHelperCallerOnly, 0)
+		if err != nil {
+			t.Fatalf("parse n10_caller.go: %v", err)
+		}
+		callerLines := strings.Split(scSweepNeedleHelperCallerOnly, "\n")
+
+		// Per-file-only resolution (the first draft): resolving sinks from the
+		// caller file alone must find NOTHING, or this needle proves nothing.
+		fileOnlySinks := scSweepFindIdentitySinks(scSweepFuncDecls(callerFile))
+		fileOnlySites := scSweepHelperCallSitesInFile(callerFset, "n10_caller.go", callerFile, callerLines, fileOnlySinks)
+		if len(fileOnlySites) != 0 {
+			t.Fatalf("per-file-only sites = %v, want none — this needle is meaningless unless scanning the caller file alone (without its sibling) misses the call", fileOnlySites)
+		}
+
+		// Per-package resolution (the real population scan's approach, see
+		// TestRLS_SweptPackagesBuildIdentitiesFromASeededMember): pool both
+		// files' FuncDecls before resolving sinks, exactly as document's real
+		// identity()/siblings split requires.
+		pkgDecls := append(scSweepFuncDecls(sinkFile), scSweepFuncDecls(callerFile)...)
+		pkgSinks := scSweepFindIdentitySinks(pkgDecls)
+		pkgSites := scSweepHelperCallSitesInFile(callerFset, "n10_caller.go", callerFile, callerLines, pkgSinks)
+		if len(pkgSites) != 1 || pkgSites[0].kind != "helper" || pkgSites[0].fn != "TestN10" {
+			t.Fatalf("per-package sites = %v, want exactly one helper site in TestN10 — a sink declared in a SIBLING file must still be resolved", pkgSites)
 		}
 	})
 }

@@ -110,6 +110,27 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	return id
 }
 
+// TestInvoiceFixture_SeedTenantSeedsAnActiveCallerMembership (AUDIT-12-04
+// AC-1): seedTenant must seed its own caller a membership row, active, in
+// the same tenant. Deleting that INSERT (Stage 3's own fixture change) must
+// fail this test, not pass silently -- subtask 02's gap, QA-found.
+func TestInvoiceFixture_SeedTenantSeedsAnActiveCallerMembership(t *testing.T) {
+	super, _ := dbTestPools(t)
+
+	tenantID := seedTenant(t, super, "AUDIT-12-04 fixture-presence tenant")
+
+	var status string
+	err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE tenant_id = $1`, tenantID,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("seedTenant seeded no memberships row for its own tenant: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("membership status = %q, want active", status)
+	}
+}
+
 // seedEntity inserts one business_entities row for tenantID as the
 // superuser (BYPASSRLS) and registers its own cleanup (belt-and-suspenders
 // alongside the tenant-cascade above; harmless once the tenant is gone).

@@ -77,6 +77,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +101,12 @@ type redCase struct {
 	// reference the same name, so each broken extractor has one definition rather than two that
 	// drift (precedent: internal/submission/contract_red_test.go:634-638).
 	newExtractor func() extraction.Extractor
+
+	// wantMessage, when set, is a substring exactly one recorded message must carry. Set
+	// equality grades law ids, and for the watchdog site that is not enough: with :505 disabled
+	// the timeout path returns (nil, nil) and the nil-error site records E12 in its place, so
+	// the id set is identical either way. Only the text tells the two apart -- measured.
+	wantMessage string
 
 	// slow marks the E12 watchdog row, which costs a full cancelledExtractBudget.
 	// TestContractCorpusNeedsNoRestore skips it, which is only sound while that row's Extract
@@ -142,9 +149,16 @@ func (e redFields) Extract(ctx context.Context, _ extraction.Document) ([]extrac
 	return e.build(), nil
 }
 
-// driftingName trips BOTH E01 sites in one row: empty on an instance's first call, then
-// something else. E03 stays clear because the runner compares each instance's FIRST call
-// (contract_test.go:345-355), and every instance's first call returns the same empty string.
+// E01 owns two sites and one extractor cannot isolate both, so it gets a row each. emptyName
+// keeps Name() constant, reaching the emptiness site alone; driftingName keeps it non-empty,
+// reaching the stability site alone. E03 stays clear for both: the runner compares each
+// instance's FIRST call (contract_test.go:369), and both shapes agree there.
+type emptyName struct{ refExtractor }
+
+func newEmptyName() extraction.Extractor { return emptyName{} }
+
+func (emptyName) Name() string { return "" }
+
 type driftingName struct {
 	refExtractor
 	calls int
@@ -154,13 +168,16 @@ func newDriftingName() extraction.Extractor { return &driftingName{} }
 
 func (e *driftingName) Name() string {
 	e.calls++
-	if e.calls == 1 {
-		return ""
-	}
-	return "drifted"
+	return fmt.Sprintf("drifted-%d", e.calls)
 }
 
-// driftingVersion is driftingName's twin, on E02's two sites.
+// E02's twins of the pair above, on Version().
+type emptyVersion struct{ refExtractor }
+
+func newEmptyVersion() extraction.Extractor { return emptyVersion{} }
+
+func (emptyVersion) Version() string { return "" }
+
 type driftingVersion struct {
 	refExtractor
 	calls int
@@ -170,31 +187,43 @@ func newDriftingVersion() extraction.Extractor { return &driftingVersion{} }
 
 func (e *driftingVersion) Version() string {
 	e.calls++
-	if e.calls == 1 {
-		return ""
-	}
-	return "drifted"
+	return fmt.Sprintf("drifted-%d", e.calls)
 }
 
-// instanceStampedIdentity stamps Name and Version with a sequence number, so two instances
-// disagree and BOTH E03 sites fire while each instance stays stable across its own calls.
-type instanceStampedIdentity struct {
+// E03 splits the same way, one row per site: each type stamps ONE of Name and Version with a
+// sequence number, so two instances disagree on that one and inherit the other. Each instance
+// stays stable across its own calls, so E01 and E02 stay clear.
+type instanceStampedName struct {
 	refExtractor
 	seq int
 }
 
-// newInstanceStampedIdentity keeps the counter PER FACTORY. Per instance it would trip E01 and
-// E02 instead; process-wide it would leak across rows and across repeat runs of one row.
-func newInstanceStampedIdentity() func() extraction.Extractor {
+// The counter is PER FACTORY. Per instance it would trip E01 instead; process-wide it would
+// leak across rows and across repeat runs of one row.
+func newInstanceStampedName() func() extraction.Extractor {
 	seq := 0
 	return func() extraction.Extractor {
 		seq++
-		return instanceStampedIdentity{seq: seq}
+		return instanceStampedName{seq: seq}
 	}
 }
 
-func (e instanceStampedIdentity) Name() string    { return fmt.Sprintf("stamped-name-%d", e.seq) }
-func (e instanceStampedIdentity) Version() string { return fmt.Sprintf("stamped-version-%d", e.seq) }
+func (e instanceStampedName) Name() string { return fmt.Sprintf("stamped-name-%d", e.seq) }
+
+type instanceStampedVersion struct {
+	refExtractor
+	seq int
+}
+
+func newInstanceStampedVersion() func() extraction.Extractor {
+	seq := 0
+	return func() extraction.Extractor {
+		seq++
+		return instanceStampedVersion{seq: seq}
+	}
+}
+
+func (e instanceStampedVersion) Version() string { return fmt.Sprintf("stamped-version-%d", e.seq) }
 
 // E04, success half: a nil slice alongside a nil error -- the []T to JSON null hazard.
 func newNilSliceOnSuccess() extraction.Extractor { return redFields{build: nilSliceOnSuccess} }
@@ -281,13 +310,22 @@ func missingWithValue() []extraction.Field {
 	return fields
 }
 
-// E11, absolute coordinates: PDF points where the contract wants a normalised box. Page 1 is
-// lawful, so this reaches the X and Y sites only -- two of E11's three.
-func newAbsoluteRegion() extraction.Extractor { return redFields{build: absoluteRegion} }
+// E11's bounds are two independent sites, one per axis, so one row each: PDF points on the
+// row's own axis and a normalised box on the other. Page 1 is lawful, so the page site stays
+// clear for both.
+func newAbsoluteRegionX() extraction.Extractor { return redFields{build: absoluteRegionX} }
 
-func absoluteRegion() []extraction.Field {
+func absoluteRegionX() []extraction.Field {
 	fields := lawfulFields()
-	fields[0].Region = &extraction.Region{Page: 1, X0: 72, Y0: 720, X1: 540, Y1: 750}
+	fields[0].Region = &extraction.Region{Page: 1, X0: 72, Y0: 0.10, X1: 540, Y1: 0.20}
+	return fields
+}
+
+func newAbsoluteRegionY() extraction.Extractor { return redFields{build: absoluteRegionY} }
+
+func absoluteRegionY() []extraction.Field {
+	fields := lawfulFields()
+	fields[0].Region = &extraction.Region{Page: 1, X0: 0.10, Y0: 720, X1: 0.40, Y1: 750}
 	return fields
 }
 
@@ -302,13 +340,32 @@ func pageZeroRegion() []extraction.Field {
 	return fields
 }
 
-// cancellationIgnoring never reads ctx, so it returns a result where the contract wants an
-// error and a nil slice. It reaches E12's two return-value sites.
-type cancellationIgnoring struct{ refExtractor }
+// E12's two return-value sites are checked independently, so a row each. Both are lawful on a
+// live context, so neither disturbs a value law.
+//
+// nilErrorUnderCancellation drops the error and the fields: the nil slice is lawful, so only
+// the error site fires.
+type nilErrorUnderCancellation struct{ refExtractor }
 
-func newCancellationIgnoring() extraction.Extractor { return cancellationIgnoring{} }
+func newNilErrorUnderCancellation() extraction.Extractor { return nilErrorUnderCancellation{} }
 
-func (cancellationIgnoring) Extract(context.Context, extraction.Document) ([]extraction.Field, error) {
+func (nilErrorUnderCancellation) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+	if ctx.Err() != nil {
+		return nil, nil
+	}
+	return lawfulFields(), nil
+}
+
+// fieldsUnderCancellation smuggles a result out beside the error: the error is lawful, so only
+// the slice site fires.
+type fieldsUnderCancellation struct{ refExtractor }
+
+func newFieldsUnderCancellation() extraction.Extractor { return fieldsUnderCancellation{} }
+
+func (fieldsUnderCancellation) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+	if err := ctx.Err(); err != nil {
+		return lawfulFields(), err
+	}
 	return lawfulFields(), nil
 }
 
@@ -337,15 +394,19 @@ func (cancellationBlocking) Extract(ctx context.Context, doc extraction.Document
 	return lawfulFields(), nil
 }
 
-// redCases is fifteen rows for twelve laws. E04, E11 and E12 carry a second row each because
-// one broken extractor cannot reach every emission site those laws own: the runner holds 20
-// Errorf sites, and these fifteen rows exercise all 20. Fourteen rows cost about 13ms apiece;
-// the slow one costs a full cancelledExtractBudget and is the only thing in the repository
-// that goes red when the watchdog stops reporting.
+// redCases is twenty rows for twelve laws -- ONE PER EMISSION SITE, because a law id set
+// cannot see half a law go missing. Six laws carry more than one row: no single broken
+// extractor can reach both of E01's, E02's, E03's or E12's sites at once without tripping a
+// second law, and E04 and E11 own arms a single result cannot occupy together. Nineteen rows
+// cost about 13ms apiece; the slow one costs a full cancelledExtractBudget and is the only
+// thing in the repository that goes red when the watchdog stops reporting.
 var redCases = []redCase{
-	{lawID: "E01", name: "name-empty-then-drifting", want: lawSet("E01"), newExtractor: newDriftingName},
-	{lawID: "E02", name: "version-empty-then-drifting", want: lawSet("E02"), newExtractor: newDriftingVersion},
-	{lawID: "E03", name: "identity-stamped-per-instance", want: lawSet("E03"), newExtractor: newInstanceStampedIdentity()},
+	{lawID: "E01", name: "name-always-empty", want: lawSet("E01"), newExtractor: newEmptyName},
+	{lawID: "E01", name: "name-drifts-within-an-instance", want: lawSet("E01"), newExtractor: newDriftingName},
+	{lawID: "E02", name: "version-always-empty", want: lawSet("E02"), newExtractor: newEmptyVersion},
+	{lawID: "E02", name: "version-drifts-within-an-instance", want: lawSet("E02"), newExtractor: newDriftingVersion},
+	{lawID: "E03", name: "name-stamped-per-instance", want: lawSet("E03"), newExtractor: newInstanceStampedName()},
+	{lawID: "E03", name: "version-stamped-per-instance", want: lawSet("E03"), newExtractor: newInstanceStampedVersion()},
 	{lawID: "E04", name: "nil-slice-on-success", want: lawSet("E04"), newExtractor: newNilSliceOnSuccess},
 	{lawID: "E04", name: "fields-alongside-an-error", want: lawSet("E04"), newExtractor: newFieldsWithError},
 	{lawID: "E05", name: "mutates-doc-bytes", want: lawSet("E05"), newExtractor: newBytesMutating},
@@ -354,10 +415,19 @@ var redCases = []redCase{
 	{lawID: "E08", name: "empty-value-pointer", want: lawSet("E08"), newExtractor: newEmptyValuePointer},
 	{lawID: "E09", name: "undeclared-reason", want: lawSet("E09"), newExtractor: newUndeclaredReason},
 	{lawID: "E10", name: "missing-with-a-value", want: lawSet("E10"), newExtractor: newMissingWithValue},
-	{lawID: "E11", name: "absolute-coordinates", want: lawSet("E11"), newExtractor: newAbsoluteRegion},
+	{lawID: "E11", name: "absolute-x-coordinates", want: lawSet("E11"), newExtractor: newAbsoluteRegionX},
+	{lawID: "E11", name: "absolute-y-coordinates", want: lawSet("E11"), newExtractor: newAbsoluteRegionY},
 	{lawID: "E11", name: "page-zero", want: lawSet("E11"), newExtractor: newPageZeroRegion},
-	{lawID: "E12", name: "ignores-cancellation", want: lawSet("E12"), newExtractor: newCancellationIgnoring},
-	{lawID: "E12", name: "blocks-past-the-budget", want: lawSet("E12"), newExtractor: newCancellationBlocking, slow: true},
+	{lawID: "E12", name: "nil-error-under-cancellation", want: lawSet("E12"), newExtractor: newNilErrorUnderCancellation},
+	{lawID: "E12", name: "fields-under-cancellation", want: lawSet("E12"), newExtractor: newFieldsUnderCancellation},
+	{
+		lawID:        "E12",
+		name:         "blocks-past-the-budget",
+		want:         lawSet("E12"),
+		newExtractor: newCancellationBlocking,
+		wantMessage:  "did not return within",
+		slow:         true,
+	},
 }
 
 // lawSet builds a want value from a list of ids.
@@ -369,11 +439,17 @@ func lawSet(ids ...string) map[string]bool {
 	return s
 }
 
-// recordedLawIDs drives one extractor through the whole suite and returns the ids it tripped.
-func recordedLawIDs(newExtractor func() extraction.Extractor) map[string]bool {
+// recordedLaws drives one extractor through the whole suite and returns the recorder: lawIDs
+// is what the table grades on, messages what the watchdog row needs beyond it.
+func recordedLaws(newExtractor func() extraction.Extractor) *lawRecorder {
 	rec := &lawRecorder{}
 	RunExtractorContract(rec, newExtractor)
-	return rec.lawIDs()
+	return rec
+}
+
+// recordedLawIDs is the id-set half, which is all the named specs below need.
+func recordedLawIDs(newExtractor func() extraction.Extractor) map[string]bool {
+	return recordedLaws(newExtractor).lawIDs()
 }
 
 // assertExactLawIDs grades got against want by set equality in BOTH directions -- containment
@@ -392,6 +468,23 @@ func assertExactLawIDs(t *testing.T, label string, got, want map[string]bool) {
 			t.Errorf("%s: law %s was recorded but not wanted: recorded %v, want exactly %v",
 				label, id, sortedLawIDs(got), sortedLawIDs(want))
 		}
+	}
+}
+
+// assertOneMessageContains grades a row on the recorded TEXT, for a site set equality cannot
+// see. Exactly one, not at least one: a defect that fires on a single corpus case is a
+// different defect from one that fires on every case.
+func assertOneMessageContains(t *testing.T, label string, messages []string, want string) {
+	t.Helper()
+
+	var n int
+	for _, m := range messages {
+		if strings.Contains(m, want) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%s: %d recorded message(s) carry %q, want exactly 1: recorded %v", label, n, want, messages)
 	}
 }
 
@@ -461,7 +554,11 @@ func TestContractSuite_RejectsNonConformingExtractors(t *testing.T) {
 				t.Fatalf("row %s/%s wants %v, which does not include its own primary id",
 					tc.lawID, tc.name, sortedLawIDs(tc.want))
 			}
-			assertExactLawIDs(t, tc.lawID+"/"+tc.name, recordedLawIDs(tc.newExtractor), tc.want)
+			rec := recordedLaws(tc.newExtractor)
+			assertExactLawIDs(t, tc.lawID+"/"+tc.name, rec.lawIDs(), tc.want)
+			if tc.wantMessage != "" {
+				assertOneMessageContains(t, tc.lawID+"/"+tc.name, rec.messages, tc.wantMessage)
+			}
 		})
 	}
 }
@@ -496,7 +593,7 @@ func TestRedCase_E05MutatingExtractIsRejected(t *testing.T) {
 // extraction_field_results_bbox_normalised CHECK, so PDF points in a Region are caught at both
 // layers.
 func TestRedCase_E11AbsoluteCoordinatesAreRejected(t *testing.T) {
-	assertExactLawIDs(t, "E11/absolute-coordinates", recordedLawIDs(newAbsoluteRegion), lawSet("E11"))
+	assertExactLawIDs(t, "E11/absolute-x-coordinates", recordedLawIDs(newAbsoluteRegionX), lawSet("E11"))
 }
 
 // TestRedCase_E11PageZeroIsRejected: pages are 1-based. This is the only row that reaches
@@ -506,9 +603,9 @@ func TestRedCase_E11PageZeroIsRejected(t *testing.T) {
 }
 
 // TestRedCase_E12IgnoringCancellationIsRejected: an extractor that returns a result for an
-// already-cancelled context is recorded. The watchdog half of E12 is graded by the slow row.
+// already-cancelled context is recorded. The other two E12 sites are graded by the table.
 func TestRedCase_E12IgnoringCancellationIsRejected(t *testing.T) {
-	assertExactLawIDs(t, "E12/ignores-cancellation", recordedLawIDs(newCancellationIgnoring), lawSet("E12"))
+	assertExactLawIDs(t, "E12/fields-under-cancellation", recordedLawIDs(newFieldsUnderCancellation), lawSet("E12"))
 }
 
 const redSuiteFile = "contract_red_test.go"

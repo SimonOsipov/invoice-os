@@ -84,6 +84,40 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	return seedTenantWithID(t, super, uuid.NewString(), label)
 }
 
+// docFixtureAssertActiveMembership fails unless tenantID has exactly one
+// active memberships row. Query is subject-agnostic on purpose: AUDIT-12-03
+// authors this test before the sweep names its own memberSubject constant.
+func docFixtureAssertActiveMembership(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	var status string
+	err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE tenant_id = $1`, tenantID,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("query caller membership: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("status = %q, want active", status)
+	}
+}
+
+// TestDocumentFixture_BothTenantHelpersSeedTheCaller (AUDIT-12-03 AC-1): both
+// seedTenant AND seedTenantWithID must seed a caller membership, or a test
+// that only calls the second one stays unswept. Fails today: neither helper
+// inserts a membership row yet.
+func TestDocumentFixture_BothTenantHelpersSeedTheCaller(t *testing.T) {
+	super, _ := dbTestPools(t)
+
+	t.Run("seedTenant", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "document fixture membership check (seedTenant)")
+		docFixtureAssertActiveMembership(t, super, tenantID)
+	})
+	t.Run("seedTenantWithID", func(t *testing.T) {
+		tenantID := seedTenantWithID(t, super, uuid.NewString(), "document fixture membership check (seedTenantWithID)")
+		docFixtureAssertActiveMembership(t, super, tenantID)
+	})
+}
+
 func mustCount(t *testing.T, super *pgxpool.Pool, query string, args ...any) int {
 	t.Helper()
 	var n int

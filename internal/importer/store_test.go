@@ -101,6 +101,26 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 	return id
 }
 
+// TestImporterFixture_SeedTenantSeedsAnActiveCallerMembership (AUDIT-12-03
+// AC-1): fails if seedTenant's membership INSERT is silently dropped. Query
+// is subject-agnostic on purpose: this test is authored before the sweep
+// names its own memberSubject constant.
+func TestImporterFixture_SeedTenantSeedsAnActiveCallerMembership(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "importer fixture membership check")
+
+	var status string
+	err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE tenant_id = $1`, tenantID,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("query caller membership: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("status = %q, want active", status)
+	}
+}
+
 // seedEntity inserts one business_entities row for tenantID as the superuser
 // (BYPASSRLS, so tin is left NULL) and registers its own cleanup
 // (belt-and-suspenders alongside the tenant-cascade above; harmless once the

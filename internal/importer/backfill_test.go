@@ -11,10 +11,12 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fixture helpers ---------------------------------------------------
@@ -571,5 +573,38 @@ func TestBackfill_UndecodableOrMissingDocumentIsSkippedNotFatal(t *testing.T) {
 	}
 	if got := sourceRowsOf(t, super, cleanInv); !intSliceEqual(got, wantClean) {
 		t.Errorf("clean invoice source_rows = %v, want %v — a bad sibling document must not block it", got, wantClean)
+	}
+}
+
+// TestBackfill_RunsAsANonUUIDActorAndIsNotGated (AUDIT-12-03 AC-4): the
+// caller's own setup identity is irrelevant -- BackfillSourceRows
+// unconditionally overwrites ctx with the non-uuid backfillActor
+// (backfill.go:70), which db.WithinRequestTenantTxOpts admits without a
+// membership lookup (a non-uuid Subject short-circuits past the gate).
+// Sweeping this file's setup identities to memberSubject must not disturb
+// that arm.
+func TestBackfill_RunsAsANonUUIDActorAndIsNotGated(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := newBFTwoInvoiceFixture(t, super, app, "backfill actor")
+	nullSourceRows(t, super, fx.invA, fx.invB)
+
+	res, err := BackfillSourceRows(context.Background(), app, fx.open, fx.tenantID, false)
+	if err != nil {
+		t.Fatalf("BackfillSourceRows: %v", err)
+	}
+	if res.InvoicesWritten == 0 {
+		t.Fatalf("InvoicesWritten = 0, want > 0 — a gated actor would have written nothing")
+	}
+
+	var actor string
+	if err := db.WithinTenantTx(context.Background(), app, fx.tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT actor FROM audit_log WHERE event = 'document.read' ORDER BY created_at DESC, id DESC LIMIT 1`,
+		).Scan(&actor)
+	}); err != nil {
+		t.Fatalf("read audit_log actor: %v", err)
+	}
+	if actor != backfillActor {
+		t.Fatalf("actor = %q, want %q", actor, backfillActor)
 	}
 }

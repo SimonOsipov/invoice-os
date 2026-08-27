@@ -1267,13 +1267,25 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 // unswept-allowlist entries, so a revert between subtasks fails on the commit
 // that causes it.
 //
-// The match is textual, not type-aware — it does not ask whether a site can
-// reach the gated seam, only whether the shape is still there. Two shapes
-// count: `Subject: uuid.NewString()` directly, and `x := uuid.NewString()`
-// followed anywhere in the same func by `Subject: x` — internal/portfolio
-// spells ~9 of its 41 sites the second way (AUDIT-12-02 Implementation Plan,
-// Correction 2), and a literal-only match would certify a sweep that missed
-// them.
+// The match is textual for two shapes and AST-based for a third:
+// `Subject: uuid.NewString()` directly, `x := uuid.NewString()` followed
+// anywhere in the same func by `Subject: x` (internal/portfolio spells ~9 of
+// its 41 sites the second way, AUDIT-12-02 Implementation Plan Correction 2),
+// and — AUDIT-12-03's finding — a fresh uuid passed POSITIONALLY into a local
+// test helper that itself builds the identity, e.g.
+// `identity(ctx, tenantID, uuid.NewString())` where `identity(ctx, tenantID,
+// subject string)` does `auth.Identity{Subject: subject, ...}` internally.
+// Neither text pattern ever appears at that call site — "Subject:" is inside
+// the helper, not the caller — so this shape needs a real value-flow answer:
+// scSweepFindIdentitySinks walks every local func for one that routes a
+// parameter into `Subject:` (directly, or by relaying a parameter into
+// another already-found sink — a fixed-point closure, so a chain of
+// wrappers is caught at any depth, not just one hop), and
+// scSweepHelperCallSitesIn then flags any call into a sink fed a fresh uuid
+// — inline or through a `:=`-assigned variable — at that parameter position.
+// This is deliberately structural (which parameter position feeds Subject),
+// not name-based (no hardcoded "identity" or "testIdentity"), so a
+// differently-named helper in the next swept package is still caught.
 //
 // A site that legitimately needs a fresh, unmembered subject inside an
 // already-swept package (the claim-changing set, AUDIT-12 System Design §5.4)
@@ -1286,7 +1298,9 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 // subtest — none of today's sites need finer scoping. A variable also fed to
 // its own explicit membership insert is still flagged; a later sweep subtask
 // that needs that shape extends the predicate or the allowlist, not this
-// comment.
+// comment. The helper-sink walk resolves calls by plain identifier only (a
+// local func called directly, not through a struct method or an interface
+// value) — every known helper in this package's population is a bare func.
 
 // scSweepFuncLineRanges maps every FuncDecl in f to its body's 1-based
 // [start,end] line range. AST supplies the boundary; the match itself is a
@@ -1311,7 +1325,7 @@ type scSweepSubjectSite struct {
 	file string
 	line int
 	fn   string
-	kind string // "literal" (Subject: uuid.NewString()) or "var" (x := uuid.NewString() ... Subject: x)
+	kind string // "literal" (Subject: uuid.NewString()), "var" (x := uuid.NewString() ... Subject: x), or "helper" (a fresh uuid passed positionally into a local identity-building func)
 }
 
 func (s scSweepSubjectSite) String() string {
@@ -1325,9 +1339,10 @@ func scSweepVarUseRE(name string) *regexp.Regexp {
 	return regexp.MustCompile(`Subject:\s*` + regexp.QuoteMeta(name) + `\b`)
 }
 
-// scSweepSubjectSitesIn finds every fresh-subject site in one parsed
-// _test.go file.
-func scSweepSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSubjectSite {
+// scSweepTextualSubjectSitesIn finds the two textual shapes (literal,
+// var-mediated) in one parsed _test.go file. Both are self-contained inside
+// one func body, so per-file matching is correct for them.
+func scSweepTextualSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSubjectSite {
 	var out []scSweepSubjectSite
 	for fn, rng := range scSweepFuncLineRanges(fset, f) {
 		start, end := rng[0], rng[1]
@@ -1347,6 +1362,229 @@ func scSweepSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines [
 				}
 			}
 		}
+	}
+	return out
+}
+
+// scSweepSubjectSitesIn is the single-file convenience the needle fixtures
+// below use, where the sink and its call always live in the same synthetic
+// file: textual shapes plus helper-shape sinks resolved from this file
+// alone. The real population scan does NOT call this — it resolves sinks
+// per PACKAGE (see TestRLS_SweptPackagesBuildIdentitiesFromASeededMember),
+// because a package's identity()-style helper is routinely declared in one
+// _test.go file and called from its siblings.
+func scSweepSubjectSitesIn(fset *token.FileSet, rel string, f *ast.File, lines []string) []scSweepSubjectSite {
+	out := scSweepTextualSubjectSitesIn(fset, rel, f, lines)
+	sinks := scSweepFindIdentitySinks(scSweepFuncDecls(f))
+	out = append(out, scSweepHelperCallSitesInFile(fset, rel, f, lines, sinks)...)
+	return out
+}
+
+// scSweepFuncDecls returns every top-level func with a body, in source order.
+func scSweepFuncDecls(f *ast.File) []*ast.FuncDecl {
+	var out []*ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+			out = append(out, fd)
+		}
+	}
+	return out
+}
+
+// scSweepFlattenParams returns a func's parameter names in call-site
+// positional order (`func f(ctx context.Context, tenantID, subject string)`
+// flattens to ["ctx", "tenantID", "subject"]) — an unnamed field contributes
+// a blank slot so later indices still line up with real call args.
+func scSweepFlattenParams(fl *ast.FieldList) []string {
+	if fl == nil {
+		return nil
+	}
+	var out []string
+	for _, field := range fl.List {
+		if len(field.Names) == 0 {
+			out = append(out, "")
+			continue
+		}
+		for _, n := range field.Names {
+			out = append(out, n.Name)
+		}
+	}
+	return out
+}
+
+// scSweepIdentitySink is one local func that routes one of its own
+// parameters (at paramIdx, positional) into auth.Identity{Subject: ...} —
+// directly, or by relaying that parameter into another sink.
+type scSweepIdentitySink struct {
+	paramIdx int
+}
+
+// scSweepFindIdentitySinks finds every local sink in one file. Base case: a
+// CompositeLit key `Subject` whose value is an Ident matching one of the
+// enclosing func's own parameters. Then a fixed-point pass: a func that
+// calls an already-found sink, passing one of ITS OWN parameters at the
+// sink's paramIdx position, becomes a sink itself — repeated until nothing
+// new is found, so a chain of wrapper helpers is resolved at any depth, not
+// just one hop. Resolution is by plain identifier call (`f(...)`), the only
+// shape any known local test helper uses.
+func scSweepFindIdentitySinks(decls []*ast.FuncDecl) map[string]scSweepIdentitySink {
+	sinks := map[string]scSweepIdentitySink{}
+
+	for _, fd := range decls {
+		if _, ok := sinks[fd.Name.Name]; ok {
+			continue
+		}
+		params := scSweepFlattenParams(fd.Type.Params)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			for _, elt := range cl.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok || key.Name != "Subject" {
+					continue
+				}
+				id, ok := kv.Value.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				for i, p := range params {
+					if p != "" && p == id.Name {
+						if _, exists := sinks[fd.Name.Name]; !exists {
+							sinks[fd.Name.Name] = scSweepIdentitySink{paramIdx: i}
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for _, fd := range decls {
+			if _, ok := sinks[fd.Name.Name]; ok {
+				continue
+			}
+			params := scSweepFlattenParams(fd.Type.Params)
+			found := -1
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if found != -1 {
+					return false
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee, ok := call.Fun.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				sink, ok := sinks[callee.Name]
+				if !ok || sink.paramIdx >= len(call.Args) {
+					return true
+				}
+				argID, ok := call.Args[sink.paramIdx].(*ast.Ident)
+				if !ok {
+					return true
+				}
+				for i, p := range params {
+					if p != "" && p == argID.Name {
+						found = i
+						return false
+					}
+				}
+				return true
+			})
+			if found != -1 {
+				sinks[fd.Name.Name] = scSweepIdentitySink{paramIdx: found}
+				changed = true
+			}
+		}
+	}
+	return sinks
+}
+
+// scSweepFreshVarNames returns every name assigned via `x := uuid.NewString()`
+// anywhere in body — the same shape scSweepVarAssignRE matches, reused here to
+// decide whether a variable fed into a helper call is a fresh uuid.
+func scSweepFreshVarNames(body string) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		if m := scSweepVarAssignRE.FindStringSubmatch(line); m != nil {
+			out[m[1]] = true
+		}
+	}
+	return out
+}
+
+// scSweepIsFreshValue reports whether e is a fresh uuid: an inline
+// `uuid.NewString()` call, or an Ident previously `:=`-assigned from one
+// (per fresh, scoped to the enclosing func).
+func scSweepIsFreshValue(e ast.Expr, fresh map[string]bool) bool {
+	switch v := e.(type) {
+	case *ast.CallExpr:
+		sel, ok := v.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		x, ok := sel.X.(*ast.Ident)
+		return ok && x.Name == "uuid" && sel.Sel.Name == "NewString"
+	case *ast.Ident:
+		return fresh[v.Name]
+	default:
+		return false
+	}
+}
+
+// scSweepHelperCallSitesInFile finds every call into a local identity sink
+// (scSweepFindIdentitySinks, precomputed by the caller — package-wide for
+// the real scan, single-file for the needle fixtures) fed a fresh uuid at
+// the parameter position that reaches Subject — the positional-helper shape
+// (`identity(ctx, tenantID, uuid.NewString())`), regardless of how the fresh
+// value is spelled at the call site. A sink's own body is walked like any
+// other func, so a wrapper that merely relays a parameter is not flagged for
+// relaying it — only the func that actually introduces the freshness is.
+func scSweepHelperCallSitesInFile(fset *token.FileSet, rel string, f *ast.File, lines []string, sinks map[string]scSweepIdentitySink) []scSweepSubjectSite {
+	if len(sinks) == 0 {
+		return nil
+	}
+	var out []scSweepSubjectSite
+	for _, fd := range scSweepFuncDecls(f) {
+		start := fset.Position(fd.Body.Pos()).Line
+		end := fset.Position(fd.Body.End()).Line
+		if start < 1 || end > len(lines) {
+			continue
+		}
+		fresh := scSweepFreshVarNames(strings.Join(lines[start-1:end], "\n"))
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			callee, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			sink, ok := sinks[callee.Name]
+			if !ok || sink.paramIdx >= len(call.Args) {
+				return true
+			}
+			if scSweepIsFreshValue(call.Args[sink.paramIdx], fresh) {
+				out = append(out, scSweepSubjectSite{
+					file: rel,
+					line: fset.Position(call.Pos()).Line,
+					fn:   fd.Name.Name,
+					kind: "helper",
+				})
+			}
+			return true
+		})
 	}
 	return out
 }
@@ -1399,6 +1637,87 @@ func TestN4(t *testing.T) {
 }
 `
 
+// scSweepNeedleHelper is the positional-helper shape (AUDIT-12-03
+// Implementation Plan §2, internal/document's identity()): the fresh uuid is
+// an inline call, never text-adjacent to "Subject:".
+const scSweepNeedleHelper = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN5(t *testing.T) {
+	c := identity(ctx, tenantID, uuid.NewString())
+	_ = c
+}
+`
+
+// scSweepNeedleHelperVar is the positional-helper shape spelled through a
+// variable (internal/importer's handlers_adversarial_test.go: `subject :=
+// uuid.NewString()` then passed as identity()'s 3rd arg, never `Subject:
+// subject`).
+const scSweepNeedleHelperVar = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN6(t *testing.T) {
+	subject := uuid.NewString()
+	c := identity(ctx, tenantID, subject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperClean proves a swept call into the same helper is not a
+// site: memberSubject is not a fresh uuid, however it is spelled.
+const scSweepNeedleHelperClean = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN7(t *testing.T) {
+	c := identity(ctx, tenantID, memberSubject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperTenantParam proves the sink is positional, not "any
+// fresh uuid anywhere in the call": a fresh uuid at the TENANT parameter,
+// with a swept subject, is not a site.
+const scSweepNeedleHelperTenantParam = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func TestN8(t *testing.T) {
+	c := identity(ctx, uuid.NewString(), memberSubject)
+	_ = c
+}
+`
+
+// scSweepNeedleHelperChain proves the fixed-point resolves a two-hop wrapper
+// (identityFor relays its own "actor" param into identity's sink slot, so
+// identityFor becomes a sink too) — generality beyond the single hop the
+// shipped corpus needs today.
+const scSweepNeedleHelperChain = `package x
+
+func identity(ctx context.Context, tenantID, subject string) context.Context {
+	return auth.WithIdentity(ctx, auth.Identity{Subject: subject, TenantID: tenantID})
+}
+
+func identityFor(ctx context.Context, tenantID, actor string) context.Context {
+	return identity(ctx, tenantID, actor)
+}
+
+func TestN9(t *testing.T) {
+	c := identityFor(ctx, tenantID, uuid.NewString())
+	_ = c
+}
+`
+
 func scSweepSubjectControlNeedles(t *testing.T) {
 	t.Run("N1 direct literal", func(t *testing.T) {
 		sites := scSweepFixtureSubjectSites(t, "n1.go", scSweepNeedleLiteral)
@@ -1422,6 +1741,36 @@ func scSweepSubjectControlNeedles(t *testing.T) {
 		sites := scSweepFixtureSubjectSites(t, "n4.go", scSweepNeedleTenantOnly)
 		if len(sites) != 0 {
 			t.Fatalf("sites = %v, want none — a fresh uuid never read back as Subject is a tenant id", sites)
+		}
+	})
+	t.Run("N5 positional helper, inline literal", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n5.go", scSweepNeedleHelper)
+		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN5" {
+			t.Fatalf("sites = %v, want exactly one helper site in TestN5 — this is the shape a text-only scan cannot see (internal/document's identity())", sites)
+		}
+	})
+	t.Run("N6 positional helper, variable-mediated", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n6.go", scSweepNeedleHelperVar)
+		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN6" {
+			t.Fatalf("sites = %v, want exactly one helper site in TestN6 — a fresh var passed positionally is still a fresh subject", sites)
+		}
+	})
+	t.Run("N7 a swept helper call is not a site", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n7.go", scSweepNeedleHelperClean)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — memberSubject at the subject position is the seeded caller, not a fresh identity", sites)
+		}
+	})
+	t.Run("N8 a fresh tenant id at the helper's tenant slot is not a subject", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n8.go", scSweepNeedleHelperTenantParam)
+		if len(sites) != 0 {
+			t.Fatalf("sites = %v, want none — the sink is positional; a fresh value at the TENANT parameter is not the Subject parameter", sites)
+		}
+	})
+	t.Run("N9 a two-hop wrapper chain resolves to the origin call", func(t *testing.T) {
+		sites := scSweepFixtureSubjectSites(t, "n9.go", scSweepNeedleHelperChain)
+		if len(sites) != 1 || sites[0].kind != "helper" || sites[0].fn != "TestN9" {
+			t.Fatalf("sites = %v, want exactly one helper site in TestN9, attributed to the caller that introduces the freshness — not to the relaying wrapper identityFor", sites)
 		}
 	})
 }
@@ -1452,8 +1801,6 @@ func scSweepInPopulation(pkg string) bool {
 // hold for. Each AUDIT-12 sweep subtask deletes its own entries.
 var scSweepUnsweptAllowlist = []string{
 	"internal/invoice",     // the largest package in the blast radius, 395 failing tests; its own subtask, AUDIT-12-04
-	"internal/importer",    // shares its sweep subtask, AUDIT-12-03, with internal/document
-	"internal/document",    // shares its sweep subtask, AUDIT-12-03, with internal/importer
 	"internal/approval",    // one of the tail's three packages swept together in AUDIT-12-05
 	"internal/platform/db", // one of the tail's three packages swept together in AUDIT-12-05
 	"internal/submission",  // one of the tail's three packages swept together in AUDIT-12-05
@@ -1517,6 +1864,17 @@ func scSweepTestFiles(t *testing.T, root string) []string {
 	return out
 }
 
+// scSweepParsedTestFile is one already-read, already-parsed _test.go file,
+// kept around so the population scan below can resolve identity sinks
+// per-package (one AST walk over every sibling file) before scanning any
+// single file's calls against them.
+type scSweepParsedTestFile struct {
+	rel   string
+	fset  *token.FileSet
+	file  *ast.File
+	lines []string
+}
+
 func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
 	t.Run("control needles", scSweepSubjectControlNeedles)
 
@@ -1526,7 +1884,7 @@ func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
 		t.Fatalf("walk found %d _test.go file(s) under internal/, want at least 350 (408 measured at AUDIT-12-02) — a clean report over a broken walk means nothing", len(files))
 	}
 
-	var sites []scSweepSubjectSite
+	byPkg := map[string][]scSweepParsedTestFile{}
 	swept := 0
 	for _, rel := range files {
 		pkg := filepath.Dir(rel)
@@ -1543,10 +1901,27 @@ func TestRLS_SweptPackagesBuildIdentitiesFromASeededMember(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v — the scan cannot report on a file it cannot parse", rel, err)
 		}
-		sites = append(sites, scSweepSubjectSitesIn(fset, rel, f, strings.Split(string(raw), "\n"))...)
+		byPkg[pkg] = append(byPkg[pkg], scSweepParsedTestFile{rel: rel, fset: fset, file: f, lines: strings.Split(string(raw), "\n")})
 	}
 	if swept < 15 {
 		t.Fatalf("walked %d _test.go file(s) in a swept population package, want at least 15 (19 measured at AUDIT-12-02: portfolio's 4 plus dashboard's 15) — the population floor is meant to catch exactly this", swept)
+	}
+
+	// Sinks (the positional-helper shape) are resolved per PACKAGE, not per
+	// file — internal/document's identity() is declared in document_test.go
+	// and called from service_test.go/store_adversarial_test.go/etc, none of
+	// which declare it themselves (AUDIT-12-03 Implementation Plan §2).
+	var sites []scSweepSubjectSite
+	for _, pfs := range byPkg {
+		var pkgDecls []*ast.FuncDecl
+		for _, pf := range pfs {
+			pkgDecls = append(pkgDecls, scSweepFuncDecls(pf.file)...)
+		}
+		sinks := scSweepFindIdentitySinks(pkgDecls)
+		for _, pf := range pfs {
+			sites = append(sites, scSweepTextualSubjectSitesIn(pf.fset, pf.rel, pf.file, pf.lines)...)
+			sites = append(sites, scSweepHelperCallSitesInFile(pf.fset, pf.rel, pf.file, pf.lines, sinks)...)
+		}
 	}
 
 	for _, s := range sites {
@@ -1660,6 +2035,8 @@ func (e scSweepSkipExemption) covers(s scSweepSkipSite) bool {
 var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/portfolio/portfolio_test.go", fn: "dbTestPools"}, // env-gated: skips when DATABASE_URL/DATABASE_SUPERUSER_URL are unset, the same guard every DB-backed package uses
 	{file: "internal/dashboard/store_test.go", fn: "dbTestPools"},     // same guard, dashboard's own pool helper
+	{file: "internal/document/document_test.go", fn: "dbTestPools"},   // same guard, document's own pool helper
+	{file: "internal/importer/store_test.go", fn: "dbTestPools"},      // same guard, importer's own pool helper
 }
 
 func TestRLS_NoNewSkipsInASweptPackage(t *testing.T) {

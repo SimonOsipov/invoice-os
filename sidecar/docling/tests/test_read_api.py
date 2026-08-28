@@ -26,6 +26,13 @@ def test_t01_5_exactly_cap_body_is_not_refused(client):
     assert resp.status_code != 413  # the cap bounds over, not at
 
 
+def test_body_one_byte_under_cap_is_not_refused(client):
+    # Third boundary point: T-01-4 covers over, T-01-5 covers at.
+    body = b"0" * (MAX_DOCUMENT_BYTES - 1)
+    resp = client.post("/v1/read", content=body, headers={"content-type": PDF_CONTENT_TYPE})
+    assert resp.status_code != 413
+
+
 def test_t01_6_empty_body_is_400(client):
     resp = client.post("/v1/read", content=b"", headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code == 400
@@ -50,3 +57,24 @@ def test_t01_7_stub_response_validates_against_the_wire_contract(client):
             for cell in table["cells"]:
                 for coord in (cell["x0"], cell["y0"], cell["x1"], cell["y1"]):
                     assert 0.0 <= coord <= 1.0
+
+
+def test_docling_version_field_is_present(client):
+    # sec. 3 requires "docling_version" on every response; no existing test checks it.
+    resp = client.post(
+        "/v1/read", content=b"%PDF-1.4\nstub", headers={"content-type": PDF_CONTENT_TYPE}
+    )
+    assert "docling_version" in resp.json()
+
+
+def test_missing_content_type_is_accepted(client):
+    resp = client.post("/v1/read", content=b"%PDF-1.4\nstub")
+    assert resp.status_code == 200
+
+
+def test_unsupported_content_type_is_accepted(client):
+    # Stage 01 has no reader that branches on Content-Type; it's forwarded, not validated.
+    resp = client.post(
+        "/v1/read", content=b"%PDF-1.4\nstub", headers={"content-type": "application/x-bogus"}
+    )
+    assert resp.status_code == 200

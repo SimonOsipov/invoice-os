@@ -4,6 +4,7 @@ package extraction
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -37,4 +38,22 @@ func pdfiumPoolFor(ctx context.Context) (pdfium.Pool, error) {
 		return nil, err
 	}
 	return pdfiumPool()
+}
+
+// withPDFiumInstance borrows one pool instance for the duration of fn. Structural rather than
+// remembered: at MaxTotal 2, one unreturned instance leaves the next extraction blocked inside
+// GetInstanceWithContext with no error to show for it.
+func withPDFiumInstance(ctx context.Context, fn func(pdfium.Pdfium) error) error {
+	pool, err := pdfiumPoolFor(ctx)
+	if err != nil {
+		return err
+	}
+
+	inst, err := pool.GetInstanceWithContext(ctx)
+	if err != nil {
+		return fmt.Errorf("pdfium: get instance: %w", err)
+	}
+	defer inst.Close()
+
+	return fn(inst)
 }

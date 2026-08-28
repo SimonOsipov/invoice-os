@@ -25,6 +25,8 @@ import (
 
 const (
 	pxWebAssembly    = pdfiumModule + "/webassembly"
+	pxRequests       = pdfiumModule + "/requests"
+	pxResponses      = pdfiumModule + "/responses"
 	pxSingleThreaded = pdfiumModule + "/single_threaded"
 	pxMultiThreaded  = pdfiumModule + "/multi_threaded"
 
@@ -49,9 +51,13 @@ var pxSourceFiles = []string{"pdfium.go", pxPoolFile, "pagestore.go"}
 // runtime and unsafe, which it never mentions.
 var pxAllowedImports = map[string]bool{
 	"context":     true,
+	"fmt":         true,
 	"sync":        true,
 	"sync/atomic": true,
+	"unicode":     true,
 	pdfiumModule:  true,
+	pxRequests:    true,
+	pxResponses:   true,
 	pxWebAssembly: true,
 }
 

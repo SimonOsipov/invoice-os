@@ -692,3 +692,271 @@ func TestExtractionStore_FieldResultsAreScopedToOneJob(t *testing.T) {
 		t.Errorf("FieldResults for job %s returned value %v, want INV-FIRST", first.ID, out[0].Value)
 	}
 }
+
+// TestExtractionStore_WritesTheTextLayerVerdict (CONFIRMATORY): the exact shape
+// PDFiumExtractor emits for a scan -- no value, no box, reason 'unreadable'. No other spec
+// writes that reason, and the all-NULL region arm of _region_complete is what admits it.
+func TestExtractionStore_WritesTheTextLayerVerdict(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 901101)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.Field{
+		{Name: "document_text_layer", Reason: extraction.ReasonUnreadable},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults for the text-layer verdict: %v", err)
+	}
+
+	var (
+		value, reason  *string
+		page           *int
+		x0, y0, x1, y1 *float64
+	)
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT value, reason_code, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1
+		   FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2`, job.ID, "document_text_layer").
+		Scan(&value, &reason, &page, &x0, &y0, &x1, &y1); err != nil {
+		t.Fatalf("read the text-layer row: %v", err)
+	}
+
+	if reason == nil || *reason != "unreadable" {
+		t.Errorf("reason_code is %v, want unreadable", reason)
+	}
+	if value != nil {
+		t.Errorf("value is %q, want SQL NULL", *value)
+	}
+	if page != nil {
+		t.Errorf("page is %d, want SQL NULL", *page)
+	}
+	for _, c := range []struct {
+		col string
+		got *float64
+	}{{"bbox_x0", x0}, {"bbox_y0", y0}, {"bbox_x1", x1}, {"bbox_y1", y1}} {
+		if c.got != nil {
+			t.Errorf("%s is %v, want SQL NULL", c.col, *c.got)
+		}
+	}
+}
+
+// stPageKey is the shape extraction_page_images_key_tenant_scoped admits. uuid::text
+// renders lowercase and the CHECK compares bytes, so the tenant segment is never
+// case-transformed.
+func stPageKey(tenantID, hash string, page int) string {
+	return fmt.Sprintf("tenants/%s/pages/%s/v1/p%04d.png", tenantID, hash, page)
+}
+
+// stDocument seeds one extra document under an existing tenant. stTenant's own document is
+// the only other one; a second is what proves the whole-set replace is document-scoped.
+func stDocument(t *testing.T, ctx context.Context, tenantID string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, tenantID, "extr-08/"+id, strings.Repeat("b", 64), 2048); err != nil {
+		t.Fatalf("seed second document: %v", err)
+	}
+	return id
+}
+
+// stPageRows returns a document's stored page images in page order, as the superuser.
+func stPageRows(t *testing.T, ctx context.Context, documentID string) []extraction.PageImage {
+	t.Helper()
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT page_number, width_px, height_px, storage_key FROM extraction_page_images
+		  WHERE document_id = $1 ORDER BY page_number`, documentID)
+	if err != nil {
+		t.Fatalf("read page images for document %s: %v", documentID, err)
+	}
+	defer rows.Close()
+
+	out := []extraction.PageImage{}
+	for rows.Next() {
+		var p extraction.PageImage
+		if err := rows.Scan(&p.Page, &p.WidthPx, &p.HeightPx, &p.StorageKey); err != nil {
+			t.Fatalf("scan page image for document %s: %v", documentID, err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read page images for document %s: %v", documentID, err)
+	}
+	return out
+}
+
+// D-20. A retry re-renders and replaces; it never appends. The second document is the
+// scope oracle: a DELETE that drops the document_id predicate empties it too, and the
+// count for the first document alone cannot see that.
+func TestExtractionStore_WritePageImagesReplacesTheWholeSet(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+	otherDoc := stDocument(t, ctx, tenantID)
+
+	first := []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "aaa", 1)},
+		{Page: 2, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "aaa", 2)},
+		{Page: 3, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "aaa", 3)},
+	}
+	if err := s.WritePageImages(ctx, tenantID, documentID, first); err != nil {
+		t.Fatalf("WritePageImages (3 pages): %v", err)
+	}
+	if got := stPageRows(t, ctx, documentID); len(got) != 3 {
+		t.Fatalf("the document holds %d page rows after the first write, want 3", len(got))
+	}
+
+	other := []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "bbb", 1)},
+		{Page: 2, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "bbb", 2)},
+	}
+	if err := s.WritePageImages(ctx, tenantID, otherDoc, other); err != nil {
+		t.Fatalf("WritePageImages for the second document: %v", err)
+	}
+
+	// A shorter re-render. Without the DELETE this is 23505 on page 1; with a DELETE that
+	// forgot document_id the second document below is empty.
+	replacement := []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "ccc", 1)},
+	}
+	if err := s.WritePageImages(ctx, tenantID, documentID, replacement); err != nil {
+		t.Fatalf("WritePageImages (replacing 3 pages with 1): %v", err)
+	}
+
+	got := stPageRows(t, ctx, documentID)
+	if len(got) != 1 {
+		t.Fatalf("the document holds %d page rows after the replace, want 1 — the write appended", len(got))
+	}
+	if got[0] != replacement[0] {
+		t.Errorf("the surviving row is %+v, want %+v", got[0], replacement[0])
+	}
+	if n := len(stPageRows(t, ctx, otherDoc)); n != 2 {
+		t.Errorf("the second document holds %d page rows, want 2 — the replace was not document-scoped", n)
+	}
+}
+
+// D-20: N attempts over one document converge on the page count, never a multiple of it.
+func TestExtractionStore_WritePageImagesIsIdempotentAcrossRetries(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	pages := []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "ddd", 1)},
+		{Page: 2, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "ddd", 2)},
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := s.WritePageImages(ctx, tenantID, documentID, pages); err != nil {
+			t.Fatalf("WritePageImages attempt %d: %v", attempt, err)
+		}
+		got := stPageRows(t, ctx, documentID)
+		if len(got) != len(pages) {
+			t.Fatalf("after attempt %d the document holds %d page rows, want %d", attempt, len(got), len(pages))
+		}
+	}
+}
+
+// The render's own dimensions, per page. Width and height differ and page 2 differs from
+// page 1, so a column swap or a per-page value read off the wrong row cannot survive.
+func TestExtractionStore_WritePageImagesStoresDimensionsAndKey(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	want := []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "eee", 1)},
+		{Page: 2, WidthPx: 1754, HeightPx: 1240, StorageKey: stPageKey(tenantID, "eee", 2)},
+	}
+	if err := s.WritePageImages(ctx, tenantID, documentID, want); err != nil {
+		t.Fatalf("WritePageImages: %v", err)
+	}
+
+	got := stPageRows(t, ctx, documentID)
+	if len(got) != len(want) {
+		t.Fatalf("the document holds %d page rows, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("page %d stored %+v, want %+v", want[i].Page, got[i], want[i])
+		}
+	}
+}
+
+// An empty set is the replace with nothing to insert. Nothing branches on it, so the DELETE
+// still runs and the inventory reads empty rather than stale.
+func TestExtractionStore_WritePageImagesEmptySetClearsTheInventory(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	if err := s.WritePageImages(ctx, tenantID, documentID, []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "fff", 1)},
+		{Page: 2, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantID, "fff", 2)},
+	}); err != nil {
+		t.Fatalf("WritePageImages (2 pages): %v", err)
+	}
+
+	if err := s.WritePageImages(ctx, tenantID, documentID, nil); err != nil {
+		t.Fatalf("WritePageImages (empty set): %v", err)
+	}
+	if got := stPageRows(t, ctx, documentID); len(got) != 0 {
+		t.Errorf("the document holds %d page rows after an empty write, want 0", len(got))
+	}
+}
+
+// extraction_page_images_key_tenant_scoped, reached through the store: a key outside the
+// tenant's own prefix is refused even though the row's tenant_id is the caller's own.
+func TestExtractionStore_WritePageImagesRefusesAKeyOutsideTheTenantPrefix(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+	otherTenant := uuid.NewString()
+
+	if err := s.WritePageImages(ctx, tenantID, documentID, []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(otherTenant, "ggg", 1)},
+	}); err == nil {
+		t.Error("WritePageImages accepted a storage_key under another tenant's prefix and reported no error")
+	}
+	if got := stPageRows(t, ctx, documentID); len(got) != 0 {
+		t.Errorf("the document holds %d page rows after the refused key, want 0", len(got))
+	}
+}
+
+// The DELETE leg matters as much as the INSERT: a whole-set replace scoped to the wrong
+// tenant would empty that tenant's inventory before failing on the insert.
+func TestRLS_ExtractionStoreCannotWritePageImagesAcrossTenants(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+
+	tenantA, _ := stTenant(t, ctx)
+	tenantB, documentB := stTenant(t, ctx)
+
+	seeded := []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantB, "hhh", 1)},
+		{Page: 2, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantB, "hhh", 2)},
+	}
+	if err := s.WritePageImages(ctx, tenantB, documentB, seeded); err != nil {
+		t.Fatalf("WritePageImages for tenant B: %v", err)
+	}
+
+	if err := s.WritePageImages(ctx, tenantA, documentB, []extraction.PageImage{
+		{Page: 1, WidthPx: 1275, HeightPx: 1651, StorageKey: stPageKey(tenantA, "iii", 1)},
+	}); err == nil {
+		t.Error("WritePageImages scoped to tenant A accepted tenant B's document id and reported no error")
+	}
+
+	got := stPageRows(t, ctx, documentB)
+	if len(got) != len(seeded) {
+		t.Fatalf("tenant B holds %d page rows after tenant A's refused write, want %d", len(got), len(seeded))
+	}
+	for i := range seeded {
+		if got[i] != seeded[i] {
+			t.Errorf("tenant B's page %d is %+v, want the seeded %+v", seeded[i].Page, got[i], seeded[i])
+		}
+	}
+}

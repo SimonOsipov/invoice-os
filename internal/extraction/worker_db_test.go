@@ -5,9 +5,12 @@ package extraction_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -185,9 +188,119 @@ func (wkImmediate) NextRetry(*rivertype.JobRow) time.Time { return time.Now() }
 
 // --- harness -------------------------------------------------------------------------
 
+// wkStubReader is a PageReader over arbitrary bytes. Most specs here carry a text fixture
+// pdfium refuses, and page rendering is not what they are about; the two that need real pixels
+// build their own PageStore over PDFiumReader.
+type wkStubReader struct{ pages int }
+
+func (*wkStubReader) Name() string    { return "extr-09-stub-reader" }
+func (*wkStubReader) Version() string { return "v1" }
+
+func (r *wkStubReader) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	for i := 1; i <= r.pages; i++ {
+		if err := onPage(extraction.Page{
+			Number:      i,
+			WidthPt:     612,
+			HeightPt:    792,
+			ImageWidth:  prLetterWidthPx,
+			ImageHeight: prLetterHeightPx,
+			ImagePNG:    []byte("\x89PNG\r\n\x1a\nextr-09 stub page"),
+		}); err != nil {
+			return extraction.PageResult{}, err
+		}
+	}
+	return extraction.PageResult{Pages: r.pages}, nil
+}
+
+// wkPageSink records the worker's PUTs and, per call, whether the context it arrived on
+// carried an auth identity. failOn > 0 errors on the call of that number.
+type wkPageSink struct {
+	mu       sync.Mutex
+	keys     []string
+	identity []bool
+	seen     int
+	failOn   int
+	err      error
+}
+
+func (s *wkPageSink) put(ctx context.Context, key string, _ []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seen++
+	_, ok := auth.IdentityFromContext(ctx)
+	s.identity = append(s.identity, ok)
+	if s.failOn > 0 && s.seen == s.failOn {
+		return s.err
+	}
+	s.keys = append(s.keys, key)
+	return nil
+}
+
+func (s *wkPageSink) snapshot() (keys []string, identity []bool, calls int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.keys), slices.Clone(s.identity), s.seen
+}
+
+// wkPageKeys is the key list a PageStore must produce for one document's bytes.
+func wkPageKeys(tenantID string, body []byte, pages int) []string {
+	sum := sha256.Sum256(body)
+	hash := hex.EncodeToString(sum[:])
+	out := make([]string, 0, pages)
+	for i := 1; i <= pages; i++ {
+		out = append(out, stPageKey(tenantID, hash, i))
+	}
+	return out
+}
+
+// wkPageRowIDs returns a document's page-image row ids in page order. A whole-set replace mints
+// new ids; a replace that never ran leaves the old ones, which a row COUNT cannot see because
+// the keys are content-derived and identical either way.
+func wkPageRowIDs(t *testing.T, ctx context.Context, documentID string) []string {
+	t.Helper()
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT id::text FROM extraction_page_images WHERE document_id = $1 ORDER BY page_number`,
+		documentID)
+	if err != nil {
+		t.Fatalf("read page-image row ids for document %s: %v", documentID, err)
+	}
+	defer rows.Close()
+
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan page-image row id for document %s: %v", documentID, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read page-image row ids for document %s: %v", documentID, err)
+	}
+	return out
+}
+
+// wkWorker wires a stub PageStore: Work renders unconditionally, so a nil Pages panics on the
+// first job rather than quietly skipping the page inventory.
 func wkWorker(t *testing.T, ext extraction.Extractor, op *wkOpener) *extraction.ExtractWorker {
 	t.Helper()
-	return &extraction.ExtractWorker{Pool: stRequire(t).app, Extractor: ext, Open: op.open}
+	return wkWorkerPages(t, ext, op, &extraction.PageStore{
+		Reader: &wkStubReader{pages: 1},
+		Sink:   (&wkPageSink{}).put,
+	})
+}
+
+func wkWorkerPages(t *testing.T, ext extraction.Extractor, op *wkOpener, pages *extraction.PageStore) *extraction.ExtractWorker {
+	t.Helper()
+	return &extraction.ExtractWorker{
+		Pool: stRequire(t).app, Extractor: ext, Open: op.open, Pages: pages,
+	}
+}
+
+// wkPDFiumPages is the page store the two corpus specs drive: the real renderer, a recording
+// sink.
+func wkPDFiumPages(sink *wkPageSink) *extraction.PageStore {
+	return &extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: sink.put}
 }
 
 // wkClient builds a working client over queues, registering ew through extraction.AddTo --
@@ -815,5 +928,187 @@ func TestExtractArgsTypeIsUnexported(t *testing.T) {
 	}
 	if got := ts.Tenant(); got != tenantID {
 		t.Errorf("Tenant() = %q, want the args' TenantID %q", got, tenantID)
+	}
+}
+
+// D-19 on the wire: the objects and the rows, end to end, with the real renderer over the
+// committed corpus. The dimension assertion is the render's own grid, the number a canvas
+// scales a normalised box by.
+func TestRLS_ExtractWorkerWritesPageImagesThroughTheSink(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxNative3)
+	op := &wkOpener{body: raw}
+	ext := wkOK()
+	sink := &wkPageSink{}
+
+	const riverJobID = int64(909601)
+	if err := wkWorkerPages(t, ext, op, wkPDFiumPages(sink)).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	want := wkPageKeys(tenantID, raw, 3)
+	keys, identity, puts := sink.snapshot()
+	if puts != 3 {
+		t.Fatalf("the sink saw %d PUT(s), want 3 -- one per page of the corpus", puts)
+	}
+	if !slices.Equal(keys, want) {
+		t.Errorf("the worker PUT\n  %v\nwant\n  %v", keys, want)
+	}
+
+	rows := stPageRows(t, ctx, documentID)
+	if len(rows) != 3 {
+		t.Fatalf("the document holds %d extraction_page_images row(s), want 3", len(rows))
+	}
+	for i, r := range rows {
+		if r.Page != i+1 {
+			t.Errorf("row %d records page %d, want %d", i, r.Page, i+1)
+		}
+		if r.StorageKey != want[i] {
+			t.Errorf("page %d's row names %q, want the key the sink was handed, %q", i+1, r.StorageKey, want[i])
+		}
+		if r.WidthPx != prLetterWidthPx || r.HeightPx != prLetterHeightPx {
+			t.Errorf("page %d's row records %dx%d px, want the render's own %dx%d",
+				i+1, r.WidthPx, r.HeightPx, prLetterWidthPx, prLetterHeightPx)
+		}
+	}
+
+	// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
+	// identity the way the extractor is. The opener, which RLS scopes, is the control -- it
+	// DOES see one, so this is not simply a worker that synthesises no identity at all.
+	for i, ok := range identity {
+		if ok {
+			t.Errorf("page %d's PUT arrived on a context carrying an auth identity; Ingest was handed the worker's tenant-scoped context", i+1)
+		}
+	}
+	if seen := op.first(t); !seen.ok {
+		t.Error("OpenDocument saw no identity either, so the identity-free assertions above prove nothing")
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	stAssertFieldResultCount(t, ctx, xid, len(wkOneField()))
+	if n := ext.count(); n != 1 {
+		t.Errorf("the extractor ran %d time(s), want 1", n)
+	}
+}
+
+// The other half of D-19's ordering: objects first, rows last. A sink that fails mid-render
+// leaves orphan objects and NO rows, which reads as "no page images" and retries cleanly; the
+// reverse order would leave a committed row naming a 404.
+func TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxNative3)
+	boom := errors.New("extr-09: the object store refused the page PUT")
+
+	ext := wkOK()
+	sink := &wkPageSink{failOn: 2, err: boom}
+	const riverJobID = int64(909651)
+	if err := wkWorkerPages(t, ext, &wkOpener{body: raw}, wkPDFiumPages(sink)).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work returned %v, want the sink's error", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "failed")
+	if got := stJobLastError(t, ctx, xid); got == nil || *got != boom.Error() {
+		t.Errorf("extraction job %s records last_error %s, want %q", xid, wkStr(got), boom.Error())
+	}
+	stAssertFieldResultCount(t, ctx, xid, 0)
+	if rows := stPageRows(t, ctx, documentID); len(rows) != 0 {
+		t.Errorf("a failed page PUT left %d extraction_page_images row(s), want 0: a committed row must name an object that was written", len(rows))
+	}
+	// The rows commit before Extract runs, so a sink failure means the extractor never ran.
+	if n := ext.count(); n != 0 {
+		t.Errorf("the extractor ran %d time(s) after the page sink failed, want 0 -- the page ingest is upstream of it", n)
+	}
+	if _, _, puts := sink.snapshot(); puts != 2 {
+		t.Errorf("the sink saw %d call(s), want 2: the ingest ran on past the page that failed", puts)
+	}
+
+	// Control: the same document, the same worker shape, a sink that works. Without it the
+	// zero-row assertion above passes on a worker that writes no page rows at all.
+	const controlRiverJobID = int64(909653)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{})).Work(ctx,
+		extraction.NewExtractJobForTest(controlRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("control Work: %v", err)
+	}
+	if rows := stPageRows(t, ctx, documentID); len(rows) != 3 {
+		t.Fatalf("the control left %d page row(s), want 3; the zero-row assertion above proves nothing without it", len(rows))
+	}
+
+	// The final attempt is terminal for a sink failure the same way it is for an extractor one.
+	const deadRiverJobID = int64(909652)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{failOn: 1, err: boom})).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on the final attempt returned %v, want the sink's error", err)
+	}
+	stAssertJobState(t, ctx, wkExtractionJobID(t, ctx, tenantID, deadRiverJobID), "dead_lettered")
+}
+
+// D-20 end to end. The row ids are the oracle, not the count: the keys are content-derived and
+// byte-identical across runs, so a replace that never ran leaves a row set a count cannot tell
+// from a replaced one.
+func TestRLS_ExtractWorkerRetryReplacesTheRowSet(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxNative3)
+	sink := &wkPageSink{}
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(sink))
+
+	// Two DIFFERENT river jobs over one document: extraction_jobs carries no UNIQUE over
+	// (tenant_id, document_id), so duplicate jobs are expected, and a replay of the SAME job
+	// short-circuits on its terminal state and never re-renders. That replay is the control
+	// at the end.
+	const (
+		firstRiverJobID  = int64(909701)
+		secondRiverJobID = int64(909702)
+	)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(firstRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	firstIDs := wkPageRowIDs(t, ctx, documentID)
+	if len(firstIDs) != 3 {
+		t.Fatalf("the first run left %d page row(s), want 3", len(firstIDs))
+	}
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(secondRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("second Work: %v", err)
+	}
+	rows := stPageRows(t, ctx, documentID)
+	if len(rows) != 3 {
+		t.Fatalf("two jobs over one document left %d page row(s), want 3: the inventory is document-keyed and a re-render replaces it whole", len(rows))
+	}
+	want := wkPageKeys(tenantID, raw, 3)
+	for i, r := range rows {
+		if r.StorageKey != want[i] {
+			t.Errorf("after the second run page %d names %q, want %q", i+1, r.StorageKey, want[i])
+		}
+	}
+	secondIDs := wkPageRowIDs(t, ctx, documentID)
+	for i := range secondIDs {
+		if secondIDs[i] == firstIDs[i] {
+			t.Errorf("page %d still carries row id %s after a second job over the same document; the replace never ran, and the identical content-derived keys hide that from a row count", i+1, secondIDs[i])
+		}
+	}
+
+	// Control: a replay of a SUCCEEDED job is terminal in tx1 and renders nothing at all.
+	_, _, before := sink.snapshot()
+	if before != 6 {
+		t.Fatalf("the sink saw %d PUT(s) across two runs, want 6", before)
+	}
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(secondRiverJobID, 2, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("replayed Work: %v", err)
+	}
+	if _, _, after := sink.snapshot(); after != before {
+		t.Errorf("a replay of a succeeded job made %d further PUT(s); the terminal short-circuit is what stops it re-rendering", after-before)
+	}
+	if got := wkPageRowIDs(t, ctx, documentID); !slices.Equal(got, secondIDs) {
+		t.Errorf("a replay of a succeeded job rewrote the page rows: ids %v, want the unchanged %v", got, secondIDs)
 	}
 }

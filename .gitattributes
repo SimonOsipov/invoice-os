@@ -11,3 +11,11 @@
 # (no EOL conversion, no encoding reinterpretation) so every checkout,
 # on every OS, gets the exact bytes that were committed.
 testdata/invoices/** -text
+
+# internal/extraction/testdata/ holds the EXTR-02 PDF corpus, emitted by the
+# generator in internal/extraction/fixtures_test.go and byte-compared against
+# regeneration by TestFixtures_MatchTheirGenerator. The two native fixtures
+# carry no NUL byte, so git's own binary sniff classifies them as text and a
+# core.autocrlf checkout would rewrite every LF -- failing the guard for a
+# reason that has nothing to do with the code under test.
+internal/extraction/testdata/** -text

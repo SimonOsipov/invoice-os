@@ -49,6 +49,21 @@ func (s *Store) WriteFieldResults(ctx context.Context, tenantID, jobID string, f
 	})
 }
 
+// PageImage is one written page: the row extraction_page_images stores.
+type PageImage struct {
+	Page       int
+	WidthPx    int
+	HeightPx   int
+	StorageKey string
+}
+
+// WritePageImages replaces the document's whole page-image inventory.
+func (s *Store) WritePageImages(ctx context.Context, tenantID, documentID string, pages []PageImage) error {
+	return db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
+		return writePageImagesTx(ctx, tx, tenantID, documentID, pages)
+	})
+}
+
 // FieldResults returns the job's stored fields, never a nil slice.
 func (s *Store) FieldResults(ctx context.Context, tenantID, jobID string) ([]Field, error) {
 	out := []Field{}
@@ -133,6 +148,30 @@ func writeFieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string,
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			tenantID, jobID, f.Name, f.Value, page, x0, y0, x1, y1, reason); err != nil {
 			return fmt.Errorf("extraction: write field result %s for job %s: %w", f.Name, jobID, err)
+		}
+	}
+	return nil
+}
+
+// writePageImagesTx replaces the row set rather than upserting it: the DELETE is a separate
+// statement from the INSERT because tuples deleted by this transaction are already dead to
+// its own uniqueness check, so a re-render needs no ON CONFLICT and the unique index stays a
+// guard that can fire. The policy's USING scopes the DELETE and doubles as the INSERT WITH
+// CHECK, so both statements are tenant-bound on top of the explicit predicate.
+func writePageImagesTx(ctx context.Context, tx pgx.Tx, tenantID, documentID string, pages []PageImage) error {
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM extraction_page_images WHERE tenant_id = $1 AND document_id = $2`,
+		tenantID, documentID); err != nil {
+		return fmt.Errorf("extraction: clear page images for document %s: %w", documentID, err)
+	}
+
+	for _, p := range pages {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO extraction_page_images
+			     (tenant_id, document_id, page_number, width_px, height_px, storage_key)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			tenantID, documentID, p.Page, p.WidthPx, p.HeightPx, p.StorageKey); err != nil {
+			return fmt.Errorf("extraction: write page image %d for document %s: %w", p.Page, documentID, err)
 		}
 	}
 	return nil

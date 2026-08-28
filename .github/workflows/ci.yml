@@ -23,6 +23,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      sidecar: ${{ steps.filter.outputs.sidecar }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -73,6 +74,12 @@ jobs:
               - 'package.json'
               - 'pnpm-workspace.yaml'
               - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
+            sidecar:
+              - 'sidecar/**'
+              - 'internal/platform/buildsha.txt'
+              - 'scripts/ci/stamp-build-sha.sh'
+              - 'scripts/ci/docling-canary.sh'
               - '.github/workflows/ci.yml'
 
   go:
@@ -166,6 +173,53 @@ jobs:
           build-args: |
             SERVICE=gateway
           push: false
+
+  # Core AC 5 ("version-pinned, and the models are baked into the image rather
+  # than downloaded at boot"), proved offline: build the docling sidecar image
+  # and boot it with networking disabled entirely, so nothing it does can be a
+  # disguised download. T-02-1..4. The offline CONVERT (POST /v1/read against a
+  # real fixture) is subtask 03's addition to this same job — at this subtask
+  # /v1/read is still subtask 01's stub, which an offline-convert check cannot
+  # prove anything against.
+  docling-canary:
+    name: Docling image (canary)
+    needs: changes
+    if: needs.changes.outputs.sidecar == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # Assumed to match the fleet's $PORT convention (internal/platform/config.go)
+      # until subtask 02's Dockerfile confirms it.
+      DOCLING_CANARY_PORT: "8080"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # T-02-4 needs a non-"dev" build value baked in before the boot below.
+      - name: Stamp a build sha
+        run: ./scripts/ci/stamp-build-sha.sh "$GITHUB_SHA"
+      - name: Build the docling image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sidecar/docling/Dockerfile
+          tags: docling:canary
+          load: true
+          push: false
+      - name: Boot the container with networking disabled
+        run: docker run -d --name docling-canary --network none docling:canary
+      - name: T-02-2 — /healthz answers 200 within 15s
+        run: scripts/ci/docling-canary.sh healthz
+      - name: T-02-4 — /healthz reports the stamped sha
+        run: scripts/ci/docling-canary.sh buildsha "$GITHUB_SHA"
+      - name: T-02-1 — every model is baked and reachable offline
+        run: scripts/ci/docling-canary.sh models
+      - name: T-02-3 — the container does not run as root
+        run: scripts/ci/docling-canary.sh nonroot
+      - name: Record image size (informational, not a gate)
+        if: always()
+        run: docker image inspect docling:canary --format '{{.Size}}' | awk '{printf "docling:canary is %.0f MiB\n", $1/1024/1024}'
+      - name: Stop the canary
+        if: always()
+        run: docker rm -f docling-canary || true
 
   # The independent migration gate (M2-01, task-9.2): prove the goose harness end to
   # end against a FRESH, ephemeral Postgres — zero Railway dependency. Bootstrap the
@@ -703,7 +757,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit, stale-refs, history-rewrite]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, rls, queue, audit, stale-refs, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -712,6 +766,7 @@ jobs:
           echo "changes:       ${{ needs.changes.result }}"
           echo "go:            ${{ needs.go.result }}"
           echo "docker-canary: ${{ needs.docker-canary.result }}"
+          echo "docling-canary: ${{ needs.docling-canary.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
           echo "rls:           ${{ needs.rls.result }}"
           echo "queue:         ${{ needs.queue.result }}"
@@ -728,6 +783,9 @@ jobs:
           fi
           if [ "${{ needs.docker-canary.result }}" = "failure" ] || [ "${{ needs.docker-canary.result }}" = "cancelled" ]; then
             echo "::error::Docker canary build failed"; exit 1
+          fi
+          if [ "${{ needs.docling-canary.result }}" = "failure" ] || [ "${{ needs.docling-canary.result }}" = "cancelled" ]; then
+            echo "::error::Docling canary build/boot failed"; exit 1
           fi
           if [ "${{ needs.migrations.result }}" = "failure" ] || [ "${{ needs.migrations.result }}" = "cancelled" ]; then
             echo "::error::Migrations job failed"; exit 1

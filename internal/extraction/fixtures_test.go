@@ -28,6 +28,7 @@ const (
 	fxNative3  = "native_3page.pdf"
 	fxScanned  = "scanned_invoice.pdf"
 	fxHybrid   = "hybrid_invoice.pdf"
+	fxTable    = "table_invoice.pdf"
 	fxMinBytes = 200 // floor: every fixture carries a catalog, a page tree, a page and a stream
 )
 
@@ -39,6 +40,7 @@ var fxCorpus = []struct {
 	{fxNative3, fxBuildNative3Page},
 	{fxScanned, fxBuildScanned},
 	{fxHybrid, fxBuildHybrid},
+	{fxTable, fxBuildTable},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -198,6 +200,68 @@ func fxBuildHybrid() []byte {
 		fxStream([]byte(fxImageDraw)),
 		fxObject(fxHelvetica),
 		fxImageObject(4, 4, fxPixels),
+	})
+}
+
+// fxTableColXs are the 4-column table's vertical rule positions (5 boundaries, 117pt wide
+// columns). fxTableRowYs are its horizontal rule positions: top of header, header/row1,
+// row1/row2, bottom. Header/body text matches build_docx.py's for cross-format parity.
+var (
+	fxTableColXs  = [5]int{72, 189, 306, 423, 540}
+	fxTableRowYs  = [4]int{650, 626, 602, 578}
+	fxTableHeader = []string{"Description", "Qty", "Unit Price", "Total"}
+	fxTableBody   = [][]string{
+		{"Widget", "2", "500.00", "1000.00"},
+		{"Gadget", "1", "500.00", "500.00"},
+	}
+)
+
+// fxRuleH is a stroked horizontal line at y from x0 to x1.
+func fxRuleH(y, x0, x1 int) string {
+	return fmt.Sprintf("%d %d m\n%d %d l\nS\n", x0, y, x1, y)
+}
+
+// fxRuleV is a stroked vertical line at x from y0 to y1.
+func fxRuleV(x, y0, y1 int) string {
+	return fmt.Sprintf("%d %d m\n%d %d l\nS\n", x, y0, x, y1)
+}
+
+// fxTableRowText lays one row of cell strings on a baseline, 4pt into each column.
+func fxTableRowText(baseline int, cells []string) []fxLine {
+	lines := make([]fxLine, len(cells))
+	for i, text := range cells {
+		lines[i] = fxLine{10, fxTableColXs[i] + 4, baseline, text}
+	}
+	return lines
+}
+
+// fxBuildTable is one US-Letter page: a title plus a ruled 4-column, 3-row table (a header
+// row and two body rows). EXTR-03-04's table-mapping fixture -- TableFormer's own read of
+// it is asserted only to a coarse floor (T-04-14), never pinned exactly, because an ML
+// model's row/column verdict on a synthetic page is not a contract this story can hold.
+func fxBuildTable() []byte {
+	lines := []fxLine{{24, 72, 720, "INVOICE"}}
+	lines = append(lines, fxTableRowText(638, fxTableHeader)...)
+	lines = append(lines, fxTableRowText(614, fxTableBody[0])...)
+	lines = append(lines, fxTableRowText(590, fxTableBody[1])...)
+
+	var rules bytes.Buffer
+	for _, y := range fxTableRowYs {
+		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxTableRowYs[len(fxTableRowYs)-1], fxTableRowYs[0]))
+	}
+
+	content := fxText(lines...)
+	content = append(content, rules.Bytes()...)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxHelvetica),
 	})
 }
 

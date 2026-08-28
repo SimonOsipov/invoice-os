@@ -16,6 +16,7 @@ require (
 	github.com/google/cel-go v0.29.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/klippa-app/go-pdfium v1.19.8
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/riverqueue/river v0.40.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.40.0
@@ -60,7 +61,6 @@ require (
 	github.com/jolestar/go-commons-pool/v2 v2.1.2 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
-	github.com/klippa-app/go-pdfium v1.19.8 // indirect
 	github.com/lmittmann/tint v1.1.3 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect

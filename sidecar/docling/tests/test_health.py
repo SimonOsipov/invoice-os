@@ -1,5 +1,12 @@
-"""T-01-1..T-01-3: /healthz's two-key body and its promise to never touch a model."""
+"""T-01-1..T-01-3: /healthz's two-key body and its promise to never touch a model.
+T-03-14: /healthz stays fast while a conversion (or the converter's own lazy build) is in flight.
+"""
 
+import asyncio
+import threading
+import time
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -85,3 +92,76 @@ def test_healthz_reports_dev_when_build_file_is_unreadable(client, monkeypatch, 
         assert resp.json()["build"] == "dev"
     finally:
         build_file.chmod(0o644)  # tmp_path cleanup needs read/write back
+
+
+def test_t03_14_healthz_stays_fast_while_a_read_is_in_flight(monkeypatch):
+    # Real concurrency, not a sleep standing in for it: both requests run as asyncio Tasks
+    # on the SAME loop via httpx.AsyncClient(ASGITransport), gathered together, and each
+    # measures its own completion time from one shared start. A synchronous, blocking call
+    # inside read_document's `async def` -- today's shape, convert.stub_read called inline --
+    # starves the loop, so /healthz's elapsed time reveals it whether or not it touches
+    # anything docling-specific.
+    orig_stub_read = convert.stub_read
+
+    def slow_stub_read(body, content_type):
+        time.sleep(2)
+        return orig_stub_read(body, content_type)
+
+    monkeypatch.setattr(convert, "stub_read", slow_stub_read)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            t_start = time.time()
+
+            async def call_read():
+                resp = await client.post(
+                    "/v1/read", content=b"%PDF-1.4\nx", headers={"content-type": "application/pdf"}
+                )
+                return resp, time.time() - t_start
+
+            async def call_healthz():
+                resp = await client.get("/healthz")
+                return resp, time.time() - t_start
+
+            return await asyncio.gather(call_read(), call_healthz())
+
+    (read_resp, read_elapsed), (healthz_resp, healthz_elapsed) = asyncio.run(scenario())
+
+    assert read_resp.status_code == 200
+    assert read_elapsed >= 1.9, (
+        f"the stubbed read only took {read_elapsed:.2f}s -- the slow path was never exercised"
+    )
+    assert healthz_resp.status_code == 200
+    assert healthz_elapsed < 1.0, (
+        f"/healthz took {healthz_elapsed:.2f}s while a read was in flight, want <1s "
+        f"(probeTimeout = 3s, internal/gateway/fleet.go:22)"
+    )
+
+
+def test_healthz_independent_of_the_converter_construction_lock(monkeypatch):
+    # The other half of T-03-14's Given: a cold converter still loading. get_converter()'s
+    # lock is real (wired in EXTR-03-03's Mode-A scaffolding); /healthz never acquires it,
+    # by construction -- this guards that independence directly, with a genuine background
+    # thread holding the lock for 2 real seconds, not a mocked delay.
+    convert._converter = None
+    convert._construction_count = 0
+
+    def slow_construct():
+        time.sleep(2)
+        return object()
+
+    monkeypatch.setattr(convert, "_construct_converter", slow_construct)
+
+    builder = threading.Thread(target=convert.get_converter)
+    builder.start()
+    time.sleep(0.1)  # let the builder thread acquire the lock before measuring
+
+    client = TestClient(app)
+    t0 = time.time()
+    resp = client.get("/healthz")
+    elapsed = time.time() - t0
+    builder.join(timeout=5)
+
+    assert resp.status_code == 200
+    assert elapsed < 1.0, f"/healthz took {elapsed:.2f}s while the converter lock was held"

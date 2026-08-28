@@ -78,3 +78,14 @@ def test_unsupported_content_type_is_accepted(client):
         "/v1/read", content=b"%PDF-1.4\nstub", headers={"content-type": "application/x-bogus"}
     )
     assert resp.status_code == 200
+
+
+def test_t03_13_truncated_pdf_is_422_not_400_or_500(client):
+    # Valid header, body cut mid-object -- no endobj, no xref, no %%EOF. docling-parse raises
+    # ConversionError on exactly this shape (confirmed against the pinned stack); a document
+    # Docling opened but could not convert is 422, never 400 (that's reserved for empty body)
+    # and never a bare 500.
+    truncated = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R"
+    resp = client.post("/v1/read", content=truncated, headers={"content-type": PDF_CONTENT_TYPE})
+    assert resp.status_code == 422, f"got {resp.status_code}, want 422"
+    assert "error" in resp.json()

@@ -36,6 +36,25 @@ RUN python3 -c "from pathlib import Path; from docling.utils.model_downloader im
 COPY sidecar/docling/fetch_rapidocr_models.py .
 RUN python3 fetch_rapidocr_models.py
 
+# ---- test: deps + dev deps (pytest/httpx/ruff) + app + tests, the real pinned stack ----
+# `docker build --target test -f sidecar/docling/Dockerfile -t docling:test .` then
+# `docker run --rm docling:test` -- the one command CI and a local dev both use to run the
+# Test-Spec suite (T-03-1..9,13,14 need docling importable; nothing here skips them).
+FROM deps AS test
+COPY sidecar/docling/requirements-dev.txt .
+# requirements-dev.txt re-includes `-r requirements.txt` (so a local `pip install -r
+# requirements-dev.txt` is self-sufficient) -- that re-resolve sees rapidocr's declared
+# "opencv-python" as unsatisfied (this stage only has -headless, a different distribution
+# name) and reinstalls the GUI build, undoing deps' swap above. Redo the swap after.
+RUN pip install --no-cache-dir -r requirements-dev.txt \
+    && pip uninstall -y opencv-python \
+    && pip install --no-cache-dir --no-deps opencv-python-headless==5.0.0.93
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
+WORKDIR /app
+COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/pyproject.toml ./
+COPY sidecar/docling/tests ./tests
+CMD ["pytest", "-v"]
+
 # ---- run: venv + models + app, non-root ----
 FROM mirror.gcr.io/library/python:3.12-slim AS run
 RUN useradd --no-create-home --uid 1000 --shell /usr/sbin/nologin appuser

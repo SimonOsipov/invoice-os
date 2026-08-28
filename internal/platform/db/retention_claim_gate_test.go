@@ -254,6 +254,9 @@ var retentionWantSites = map[string][]string{
 		"retained **permanently**",
 	},
 	"docs/migrations.md": {"permanent/append-only"},
+	// Page-image OBJECTS are never deleted by the app; the purge takes only the rows
+	// that made them findable.
+	"docs/page-image-storage.md": {"never deleted by the app"},
 	"migrations/20260708062657_audit_log.sql": {
 		"immutable trail",
 		"permanent/append-only",

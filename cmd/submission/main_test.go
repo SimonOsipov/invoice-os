@@ -309,7 +309,9 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		return extraction.Document{ContentType: sentinel}, nil
 	}
 
-	ew := newExtractWorker(pool, ext, open, logger)
+	pages := &extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: func(context.Context, string, []byte) error { return nil }}
+
+	ew := newExtractWorker(pool, ext, open, pages, logger)
 	if ew == nil {
 		t.Fatal("newExtractWorker returned nil")
 	}
@@ -329,8 +331,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 			}
 		}
 	}
-	if checked < 4 {
-		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 4 (Pool, Extractor, Open, Logger) -- the loop above examined almost nothing", checked)
+	if checked < 5 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 5 (Pool, Extractor, Open, Pages, Logger) -- the loop above examined almost nothing", checked)
 	}
 
 	if ew.Pool != pool {
@@ -341,6 +343,9 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 	}
 	if ew.Logger != logger {
 		t.Error("ExtractWorker.Logger is not the logger passed in")
+	}
+	if ew.Pages != pages {
+		t.Error("ExtractWorker.Pages is not the page store passed in")
 	}
 	if ew.Open == nil {
 		t.Fatal("ExtractWorker.Open is nil")
@@ -466,8 +471,8 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
 	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
 
-	if len(ewArgs) != 4 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 4 (pool, extractor, opener, logger)", len(ewArgs))
+	if len(ewArgs) != 5 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 5 (pool, extractor, opener, pages, logger)", len(ewArgs))
 	}
 	for i, arg := range ewArgs {
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
@@ -493,7 +498,36 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 		t.Errorf("newDocumentOpener is built over %s, want %s.Open: an opener over anything else reads no document, and nothing else in this file would notice", wtRender(call.Args[0]), svcName)
 	}
 
-	// 3. That service is built over the shared pool and the object store AC #8 fatals on. Without
+	// 3. The page store that worker renders and PUTs through: the real reader, and a sink over
+	//    the same object store the source-document path already uses. A sink over anything else
+	//    writes page images somewhere nothing can read them back.
+	pagesLit, ok := ewArgs[3].(*ast.UnaryExpr)
+	if !ok || pagesLit.Op != token.AND {
+		t.Errorf("newExtractWorker's page-store argument is %s, want a &extraction.PageStore{...} literal", wtRender(ewArgs[3]))
+	} else if lit, ok := pagesLit.X.(*ast.CompositeLit); !ok || wtCallName(lit.Type) != "extraction.PageStore" {
+		t.Errorf("newExtractWorker's page-store argument points at %s, want an extraction.PageStore literal", wtRender(pagesLit.X))
+	} else {
+		fields := map[string]ast.Expr{}
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok {
+					fields[key.Name] = kv.Value
+				}
+			}
+		}
+		if call, ok := fields["Reader"].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "extraction.NewPDFiumReader" {
+			t.Errorf("extraction.PageStore.Reader is %s, want an extraction.NewPDFiumReader() call", wtRender(fields["Reader"]))
+		}
+		if call, ok := fields["Sink"].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newPageSink" {
+			t.Errorf("extraction.PageStore.Sink is %s, want a newPageSink(...) call: the adapter onto the object store is only reached if main() builds it", wtRender(fields["Sink"]))
+		} else if len(call.Args) != 1 {
+			t.Errorf("newPageSink is called with %d argument(s), want 1", len(call.Args))
+		} else if id, ok := call.Args[0].(*ast.Ident); !ok || id.Name != objName {
+			t.Errorf("newPageSink is built over %s, want %s -- the store document.NewS3Store built and main() already fatals on", wtRender(call.Args[0]), objName)
+		}
+	}
+
+	// 4. That service is built over the shared pool and the object store AC #8 fatals on. Without
 	//    this, document.ConfigFromEnv can fatal at boot over a store nothing ever reaches.
 	if len(svcArgs) != 2 {
 		t.Fatalf("document.NewService is called with %d argument(s), want 2 (row store, object store)", len(svcArgs))
@@ -893,5 +927,103 @@ func TestSubmissionMain_FatalOnDocumentConfigError(t *testing.T) {
 		if !fatal {
 			t.Errorf("the statement after %s is not an error check that calls log.Fatal: a malformed object-store configuration must refuse to boot, exactly as PORT and MockConfigFromEnv do", want)
 		}
+	}
+}
+
+// psObjects is newPageSink's only collaborator: a fake document.ObjectStore that records the
+// one Put and, crucially, the reader's position when it arrived.
+type psObjects struct {
+	calls  int
+	key    string
+	size   int64
+	offset int64
+	body   []byte
+	err    error
+}
+
+var _ document.ObjectStore = (*psObjects)(nil)
+
+func (o *psObjects) Put(_ context.Context, key string, body io.ReadSeeker, size int64) error {
+	o.calls++
+	o.key, o.size = key, size
+
+	pos, err := body.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	o.offset = pos
+
+	b, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	o.body = b
+	return o.err
+}
+
+func (o *psObjects) Get(context.Context, string, string) (document.Object, error) {
+	return document.Object{}, errors.New("newPageSink never reads an object")
+}
+
+// TestNewPageSink_PutsToTheDocumentStore: the offset assertion is the load-bearing one.
+// document.Service.Store rewinds before its own Put for the reason recorded at
+// internal/document/service.go:45 -- Put transmits from the reader's CURRENT offset, so an
+// already-read reader sends zero bytes under a declared length and the object lands empty.
+func TestNewPageSink_PutsToTheDocumentStore(t *testing.T) {
+	objects := &psObjects{}
+	sink := newPageSink(objects)
+
+	const key = "tenants/3f2a1c88-0b6d-4e19-9f31-5c7a2d840e11/pages/" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/v1/p0001.png"
+	body := []byte("\x89PNG\r\n\x1a\nextr-09 page one bytes")
+
+	if err := sink(context.Background(), key, body); err != nil {
+		t.Fatalf("newPageSink: %v", err)
+	}
+	if objects.calls != 1 {
+		t.Fatalf("the object store saw %d Put(s), want 1; every assertion below would read a zero value", objects.calls)
+	}
+	if objects.key != key {
+		t.Errorf("Put was given key %q, want %q", objects.key, key)
+	}
+	if objects.size != int64(len(body)) {
+		t.Errorf("Put was given size %d, want %d -- the declared length is what the store transmits", objects.size, len(body))
+	}
+	if objects.offset != 0 {
+		t.Errorf("Put was handed a reader at offset %d, want 0: Put transmits from the reader's current offset, so a pre-read reader sends zero bytes under a declared length", objects.offset)
+	}
+	if !bytes.Equal(objects.body, body) {
+		t.Errorf("Put read back %d byte(s), want the %d handed to the sink", len(objects.body), len(body))
+	}
+
+	objects.err = errors.New("the object store refused the PUT")
+	if err := sink(context.Background(), key, body); !errors.Is(err, objects.err) {
+		t.Errorf("newPageSink returned %v over a failing store, want its error: a swallowed PUT failure would commit a page row naming nothing", err)
+	}
+}
+
+// TestPageKey_MatchesTheDocumentStorageKeyPrefix: extraction_page_images_key_tenant_scoped
+// checks starts_with(storage_key, 'tenants/' || tenant_id::text || '/'), the same prefix
+// document.StorageKey already builds. This test lives here rather than in internal/extraction
+// because deps_test.go's scan B covers test imports too, so no extraction test may reach
+// internal/document.
+func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
+	const (
+		tenant = "3f2a1c88-0b6d-4e19-9f31-5c7a2d840e11"
+		hash   = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	)
+	prefix := "tenants/" + tenant + "/"
+
+	docKey := document.StorageKey(tenant, hash)
+	pageKey := extraction.PageKey(tenant, hash, 1)
+
+	if !strings.HasPrefix(docKey, prefix) {
+		t.Fatalf("document.StorageKey = %q, which does not start with %q; the comparison below has no baseline", docKey, prefix)
+	}
+	if !strings.HasPrefix(pageKey, prefix) {
+		t.Errorf("extraction.PageKey = %q, which does not start with %q -- the storage_key CHECK refuses it", pageKey, prefix)
+	}
+	if pageKey == docKey || strings.HasPrefix(pageKey, docKey) {
+		t.Errorf("extraction.PageKey = %q sits at or under document.StorageKey's %q; a rendered page would overwrite the source document it came from", pageKey, docKey)
 	}
 }

@@ -187,8 +187,8 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     env:
-      # Assumed to match the fleet's $PORT convention (internal/platform/config.go)
-      # until subtask 02's Dockerfile confirms it.
+      # Matches the fleet's $PORT convention (internal/platform/config.go) --
+      # confirmed against sidecar/docling/Dockerfile's EXPOSE/CMD default.
       DOCLING_CANARY_PORT: "8080"
     steps:
       - uses: actions/checkout@v4

@@ -20,7 +20,7 @@ def _requirement_lines() -> list[str]:
     lines = []
     for raw in REQUIREMENTS.read_text().splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("-"):
+        if not line or line.startswith(("#", "-")):
             continue
         lines.append(line)
     return lines

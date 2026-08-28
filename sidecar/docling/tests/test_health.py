@@ -71,3 +71,17 @@ def test_healthz_strips_crlf_build_sha(client, monkeypatch, tmp_path):
     monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
     resp = client.get("/healthz")
     assert resp.json()["build"] == "abc123"
+
+
+def test_healthz_reports_dev_when_build_file_is_unreadable(client, monkeypatch, tmp_path):
+    # Carried over from EXTR-03-01 QA: an unreadable file must not 500 the liveness probe.
+    build_file = tmp_path / "build.txt"
+    build_file.write_text("abc123\n")
+    build_file.chmod(0o000)
+    monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
+    try:
+        resp = client.get("/healthz")
+        assert resp.status_code == 200
+        assert resp.json()["build"] == "dev"
+    finally:
+        build_file.chmod(0o644)  # tmp_path cleanup needs read/write back

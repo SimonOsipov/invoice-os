@@ -52,9 +52,15 @@ buildsha)
 
 models)
   # T-02-1: layout, TableFormer and RapidOCR-en are all present, each over 1
-  # MiB. Substring match on the on-disk path is the only oracle available
-  # before subtask 02 bakes a real image -- tighten once the real layout is
-  # known.
+  # MiB. Substrings traced from the pinned docling-slim==2.123.1 source, not
+  # guessed: model_downloader.download_models() names its HF snapshot dirs
+  # after the repo_id (`docling-project--docling-layout-heron[-onnx]` for
+  # layout; `docling-project--docling-models/model_artifacts/tableformer/...`
+  # for TableFormer), and RapidOcrModel._model_repo_folder is literally
+  # "RapidOcr". The onnxruntime-backend rapidocr files additionally must end
+  # in .onnx -- the paddle/torch backends this build does NOT request would
+  # name their checkpoints differently, so this also proves the backend
+  # selector (rapidocr_models=['onnxruntime:en']) actually took effect.
   docker exec "$CONTAINER" python3 -c "
 import os, sys
 root = os.environ.get('DOCLING_ARTIFACTS_PATH', '')
@@ -65,15 +71,21 @@ for dirpath, _, files in os.walk(root):
     for name in files:
         p = os.path.join(dirpath, name)
         if os.path.getsize(p) > 1024 * 1024:
-            big.append(p.lower())
+            big.append(p)
 if not big:
     print(f'no file over 1 MiB found under {root}', file=sys.stderr); sys.exit(1)
-missing = [n for n in ('layout', 'tableformer', 'rapidocr') if not any(n in p for p in big)]
+lower = [p.lower() for p in big]
+checks = {
+    'layout (docling-project/docling-layout-heron[-onnx])': lambda ps: any('docling-layout-heron' in p for p in ps),
+    'tableformer (docling-project/docling-models/model_artifacts/tableformer)': lambda ps: any('tableformer' in p for p in ps),
+    'rapidocr onnxruntime backend (RapidOcr/*.onnx)': lambda ps: any('rapidocr' in p and p.endswith('.onnx') for p in ps),
+}
+missing = [name for name, ok in checks.items() if not ok(lower)]
 if missing:
-    print(f'no file over 1 MiB under {root} matches {missing}', file=sys.stderr)
+    print(f'no file over 1 MiB under {root} satisfies: {missing}', file=sys.stderr)
     print(chr(10).join(big), file=sys.stderr)
     sys.exit(1)
-print(f'layout, TableFormer and RapidOCR-en models present and >1 MiB under {root} ({len(big)} file(s))')
+print(f'layout, TableFormer and RapidOCR-en (onnxruntime) models present and >1 MiB under {root} ({len(big)} file(s))')
 "
   ;;
 

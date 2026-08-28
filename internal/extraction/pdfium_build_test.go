@@ -18,6 +18,8 @@ import (
 )
 
 const (
+	// go-pdfium is MIT (Klippa App BV); the PDFium it embeds is BSD-3. The epic licence
+	// fence names PDFium only and is silent about the wrapper.
 	pdfiumModule  = "github.com/klippa-app/go-pdfium"
 	pdfiumVersion = "v1.19.8"
 

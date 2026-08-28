@@ -108,6 +108,10 @@ jobs:
           fi
       - name: Build
         run: go build ./...
+      # The shared Dockerfile builds every service with cgo off. Without this step a cgo
+      # backend (go-pdfium ships one) fails first at the fleet's image build, not here.
+      - name: Build (cgo off, as the fleet Dockerfile does)
+        run: CGO_ENABLED=0 go build ./...
       # vet/test error on an empty module ("no packages"), so gate them on
       # there being at least one package. They run automatically from M2 on.
       - name: Vet

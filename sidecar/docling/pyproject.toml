@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# app.py/buildinfo.py/convert.py are flat modules (no package __init__.py — sidecar/
+# names a role, not a Python package), so tests need this dir on sys.path.
+pythonpath = ["."]
+
+[tool.ruff]
+# D-18: ruff is the pinned linter (sidecar/docling/requirements-dev.txt).
+line-length = 100

@@ -456,3 +456,21 @@ func TestFixtures_HybridHasTextOnPageOneOnly(t *testing.T) {
 		}
 	}
 }
+
+// fxBuildNPage is n blank US-Letter pages, for the page-cap boundary. MediaBox is inherited
+// from the page tree and a page carries no content stream, so one page costs about 75 bytes
+// and an 801-page document is ~60 KiB -- generated in-test, never committed.
+func fxBuildNPage(n int) []byte {
+	objs := make([]fxObject, 2, n+2)
+	objs[0] = fxObject("<< /Type /Catalog /Pages 2 0 R >>")
+
+	kids := make([]string, 0, n)
+	for i := range n {
+		kids = append(kids, fmt.Sprintf("%d 0 R", i+3))
+		objs = append(objs, fxObject("<< /Type /Page /Parent 2 0 R >>"))
+	}
+	objs[1] = fxObject(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 %d %d] >>",
+		strings.Join(kids, " "), n, fxPageWidthPt, fxPageHeightPt))
+
+	return fxAssemble(objs)
+}

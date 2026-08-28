@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import convert
 from app import MAX_DOCUMENT_BYTES, app
 
 PDF_CONTENT_TYPE = "application/pdf"
@@ -104,3 +105,19 @@ def test_t03_13_truncated_pdf_is_422_not_400_or_500(client):
     resp = client.post("/v1/read", content=truncated, headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code == 422, f"got {resp.status_code}, want 422"
     assert "error" in resp.json()
+
+
+def test_unexpected_error_is_500_not_swallowed_into_422(client, monkeypatch, caplog):
+    # 422 is reserved for DocumentUnreadable (docling opened the document but couldn't
+    # convert it) -- a genuine bug must stay 500 and land in the log, not get relabeled
+    # "bad document" and hidden.
+    def boom(body, content_type):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(convert, "stub_read", boom)
+    resp = client.post(
+        "/v1/read", content=b"%PDF-1.4\nx", headers={"content-type": PDF_CONTENT_TYPE}
+    )
+    assert resp.status_code == 500
+    assert resp.json() == {"error": "internal error"}
+    assert "unexpected /v1/read failure" in caplog.text

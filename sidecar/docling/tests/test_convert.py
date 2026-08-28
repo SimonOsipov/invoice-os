@@ -6,8 +6,8 @@ docstring for why internal/extraction/testdata/scanned_invoice.pdf can't serve t
 native_invoice.pdf (a byte-identical copy of internal/extraction's fixture; test_pins.py
 guards it against drift).
 
-Currently red against convert.stub_read, which always returns one fixed "STUB" token and
-docling_version "stub" regardless of input -- these assertions target the real fixture content.
+Runs the real DocumentConverter (EXTR-03-03): assertions target actual fixture content, not
+the fixed "STUB" token / docling_version "stub" convert.stub_read returned before this subtask.
 """
 
 from pathlib import Path

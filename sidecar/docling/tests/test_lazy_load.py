@@ -1,9 +1,8 @@
 """T-03-8, T-03-9: the converter is built on first use, once, and a second concurrent
 caller waits on the lock rather than getting a 503 (D-17).
 
-Needs docling importable -- run only via the Docker `test` stage. Currently red: /v1/read is
-still convert.stub_read, which never calls convert.get_converter(), so construction_count()
-stays 0 no matter how many requests land -- these assertions expect it to reach 1.
+Needs docling importable -- run only via the Docker `test` stage. /v1/read now calls the real
+convert.get_converter() (EXTR-03-03), so construction_count() reaches 1 on first use.
 """
 
 import concurrent.futures
@@ -89,3 +88,23 @@ def test_t03_9_concurrent_first_requests_share_one_construction_and_both_succeed
         assert resp.status_code == 200
 
     assert convert.construction_count() == 1, "two concurrent first callers must build exactly once"
+
+
+def test_request_arriving_during_warmup_shares_the_warmup_construction(monkeypatch):
+    # T-03-9 covers two concurrent /v1/read calls; this covers the pairing the boot-time
+    # warm-up thread actually creates -- a request landing mid-warm-up, not mid-another-request.
+    convert._warmup_thread = None  # force start_warm_up() to spawn a fresh thread
+
+    def slow_construct():
+        time.sleep(1)
+        return object()
+
+    monkeypatch.setattr(convert, "_construct_converter", slow_construct)
+
+    warmup_thread = convert.start_warm_up()
+    time.sleep(0.1)  # let warm-up acquire the lock first
+    result = convert.get_converter()  # simulates a request landing mid-warm-up
+    warmup_thread.join(timeout=5)
+
+    assert convert.construction_count() == 1, "warm-up + a request during it must build once"
+    assert result is convert._converter

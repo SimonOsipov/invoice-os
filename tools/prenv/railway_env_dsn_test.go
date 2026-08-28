@@ -221,7 +221,7 @@ func TestAssertDBDSNsSelfTestNeedsNoToken(t *testing.T) {
 // checks fails here with five DefectNoPassword offenders.
 func TestAssertDBDSNsSelfTestCoversDocumentVars(t *testing.T) {
 	t.Run("document-vars-clean", func(t *testing.T) {
-		requireDocumentRows(t)
+		requireDocumentRows(t, "invoice")
 
 		stdout, stderr, code := runSelfTest(t, documentMap(), nil)
 		if code != 0 {

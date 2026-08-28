@@ -700,6 +700,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{pkg: "internal/reconciliation"},              // the sweep worker, same shape: a schedule opened it, not a caller
 	{pkg: "internal/demodocs"},                    // boot-time document seeder; it runs to completion before the first request is served
 	{pkg: "internal/demopolicy"},                  // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/extraction/store.go"},        // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
+	{file: "internal/extraction/worker.go"},       // the extraction River worker itself, same shape: the job row carries the tenant
 	{file: "internal/importer/backfill.go"},       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
 	{file: "internal/invoice/revalidate.go"},      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
 	{file: "internal/tenancy/store.go", fn: "Me"}, // the one deliberate HTTP-path exemption; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated

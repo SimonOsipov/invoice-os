@@ -25,7 +25,6 @@ package db_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"regexp"
 	"slices"
@@ -273,15 +272,33 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	}
 
 	// content_hash is CHECKed at exactly 64 chars. Left unreferenced by the
-	// invoices row above: this only has to prove documents is truncated, and a
-	// RESTRICT pointer would add nothing the single TRUNCATE does not already
-	// exercise.
-	if _, err := pool.Exec(ctx,
+	// invoices row above; the extraction_jobs row below is the RESTRICT
+	// pointer that makes truncating documents illegal unless both are named
+	// in the same statement.
+	var documentID string
+	if err := pool.QueryRow(ctx,
 		`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes, filename)
-		 VALUES ($1, $2, $3, 1, $4)`,
-		tenantID, "reset-fixture/"+marker, fmt.Sprintf("%064d", 7), marker,
-	); err != nil {
+		 VALUES ($1, $2, $3, 1, $4) RETURNING id`,
+		tenantID, "reset-fixture/"+marker, strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), marker,
+	).Scan(&documentID); err != nil {
 		t.Fatalf("seed documents fixture: %v", err)
+	}
+
+	var extractionJobID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version)
+		 VALUES ($1, $2, 'mock', 'v1') RETURNING id`,
+		tenantID, documentID,
+	).Scan(&extractionJobID); err != nil {
+		t.Fatalf("seed extraction_jobs fixture: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_field_results (tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1, $2, 'total_amount', '100.00')`,
+		tenantID, extractionJobID,
+	); err != nil {
+		t.Fatalf("seed extraction_field_results fixture: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx,
@@ -420,8 +437,12 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	})
 
 	seedFullResetFixture(t, pool, demoTenantID)
-	if before := countAllResetTargetTables(t, pool); before == 0 {
-		t.Fatalf("precondition: 0 rows across the reset target tables after seeding a fixture in every one of them")
+	// Per-table, not summed: an aggregate count stays non-zero when the fixture
+	// forgets a table, and the post-Reset zero for that table is then vacuous.
+	for _, table := range resetTargetTables {
+		if n := mustCount(t, pool, `SELECT count(*) FROM `+table); n == 0 {
+			t.Fatalf("precondition: %s holds 0 rows after seedFullResetFixture — add a plant for it, or the post-Reset zero below proves nothing about that table", table)
+		}
 	}
 
 	if err := db.Reset(ctx, superDSN); err != nil {

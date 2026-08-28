@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Shared build for every Go service (M2-04). The build context MUST be the repo
 # root: each binary shares the root go.mod/go.sum and the internal/ packages.
 # Parameterized by a single build arg — the image is the static binary compiled
@@ -7,14 +6,23 @@
 # Pairs with Dockerfile.dockerignore: BuildKit resolves the Dockerfile-adjacent
 # ignore ahead of the root .dockerignore (which is tuned for the SPA images and
 # excludes all Go source), so this build sees cmd/ and internal/ while the SPA
-# builds keep their lean context. BuildKit is required (syntax directive above).
+# builds keep their lean context.
+#
+# No `# syntax=` directive on purpose: it makes BuildKit fetch the frontend image
+# from Docker Hub before the build, which strands the whole fleet whenever a
+# Railway builder loses egress to registry-1.docker.io. Nothing here needs a
+# frontend newer than the built-in one. Re-adding it re-arms that outage.
 
 ARG SERVICE
 
 # ---- Build: compile ./cmd/${SERVICE} into a static, CGO-free binary ----
 # golang:1.26-alpine tracks the latest 1.26.x (>= the go.mod toolchain 1.26.4),
 # so Go never has to download a toolchain at build time.
-FROM golang:1.26-alpine AS build
+#
+# Pulled through mirror.gcr.io, not docker.io: Railway Metal builders intermittently
+# lose egress to registry-1.docker.io, which fails the build at `load metadata` while
+# gcr.io keeps resolving. Same image -- the manifest digests were compared and match.
+FROM mirror.gcr.io/library/golang:1.26-alpine AS build
 WORKDIR /src
 # Modules first: this COPY+download layer is reused across source-only changes
 # via normal Docker layer caching. A BuildKit `--mount=type=cache` is deliberately

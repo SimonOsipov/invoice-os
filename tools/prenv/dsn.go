@@ -84,6 +84,14 @@ var DSNRequirements = []DSNRequirement{
 	{"validation", "DATABASE_URL", Required, KindDSN},
 	{"dashboard", "DATABASE_URL", Required, KindDSN},
 	{"submission", "DATABASE_URL", Required, KindDSN},
+	// cmd/submission/main.go calls document.ConfigFromEnv at boot for the
+	// extraction worker document reads, and fatals on any one of them being
+	// unset, so an absent variable is a crash-loop here too.
+	{"submission", "DOCUMENT_BUCKET", Required, KindOpaque},
+	{"submission", "DOCUMENT_ENDPOINT", Required, KindOpaque},
+	{"submission", "DOCUMENT_REGION", Required, KindOpaque},
+	{"submission", "DOCUMENT_ACCESS_KEY_ID", Required, KindOpaque},
+	{"submission", "DOCUMENT_SECRET_ACCESS_KEY", Required, KindOpaque},
 	// cmd/notifications/main.go opens no pool -- it has no db/pgxpool/sql
 	// reference at all -- so an absent DATABASE_URL is not a defect there.
 	{"notifications", "DATABASE_URL", IfPresent, KindDSN},

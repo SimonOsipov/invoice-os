@@ -209,6 +209,8 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	versionID := uuid.NewString()
 	entityID := uuid.NewString()
 	documentID := uuid.NewString()
+	extractionJobID := uuid.NewString()
+	fieldResultID := uuid.NewString()
 	batchID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
@@ -245,6 +247,14 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes, filename, declared_content_type)
 		 VALUES ($1,$2,'purge-witness/doc.csv',$3,64,'doc.csv','text/csv')`,
 		documentID, tenantID, contentHash)
+	plant("extraction_jobs", "id", extractionJobID,
+		`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version)
+		 VALUES ($1,$2,$3,'mock','v1')`,
+		extractionJobID, tenantID, documentID)
+	plant("extraction_field_results", "id", fieldResultID,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, value)
+		 VALUES ($1,$2,$3,'total_amount','100.00')`,
+		fieldResultID, tenantID, extractionJobID)
 	plant("import_batches", "id", batchID,
 		`INSERT INTO import_batches (id, tenant_id, entity_id, status, rows_total, rows_valid, rows_invalid, filename, document_id)
 		 VALUES ($1,$2,$3,'completed',1,1,0,'doc.csv',$4)`,
@@ -592,6 +602,42 @@ func TestPurgeTableListCoversEveryTenantOwnedTable(t *testing.T) {
 
 // ---- AC-1: the purge removes a demo tenant's rows everywhere ---------------
 
+// TestPurgeCountsEveryPopulatedTableUnderItsOwnName pins the leaf-first order.
+// purgeTables is walked in order and ByTable takes each statement's own
+// RowsAffected, so a parent listed before its ON DELETE CASCADE child takes the
+// child's rows silently and reports the child as having lost nothing. Every
+// table still ends empty, which is why the removal test above cannot see it.
+// TestPurgeResultOmitsTablesThatLostNothing asserts the same equality but only
+// over tables db.Seed populates, and the seed writes no extraction row.
+func TestPurgeCountsEveryPopulatedTableUnderItsOwnName(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	reseedOnCleanup(t, superDSN)
+	plantWitnessRows(t, pool, demoTenantID)
+
+	before := map[string]int{}
+	for _, tbl := range db.PurgeTablesForTest {
+		before[tbl] = countFor(t, pool, tbl, db.DemoTenants)
+		if before[tbl] == 0 {
+			t.Fatalf("test setup: %s holds 0 demo-tenant rows before the purge — its count below would be vacuous", tbl)
+		}
+	}
+
+	res, err := db.PurgeDemoTenants(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("PurgeDemoTenants: %v", err)
+	}
+
+	for _, tbl := range db.PurgeTablesForTest {
+		if got := res.ByTable[tbl]; got != int64(before[tbl]) {
+			t.Errorf("ByTable[%s] = %d, want %d — %s is listed after a table whose ON DELETE CASCADE "+
+				"already took its rows, so its own DELETE matched nothing", tbl, got, before[tbl], tbl)
+		}
+	}
+}
+
 // TestPurgeRemovesEveryTenantOwnedRowForADemoTenant (AC-1): a row is planted in
 // every purged table first, so a table the purge forgets cannot hide behind a
 // count that was already zero.
@@ -630,7 +676,7 @@ func TestPurgeRemovesEveryTenantOwnedRowForADemoTenant(t *testing.T) {
 // ---- Obligation 3: a non-demo tenant survives, witnessed in every table ----
 
 // TestPurgeLeavesANonDemoTenantUntouched (obligation 3, AC-2): the throwaway
-// tenant holds a row in all seventeen purged tables; every one must survive the
+// tenant holds a row in all nineteen purged tables; every one must survive the
 // purge with identical column values.
 func TestPurgeLeavesANonDemoTenantUntouched(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -810,7 +856,7 @@ func TestPurgeReplicaWindowHoldsExactlyOneStatement(t *testing.T) {
 		}
 	}
 	if replicaCount != 1 {
-		t.Fatalf("the purge switched session_replication_role to 'replica' %d time(s), want exactly 1 — the bypass suppresses referential integrity transaction-wide, so a second window (or none) changes what the other sixteen deletes are checked against\ntraced: %v", replicaCount, stmts)
+		t.Fatalf("the purge switched session_replication_role to 'replica' %d time(s), want exactly 1 — the bypass suppresses referential integrity transaction-wide, so a second window (or none) changes what the other eighteen deletes are checked against\ntraced: %v", replicaCount, stmts)
 	}
 	if closeAt == -1 {
 		t.Fatalf("session_replication_role is never set back to 'origin' after the replica window opens\ntraced: %v", stmts)
@@ -863,7 +909,7 @@ func TestPurgeRestoresOriginBeforeCommit(t *testing.T) {
 	}
 }
 
-// TestPurgeDeleteOrderRunsUnderFullForeignKeyEnforcement (AC-3): the sixteen
+// TestPurgeDeleteOrderRunsUnderFullForeignKeyEnforcement (AC-3): the eighteen
 // non-audit_log deletes must run under 'origin', so a future reordering of
 // purgeTables fails loudly instead of silently orphaning rows.
 func TestPurgeDeleteOrderRunsUnderFullForeignKeyEnforcement(t *testing.T) {

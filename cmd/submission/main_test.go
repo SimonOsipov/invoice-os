@@ -12,9 +12,31 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
+	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+
+	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // TestSubmissionMainFatalsOnAdapterSelectError: AC-6 / AC-7 (Core AC-6's binary-level
@@ -151,5 +173,725 @@ func TestSubmissionMain_NoNonProductionAdapterFallback(t *testing.T) {
 		t.Errorf("found IsProduction( within 500 bytes after the submission.Select( call site -- the "+
 			"adapter-selection error path must be an unconditional log.Fatalf, not gated on "+
 			"IsProduction(...) || appAdapter != \"\":\n%s", window)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The extraction wiring: the four seams main() composes, and the guards that
+// prove main() actually uses them.
+// ---------------------------------------------------------------------------
+
+// wtRepoRoot locates the worktree root; every module-wide path below is relative to it.
+func wtRepoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		t.Fatal("git reported an empty worktree root; every scan below would read nothing")
+	}
+	return root
+}
+
+// wtCallName renders a call target: "queueConfigs" for a package function, "pkg.Name" for a
+// qualified one. Anything else yields "".
+func wtCallName(fun ast.Expr) string {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		if x, ok := f.X.(*ast.Ident); ok {
+			return x.Name + "." + f.Sel.Name
+		}
+		return "." + f.Sel.Name
+	}
+	return ""
+}
+
+// wtCloser counts closes so a leak (0) and a double close (2) are both visible.
+type wtCloser struct {
+	io.Reader
+	closes int
+}
+
+func (c *wtCloser) Close() error { c.closes++; return nil }
+
+// wtErrReader fails on the first Read, the shape a truncated object stream has.
+type wtErrReader struct{ err error }
+
+func (r wtErrReader) Read([]byte) (int, error) { return 0, r.err }
+
+// wtScript is one scripted document.Service.Open outcome plus what the closure passed it.
+type wtScript struct {
+	doc document.Document
+	obj document.Object
+	err error
+
+	calls int
+	ctx   context.Context
+	id    string
+	rng   string
+}
+
+func (s *wtScript) open(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error) {
+	s.calls++
+	s.ctx, s.id, s.rng = ctx, id, rangeHeader
+	return s.doc, s.obj, s.err
+}
+
+// TestWorkerBundle_CarriesAllThreeKinds is the behavioural half of AC #1. river.AddWorkerSafely
+// reports "already registered" rather than panicking, and type inference means this package
+// never names the unexported args type. A second bundle, or a bundle built after queue.New has
+// read the first, fails the positive arm.
+func TestWorkerBundle_CarriesAllThreeKinds(t *testing.T) {
+	probes := []struct {
+		kind string
+		add  func(*river.Workers) error
+	}{
+		{"extraction_extract", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &extraction.ExtractWorker{})
+		}},
+		{"submission_submit", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &submission.SubmitWorker{})
+		}},
+		{"submission_poll", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &submission.PollWorker{})
+		}},
+	}
+
+	// Control: on an empty bundle every probe must report ABSENT, or a later "already
+	// registered" verdict would mean nothing.
+	for _, p := range probes {
+		if err := p.add(river.NewWorkers()); err != nil {
+			t.Fatalf("probe for %q rejected an EMPTY bundle (%v); it cannot tell present from absent, so the assertions below would pass vacuously", p.kind, err)
+		}
+	}
+
+	// Absent arm on a REAL bundle: submission.Workers alone carries the two submission kinds
+	// and not extraction.
+	base := submission.Workers(&submission.SubmitWorker{}, &submission.PollWorker{})
+	if err := probes[0].add(base); err != nil {
+		t.Fatalf("submission.Workers already carries %q (%v); the positive arm below could then pass without extraction.AddTo being called at all", probes[0].kind, err)
+	}
+	for _, p := range probes[1:] {
+		if err := p.add(submission.Workers(&submission.SubmitWorker{}, &submission.PollWorker{})); err == nil {
+			t.Fatalf("submission.Workers does not carry %q; the probe is looking at the wrong kind", p.kind)
+		}
+	}
+
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{})
+	if bundle == nil {
+		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
+	}
+	for _, p := range probes {
+		err := p.add(bundle)
+		if err == nil {
+			t.Errorf("workerBundle does not carry %q: a worker missing from the ONE bundle queue.New reads never fetches a job", p.kind)
+			continue
+		}
+		if !strings.Contains(err.Error(), "already registered") || !strings.Contains(err.Error(), strconv.Quote(p.kind)) {
+			t.Errorf("probing %q returned %q, want the already-registered error naming that kind", p.kind, err)
+		}
+	}
+}
+
+// TestNewExtractWorker_SetsEveryCollaborator: a nil field compiles and fails only on the first
+// job, so the constructor keeps every collaborator at one call site. Reflection over the
+// non-embedded fields, so a collaborator added later is covered too.
+func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
+	pool := &pgxpool.Pool{}
+	ext := extraction.NewMockExtractor()
+	logger := slog.Default()
+	const sentinel = "sentinel/content-type"
+	open := func(context.Context, string) (extraction.Document, error) {
+		return extraction.Document{ContentType: sentinel}, nil
+	}
+
+	ew := newExtractWorker(pool, ext, open, logger)
+	if ew == nil {
+		t.Fatal("newExtractWorker returned nil")
+	}
+
+	rv := reflect.ValueOf(*ew)
+	checked := 0
+	for i := range rv.NumField() {
+		if rv.Type().Field(i).Anonymous {
+			continue
+		}
+		f := rv.Field(i)
+		switch f.Kind() {
+		case reflect.Pointer, reflect.Interface, reflect.Func, reflect.Map, reflect.Slice:
+			checked++
+			if f.IsNil() {
+				t.Errorf("ExtractWorker.%s is nil: it compiles and panics on the first job", rv.Type().Field(i).Name)
+			}
+		}
+	}
+	if checked < 4 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 4 (Pool, Extractor, Open, Logger) -- the loop above examined almost nothing", checked)
+	}
+
+	if ew.Pool != pool {
+		t.Error("ExtractWorker.Pool is not the pool passed in")
+	}
+	if ew.Extractor != ext {
+		t.Error("ExtractWorker.Extractor is not the extractor passed in")
+	}
+	if ew.Logger != logger {
+		t.Error("ExtractWorker.Logger is not the logger passed in")
+	}
+	if ew.Open == nil {
+		t.Fatal("ExtractWorker.Open is nil")
+	}
+	doc, err := ew.Open(context.Background(), "doc")
+	if err != nil || doc.ContentType != sentinel {
+		t.Errorf("ExtractWorker.Open returned (%+v, %v), want the sentinel opener passed in", doc, err)
+	}
+}
+
+// TestQueueConfigs_NamesBothQueues: AC #2. Extraction gets its own queue so a slow read cannot
+// starve submission; river.NewClient refuses MaxWorkers < 1.
+func TestQueueConfigs_NamesBothQueues(t *testing.T) {
+	got := queueConfigs()
+	if len(got) == 0 {
+		t.Fatal("queueConfigs returned an empty map; the assertions below would pass vacuously")
+	}
+	if extraction.QueueName == river.QueueDefault {
+		t.Fatalf("extraction.QueueName is %q, the River default: the two-queue assertion below collapses to one", extraction.QueueName)
+	}
+
+	want := map[string]int{river.QueueDefault: 10, extraction.QueueName: 2}
+	names := make([]string, 0, len(got))
+	for name := range got {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	wantNames := []string{extraction.QueueName, river.QueueDefault}
+	sort.Strings(wantNames)
+	if !reflect.DeepEqual(names, wantNames) {
+		t.Fatalf("queueConfigs names %v, want exactly %v", names, wantNames)
+	}
+	for name, n := range want {
+		if got[name].MaxWorkers != n {
+			t.Errorf("queue %q has MaxWorkers %d, want %d", name, got[name].MaxWorkers, n)
+		}
+	}
+}
+
+// TestSubmissionMain_WiresTheQueueSeams: the seams above are only worth their assertions if
+// main() is what calls them. AST, not a byte scan, so reformatting main.go cannot break it.
+func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+
+	var configs []*ast.CompositeLit
+	addWorkerHits := 0
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CompositeLit:
+			if wtCallName(x.Type) == "queue.Config" {
+				configs = append(configs, x)
+			}
+		case *ast.SelectorExpr:
+			if x.Sel.Name == "AddWorker" {
+				addWorkerHits++
+			}
+		}
+		return true
+	})
+
+	if len(configs) != 1 {
+		t.Fatalf("cmd/submission/main.go builds %d queue.Config literal(s), want exactly 1 -- with none, every assertion below is vacuous; with two, the one queue.New reads is ambiguous", len(configs))
+	}
+	seams := map[string]string{"Queues": "queueConfigs", "Workers": "workerBundle"}
+	var bundleArgs []ast.Expr
+	for _, elt := range configs[0].Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		want, tracked := seams[key.Name]
+		if !tracked {
+			continue
+		}
+		delete(seams, key.Name)
+		call, ok := kv.Value.(*ast.CallExpr)
+		if !ok || wtCallName(call.Fun) != want {
+			t.Errorf("queue.Config.%s is not a %s(...) call (%T) -- an inline literal here is not the value the seam test above inspects, so the two can disagree", key.Name, want, kv.Value)
+			continue
+		}
+		if key.Name == "Workers" {
+			bundleArgs = call.Args
+		}
+	}
+	for key, want := range seams {
+		t.Errorf("queue.Config carries no %s key, so %s is unreachable from the composition root", key, want)
+	}
+
+	// D-21: one bundle, built by extraction.AddTo. A bare river.AddWorker here is how a second
+	// bundle gets created.
+	if addWorkerHits != 0 {
+		t.Errorf("cmd/submission/main.go selects AddWorker %d time(s); registration belongs in submission.Workers and extraction.AddTo", addWorkerHits)
+	}
+	control := filepath.Join(wtRepoRoot(t), "internal", "submission", "worker.go")
+	cf, err := parser.ParseFile(token.NewFileSet(), control, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", control, err)
+	}
+	controlHits := 0
+	ast.Inspect(cf, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "AddWorker" {
+			controlHits++
+		}
+		return true
+	})
+	if controlHits < 2 {
+		t.Fatalf("the AddWorker matcher found %d hit(s) in internal/submission/worker.go, want at least 2 -- the absence found in main.go above is the matcher being broken, not a clean file", controlHits)
+	}
+
+	// Every seam above can be called correctly and still be handed something else. These three
+	// follow the identifiers: the worker queue.New registers, the opener that worker reads
+	// through, and the store that opener reaches.
+	poolName, _ := wtOneCall(t, f, "db.NewPool")
+	objName, _ := wtOneCall(t, f, "document.NewS3Store")
+	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
+	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
+
+	if len(ewArgs) != 4 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 4 (pool, extractor, opener, logger)", len(ewArgs))
+	}
+	for i, arg := range ewArgs {
+		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
+			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and panics on the first job", i)
+		}
+	}
+
+	// 1. The worker on the bundle is the one newExtractWorker built. A bare
+	//    &extraction.ExtractWorker{} here compiles, registers the kind, and panics on job one.
+	if len(bundleArgs) != 3 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 3 (sw, pw, ew)", len(bundleArgs))
+	}
+	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
+		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and panics on its first job", wtRender(bundleArgs[2]), ewName)
+	}
+
+	// 2. That worker reads through an opener built over the document service's own Open.
+	if call, ok := ewArgs[2].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newDocumentOpener" {
+		t.Errorf("newExtractWorker's opener argument is %s, want a newDocumentOpener(...) call: the capped, always-closing closure is only reached if main() builds it", wtRender(ewArgs[2]))
+	} else if len(call.Args) != 1 {
+		t.Errorf("newDocumentOpener is called with %d argument(s), want 1", len(call.Args))
+	} else if sel, ok := call.Args[0].(*ast.SelectorExpr); !ok || wtCallName(sel) != svcName+".Open" {
+		t.Errorf("newDocumentOpener is built over %s, want %s.Open: an opener over anything else reads no document, and nothing else in this file would notice", wtRender(call.Args[0]), svcName)
+	}
+
+	// 3. That service is built over the shared pool and the object store AC #8 fatals on. Without
+	//    this, document.ConfigFromEnv can fatal at boot over a store nothing ever reaches.
+	if len(svcArgs) != 2 {
+		t.Fatalf("document.NewService is called with %d argument(s), want 2 (row store, object store)", len(svcArgs))
+	}
+	if store, ok := svcArgs[0].(*ast.CallExpr); !ok || wtCallName(store.Fun) != "document.NewStore" {
+		t.Errorf("document.NewService's row store is %s, want a document.NewStore(...) call", wtRender(svcArgs[0]))
+	} else if len(store.Args) != 1 {
+		t.Errorf("document.NewStore is called with %d argument(s), want 1 (the pool)", len(store.Args))
+	} else if id, ok := store.Args[0].(*ast.Ident); !ok || id.Name != poolName {
+		t.Errorf("document.NewStore is given %s, want the shared pool %s that db.NewPool returned", wtRender(store.Args[0]), poolName)
+	}
+	if id, ok := svcArgs[1].(*ast.Ident); !ok || id.Name != objName {
+		t.Errorf("document.NewService's object store is %s, want %s -- the store document.NewS3Store built and main() already fatals on", wtRender(svcArgs[1]), objName)
+	}
+}
+
+// wtMainPackageDeps runs go list once over the module and returns, per import path of interest,
+// the package-main packages whose TRANSITIVE dependencies include it. A library-level import
+// links a package into a binary just as surely as a direct one, which a file's own import block
+// cannot show. Also returns the package-main population so a caller can floor it.
+func wtMainPackageDeps(t *testing.T, root string, paths []string) (map[string][]string, []string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-f", "{{.ImportPath}}|{{.Name}}|{{join .Deps \" \"}}", "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("go list ./... in %s: %v: %s -- a failed listing reads exactly like a clean one", root, err, ee.Stderr)
+		}
+		t.Fatalf("go list ./... in %s: %v", root, err)
+	}
+
+	want := map[string]bool{}
+	for _, p := range paths {
+		want[p] = true
+	}
+	hits := map[string][]string{}
+	var mains []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 || parts[1] != "main" {
+			continue
+		}
+		mains = append(mains, parts[0])
+		for _, dep := range strings.Fields(parts[2]) {
+			if want[dep] {
+				hits[dep] = append(hits[dep], parts[0])
+			}
+		}
+	}
+	for p := range hits {
+		sort.Strings(hits[p])
+	}
+	sort.Strings(mains)
+	return hits, mains
+}
+
+// TestSubmissionMain_AddsNoNewBinary: Core AC-8. The directory check alone is evaded by any
+// name other than "extraction", so the second half asserts that the submission binary is the
+// only one that LINKS internal/extraction -- transitively, since a library-level import reaches
+// a binary that names neither package.
+func TestSubmissionMain_AddsNoNewBinary(t *testing.T) {
+	entries, err := os.ReadDir("..")
+	if err != nil {
+		t.Fatalf("read cmd/: %v -- a silent read error here reads exactly like a clean directory", err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	sort.Strings(dirs)
+	wantDirs := []string{
+		"dashboard", "gateway", "invoice", "notifications", "opsconsole",
+		"portfolio", "reconciliation", "submission", "tenancy", "validation",
+	}
+	if !reflect.DeepEqual(dirs, wantDirs) {
+		t.Errorf("cmd/ holds %v, want exactly %v: extraction runs inside the submission binary, and a new service directory is a new Railway service nobody provisioned", dirs, wantDirs)
+	}
+
+	const (
+		modulePkg     = "github.com/SimonOsipov/invoice-os/"
+		extractionPkg = modulePkg + "internal/extraction"
+		submissionPkg = modulePkg + "internal/submission"
+	)
+	hits, mains := wtMainPackageDeps(t, wtRepoRoot(t), []string{extractionPkg, submissionPkg})
+
+	if len(mains) < 10 {
+		t.Fatalf("go list reported %d package-main package(s) in this module, want at least 10 -- a clean report over an empty listing means nothing", len(mains))
+	}
+
+	// Control needle, same listing and same matcher. internal/submission is imported directly by
+	// cmd/submission alone but LINKED into five binaries; cmd/invoice reaches it only through
+	// internal/invoice. Its presence here is what proves this check follows the whole graph
+	// rather than one file's import block -- the difference the extraction assertion rests on.
+	control := hits[submissionPkg]
+	for _, want := range []string{modulePkg + "cmd/invoice", modulePkg + "cmd/submission"} {
+		if !slices.Contains(control, want) {
+			t.Fatalf("the dependency matcher reports internal/submission linked into %v, want that to include %s; cmd/invoice reaches it only transitively, so its absence means this check no longer follows the graph and the extraction assertion below would pass having examined nothing", control, want)
+		}
+	}
+
+	if want := []string{modulePkg + "cmd/submission"}; !reflect.DeepEqual(hits[extractionPkg], want) {
+		t.Errorf("internal/extraction is linked into %v, want exactly %v: the mock extractor ships inside the submission binary and no other, and one library-level import is enough to put it in a binary nobody provisioned", hits[extractionPkg], want)
+	}
+}
+
+// TestNewDocumentOpener_CapsAtDocumentSizeCeiling: AC #4. The cap bounds the READ, never
+// obj.Size -- Object.Size is what the store reports, and on a 206 it is the range length.
+func TestNewDocumentOpener_CapsAtDocumentSizeCeiling(t *testing.T) {
+	// documents.size_bytes CHECKs <= this, so a document of exactly this length is legal.
+	const ceiling = 15728640
+	if maxDocumentBytes != ceiling {
+		t.Fatalf("maxDocumentBytes = %d, want %d (the documents.size_bytes CHECK)", maxDocumentBytes, ceiling)
+	}
+
+	t.Run("at the ceiling reads whole", func(t *testing.T) {
+		body := &wtCloser{Reader: bytes.NewReader(make([]byte, ceiling))}
+		s := &wtScript{obj: document.Object{Body: body, Size: ceiling}}
+		doc, err := newDocumentOpener(s.open)(context.Background(), "doc")
+		if err != nil {
+			t.Fatalf("a document of exactly %d bytes is legal and must read whole, got %v", ceiling, err)
+		}
+		if len(doc.Bytes) != ceiling {
+			t.Errorf("read %d bytes, want %d", len(doc.Bytes), ceiling)
+		}
+		if body.closes != 1 {
+			t.Errorf("body closed %d time(s), want exactly 1", body.closes)
+		}
+	})
+
+	t.Run("one byte over is refused even when Size lies", func(t *testing.T) {
+		body := &wtCloser{Reader: bytes.NewReader(make([]byte, ceiling+1))}
+		// Size deliberately understates the stream: a cap on obj.Size alone would let a lying
+		// or ranged store push unbounded bytes into memory.
+		s := &wtScript{obj: document.Object{Body: body, Size: 3}}
+		doc, err := newDocumentOpener(s.open)(context.Background(), "doc")
+		if err == nil {
+			t.Fatalf("a %d-byte body was accepted, and %d bytes came back presented as success", ceiling+1, len(doc.Bytes))
+		}
+		if len(doc.Bytes) != 0 {
+			t.Errorf("the refused document still carries %d bytes; the error path must return the zero Document", len(doc.Bytes))
+		}
+		if body.closes != 1 {
+			t.Errorf("body closed %d time(s), want exactly 1", body.closes)
+		}
+	})
+}
+
+// TestNewDocumentOpener_ClosesBodyOnReadError: AC #4. Exactly once -- a defer plus an explicit
+// Close in the error branch is a double close, which only the count catches.
+func TestNewDocumentOpener_ClosesBodyOnReadError(t *testing.T) {
+	boom := errors.New("boom")
+	body := &wtCloser{Reader: wtErrReader{err: boom}}
+	s := &wtScript{obj: document.Object{Body: body, Size: 3}}
+
+	_, err := newDocumentOpener(s.open)(context.Background(), "doc")
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the read error", err)
+	}
+	if body.closes != 1 {
+		t.Errorf("body closed %d time(s), want exactly 1", body.closes)
+	}
+}
+
+// TestNewDocumentOpener_ClosesBodyWhenOpenErrors: the leak two callers in this repo still have
+// -- registering the defer after the error return drops a body handed back WITH an error.
+func TestNewDocumentOpener_ClosesBodyWhenOpenErrors(t *testing.T) {
+	boom := errors.New("open failed")
+	body := &wtCloser{Reader: bytes.NewReader([]byte("abc"))}
+	s := &wtScript{obj: document.Object{Body: body, Size: 3}, err: boom}
+
+	_, err := newDocumentOpener(s.open)(context.Background(), "doc")
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the open error", err)
+	}
+	if body.closes != 1 {
+		t.Errorf("body closed %d time(s) after an open that returned BOTH a body and an error, want exactly 1", body.closes)
+	}
+}
+
+// TestNewDocumentOpener_RejectsANilBody: io.ReadAll over a nil ReadCloser panics, and an empty
+// document would otherwise be extracted as if it were the real one.
+func TestNewDocumentOpener_RejectsANilBody(t *testing.T) {
+	s := &wtScript{obj: document.Object{Body: nil, Size: 0}}
+
+	doc, err := newDocumentOpener(s.open)(context.Background(), "doc-42")
+	if err == nil {
+		t.Fatalf("a nil body was accepted and yielded %+v", doc)
+	}
+	if !strings.Contains(err.Error(), "doc-42") {
+		t.Errorf("err = %q, want the document id in it", err)
+	}
+	if len(doc.Bytes) != 0 || doc.ContentType != "" {
+		t.Errorf("the refused document is %+v, want the zero Document", doc)
+	}
+}
+
+// TestNewDocumentOpener_PassesEmptyRangeHeader: a stray range would extract a fragment and
+// report success.
+func TestNewDocumentOpener_PassesEmptyRangeHeader(t *testing.T) {
+	body := &wtCloser{Reader: bytes.NewReader([]byte("abc"))}
+	s := &wtScript{obj: document.Object{Body: body, Size: 3}}
+
+	if _, err := newDocumentOpener(s.open)(context.Background(), "doc-7"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.calls != 1 {
+		t.Fatalf("the document service was opened %d time(s), want 1", s.calls)
+	}
+	if s.rng != "" {
+		t.Errorf("rangeHeader = %q, want the empty string", s.rng)
+	}
+	if s.id != "doc-7" {
+		t.Errorf("document id = %q, want %q", s.id, "doc-7")
+	}
+}
+
+// TestNewDocumentOpener_CarriesDeclaredContentType: nil means unknown, not a missing field.
+func TestNewDocumentOpener_CarriesDeclaredContentType(t *testing.T) {
+	pdf := "application/pdf"
+	for _, tc := range []struct {
+		name     string
+		declared *string
+		want     string
+	}{
+		{"nil becomes empty", nil, ""},
+		{"set is carried verbatim", &pdf, pdf},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &wtCloser{Reader: bytes.NewReader([]byte("abc"))}
+			s := &wtScript{
+				doc: document.Document{DeclaredContentType: tc.declared},
+				obj: document.Object{Body: body, Size: 3},
+			}
+			doc, err := newDocumentOpener(s.open)(context.Background(), "doc")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if doc.ContentType != tc.want {
+				t.Errorf("ContentType = %q, want %q", doc.ContentType, tc.want)
+			}
+			if string(doc.Bytes) != "abc" {
+				t.Errorf("Bytes = %q, want %q", doc.Bytes, "abc")
+			}
+		})
+	}
+}
+
+// TestNewDocumentOpener_ForwardsContextVerbatim: the worker has already put the job tenant on
+// the ctx, and document.Service.Open resolves its tenant from that identity. A closure that
+// wrapped ctx in a second identity would read another tenant rows, silently.
+func TestNewDocumentOpener_ForwardsContextVerbatim(t *testing.T) {
+	type ctxKey struct{}
+	body := &wtCloser{Reader: bytes.NewReader([]byte("abc"))}
+	s := &wtScript{obj: document.Object{Body: body, Size: 3}}
+
+	ctx := context.WithValue(context.Background(), ctxKey{}, "tenant-marker")
+	if _, err := newDocumentOpener(s.open)(ctx, "doc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.calls != 1 {
+		t.Fatalf("the document service was opened %d time(s), want 1", s.calls)
+	}
+	if s.ctx == nil {
+		t.Fatal("the document service got a nil context")
+	}
+	if got := s.ctx.Value(ctxKey{}); got != "tenant-marker" {
+		t.Errorf("the caller context value did not survive: got %v", got)
+	}
+	if s.ctx != ctx {
+		t.Errorf("the context was wrapped before it reached the document service (%T); the job tenant identity is on the caller context, and wrapping it overwrites the tenant RLS scopes the row lookup by", s.ctx)
+	}
+}
+
+// wtMainBody returns main()'s top-level statements. Fatal on no main(), so a rename fails
+// loudly rather than emptying every scan below.
+func wtMainBody(t *testing.T, f *ast.File) []ast.Stmt {
+	t.Helper()
+	for _, decl := range f.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "main" {
+			return fd.Body.List
+		}
+	}
+	t.Fatal("cmd/submission/main.go declares no main(); every assertion below would be vacuous")
+	return nil
+}
+
+// wtOneCall requires exactly one top-level `x := want(...)` in main(), returning x and the
+// call's arguments. Two call sites make "the value main built" ambiguous.
+func wtOneCall(t *testing.T, f *ast.File, want string) (string, []ast.Expr) {
+	t.Helper()
+	var lhs string
+	var args []ast.Expr
+	calls := 0
+	for _, stmt := range wtMainBody(t, f) {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || wtCallName(call.Fun) != want {
+			continue
+		}
+		calls++
+		args = call.Args
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			lhs = id.Name
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("cmd/submission/main.go assigns from %s at the top level of main() %d time(s), want exactly 1", want, calls)
+	}
+	if lhs == "" {
+		t.Fatalf("the %s call assigns to no identifier, so nothing below can follow the value it built", want)
+	}
+	return lhs, args
+}
+
+// wtRender names an expression for a failure message.
+func wtRender(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.CallExpr:
+		return wtCallName(x.Fun) + "(...)"
+	case *ast.SelectorExpr:
+		return wtCallName(x)
+	}
+	return fmt.Sprintf("%T", e)
+}
+
+// wtFatalAfter reports whether main() assigns from a call named want as a TOP-LEVEL statement
+// (so it is unconditional) and whether the statement right after it is an `if err != nil` that
+// terminates the process. calls counts the call sites found, so a zero can be told from a miss.
+func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool) {
+	t.Helper()
+	body := wtMainBody(t, f)
+	for i, stmt := range body {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || wtCallName(call.Fun) != want {
+			continue
+		}
+		calls++
+		if i+1 >= len(body) {
+			continue
+		}
+		ifs, ok := body[i+1].(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		ast.Inspect(ifs, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if name := wtCallName(c.Fun); name == "log.Fatalf" || name == "log.Fatal" {
+					fatal = true
+				}
+			}
+			return true
+		})
+	}
+	return calls, fatal
+}
+
+// TestSubmissionMain_FatalOnDocumentConfigError: AC #8. Both object-store calls sit at the top
+// level of main(), so the refusal is unconditional the way PORT and MockConfigFromEnv already
+// are -- gating it on whether extraction ever runs defers the failure to the worst moment.
+//
+// NOTE for the operator: the submission service carries no DOCUMENT_* variables today, so this
+// wiring crash-loops it until they are set. tools/prenv/dsn.go now states that requirement.
+func TestSubmissionMain_FatalOnDocumentConfigError(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+
+	// Control: the shipped adapter-config site, same matcher, same file. Its fatal is known
+	// good, so a false here is the matcher being broken rather than a real finding.
+	if calls, fatal := wtFatalAfter(t, f, "submission.MockConfigFromEnv"); calls != 1 || !fatal {
+		t.Fatalf("the matcher found %d unconditional submission.MockConfigFromEnv call(s), fatal=%v, want 1 and true -- it can no longer recognise a known-good boot fatal, so the findings below mean nothing", calls, fatal)
+	}
+
+	for _, want := range []string{"document.ConfigFromEnv", "document.NewS3Store"} {
+		calls, fatal := wtFatalAfter(t, f, want)
+		if calls == 0 {
+			t.Errorf("main() has no unconditional %s call: the object store must be built at boot, not lazily on the first extraction job", want)
+			continue
+		}
+		if calls != 1 {
+			t.Errorf("main() calls %s %d times, want 1", want, calls)
+		}
+		if !fatal {
+			t.Errorf("the statement after %s is not an error check that calls log.Fatal: a malformed object-store configuration must refuse to boot, exactly as PORT and MockConfigFromEnv do", want)
+		}
 	}
 }

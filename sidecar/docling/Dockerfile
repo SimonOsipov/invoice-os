@@ -20,13 +20,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Layout + TableFormer (torch) + RapidOCR English (onnxruntime backend) only --
-# skips code/formula (~640 MB) and the picture classifier (~16 MB), neither of
-# which an invoice pipeline touches. Baked here, not fetched at boot: with
-# DOCLING_ARTIFACTS_PATH set below, Docling refuses to fetch anything at runtime,
-# so a mismatched selector here fails loudly on the first scan instead of quietly
-# re-downloading.
-RUN python3 -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('/opt/docling-models'), with_code_formula=False, with_picture_classifier=False, rapidocr_models=['onnxruntime:en'])"
+# Layout + TableFormer (torch) only here -- skips code/formula (~640 MB) and the
+# picture classifier (~16 MB), neither of which an invoice pipeline touches. Baked
+# here, not fetched at boot: with DOCLING_ARTIFACTS_PATH set below, Docling refuses
+# to fetch anything at runtime, so a mismatched selector here fails loudly on the
+# first scan instead of quietly re-downloading.
+RUN python3 -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('/opt/docling-models'), with_code_formula=False, with_picture_classifier=False, with_rapidocr=False)"
+
+# RapidOCR English (onnxruntime backend) fetched separately -- see the script's own
+# docstring: official host first (short timeout, one retry), pinned HF mirror on
+# failure, hash-verified either way.
+COPY sidecar/docling/fetch_rapidocr_models.py .
+RUN python3 fetch_rapidocr_models.py
 
 # ---- run: venv + models + app, non-root ----
 FROM mirror.gcr.io/library/python:3.12-slim AS run

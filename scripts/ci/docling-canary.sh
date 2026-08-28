@@ -51,41 +51,49 @@ buildsha)
   ;;
 
 models)
-  # T-02-1: layout, TableFormer and RapidOCR-en are all present, each over 1
-  # MiB. Substrings traced from the pinned docling-slim==2.123.1 source, not
-  # guessed: model_downloader.download_models() names its HF snapshot dirs
-  # after the repo_id (`docling-project--docling-layout-heron[-onnx]` for
-  # layout; `docling-project--docling-models/model_artifacts/tableformer/...`
-  # for TableFormer), and RapidOcrModel._model_repo_folder is literally
-  # "RapidOcr". The onnxruntime-backend rapidocr files additionally must end
-  # in .onnx -- the paddle/torch backends this build does NOT request would
-  # name their checkpoints differently, so this also proves the backend
-  # selector (rapidocr_models=['onnxruntime:en']) actually took effect.
+  # T-02-1: layout, TableFormer and all three RapidOCR-en checkpoints are present.
+  # Substrings/names traced from the pinned docling-slim==2.123.1 source, not
+  # guessed: model_downloader.download_models() names its HF snapshot dirs after
+  # the repo_id (`docling-project--docling-layout-heron[-onnx]` for layout;
+  # `docling-project--docling-models/model_artifacts/tableformer/...` for
+  # TableFormer), and RapidOcrModel._model_repo_folder is literally "RapidOcr".
+  # Layout/TableFormer are matched by a >1 MiB substring scan; RapidOCR's cls
+  # checkpoint is only ~570 KiB (under that floor), so its three onnxruntime:en
+  # files are asserted by exact name instead -- a >1 MiB scan alone would pass
+  # with det/rec present and cls silently missing.
   docker exec "$CONTAINER" python3 -c "
 import os, sys
 root = os.environ.get('DOCLING_ARTIFACTS_PATH', '')
 if not root:
     print('DOCLING_ARTIFACTS_PATH is unset', file=sys.stderr); sys.exit(1)
+all_paths = []
 big = []
 for dirpath, _, files in os.walk(root):
     for name in files:
         p = os.path.join(dirpath, name)
+        all_paths.append(p)
         if os.path.getsize(p) > 1024 * 1024:
             big.append(p)
 if not big:
     print(f'no file over 1 MiB found under {root}', file=sys.stderr); sys.exit(1)
-lower = [p.lower() for p in big]
-checks = {
+lower_big = [p.lower() for p in big]
+big_checks = {
     'layout (docling-project/docling-layout-heron[-onnx])': lambda ps: any('docling-layout-heron' in p for p in ps),
     'tableformer (docling-project/docling-models/model_artifacts/tableformer)': lambda ps: any('tableformer' in p for p in ps),
-    'rapidocr onnxruntime backend (RapidOcr/*.onnx)': lambda ps: any('rapidocr' in p and p.endswith('.onnx') for p in ps),
 }
-missing = [name for name, ok in checks.items() if not ok(lower)]
-if missing:
-    print(f'no file over 1 MiB under {root} satisfies: {missing}', file=sys.stderr)
+missing_big = [name for name, ok in big_checks.items() if not ok(lower_big)]
+if missing_big:
+    print(f'no file over 1 MiB under {root} satisfies: {missing_big}', file=sys.stderr)
     print(chr(10).join(big), file=sys.stderr)
     sys.exit(1)
-print(f'layout, TableFormer and RapidOCR-en (onnxruntime) models present and >1 MiB under {root} ({len(big)} file(s))')
+rapidocr_dir = os.path.join(root, 'RapidOcr') + os.sep
+want_rapidocr = {'PP-OCRv6_det_small.onnx', 'PP-OCRv6_rec_small.onnx', 'ch_ppocr_mobile_v2.0_cls_mobile.onnx'}
+have_rapidocr = {os.path.basename(p) for p in all_paths if p.startswith(rapidocr_dir)}
+missing_rapidocr = sorted(want_rapidocr - have_rapidocr)
+if missing_rapidocr:
+    print(f'RapidOCR-en checkpoint(s) missing under {rapidocr_dir}: {missing_rapidocr}', file=sys.stderr)
+    sys.exit(1)
+print(f'layout, TableFormer (>1 MiB) and all three RapidOCR-en checkpoints present under {root}')
 "
   ;;
 

@@ -38,21 +38,36 @@ RUN python3 fetch_rapidocr_models.py
 
 # ---- test: deps + dev deps (pytest/httpx/ruff) + app + tests, the real pinned stack ----
 # `docker build --target test -f sidecar/docling/Dockerfile -t docling:test .` then
-# `docker run --rm docling:test` -- the one command CI and a local dev both use to run the
-# Test-Spec suite (T-03-1..9,13,14 need docling importable; nothing here skips them).
+# `docker run --rm -v "$PWD:/repo:ro" -e REPO_ROOT=/repo docling:test` -- the one command
+# CI and a local dev both use to run the Test-Spec suite (T-03-1..9,13,14 need docling
+# importable; nothing here skips them). The mount is read by test_pins.py/test_fixtures.py
+# (see tests/conftest.py) for the repo-scanning specs; the run stage's own build context
+# needs nothing mounted, only this stage.
 FROM deps AS test
 COPY sidecar/docling/requirements-dev.txt .
 # requirements-dev.txt re-includes `-r requirements.txt` (so a local `pip install -r
 # requirements-dev.txt` is self-sufficient) -- that re-resolve sees rapidocr's declared
 # "opencv-python" as unsatisfied (this stage only has -headless, a different distribution
 # name) and reinstalls the GUI build, undoing deps' swap above. Redo the swap after.
+# --force-reinstall is required here: -headless' dist-info already exists from the deps
+# stage (unaffected by the uninstall above, which only removes opencv-python's files), so
+# a plain `pip install` sees it as "already satisfied" and skips writing cv2/ back --
+# leaving the package uninstalled in all but name. Confirmed empirically (T-03-cv2 guard).
 RUN pip install --no-cache-dir -r requirements-dev.txt \
     && pip uninstall -y opencv-python \
-    && pip install --no-cache-dir --no-deps opencv-python-headless==5.0.0.93
+    && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless==5.0.0.93
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 WORKDIR /app
 COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/pyproject.toml ./
 COPY sidecar/docling/tests ./tests
+# Same non-root user the run stage uses below, not just for parity: running as root
+# makes chmod 000 a no-op (root bypasses the DAC check), which was silently defeating
+# test_healthz_reports_dev_when_build_file_is_unreadable. appuser needs write access to
+# /app for pytest's cache dir; /opt/venv and /opt/docling-models stay root-owned but
+# world-readable from the deps stage's RUN steps, which is all this stage reads from them.
+RUN useradd --no-create-home --uid 1000 --shell /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 CMD ["pytest", "-v"]
 
 # ---- run: venv + models + app, non-root ----

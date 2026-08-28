@@ -5,10 +5,15 @@ the bare local venv.
 """
 
 import re
-from pathlib import Path
 
-SIDECAR_DIR = Path(__file__).parent.parent
-REPO_ROOT = SIDECAR_DIR.parent.parent
+from conftest import repo_root
+
+# Resolved through conftest.repo_root(), not Path(__file__)-arithmetic: inside
+# docling:test this file lives at /app/tests/, which is not the mounted repo, so
+# SIDECAR_DIR must come from REPO_ROOT (see conftest.py). Every test below reads at
+# least one of these, so a missing repo fails the whole module loudly at collection.
+REPO_ROOT = repo_root()
+SIDECAR_DIR = REPO_ROOT / "sidecar" / "docling"
 REQUIREMENTS = SIDECAR_DIR / "requirements.txt"
 DOCKERFILE = SIDECAR_DIR / "Dockerfile"
 DOCLING_SIDECAR_DOC = REPO_ROOT / "docs" / "docling-sidecar.md"

@@ -5,6 +5,7 @@ T-03-14: /healthz stays fast while a conversion (or the converter's own lazy bui
 import asyncio
 import threading
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,10 +15,32 @@ import buildinfo
 import convert
 from app import app
 
+# T-03-14 needs a body that genuinely converts (not a malformed stand-in): a real convert
+# is a better proof of the fix than a sleep, since it exercises the actual thread dispatch.
+NATIVE_PDF = (Path(__file__).parent / "testdata" / "native_invoice.pdf").read_bytes()
+
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_converter_state():
+    # _converter/_construction_count are module-level and shared across test FILES too --
+    # without this, T-01-3's "before == 0" depends on collection order (test_convert.py's
+    # real conversions run first, alphabetically, and would leave construction_count at 1).
+    # Joining the warm-up thread first makes the reset deterministic instead of a race:
+    # without it, a warm-up still mid-flight could finish and increment the counter *after*
+    # this reset runs, flaking any test order (or a parallelised run) that reaches this file
+    # before the warm-up thread happens to have finished on its own.
+    if convert._warmup_thread is not None:
+        convert._warmup_thread.join()
+    convert._converter = None
+    convert._construction_count = 0
+    yield
+    convert._converter = None
+    convert._construction_count = 0
 
 
 def test_t01_1_healthz_reports_dev_when_no_build_file(client, monkeypatch, tmp_path):
@@ -115,8 +138,12 @@ def test_t03_14_healthz_stays_fast_while_a_read_is_in_flight(monkeypatch):
             t_start = time.time()
 
             async def call_read():
+                # NATIVE_PDF, not a malformed stand-in: docling genuinely can't open a
+                # header-only body (confirmed against the pinned stack -- same failure
+                # docling-parse gives T-03-13's truncated fixture), so a real conversion is
+                # the only way this call can legitimately return 200.
                 resp = await client.post(
-                    "/v1/read", content=b"%PDF-1.4\nx", headers={"content-type": "application/pdf"}
+                    "/v1/read", content=NATIVE_PDF, headers={"content-type": "application/pdf"}
                 )
                 return resp, time.time() - t_start
 

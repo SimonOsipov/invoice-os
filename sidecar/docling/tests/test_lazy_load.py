@@ -8,6 +8,7 @@ stays 0 no matter how many requests land -- these assertions expect it to reach 
 
 import concurrent.futures
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,20 @@ from app import app
 PDF_CONTENT_TYPE = "application/pdf"
 
 
+def _fake_convert(stream):
+    """Minimal stand-in for a real ConversionResult -- just enough shape for
+    convert._to_wire_contract to build a response without needing the real (multi-second)
+    DocumentConverter build. Used by T-03-9's mock so the test can assert its actual
+    discriminator (both requests 200), not just "neither is a 503".
+    """
+    page = SimpleNamespace(page_no=1, parsed_page=None)
+    document = SimpleNamespace(
+        version="fake-1.0.0",
+        pages={1: SimpleNamespace(size=SimpleNamespace(width=100.0, height=100.0))},
+    )
+    return SimpleNamespace(document=document, pages=[page])
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -26,6 +41,10 @@ def client():
 @pytest.fixture(autouse=True)
 def reset_converter_state():
     # _converter/_construction_count are module-level; tests must not see each other's builds.
+    # Join the boot-time warm-up thread first -- otherwise it can finish and increment the
+    # counter *after* this reset, racing test_t03_8's "before == 0" non-deterministically.
+    if convert._warmup_thread is not None:
+        convert._warmup_thread.join()
     convert._converter = None
     convert._construction_count = 0
     yield
@@ -47,8 +66,11 @@ def test_t03_9_concurrent_first_requests_share_one_construction_and_both_succeed
     client, monkeypatch
 ):
     def slow_construct():
+        # A working fake, not a bare object(): the real discriminator is that BOTH concurrent
+        # callers get 200 (a 500 would be just as wrong as a 503 here), so the mock must
+        # support the same .convert() call read_document actually makes.
         time.sleep(2)
-        return object()
+        return SimpleNamespace(convert=_fake_convert)
 
     monkeypatch.setattr(convert, "_construct_converter", slow_construct)
 

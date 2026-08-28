@@ -1,4 +1,10 @@
-"""T-01-4..T-01-7: /v1/read's size cap, its 400/413 error shape, and the §3 response contract."""
+"""T-01-4..T-01-7: /v1/read's size cap, its 400/413 error shape, and the §3 response contract.
+
+The size-cap and empty-body tests are content-independent and collect in a bare venv; the
+rest need docling importable (EXTR-03-03's real converter) -- run via the Docker `test` stage.
+"""
+
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,10 +13,19 @@ from app import MAX_DOCUMENT_BYTES, app
 
 PDF_CONTENT_TYPE = "application/pdf"
 
+# T-01-7 and its neighbours below need a body Docling can actually convert (EXTR-03-03
+# replaced the always-succeeds stub) -- reuses the fixture test_convert.py already commits.
+TESTDATA = Path(__file__).parent / "testdata"
+
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture
+def real_pdf_body() -> bytes:
+    return (TESTDATA / "native_invoice.pdf").read_bytes()
 
 
 def test_t01_4_over_cap_body_is_refused_with_413(client):
@@ -38,9 +53,9 @@ def test_t01_6_empty_body_is_400(client):
     assert resp.status_code == 400
 
 
-def test_t01_7_stub_response_validates_against_the_wire_contract(client):
+def test_t01_7_stub_response_validates_against_the_wire_contract(client, real_pdf_body):
     resp = client.post(
-        "/v1/read", content=b"%PDF-1.4\nstub", headers={"content-type": PDF_CONTENT_TYPE}
+        "/v1/read", content=real_pdf_body, headers={"content-type": PDF_CONTENT_TYPE}
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -59,23 +74,23 @@ def test_t01_7_stub_response_validates_against_the_wire_contract(client):
                     assert 0.0 <= coord <= 1.0
 
 
-def test_docling_version_field_is_present(client):
+def test_docling_version_field_is_present(client, real_pdf_body):
     # sec. 3 requires "docling_version" on every response; no existing test checks it.
     resp = client.post(
-        "/v1/read", content=b"%PDF-1.4\nstub", headers={"content-type": PDF_CONTENT_TYPE}
+        "/v1/read", content=real_pdf_body, headers={"content-type": PDF_CONTENT_TYPE}
     )
     assert "docling_version" in resp.json()
 
 
-def test_missing_content_type_is_accepted(client):
-    resp = client.post("/v1/read", content=b"%PDF-1.4\nstub")
+def test_missing_content_type_is_accepted(client, real_pdf_body):
+    resp = client.post("/v1/read", content=real_pdf_body)
     assert resp.status_code == 200
 
 
-def test_unsupported_content_type_is_accepted(client):
-    # Stage 01 has no reader that branches on Content-Type; it's forwarded, not validated.
+def test_unsupported_content_type_is_accepted(client, real_pdf_body):
+    # /v1/read has no reader that branches on Content-Type; it's forwarded, not validated.
     resp = client.post(
-        "/v1/read", content=b"%PDF-1.4\nstub", headers={"content-type": "application/x-bogus"}
+        "/v1/read", content=real_pdf_body, headers={"content-type": "application/x-bogus"}
     )
     assert resp.status_code == 200
 

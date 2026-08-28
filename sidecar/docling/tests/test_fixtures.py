@@ -10,15 +10,18 @@ with no real glyphs (see gen_scanned_ocr_fixture.py's docstring), so it can't se
 
 from pathlib import Path
 
+from conftest import repo_root
+
 TESTDATA = Path(__file__).parent / "testdata"
-GO_EXTRACTION_TESTDATA = (
-    Path(__file__).parent.parent.parent.parent / "internal" / "extraction" / "testdata"
-)
 
 
 def test_native_invoice_fixture_matches_the_go_extraction_corpus():
+    # repo_root() resolved here, not at module level: this is the only test in this
+    # file that needs the wider repo (docling:test carries sidecar/docling/ only), so
+    # a missing mount must not also fail the self-contained test below.
+    go_extraction_testdata = repo_root() / "internal" / "extraction" / "testdata"
     ours = TESTDATA / "native_invoice.pdf"
-    theirs = GO_EXTRACTION_TESTDATA / "native_invoice.pdf"
+    theirs = go_extraction_testdata / "native_invoice.pdf"
     assert theirs.exists(), f"{theirs} is gone -- internal/extraction's own corpus moved"
     assert ours.read_bytes() == theirs.read_bytes(), (
         f"{ours} has drifted from {theirs} -- copy it again after any Go-side regeneration"

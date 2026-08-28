@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr> [args...]
+# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert> [args...]
 #
 # Assertion steps for ci.yml's docling-canary job (T-02-1..4). Every check execs
 # into the already-running `docling-canary` container and asks it in python3:
@@ -15,7 +15,7 @@ set -euo pipefail
 CONTAINER="${DOCLING_CANARY_CONTAINER:-docling-canary}"
 PORT="${DOCLING_CANARY_PORT:-8080}"
 
-check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr> [args...]}"
+check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert> [args...]}"
 shift
 
 healthz_json() {
@@ -122,6 +122,38 @@ model = RapidOcrModel(
 )
 assert model.reader is not None, 'RapidOcrModel.reader was not constructed'
 print('RapidOcrModel constructed offline against', artifacts_path, '-- ONNX session ready')
+"
+  ;;
+
+convert)
+  # T-03-12: the baked models convert the fixture with --network none already in effect --
+  # proves the offline artifacts are real, not just present (T-02-1 only checked size).
+  docker cp sidecar/docling/tests/testdata/scanned_ocr_fixture.pdf "$CONTAINER":/tmp/scanned_ocr_fixture.pdf
+  docker exec "$CONTAINER" python3 -c "
+import json
+import urllib.error
+import urllib.request
+
+with open('/tmp/scanned_ocr_fixture.pdf', 'rb') as f:
+    body = f.read()
+req = urllib.request.Request(
+    'http://localhost:${PORT}/v1/read',
+    data=body,
+    headers={'Content-Type': 'application/pdf'},
+    method='POST',
+)
+try:
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        status = resp.status
+        payload = json.load(resp)
+except urllib.error.HTTPError as err:
+    raise SystemExit(f'/v1/read returned {err.code}: {err.read().decode()}')
+if status != 200:
+    raise SystemExit(f'/v1/read returned {status}: {payload}')
+tokens = [tok for page in payload['pages'] for tok in page['tokens']]
+if not tokens:
+    raise SystemExit('offline convert produced zero tokens')
+print(f'/v1/read converted the fixture offline: {len(tokens)} token(s)')
 "
   ;;
 

@@ -2,13 +2,11 @@
 table structure ACCURATE, code/formula/picture off.
 
 Needs docling importable -- run only via the Docker `test` stage (see sidecar/docling/Dockerfile),
-never in the local venv. convert.pipeline_options() is a Mode-A stub (raises
-NotImplementedError); these tests fail on that call, not on collection.
+never in the local venv.
 """
 
 from importlib import metadata
 
-import pytest
 from docling.datamodel.accelerator_options import AcceleratorDevice
 from docling.datamodel.pipeline_options import RapidOcrOptions, TableFormerMode
 
@@ -64,10 +62,3 @@ def test_code_formula_picture_enrichment_stay_off():
     assert opts.do_code_enrichment is False
     assert opts.do_formula_enrichment is False
     assert opts.do_picture_classification is False
-
-
-def test_pipeline_options_stub_raises_not_implemented():
-    # Documents the current (pre-EXTR-03-03) state directly, so a reader of a red run knows
-    # why every test above failed the same way.
-    with pytest.raises(NotImplementedError):
-        convert.pipeline_options()

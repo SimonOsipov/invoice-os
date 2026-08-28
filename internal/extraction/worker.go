@@ -48,6 +48,7 @@ type ExtractWorker struct {
 	Pool      *pgxpool.Pool
 	Extractor Extractor
 	Open      OpenDocument
+	Pages     *PageStore
 	Logger    *slog.Logger
 }
 
@@ -93,7 +94,22 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	})
 
 	var fields []Field
+	var images []PageImage
 	doc, err := w.Open(octx, args.DocumentID)
+	if err == nil {
+		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
+		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).
+		images, _, err = w.Pages.Ingest(ctx, args.TenantID, doc)
+	}
+	if err == nil {
+		// Objects first, rows last, so a committed row always names an object that was PUT
+		// (TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails). Outside queue.OncePerJob on
+		// purpose: these rows commit before Extract, so a document whose field extraction fails
+		// still has a page inventory.
+		err = db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+			return writePageImagesTx(ctx, tx, args.TenantID, args.DocumentID, images)
+		})
+	}
 	if err == nil {
 		// ctx, not octx: the extractor is fenced from the database and must not be handed a
 		// tenant identity.

@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -119,7 +120,9 @@ func main() {
 
 	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
-	ew := newExtractWorker(pool, extraction.NewMockExtractor(), newDocumentOpener(docSvc.Open), app.Logger)
+	ew := newExtractWorker(pool, extraction.NewMockExtractor(), newDocumentOpener(docSvc.Open),
+		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
+		app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
@@ -188,10 +191,19 @@ func newDocumentOpener(open documentOpen) extraction.OpenDocument {
 	}
 }
 
+// newPageSink adapts the document object store to the extraction seam. bytes.Reader is handed
+// over at offset 0 because Put transmits from the reader's CURRENT position, the same trap
+// document.Service.Store rewinds for (TestNewPageSink_PutsToTheDocumentStore).
+func newPageSink(objects document.ObjectStore) extraction.PageSink {
+	return func(ctx context.Context, key string, body []byte) error {
+		return objects.Put(ctx, key, bytes.NewReader(body), int64(len(body)))
+	}
+}
+
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails
 // only on the first job (TestNewExtractWorker_SetsEveryCollaborator).
-func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument, logger *slog.Logger) *extraction.ExtractWorker {
-	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Logger: logger}
+func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument, pages *extraction.PageStore, logger *slog.Logger) *extraction.ExtractWorker {
+	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages, Logger: logger}
 }
 
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow

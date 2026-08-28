@@ -23,6 +23,8 @@ var pdWhitespaceRun = regexp.MustCompile(`\s+`)
 
 // pdSections are the four claims the doc owes, each with the needles that make it a record
 // rather than a gesture.
+// Every needle is a phrase rather than a bare number. "600" is a substring of "1,600", so a
+// bare-number list reported the derivation present when only the summary table had survived.
 var pdSections = []struct {
 	heading string
 	needles []string
@@ -30,7 +32,7 @@ var pdSections = []struct {
 }{
 	{
 		heading: "Render profile",
-		needles: []string{"150", "grayscale", "PNG"},
+		needles: []string{"DPI 150", "grayscale", "PNG"},
 		why:     "a canvas that cannot tell what resolution or colour model it is scaling has to guess",
 	},
 	{
@@ -40,8 +42,16 @@ var pdSections = []struct {
 	},
 	{
 		heading: "The page cap",
-		needles: []string{"800", "600", "480", "300", "1,600", "safety factor"},
-		why:     "a cap with no derivation is a number someone will raise without redoing the arithmetic",
+		needles: []string{
+			"800",
+			"600-second",
+			"480 seconds",
+			"300 ms per page",
+			"480 s / 300 ms",
+			"1,600-page ceiling",
+			"safety factor of 2",
+		},
+		why: "a cap with no derivation is a number someone will raise without redoing the arithmetic",
 	},
 	{
 		heading: "Retention",

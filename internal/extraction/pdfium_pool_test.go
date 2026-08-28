@@ -48,19 +48,23 @@ var pxSourceFiles = []string{"pdfium.go", "pdfium_extractor.go", pxPoolFile, "pa
 
 // pxAllowedImports is what the pdfium source may import. An allowlist is stronger than the
 // denylist AC-7 names: time, os, math/rand and net/* all need an import, and so do crypto/rand,
-// runtime and unsafe, which it never mentions.
+// runtime and unsafe, which it never mentions. crypto/sha256 and encoding/hex are admitted for
+// PageKey's content hash: both are pure functions of their input, which is the property the
+// list exists to keep.
 var pxAllowedImports = map[string]bool{
-	"bytes":       true,
-	"context":     true,
-	"fmt":         true,
-	"image/png":   true,
-	"sync":        true,
-	"sync/atomic": true,
-	"unicode":     true,
-	pdfiumModule:  true,
-	pxRequests:    true,
-	pxResponses:   true,
-	pxWebAssembly: true,
+	"bytes":         true,
+	"context":       true,
+	"crypto/sha256": true,
+	"encoding/hex":  true,
+	"fmt":           true,
+	"image/png":     true,
+	"sync":          true,
+	"sync/atomic":   true,
+	"unicode":       true,
+	pdfiumModule:    true,
+	pxRequests:      true,
+	pxResponses:     true,
+	pxWebAssembly:   true,
 }
 
 // TestPDFium_UsesTheWebAssemblyBackendOnly: AC-1. The wazero backend is what keeps the module

@@ -154,7 +154,7 @@ func TestPDFiumSourceHasNoAmbientDependency(t *testing.T) {
 			}
 			seen++
 			if !pxAllowedImports[p] {
-				t.Errorf("%s: %s imports %q; the allowlist is %v -- time, os, math/rand and net/* are all outside it",
+				t.Errorf("%s: %s imports %q; the allowlist is %v -- time, os, math/rand and net/* are all outside it. For a deadline take pdfium.Pool.GetInstanceWithContext, not GetInstance(timeout): it carries the job context and needs no clock",
 					fset.Position(spec.Pos()), name, p, mxSortedStrings(pxAllowedImports))
 			}
 		}

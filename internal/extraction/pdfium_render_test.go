@@ -390,7 +390,8 @@ func TestPDFiumReader_CleansUpOnAnOnPageError(t *testing.T) {
 		return nil
 	})
 
-	if err != refused { //nolint:errorlint // the contract is the identical error, not a wrapped one
+	// Identity, not errors.Is: the contract is the onPage error itself, unwrapped.
+	if err != refused {
 		t.Errorf("Read(%s) returned %v, want the onPage error itself: a caller distinguishes its own refusal from a pdfium failure by identity", fxNative3, err)
 	}
 	if calls != 2 {
@@ -453,7 +454,8 @@ func TestPDFiumReader_AcceptsAtThePageCap(t *testing.T) {
 		return enough
 	})
 
-	if err != enough { //nolint:errorlint // the cap must let this document through to onPage at all
+	// Identity: the cap must let a document at exactly maxPages through to onPage at all.
+	if err != enough {
 		t.Fatalf("Read on a %d-page document returned %v, want the onPage refusal: a document at exactly the cap is accepted, and an off-by-one cap refuses it here", prAtCap, err)
 	}
 	if calls != 1 {

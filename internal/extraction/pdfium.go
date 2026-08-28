@@ -1,10 +1,12 @@
-// pdfium.go: PDFiumReader, the native-PDF PageReader. Text only -- rendering is EXTR-02-06, so
-// Page.ImagePNG and its dimensions stay zero here.
+// pdfium.go: PDFiumReader, the native-PDF PageReader.
 package extraction
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image/png"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/klippa-app/go-pdfium"
@@ -19,9 +21,24 @@ const (
 	pdfiumReaderVersion = "v1"
 )
 
-// PDFiumReader holds no state: a read borrows a pool instance for its own duration and returns
-// it, so two reads share nothing.
-type PDFiumReader struct{}
+// pdfiumRenderDPI puts US-Letter on a 1275x1651 grid: legible at full review width, and about
+// 113 KiB of grayscale PNG per invoice page. RGBA is 10x that and JPEG q85 8x, on line art.
+const pdfiumRenderDPI = 150
+
+// maxPages refuses a document rather than letting River dead-letter it as a timeout: 800 x the
+// 300 ms per-page cost is 240 s, half the 480 s of render budget inside worker.go's 600 s.
+const maxPages = 800
+
+// Render-bitmap releases, read by TestPDFiumReader_HoldsOnePageAtATime.
+var pdfiumCleanups atomic.Int64
+
+// PDFiumReader holds no mutable state: a read borrows a pool instance for its own duration and
+// returns it, so two reads share nothing.
+type PDFiumReader struct {
+	// dpi overrides pdfiumRenderDPI. Only AC-4's alignment sweep sets it, through
+	// NewPDFiumReaderAtDPIForTest.
+	dpi int
+}
 
 var _ PageReader = (*PDFiumReader)(nil)
 
@@ -30,6 +47,13 @@ func NewPDFiumReader() *PDFiumReader { return &PDFiumReader{} }
 func (r *PDFiumReader) Name() string { return pdfiumReaderName }
 
 func (r *PDFiumReader) Version() string { return pdfiumReaderVersion }
+
+func (r *PDFiumReader) renderDPI() int {
+	if r.dpi == 0 {
+		return pdfiumRenderDPI
+	}
+	return r.dpi
+}
 
 // Read hands doc.Bytes to pdfium by reference and calls onPage once per page in ascending
 // order. onPage must not be nil.
@@ -54,6 +78,9 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 		if err != nil {
 			return fmt.Errorf("pdfium: page count: %w", err)
 		}
+		if count.PageCount > maxPages {
+			return fmt.Errorf("pdfium: document has %d pages, over the %d page limit", count.PageCount, maxPages)
+		}
 
 		totals := PageResult{Pages: count.PageCount}
 		for i := range count.PageCount {
@@ -69,8 +96,9 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 				return fmt.Errorf("pdfium: page %d size: %w", i+1, err)
 			}
 
+			ref := requests.Page{ByIndex: &requests.PageByIndex{Document: opened.Document, Index: i}}
 			text, err := inst.GetPageTextStructured(&requests.GetPageTextStructured{
-				Page: requests.Page{ByIndex: &requests.PageByIndex{Document: opened.Document, Index: i}},
+				Page: ref,
 				Mode: requests.GetPageTextStructuredModeRects,
 			})
 			if err != nil {
@@ -83,12 +111,12 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 				totals.PagesWithText++
 			}
 
-			if err := onPage(Page{
+			if err := r.renderPage(inst, ref, Page{
 				Number:   i + 1,
 				WidthPt:  size.Width,
 				HeightPt: size.Height,
 				Tokens:   tokens,
-			}); err != nil {
+			}, onPage); err != nil {
 				return err
 			}
 		}
@@ -100,6 +128,37 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 		return PageResult{}, err
 	}
 	return result, nil
+}
+
+// renderPage renders one page, hands it to onPage, then releases the render bitmap. Cleanup is
+// mandatory under the wasm backend and runs on every path, including onPage's error.
+func (r *PDFiumReader) renderPage(inst pdfium.Pdfium, ref requests.Page, page Page, onPage func(Page) error) error {
+	rendered, err := inst.RenderPageInDPI(&requests.RenderPageInDPI{
+		Page:        ref,
+		DPI:         r.renderDPI(),
+		ImageFormat: requests.RenderImageFormatGrayscale,
+	})
+	if err != nil {
+		return fmt.Errorf("pdfium: page %d render: %w", page.Number, err)
+	}
+	defer func() {
+		rendered.Cleanup()
+		pdfiumCleanups.Add(1)
+	}()
+
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, rendered.Result.RenderedImage); err != nil {
+		return fmt.Errorf("pdfium: page %d encode: %w", page.Number, err)
+	}
+
+	// The render's own grid, not pageWidthPt * dpi / 72: go-pdfium ceils that product, so
+	// US-Letter at DPI 150 is 1651 rows and not 1650.
+	grid := rendered.Result.RenderedImage.Bounds()
+	page.ImagePNG = encoded.Bytes()
+	page.ImageWidth = grid.Dx()
+	page.ImageHeight = grid.Dy()
+
+	return onPage(page)
 }
 
 // pdfiumTokens converts one page's text rects into tokens and counts the non-whitespace

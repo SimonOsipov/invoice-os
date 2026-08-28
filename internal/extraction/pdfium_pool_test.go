@@ -50,8 +50,10 @@ var pxSourceFiles = []string{"pdfium.go", pxPoolFile, "pagestore.go"}
 // denylist AC-7 names: time, os, math/rand and net/* all need an import, and so do crypto/rand,
 // runtime and unsafe, which it never mentions.
 var pxAllowedImports = map[string]bool{
+	"bytes":       true,
 	"context":     true,
 	"fmt":         true,
+	"image/png":   true,
 	"sync":        true,
 	"sync/atomic": true,
 	"unicode":     true,

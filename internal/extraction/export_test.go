@@ -22,3 +22,11 @@ func NewExtractJobForTest(riverJobID int64, attempt, maxAttempts int, tenantID, 
 		Args:   extractArgs{TenantID: tenantID, DocumentID: documentID, IdempotencyKey: key},
 	}
 }
+
+// NewPDFiumReaderAtDPIForTest builds a reader that renders at a non-default DPI. AC-4's
+// alignment sweep runs 100/150/200 to prove the box space and the pixel space are one space at
+// any resolution.
+func NewPDFiumReaderAtDPIForTest(dpi int) *PDFiumReader { return &PDFiumReader{dpi: dpi} }
+
+// PDFiumCleanupsForTest reads the render-bitmap release counter.
+func PDFiumCleanupsForTest() int64 { return pdfiumCleanups.Load() }

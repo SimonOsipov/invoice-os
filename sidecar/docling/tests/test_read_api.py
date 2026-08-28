@@ -1,4 +1,5 @@
 """T-01-4..T-01-7: /v1/read's size cap, its 400/413 error shape, and the §3 response contract."""
+
 import pytest
 from fastapi.testclient import TestClient
 

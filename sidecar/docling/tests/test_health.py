@@ -1,4 +1,5 @@
 """T-01-1..T-01-3: /healthz's two-key body and its promise to never touch a model."""
+
 import pytest
 from fastapi.testclient import TestClient
 

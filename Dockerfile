@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Shared build for every Go service (M2-04). The build context MUST be the repo
 # root: each binary shares the root go.mod/go.sum and the internal/ packages.
 # Parameterized by a single build arg — the image is the static binary compiled
@@ -7,7 +6,12 @@
 # Pairs with Dockerfile.dockerignore: BuildKit resolves the Dockerfile-adjacent
 # ignore ahead of the root .dockerignore (which is tuned for the SPA images and
 # excludes all Go source), so this build sees cmd/ and internal/ while the SPA
-# builds keep their lean context. BuildKit is required (syntax directive above).
+# builds keep their lean context.
+#
+# No `# syntax=` directive on purpose: it makes BuildKit fetch the frontend image
+# from Docker Hub before the build, which strands the whole fleet whenever a
+# Railway builder loses egress to registry-1.docker.io. Nothing here needs a
+# frontend newer than the built-in one. Re-adding it re-arms that outage.
 
 ARG SERVICE
 

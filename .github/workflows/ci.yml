@@ -212,6 +212,8 @@ jobs:
         run: scripts/ci/docling-canary.sh buildsha "$GITHUB_SHA"
       - name: T-02-1 — every model is baked and reachable offline
         run: scripts/ci/docling-canary.sh models
+      - name: OCR engine imports and builds an ONNX session offline
+        run: scripts/ci/docling-canary.sh ocr
       - name: T-02-3 — the container does not run as root
         run: scripts/ci/docling-canary.sh nonroot
       - name: Record image size (informational, not a gate)

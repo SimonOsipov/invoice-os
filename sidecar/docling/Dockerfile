@@ -12,13 +12,16 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /build
 COPY sidecar/docling/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# rapidocr pulls opencv_python (the GUI build, not -headless); its `import cv2` needs
-# these X11/GL shared libs even though nothing here renders anything.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
-    && rm -rf /var/lib/apt/lists/*
+# rapidocr==3.9.2 hard-requires opencv_python (the GUI build) with no marker to swap
+# it for -headless, so `pip install -r requirements.txt` alone always pulls it in.
+# -headless serves the identical cv2 API rapidocr/docling_ibm_models call here
+# (imgproc/imgcodecs only, no highgui) with no X11/GL libs. The uninstall must sit
+# strictly between the two installs: resolving both in one command lets pip's
+# internal install order silently decide whose cv2/ files land on disk last, and the
+# losing order reproduces this story's ImportError (confirmed empirically).
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y opencv-python \
+    && pip install --no-cache-dir --no-deps opencv-python-headless==5.0.0.93
 
 # Layout + TableFormer (torch) only here -- skips code/formula (~640 MB) and the
 # picture classifier (~16 MB), neither of which an invoice pipeline touches. Baked

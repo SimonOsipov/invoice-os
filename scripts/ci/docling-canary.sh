@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot> [args...]
+# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr> [args...]
 #
 # Assertion steps for ci.yml's docling-canary job (T-02-1..4). Every check execs
 # into the already-running `docling-canary` container and asks it in python3:
@@ -15,7 +15,7 @@ set -euo pipefail
 CONTAINER="${DOCLING_CANARY_CONTAINER:-docling-canary}"
 PORT="${DOCLING_CANARY_PORT:-8080}"
 
-check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot> [args...]}"
+check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr> [args...]}"
 shift
 
 healthz_json() {
@@ -94,6 +94,34 @@ if missing_rapidocr:
     print(f'RapidOCR-en checkpoint(s) missing under {rapidocr_dir}: {missing_rapidocr}', file=sys.stderr)
     sys.exit(1)
 print(f'layout, TableFormer (>1 MiB) and all three RapidOCR-en checkpoints present under {root}')
+"
+  ;;
+
+ocr)
+  # Would have caught EXTR-03-02's shipped defect: every checkpoint was baked and
+  # T-02-1 passed, but the run stage couldn't `import cv2` (libxcb.so.1 missing), so
+  # RapidOcrModel could never construct. Goes past the bare import to build the real
+  # model against the baked artifacts_path -- proves the ONNX session loads offline,
+  # not just that the import line succeeds.
+  docker exec "$CONTAINER" python3 -c "
+import os
+import cv2
+print(f'cv2 {cv2.__version__} imports OK')
+
+from pathlib import Path
+from docling.datamodel.accelerator_options import AcceleratorOptions
+from docling.datamodel.pipeline_options import RapidOcrOptions
+from docling.models.stages.ocr.rapid_ocr_model import RapidOcrModel
+
+artifacts_path = Path(os.environ['DOCLING_ARTIFACTS_PATH'])
+model = RapidOcrModel(
+    enabled=True,
+    artifacts_path=artifacts_path,
+    options=RapidOcrOptions(lang=['english']),
+    accelerator_options=AcceleratorOptions(),
+)
+assert model.reader is not None, 'RapidOcrModel.reader was not constructed'
+print('RapidOcrModel constructed offline against', artifacts_path, '-- ONNX session ready')
 "
   ;;
 

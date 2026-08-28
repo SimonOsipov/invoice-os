@@ -44,7 +44,7 @@ const (
 
 // pxSourceFiles are the files the ambient scan reads. pdfium.go and pagestore.go arrive in
 // later subtasks; the scan takes those that exist and fatals at zero.
-var pxSourceFiles = []string{"pdfium.go", pxPoolFile, "pagestore.go"}
+var pxSourceFiles = []string{"pdfium.go", "pdfium_extractor.go", pxPoolFile, "pagestore.go"}
 
 // pxAllowedImports is what the pdfium source may import. An allowlist is stronger than the
 // denylist AC-7 names: time, os, math/rand and net/* all need an import, and so do crypto/rand,

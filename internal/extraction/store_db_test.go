@@ -692,3 +692,54 @@ func TestExtractionStore_FieldResultsAreScopedToOneJob(t *testing.T) {
 		t.Errorf("FieldResults for job %s returned value %v, want INV-FIRST", first.ID, out[0].Value)
 	}
 }
+
+// TestExtractionStore_WritesTheTextLayerVerdict (CONFIRMATORY): the exact shape
+// PDFiumExtractor emits for a scan -- no value, no box, reason 'unreadable'. No other spec
+// writes that reason, and the all-NULL region arm of _region_complete is what admits it.
+func TestExtractionStore_WritesTheTextLayerVerdict(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 901101)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.Field{
+		{Name: "document_text_layer", Reason: extraction.ReasonUnreadable},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults for the text-layer verdict: %v", err)
+	}
+
+	var (
+		value, reason  *string
+		page           *int
+		x0, y0, x1, y1 *float64
+	)
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT value, reason_code, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1
+		   FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2`, job.ID, "document_text_layer").
+		Scan(&value, &reason, &page, &x0, &y0, &x1, &y1); err != nil {
+		t.Fatalf("read the text-layer row: %v", err)
+	}
+
+	if reason == nil || *reason != "unreadable" {
+		t.Errorf("reason_code is %v, want unreadable", reason)
+	}
+	if value != nil {
+		t.Errorf("value is %q, want SQL NULL", *value)
+	}
+	if page != nil {
+		t.Errorf("page is %d, want SQL NULL", *page)
+	}
+	for _, c := range []struct {
+		col string
+		got *float64
+	}{{"bbox_x0", x0}, {"bbox_y0", y0}, {"bbox_x1", x1}, {"bbox_y1", y1}} {
+		if c.got != nil {
+			t.Errorf("%s is %v, want SQL NULL", c.col, *c.got)
+		}
+	}
+}

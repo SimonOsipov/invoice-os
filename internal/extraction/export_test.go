@@ -30,3 +30,9 @@ func NewPDFiumReaderAtDPIForTest(dpi int) *PDFiumReader { return &PDFiumReader{d
 
 // PDFiumCleanupsForTest reads the render-bitmap release counter.
 func PDFiumCleanupsForTest() int64 { return pdfiumCleanups.Load() }
+
+// NewPDFiumExtractorWithReaderForTest builds an extractor over a substitute PageReader.
+// TestPDFiumExtractor_ChecksCancellationBeforeTheWasmPool counts the calls that reach it.
+func NewPDFiumExtractorWithReaderForTest(r PageReader) *PDFiumExtractor {
+	return &PDFiumExtractor{reader: r}
+}

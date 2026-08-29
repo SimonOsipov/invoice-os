@@ -4,6 +4,7 @@ package extraction
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -65,6 +66,13 @@ func AddTo(bundle *river.Workers, ew *ExtractWorker) { river.AddWorker(bundle, e
 func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) error {
 	args := job.Args
 
+	// Before ensureJobTx: a worker wired without the port must change no state at all, or the
+	// job finishes and nothing records that its outcome went unwritten
+	// (TestExtractWorker_NilAuditFailsBeforeAnyStateChange).
+	if w.Audit == nil {
+		return errors.New("extraction: ExtractWorker.Audit is nil")
+	}
+
 	var row Job
 	var terminal bool
 	if err := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
@@ -75,7 +83,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		}
 		row = j
 		// A job River replays after it already finished must not extract again
-		// (TestRLS_ExtractWorkerWritesOneResultSetPerJobOnReplay).
+		// (TestRLS_ExtractWorkerWritesOneResultSetPerJobOnReplay), and its terminal event was
+		// emitted by the attempt that ended it (TestRLS_ExtractWorkerReplayEmitsNoSecondRow).
 		if j.State == "succeeded" || j.State == "dead_lettered" {
 			terminal = true
 			return nil
@@ -96,25 +105,37 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 
 	var fields []Field
 	var images []PageImage
+	// Set by whichever stage below fails. Control flow, never a parse of last_error
+	// (TestExtractWorker_FailureKindPerStage).
+	var kind FailureKind
 	doc, err := w.Open(octx, args.DocumentID)
+	if err != nil {
+		kind = FailureDocumentUnavailable
+	}
 	if err == nil {
 		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
 		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).
-		images, _, err = w.Pages.Ingest(ctx, args.TenantID, doc)
+		if images, _, err = w.Pages.Ingest(ctx, args.TenantID, doc); err != nil {
+			kind = FailurePagesNotRendered
+		}
 	}
 	if err == nil {
 		// Objects first, rows last, so a committed row always names an object that was PUT
 		// (TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails). Outside queue.OncePerJob on
 		// purpose: these rows commit before Extract, so a document whose field extraction fails
 		// still has a page inventory.
-		err = db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+		if err = db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
 			return writePageImagesTx(ctx, tx, args.TenantID, args.DocumentID, images)
-		})
+		}); err != nil {
+			kind = FailurePageRowsNotWritten
+		}
 	}
 	if err == nil {
 		// ctx, not octx: the extractor is fenced from the database and must not be handed a
 		// tenant identity.
-		fields, err = w.Extractor.Extract(ctx, doc)
+		if fields, err = w.Extractor.Extract(ctx, doc); err != nil {
+			kind = FailureExtractFailed
+		}
 	}
 	if err != nil {
 		state := "failed"
@@ -122,21 +143,55 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			state = "dead_lettered"
 		}
 		if txErr := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
-			return advanceJobTx(ctx, tx, args.TenantID, row.ID, state, err.Error(), job.Attempt)
+			if advErr := advanceJobTx(ctx, tx, args.TenantID, row.ID, state, err.Error(), job.Attempt); advErr != nil {
+				return advErr
+			}
+			// An attempt with retries left is not a terminal outcome, so it is not an event
+			// (TestRLS_ExtractWorkerEmitsFailedOnlyWhenDeadLettered).
+			if state != "dead_lettered" {
+				return nil
+			}
+			return w.Audit(ctx, tx, ExtractionAudit{
+				DocumentID:       args.DocumentID,
+				ExtractionJobID:  row.ID,
+				Extractor:        w.Extractor.Name(),
+				ExtractorVersion: w.Extractor.Version(),
+				State:            state,
+				FailureKind:      kind,
+			})
 		}); txErr != nil {
 			return txErr
 		}
 		return err
 	}
 
+	flagged := 0
+	for _, f := range fields {
+		if f.Reason != ReasonNone {
+			flagged++
+		}
+	}
+
 	return db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
-		// The marker, the result rows and the advance to succeeded share one transaction and
-		// one fate (TestRLS_ExtractWorkerResultWriteIsGuardedByTheJobMarker).
+		// The marker, the result rows, the advance to succeeded and the audit row share one
+		// transaction and one fate (TestRLS_ExtractWorkerResultWriteIsGuardedByTheJobMarker,
+		// TestExtractWorker_AuditWriteIsLastInItsClosure).
 		_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
 			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, fields); err != nil {
 				return err
 			}
-			return advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt)
+			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt); err != nil {
+				return err
+			}
+			return w.Audit(ctx, tx, ExtractionAudit{
+				Succeeded:        true,
+				DocumentID:       args.DocumentID,
+				ExtractionJobID:  row.ID,
+				Extractor:        w.Extractor.Name(),
+				ExtractorVersion: w.Extractor.Version(),
+				FieldCount:       len(fields),
+				FlaggedCount:     flagged,
+			})
 		})
 		return err
 	})

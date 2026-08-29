@@ -447,8 +447,8 @@ func triggerNames(states map[string]string) []string {
 
 // --- AUDIT-11-05 Core AC 8 (no DB, no git) ---------------------------------------------
 
-// auditNumberMigrationCount and auditNumberNewestMigration pin migrations/ as it stands on
-// main. A migration added on this branch raises the count and, because goose stamps ascending
+// auditNumberMigrationCount and auditNumberNewestMigration pin migrations/ as it stands here.
+// A migration added on this branch raises the count and, because goose stamps ascending
 // and TestAudit_SingleMigrationForThisStory enforces that rule, sorts after the newest name --
 // so either half fires. A later story that legitimately adds one moves both pins.
 //
@@ -456,8 +456,8 @@ func triggerNames(states map[string]string) []string {
 // checks out at fetch-depth 1, where `git diff main...HEAD` exits 128 with "ambiguous argument".
 // This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
 const (
-	auditNumberMigrationCount  = 51
-	auditNumberNewestMigration = "20260828114600_extraction_page_images.sql"
+	auditNumberMigrationCount  = 52
+	auditNumberNewestMigration = "20260829082535_extraction_anchor_rules.sql"
 )
 
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of

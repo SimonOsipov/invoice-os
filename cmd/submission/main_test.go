@@ -490,17 +490,18 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	}
 	for i, arg := range ewArgs {
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
-			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and panics on the first job", i)
+			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, the rest panic", i)
 		}
 	}
 
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
-	//    &extraction.ExtractWorker{} here compiles, registers the kind, and panics on job one.
+	//    &extraction.ExtractWorker{} here compiles, registers the kind, and fails job one on
+	//    Work's nil-Audit guard before its nil pool can panic.
 	if len(bundleArgs) != 3 {
 		t.Fatalf("workerBundle is called with %d argument(s), want 3 (sw, pw, ew)", len(bundleArgs))
 	}
 	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
-		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and panics on its first job", wtRender(bundleArgs[2]), ewName)
+		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and works no job", wtRender(bundleArgs[2]), ewName)
 	}
 
 	// 2. That worker reads through an opener built over the document service's own Open.

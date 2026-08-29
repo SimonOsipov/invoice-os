@@ -1,6 +1,12 @@
 // worker_db_test.go: the DB-backed ExtractWorker specs. Package extraction_test, so it shares
 // store_db_test.go's TestMain, per-role pools and single skip site; export_test.go is what lets
 // it reach the unexported args type from out here.
+//
+// Every extraction.* row in the shared database is test debris: nothing enqueues extraction
+// yet, so these specs are its only writers. audit_log carries no foreign keys, so the suite's
+// DELETE FROM tenants cascades nothing to it, and the audit_log_no_update_delete trigger
+// raises SQLSTATE 23001 on any DELETE -- the rows accumulate forever under throwaway tenant
+// ids. Never read them as evidence that extraction audit events are emitted in production.
 package extraction_test
 
 import (
@@ -1799,5 +1805,69 @@ func TestRLS_ExtractWorkerTwoRiverJobsOneDocumentEmitTwice(t *testing.T) {
 		if x := wkExtractionJobID(t, ctx, tenantID, id); !seen[x] {
 			t.Errorf("river job %d minted extraction job %s, which no audit row names (rows name %v)", id, x, seen)
 		}
+	}
+}
+
+// wkAuditRowID is the id of a tenant's one extraction.* audit row. Superuser, because the
+// lookup runs outside any tenant transaction; the count is what keeps a caller from reading a
+// row some other arm wrote.
+func wkAuditRowID(t *testing.T, ctx context.Context, tenantID string) int64 {
+	t.Helper()
+	var n int
+	var id int64
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT count(*), coalesce(min(id), 0) FROM audit_log
+		  WHERE tenant_id = $1 AND event LIKE 'extraction.%'`, tenantID).Scan(&n, &id); err != nil {
+		t.Fatalf("read the extraction.* audit row id for tenant %s: %v", tenantID, err)
+	}
+	if n != 1 {
+		t.Fatalf("tenant %s holds %d extraction.* audit row(s), want exactly 1", tenantID, n)
+	}
+	return id
+}
+
+// wkAuditRowVisibleTo counts one audit row by bare id as the caller's tenant. app, never super:
+// stRequire(t).super is rolbypassrls = t, so a read through it consults no policy at all and
+// answers 1 under both tenants. And by bare id: measured, a tenant_id predicate here makes
+// tenant B read zero on its own, staying green through a total collapse of row-level security.
+func wkAuditRowVisibleTo(t *testing.T, ctx context.Context, tenantID string, rowID int64) int {
+	t.Helper()
+	var n int
+	if err := db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE id = $1`, rowID).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count audit row %d as tenant %s: %v", rowID, tenantID, err)
+	}
+	return n
+}
+
+// T5-1. tenant_isolation over an extraction.* row, read by bare id.
+//
+// This is a coverage claim, not a novel RLS proof: TestAudit_TenantIsolation
+// (internal/audit/audit_test.go) already asserts both directions on a synthetic event name.
+// What it adds is the subject -- the row here is the worker's own output, written on the
+// worker's transaction as invoice_app with tenant_id defaulted from app.current_tenant, so the
+// policy is exercised against this story's event names and payload shape. It is NOT proof that
+// the production adapter is tenant-safe: deps_test.go's fence keeps internal/audit out of this
+// package, so the row goes in through wkAuditRecorder's copy of newExtractionAuditor's mapping,
+// and cmd/submission has no DB harness that drives the real adapter against a database at all.
+func TestRLS_ExtractionAuditRowIsNotVisibleAcrossTenants(t *testing.T) {
+	ctx := t.Context()
+	tenantA, documentA := wkFixture(t, ctx)
+	tenantB, _ := wkFixture(t, ctx)
+
+	if err := wkWorker(t, wkOK(), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(909891, 1, 3, tenantA, documentA, uuid.NewString())); err != nil {
+		t.Fatalf("Work under tenant A: %v", err)
+	}
+	rowID := wkAuditRowID(t, ctx, tenantA)
+
+	// The positive case first: an id nobody wrote reads zero under every tenant, which would
+	// make the refusal below true of a database with no row-level security whatsoever.
+	if n := wkAuditRowVisibleTo(t, ctx, tenantA, rowID); n != 1 {
+		t.Fatalf("tenant A reads %d row(s) for its own audit row %d, want 1", n, rowID)
+	}
+	if n := wkAuditRowVisibleTo(t, ctx, tenantB, rowID); n != 0 {
+		t.Errorf("tenant B reads %d row(s) for tenant A's audit row %d, want 0", n, rowID)
 	}
 }

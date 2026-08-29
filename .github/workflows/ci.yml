@@ -141,6 +141,15 @@ jobs:
           else
             echo "No Go packages yet — skipping test (wired for M2)."
           fi
+      - name: Report the Tier-1 accuracy table
+        run: |
+          # The rls job runs this package through a gate that DELETES a passing test's buffered
+          # output, so the report reaches CI only from here. pipefail because run: is `bash -e`
+          # and tee would otherwise mask a failed go test. TestTier1Accuracy_CIPrintsTheReport
+          # cuts the step holding its own name -- keep that name in here, not in a YAML comment.
+          set -o pipefail
+          go test -count=1 -v -run 'TestTier1Accuracy' ./internal/extraction/ | tee accuracy.txt
+          grep -q 'tier-1 accuracy over the golden corpus' accuracy.txt
 
   # Prove the shared multi-service Dockerfile (M2-04) actually builds before it
   # reaches Railway (M2-12). All seven services stamp the same root Dockerfile

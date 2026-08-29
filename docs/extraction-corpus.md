@@ -31,7 +31,7 @@ compare trimmed.
 |---|---|---|---|
 | `corpus_inline_labels.pdf` | `same_token` for all ten fields — every `Label: value` is one token. Carries no bare-TIN token, so the format-only sweeps deliberately cannot fire here. | 11 | 1117 |
 | `corpus_split_labels.pdf` | `right` — label and value on one baseline as two tokens, ~0.15 normalised apart. Its buyer TIN sits at `Y0` 0.53, in the lower half the buyer sweep needs. Its date, `15/04/2026`, has a day above 12 and is deliberately unambiguous. | 21 | 1429 |
-| `corpus_stacked_labels.pdf` | `below` — the only layout where *every* label's value sits under it, 16pt down at the same `x`, invoice number and date and total included. A label reaches its own group's values within 0.027 normalised and the next group's label no closer than 0.087, a 3.3x margin, so a `below` rule anchored on a label cannot span two groups. `corpus_two_column.pdf` stacks its two party blocks the same way, so `below` reaches the name fields there too; what is unique here is that nothing else in this layout is inline. Its bare TINs are not unique either — `corpus_split_labels.pdf` carries one in each page half as well. | 13 | 1109 |
+| `corpus_stacked_labels.pdf` | `below` — the only layout where *every* label's value sits under it, 16pt down at the same `x`, invoice number and date and total included. Every value `corpusExpect` requires from a `below` rule here sits at most 0.009111 normalised under its label, and the next group's label is no closer than 0.087010 — a 9.55x window, so a `below` rule anchored on a label cannot span two groups. (The widest *intra-group* gap is 0.026631, a party block's TIN line that no expectation requires; `TestCorpus_StackedValuesSitBelowTheirLabels` asserts that one and the 0.087010 separation, and `TestTier1_DialsStayInsideTheirMeasuredWindow` asserts the window.) `corpus_two_column.pdf` stacks its two party blocks the same way, so `below` reaches the name fields there too; what is unique here is that nothing else in this layout is inline. Its bare TINs are not unique either — `corpus_split_labels.pdf` carries one in each page half as well. | 13 | 1109 |
 | `corpus_two_column.pdf` | Column bands. Supplier labels centre at X 0.15–0.21 (band 0), buyer labels at 0.68–0.74 (band 2). It is the only layout whose anchor labels reach the right-hand third at all, and so the only one whose fingerprint carries a band above 1; `TestCorpus_TwoColumnPartiesLandInTheOuterBands` enforces both halves of that. Both TINs sit inside a longer token (`TIN: 99999999-0401` and `TIN: 99999999-0402`, both at `Y0` 0.2341), so neither format-only sweep can fire and neither is separated by page half. Under Tier-1 they are not separated by label either: the `supplier_tin` pattern's party word is optional, so a bare `TIN` label matches it and `supplier_tin` collects **both**, while `buyer_tin` — whose party word is required — is unreachable on this layout. That is a Tier-1 accuracy defect, not a corpus defect; EXTR-04-09 owns it, and widening the lexicon would change every stored document's fingerprint. | 10 | 1031 |
 | `corpus_ambiguous_date.pdf` | `12/03/2026` — both components at most 12 and no month name, so `ShapeDate` returns both readings and `issue_date` keeps two candidates. The one layout whose expectation row carries two values. | 6 | 873 |
 | `corpus_totals_block.pdf` | The lexicon overlap: `Sub-total` matches both `subtotal` and `\btotal\b`, because `-` is a non-word character, so one label mints a candidate for two fields. Right-aligned split totals. The VAT label carries no percentage — a `7.5%` remainder would mint a spurious amount candidate. | 9 | 938 |
@@ -62,6 +62,79 @@ fails on any expected value the shipped set cannot reach. One pair is exempt and
 `t1aGaps`: `corpus_two_column.pdf` / `buyer_tin`, per that layout's row above. The exemption is
 asserted still-unreached, so EXTR-04-09 closing it is a deliberate diff rather than a silent
 pass.
+
+## Tier-1 accuracy and the floor
+
+Measured 2026-08-29 on `feature/extr-04-anchor-rules-and-field-resolution`: the shipped Tier-1
+set reaches **43 of 44** of the (layout, field) pairs `corpusExpect` names — **0.9773**. The
+denominator is the pairs the table actually asserts, so a field absent from a row is not counted
+and the ambiguous-date row's two accepted readings are one pair, not two.
+
+A pair is a **hit** when the expected value appears anywhere among that field's candidates.
+Rank is deliberately not read: ranking beyond tier precedence is EXTR-05's.
+
+| Layout | Hits | Pairs |
+|---|---|---|
+| `corpus_inline_labels.pdf` | 10 | 10 |
+| `corpus_split_labels.pdf` | 10 | 10 |
+| `corpus_stacked_labels.pdf` | 7 | 7 |
+| `corpus_two_column.pdf` | 6 | 7 |
+| `corpus_ambiguous_date.pdf` | 5 | 5 |
+| `corpus_totals_block.pdf` | 5 | 5 |
+
+| Field | Hits | Pairs |
+|---|---|---|
+| `invoice_number` | 6 | 6 |
+| `issue_date` | 5 | 5 |
+| `supplier_tin` | 6 | 6 |
+| `supplier_name` | 5 | 5 |
+| `buyer_tin` | 3 | 4 |
+| `buyer_name` | 4 | 4 |
+| `currency` | 2 | 2 |
+| `subtotal` | 3 | 3 |
+| `vat` | 3 | 3 |
+| `total` | 6 | 6 |
+
+The single miss is `corpus_two_column.pdf` / `buyer_tin`, the pair `t1aGaps` records: that
+layout's bare `TIN` labels match the `supplier_tin` pattern, whose party word is optional, and
+never `buyer_tin`, whose party word is required. It is a Tier-1 lexicon defect carried forward,
+not a corpus defect — closing it changes `anchorLexicon`, which is an input to `Fingerprint`.
+
+### Moving the floor
+
+The floor lives in `internal/extraction/accuracy_test.go` as two pinned integers,
+`tier1AccuracyHits` and `tier1AccuracyPairs`; `tier1AccuracyFloor` is their quotient.
+
+1. Re-measure: `go test -count=1 -v -run TestTier1Accuracy ./internal/extraction/`. The report
+   prints the two tables above. CI prints it too, from the `go` job's own reporting step — the
+   gated step runs this package through `rlsgate`, which deletes a passing test's output.
+2. Edit `tier1AccuracyHits` and `tier1AccuracyPairs` to the measured values.
+3. Update both tables in this section **in the same commit**, or
+   `TestCorpusDoc_RecordsTheMeasuredFloor` fails: it parses the per-layout rows and compares
+   each against a live measurement, so a table that sums correctly with the numbers in the
+   wrong layouts is still red.
+4. If a recorded gap closed, drop it from `t1aGaps` in the same commit, or both
+   `TestTier1_ReachesEveryCorpusExpectation` and
+   `TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps` fail.
+
+### Why it may only go up
+
+`TestTier1Accuracy_FloorIsNotVacuous` admits less than one pair of slack: the floor must exceed
+`rate - 1/total`. So an improvement that is not recorded is a red test, and a lowered floor is a
+regression somebody accepted in silence — the one move a ratchet exists to prevent. The floor is
+set to what was measured, never to a target.
+
+The asymmetry between the two oracles is deliberate. `t1aGaps` excuses a pair from the per-pair
+test `TestTier1_ReachesEveryCorpusExpectation`. It excuses **nothing** from the rate. Adding a
+layout whose fields Tier-1 cannot reach lowers the rate and `TestTier1Accuracy_MeetsTheFloor`
+stays red until the rules are fixed — which is exactly what
+`## When a client's invoice fails to extract` step 4 below asks for. There is no exemption hatch
+in the rate by design.
+
+One thing the rate can **never** catch: an over-wide distance dial. Widening a dial only adds
+candidates, so the rate is monotone non-decreasing in both — it goes up as the rules get
+sloppier. `TestTier1_DialsStayInsideTheirMeasuredWindow` is the only guard on that side, and it
+names the wrong candidate each widened dial produces.
 
 ## Regenerating
 

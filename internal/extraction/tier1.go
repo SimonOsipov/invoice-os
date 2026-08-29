@@ -19,9 +19,10 @@ type Tier1Rule struct {
 // labels, plus the two banded TIN sweeps.
 const tier1RuleCount = 32
 
-// The set's only distance dials; nothing else reads a distance. Measured widest
-// label-to-value gap is 0.2060 across the corpus; the furthest a stacked label must reach its
-// own group is 0.0267, and the next group's label is no closer than 0.087.
+// The set's only distance dials; nothing else reads a distance. Distance is the box GAP, so
+// both are bounded on both sides by the corpus: right must reach 0.2060 and must not reach
+// 0.465497 (two_column's buyer column); below must reach 0.009111 and must not reach 0.087010
+// (the next stacked group's label). TestTier1_DialsStayInsideTheirMeasuredWindow holds both.
 //
 // Each float is paired with its JSON spelling because strconv is outside this file's import
 // allowlist. TestTier1_EveryRuleHasACompiledMatcher checks every shipped rule's parsed distance

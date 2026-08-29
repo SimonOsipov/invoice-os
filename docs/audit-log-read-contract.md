@@ -75,6 +75,16 @@ concatenates every node's Index Cond line can therefore be satisfied by the join
 while `audit_log` has lost its tenant lead entirely — which is the exact regression such a
 check exists to catch. `TestAudit_IndexCondIgnoresTheJoinedTable` holds the scoping.
 
+Relation-prefix scoping is not per-node scoping, and the difference is a second false green.
+`planCondLines` turns on for every node whose scan target starts with `audit_log`, so a
+`BitmapAnd` over two indexes **of the same table**, whose two `Index Cond:` lines each name one
+of the required columns, satisfies a both-columns check. Measured on `extraction_jobs`
+(`internal/extraction/reader_plan_test.go`): swapping the composite `(tenant_id, document_id)`
+index for a `(document_id)`-only one produces exactly that plan. `assertServedByIndex` still
+rejects that particular mutation, but on its index-name check, not on the cond check — a variant
+where the pinned index itself contributes only one column would pass. Collect `Index Cond:`
+lines per scan node and require ONE line to name every column if you need that closed.
+
 Use these column orders. A reader that sorts on anything but `created_at DESC, id DESC`,
 or filters on a column that does not lead one of these indexes, falls back to reading the
 whole tenant partition.

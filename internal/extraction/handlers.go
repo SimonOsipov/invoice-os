@@ -13,6 +13,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -39,12 +42,46 @@ func statusForErr(err error) (status int, msg string) {
 	}
 }
 
-// JobsHandler returns GET /v1/extraction-jobs.
+// JobsHandler returns GET /v1/extraction-jobs. Identity is checked FIRST, before any
+// parameter is read, so an unauthenticated caller cannot learn which parameters exist by
+// watching 400s (TestExtractionJobsHandler_UnauthenticatedIs401BeforeParsing).
 //
-// STUB. Every arm of the status table is unbuilt, so handlers_test.go fails on its own
-// assertions rather than on a compile error — a compile error proves nothing about them.
+// The state column passes through untouched: no stage is named here and no number is
+// derived from one (TestExtractionHandlers_NamesNoStateLiteral).
 func JobsHandler(list func(ctx context.Context, documentID string) (JobsResponse, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// Empty is ABSENT for the optional filters of internal/audit/handlers.go:70-74;
+		// document_id is required, so both mean the caller named no document
+		// (internal/importer/handlers.go:231-235). This check stays above uuid.Parse,
+		// which errors on "" too (TestExtractionJobsHandler_MissingDocumentIDIs400).
+		documentID := r.URL.Query().Get("document_id")
+		if documentID == "" {
+			writeError(w, http.StatusBadRequest, "document_id is required")
+			return
+		}
+		if _, err := uuid.Parse(documentID); err != nil {
+			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		out, err := list(r.Context(), documentID)
+		if err != nil {
+			status, body := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "extraction: jobs for document", slog.Any("err", err))
+			}
+			writeError(w, status, body)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, out)
 	}
 }

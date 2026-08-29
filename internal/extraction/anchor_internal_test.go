@@ -1,6 +1,6 @@
 // anchor_internal_test.go: A-01..A-10 (AC #6). Package extraction, not extraction_test: A-01
 // reads Rule.re, A-04/A-10 compare against the unexported zero Rule, and A-08/A-09 read
-// anchorLexicon directly.
+// anchorLexicon directly, as do the two lexicon/matcher guards at the end of the file.
 package extraction
 
 import (
@@ -235,5 +235,44 @@ func TestParseRule_RejectsMalformedJSON(t *testing.T) {
 	}
 	if r != (Rule{}) {
 		t.Errorf("ParseRule() returned %+v on malformed JSON, want the zero Rule", r)
+	}
+}
+
+// The compiled companion must stay element-for-element parallel to anchorLexicon: Fingerprint
+// reads only anchorLabelMatchers, so a reorder or a dropped entry would silently change every
+// fingerprint.
+func TestAnchorLabelMatchers_ParallelsTheLexicon(t *testing.T) {
+	if len(anchorLexicon) == 0 {
+		t.Fatal("anchorLexicon is empty; every assertion below would pass over nothing")
+	}
+	if len(anchorLabelMatchers) != len(anchorLexicon) {
+		t.Fatalf("len(anchorLabelMatchers) = %d, len(anchorLexicon) = %d, want equal",
+			len(anchorLabelMatchers), len(anchorLexicon))
+	}
+
+	for i, entry := range anchorLexicon {
+		if got := anchorLabelMatchers[i].ID; got != entry.ID {
+			t.Errorf("anchorLabelMatchers[%d].ID = %q, anchorLexicon[%d].ID = %q, want equal in order",
+				i, got, i, entry.ID)
+		}
+		if anchorLabelMatchers[i].RE == nil {
+			t.Errorf("anchorLabelMatchers[%d] (%q) has a nil RE", i, entry.ID)
+		}
+	}
+}
+
+// Fingerprint joins elements as labelID + ":" + band with "|". Neither separator may occur
+// inside a label id, or two different observation lists could encode to one string.
+func TestAnchorLexicon_IDsAreSeparatorSafe(t *testing.T) {
+	if len(anchorLexicon) == 0 {
+		t.Fatal("anchorLexicon is empty; the loop below would pass over nothing")
+	}
+
+	safe := regexp.MustCompile(`^[a-z_]+$`)
+	for _, entry := range anchorLexicon {
+		if !safe.MatchString(entry.ID) {
+			t.Errorf("anchorLexicon ID %q is not [a-z_]+; a %q or %q inside an id makes the joined element string ambiguous",
+				entry.ID, ":", "|")
+		}
 	}
 }

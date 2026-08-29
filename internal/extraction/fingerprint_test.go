@@ -1,13 +1,9 @@
 // fingerprint_test.go: F-01..F-10 (EXTR-04-03 AC). External package: every spec reaches only
 // exported symbols -- Fingerprint, CollectTokens, FingerprintVersion and TokenPage.
 //
-// Fingerprint is stubbed to always return "". A bare equality assertion between two calls
-// would then trivially pass ("" == ""), so every spec that asserts EQUALITY (F-01, F-03, F-04,
-// F-07, F-08) also asserts the result is 67 bytes, which the stub cannot satisfy. Specs that
-// assert INEQUALITY (F-02, F-08's second half) already fail correctly against the stub with no
-// extra assertion, since "" == "" for both inputs. F-09 needs the same treatment for a
-// different stub: CollectTokens's callback is a no-op, so "no page retains the mutated bytes"
-// would be vacuously true over zero collected pages unless paired with a positive count.
+// Every spec asserting EQUALITY (F-01, F-03, F-04, F-07, F-08) also asserts the result is 67
+// bytes, so two degenerate returns cannot satisfy it vacuously. F-09 pairs its retention check
+// with a positive page count for the same reason.
 package extraction_test
 
 import (
@@ -230,9 +226,8 @@ func TestFingerprint_BoxlessTokensDegradeToTheLabelSet(t *testing.T) {
 }
 
 // F-09: CollectTokens must not retain Page.ImagePNG, which is only valid for the duration of
-// the onPage call. dst must still receive the page's Number and Tokens -- a no-op stub cannot
-// satisfy the length check below, which is what keeps the mutation check from passing
-// vacuously over zero collected pages.
+// the onPage call. The length check below keeps the retention assertions from passing vacuously
+// over zero collected pages.
 func TestCollectTokens_DoesNotRetainTheBorrowedImage(t *testing.T) {
 	var pages []extraction.TokenPage
 	onPage := extraction.CollectTokens(&pages)

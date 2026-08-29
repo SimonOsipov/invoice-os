@@ -691,7 +691,7 @@ func TestRLS_AuditNumberScanPopulationFloor(t *testing.T) {
 		byFile[s.file] = append(byFile[s.file], s)
 	}
 	if len(sites) < anMinCalls || len(byFile) < anMinFiles {
-		t.Fatalf("found %d audit.Record call(s) across %d file(s) %v, want at least %d across at least %d (35 across 13 measured at AUDIT-11-06) -- zero is what a broken walk and a repo with no writers both look like; these are CALLS, not the 39 text occurrences, four of which are doc comments", len(sites), len(byFile), sortedKeys(byFile), anMinCalls, anMinFiles)
+		t.Fatalf("found %d audit.Record call(s) across %d file(s) %v, want at least %d across at least %d (35 across 13 measured at AUDIT-11-06) -- zero is what a broken walk and a repo with no writers both look like; these are CALLS, not the 41 text occurrences, four of which are doc comments", len(sites), len(byFile), sortedKeys(byFile), anMinCalls, anMinFiles)
 	}
 }
 

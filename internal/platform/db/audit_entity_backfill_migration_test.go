@@ -43,8 +43,9 @@ import (
 
 const auditEntityMigrationGlob = "*_audit_log_entity_id_and_read_indexes.sql"
 
-// The 36 audit events, split by attribution rule. Rules A-C are the 21 attributable
-// ones; rule D is workspace-level and always resolves NULL.
+// The 36 audit events the entity trigger classifies, split by attribution rule. Rules
+// A-C are the 21 attributable ones; rule D is workspace-level and always resolves NULL.
+// The vocabulary is wider than this set: extraction.* is in no rule and resolves NULL.
 var (
 	auditRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",

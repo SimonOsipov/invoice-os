@@ -1258,11 +1258,23 @@ domain_dark_self_test() {
   # The signature is the code AND the body: a 502 carrying the same text is a different fault.
   dark_expect D6 502 '{"message":"Application not found"}' no
 
+  # heal_domain reads $4 under `set -u`, and only a genuinely dark hostname reaches it —
+  # no fixture can, so a missing argument would ship and only fail in a live repair.
+  local bad
+  bad=$(grep -nE '^[[:space:]]*heal_domain ' "${BASH_SOURCE[0]}" \
+        | grep -vE 'heal_domain( +"[^"]+"){4}[[:space:]]*$' || true)
+  if [ -n "$bad" ]; then
+    echo "  D7 FAIL -> heal_domain call site does not pass 4 arguments: $bad"
+    failures=$((failures + 1))
+  else
+    echo "  D7 ok -> every heal_domain call site passes 4 arguments"
+  fi
+
   if [ "$failures" -ne 0 ]; then
     echo "Domain reachability self-test: $failures fixture(s) FAILED."
     return 1
   fi
-  echo "Domain reachability self-test: 6 fixtures passed, no token read, no network call."
+  echo "Domain reachability self-test: 7 fixtures passed, no token read, no network call."
 }
 
 # verify_one_domain <env-id> <svc-id> <label> <probe-path> <url-var-name>
@@ -1292,7 +1304,7 @@ verify_one_domain() {
   done
 
   if [ "$dark" = 1 ]; then
-    heal_domain "$env_id" "$svc_id" "$label"
+    heal_domain "$env_id" "$svc_id" "$label" "$dom_id"
     found=$(discover_domain "$env_id" "$svc_id" "$label")
     domain="${found#* }"
     url="https://$domain"

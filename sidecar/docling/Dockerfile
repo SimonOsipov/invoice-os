@@ -58,7 +58,7 @@ RUN pip install --no-cache-dir -r requirements-dev.txt \
     && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless==5.0.0.93
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 WORKDIR /app
-COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/pyproject.toml ./
+COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py sidecar/docling/pyproject.toml ./
 COPY sidecar/docling/tests ./tests
 # Same non-root user the run stage uses below, not just for parity: running as root
 # makes chmod 000 a no-op (root bypasses the DAC check), which was silently defeating
@@ -78,7 +78,7 @@ COPY --from=deps /opt/docling-models /opt/docling-models
 ENV PATH="/opt/venv/bin:${PATH}" \
     DOCLING_ARTIFACTS_PATH=/opt/docling-models
 WORKDIR /app
-COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py ./
+COPY sidecar/docling/app.py sidecar/docling/buildinfo.py sidecar/docling/convert.py sidecar/docling/geometry.py ./
 # Overwrites the sidecar/docling/build.txt placeholder ("dev") with the sha
 # scripts/ci/stamp-build-sha.sh wrote -- same mechanism the four SPA Dockerfiles
 # use for /build.txt.

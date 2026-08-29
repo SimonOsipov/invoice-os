@@ -1,13 +1,14 @@
 """Docling conversion: real DocumentConverter, RapidOCR (en/onnxruntime), CPU inference.
 
-Token/box mapping here is deliberately coarse (parsed_page.textline_cells, already
-top-left origin, no flip needed) -- EXTR-03-04 owns the precise doc.texts/coord_origin/
-table mapping in geometry.py. This subtask only needs a working wire-contract response.
+Page tokens stay sourced from parsed_page.textline_cells (already top-left, no flip needed).
+Tables and the DOCX path go through geometry.py, which owns all coord_origin arithmetic.
 """
 
 import logging
 import threading
 from io import BytesIO
+
+import geometry
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +141,17 @@ def _page_tokens(parsed_page, width: float, height: float) -> list[dict]:
     return tokens
 
 
-def _to_wire_contract(result) -> dict:
-    """ConversionResult -> the §3 wire shape. tables stay [] here -- EXTR-03-04's job."""
-    doc = result.document
+def _pdf_wire_pages(result, doc) -> list[dict]:
+    """The per-page path: one wire page per result.pages entry, tokens from parsed_page
+    (unchanged, already top-left -- see _page_tokens), tables from doc.tables mapped by
+    geometry.map_table and grouped by their own page_no.
+    """
+    page_sizes = {page_no: page_item.size for page_no, page_item in doc.pages.items()}
+    tables_by_page: dict[int, list[dict]] = {}
+    for table_item in getattr(doc, "tables", []):
+        page_no = table_item.prov[0].page_no
+        tables_by_page.setdefault(page_no, []).append(geometry.map_table(table_item, page_sizes))
+
     pages = []
     for page in result.pages:
         size = doc.pages[page.page_no].size
@@ -152,9 +161,39 @@ def _to_wire_contract(result) -> dict:
                 "width_pt": size.width,
                 "height_pt": size.height,
                 "tokens": _page_tokens(page.parsed_page, size.width, size.height),
-                "tables": [],
+                "tables": tables_by_page.get(page.page_no, []),
             }
         )
+    return pages
+
+
+def _docx_wire_pages(doc) -> list[dict]:
+    """DOCX has no per-page structure at all (doc.pages == {}, result.pages == []) --
+    msword_backend.py constructs zero ProvenanceItems, so there is no page to loop over and
+    no box to compute (T-04-15/16). Text and tables are read straight off the document; one
+    synthesised wire "page" carries everything, matching DOCX's structured-view rendering
+    (Q10) rather than a page image.
+    """
+    tokens = [{"text": item.text} for item in doc.texts]
+    tables = [geometry.map_table(table_item, {}) for table_item in getattr(doc, "tables", [])]
+    return [
+        {
+            "number": 1,
+            "width_pt": 0.0,
+            "height_pt": 0.0,
+            "tokens": tokens,
+            "tables": tables,
+        }
+    ]
+
+
+def _to_wire_contract(result) -> dict:
+    """ConversionResult -> the §3 wire shape. A DOCX conversion reports result.pages == [] --
+    that's the discriminator between the two wire-building paths (measured, not a
+    Content-Type check: Content-Type is forwarded, not validated, per T-01's tests).
+    """
+    doc = result.document
+    pages = _pdf_wire_pages(result, doc) if result.pages else _docx_wire_pages(doc)
     pages.sort(key=lambda p: p["number"])
     return {
         "reader": "docling",
@@ -164,11 +203,19 @@ def _to_wire_contract(result) -> dict:
     }
 
 
+_CONTENT_TYPE_EXTENSIONS = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+}
+
+
 def _stream_name(content_type: str) -> str:
-    """DocumentStream needs a filename for format detection. DOCX arrives in EXTR-03-04;
-    this subtask only wires the PDF pipeline, so every request is treated as a PDF.
+    """DocumentStream needs a filename for format detection. Docling sniffs the true format
+    from content regardless, so a missing/unrecognised Content-Type (T-01's own tests post
+    both) safely falls back to .pdf rather than rejecting the request.
     """
-    return "document.pdf"
+    ext = _CONTENT_TYPE_EXTENSIONS.get(content_type.split(";")[0].strip().lower(), "pdf")
+    return f"document.{ext}"
 
 
 def stub_read(body: bytes, content_type: str) -> dict:

@@ -57,8 +57,14 @@ def test_t04_10_3x4_table_maps_rows_cols_and_all_twelve_cells():
     cells = []
     for row in range(3):
         for col in range(4):
+            # Deliberately TOPLEFT *inside* the BOTTOMLEFT table's own top-left band
+            # (y in [92,292] raw, non-overlapping per row) -- don't collapse the two
+            # origins back into one; that's exactly what T-04-11 exists to catch.
             bbox = BoundingBox(
-                l=50 + col * 125, t=650 - row * 50, r=50 + (col + 1) * 125, b=600 - row * 50,
+                l=50 + col * 125,
+                t=100 + row * 60,
+                r=50 + (col + 1) * 125,
+                b=150 + row * 60,
                 coord_origin=CoordOrigin.TOPLEFT,
             )
             cells.append(_cell(row, col, text=f"r{row}c{col}", bbox=bbox))
@@ -80,8 +86,14 @@ def test_t04_11_every_cell_box_falls_inside_the_tables_own_prov_box():
     cells = []
     for row in range(3):
         for col in range(4):
+            # Deliberately TOPLEFT *inside* the BOTTOMLEFT table's own top-left band
+            # (y in [92,292] raw, non-overlapping per row) -- don't collapse the two
+            # origins back into one; that's exactly what T-04-11 exists to catch.
             bbox = BoundingBox(
-                l=50 + col * 125, t=650 - row * 50, r=50 + (col + 1) * 125, b=600 - row * 50,
+                l=50 + col * 125,
+                t=100 + row * 60,
+                r=50 + (col + 1) * 125,
+                b=150 + row * 60,
                 coord_origin=CoordOrigin.TOPLEFT,
             )
             cells.append(_cell(row, col, text=f"r{row}c{col}", bbox=bbox))

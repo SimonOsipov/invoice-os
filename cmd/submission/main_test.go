@@ -1130,17 +1130,18 @@ func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
 	}
 }
 
-// TestSubmissionMain_RegistersTheExtractionsRoute (EXTR-07-03 AC-3): GET /v1/extractions must
+// TestSubmissionMain_RegistersTheExtractionsRoute (EXTR-07-03 AC-1): GET /v1/extractions must
 // be mounted on app.Mux dispatching to extraction.JobsHandler(...). AST, not a byte scan, so
 // gofmt cannot break the anchor. The GET /v1/ping needle is a control: it proves the argument
 // matcher still finds a real, already-shipped registration before a negative result is trusted.
+// The receiver is asserted too -- a route on a locally built mux is registered and unreachable.
 func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
 
-	var foundPing, foundExtractions bool
+	var foundPing, pingOnAppMux, foundExtractions bool
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -1157,8 +1158,12 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 		switch strings.Trim(lit.Value, `"`) {
 		case "GET /v1/ping":
 			foundPing = true
+			pingOnAppMux = wtRender(sel.X) == "app.Mux"
 		case "GET /v1/extractions":
 			foundExtractions = true
+			if got := wtRender(sel.X); got != "app.Mux" {
+				t.Errorf(`GET /v1/extractions is registered on %s, want app.Mux -- only app.Mux is served, so any other mux answers nothing at /api/submission/v1/extractions`, got)
+			}
 			handlerCall, ok := call.Args[1].(*ast.CallExpr)
 			if !ok {
 				t.Errorf(`GET /v1/extractions' second argument is %T, want a call expression`, call.Args[1])
@@ -1178,6 +1183,9 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 
 	if !foundPing {
 		t.Fatal("control needle: no GET /v1/ping registration found -- the AST walk itself is broken, so the assertion below is vacuous")
+	}
+	if !pingOnAppMux {
+		t.Fatal("control needle: the GET /v1/ping receiver does not render as app.Mux -- the receiver check above cannot fail, so it proves nothing")
 	}
 	if !foundExtractions {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler(...)) registration found in cmd/submission/main.go`)

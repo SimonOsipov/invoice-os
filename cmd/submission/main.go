@@ -6,6 +6,9 @@
 // SubmitWorker drives the tx1 / adapter / tx2 submit flow and PollWorker follows a
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
+//
+// EXTR-07 gives the service its first domain route, GET /v1/extractions: the HTTP surface is
+// no longer /healthz + /readyz + the ping stub.
 package main
 
 import (

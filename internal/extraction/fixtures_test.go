@@ -33,6 +33,17 @@ const (
 	fxMinBytes = 200 // floor: every fixture carries a catalog, a page tree, a page and a stream
 )
 
+// The golden corpus: the six anchor-rule layouts, flat in testdata/ under corpus_test.go's
+// corpusPrefix. See docs/extraction-corpus.md.
+const (
+	fxCorpusInline    = "corpus_inline_labels.pdf"
+	fxCorpusSplit     = "corpus_split_labels.pdf"
+	fxCorpusStacked   = "corpus_stacked_labels.pdf"
+	fxCorpusTwoColumn = "corpus_two_column.pdf"
+	fxCorpusAmbigDate = "corpus_ambiguous_date.pdf"
+	fxCorpusTotals    = "corpus_totals_block.pdf"
+)
+
 var fxCorpus = []struct {
 	name  string
 	build func() []byte
@@ -43,6 +54,12 @@ var fxCorpus = []struct {
 	{fxHybrid, fxBuildHybrid},
 	{fxTable, fxBuildTable},
 	{fxDense, fxBuildDense},
+	{fxCorpusInline, fxBuildCorpusInlineLabels},
+	{fxCorpusSplit, fxBuildCorpusSplitLabels},
+	{fxCorpusStacked, fxBuildCorpusStackedLabels},
+	{fxCorpusTwoColumn, fxBuildCorpusTwoColumn},
+	{fxCorpusAmbigDate, fxBuildCorpusAmbiguousDate},
+	{fxCorpusTotals, fxBuildCorpusTotalsBlock},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -265,6 +282,133 @@ func fxBuildTable() []byte {
 		fxStream(content),
 		fxObject(fxHelvetica),
 	})
+}
+
+// --- the golden corpus ------------------------------------------------------
+
+// The six layouts below are the anchor-rule corpus. One fxLine is one Tj is one pdfium token,
+// so the number of fxLine values per field IS the token granularity a layout exercises.
+// Every TIN sits in the free part of the reserved 99999999- block, never -0001..-0009
+// (internal/submission/mock_script.go). corpus_test.go holds what Tier-1 must resolve from
+// each; docs/extraction-corpus.md holds the rest.
+
+// fxTextPage is one US-Letter page of text over a single Helvetica.
+func fxTextPage(lines ...fxLine) []byte {
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(fxText(lines...)),
+		fxObject(fxHelvetica),
+	})
+}
+
+// fxBuildCorpusInlineLabels puts every "Label: value" in one Tj, so all ten fields resolve by
+// same_token. No token is a bare TIN, so the format-only sweeps cannot fire here.
+func fxBuildCorpusInlineLabels() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: INV-1001"},
+		fxLine{12, 72, 672, "Invoice Date: 2026-03-04"},
+		fxLine{12, 72, 654, "Supplier TIN: 99999999-0101"},
+		fxLine{12, 72, 636, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 618, "Buyer TIN: 99999999-0102"},
+		fxLine{12, 72, 600, "Buyer: Honeywell Group"},
+		fxLine{12, 72, 582, "Currency: NGN"},
+		fxLine{12, 72, 240, "Sub-total: 1,000.00"},
+		fxLine{12, 72, 222, "VAT: 75.00"},
+		fxLine{12, 72, 204, "Total: 1,075.00"},
+	)
+}
+
+// fxBuildCorpusSplitLabels puts label and value on one baseline as two Tj, so the same fields
+// resolve by right instead. 15/04/2026 has a day > 12 and is deliberately UNambiguous --
+// ambiguity is fxCorpusAmbigDate's job. The buyer TIN reads at Y0 0.53, in the lower page
+// half the buyer sweep needs.
+func fxBuildCorpusSplitLabels() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No"}, fxLine{12, 220, 690, "INV-1002"},
+		fxLine{12, 72, 672, "Invoice Date"}, fxLine{12, 220, 672, "15/04/2026"},
+		fxLine{12, 72, 654, "Supplier TIN"}, fxLine{12, 220, 654, "99999999-0201"},
+		fxLine{12, 72, 636, "Supplier"}, fxLine{12, 220, 636, "Adeyemi Trading Limited"},
+		fxLine{12, 72, 618, "Currency"}, fxLine{12, 220, 618, "NGN"},
+		fxLine{12, 72, 360, "Buyer TIN"}, fxLine{12, 220, 360, "99999999-0202"},
+		fxLine{12, 72, 342, "Buyer"}, fxLine{12, 220, 342, "Honeywell Group"},
+		fxLine{12, 72, 240, "Sub-total"}, fxLine{12, 220, 240, "2,000.00"},
+		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, "150.00"},
+		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, "2,150.00"},
+	)
+}
+
+// fxBuildCorpusStackedLabels stacks each value 16pt under its label at the same x, the only
+// layout where below reaches the name fields. A label clears its own group's values by at
+// most 0.027 normalised and the next group's first token by at least 0.090, so below cannot
+// span two groups.
+func fxBuildCorpusStackedLabels() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No"},
+		fxLine{12, 72, 674, "INV-1003"},
+		fxLine{12, 72, 610, "Supplier"},
+		fxLine{12, 72, 594, "Adeyemi Trading Limited"},
+		fxLine{12, 72, 578, "99999999-0301"},
+		fxLine{12, 72, 530, "Invoice Date"},
+		fxLine{12, 72, 514, "22 Apr 2026"},
+		fxLine{12, 72, 360, "Buyer"},
+		fxLine{12, 72, 344, "Honeywell Group"},
+		fxLine{12, 72, 328, "99999999-0302"},
+		fxLine{12, 72, 240, "Total"},
+		fxLine{12, 72, 224, "NGN 3,225.00"},
+	)
+}
+
+// fxBuildCorpusTwoColumn splits supplier and buyer across columns rather than down the page,
+// so its fingerprint differs from its siblings' by column band. Both TINs sit inside a longer
+// token, so the buyer/supplier split here is decided by label and not by page half.
+// x=400, not the 340 the plan named: columnBand is centre-X thirds, and at 340 both buyer
+// labels centre at 0.58/0.65 and land in the MIDDLE band. 400 puts them in the right one.
+func fxBuildCorpusTwoColumn() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: INV-1004"},
+		fxLine{12, 72, 672, "Invoice Date: 2026-05-06"},
+		fxLine{12, 72, 630, "Supplier"},
+		fxLine{12, 72, 614, "Adeyemi Trading Limited"},
+		fxLine{12, 72, 598, "TIN: 99999999-0401"},
+		fxLine{12, 400, 630, "Buyer"},
+		fxLine{12, 400, 614, "Honeywell Group"},
+		fxLine{12, 400, 598, "TIN: 99999999-0402"},
+		fxLine{12, 72, 240, "Total: NGN 6,450.00"},
+	)
+}
+
+// fxBuildCorpusAmbiguousDate carries 12/03/2026: both components <= 12 and no month name, so
+// ShapeDate returns both readings and issue_date keeps two candidates.
+func fxBuildCorpusAmbiguousDate() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: INV-1005"},
+		fxLine{12, 72, 672, "Invoice Date: 12/03/2026"},
+		fxLine{12, 72, 654, "Supplier TIN: 99999999-0501"},
+		fxLine{12, 72, 636, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 240, "Total: NGN 4,300.00"},
+	)
+}
+
+// fxBuildCorpusTotalsBlock is a right-aligned split totals block. It exercises the lexicon
+// overlap: "Sub-total" matches subtotal AND \btotal\b, because - is a non-word character, so
+// one label mints a candidate for two fields. The VAT label carries no percentage -- a
+// remainder like "7.5%" would mint a spurious amount candidate.
+func fxBuildCorpusTotalsBlock() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: INV-1006"},
+		fxLine{12, 72, 672, "Supplier TIN: 99999999-0601"},
+		fxLine{12, 380, 240, "Sub-total"}, fxLine{12, 500, 240, "5,000.00"},
+		fxLine{12, 380, 222, "VAT"}, fxLine{12, 500, 222, "375.00"},
+		fxLine{12, 380, 204, "Total"}, fxLine{12, 500, 204, "5,375.00"},
+	)
 }
 
 // --- the raster half --------------------------------------------------------

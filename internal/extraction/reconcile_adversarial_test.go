@@ -38,11 +38,10 @@ func TestReconcile_RowMissingAnyOfTheThreeNumbersIsNotChecked(t *testing.T) {
 	}
 }
 
-// TestReconcile_FieldWithTwoCandidatesIsSilentlyAbsent pins today's generalisation of the
-// 0-or-1-candidate rule from subtotal to every field: a field with 2+ candidates gets no
-// FieldResult at all rather than a wrong reason code. Ambiguity resolution is EXTR-05-04's; this
-// is the contract 04 inherits and must not read as "vat decided, clean."
-func TestReconcile_FieldWithTwoCandidatesIsSilentlyAbsent(t *testing.T) {
+// TestReconcile_AmbiguityInOneFieldDoesNotLeakIntoAnother pins D-14: two candidates naming the
+// same field, sharing Tier and Distance but with distinct values, are equal standing -- present,
+// ReasonAmbiguous, peer in Alternatives -- and that decision never spills over to another field.
+func TestReconcile_AmbiguityInOneFieldDoesNotLeakIntoAnother(t *testing.T) {
 	in := extraction.Input{
 		Candidates: []extraction.Candidate{
 			rcCandidate("vat", "75.00"),
@@ -51,8 +50,15 @@ func TestReconcile_FieldWithTwoCandidatesIsSilentlyAbsent(t *testing.T) {
 		},
 	}
 	results := extraction.Reconcile(in)
-	if _, ok := rcFind(results, "vat"); ok {
-		t.Error(`"vat" found in Reconcile's output; a field with 2 candidates should be absent (ambiguity resolution is EXTR-05-04's), never decided as though it had exactly one`)
+	vat, ok := rcFind(results, "vat")
+	if !ok {
+		t.Fatalf(`"vat" result not found in %+v`, results)
+	}
+	if vat.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("vat reason = %q, want ReasonAmbiguous -- both candidates share Tier and Distance with distinct values (D-14)", vat.Reason)
+	}
+	if len(vat.Alternatives) != 1 || vat.Alternatives[0].Value == nil || *vat.Alternatives[0].Value != "80.00" {
+		t.Errorf("vat Alternatives = %+v, want exactly one peer carrying \"80.00\"", vat.Alternatives)
 	}
 	got, ok := rcFind(results, "total")
 	if !ok {

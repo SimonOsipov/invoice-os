@@ -62,3 +62,11 @@ func AnchorLabelIDsForTest(text string) []string {
 // MaxCandidatesPerFieldForTest exposes the per-field cap so V-13 asserts the production
 // constant rather than a copy of it.
 const MaxCandidatesPerFieldForTest = maxCandidatesPerField
+
+// Tier1MaxDistanceRightForTest / Tier1MaxDistanceBelowForTest expose the two distance dials so
+// TestTier1_DialsStayInsideTheirMeasuredWindow bounds the production constants rather than a
+// copy of them.
+const (
+	Tier1MaxDistanceRightForTest = tier1MaxDistanceRight
+	Tier1MaxDistanceBelowForTest = tier1MaxDistanceBelow
+)

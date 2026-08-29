@@ -67,7 +67,7 @@ func t1aUnbanded() []extraction.Tier1Rule {
 
 // --- the specs --------------------------------------------------------------
 
-// AC-4's breadth oracle. G-04 checks three fields on one layout; corpusExpect is 47 pairs across
+// AC-4's breadth oracle. G-04 checks three fields on one layout; corpusExpect is 44 pairs across
 // six, and it is the table that says what Tier-1 must produce.
 func TestTier1_ReachesEveryCorpusExpectation(t *testing.T) {
 	t1Floor(t)

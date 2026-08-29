@@ -5,7 +5,6 @@ package extraction
 
 import (
 	"context"
-	"errors"
 )
 
 // doclingTextLayerField is the only field this extractor emits, matching pdfiumTextLayerField:
@@ -42,9 +41,25 @@ func (e *DoclingExtractor) Version() string { return doclingReaderVersion }
 
 func (e *DoclingExtractor) pageReader() PageReader { return e.reader }
 
-// Extract is a stub for EXTR-03-06's test-spec stage: it never reaches pageReader(), so the
-// behaviour specs in docling_extractor_test.go fail on their own assertions rather than on a
-// compile error. The real body lands with the accompanying feat commit.
+// Extract reports one document-level verdict: no text anywhere is unreadable, anything else is
+// an empty non-nil slice for EXTR-04 to fill (law E04). ctx.Err() is the FIRST statement, so a
+// cancelled call reaches no reader and dispatches no request (law E12).
+//
+// PagesWithText is read in no branch: the verdict is document-level (D-9), exactly as in
+// PDFiumExtractor.
 func (e *DoclingExtractor) Extract(ctx context.Context, doc Document) ([]Field, error) {
-	return nil, errors.New("docling: Extract not implemented")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// The pages are dropped: only the text totals decide the verdict.
+	res, err := e.pageReader().Read(ctx, doc, func(Page) error { return nil })
+	if err != nil {
+		return nil, err
+	}
+
+	if res.TextChars == 0 {
+		return []Field{{Name: doclingTextLayerField, Reason: ReasonUnreadable}}, nil
+	}
+	return []Field{}, nil
 }

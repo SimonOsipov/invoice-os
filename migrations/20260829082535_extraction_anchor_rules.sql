@@ -3,9 +3,9 @@
 -- The only FK is tenant_id -> tenants. The house composite (tenant_id, col) FK rule exists
 -- because referential checks run RLS-bypassed, so a bare FK to a TENANT-SCOPED parent would
 -- accept another tenant's row. A rule belongs to a computed layout fingerprint, not to a row,
--- so there is no such parent here and the rule is satisfied vacuously. _tenant_id_id_uq is
--- still a CONSTRAINT and not a bare unique index, so EXTR-14's child has a composite-FK
--- target.
+-- so there is no such parent here and the rule is satisfied vacuously. _tenant_id_id_uq is a
+-- named CONSTRAINT, the form every sibling table uses, so EXTR-14's child gets the same
+-- composite-FK target shape (TestRLS_ExtractionAnchorRulesUqCarriesACompositeForeignKey).
 --
 -- No UNIQUE over (tenant_id, layout_fingerprint, field_name): corrections are append-only, so
 -- several rules accumulate per field per layout and all produce candidates.

@@ -447,8 +447,8 @@ func triggerNames(states map[string]string) []string {
 
 // --- AUDIT-11-05 Core AC 8 (no DB, no git) ---------------------------------------------
 
-// auditNumberMigrationCount and auditNumberNewestMigration pin migrations/ as it stands on
-// main. A migration added on this branch raises the count and, because goose stamps ascending
+// auditNumberMigrationCount and auditNumberNewestMigration pin migrations/ as it stands here.
+// A migration added on this branch raises the count and, because goose stamps ascending
 // and TestAudit_SingleMigrationForThisStory enforces that rule, sorts after the newest name --
 // so either half fires. A later story that legitimately adds one moves both pins.
 //

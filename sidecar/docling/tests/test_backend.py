@@ -8,13 +8,13 @@ ZERO tokens for a scan RapidOCR reads perfectly when called directly -- a silent
 Needs docling importable -- run only via the Docker `test` stage.
 """
 
-import convert
 import pytest
 from conftest import repo_root
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.datamodel.base_models import InputFormat
 from fastapi.testclient import TestClient
 
+import convert
 from app import app
 
 PDF_CONTENT_TYPE = "application/pdf"

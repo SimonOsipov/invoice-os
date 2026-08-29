@@ -32,6 +32,26 @@ type Token struct {
 	Region Region
 }
 
+// Table is one table on one page, as the reader found it. Rows/Cols are the table's own
+// dimensions, not len(Cells): a merged cell occupies several (row,col) positions.
+type Table struct {
+	Rows  int
+	Cols  int
+	Cells []TableCell
+}
+
+// TableCell is one cell. Region is nil when the source carried no box -- an empty cell, or any
+// DOCX table, which has no provenance at all. A zero box is a real box, so the two cannot share
+// a representation.
+type TableCell struct {
+	Row     int
+	Col     int
+	RowSpan int
+	ColSpan int
+	Text    string
+	Region  *Region
+}
+
 // Page is one page: its geometry, its render and its text.
 type Page struct {
 	Number      int     // 1-based, matches Region.Page
@@ -45,6 +65,10 @@ type Page struct {
 	ImagePNG []byte
 
 	Tokens []Token
+
+	// Tables is what the reader found of the page's table structure. Nil from PDFiumReader,
+	// which does not look for tables at all.
+	Tables []Table
 }
 
 // PageResult is what a whole read totals up.

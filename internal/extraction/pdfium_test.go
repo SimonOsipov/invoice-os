@@ -337,6 +337,21 @@ func TestPDFiumReader_RejectsAMalformedPDF(t *testing.T) {
 	}
 }
 
+// TestPDFiumReader_NeverSetsTables: T-05-12. PDFiumReader looks for no table structure at all,
+// so every page it emits carries a nil Tables -- the same nil DoclingReader emits for a page
+// whose wire "tables" array was empty.
+func TestPDFiumReader_NeverSetsTables(t *testing.T) {
+	pages, res := ptRead(t, fxNative)
+	if res.Pages == 0 {
+		t.Fatalf("Read(%s) reported 0 pages; the Tables clause below would examine nothing", fxNative)
+	}
+	for _, p := range pages {
+		if p.Tables != nil {
+			t.Errorf("%s page %d carries %d Table(s), want nil", fxNative, p.Number, len(p.Tables))
+		}
+	}
+}
+
 // TestPDFiumReader_PinsNameAndVersion: both are persisted as extraction_jobs.extractor /
 // .extractor_version, so a drifting value orphans every stored row. Mirrors
 // TestMockExtractor_PinsNameAndVersion.

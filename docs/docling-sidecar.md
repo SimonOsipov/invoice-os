@@ -39,6 +39,26 @@ The `test` stage runs as the same non-root `appuser` (uid 1000) the production `
 stage uses, not root — root bypasses `chmod`-based permission checks, which would
 silently defeat `test_health.py`'s unreadable-build-file spec.
 
+## Regenerating the Go golden
+
+`internal/extraction/testdata/native_invoice.docling.json` is the service's real `/v1/read`
+response for `native_invoice.pdf`, replayed through an `httptest.Server` because `go test`
+cannot run a Python service. `go test -update` does not touch it — Go has no generator for it.
+It is regenerated from a running container instead:
+
+```
+docker build -f sidecar/docling/Dockerfile -t docling:canary .
+docker run -d --name docling-canary --network none docling:canary
+scripts/ci/docling-canary.sh golden dev --update    # `dev` = the build.txt stamp in the image
+docker rm -f docling-canary
+```
+
+Without `--update` the same command compares and prints a diff; that is what CI runs.
+
+The `<sha>` argument is a freshness gate, not decoration: the script reads `/healthz` and
+refuses to generate unless `build` matches. A `docling:canary` tag left over from an earlier
+build serves that build's `/v1/read` and yields a golden that looks plausible and is wrong.
+
 ## Backend, memory, throughput
 
 Not yet measured. EXTR-03-09 records peak RSS, p95 conversion latency, and the

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert> [args...]
+# scripts/ci/docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert|golden> [args...]
 #
 # Assertion steps for ci.yml's docling-canary job (T-02-1..4). Every check execs
 # into the already-running `docling-canary` container and asks it in python3:
@@ -15,7 +15,7 @@ set -euo pipefail
 CONTAINER="${DOCLING_CANARY_CONTAINER:-docling-canary}"
 PORT="${DOCLING_CANARY_PORT:-8080}"
 
-check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert> [args...]}"
+check="${1:?usage: docling-canary.sh <healthz|buildsha|models|nonroot|ocr|convert|golden> [args...]}"
 shift
 
 healthz_json() {
@@ -155,6 +155,63 @@ if not tokens:
     raise SystemExit('offline convert produced zero tokens')
 print(f'/v1/read converted the fixture offline: {len(tokens)} token(s)')
 "
+  ;;
+
+golden)
+  # T-05-18: internal/extraction/testdata/native_invoice.docling.json still matches what the
+  # built image returns. The sha gate is the point -- a docling:canary tag left over from an
+  # earlier subtask serves that subtask's /v1/read and produces a plausible-looking fake
+  # golden (observed: a stub image yielded docling_version "stub" and one "STUB" token).
+  want_sha="${1:?usage: docling-canary.sh golden <sha> [--update]}"
+  shift
+  update="${1:-}"
+
+  got_sha="$(healthz_json | python3 -c 'import json, sys; print(json.load(sys.stdin)["build"])')"
+  if [ "$got_sha" != "$want_sha" ]; then
+    echo "::error::/healthz build=$got_sha, want $want_sha -- the container is not running the image under test; rebuild before regenerating the golden"
+    exit 1
+  fi
+
+  golden_path="internal/extraction/testdata/native_invoice.docling.json"
+  docker cp internal/extraction/testdata/native_invoice.pdf "$CONTAINER":/tmp/native_invoice.pdf
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+  docker exec "$CONTAINER" python3 -c "
+import json
+import urllib.error
+import urllib.request
+
+with open('/tmp/native_invoice.pdf', 'rb') as f:
+    body = f.read()
+req = urllib.request.Request(
+    'http://localhost:${PORT}/v1/read',
+    data=body,
+    headers={'Content-Type': 'application/pdf'},
+    method='POST',
+)
+try:
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        status = resp.status
+        payload = json.load(resp)
+except urllib.error.HTTPError as err:
+    raise SystemExit(f'/v1/read returned {err.code}: {err.read().decode()}')
+if status != 200:
+    raise SystemExit(f'/v1/read returned {status}')
+print(json.dumps(payload, indent=2, sort_keys=True))
+" >"$tmp"
+
+  if [ "$update" = "--update" ]; then
+    cp "$tmp" "$golden_path"
+    echo "regenerated $golden_path from the running image ($got_sha)"
+    exit 0
+  fi
+
+  if ! cmp -s "$tmp" "$golden_path"; then
+    echo "::error::$golden_path does not match the built image -- regenerate with: scripts/ci/docling-canary.sh golden <sha> --update"
+    diff -u "$golden_path" "$tmp" || true
+    exit 1
+  fi
+  echo "$golden_path matches the built image ($got_sha)"
   ;;
 
 nonroot)

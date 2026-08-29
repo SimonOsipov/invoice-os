@@ -2731,6 +2731,63 @@ func TestRLS_ExtractionFieldResultsCandidateRankDefaultsToZero(t *testing.T) {
 	}
 }
 
+// EXTR-05-01: candidate_rank is an ordinary column, not a new isolation seam — it rides the
+// same tenant_id predicate as every other column on this table. B's non-zero-ranked row must
+// stay invisible to A under SELECT, and A must not be able to plant a ranked row into B.
+func TestRLS_ExtractionFieldResultsCandidateRankCrossTenantRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EXTR-05-01/cross-b.pdf")
+	defer cleanupDocB()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	rankedB := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, rankedB)
+	}()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, candidate_rank)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		rankedB, h.tenantB, jobB, efrField, 3,
+	); err != nil {
+		if failIfUndefinedFieldResults(t, "seed B's ranked row", err) {
+			return
+		}
+		t.Fatalf("seed B's ranked row: %v", err)
+	}
+
+	crossInsertID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, crossInsertID)
+	}()
+
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		// SELECT half: B's ranked row must not surface even when the query names candidate_rank.
+		if n := mustCount(t, tx,
+			`SELECT count(*) FROM extraction_field_results WHERE id = $1 AND candidate_rank = 3`, rankedB,
+		); n != 0 {
+			t.Errorf("B's ranked row visible to A via candidate_rank filter = %d, want 0", n)
+		}
+
+		// INSERT half: A cannot plant a ranked row into B's tenant either.
+		_, err := tx.Exec(ctx,
+			`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, candidate_rank)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			crossInsertID, h.tenantB, jobB, efrField, 2)
+		return err
+	}); err != nil {
+		assertRLSViolation(t, err)
+	} else {
+		t.Fatal("cross-tenant INSERT naming candidate_rank succeeded, want RLS refusal")
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, crossInsertID); n != 0 {
+		t.Errorf("rows after the refused cross-tenant ranked INSERT = %d, want 0", n)
+	}
+}
+
 // EFR-23: NaN and ±Infinity never reach a bbox column. Postgres orders NaN above every
 // float8, so a NaN that only ever met a `>= 0` conjunct would be stored; the ordering
 // conjuncts are what refuse it. An extractor dividing by a zero page width produces exactly

@@ -119,9 +119,17 @@ func main() {
 		Logger:      app.Logger,
 	}
 
-	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill.
+	// Fatal in every environment, matching the Select call above: a fleet that names an
+	// extractor it cannot build should not boot and quietly extract nothing.
+	extractor, err := selectExtractor(os.Getenv("EXTRACTOR"), os.Getenv("DOCLING_URL"))
+	if err != nil {
+		log.Fatalf("submission: %v", err)
+	}
+
+	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill. PageStore.Reader
+	// stays go-pdfium whatever EXTRACTOR selects: it renders page images, not text.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
-	ew := newExtractWorker(pool, extraction.NewMockExtractor(), newDocumentOpener(docSvc.Open),
+	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
 		app.Logger)
 
@@ -202,10 +210,28 @@ func newPageSink(objects document.ObjectStore) extraction.PageSink {
 }
 
 // selectExtractor resolves EXTRACTOR to an extraction.Extractor, the shape submission.Select
-// already uses for APP_ADAPTER. EXTR-03-07 stub -- the mock/docling/unrecognised branches land
-// with the story that owns them (cmd/submission/main_test.go: TestSelectExtractor_*).
+// already uses for APP_ADAPTER. Unset means mock, so a fleet that sets nothing behaves exactly
+// as it did before the sidecar existed. An unrecognised value is an error, never a silent fall
+// back to mock: a typo that quietly downgrades extraction is the failure this shape exists to
+// prevent, and main() makes it fatal in every environment (M5-04-08's posture).
 func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, error) {
-	return nil, errors.New("extractor: not implemented")
+	switch extractorName {
+	case "", "mock":
+		return extraction.NewMockExtractor(), nil
+	case "docling":
+		if doclingURL == "" {
+			return nil, errors.New("extractor: EXTRACTOR=docling requires DOCLING_URL")
+		}
+		// NewDoclingExtractor validates the URL, so a malformed one fails here at boot rather
+		// than on the first job with a client pointed at nothing.
+		ext, err := extraction.NewDoclingExtractor(doclingURL)
+		if err != nil {
+			return nil, fmt.Errorf("extractor: DOCLING_URL %q: %w", doclingURL, err)
+		}
+		return ext, nil
+	default:
+		return nil, fmt.Errorf("extractor: unrecognised EXTRACTOR %q, want mock or docling", extractorName)
+	}
 }
 
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails

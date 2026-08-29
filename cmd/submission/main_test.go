@@ -1061,6 +1061,16 @@ func TestSelectExtractor_DoclingRequiresURL(t *testing.T) {
 	if !strings.Contains(err.Error(), "DOCLING_URL") {
 		t.Errorf("err = %q, want it to name DOCLING_URL", err.Error())
 	}
+	// "Unset" and "malformed" are separate cases in the AC and read differently to whoever is
+	// looking at a boot log. Without this, deleting the empty check passes: NewDoclingExtractor
+	// rejects "" on its own and the wrapper still says DOCLING_URL, so the operator gets a
+	// complaint about a URL scheme instead of "you have not set this".
+	if _, bad := selectExtractor("docling", "://nope"); bad == nil || err.Error() == bad.Error() {
+		t.Errorf("the empty-DOCLING_URL error %q does not read differently from the malformed one", err.Error())
+	}
+	if !strings.Contains(err.Error(), "requires") {
+		t.Errorf("err = %q, want it to say DOCLING_URL is required rather than report a parse failure", err.Error())
+	}
 }
 
 // TestSelectExtractor_DoclingRejectsMalformedURL: T-07-5. A malformed DOCLING_URL must fail at

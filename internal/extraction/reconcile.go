@@ -181,7 +181,33 @@ func Reconcile(in Input) []FieldResult {
 		}
 	}
 
+	// Q11's advisory supplier check: does the decided supplier reading match the signed-in
+	// entity. Advisory only -- it writes nothing; store.go overwrites these fields on every
+	// write regardless. Each field is gated independently, and only a ReasonNone field moves.
+	if in.Entity.TIN != "" {
+		flagIfInconsistent(out, "supplier_tin", func(v string) bool { return v == in.Entity.TIN })
+	}
+	if in.Entity.Name != "" {
+		entityName := liNormalizeHeaderText(in.Entity.Name)
+		flagIfInconsistent(out, "supplier_name", func(v string) bool { return liNormalizeHeaderText(v) == entityName })
+	}
+
 	out = append(out, lineItems)
 	out = append(out, rowFlags...)
 	return out
+}
+
+// flagIfInconsistent sets ReasonInconsistent on the named field when it is decided
+// (ReasonNone) and match reports it disagrees with the entity. A missing or ambiguous field
+// is left alone (AC-6): the supplier check never overrides an earlier reason.
+func flagIfInconsistent(out []FieldResult, name string, match func(string) bool) {
+	for i := range out {
+		if out[i].Name != name || out[i].Reason != ReasonNone {
+			continue
+		}
+		if out[i].Value != nil && !match(*out[i].Value) {
+			out[i].Reason = ReasonInconsistent
+		}
+		return
+	}
 }

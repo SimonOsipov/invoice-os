@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -131,5 +133,112 @@ func TestAuditDoc_ReadContractRecordsTheWriteSideRule(t *testing.T) {
 	}
 	if docContractClaimsHandMaintained(section) {
 		t.Errorf("%s section %s claims the writer set is hand-maintained -- the opposite of what AC-5 requires: it must be DERIVED from the generated column (§11)", docContractPath, docContractSectionNumber)
+	}
+}
+
+// --- §11: the vocabulary counts ---------------------------------------------------------
+
+const docContractVocabSection = "11"
+
+var docContractIntRE = regexp.MustCompile(`\d+`)
+
+// docContractTopSection returns one `## <number>.` section's heading tail and body, with
+// whitespace collapsed so a line wrap cannot hide a phrase.
+func docContractTopSection(t *testing.T, doc, number string) (heading, body string) {
+	t.Helper()
+	lines := strings.Split(doc, "\n")
+	prefix := "## " + number + "."
+	start := -1
+	for i, line := range lines {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		if start >= 0 {
+			t.Fatalf("%s holds more than one heading starting %q -- this oracle would read the wrong prose", docContractPath, prefix)
+		}
+		start = i
+	}
+	if start < 0 {
+		t.Fatalf("%s holds no heading starting %q -- a renamed or deleted section leaves this oracle reading nothing", docContractPath, prefix)
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "## ") {
+			end = i
+			break
+		}
+	}
+	body = strings.TrimSpace(docContractWhitespaceRun.ReplaceAllString(strings.Join(lines[start+1:end], " "), " "))
+	if n := len([]rune(body)); n < docContractMinSectionRunes {
+		t.Fatalf("%s section %s carries %d rune(s), want at least %d -- every check below would read an emptied section", docContractPath, number, n, docContractMinSectionRunes)
+	}
+	return strings.TrimPrefix(lines[start], prefix), body
+}
+
+// docContractSpell renders 0-99 the way §11's prose does. Total over the range, so a derived
+// count with no word fails loudly rather than matching nothing.
+func docContractSpell(t *testing.T, n int) string {
+	t.Helper()
+	units := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+		"ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+		"eighteen", "nineteen"}
+	tens := []string{"", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+	if n < 0 || n > 99 {
+		t.Fatalf("count %d is outside the range this test can spell", n)
+	}
+	switch {
+	case n < 20:
+		return units[n]
+	case n%10 == 0:
+		return tens[n/10]
+	default:
+		return tens[n/10] + "-" + units[n%10]
+	}
+}
+
+// §11's counts must be DERIVED, which is what §11 itself demands of its reader. The numerator
+// comes from the generated column's own two dispatch lists, the denominator from the four
+// rule-set fixtures. Heading digits and prose words are checked separately: EXTR-08-04 moved
+// both by hand after the vocabulary grew, and nothing could have caught either.
+func TestAuditDoc_ReadContractVocabularyCountsAreDerived(t *testing.T) {
+	root := docContractRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(docContractPath)))
+	if err != nil {
+		t.Fatalf("read %s: %v", docContractPath, err)
+	}
+
+	idEvents, invoiceIDEvents := scopedEventListsFromExpression(t, scopedInvoiceIDMigrationUp(t))
+	scoped := len(idEvents) + len(invoiceIDEvents)
+	ruleD := triggerRuleDPayloads("00000000-0000-0000-0000-000000000000")
+	vocabulary := len(triggerRuleAEvents) + len(triggerRuleBEvents) + len(triggerRuleCEvents) + len(ruleD)
+
+	// Floors: an empty list would turn every comparison below into a claim about zero.
+	if len(idEvents) == 0 || len(invoiceIDEvents) == 0 {
+		t.Fatalf("the generated column's dispatch lists hold %d and %d events, want both non-empty",
+			len(idEvents), len(invoiceIDEvents))
+	}
+	if vocabulary <= scoped {
+		t.Fatalf("vocabulary %d is not larger than the scoped set %d -- the fixtures cannot be right", vocabulary, scoped)
+	}
+
+	heading, body := docContractTopSection(t, string(raw), docContractVocabSection)
+	got := docContractIntRE.FindAllString(heading, -1)
+	want := []string{strconv.Itoa(scoped), strconv.Itoa(vocabulary)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s section %s heading carries the numbers %v, want %v -- these are derived from the migration and the rule sets, never restated",
+			docContractPath, docContractVocabSection, got, want)
+	}
+
+	// The prose says the same numbers in words, and says how each half of the numerator splits.
+	for _, w := range []string{
+		docContractSpell(t, scoped),
+		docContractSpell(t, vocabulary),
+		docContractSpell(t, len(idEvents)),
+		docContractSpell(t, len(invoiceIDEvents)),
+	} {
+		if !regexp.MustCompile(`\b` + regexp.QuoteMeta(w) + `\b`).MatchString(body) {
+			t.Errorf("%s section %s never says %q -- its prose has drifted from the migration it claims to derive from",
+				docContractPath, docContractVocabSection, w)
+		}
 	}
 }

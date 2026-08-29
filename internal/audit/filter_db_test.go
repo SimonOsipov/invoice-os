@@ -230,8 +230,10 @@ func filtAssertPage(t *testing.T, label string, got audit.Response, c filtCorpus
 
 // --- AC #7: no event type is suppressed by default ---------------------------------------
 
-// filtAllPrefixEvents is one event per dotted prefix plus three extras, so the fixture
-// clears the twelve-row floor while covering all nine prefixes.
+// filtAllPrefixEvents is one event per dotted prefix plus four extras, so the fixture
+// clears the twelve-row floor while covering all ten prefixes. seededPrefixes counts what
+// this list INSERTED, so a prefix nobody seeds is a prefix the floor cannot notice —
+// extraction.* is here because EXTR-08 made such a row writable, not merely nameable.
 var filtAllPrefixEvents = []string{
 	"invoice.created", "invoice.updated",
 	"submission.accepted",
@@ -242,6 +244,7 @@ var filtAllPrefixEvents = []string{
 	"membership.suspended",
 	"validation.rule.enabled",
 	"document.created", "document.read",
+	"extraction.succeeded", "extraction.failed",
 }
 
 func TestAuditRead_DefaultResponseSuppressesNoEventType(t *testing.T) {
@@ -267,8 +270,8 @@ func TestAuditRead_DefaultResponseSuppressesNoEventType(t *testing.T) {
 	if seededRows < 12 {
 		t.Fatalf("population floor: %d rows landed, want at least 12", seededRows)
 	}
-	if seededPrefixes != 9 {
-		t.Fatalf("population floor: %d distinct event prefixes, want 9 (the whole vocabulary)", seededPrefixes)
+	if seededPrefixes != 10 {
+		t.Fatalf("population floor: %d distinct event prefixes, want 10 (the whole vocabulary)", seededPrefixes)
 	}
 
 	// Limit above the seeded count, or "the returned set equals the seeded set" would be

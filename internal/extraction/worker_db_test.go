@@ -1,17 +1,28 @@
 // worker_db_test.go: the DB-backed ExtractWorker specs. Package extraction_test, so it shares
 // store_db_test.go's TestMain, per-role pools and single skip site; export_test.go is what lets
 // it reach the unexported args type from out here.
+//
+// Every extraction.* row in the shared database is test debris: nothing enqueues extraction
+// yet, so every writer of one is a test fixture. Never read them as evidence that extraction
+// audit events are emitted in production.
+//
+// This file leaves none behind -- wkPurgeAuditLog drops each fixture tenant's audit rows at
+// teardown. internal/audit's fixtures do not, and audit_log carries no foreign key for
+// DELETE FROM tenants to cascade through, so those rows accumulate under dead tenant ids.
 package extraction_test
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +30,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
@@ -52,6 +64,13 @@ const (
 	// river.QueueDefault; a default-queue client here would fetch them, fail them as an
 	// unhandled kind, and spend the control's budget doing it.
 	wkOtherQueue = "extraction-test-other-queue"
+
+	// The two terminal-outcome events and the actor they carry. "system", not wkActor: the
+	// worker's synthesised subject lands on the document.read rows it causes, not on the
+	// outcome of the job. Spelled here as cmd/submission's adapter spells them.
+	wkSucceededEvent = "extraction.succeeded"
+	wkFailedEvent    = "extraction.failed"
+	wkAuditActor     = "system"
 )
 
 var wkErrRollback = errors.New("worker suite: intentional rollback")
@@ -191,18 +210,29 @@ func (wkImmediate) NextRetry(*rivertype.JobRow) time.Time { return time.Now() }
 // wkStubReader is a PageReader over arbitrary bytes. Most specs here carry a text fixture
 // pdfium refuses, and page rendering is not what they are about; the two that need real pixels
 // build their own PageStore over PDFiumReader.
-type wkStubReader struct{ pages int }
+type wkStubReader struct {
+	pages int
+	// zeroWidth yields ImageWidth: 0. PageStore.Ingest copies it through unvalidated, so the
+	// row reaches writePageImagesTx and extraction_page_images_width_px_check refuses it with
+	// SQLSTATE 23514. The only lever in this suite that fails the page-row write and nothing
+	// upstream of it.
+	zeroWidth bool
+}
 
 func (*wkStubReader) Name() string    { return "extr-09-stub-reader" }
 func (*wkStubReader) Version() string { return "v1" }
 
 func (r *wkStubReader) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	width := prLetterWidthPx
+	if r.zeroWidth {
+		width = 0
+	}
 	for i := 1; i <= r.pages; i++ {
 		if err := onPage(extraction.Page{
 			Number:      i,
 			WidthPt:     612,
 			HeightPt:    792,
-			ImageWidth:  prLetterWidthPx,
+			ImageWidth:  width,
 			ImageHeight: prLetterHeightPx,
 			ImagePNG:    []byte("\x89PNG\r\n\x1a\nextr-09 stub page"),
 		}); err != nil {
@@ -240,6 +270,127 @@ func (s *wkPageSink) snapshot() (keys []string, identity []bool, calls int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.keys), slices.Clone(s.identity), s.seen
+}
+
+// wkAuditRecorder is the Audit every worker in this file carries. It records the event AND
+// writes the row on the tx it was handed, so the row shares the worker's transaction and is
+// readable per tenant. A no-op stub would satisfy the nil guard while observing nothing.
+//
+// The payload map mirrors cmd/submission's newExtractionAuditor. It is a copy on purpose:
+// deps_test.go's fence keeps internal/audit out of this package, and the mapping itself is
+// pinned from that end in cmd/submission/extraction_audit_test.go. What the copy buys here is
+// the transaction, not the key names.
+type wkAuditRecorder struct {
+	mu   sync.Mutex
+	seen []extraction.ExtractionAudit
+}
+
+func (r *wkAuditRecorder) record(ctx context.Context, tx pgx.Tx, ev extraction.ExtractionAudit) error {
+	r.mu.Lock()
+	r.seen = append(r.seen, ev)
+	r.mu.Unlock()
+
+	if tx == nil {
+		return errors.New("the audit port was handed a nil tx; the row cannot share the worker's transaction")
+	}
+	event, payload, err := wkAuditWire(ev)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO audit_log (actor, event, payload) VALUES ($1, $2, $3)`,
+		wkAuditActor, event, payload)
+	return err
+}
+
+func (r *wkAuditRecorder) events() []extraction.ExtractionAudit {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.seen)
+}
+
+// wkAuditWire renders one event the way the adapter does: the branch picks the event name and
+// the two keys that branch owns.
+func wkAuditWire(ev extraction.ExtractionAudit) (event, payload string, err error) {
+	m := map[string]any{
+		"document_id":       ev.DocumentID,
+		"extraction_job_id": ev.ExtractionJobID,
+		"extractor":         ev.Extractor,
+		"extractor_version": ev.ExtractorVersion,
+	}
+	event = wkFailedEvent
+	if ev.Succeeded {
+		event = wkSucceededEvent
+		m["field_count"] = ev.FieldCount
+		m["flagged_count"] = ev.FlaggedCount
+	} else {
+		m["state"] = ev.State
+		m["failure_kind"] = string(ev.FailureKind)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal audit payload: %w", err)
+	}
+	return event, string(b), nil
+}
+
+// wkAuditRow is one stored extraction.* audit row. raw is kept alongside the decoded map: a
+// key stored with an empty value is present in the text and absent from a %v of the map.
+type wkAuditRow struct {
+	event   string
+	raw     string
+	payload map[string]any
+}
+
+func (r wkAuditRow) keys() []string {
+	out := make([]string, 0, len(r.payload))
+	for k := range r.payload {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// wkAuditRows reads every extraction.* audit row for a tenant, oldest first. Superuser: the
+// rows are read back outside any tenant transaction.
+func wkAuditRows(t *testing.T, ctx context.Context, tenantID string) []wkAuditRow {
+	t.Helper()
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT event, payload::text FROM audit_log
+		  WHERE tenant_id = $1 AND event LIKE 'extraction.%' ORDER BY id`, tenantID)
+	if err != nil {
+		t.Fatalf("read audit_log for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	out := []wkAuditRow{}
+	for rows.Next() {
+		var r wkAuditRow
+		if err := rows.Scan(&r.event, &r.raw); err != nil {
+			t.Fatalf("scan audit_log row for tenant %s: %v", tenantID, err)
+		}
+		if err := json.Unmarshal([]byte(r.raw), &r.payload); err != nil {
+			t.Fatalf("stored payload %q is not a JSON object: %v", r.raw, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read audit_log for tenant %s: %v", tenantID, err)
+	}
+	return out
+}
+
+// wkAuditRowsForJob narrows to one extraction_jobs row, so arms sharing a tenant do not count
+// each other's events.
+func wkAuditRowsForJob(t *testing.T, ctx context.Context, tenantID, extractionJobID string) []wkAuditRow {
+	t.Helper()
+	out := []wkAuditRow{}
+	for _, r := range wkAuditRows(t, ctx, tenantID) {
+		if id, _ := r.payload["extraction_job_id"].(string); id == extractionJobID {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // wkPageKeys is the key list a PageStore must produce for one document's bytes.
@@ -280,20 +431,28 @@ func wkPageRowIDs(t *testing.T, ctx context.Context, documentID string) []string
 	return out
 }
 
-// wkWorker wires a stub PageStore: Work renders unconditionally, so a nil Pages panics on the
-// first job rather than quietly skipping the page inventory.
+// wkWorker wires a stub PageStore and a fresh recording auditor: Work renders unconditionally
+// and refuses a nil Audit, so a spec that leaves either unset fails on the first job rather
+// than quietly skipping the page inventory or the audit row.
 func wkWorker(t *testing.T, ext extraction.Extractor, op *wkOpener) *extraction.ExtractWorker {
+	t.Helper()
+	return wkWorkerAudit(t, ext, op, &wkAuditRecorder{})
+}
+
+// wkWorkerAudit is wkWorker with the caller's recorder, for the specs that read back what the
+// worker emitted.
+func wkWorkerAudit(t *testing.T, ext extraction.Extractor, op *wkOpener, rec *wkAuditRecorder) *extraction.ExtractWorker {
 	t.Helper()
 	return wkWorkerPages(t, ext, op, &extraction.PageStore{
 		Reader: &wkStubReader{pages: 1},
 		Sink:   (&wkPageSink{}).put,
-	})
+	}, rec)
 }
 
-func wkWorkerPages(t *testing.T, ext extraction.Extractor, op *wkOpener, pages *extraction.PageStore) *extraction.ExtractWorker {
+func wkWorkerPages(t *testing.T, ext extraction.Extractor, op *wkOpener, pages *extraction.PageStore, rec *wkAuditRecorder) *extraction.ExtractWorker {
 	t.Helper()
 	return &extraction.ExtractWorker{
-		Pool: stRequire(t).app, Extractor: ext, Open: op.open, Pages: pages,
+		Pool: stRequire(t).app, Extractor: ext, Open: op.open, Pages: pages, Audit: rec.record,
 	}
 }
 
@@ -371,7 +530,34 @@ func wkCleanupInfra(t *testing.T, tenantID string) {
 			`DELETE FROM idempotency_keys WHERE tenant_id = $1`, tenantID); err != nil {
 			t.Errorf("teardown idempotency_keys for tenant %s: %v", tenantID, err)
 		}
+		wkPurgeAuditLog(t, ctx, tenantID)
 	})
+}
+
+// wkPurgeAuditLog deletes a tenant's audit rows. audit_log has no foreign key to tenants, so
+// DELETE FROM tenants does not reach them, and audit_log_append_only() refuses DELETE for
+// every role including the owner -- session_replication_role='replica' is the one bypass, is
+// superuser-only, and SET LOCAL confines it to this transaction.
+func wkPurgeAuditLog(t *testing.T, ctx context.Context, tenantID string) {
+	t.Helper()
+	tx, err := stRequire(t).super.Begin(ctx)
+	if err != nil {
+		t.Errorf("teardown audit_log for tenant %s: begin: %v", tenantID, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Errorf("teardown audit_log for tenant %s: set session_replication_role: %v", tenantID, err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, tenantID); err != nil {
+		t.Errorf("teardown audit_log for tenant %s: %v", tenantID, err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("teardown audit_log for tenant %s: commit: %v", tenantID, err)
+	}
 }
 
 // wkFixture seeds a tenant and a document and registers both teardowns.
@@ -944,7 +1130,7 @@ func TestRLS_ExtractWorkerWritesPageImagesThroughTheSink(t *testing.T) {
 	sink := &wkPageSink{}
 
 	const riverJobID = int64(909601)
-	if err := wkWorkerPages(t, ext, op, wkPDFiumPages(sink)).Work(ctx,
+	if err := wkWorkerPages(t, ext, op, wkPDFiumPages(sink), &wkAuditRecorder{}).Work(ctx,
 		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
@@ -1008,7 +1194,7 @@ func TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails(t *testing.T) {
 	ext := wkOK()
 	sink := &wkPageSink{failOn: 2, err: boom}
 	const riverJobID = int64(909651)
-	if err := wkWorkerPages(t, ext, &wkOpener{body: raw}, wkPDFiumPages(sink)).Work(ctx,
+	if err := wkWorkerPages(t, ext, &wkOpener{body: raw}, wkPDFiumPages(sink), &wkAuditRecorder{}).Work(ctx,
 		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
 		t.Fatalf("Work returned %v, want the sink's error", err)
 	}
@@ -1033,7 +1219,7 @@ func TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails(t *testing.T) {
 	// Control: the same document, the same worker shape, a sink that works. Without it the
 	// zero-row assertion above passes on a worker that writes no page rows at all.
 	const controlRiverJobID = int64(909653)
-	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{})).Work(ctx,
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
 		extraction.NewExtractJobForTest(controlRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
 		t.Fatalf("control Work: %v", err)
 	}
@@ -1043,7 +1229,7 @@ func TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails(t *testing.T) {
 
 	// The final attempt is terminal for a sink failure the same way it is for an extractor one.
 	const deadRiverJobID = int64(909652)
-	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{failOn: 1, err: boom})).Work(ctx,
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{failOn: 1, err: boom}), &wkAuditRecorder{}).Work(ctx,
 		extraction.NewExtractJobForTest(deadRiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
 		t.Fatalf("Work on the final attempt returned %v, want the sink's error", err)
 	}
@@ -1059,7 +1245,7 @@ func TestRLS_ExtractWorkerRetryReplacesTheRowSet(t *testing.T) {
 
 	raw := fxRead(t, fxNative3)
 	sink := &wkPageSink{}
-	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(sink))
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(sink), &wkAuditRecorder{})
 
 	// Two DIFFERENT river jobs over one document: extraction_jobs carries no UNIQUE over
 	// (tenant_id, document_id), so duplicate jobs are expected, and a replay of the SAME job
@@ -1110,5 +1296,580 @@ func TestRLS_ExtractWorkerRetryReplacesTheRowSet(t *testing.T) {
 	}
 	if got := wkPageRowIDs(t, ctx, documentID); !slices.Equal(got, secondIDs) {
 		t.Errorf("a replay of a succeeded job rewrote the page rows: ids %v, want the unchanged %v", got, secondIDs)
+	}
+}
+
+// --- EXTR-08-03: emission at the two terminal points ----------------------------------
+
+// wkFlaggedFields is three fields of which two carry a reason. field_count and flagged_count
+// must differ and neither may be 0 or 1: a swapped pair reads as clean otherwise.
+func wkFlaggedFields() []extraction.Field {
+	return []extraction.Field{
+		{Name: "invoice_number", Value: stPtr("INV-EXTR-08-03")},
+		{Name: "total_amount", Value: stPtr("100.00"), Reason: extraction.ReasonAmbiguous},
+		{Name: "supplier_tin", Value: stPtr("?"), Reason: extraction.ReasonUnreadable},
+	}
+}
+
+func wkFieldsExtractor(fields []extraction.Field) *wkExtract {
+	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.Field, error) {
+		return fields, nil
+	}}
+}
+
+// wkSucceededKeys and wkFailedKeys are the six keys of each event, sorted for set equality.
+var (
+	wkSucceededKeys = []string{
+		"document_id", "extraction_job_id", "extractor", "extractor_version",
+		"field_count", "flagged_count",
+	}
+	wkFailedKeys = []string{
+		"document_id", "extraction_job_id", "extractor", "extractor_version",
+		"failure_kind", "state",
+	}
+
+	// The spellings an emitter reaching for extraction_jobs.last_error would use.
+	wkForbiddenKeys = []string{"body", "detail", "error", "last_error", "message", "raw", "wire"}
+)
+
+// T3-1. The success emission, read back as a stored row: exactly one, with the six keys of the
+// payload schema carrying the counts the extractor actually produced.
+func TestRLS_ExtractWorkerEmitsSucceededOnce(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	rec := &wkAuditRecorder{}
+	fields := wkFlaggedFields()
+	const riverJobID = int64(909801)
+	if err := wkWorkerAudit(t, wkFieldsExtractor(fields), wkNewOpener(), rec).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	if n := len(rec.events()); n != 1 {
+		t.Fatalf("the worker called the audit port %d time(s), want exactly 1", n)
+	}
+	rows := wkAuditRows(t, ctx, tenantID)
+	if len(rows) != 1 {
+		t.Fatalf("the tenant holds %d extraction.* audit row(s), want exactly 1: %v", len(rows), rows)
+	}
+	if rows[0].event != wkSucceededEvent {
+		t.Fatalf("the stored event is %q, want %q", rows[0].event, wkSucceededEvent)
+	}
+	if got := rows[0].keys(); !slices.Equal(got, wkSucceededKeys) {
+		t.Errorf("stored payload keys = %v, want exactly %v", got, wkSucceededKeys)
+	}
+	want := map[string]any{
+		"document_id":       documentID,
+		"extraction_job_id": xid,
+		"extractor":         wkExtractorName,
+		"extractor_version": wkExtractorVersion,
+		"field_count":       float64(len(fields)),
+		"flagged_count":     float64(2),
+	}
+	if !reflect.DeepEqual(rows[0].payload, want) {
+		t.Errorf("stored payload = %v, want %v -- six right-named keys carrying the wrong values read as clean on a key-set check alone", rows[0].payload, want)
+	}
+}
+
+// T3-2. AC-D3: a failed-but-will-retry attempt is non-terminal in substance and must emit
+// nothing. The dead-lettered arm below is the population floor that stops the retry arm's zero
+// from passing on a worker that emits nothing at all.
+func TestRLS_ExtractWorkerEmitsFailedOnlyWhenDeadLettered(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	boom := errors.New("extr-08-03: the extractor always fails")
+
+	retryRec := &wkAuditRecorder{}
+	const retryRiverJobID = int64(909811)
+	if err := wkWorkerAudit(t, wkFailing(boom), wkNewOpener(), retryRec).Work(ctx,
+		extraction.NewExtractJobForTest(retryRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on attempt 1 of 3 returned %v, want the extractor's error", err)
+	}
+	retryJobID := wkExtractionJobID(t, ctx, tenantID, retryRiverJobID)
+	stAssertJobState(t, ctx, retryJobID, "failed")
+	if n := len(retryRec.events()); n != 0 {
+		t.Errorf("attempt 1 of 3 called the audit port %d time(s), want 0: the job is still retrying", n)
+	}
+	if rows := wkAuditRowsForJob(t, ctx, tenantID, retryJobID); len(rows) != 0 {
+		t.Errorf("attempt 1 of 3 wrote %d extraction.* audit row(s), want 0: %v", len(rows), rows)
+	}
+
+	deadRec := &wkAuditRecorder{}
+	const deadRiverJobID = int64(909812)
+	if err := wkWorkerAudit(t, wkFailing(boom), wkNewOpener(), deadRec).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on attempt 3 of 3 returned %v, want the extractor's error", err)
+	}
+	deadJobID := wkExtractionJobID(t, ctx, tenantID, deadRiverJobID)
+	stAssertJobState(t, ctx, deadJobID, "dead_lettered")
+
+	if n := len(deadRec.events()); n != 1 {
+		t.Fatalf("attempt 3 of 3 called the audit port %d time(s), want exactly 1 -- and without this the zero above proves nothing", n)
+	}
+	rows := wkAuditRowsForJob(t, ctx, tenantID, deadJobID)
+	if len(rows) != 1 {
+		t.Fatalf("attempt 3 of 3 wrote %d extraction.* audit row(s), want exactly 1 -- and without this the zero above proves nothing: %v", len(rows), rows)
+	}
+	if rows[0].event != wkFailedEvent {
+		t.Fatalf("the stored event is %q, want %q", rows[0].event, wkFailedEvent)
+	}
+	if got := rows[0].keys(); !slices.Equal(got, wkFailedKeys) {
+		t.Errorf("stored payload keys = %v, want exactly %v", got, wkFailedKeys)
+	}
+	if got := rows[0].payload["state"]; got != "dead_lettered" {
+		t.Errorf("the stored state is %v, want %q: the event is written only when the job is over", got, "dead_lettered")
+	}
+	if got := rows[0].payload["failure_kind"]; got != string(extraction.FailureExtractFailed) {
+		t.Errorf("the stored failure_kind is %v, want %q", got, extraction.FailureExtractFailed)
+	}
+}
+
+// T3-3. AC-D4: a River replay of an already-terminal job re-emits nothing. before == 1 on each
+// arm is load-bearing -- a 0 -> 0 count passes identically on a worker that emits nothing.
+func TestRLS_ExtractWorkerReplayEmitsNoSecondRow(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	const succeededRiverJobID = int64(909821)
+	key := uuid.NewString()
+	if err := wkWorker(t, wkOK(), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(succeededRiverJobID, 1, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	succeededJobID := wkExtractionJobID(t, ctx, tenantID, succeededRiverJobID)
+	stAssertJobState(t, ctx, succeededJobID, "succeeded")
+	if n := len(wkAuditRowsForJob(t, ctx, tenantID, succeededJobID)); n != 1 {
+		t.Fatalf("the succeeded job holds %d audit row(s) before the replay, want 1; an unchanged count means nothing from 0", n)
+	}
+
+	replayRec := &wkAuditRecorder{}
+	if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), replayRec).Work(ctx,
+		extraction.NewExtractJobForTest(succeededRiverJobID, 2, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("replayed Work on a succeeded job: %v", err)
+	}
+	if n := len(replayRec.events()); n != 0 {
+		t.Errorf("the replay of a succeeded job called the audit port %d time(s), want 0", n)
+	}
+	if n := len(wkAuditRowsForJob(t, ctx, tenantID, succeededJobID)); n != 1 {
+		t.Errorf("the succeeded job holds %d audit row(s) after the replay, want the unchanged 1", n)
+	}
+
+	boom := errors.New("extr-08-03 replay: the extractor always fails")
+	const deadRiverJobID = int64(909822)
+	if err := wkWorker(t, wkFailing(boom), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on the final attempt returned %v, want the extractor's error", err)
+	}
+	deadJobID := wkExtractionJobID(t, ctx, tenantID, deadRiverJobID)
+	stAssertJobState(t, ctx, deadJobID, "dead_lettered")
+	if n := len(wkAuditRowsForJob(t, ctx, tenantID, deadJobID)); n != 1 {
+		t.Fatalf("the dead-lettered job holds %d audit row(s) before the replay, want 1; an unchanged count means nothing from 0", n)
+	}
+
+	deadReplayRec := &wkAuditRecorder{}
+	if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), deadReplayRec).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 4, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("replayed Work on a dead-lettered job: %v", err)
+	}
+	if n := len(deadReplayRec.events()); n != 0 {
+		t.Errorf("the replay of a dead-lettered job called the audit port %d time(s), want 0", n)
+	}
+	if n := len(wkAuditRowsForJob(t, ctx, tenantID, deadJobID)); n != 1 {
+		t.Errorf("the dead-lettered job holds %d audit row(s) after the replay, want the unchanged 1", n)
+	}
+}
+
+// T3-5. A nil Audit is a wiring mistake, and a worker that skipped the row silently would leave
+// no trace of it. The guard runs before any state change, so the job row is absent -- and the
+// recording control in the same test is what stops that absence from passing against a worker
+// that refuses every job.
+func TestExtractWorker_NilAuditFailsBeforeAnyStateChange(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	op := wkNewOpener()
+	ext := wkOK()
+	ew := &extraction.ExtractWorker{
+		Pool: stRequire(t).app, Extractor: ext, Open: op.open,
+		Pages: &extraction.PageStore{Reader: &wkStubReader{pages: 1}, Sink: (&wkPageSink{}).put},
+	}
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(909831, 1, 3, tenantID, documentID, uuid.NewString())); err == nil {
+		t.Errorf("Work with a nil Audit returned nil, want an error: a skipped audit row must not read as success")
+	}
+	if n := wkExtractionJobCount(t, ctx, tenantID); n != 0 {
+		t.Errorf("Work with a nil Audit left %d extraction_jobs row(s), want 0: the guard runs before any state change", n)
+	}
+	if n := op.count(); n != 0 {
+		t.Errorf("Work with a nil Audit called OpenDocument %d time(s), want 0", n)
+	}
+	if n := ext.count(); n != 0 {
+		t.Errorf("Work with a nil Audit ran the extractor %d time(s), want 0", n)
+	}
+
+	// Control: the identical call with a recording Audit does the whole job.
+	rec := &wkAuditRecorder{}
+	const controlRiverJobID = int64(909832)
+	if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), rec).Work(ctx,
+		extraction.NewExtractJobForTest(controlRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("control Work: %v; the zero-assertions above prove nothing without it", err)
+	}
+	if n := wkExtractionJobCount(t, ctx, tenantID); n != 1 {
+		t.Fatalf("the control left %d extraction_jobs row(s), want 1; the zero-assertions above prove nothing without it", n)
+	}
+	stAssertJobState(t, ctx, wkExtractionJobID(t, ctx, tenantID, controlRiverJobID), "succeeded")
+	if n := len(rec.events()); n != 1 {
+		t.Errorf("the control called the audit port %d time(s), want 1", n)
+	}
+}
+
+// T3-6. AC-4: the failed event names the stage that failed. Four levers, one per error path in
+// Work()'s if err == nil chain, each driven at attempt 3 of 3 because the kind only reaches a
+// row on the dead_lettered branch.
+func TestExtractWorker_FailureKindPerStage(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	boom := errors.New("extr-08-03: the stage under test refused")
+
+	cases := []struct {
+		name       string
+		riverJobID int64
+		worker     func(*wkAuditRecorder) *extraction.ExtractWorker
+		// wantSQLState is set only for the arm whose lever is a constraint violation: that
+		// lever is new, and an arm that stopped reaching writePageImagesTx would otherwise
+		// classify some other stage and still look right.
+		wantSQLState string
+		want         extraction.FailureKind
+	}{
+		{
+			name:       "w.Open",
+			riverJobID: 909841,
+			worker: func(rec *wkAuditRecorder) *extraction.ExtractWorker {
+				return wkWorkerAudit(t, wkOK(), &wkOpener{err: boom}, rec)
+			},
+			want: extraction.FailureDocumentUnavailable,
+		},
+		{
+			name:       "w.Pages.Ingest",
+			riverJobID: 909842,
+			worker: func(rec *wkAuditRecorder) *extraction.ExtractWorker {
+				pages := &extraction.PageStore{
+					Reader: &wkStubReader{pages: 1},
+					Sink:   (&wkPageSink{failOn: 1, err: boom}).put,
+				}
+				return wkWorkerPages(t, wkOK(), wkNewOpener(), pages, rec)
+			},
+			want: extraction.FailurePagesNotRendered,
+		},
+		{
+			name:       "writePageImagesTx",
+			riverJobID: 909843,
+			worker: func(rec *wkAuditRecorder) *extraction.ExtractWorker {
+				pages := &extraction.PageStore{
+					Reader: &wkStubReader{pages: 1, zeroWidth: true},
+					Sink:   (&wkPageSink{}).put,
+				}
+				return wkWorkerPages(t, wkOK(), wkNewOpener(), pages, rec)
+			},
+			wantSQLState: "23514",
+			want:         extraction.FailurePageRowsNotWritten,
+		},
+		{
+			name:       "w.Extractor.Extract",
+			riverJobID: 909844,
+			worker: func(rec *wkAuditRecorder) *extraction.ExtractWorker {
+				return wkWorkerAudit(t, wkFailing(boom), wkNewOpener(), rec)
+			},
+			want: extraction.FailureExtractFailed,
+		},
+	}
+
+	// Subtests, not a bare loop: one arm that cannot reach its stage must not stop the other
+	// three from proving theirs.
+	written := map[extraction.FailureKind]string{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &wkAuditRecorder{}
+			err := tc.worker(rec).Work(ctx,
+				extraction.NewExtractJobForTest(tc.riverJobID, 3, 3, tenantID, documentID, uuid.NewString()))
+			if err == nil {
+				t.Fatalf("Work returned nil, want the stage's error")
+			}
+			if tc.wantSQLState != "" {
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.SQLState() != tc.wantSQLState {
+					t.Fatalf("Work returned %v, want SQLSTATE %s from extraction_page_images_width_px_check -- the lever no longer reaches the page-row write",
+						err, tc.wantSQLState)
+				}
+			}
+			jobID := wkExtractionJobID(t, ctx, tenantID, tc.riverJobID)
+			stAssertJobState(t, ctx, jobID, "dead_lettered")
+
+			rows := wkAuditRowsForJob(t, ctx, tenantID, jobID)
+			if len(rows) != 1 {
+				t.Fatalf("wrote %d extraction.* audit row(s), want exactly 1: %v", len(rows), rows)
+			}
+			got, _ := rows[0].payload["failure_kind"].(string)
+			if got != string(tc.want) {
+				t.Errorf("stored failure_kind = %q, want %q", got, tc.want)
+			}
+			if prior, dup := written[extraction.FailureKind(got)]; dup {
+				t.Errorf("stored failure_kind %q was already written by %s -- the four stages must be distinguishable", got, prior)
+			}
+			written[extraction.FailureKind(got)] = tc.name
+		})
+	}
+
+	// Set equality against the whole vocabulary: four distinct values is satisfied by four
+	// values that are not the four FailureKind declares.
+	want := map[extraction.FailureKind]bool{
+		extraction.FailureDocumentUnavailable: true,
+		extraction.FailurePagesNotRendered:    true,
+		extraction.FailurePageRowsNotWritten:  true,
+		extraction.FailureExtractFailed:       true,
+	}
+	if len(written) != len(want) {
+		t.Fatalf("the four levers wrote %d distinct failure_kind value(s) (%v), want %d", len(written), written, len(want))
+	}
+	for k := range want {
+		if _, ok := written[k]; !ok {
+			t.Errorf("no lever wrote failure_kind %q; that stage is unreachable or misclassified", k)
+		}
+	}
+	for k := range written {
+		if !want[k] {
+			t.Errorf("a lever wrote failure_kind %q, which FailureKind does not declare", k)
+		}
+	}
+}
+
+// T3-7. AC-D5: no free-text error string enters a payload. The forbidden-key half is
+// type-guaranteed -- ExtractionAudit carries no field holding err.Error() -- so the key-set
+// equality and the needle below are what actually bite.
+func TestExtractWorker_PayloadCarriesNoErrorText(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	const needle = "extr-08-03-needle: connection refused reading tenants/secret/key.pdf"
+	boom := errors.New(needle)
+
+	rec := &wkAuditRecorder{}
+	const riverJobID = int64(909851)
+	if err := wkWorkerAudit(t, wkFailing(boom), wkNewOpener(), rec).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work returned %v, want the extractor's error", err)
+	}
+	jobID := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+
+	// (c) The row-count floor. Every assertion below reads rows[0].
+	rows := wkAuditRowsForJob(t, ctx, tenantID, jobID)
+	if len(rows) != 1 {
+		t.Fatalf("the job wrote %d extraction.* audit row(s), want exactly 1: the checks below would read nothing", len(rows))
+	}
+
+	// The control needle: the text exists and this matcher finds it where it legitimately
+	// lives. Without it, "the payload does not contain the needle" is a matcher that found
+	// nothing anywhere.
+	stored := stJobLastError(t, ctx, jobID)
+	if stored == nil || !strings.Contains(*stored, needle) {
+		t.Fatalf("extraction_jobs.last_error is %s, want it to carry the needle; the absence checks below would pass on a matcher that finds nothing", wkStr(stored))
+	}
+
+	// (a) The forbidden keys.
+	for _, k := range wkForbiddenKeys {
+		if v, ok := rows[0].payload[k]; ok {
+			t.Errorf("the stored payload carries the forbidden key %q = %v; that text is adapter-shaped and the jobs table already holds it", k, v)
+		}
+	}
+	// (b) Full key-set equality: a seventh key cannot slip in under an unforbidden name.
+	if got := rows[0].keys(); !slices.Equal(got, wkFailedKeys) {
+		t.Errorf("stored payload keys = %v, want exactly %v", got, wkFailedKeys)
+	}
+	// The needle reaches neither the stored JSON nor any field of the value the worker handed
+	// the port.
+	if strings.Contains(rows[0].raw, needle) {
+		t.Errorf("the stored payload %s carries the error text", rows[0].raw)
+	}
+	events := rec.events()
+	if len(events) != 1 {
+		t.Fatalf("the worker called the audit port %d time(s), want exactly 1", len(events))
+	}
+	ev := reflect.ValueOf(events[0])
+	for i := 0; i < ev.NumField(); i++ {
+		f := ev.Field(i)
+		if f.Kind() != reflect.String {
+			continue
+		}
+		if strings.Contains(f.String(), needle) {
+			t.Errorf("ExtractionAudit.%s = %q carries the error text", ev.Type().Field(i).Name, f.String())
+		}
+	}
+}
+
+// --- EXTR-08-03: the two residuals, characterized ------------------------------------
+
+// Characterization of a ratified trade: the dead-letter emission shares the worker's
+// transaction, so a port that refuses rolls the terminal advance back with it -- the job stays
+// `extracting` and the error surfaces. internal/submission's terminal-failure branch is the same.
+func TestExtractWorker_DeadLetterAuditFailureRollsBackTheAdvance(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	stageBoom := errors.New("extr-08-03: the extractor refused")
+	auditBoom := errors.New("extr-08-03: the audit port refused")
+
+	ew := wkWorkerAudit(t, wkFailing(stageBoom), wkNewOpener(), &wkAuditRecorder{})
+	ew.Audit = func(context.Context, pgx.Tx, extraction.ExtractionAudit) error { return auditBoom }
+
+	const riverJobID = int64(909861)
+	job := extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())
+	if err := ew.Work(ctx, job); !errors.Is(err, auditBoom) {
+		t.Fatalf("Work returned %v, want the audit port's error -- an unwritten terminal event must not read as a finished job", err)
+	}
+
+	jobID := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, jobID, "extracting")
+	if e := stJobLastError(t, ctx, jobID); e != nil {
+		t.Errorf("extraction_jobs.last_error is %s, want NULL -- the whole advance rolls back, not just the state", wkStr(e))
+	}
+	if rows := wkAuditRows(t, ctx, tenantID); len(rows) != 0 {
+		t.Errorf("the rolled-back attempt left %d extraction.* audit row(s), want 0: %v", len(rows), rows)
+	}
+
+	// Control: the same River job, a working port. It reaches dead_lettered and writes the
+	// row -- so the assertions above are the rollback, not a worker that never gets there.
+	rec := &wkAuditRecorder{}
+	ew.Audit = rec.record
+	if err := ew.Work(ctx, job); !errors.Is(err, stageBoom) {
+		t.Fatalf("the control Work returned %v, want the stage's error; the assertions above prove nothing without it", err)
+	}
+	stAssertJobState(t, ctx, jobID, "dead_lettered")
+	if n := len(rec.events()); n != 1 {
+		t.Errorf("the control called the audit port %d time(s), want 1", n)
+	}
+	rows := wkAuditRowsForJob(t, ctx, tenantID, jobID)
+	if len(rows) != 1 {
+		t.Fatalf("the control wrote %d extraction.* audit row(s), want exactly 1: %v", len(rows), rows)
+	}
+	if rows[0].event != wkFailedEvent {
+		t.Errorf("the control stored event %q, want %q", rows[0].event, wkFailedEvent)
+	}
+}
+
+// Characterization: exactly-once is scoped to the River job, not the document. queue.OncePerJob
+// keys its marker job:<river id> and ensureJobTx keys on river_job_id, so two River jobs over one
+// document write two succeeded rows -- one per extraction job, each naming its own
+// extraction_job_id. Correct under D-6; the same scoping is a hole in internal/submission only
+// because the entity in its payload is the invoice.
+func TestRLS_ExtractWorkerTwoRiverJobsOneDocumentEmitTwice(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	riverJobIDs := []int64{909871, 909872}
+	rec := &wkAuditRecorder{}
+	for _, id := range riverJobIDs {
+		if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), rec).Work(ctx,
+			extraction.NewExtractJobForTest(id, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work for river job %d: %v", id, err)
+		}
+	}
+
+	if n := wkExtractionJobCount(t, ctx, tenantID); n != 2 {
+		t.Fatalf("two River jobs left %d extraction_jobs row(s), want 2 -- there is no unique index on (tenant_id, document_id)", n)
+	}
+	if n := len(rec.events()); n != 2 {
+		t.Fatalf("the worker called the audit port %d time(s), want 2", n)
+	}
+
+	rows := wkAuditRows(t, ctx, tenantID)
+	if len(rows) != 2 {
+		t.Fatalf("one document holds %d extraction.* audit row(s), want 2: %v", len(rows), rows)
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.event != wkSucceededEvent {
+			t.Errorf("stored event %q, want %q", r.event, wkSucceededEvent)
+		}
+		if got := r.payload["document_id"]; got != documentID {
+			t.Errorf("stored document_id = %v, want %s -- both rows name the one document", got, documentID)
+		}
+		id, _ := r.payload["extraction_job_id"].(string)
+		if id == "" || seen[id] {
+			t.Errorf("stored extraction_job_id = %q, want a distinct non-empty id per row (seen %v)", id, seen)
+		}
+		seen[id] = true
+	}
+	for _, id := range riverJobIDs {
+		if x := wkExtractionJobID(t, ctx, tenantID, id); !seen[x] {
+			t.Errorf("river job %d minted extraction job %s, which no audit row names (rows name %v)", id, x, seen)
+		}
+	}
+}
+
+// wkAuditRowID is the id of a tenant's one extraction.* audit row. Superuser, because the
+// lookup runs outside any tenant transaction; the count is what keeps a caller from reading a
+// row some other arm wrote.
+func wkAuditRowID(t *testing.T, ctx context.Context, tenantID string) int64 {
+	t.Helper()
+	var n int
+	var id int64
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT count(*), coalesce(min(id), 0) FROM audit_log
+		  WHERE tenant_id = $1 AND event LIKE 'extraction.%'`, tenantID).Scan(&n, &id); err != nil {
+		t.Fatalf("read the extraction.* audit row id for tenant %s: %v", tenantID, err)
+	}
+	if n != 1 {
+		t.Fatalf("tenant %s holds %d extraction.* audit row(s), want exactly 1", tenantID, n)
+	}
+	return id
+}
+
+// wkAuditRowVisibleTo counts one audit row by bare id as the caller's tenant. app, never super:
+// stRequire(t).super is rolbypassrls = t, so a read through it consults no policy at all and
+// answers 1 under both tenants. And by bare id: measured, a tenant_id predicate here makes
+// tenant B read zero on its own, staying green through a total collapse of row-level security.
+func wkAuditRowVisibleTo(t *testing.T, ctx context.Context, tenantID string, rowID int64) int {
+	t.Helper()
+	var n int
+	if err := db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE id = $1`, rowID).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count audit row %d as tenant %s: %v", rowID, tenantID, err)
+	}
+	return n
+}
+
+// T5-1. tenant_isolation over an extraction.* row, read by bare id.
+//
+// This is a coverage claim, not a novel RLS proof: TestAudit_TenantIsolation
+// (internal/audit/audit_test.go) already asserts both directions on a synthetic event name.
+// What it adds is the subject -- the row here is the worker's own output, written on the
+// worker's transaction as invoice_app with tenant_id defaulted from app.current_tenant, so the
+// policy is exercised against this story's event names and payload shape. It is NOT proof that
+// the production adapter is tenant-safe: deps_test.go's fence keeps internal/audit out of this
+// package, so the row goes in through wkAuditRecorder's copy of newExtractionAuditor's mapping,
+// and cmd/submission has no DB harness that drives the real adapter against a database at all.
+func TestRLS_ExtractionAuditRowIsNotVisibleAcrossTenants(t *testing.T) {
+	ctx := t.Context()
+	tenantA, documentA := wkFixture(t, ctx)
+	tenantB, _ := wkFixture(t, ctx)
+
+	if err := wkWorker(t, wkOK(), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(909891, 1, 3, tenantA, documentA, uuid.NewString())); err != nil {
+		t.Fatalf("Work under tenant A: %v", err)
+	}
+	rowID := wkAuditRowID(t, ctx, tenantA)
+
+	// The positive case first: an id nobody wrote reads zero under every tenant, which would
+	// make the refusal below true of a database with no row-level security whatsoever.
+	if n := wkAuditRowVisibleTo(t, ctx, tenantA, rowID); n != 1 {
+		t.Fatalf("tenant A reads %d row(s) for its own audit row %d, want 1", n, rowID)
+	}
+	if n := wkAuditRowVisibleTo(t, ctx, tenantB, rowID); n != 0 {
+		t.Errorf("tenant B reads %d row(s) for tenant A's audit row %d, want 0", n, rowID)
 	}
 }

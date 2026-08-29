@@ -62,10 +62,13 @@ export const ACTIVITY_COPY = {
   emptyWorkspaceAlso: 'This workspace has not recorded anything at all yet.',
   // The incidental zero, distinct from documentsInert's structural one.
   chipZeroInert: 'A chip with no count is dimmed: this invoice has no events of that kind in the loaded page.',
-  // D-AC-6: the Documents zero is structural, not "nothing yet". document.* is gated out of
-  // the invoice-scoped read (TestAuditScoped_EventGateExcludesACollidingID).
+  // D-AC-6: the Documents zero is structural, not "nothing yet". document.* and extraction.*
+  // are both outside the invoice-scoped read's two lists
+  // (TestAuditScoped_EventGateExcludesACollidingID). Names the FAMILIES, never the labels:
+  // the old enumeration went stale twice unnoticed --
+  // invoiceActivity_documentsInertCopyNamesEveryFamilyTheChipCovers derives them now.
   documentsInert:
-    'Document uploads and reads are recorded against the workspace, not against a single invoice, so none can appear here.',
+    'Document and extraction events are recorded against the workspace, not against a single invoice, so none can appear here.',
   // Single source for the label, shared with the toggle note and subtask 05's button.
   auditLink: 'Open in Audit →',
 } as const

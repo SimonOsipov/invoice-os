@@ -28,8 +28,9 @@
 //
 // This scan reports an ABSENCE, which is the instrument class that reports
 // all-clear while examining nothing. So it carries a control needle it must still
-// find and floors on the population walked. cmd/ holds zero audit.Record calls, so
-// its file floor is the only proof that half of the walk ran at all.
+// find and floors on the population walked. cmd/ holds two audit.Record calls, both
+// in cmd/submission's extraction auditor, and its file floor is what proves the cmd/
+// half of the walk ran at all.
 //
 // The TestRLS_ prefix is load-bearing: ci.yml runs this package under -run TestRLS,
 // and nothing else in that filter set would reach these names
@@ -260,8 +261,8 @@ func anSitesIn(fset *token.FileSet, rel string, f *ast.File) (sites []anSite, to
 }
 
 // anAllSites walks cmd/ and internal/ once. scSeamFiles floors the walk over both
-// roots; cmd/ holds zero audit.Record calls, so only its file floor proves that
-// half ran.
+// roots; cmd/ holds two audit.Record calls, in cmd/submission's extraction auditor,
+// and its file floor is what proves the cmd/ half ran.
 func anAllSites(t *testing.T) []anSite {
 	t.Helper()
 	root := repoRootDir(t)
@@ -690,7 +691,7 @@ func TestRLS_AuditNumberScanPopulationFloor(t *testing.T) {
 		byFile[s.file] = append(byFile[s.file], s)
 	}
 	if len(sites) < anMinCalls || len(byFile) < anMinFiles {
-		t.Fatalf("found %d audit.Record call(s) across %d file(s) %v, want at least %d across at least %d (35 across 13 measured at AUDIT-11-06) -- zero is what a broken walk and a repo with no writers both look like; these are CALLS, not the 39 text occurrences, four of which are doc comments", len(sites), len(byFile), sortedKeys(byFile), anMinCalls, anMinFiles)
+		t.Fatalf("found %d audit.Record call(s) across %d file(s) %v, want at least %d across at least %d (35 across 13 measured at AUDIT-11-06) -- zero is what a broken walk and a repo with no writers both look like; these are CALLS, not the 41 text occurrences, four of which are doc comments", len(sites), len(byFile), sortedKeys(byFile), anMinCalls, anMinFiles)
 	}
 }
 

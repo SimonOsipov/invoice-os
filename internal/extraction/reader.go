@@ -45,16 +45,17 @@ func (r *Reader) JobsForDocument(ctx context.Context, documentID string) (JobsRe
 		jobs, err = jobsForDocumentTx(ctx, tx, documentID)
 		return err
 	}); err != nil {
-		// Discarded on every error, including a commit that failed after the scan: a failed
-		// read answers with an empty list, never a partial or uncommitted one.
+		// Discarded on every error, the seam's own commit included —
+		// TestRLS_ExtractionReaderDiscardsRowsWhenTheCommitFails.
 		return JobsResponse{Jobs: []JobState{}}, err
 	}
 	return JobsResponse{Jobs: jobs}, nil
 }
 
-// jobsForDocumentTx names no tenant_id: the tenant_isolation policy supplies that predicate,
-// so writing one by hand would make TestRLS_ExtractionJobsCrossTenantReadRefused prove
-// nothing. Returns an empty slice rather than nil on every path — nil marshals to JSON null.
+// jobsForDocumentTx names no tenant_id: the tenant_isolation policy supplies that predicate, and
+// a hand-written one would leave TestRLS_ExtractionJobsCrossTenantReadRefused proving nothing —
+// TestExtractionReader_QueryNamesDocumentIDNotTenantID. Returns an empty slice rather than nil
+// on every path: nil marshals to JSON null.
 func jobsForDocumentTx(ctx context.Context, tx pgx.Tx, documentID string) ([]JobState, error) {
 	out := []JobState{}
 

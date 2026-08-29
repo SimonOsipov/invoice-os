@@ -231,8 +231,9 @@ What it guarantees:
 `WithinRequestTenantTx` is **not** a thin wrapper over the core. It opens its own
 transaction and adds the read-path membership gate (AUDIT-10): a caller whose
 `memberships` row in the current tenant exists and is not `active` is refused with
-`db.ErrNotActiveMember` before the closure runs; a caller with no row at all still
-proceeds. The gate's `SELECT status FROM memberships WHERE user_id = $1` rides the
+`db.ErrNotActiveMember` before the closure runs, and a caller with **no** row in the
+current tenant is refused the same way (`tenant.go:92` — AUDIT-12 dropped D-17's narrow
+no-row exception). The gate's `SELECT status FROM memberships WHERE user_id = $1` rides the
 `set_config` above in a single `pgx.Batch`, so on the HTTP path **neither statement is
 visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.BatchTracer`.
 A subject that is not a UUID skips the lookup and delegates to the core unchanged, and

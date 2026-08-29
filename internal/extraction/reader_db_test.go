@@ -2,10 +2,6 @@
 // harness — stRequire is this package's one sanctioned skip site — and seeds every fixture as
 // the superuser, because invoice_app holds no DELETE on extraction_jobs and no INSERT on
 // tenants.
-//
-// Written before the implementation: reader.go ships as a stub whose JobsForDocument returns a
-// not-implemented error, so every behavioural case below fails on its own assertion rather
-// than on a compile error.
 package extraction_test
 
 import (
@@ -17,10 +13,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -54,7 +53,14 @@ func rdReader(t *testing.T) *extraction.Reader {
 // assertions could not fail. Cleanup rides stTenant's tenant DELETE via ON DELETE CASCADE.
 func rdSeedJob(t *testing.T, ctx context.Context, tenantID, documentID, state string, createdAt time.Time, lastErr *string) string {
 	t.Helper()
-	id := uuid.NewString()
+	return rdSeedJobWithID(t, ctx, uuid.NewString(), tenantID, documentID, state, createdAt, lastErr)
+}
+
+// rdSeedJobWithID is rdSeedJob with the caller choosing the id. The ordering case needs the
+// tied rows inserted in the reverse of the order it expects back — see
+// TestRLS_ExtractionReaderReturnsEveryJobNewestFirst.
+func rdSeedJobWithID(t *testing.T, ctx context.Context, id, tenantID, documentID, state string, createdAt time.Time, lastErr *string) string {
+	t.Helper()
 	if _, err := stRequire(t).super.Exec(ctx,
 		`INSERT INTO extraction_jobs
 		     (id, tenant_id, document_id, state, extractor, extractor_version, created_at, last_error)
@@ -83,6 +89,20 @@ func rdTenant(t *testing.T, ctx context.Context, status string) (reqCtx context.
 		Role:     "authenticated",
 		TenantID: tenantID,
 	}), tenantID, documentID
+}
+
+// rdSeedDocument adds a second document to a tenant stTenant already seeded, so a case can
+// tell a per-document answer from a per-tenant one.
+func rdSeedDocument(t *testing.T, ctx context.Context, tenantID string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, tenantID, "extr-07/"+id, strings.Repeat("b", 64), 1024); err != nil {
+		t.Fatalf("seed a second document for tenant %s: %v", tenantID, err)
+	}
+	return id
 }
 
 // rdAuditCount counts as the SUPERUSER. An app-pool count is RLS-filtered and would read the
@@ -307,14 +327,27 @@ func TestRLS_ExtractionReaderReturnsEveryJobNewestFirst(t *testing.T) {
 
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	newest := rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], base, nil)
-	tied := []string{
-		rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], base.Add(-time.Second), nil),
-		rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], base.Add(-time.Second), nil),
+
+	// The tied rows are seeded in ASCENDING id order, the reverse of the answer below, and
+	// there are four of them. An untiebroken sort returns them in insertion order, so seeding
+	// random ids caught a dropped `id DESC` only half the time; this ordering makes the
+	// accidental agreement impossible rather than unlikely.
+	const tiedRows = 4
+	tied := make([]string, 0, tiedRows)
+	for range tiedRows {
+		tied = append(tied, uuid.NewString())
 	}
 	// uuid compares bytewise in Postgres, and the canonical lowercase-hex form sorts the same
 	// way, so the larger string is the larger uuid.
 	slices.Sort(tied)
-	want := []string{newest, tied[1], tied[0]}
+	for _, id := range tied {
+		rdSeedJobWithID(t, ctx, id, tenantID, documentID, rdStates[0], base.Add(-time.Second), nil)
+	}
+
+	want := []string{newest}
+	for i := len(tied) - 1; i >= 0; i-- {
+		want = append(want, tied[i])
+	}
 
 	out, err := r.JobsForDocument(ctxA, documentID)
 	if err != nil {
@@ -530,5 +563,337 @@ func TestExtractionJobState_MarshalsTheExactKeySet(t *testing.T) {
 	}
 	if string(b) != `{"jobs":[]}` {
 		t.Errorf("an empty-slice JobsResponse marshals to %s, want {\"jobs\":[]}", b)
+	}
+}
+
+// rdTraceKey carries the SQL from TraceQueryStart to TraceQueryEnd, which is handed no SQL of
+// its own.
+type rdTraceKey struct{}
+
+// rdQueryTracer records every query on its pool and can run a hook as one ends. The request
+// seam's own set_config and membership select ride a pgx.Batch, which a plain QueryTracer never
+// sees (docs/migrations.md), so only the reader's own SELECT reaches this.
+type rdQueryTracer struct {
+	mu    sync.Mutex
+	sqls  []string
+	onEnd func(conn *pgx.Conn, sql string)
+}
+
+func (tr *rdQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	tr.mu.Lock()
+	tr.sqls = append(tr.sqls, d.SQL)
+	tr.mu.Unlock()
+	return context.WithValue(ctx, rdTraceKey{}, d.SQL)
+}
+
+func (tr *rdQueryTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, _ pgx.TraceQueryEndData) {
+	sql, _ := ctx.Value(rdTraceKey{}).(string)
+	if tr.onEnd != nil {
+		tr.onEnd(conn, sql)
+	}
+}
+
+func (tr *rdQueryTracer) matching(substr string) (n int, seen []string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for _, sql := range tr.sqls {
+		if strings.Contains(sql, substr) {
+			n++
+		}
+	}
+	return n, slices.Clone(tr.sqls)
+}
+
+// rdTracedPool is a second invoice_app pool carrying tr. The harness pool is shared by every
+// case in this package, so a tracer installed on it would fire under all of them.
+func rdTracedPool(t *testing.T, tr *rdQueryTracer) *pgxpool.Pool {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig(stRequire(t).app.Config().ConnString())
+	if err != nil {
+		t.Fatalf("parse the app DSN: %v", err)
+	}
+	cfg.ConnConfig.Tracer = tr
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open a traced app pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// AC 1, the "exactly one query" half: counted on the wire, not read off the source. A reader
+// that fetched jobs and then looped for anything per row would still satisfy every other case.
+func TestRLS_ExtractionReaderIssuesOneQueryPerRead(t *testing.T) {
+	ctx := t.Context()
+	tr := &rdQueryTracer{}
+	r := &extraction.Reader{Pool: rdTracedPool(t, tr)}
+
+	ctxA, tenantID, documentID := rdTenant(t, ctx, "active")
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	const seeded = 3
+	for i := range seeded {
+		rdSeedJob(t, ctx, tenantID, documentID, rdStates[i%len(rdStates)], base.Add(time.Duration(i)*time.Second), nil)
+	}
+
+	out, err := r.JobsForDocument(ctxA, documentID)
+	if err != nil {
+		t.Fatalf("JobsForDocument: %v", err)
+	}
+	// The rows are what make the count below mean something: a read that returned nothing
+	// would also issue one query.
+	if len(out.Jobs) != seeded {
+		t.Fatalf("got %d row(s) %v, want %d", len(out.Jobs), rdIDs(out.Jobs), seeded)
+	}
+	if n, seen := tr.matching("extraction_jobs"); n != 1 {
+		t.Errorf("one read of %d row(s) issued %d queries naming extraction_jobs, want 1; the pool saw %v",
+			len(out.Jobs), n, seen)
+	}
+}
+
+// AC 4, the third error path: the transaction fails at COMMIT, after the scan already filled a
+// result set. WithinRequestTenantTx runs fn and only then commits, so assigning inside the
+// closure is not enough — the rows must be discarded on the way out.
+func TestRLS_ExtractionReaderDiscardsRowsWhenTheCommitFails(t *testing.T) {
+	ctx := t.Context()
+	ctxA, tenantID, documentID := rdTenant(t, ctx, "active")
+	rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], time.Now().UTC(), nil)
+
+	// Positive control on the untraced pool: the row is readable, so the empty answer below
+	// cannot be an empty-table artefact.
+	if out, err := rdReader(t).JobsForDocument(ctxA, documentID); err != nil || len(out.Jobs) != 1 {
+		t.Fatalf("control read returned %d row(s) and %v, want 1 and no error", len(out.Jobs), err)
+	}
+
+	// TraceQueryEnd fires from rows.Close, after the result reader is drained: the scan has
+	// succeeded and only COMMIT is left. The two-argument form waits for the backend to be
+	// gone, so the commit cannot win a race against the signal.
+	var killed int
+	tr := &rdQueryTracer{onEnd: func(conn *pgx.Conn, sql string) {
+		if !strings.Contains(sql, "extraction_jobs") {
+			return
+		}
+		killed++
+		pid := conn.PgConn().PID()
+		var gone bool
+		if err := stRequire(t).super.QueryRow(ctx,
+			`SELECT pg_terminate_backend($1, 5000)`, pid).Scan(&gone); err != nil {
+			t.Errorf("terminate backend %d: %v", pid, err)
+			return
+		}
+		if !gone {
+			t.Errorf("backend %d survived pg_terminate_backend, so the commit below may succeed", pid)
+		}
+	}}
+
+	r := &extraction.Reader{Pool: rdTracedPool(t, tr)}
+	out, err := r.JobsForDocument(ctxA, documentID)
+
+	if killed != 1 {
+		t.Fatalf("the tracer fired on %d extraction_jobs quer(ies), want 1; the commit-failure path was not reached", killed)
+	}
+	if err == nil {
+		t.Fatal("the read reported no error although its transaction could not commit")
+	}
+	if out.Jobs == nil {
+		t.Error("the commit-failure path returned a nil Jobs slice, want []JobState{}")
+	}
+	if len(out.Jobs) != 0 {
+		t.Errorf("the commit-failure path returned %d row(s) %v beside its error %v; rows read in a transaction that never committed must not reach the caller",
+			len(out.Jobs), rdIDs(out.Jobs), err)
+	}
+}
+
+// AC 8 boundary: exactly the cap, and one over it, on two documents of ONE tenant. The second
+// document also proves the cap and the WHERE are per document rather than per tenant.
+func TestRLS_ExtractionReaderCapsAtTheBoundary(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	capacity := rdDeclaredCap(t)
+	if capacity < 2 {
+		t.Fatalf("%s = %d, too small for a boundary case", rdCapName, capacity)
+	}
+
+	ctxA, tenantID, atCap := rdTenant(t, ctx, "active")
+	overCap := rdSeedDocument(t, ctx, tenantID)
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	atCapIDs := make([]string, 0, capacity)
+	for i := range capacity {
+		atCapIDs = append(atCapIDs, rdSeedJob(t, ctx, tenantID, atCap, rdStates[0], base.Add(time.Duration(i)*time.Second), nil))
+	}
+	overCapIDs := make([]string, 0, capacity+1)
+	for i := range capacity + 1 {
+		overCapIDs = append(overCapIDs, rdSeedJob(t, ctx, tenantID, overCap, rdStates[0], base.Add(time.Duration(i)*time.Second), nil))
+	}
+
+	out, err := r.JobsForDocument(ctxA, atCap)
+	if err != nil {
+		t.Fatalf("read the document holding exactly %d job(s): %v", capacity, err)
+	}
+	if len(out.Jobs) != capacity {
+		t.Errorf("a document holding exactly %d job(s) read back %d", capacity, len(out.Jobs))
+	}
+	if got, want := rdIDs(out.Jobs), slices.Clone(atCapIDs); !slices.Equal(got, rdReversed(want)) {
+		t.Errorf("the exactly-at-cap page is %v, want every row newest first: %v", got, want)
+	}
+
+	out, err = r.JobsForDocument(ctxA, overCap)
+	if err != nil {
+		t.Fatalf("read the document holding %d job(s): %v", capacity+1, err)
+	}
+	if len(out.Jobs) != capacity {
+		t.Fatalf("a document holding %d job(s) read back %d, want %d", capacity+1, len(out.Jobs), capacity)
+	}
+	// The oldest is the one dropped, and no row of the sibling document leaked in.
+	if got := rdJobByID(out.Jobs); len(got) > 0 {
+		if _, present := got[overCapIDs[0]]; present {
+			t.Errorf("the oldest job %s survived the cap; the dropped row must be the oldest", overCapIDs[0])
+		}
+		for _, id := range atCapIDs {
+			if _, leaked := got[id]; leaked {
+				t.Errorf("job %s belongs to document %s but came back under %s", id, atCap, overCap)
+			}
+		}
+	} else {
+		t.Fatal("the over-cap read returned no rows to inspect")
+	}
+}
+
+// rdReversed copies ids newest-first out of an oldest-first fixture.
+func rdReversed(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for i := len(ids) - 1; i >= 0; i-- {
+		out = append(out, ids[i])
+	}
+	return out
+}
+
+// AC 6: *string distinguishes a stored empty string from SQL NULL, and the wire must keep them
+// apart too — a reader that coerced "" to nil would report an in-flight job as failed-with-no-
+// message, or the reverse.
+func TestRLS_ExtractionReaderDistinguishesAnEmptyLastErrorFromNull(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	ctxA, tenantID, documentID := rdTenant(t, ctx, "active")
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	empty := rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], base, stPtr(""))
+	null := rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], base.Add(-time.Second), nil)
+
+	out, err := r.JobsForDocument(ctxA, documentID)
+	if err != nil {
+		t.Fatalf("JobsForDocument: %v", err)
+	}
+	got := rdJobByID(out.Jobs)
+	if len(got) != 2 {
+		t.Fatalf("got %d row(s) %v, want 2", len(got), rdIDs(out.Jobs))
+	}
+
+	switch j := got[empty]; {
+	case j.LastError == nil:
+		t.Error("a job whose last_error is the empty string read back nil, which is the shape of NULL")
+	case *j.LastError != "":
+		t.Errorf("a job whose last_error is the empty string read back %q", *j.LastError)
+	}
+	if j := got[null]; j.LastError != nil {
+		t.Errorf("a job whose last_error is NULL read back %q", *j.LastError)
+	}
+
+	for id, want := range map[string]string{empty: `"last_error":""`, null: `"last_error":null`} {
+		b, err := json.Marshal(got[id])
+		if err != nil {
+			t.Fatalf("marshal job %s: %v", id, err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("job %s marshals to %s, want it to carry %s", id, b, want)
+		}
+	}
+}
+
+// AC 2, fail-closed: a TenantID that parses but names no tenant is refused by the membership
+// gate, not answered with somebody else's rows.
+func TestRLS_ExtractionReaderRefusesAnIdentityForAnUnknownTenant(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	// A real tenant with a real job, read under an Identity naming a tenant that does not
+	// exist: the empty answer must be the refusal, not an empty table.
+	_, tenantID, documentID := rdTenant(t, ctx, "active")
+	seeded := rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], time.Now().UTC(), nil)
+
+	ctxUnknown := auth.WithIdentity(ctx, auth.Identity{
+		Subject:  rdMemberSubject,
+		Role:     "authenticated",
+		TenantID: uuid.NewString(),
+	})
+
+	out, err := r.JobsForDocument(ctxUnknown, documentID)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("a read for an unknown tenant returned %v, want %v", err, db.ErrNotActiveMember)
+	}
+	if out.Jobs == nil {
+		t.Error("the error path returned a nil Jobs slice, want []JobState{}")
+	}
+	if len(out.Jobs) != 0 {
+		t.Errorf("a read for an unknown tenant returned %d row(s) %v (the tenant's own job is %s)",
+			len(out.Jobs), rdIDs(out.Jobs), seeded)
+	}
+}
+
+// AC 4, the fourth error path: the read itself fails. document_id is uuid, so a malformed id is
+// rejected by Postgres; pgx surfaces that at rows.Err rather than from tx.Query.
+func TestRLS_ExtractionReaderReturnsAnEmptyListWhenTheQueryFails(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	ctxA, tenantID, documentID := rdTenant(t, ctx, "active")
+	seeded := rdSeedJob(t, ctx, tenantID, documentID, rdStates[0], time.Now().UTC(), nil)
+
+	out, err := r.JobsForDocument(ctxA, "not-a-uuid")
+	if err == nil {
+		t.Fatalf("a malformed document id was accepted and answered with %v", rdIDs(out.Jobs))
+	}
+	// The wrap has to name the read. Swallowed, the same call still errors — the aborted
+	// transaction cannot commit — and every other assertion here would hold.
+	if want := "extraction: read jobs for document"; !strings.Contains(err.Error(), want) {
+		t.Errorf("the query error surfaced as %q, want it wrapped with %q", err, want)
+	}
+	if out.Jobs == nil {
+		t.Error("the query-error path returned a nil Jobs slice, want []JobState{}")
+	}
+	if len(out.Jobs) != 0 {
+		t.Errorf("the query-error path returned %d row(s) %v (the tenant's own job is %s)",
+			len(out.Jobs), rdIDs(out.Jobs), seeded)
+	}
+}
+
+// AC 1, the "not tenant_id" half: a hand-written tenant predicate would make every cross-tenant
+// case here pass whether or not the policy is doing the work. Nothing else in the suite fails
+// when one is added.
+func TestExtractionReader_QueryNamesDocumentIDNotTenantID(t *testing.T) {
+	f, fset := mxParse(t, rdReaderSource)
+
+	const table = "extraction_jobs"
+	var sqlLits int
+	ast.Inspect(f, func(n ast.Node) bool {
+		bl, ok := n.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return true
+		}
+		unq, err := strconv.Unquote(bl.Value)
+		if err != nil || !strings.Contains(unq, table) {
+			return true
+		}
+		sqlLits++
+		if !strings.Contains(unq, "document_id") {
+			t.Errorf("%s: the %s query names no document_id", fset.Position(bl.Pos()), table)
+		}
+		if strings.Contains(unq, "tenant_id") {
+			t.Errorf("%s: the %s query names tenant_id; the tenant_isolation policy supplies that predicate",
+				fset.Position(bl.Pos()), table)
+		}
+		return true
+	})
+	if sqlLits == 0 {
+		t.Fatalf("reader.go holds no string literal naming %s, so this scan examined nothing", table)
 	}
 }

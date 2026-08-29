@@ -242,8 +242,8 @@ func TestAudit_GeneratedInvoiceIDListsMatchTheLiveResolver(t *testing.T) {
 var scopedGrammarLiteralRE = regexp.MustCompile(`(?s)'(\^\[0-9a-f\]\{4\}.*?\$)'`)
 
 // Row 9 (new) / AC-2: the migration's two grammar copies are byte-identical to the live
-// resolver's — contract §6's "change one, change all", now six copies total across the
-// repo (four pre-existing plus this migration's two).
+// resolver's — contract §6's "change one, change all". Eight copies across the repo today;
+// count them from the tree, not from this line.
 func TestAudit_GeneratedInvoiceIDGrammarIsByteIdenticalToTheResolver(t *testing.T) {
 	migMatches := scopedGrammarLiteralRE.FindAllStringSubmatch(scopedInvoiceIDMigrationUp(t), -1)
 	if len(migMatches) != 2 {

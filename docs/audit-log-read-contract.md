@@ -170,14 +170,18 @@ Verified by differential fuzz against `uuid_in`: 180,000 spellings, zero disagre
 zero cast failures. Fenced by
 `TestAudit_InsertTriggerResolvesEverySpellingUUIDInAccepts`.
 
-This grammar now has **four** copies that must not drift. Three are SQL: AUDIT-01's
-superseded body in `migrations/20260820150810_audit_log_entity_id_and_read_indexes.sql`, and
-both the Up and the Down body of the migration that currently defines
-`audit_log_entity_for` — a Down carrying a different grammar would change the resolver on
-rollback rather than restore it. The fourth is `actor.Resolve`'s Go copy
-(`internal/actor/resolve.go`), which applies it before binding a `uuid[]` — an unfiltered
-subject there raises 22P02 and aborts the reader's transaction. The Go copy is fenced against
-Postgres itself by `TestActorResolve_UUIDGateMatchesUUIDIn`. Change one, change all four.
+This grammar now has **eight** copies. Count them from the tree, not from this line:
+`grep -rn '0-9a-f\]{4}' migrations internal/actor`. Seven are SQL — every resolver body ever
+shipped, Up and Down alike, plus the two inside AUDIT-04-11's generated column
+(`migrations/20260822080722_audit_log_invoice_id_column_and_index.sql`). Only the newest
+resolver's Up and Down are live; the earlier ones are applied history and must not be edited.
+A Down carrying a different grammar would change the resolver on rollback rather than restore
+it. The eighth is `actor.Resolve`'s Go copy (`internal/actor/resolve.go`), which applies it
+before binding a `uuid[]` — an unfiltered subject there raises 22P02 and aborts the reader's
+transaction. The Go copy is fenced against Postgres itself by
+`TestActorResolve_UUIDGateMatchesUUIDIn`. Change one live copy, change them all —
+`TestAudit_GeneratedInvoiceIDGrammarIsByteIdenticalToTheResolver` pins the generated column's
+two against the live resolver's.
 
 ## 7. The one predicate no index here serves — and the rule behind it
 
@@ -589,8 +593,9 @@ An invoice-scoped writer records `invoice_number` in its payload (above), beside
 key it already carried. Which writers count as invoice-scoped is not a second list someone has
 to keep in sync — it is **enumerated** by the same expression that backs `audit_log.invoice_id`
 (§11): the 17 events its generated column dispatches on are the entire set, no more and no
-fewer. A writer for an event outside that set has nothing to enumerate against, because it is
-not invoice-scoped by definition.
+fewer. A writer for an event outside that set has nothing to enumerate against, because that
+column's set is what "invoice-scoped" means for this rule — not the resolver's, which is a
+larger set since EXTR-08-06 (§11).
 
 `TestRLS_EveryInvoiceScopedWriterCarriesTheNumber`
 (`internal/platform/db/audit_number_scan_test.go`) is the scan that keeps this true: it derives
@@ -642,6 +647,13 @@ dispatch is on the event name and not the key. §3 and §5 record the same fact 
 `document.created` and `portfolio.entity.updated` as the two colliding families with a genuine
 `invoice.created` row as the control needle — without which every case would pass by returning
 nothing at all.
+
+**This column's set and `audit_log_entity_for`'s set are no longer the same.** EXTR-08-06 added
+a fourth resolver branch for `extraction.field_corrected`, keyed on `invoice_id`, and
+deliberately left this column's two lists alone — growing them would rewrite a `STORED` column
+across the whole table. So that event is attributed to a company through its invoice, but it
+carries no `invoice_number` obligation (§10.13) and never appears in an invoice's scoped read.
+Read each set from its own migration.
 
 Two consequences for anyone building on this.
 

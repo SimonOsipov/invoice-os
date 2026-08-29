@@ -1,9 +1,9 @@
 -- +goose Up
 -- Adds extraction.field_corrected to the resolver, keyed on an invoice_id payload key.
--- This is the THIRD migration to define audit_log_entity_for, and the fifth in the
--- audit_log family after the table's creation (20260803104130, 20260820150810,
--- 20260821135423, 20260822080722). Q15 waived it. A fourth waiver is the wrong answer:
--- fix the hardcoded-list dispatch instead.
+-- This is the THIRD migration to define audit_log_entity_for, and the fifth audit_log
+-- migration since the table's creation -- four precede it (20260803104130, 20260820150810,
+-- 20260821135423, 20260822080722). It ALTERs no table; only three migrations ever have.
+-- Q15 waived it. A fourth waiver is the wrong answer: fix the hardcoded-list dispatch instead.
 -- A separate ELSIF, not a growth of rule B: rules A and B are set-equal-pinned to the
 -- generated invoice_id column, and growing either rewrites that column across the table.
 -- Otherwise byte-identical to 20260821135423_audit_log_entity_for_submission_failed.sql.

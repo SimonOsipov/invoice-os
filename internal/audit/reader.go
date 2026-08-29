@@ -132,8 +132,8 @@ var firmWideEvents = map[string]struct{}{
 // ScopeOf classifies one event (§2): entity_id set → company; entity_id nil and event in
 // firmWideEvents → workspace; otherwise → unattributed. Rule 3 is the fallback so an
 // unclassified event fails safe as "we do not know" rather than falsely claiming
-// "this was firm-wide" (D-28) — it also catches the three document.* events and an
-// invoice-scoped event whose invoice is gone or invisible. Pure Go, no DB.
+// "this was firm-wide" (D-28) — it also catches the three document.* and two extraction.*
+// events, and an invoice-scoped event whose invoice is gone or invisible. Pure Go, no DB.
 func ScopeOf(event string, entityID *string) CompanyScope {
 	if entityID != nil {
 		return ScopeCompany

@@ -1,5 +1,5 @@
-// audit_internal_test.go: the shape of the terminal-outcome audit seam. Internal because
-// the vocabulary and event-name scans read this package's own production source.
+// audit_internal_test.go: the shape of the terminal-outcome audit seam. audit_test.go pins the
+// same seam from outside the package, which is where subtask 02's adapter calls it from.
 package extraction
 
 import (
@@ -49,7 +49,7 @@ func auditPkgFiles(t *testing.T) (*token.FileSet, []*ast.File, []string) {
 		parsed = append(parsed, name)
 	}
 	if len(files) < 8 {
-		t.Fatalf("parsed %d non-test .go file(s) in internal/extraction, want at least 8 (11 measured); a clean report over a broken walk means nothing", len(files))
+		t.Fatalf("parsed %d non-test .go file(s) in internal/extraction, want at least 8 (12 measured); a clean report over a broken walk means nothing", len(files))
 	}
 	return fset, files, parsed
 }

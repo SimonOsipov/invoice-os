@@ -416,7 +416,7 @@ func TestResolve_EmitsNothingWhenTheShapeReadsNothing(t *testing.T) {
 }
 
 func TestResolve_ValueIsNeverEmpty(t *testing.T) {
-	got := extraction.Resolve(rvPage(rvMixedTokens()...), rvGenericRules(t))
+	got := extraction.Resolve(rvPage(rvMixedTokens()...), rvGeneric())
 	rvFloor(t, got, "the mixed page under the generic rule set")
 
 	for i, c := range got {

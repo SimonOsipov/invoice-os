@@ -131,36 +131,11 @@ func rvMixedRules(t *testing.T) extraction.RuleSet {
 	}
 }
 
-// rvGenericSpecs stands in for Tier1Rules, which the next subtask ships. The labels are the
-// anchor lexicon's; the shapes are the field vocabulary's.
-var rvGenericSpecs = []struct {
-	field, label string
-	shape        extraction.Shape
-}{
-	{"invoice_number", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`, extraction.ShapeInvoiceNumber},
-	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`, extraction.ShapeDate},
-	{"supplier_tin", `(?i)\b(supplier|seller|vendor)?\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`, extraction.ShapeTIN},
-	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`, extraction.ShapeName},
-	{"buyer_tin", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\s*\.?\s*(tin|tax\s*id)\b`, extraction.ShapeTIN},
-	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\b`, extraction.ShapeName},
-	{"currency", `(?i)\b(currency|ccy)\b`, extraction.ShapeCurrency},
-	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`, extraction.ShapeAmount},
-	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`, extraction.ShapeAmount},
-	{"total", `(?i)\b(grand\s*total|amount\s*due|balance\s*due|total)\b`, extraction.ShapeAmount},
-}
-
-func rvGenericRules(t *testing.T) extraction.RuleSet {
-	t.Helper()
-
-	var out []extraction.Tier1Rule
-	for _, s := range rvGenericSpecs {
-		out = append(out,
-			rvTier1(t, "g."+s.field+".same_token", s.field, s.label, extraction.RelSameToken, 0, s.shape),
-			rvTier1(t, "g."+s.field+".right", s.field, s.label, extraction.RelRight, 0.35, s.shape),
-			rvTier1(t, "g."+s.field+".below", s.field, s.label, extraction.RelBelow, 0.06, s.shape),
-		)
-	}
-	return extraction.RuleSet{Tier1: out}
+// rvGeneric is the shipped Tier-1 set, read from the package and never re-typed here: a
+// test-local fork of the ten lexicon patterns drifts from the shipped ones silently
+// (TestTier1_ReusesTheAnchorLexiconPatterns).
+func rvGeneric() extraction.RuleSet {
+	return extraction.RuleSet{Tier1: extraction.Tier1Rules}
 }
 
 // rvCorpusPages reads a committed corpus fixture through the real reader and CollectTokens, so
@@ -414,7 +389,7 @@ func TestResolve_IsDeterministicAcrossRepeatedCalls(t *testing.T) {
 
 // V-09
 func TestResolve_ReasonIsAlwaysNone(t *testing.T) {
-	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGenericRules(t))
+	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGeneric())
 	rvFloor(t, got, rvCorpusInline+" under the generic rule set")
 
 	for i, c := range got {
@@ -488,7 +463,7 @@ func TestResolve_SpatialRelationsSkipDegenerateBoxes(t *testing.T) {
 
 // V-12
 func TestResolve_EveryRegionSatisfiesTheColumnCheck(t *testing.T) {
-	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGenericRules(t))
+	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGeneric())
 	rvFloor(t, got, rvCorpusInline+" under the generic rule set")
 
 	withRegion := 0

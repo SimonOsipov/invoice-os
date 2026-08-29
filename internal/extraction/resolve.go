@@ -49,10 +49,10 @@ const maxCandidatesPerField = 8
 func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 	var all []Candidate
 	for _, r := range rules.Learned {
-		all = appendRuleCandidates(all, pages, r.Rule, r.Field, r.ID, TierLearned)
+		all = appendRuleCandidates(all, pages, r.Rule, BandAnywhere, r.Field, r.ID, TierLearned)
 	}
 	for _, r := range rules.Tier1 {
-		all = appendRuleCandidates(all, pages, r.Rule, r.Field, r.Key, TierGeneric)
+		all = appendRuleCandidates(all, pages, r.Rule, r.Band, r.Field, r.Key, TierGeneric)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -71,9 +71,10 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 }
 
 // appendRuleCandidates applies one rule to every page in slice order and every token in reader
-// order. A Rule built as a composite literal has no compiled matcher and yields nothing rather
-// than panicking; ParseRule is the only constructor that sets one.
-func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, field, ruleID string, tier Tier) []Candidate {
+// order, skipping any anchor outside band. A Rule built as a composite literal has no compiled
+// matcher and yields nothing rather than panicking; ParseRule is the only constructor that sets
+// one.
+func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band PageBand, field, ruleID string, tier Tier) []Candidate {
 	if rule.re == nil {
 		return dst
 	}
@@ -81,6 +82,9 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, field, 
 		for _, tok := range page.Tokens {
 			loc := rule.re.FindStringIndex(tok.Text)
 			if loc == nil {
+				continue
+			}
+			if !inBand(band, page.Number, tok.Region) {
 				continue
 			}
 			switch rule.Relation.Kind {
@@ -202,6 +206,26 @@ const (
 	BandPage1Top                    // page 1, anchor box wholly above the half-way line
 	BandPage1Bottom                 // page 1, anchor box wholly below it
 )
+
+// pageBandSplit is the half-way line the two bounded bands divide page 1 on.
+const pageBandSplit = 0.5
+
+// inBand reports whether an anchor at r on page satisfies band. An unrecognised band, a boxless
+// token and a box straddling the split all match nothing: a bounded band over an unknown or
+// ambiguous position has to fail closed, or the sweep it scopes goes page-wide
+// (TestResolve_ABandedRuleIgnoresAnAnchorOutsideItsBand).
+func inBand(band PageBand, page int, r Region) bool {
+	switch band {
+	case BandAnywhere:
+		return true
+	case BandPage1Top:
+		return page == 1 && usableBox(r) && r.Y1 <= pageBandSplit
+	case BandPage1Bottom:
+		return page == 1 && usableBox(r) && r.Y0 >= pageBandSplit
+	default:
+		return false
+	}
+}
 
 // usableRegion is the box a candidate may carry: a copy, or nil when the source token had no
 // geometry worth pointing at.

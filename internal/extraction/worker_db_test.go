@@ -1701,3 +1701,103 @@ func TestExtractWorker_PayloadCarriesNoErrorText(t *testing.T) {
 		}
 	}
 }
+
+// --- EXTR-08-03: the two residuals, characterized ------------------------------------
+
+// Characterization of a ratified trade: the dead-letter emission shares the worker's
+// transaction, so a port that refuses rolls the terminal advance back with it -- the job stays
+// `extracting` and the error surfaces. internal/submission's terminal-failure branch is the same.
+func TestExtractWorker_DeadLetterAuditFailureRollsBackTheAdvance(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	stageBoom := errors.New("extr-08-03: the extractor refused")
+	auditBoom := errors.New("extr-08-03: the audit port refused")
+
+	ew := wkWorkerAudit(t, wkFailing(stageBoom), wkNewOpener(), &wkAuditRecorder{})
+	ew.Audit = func(context.Context, pgx.Tx, extraction.ExtractionAudit) error { return auditBoom }
+
+	const riverJobID = int64(909861)
+	job := extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())
+	if err := ew.Work(ctx, job); !errors.Is(err, auditBoom) {
+		t.Fatalf("Work returned %v, want the audit port's error -- an unwritten terminal event must not read as a finished job", err)
+	}
+
+	jobID := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, jobID, "extracting")
+	if e := stJobLastError(t, ctx, jobID); e != nil {
+		t.Errorf("extraction_jobs.last_error is %s, want NULL -- the whole advance rolls back, not just the state", wkStr(e))
+	}
+	if rows := wkAuditRows(t, ctx, tenantID); len(rows) != 0 {
+		t.Errorf("the rolled-back attempt left %d extraction.* audit row(s), want 0: %v", len(rows), rows)
+	}
+
+	// Control: the same River job, a working port. It reaches dead_lettered and writes the
+	// row -- so the assertions above are the rollback, not a worker that never gets there.
+	rec := &wkAuditRecorder{}
+	ew.Audit = rec.record
+	if err := ew.Work(ctx, job); !errors.Is(err, stageBoom) {
+		t.Fatalf("the control Work returned %v, want the stage's error; the assertions above prove nothing without it", err)
+	}
+	stAssertJobState(t, ctx, jobID, "dead_lettered")
+	if n := len(rec.events()); n != 1 {
+		t.Errorf("the control called the audit port %d time(s), want 1", n)
+	}
+	rows := wkAuditRowsForJob(t, ctx, tenantID, jobID)
+	if len(rows) != 1 {
+		t.Fatalf("the control wrote %d extraction.* audit row(s), want exactly 1: %v", len(rows), rows)
+	}
+	if rows[0].event != wkFailedEvent {
+		t.Errorf("the control stored event %q, want %q", rows[0].event, wkFailedEvent)
+	}
+}
+
+// Characterization: exactly-once is scoped to the River job, not the document. queue.OncePerJob
+// keys its marker job:<river id> and ensureJobTx keys on river_job_id, so two River jobs over one
+// document write two succeeded rows -- one per extraction job, each naming its own
+// extraction_job_id. Correct under D-6; the same scoping is a hole in internal/submission only
+// because the entity in its payload is the invoice.
+func TestRLS_ExtractWorkerTwoRiverJobsOneDocumentEmitTwice(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	riverJobIDs := []int64{909871, 909872}
+	rec := &wkAuditRecorder{}
+	for _, id := range riverJobIDs {
+		if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), rec).Work(ctx,
+			extraction.NewExtractJobForTest(id, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work for river job %d: %v", id, err)
+		}
+	}
+
+	if n := wkExtractionJobCount(t, ctx, tenantID); n != 2 {
+		t.Fatalf("two River jobs left %d extraction_jobs row(s), want 2 -- there is no unique index on (tenant_id, document_id)", n)
+	}
+	if n := len(rec.events()); n != 2 {
+		t.Fatalf("the worker called the audit port %d time(s), want 2", n)
+	}
+
+	rows := wkAuditRows(t, ctx, tenantID)
+	if len(rows) != 2 {
+		t.Fatalf("one document holds %d extraction.* audit row(s), want 2: %v", len(rows), rows)
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.event != wkSucceededEvent {
+			t.Errorf("stored event %q, want %q", r.event, wkSucceededEvent)
+		}
+		if got := r.payload["document_id"]; got != documentID {
+			t.Errorf("stored document_id = %v, want %s -- both rows name the one document", got, documentID)
+		}
+		id, _ := r.payload["extraction_job_id"].(string)
+		if id == "" || seen[id] {
+			t.Errorf("stored extraction_job_id = %q, want a distinct non-empty id per row (seen %v)", id, seen)
+		}
+		seen[id] = true
+	}
+	for _, id := range riverJobIDs {
+		if x := wkExtractionJobID(t, ctx, tenantID, id); !seen[x] {
+			t.Errorf("river job %d minted extraction job %s, which no audit row names (rows name %v)", id, x, seen)
+		}
+	}
+}

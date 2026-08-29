@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"math/rand"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -323,4 +324,119 @@ func TestReconcile_MutatesNeitherItsInputSliceNorItsCandidates(t *testing.T) {
 	if beforeSum != afterSum {
 		t.Errorf("Input changed after Reconcile: before %x, after %x -- Reconcile must not mutate its input", beforeSum, afterSum)
 	}
+}
+
+// TestReconcile_ClosedSetHoldsAcrossShapedInputs is Core AC 7 proved exhaustively rather than by
+// example: every result of every shaped input carries a Reason in the closed set, the leading
+// HeaderFields+line_items run is always exactly rcExpectedNames() (never a 10- or 12-element
+// slice), and anything past it is a per-row flag.
+func TestReconcile_ClosedSetHoldsAcrossShapedInputs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   extraction.Input
+	}{
+		{"empty input", extraction.Input{}},
+		{"every header field found, no lines", extraction.Input{Candidates: rcAllHeaderCandidates()}},
+		{"mixed reasons plus a bad row", extraction.Input{
+			Candidates: []extraction.Candidate{
+				rcCandidate("invoice_number", "INV-001"),
+				rcCandAt("vat", "75.00", extraction.TierGeneric, 0.01),
+				rcCandAt("vat", "80.00", extraction.TierGeneric, 0.01),
+			},
+			Lines: []extraction.DocLine{
+				{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("999.00")},
+				{Index: 2, Quantity: rcStr("1"), UnitPrice: rcStr("5.00"), LineTotal: rcStr("5.00")},
+			},
+		}},
+		{"several bad rows, no candidates at all", extraction.Input{
+			Lines: []extraction.DocLine{
+				{Index: 1, Quantity: rcStr("1"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("999.00")},
+				{Index: 2, Quantity: rcStr("1"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("998.00")},
+				{Index: 3, Quantity: rcStr("1"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("10.00")},
+			},
+		}},
+	}
+
+	want := rcExpectedNames()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := extraction.Reconcile(tc.in)
+			if len(results) < len(want) {
+				t.Fatalf("got %d results, want at least %d (HeaderFields + line_items)", len(results), len(want))
+			}
+			if got := rcNames(results[:len(want)]); !rcNamesEqual(got, want) {
+				t.Fatalf("leading names = %v, want exactly %v -- the total run is never a 10- or 12-element slice", got, want)
+			}
+			for _, r := range results[len(want):] {
+				if !strings.HasPrefix(r.Name, "line_items[") {
+					t.Errorf("result past the total run named %q, want a line_items[N].line_total flag", r.Name)
+				}
+			}
+			for _, r := range results {
+				if !rcIsValidReason(r.Reason) {
+					t.Errorf("%s reason = %q, not a member of the closed set", r.Name, r.Reason)
+				}
+			}
+		})
+	}
+}
+
+// TestReconcile_TiedGroupSurvivesInsertionSortCutover closes the gap TestReconcile_IsPermutationInvariantOnEqualInput
+// leaves open: that test's 13 candidates carry distinct distances, so it never exercises
+// equal-standing detection above Go's n=12 insertion-sort cutover for slices.SortFunc -- only
+// TestReconcile_ThreeWayTieKeepsEveryPeer does that, with 3 candidates, safely below it. Here 12
+// genuinely tied candidates (same Tier, same Distance, distinct values) are shuffled 100 times;
+// the decided value plus every alternative must reproduce the same ascending comparator order
+// every time.
+func TestReconcile_TiedGroupSurvivesInsertionSortCutover(t *testing.T) {
+	const n = 12
+	base := make([]extraction.Candidate, 0, n)
+	wantOrder := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		v := fmt.Sprintf("V%02d", i)
+		base = append(base, rcCandAt("vat", v, extraction.TierGeneric, 0.05))
+		wantOrder = append(wantOrder, v)
+	}
+
+	for i := 0; i < 100; i++ {
+		shuffled := make([]extraction.Candidate, len(base))
+		copy(shuffled, base)
+		rand.New(rand.NewSource(int64(i))).Shuffle(len(shuffled), func(a, b int) {
+			shuffled[a], shuffled[b] = shuffled[b], shuffled[a]
+		})
+
+		results := extraction.Reconcile(extraction.Input{Candidates: shuffled})
+		got, ok := rcFind(results, "vat")
+		if !ok {
+			t.Fatalf("permutation %d: \"vat\" not found in %+v", i, results)
+		}
+		if got.Reason != extraction.ReasonAmbiguous {
+			t.Fatalf("permutation %d: vat reason = %q, want ReasonAmbiguous -- all %d candidates are tied", i, got.Reason, n)
+		}
+		if len(got.Alternatives) != n-1 {
+			t.Fatalf("permutation %d: vat Alternatives has %d entries, want %d", i, len(got.Alternatives), n-1)
+		}
+		if got.Value == nil {
+			t.Fatalf("permutation %d: vat Value = nil", i)
+		}
+		gotOrder := append([]string{*got.Value}, valuesOf(got.Alternatives)...)
+		for j := range gotOrder {
+			if gotOrder[j] != wantOrder[j] {
+				t.Fatalf("permutation %d: comparator order = %v, want %v -- a non-total comparator would scramble this above the sort's insertion-sort cutover", i, gotOrder, wantOrder)
+			}
+		}
+	}
+}
+
+// valuesOf reads Value off each Field, in order, for the comparator-order assertion above.
+func valuesOf(fields []extraction.Field) []string {
+	out := make([]string, len(fields))
+	for i, f := range fields {
+		if f.Value == nil {
+			out[i] = "<nil>"
+			continue
+		}
+		out[i] = *f.Value
+	}
+	return out
 }

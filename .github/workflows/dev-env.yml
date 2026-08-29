@@ -611,6 +611,19 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
+      # Deleting a pr-<N> environment and recreating it under the same name hands the fork
+      # back its OWN old hostnames, which the edge still binds to the deleted services: the
+      # domain reads syncStatus ACTIVE and routes nowhere. Repair it before the 900s wait
+      # below blames Postgres. Skipped on workflow_dispatch, which authenticates with a
+      # project token the script's Bearer header does not speak.
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch'
+      - name: Verify the gateway hostname routes (repair a dark domain)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh verify-gateway-domain "$ENV_ID"
       - name: Wait for gateway /healthz 200 on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}

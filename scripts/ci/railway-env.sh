@@ -5,6 +5,7 @@
 #                            select-domain [--self-test]|
 #                            reconcile-fork <environment-id>|
 #                            verify-spa-domains <environment-id|--self-test>|
+#                            verify-gateway-domain <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            set-approvals-enforced <environment-id|--self-test>|
 #                            delete-environment <name>|list-environments>
@@ -1204,10 +1205,12 @@ domain_is_dark() {
   printf '%s' "$body" | jq -e '(.message? // "") == "Application not found"' >/dev/null 2>&1
 }
 
-# probe_health <url> — sets PROBE_CODE and PROBE_BODY. Never exits.
+# probe_health <url> <path> — sets PROBE_CODE and PROBE_BODY. Never exits.
+# The path is immaterial to darkness (the edge answers before the app ever sees the
+# request); it is per-service only so a LIVE host answers 200 rather than its own 404.
 probe_health() {
-  local url="$1" out
-  out=$(curl -sS --connect-timeout 5 --max-time 20 -w $'\n%{http_code}' "$url/health" 2>/dev/null) \
+  local url="$1" path="$2" out
+  out=$(curl -sS --connect-timeout 5 --max-time 20 -w $'\n%{http_code}' "$url$path" 2>/dev/null) \
     || out=$'\n000'
   PROBE_CODE=${out##*$'\n'}
   PROBE_BODY=${out%$'\n'*}
@@ -1262,6 +1265,61 @@ domain_dark_self_test() {
   echo "Domain reachability self-test: 6 fixtures passed, no token read, no network call."
 }
 
+# verify_one_domain <env-id> <svc-id> <label> <probe-path> <url-var-name>
+# Only ever call this for a service that has ALREADY deployed: a service with no deployment
+# at all draws the SAME edge 404 as a dark hostname, so probing early would recreate a
+# perfectly good domain and hand the later jobs a hostname they were never told about.
+verify_one_domain() {
+  local env_id="$1" svc_id="$2" label="$3" path="$4" var="$5"
+  local found dom_id domain url attempt dark
+
+  found=$(discover_domain "$env_id" "$svc_id" "$label")
+  if [ -z "$found" ]; then
+    echo "::error::$label has no domain in $env_id — reconcile-fork should have created one."
+    exit 1
+  fi
+  dom_id="${found%% *}"
+  domain="${found#* }"
+  url="https://$domain"
+
+  # A booting service answers 000 or 502, which is NOT dark: those belong to the build-stamp
+  # wait, which has the longer budget. Only a consistently dark hostname is repaired here.
+  dark=1
+  for attempt in 1 2 3 4 5 6; do
+    probe_health "$url" "$path"
+    if ! domain_is_dark "$PROBE_CODE" "$PROBE_BODY"; then dark=0; break; fi
+    [ "$attempt" = 6 ] || sleep 10
+  done
+
+  if [ "$dark" = 1 ]; then
+    heal_domain "$env_id" "$svc_id" "$label"
+    found=$(discover_domain "$env_id" "$svc_id" "$label")
+    domain="${found#* }"
+    url="https://$domain"
+    echo "  $label: repaired — now $url"
+  else
+    echo "  $label: $url routes (HTTP $PROBE_CODE)."
+  fi
+
+  # Publish the post-repair hostname; a recreated domain need not keep its old name. Same
+  # job only — GITHUB_ENV does not cross jobs, which is why each caller sits in the job
+  # that consumes the URL.
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "$var=$url" >> "$GITHUB_ENV"
+  fi
+}
+
+cmd_verify_gateway_domain() {
+  local env_id="${1:-}"
+  require_fork_ids
+  if [ -z "$env_id" ]; then
+    echo "::error::verify-gateway-domain needs an environment id."
+    exit 1
+  fi
+  echo "Verifying the gateway hostname routes in $env_id ..."
+  verify_one_domain "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway /healthz GATEWAY_URL
+}
+
 cmd_verify_spa_domains() {
   local env_id="${1:-}"
 
@@ -1276,51 +1334,15 @@ cmd_verify_spa_domains() {
     exit 1
   fi
 
-  local pair label svc_id found dom_id domain url attempt dark
+  local pair label
   echo "Verifying the 4 SPA hostnames route in $env_id ..."
-  for pair in "landing:$RAILWAY_SVC_LANDING_ID" "app:$RAILWAY_SVC_APP_ID" \
-              "ops-console:$RAILWAY_SVC_OPS_CONSOLE_ID" \
-              "support-console:$RAILWAY_SVC_SUPPORT_CONSOLE_ID"; do
+  for pair in "landing:$RAILWAY_SVC_LANDING_ID:LANDING_URL" \
+              "app:$RAILWAY_SVC_APP_ID:APP_URL" \
+              "ops-console:$RAILWAY_SVC_OPS_CONSOLE_ID:OPS_CONSOLE_URL" \
+              "support-console:$RAILWAY_SVC_SUPPORT_CONSOLE_ID:SUPPORT_CONSOLE_URL"; do
     label="${pair%%:*}"
-    svc_id="${pair#*:}"
-
-    found=$(discover_domain "$env_id" "$svc_id" "$label")
-    if [ -z "$found" ]; then
-      echo "::error::$label has no domain in $env_id — reconcile-fork should have created one."
-      exit 1
-    fi
-    dom_id="${found%% *}"
-    domain="${found#* }"
-    url="https://$domain"
-
-    # A booting SPA answers 000 or 502, which is NOT dark: those belong to the build-stamp
-    # wait, which has the longer budget. Only a consistently dark hostname is repaired here.
-    dark=1
-    for attempt in 1 2 3 4 5 6; do
-      probe_health "$url"
-      if ! domain_is_dark "$PROBE_CODE" "$PROBE_BODY"; then dark=0; break; fi
-      [ "$attempt" = 6 ] || sleep 10
-    done
-
-    if [ "$dark" = 1 ]; then
-      heal_domain "$env_id" "$svc_id" "$label"
-      found=$(discover_domain "$env_id" "$svc_id" "$label")
-      domain="${found#* }"
-      url="https://$domain"
-      echo "  $label: repaired — now $url"
-    else
-      echo "  $label: $url routes (HTTP $PROBE_CODE)."
-    fi
-
-    # Publish the post-repair hostname; a recreated domain need not keep its old name.
-    if [ -n "${GITHUB_ENV:-}" ]; then
-      case "$label" in
-        landing)         echo "LANDING_URL=$url" >> "$GITHUB_ENV" ;;
-        app)             echo "APP_URL=$url" >> "$GITHUB_ENV" ;;
-        ops-console)     echo "OPS_CONSOLE_URL=$url" >> "$GITHUB_ENV" ;;
-        support-console) echo "SUPPORT_CONSOLE_URL=$url" >> "$GITHUB_ENV" ;;
-      esac
-    fi
+    verify_one_domain "$env_id" "$(echo "$pair" | cut -d: -f2)" "$label" /health \
+      "$(echo "$pair" | cut -d: -f3)"
   done
 }
 
@@ -2127,6 +2149,7 @@ case "${1:-}" in
   select-domain)             cmd_select_domain "${2:-}" ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   verify-spa-domains)        cmd_verify_spa_domains "${2:-}" ;;
+  verify-gateway-domain)     cmd_verify_gateway_domain "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   set-approvals-enforced)    cmd_set_approvals_enforced "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;

@@ -705,10 +705,9 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // and asserts its one MECHANICALLY-checkable property: every hit lives inside
 // internal/validation/**, one of the two named §c e2e artifacts,
 // validationApi.test.ts, the seed migrations, or pnpm-lock.yaml (the plan's own
-// "no Category-A hit exists outside this scope" claim). The allowlist is
-// detectionHitAllowed below; internal/approval/**, frontend/app/src/**, and
-// e2e/api/policy-restore.test.ts were added to it for the approval-policy
-// version (a different version entirely) and are narrowed there, not exempted.
+// "no Category-A hit exists outside this scope" claim). detectionHitAllowed below is the
+// allowlist and the one place that enumerates it: every carve-out for a same-named version
+// that is not the rule-set version is narrowed there, not exempted.
 //
 // EXECUTOR NOTE (M4-04-01 Stage 3): this test originally also asserted
 // `wantCount == 90`. That assertion was REMOVED, for two reasons, and the
@@ -745,11 +744,10 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // fix) -- it is a baseline/regression guard, not a red-to-green spec.
 func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	root := repoRoot(t)
-	// .ralph/ is excluded for the same reason as playwright-report and .venv: gitignored
-	// per-worktree /ralph scratch, absent from every CI checkout, so it hides no shipped
-	// code. Without it a design doc quoting a version constant reds this test locally only
-	// -- the kind of false red that trains people to ignore a real guard. Only the flag was
-	// added; the regex above is untouched.
+	// .ralph/ is per-worktree RALPH scratch, untracked and absent from every CI checkout, so
+	// excluding it hides no shipped code. Unlike .venv and playwright-report it is NOT in
+	// .gitignore -- only .git/info/exclude, which is per-clone and unshared. The regex itself
+	// is untouched.
 	cmd := exec.Command("bash", "-c",
 		`grep -rnE '[Vv]ersion[[:space:]]*(:|==|!=|<>|=)[[:space:]]*1\b|[Vv]ersion\)?[[:space:]]*\.toBe\(1\)|loadV1' . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=playwright-report --exclude-dir=.venv --exclude-dir=.ralph`)
 	cmd.Dir = root

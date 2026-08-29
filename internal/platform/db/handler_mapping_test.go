@@ -6,9 +6,9 @@
 //
 // Scan 1 is AST, never text: a site is the INNERMOST enclosing func, so an inline
 // switch inside a returned handler literal is attributed to the literal and not
-// to the FuncDecl around it. A name-shaped predicate alone sees 12 of the 14
-// sites — it cannot see tenancy's two inline switches — which is what the
-// P2-only floor makes loud.
+// to the FuncDecl around it. A name-shaped predicate alone cannot see tenancy's
+// two inline switches, which is what the P2-only floor makes loud. The site
+// counts live in those floors, not here: they move with every new handler.
 //
 // The P2 predicate is a CALL to errors.Is(_, db.ErrNoTenant), never a bare
 // reference to the sentinel. Three store methods return db.ErrNoTenant; a

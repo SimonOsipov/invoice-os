@@ -6,6 +6,9 @@
 // SubmitWorker drives the tx1 / adapter / tx2 submit flow and PollWorker follows a
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
+//
+// EXTR-07 gives the service its first domain route, GET /v1/extractions: the HTTP surface is
+// no longer /healthz + /readyz + the ping stub.
 package main
 
 import (
@@ -153,6 +156,10 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"service":"submission","status":"ok"}`))
 	})
+
+	// GET /v1/extractions -- reached as /api/submission/v1/extractions: the gateway routes
+	// on the first segment under /api/ and forwards the subpath, so the pattern has no prefix.
+	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler((&extraction.Reader{Pool: pool}).JobsForDocument, app.Logger))
 
 	if err := app.Run(ctx); err != nil {
 		log.Fatalf("submission: %v", err)

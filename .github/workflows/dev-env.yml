@@ -611,6 +611,19 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
+      # Deleting a pr-<N> environment and recreating it under the same name hands the fork
+      # back its OWN old hostnames, which the edge still binds to the deleted services: the
+      # domain reads syncStatus ACTIVE and routes nowhere. Repair it before the 900s wait
+      # below blames Postgres. Skipped on workflow_dispatch, which authenticates with a
+      # project token the script's Bearer header does not speak.
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch'
+      - name: Verify the gateway hostname routes (repair a dark domain)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh verify-gateway-domain "$ENV_ID"
       - name: Wait for gateway /healthz 200 on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -868,6 +881,15 @@ jobs:
           cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile
+      # A domain record can exist, report syncStatus ACTIVE and still not route — see
+      # railway-env.sh, "Domain reachability: a record is not a route". Repair that here,
+      # before the wait below spends its whole 600s budget on a hostname the edge has no
+      # route for. Publishes the post-repair URLs, which need not keep their old names.
+      - name: Verify SPA hostnames route (repair a dark domain)
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh verify-spa-domains "$ENV_ID"
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -898,6 +920,10 @@ jobs:
             fi
           done
       - name: Install Chromium
+        # !cancelled(): skipping this when the wait fails makes topology report
+        # `browserType.launch: Executable doesn't exist` — a missing-browser error for what
+        # is really an unreachable SPA, which sends the next debugger to Playwright.
+        if: '!cancelled()'
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke

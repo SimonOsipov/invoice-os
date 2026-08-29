@@ -151,6 +151,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			if state != "dead_lettered" {
 				return nil
 			}
+			// Shares this transaction's fate on purpose, like internal/submission's
+			// terminal-failure branch: an audit-write failure rolls the advance back with it.
 			return w.Audit(ctx, tx, ExtractionAudit{
 				DocumentID:       args.DocumentID,
 				ExtractionJobID:  row.ID,

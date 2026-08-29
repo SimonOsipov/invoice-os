@@ -31,6 +31,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
@@ -311,7 +312,13 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 
 	pages := &extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: func(context.Context, string, []byte) error { return nil }}
 
-	ew := newExtractWorker(pool, ext, open, pages, logger)
+	audited := 0
+	auditor := func(context.Context, pgx.Tx, extraction.ExtractionAudit) error {
+		audited++
+		return nil
+	}
+
+	ew := newExtractWorker(pool, ext, open, pages, auditor, logger)
 	if ew == nil {
 		t.Fatal("newExtractWorker returned nil")
 	}
@@ -331,8 +338,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 			}
 		}
 	}
-	if checked < 5 {
-		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 5 (Pool, Extractor, Open, Pages, Logger) -- the loop above examined almost nothing", checked)
+	if checked < 6 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 6 (Pool, Extractor, Open, Pages, Audit, Logger) -- the loop above examined almost nothing", checked)
 	}
 
 	if ew.Pool != pool {
@@ -353,6 +360,13 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 	doc, err := ew.Open(context.Background(), "doc")
 	if err != nil || doc.ContentType != sentinel {
 		t.Errorf("ExtractWorker.Open returned (%+v, %v), want the sentinel opener passed in", doc, err)
+	}
+	if ew.Audit == nil {
+		t.Fatal("ExtractWorker.Audit is nil")
+	}
+	// Follows the identifier: a field set to some OTHER auditor is nil-free and reports nothing.
+	if err := ew.Audit(context.Background(), nil, extraction.ExtractionAudit{}); err != nil || audited != 1 {
+		t.Errorf("ExtractWorker.Audit ran %d time(s) and returned %v, want the recording auditor passed in to run exactly once", audited, err)
 	}
 }
 
@@ -471,8 +485,8 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
 	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
 
-	if len(ewArgs) != 5 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 5 (pool, extractor, opener, pages, logger)", len(ewArgs))
+	if len(ewArgs) != 6 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 6 (pool, extractor, opener, pages, auditor, logger)", len(ewArgs))
 	}
 	for i, arg := range ewArgs {
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
@@ -541,6 +555,17 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	}
 	if id, ok := svcArgs[1].(*ast.Ident); !ok || id.Name != objName {
 		t.Errorf("document.NewService's object store is %s, want %s -- the store document.NewS3Store built and main() already fatals on", wtRender(svcArgs[1]), objName)
+	}
+
+	// 5. The auditor that worker writes its terminal outcome through, and the logger still last.
+	//    A bare func literal here compiles and writes rows nothing in this file can read.
+	if call, ok := ewArgs[4].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newExtractionAuditor" {
+		t.Errorf("newExtractWorker's auditor argument is %s, want a newExtractionAuditor() call: the two literal event names and their inline payloads are only reached if main() builds it", wtRender(ewArgs[4]))
+	} else if len(call.Args) != 0 {
+		t.Errorf("newExtractionAuditor is called with %d argument(s), want 0", len(call.Args))
+	}
+	if sel, ok := ewArgs[5].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[5]))
 	}
 }
 

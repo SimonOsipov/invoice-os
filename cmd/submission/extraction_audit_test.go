@@ -258,6 +258,34 @@ func TestNewExtractionAuditor_FailedRefusesAnInvalidFailureKind(t *testing.T) {
 	}
 }
 
+// The gate admits four kinds, so the row must carry the one the event carried. A constant
+// substituted after the gate reads as clean against a single-kind fixture.
+func TestNewExtractionAuditor_FailedEchoesTheEventsFailureKind(t *testing.T) {
+	kinds := []extraction.FailureKind{
+		extraction.FailureDocumentUnavailable, extraction.FailurePagesNotRendered,
+		extraction.FailurePageRowsNotWritten, extraction.FailureExtractFailed,
+	}
+	seen := map[string]bool{}
+	for _, kind := range kinds {
+		if !kind.Valid() {
+			t.Fatalf("%q is not an accepted kind, so this case asserts the opposite of the gate", kind)
+		}
+		ev := eaFullEvent(false)
+		ev.FailureKind = kind
+		row := eaRun(t, ev)
+		if row.event != eaFailedEvent {
+			t.Fatalf("kind %q wrote %q, want %q", kind, row.event, eaFailedEvent)
+		}
+		if got := row.payload["failure_kind"]; got != string(kind) {
+			t.Errorf("kind %q wrote failure_kind %v, want %q", kind, got, kind)
+		}
+		seen[string(kind)] = true
+	}
+	if len(seen) != len(kinds) {
+		t.Fatalf("exercised %d distinct kind(s), want %d", len(seen), len(kinds))
+	}
+}
+
 func TestNewExtractionAuditor_ActorIsTheSystemLiteral(t *testing.T) {
 	seen := 0
 	for _, succeeded := range []bool{true, false} {

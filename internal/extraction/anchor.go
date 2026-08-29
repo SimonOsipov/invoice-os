@@ -20,7 +20,8 @@
 package extraction
 
 import (
-	"errors"
+	"encoding/json"
+	"fmt"
 	"regexp"
 )
 
@@ -79,9 +80,57 @@ const (
 // an unknown kind, an unknown shape, a MaxDistance outside [0,1], a Label over
 // maxRuleLabelBytes, or a Label RE2 refuses.
 func ParseRule(raw []byte) (Rule, error) {
-	return Rule{}, errors.New("ParseRule: not implemented")
+	var r Rule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return Rule{}, fmt.Errorf("anchor rule: %w", err)
+	}
+
+	// Before regexp.Compile: a 513-byte flat pattern compiles fine under RE2, so compiling
+	// first would never surface the cap.
+	if len(r.Label) > maxRuleLabelBytes {
+		return Rule{}, fmt.Errorf("anchor rule: label is %d bytes, over the %d-byte cap", len(r.Label), maxRuleLabelBytes)
+	}
+
+	switch r.Relation.Kind {
+	case RelSameToken, RelRight, RelBelow:
+	default:
+		return Rule{}, fmt.Errorf("anchor rule: unknown relation kind %q", r.Relation.Kind)
+	}
+
+	switch r.Shape {
+	case ShapeInvoiceNumber, ShapeDate, ShapeAmount, ShapeTIN, ShapeCurrency, ShapeName:
+	default:
+		return Rule{}, fmt.Errorf("anchor rule: unknown shape %q", r.Shape)
+	}
+
+	// Unconditional: same_token does not read MaxDistance, but an out-of-range value in a
+	// stored body is a defect wherever it sits.
+	if r.Relation.MaxDistance < 0 || r.Relation.MaxDistance > 1 {
+		return Rule{}, fmt.Errorf("anchor rule: max_distance %v is outside [0,1]", r.Relation.MaxDistance)
+	}
+
+	re, err := regexp.Compile(r.Label)
+	if err != nil {
+		return Rule{}, fmt.Errorf("anchor rule: label: %w", err)
+	}
+	r.re = re
+	return r, nil
 }
 
 // anchorLexicon maps a canonical label id to the pattern that recognises it. Ordered, never
 // ranged as a map: iteration order is fingerprint input.
-var anchorLexicon = []struct{ ID, Pattern string }{}
+//
+// The patterns overlap on purpose -- "Sub-total" matches both subtotal and total, and both
+// candidates are emitted. Reconciliation arithmetic downstream is the referee, not this table.
+var anchorLexicon = []struct{ ID, Pattern string }{
+	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
+	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
+	{"supplier_tin", `(?i)\b(supplier|seller|vendor)?\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
+	{"buyer_tin", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\s*\.?\s*(tin|tax\s*id)\b`},
+	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
+	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\b`},
+	{"currency", `(?i)\b(currency|ccy)\b`},
+	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`},
+	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`},
+	{"total", `(?i)\b(grand\s*total|amount\s*due|balance\s*due|total)\b`},
+}

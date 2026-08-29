@@ -4,7 +4,8 @@
 package extraction
 
 import (
-	"fmt"
+	"slices"
+	"strconv"
 
 	"github.com/shopspring/decimal"
 )
@@ -55,64 +56,70 @@ func parseMoney(s *string) (decimal.Decimal, bool) {
 	return v, err == nil
 }
 
-// singleCandidate returns the one candidate for field, and false when there are zero or more
-// than one -- ambiguity resolution is EXTR-05-04's.
-func singleCandidate(cands []Candidate, field string) (Candidate, bool) {
-	var found Candidate
-	count := 0
+// decideField picks the value for one HeaderFields member out of every candidate naming it. No
+// candidate is ReasonMissing; the head candidate (compareCandidates order) decides the value,
+// and every peer sharing its Tier and Distance is "equal standing" (D-14) -- deduped by value
+// before counting (D-15), so two readings of the same value are one answer, not an ambiguity.
+func decideField(cands []Candidate, field string) FieldResult {
+	var peers []Candidate
 	for _, c := range cands {
 		if c.Field == field {
-			found = c
-			count++
+			peers = append(peers, c)
 		}
 	}
-	return found, count == 1
-}
+	if len(peers) == 0 {
+		return FieldResult{Field: Field{Name: field, Reason: ReasonMissing}, Alternatives: []Field{}}
+	}
+	slices.SortFunc(peers, compareCandidates) // peers is a fresh slice; in.Candidates is untouched
 
-// decideField turns one candidate into its own decided, unflagged result.
-func decideField(c Candidate) FieldResult {
-	v := c.Value
-	return FieldResult{
-		Field:        Field{Name: c.Field, Value: &v, Region: c.Region, Reason: ReasonNone},
+	head := peers[0]
+	var group []Candidate
+	for _, c := range peers {
+		if c.Tier == head.Tier && c.Distance == head.Distance {
+			group = append(group, c)
+		}
+	}
+
+	var deduped []Candidate
+	for _, c := range group {
+		dup := false
+		for _, d := range deduped {
+			if d.Value == c.Value {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			deduped = append(deduped, c)
+		}
+	}
+
+	v := deduped[0].Value
+	result := FieldResult{
+		Field:        Field{Name: field, Value: &v, Region: deduped[0].Region, Reason: ReasonNone},
 		Alternatives: []Field{},
 	}
+	if len(deduped) < 2 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	alts := make([]Field, 0, len(deduped)-1)
+	for _, c := range deduped[1:] {
+		altVal := c.Value
+		alts = append(alts, Field{Name: field, Value: &altVal, Region: c.Region, Reason: ReasonNone})
+	}
+	result.Alternatives = alts
+	return result
 }
 
-// Reconcile decides which candidate to trust per field and checks the document's own
-// arithmetic. This pass covers only subtotal (0-or-1 candidates), the line_items block presence
-// check, per-row arithmetic and the line-sum-vs-subtotal check; totality over HeaderFields,
-// alternatives and reason precedence are EXTR-05-04's.
-func Reconcile(in Input) []FieldResult {
-	out := make([]FieldResult, 0, len(in.Candidates)+2+len(in.Lines))
+// reconcileLines decides the line_items block and its per-row flags. lineSum and haveLineTotal
+// feed the subtotal-vs-lines check in Reconcile; haveLineTotal is also what the block's own
+// reason turns on (D-21): a row present with no parseable total never ran the sum check, so it
+// reads ReasonMissing, not the ReasonNone a genuinely reconciled block gets.
+func reconcileLines(lines []DocLine) (block FieldResult, lineSum decimal.Decimal, haveLineTotal bool, rowFlags []FieldResult) {
+	block = FieldResult{Field: Field{Name: "line_items", Reason: ReasonMissing}, Alternatives: []Field{}}
 
-	// Every other field carrying exactly one candidate is decided as-is; subtotal is handled
-	// below because its reason can still be overridden by the line-sum check.
-	var handled []string
-	for _, c := range in.Candidates {
-		if c.Field == "subtotal" || slicesContain(handled, c.Field) {
-			continue
-		}
-		handled = append(handled, c.Field)
-		if only, ok := singleCandidate(in.Candidates, c.Field); ok {
-			out = append(out, decideField(only))
-		}
-	}
-
-	subtotalCandidate, subtotalDecided := singleCandidate(in.Candidates, "subtotal")
-	subtotal := FieldResult{Field: Field{Name: "subtotal", Reason: ReasonMissing}, Alternatives: []Field{}}
-	if subtotalDecided {
-		subtotal = decideField(subtotalCandidate)
-	}
-
-	lineItems := FieldResult{Field: Field{Name: "line_items", Reason: ReasonNone}, Alternatives: []Field{}}
-	if len(in.Lines) == 0 {
-		lineItems.Reason = ReasonMissing
-	}
-
-	var lineSum decimal.Decimal
-	haveLineTotal := false
-	var rowFlags []FieldResult
-	for _, line := range in.Lines {
+	for _, line := range lines {
 		if total, ok := parseMoney(line.LineTotal); ok {
 			lineSum = lineSum.Add(total)
 			haveLineTotal = true
@@ -130,7 +137,7 @@ func Reconcile(in Input) []FieldResult {
 		if exceedsTolerance(qty.Mul(price).Sub(printed).Abs()) {
 			rowFlags = append(rowFlags, FieldResult{
 				Field: Field{
-					Name:   fmt.Sprintf("line_items[%d].line_total", line.Index),
+					Name:   "line_items[" + strconv.Itoa(line.Index) + "].line_total",
 					Value:  line.LineTotal,
 					Region: line.Region,
 					Reason: ReasonInconsistent,
@@ -140,27 +147,41 @@ func Reconcile(in Input) []FieldResult {
 		}
 	}
 
-	// The sum check runs only when a subtotal was decided and at least one line carries a total;
-	// either absent skips the comparison rather than defaulting to a mismatch (D-19).
-	if subtotalDecided && haveLineTotal {
-		if printedSubtotal, err := decimal.NewFromString(subtotalCandidate.Value); err == nil {
-			if exceedsTolerance(lineSum.Sub(printedSubtotal).Abs()) {
-				subtotal.Reason = ReasonInconsistent
-			}
-		}
+	if haveLineTotal {
+		block.Reason = ReasonNone
 	}
-
-	out = append(out, subtotal, lineItems)
-	out = append(out, rowFlags...)
-	return out
+	return block, lineSum, haveLineTotal, rowFlags
 }
 
-// slicesContain is a small linear lookup -- this path stays off maps (resolve.go's posture).
-func slicesContain(names []string, name string) bool {
-	for _, n := range names {
-		if n == name {
-			return true
+// Reconcile decides which candidate to trust per field and checks the document's own
+// arithmetic. Total over HeaderFields (Core AC 1): one FieldResult per member, in HeaderFields
+// order, then the line_items block, then zero or more per-row flags. A candidate naming a field
+// outside HeaderFields is ignored.
+func Reconcile(in Input) []FieldResult {
+	out := make([]FieldResult, 0, len(HeaderFields)+1+len(in.Lines))
+	for _, field := range HeaderFields {
+		out = append(out, decideField(in.Candidates, field))
+	}
+
+	lineItems, lineSum, haveLineTotal, rowFlags := reconcileLines(in.Lines)
+
+	// The sum check may only tighten an already-clean subtotal (D-7): an ambiguous or missing
+	// subtotal keeps its own reason rather than being rewritten to inconsistent.
+	if haveLineTotal {
+		for i := range out {
+			if out[i].Name != "subtotal" || out[i].Reason != ReasonNone {
+				continue
+			}
+			if printedSubtotal, ok := parseMoney(out[i].Value); ok {
+				if exceedsTolerance(lineSum.Sub(printedSubtotal).Abs()) {
+					out[i].Reason = ReasonInconsistent
+				}
+			}
+			break
 		}
 	}
-	return false
+
+	out = append(out, lineItems)
+	out = append(out, rowFlags...)
+	return out
 }

@@ -193,6 +193,16 @@ func overlap1D(a0, a1, b0, b1 float64) float64 {
 	return min(a1, b1) - max(a0, b0)
 }
 
+// PageBand scopes a Tier-1 rule to part of a page. An enum, not a coordinate pair: the zero
+// value has to mean "every page", or a rule that set no band would go silent.
+type PageBand int
+
+const (
+	BandAnywhere    PageBand = iota // every page, every row -- the zero value
+	BandPage1Top                    // page 1, anchor box wholly above the half-way line
+	BandPage1Bottom                 // page 1, anchor box wholly below it
+)
+
 // usableRegion is the box a candidate may carry: a copy, or nil when the source token had no
 // geometry worth pointing at.
 func usableRegion(r Region) *Region {

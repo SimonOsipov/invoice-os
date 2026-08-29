@@ -242,3 +242,80 @@ func TestAnchorRulesFor_UsesTenantTxNotRequestTx(t *testing.T) {
 		t.Errorf("AnchorRulesFor(ctxB, tenantA, ...) returned %+v, want tenant A's row %s; the parameter must win over ctx's identity", out, idA)
 	}
 }
+
+// stAnchorRuleTotal is a rule the corpus actually matches, so a candidate reaching Resolve is
+// evidence and not an empty result.
+const stAnchorRuleTotal = `{"label":"(?i)\\btotal\\b","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
+
+// stCorpusFile is the layout G-11/G-12 fingerprint and resolve. Inline labels, so the shipped
+// set reaches every field on it.
+const stCorpusFile = "corpus_inline_labels.pdf"
+
+// G-11
+func TestResolve_LearnedRulesForAnotherFingerprintAreNeverPassedIn(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, _ := stTenant(t, ctx)
+
+	pages := rvCorpusPages(t, stCorpusFile)
+	fingerprint := extraction.Fingerprint(pages)
+	stSeedAnchorRule(t, ctx, tenantID, fingerprint+"-other", "total", stAnchorRuleTotal, extraction.RuleSchemaVersion)
+
+	learned, err := s.AnchorRulesFor(ctx, tenantID, fingerprint)
+	if err != nil {
+		t.Fatalf("AnchorRulesFor: %v", err)
+	}
+	if len(learned) != 0 {
+		t.Fatalf("AnchorRulesFor returned %d rule(s) for this document's own fingerprint; the seeded rule belongs to another layout", len(learned))
+	}
+
+	got := extraction.Resolve(pages, extraction.RuleSet{Learned: learned, Tier1: extraction.Tier1Rules})
+	// Not optional: "every candidate is generic" is what a Resolve returning nothing produces.
+	rvFloor(t, got, "the shipped set with no learned rule for this fingerprint")
+	for _, c := range got {
+		if c.Tier != extraction.TierGeneric {
+			t.Errorf("candidate %s=%q from rule %q carries %v; no stored rule for this fingerprint reached Resolve", c.Field, c.Value, c.RuleID, c.Tier)
+		}
+	}
+}
+
+// G-12
+func TestResolve_LearnedRuleFromTheStoreReachesResolution(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, _ := stTenant(t, ctx)
+
+	pages := rvCorpusPages(t, stCorpusFile)
+	fingerprint := extraction.Fingerprint(pages)
+	id := stSeedAnchorRule(t, ctx, tenantID, fingerprint, "total", stAnchorRuleTotal, extraction.RuleSchemaVersion)
+
+	learned, err := s.AnchorRulesFor(ctx, tenantID, fingerprint)
+	if err != nil {
+		t.Fatalf("AnchorRulesFor: %v", err)
+	}
+	if len(learned) != 1 {
+		t.Fatalf("AnchorRulesFor returned %d rule(s) for the seeded fingerprint, want 1", len(learned))
+	}
+
+	got := rvFor(extraction.Resolve(pages, extraction.RuleSet{Learned: learned, Tier1: extraction.Tier1Rules}), "total")
+	rvFloor(t, got, "a stored rule for this document's own fingerprint")
+	seeded := false
+	for _, c := range got {
+		if c.Tier == extraction.TierLearned && c.RuleID == id {
+			seeded = true
+		}
+	}
+	if !seeded {
+		t.Errorf("no total candidate carries TierLearned with the seeded id %s: %+v", id, got)
+	}
+
+	// Paired control: the same page with nothing learned. Without it a Resolve that stamps
+	// every candidate TierLearned passes the assertion above.
+	ctl := rvFor(extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}), "total")
+	rvControl(t, ctl, "the same page with Learned nil")
+	for _, c := range ctl {
+		if c.Tier != extraction.TierGeneric {
+			t.Errorf("with Learned nil, total candidate %q from rule %q carries %v", c.Value, c.RuleID, c.Tier)
+		}
+	}
+}

@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -198,6 +199,13 @@ func newPageSink(objects document.ObjectStore) extraction.PageSink {
 	return func(ctx context.Context, key string, body []byte) error {
 		return objects.Put(ctx, key, bytes.NewReader(body), int64(len(body)))
 	}
+}
+
+// selectExtractor resolves EXTRACTOR to an extraction.Extractor, the shape submission.Select
+// already uses for APP_ADAPTER. EXTR-03-07 stub -- the mock/docling/unrecognised branches land
+// with the story that owns them (cmd/submission/main_test.go: TestSelectExtractor_*).
+func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, error) {
+	return nil, errors.New("extractor: not implemented")
 }
 
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails

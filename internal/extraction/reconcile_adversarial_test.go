@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"math/rand"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -439,4 +440,82 @@ func valuesOf(fields []extraction.Field) []string {
 		out[i] = *f.Value
 	}
 	return out
+}
+
+// --- EXTR-05-05: no invoice-column write -------------------------------------------
+//
+// The spec's own Test Specs row bans "invoices" AND "line_items" -- but reconcile.go
+// legitimately contains "line_items" three times (the block's field name and the two per-row
+// flag names), so a scan banning that literal would fail on correct code. Rescoped here to what
+// AC-5 actually means: database-write vocabulary -- the "invoices" literal, the INSERT/UPDATE
+// SQL verbs, and a pgx import -- never every substring the field-naming code already uses.
+
+// rcDBWriteHits reports database-write vocabulary in f, never a "line_items" name.
+func rcDBWriteHits(f *ast.File) []string {
+	var hits []string
+	for _, imp := range f.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			p = imp.Path.Value
+		}
+		if strings.Contains(p, "pgx") {
+			hits = append(hits, "import "+p)
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		v, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			v = lit.Value
+		}
+		if strings.Contains(v, "invoices") {
+			hits = append(hits, "literal containing \"invoices\": "+lit.Value)
+		}
+		if up := strings.ToUpper(v); strings.Contains(up, "INSERT") || strings.Contains(up, "UPDATE") {
+			hits = append(hits, "SQL verb in literal: "+lit.Value)
+		}
+		return true
+	})
+	return hits
+}
+
+func TestReconcile_NamesNoInvoiceColumnWrite(t *testing.T) {
+	f := rcParse(t, "reconcile.go", nil)
+	if len(f.Decls) == 0 {
+		t.Fatal("reconcile.go declares nothing; the scan below reported all-clear over an empty AST")
+	}
+	if hits := rcDBWriteHits(f); len(hits) != 0 {
+		t.Errorf("reconcile.go carries %v; the decision stage reads no database and writes no invoice column", hits)
+	}
+
+	// Needle: every banned construct at once, proving the scan actually catches
+	// database-write vocabulary rather than passing vacuously.
+	const needle = `package p
+
+import "github.com/jackc/pgx/v5"
+
+func f(conn *pgx.Conn) {
+	conn.Exec(nil, "INSERT INTO invoices (id) VALUES ($1)")
+}
+`
+	if needleHits := rcDBWriteHits(rcParse(t, "needle.go", needle)); len(needleHits) == 0 {
+		t.Fatal("the needle source imports pgx and writes an INSERT INTO invoices literal, and the scan reported nothing; the all-clear above proves nothing")
+	}
+
+	// Control: reconcile.go's own legitimate line_items vocabulary must not trip the scan --
+	// the principle is database-write vocabulary, not every substring already in use.
+	const control = `package p
+
+const blockName = "line_items"
+
+func rowFlagName(i string) string {
+	return "line_items[" + i + "].line_total"
+}
+`
+	if controlHits := rcDBWriteHits(rcParse(t, "control.go", control)); len(controlHits) != 0 {
+		t.Errorf("the control source only names line_items, reconcile.go's own legitimate vocabulary, and the scan flagged %v; the scan is not specific", controlHits)
+	}
 }

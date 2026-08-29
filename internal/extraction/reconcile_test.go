@@ -713,3 +713,204 @@ func TestReconcile_AnAmbiguousSubtotalIsNotRewrittenToInconsistent(t *testing.T)
 		t.Errorf("subtotal reason = %q, want ReasonAmbiguous -- neither candidate matches the line sum, but ambiguous must never be rewritten to inconsistent", got.Reason)
 	}
 }
+
+// --- EXTR-05-05: the supplier check against the signed-in entity --------------------
+
+func TestReconcile_SupplierTINMatchesTheEntity(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_tin", "99999999-0101")},
+		Entity:     extraction.Entity{TIN: "99999999-0101"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonNone {
+		t.Errorf("supplier_tin reason = %q, want ReasonNone -- the candidate matches Entity.TIN exactly", got.Reason)
+	}
+}
+
+func TestReconcile_SupplierTINMismatchIsInconsistent(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_tin", "99999999-0102")},
+		Entity:     extraction.Entity{TIN: "99999999-0101"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonInconsistent {
+		t.Errorf("supplier_tin reason = %q, want ReasonInconsistent -- 99999999-0102 disagrees with Entity.TIN 99999999-0101", got.Reason)
+	}
+	if got.Value == nil {
+		t.Fatal("supplier_tin Value = nil, want the extracted \"99999999-0102\"")
+	}
+	if *got.Value != "99999999-0102" {
+		t.Errorf("supplier_tin Value = %s, want the EXTRACTED \"99999999-0102\" -- a flagged field must never be overwritten with the entity's own value", *got.Value)
+	}
+}
+
+func TestReconcile_SupplierNameMismatchIsInconsistent(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_name", "Acme Trading")},
+		Entity:     extraction.Entity{Name: "Honeywell Group"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_name")
+	if !ok {
+		t.Fatalf(`"supplier_name" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonInconsistent {
+		t.Errorf("supplier_name reason = %q, want ReasonInconsistent -- \"Acme Trading\" disagrees with Entity.Name \"Honeywell Group\"", got.Reason)
+	}
+	if got.Value == nil || *got.Value != "Acme Trading" {
+		t.Errorf("supplier_name Value = %v, want the EXTRACTED \"Acme Trading\" -- a flagged field must never be overwritten with the entity's own value", got.Value)
+	}
+}
+
+func TestReconcile_SupplierNameIgnoresCaseAndInnerWhitespace(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_name", "HONEYWELL   GROUP")},
+		Entity:     extraction.Entity{Name: "Honeywell Group"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_name")
+	if !ok {
+		t.Fatalf(`"supplier_name" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonNone {
+		t.Errorf("supplier_name reason = %q, want ReasonNone -- \"HONEYWELL   GROUP\" and \"Honeywell Group\" differ only in case and inner whitespace", got.Reason)
+	}
+}
+
+func TestReconcile_AnEntityWithNoTINRaisesNoSupplierFlag(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_tin", "99999999-0102")},
+		Entity:     extraction.Entity{TIN: ""},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonNone {
+		t.Errorf("supplier_tin reason = %q, want ReasonNone -- an empty Entity.TIN runs no TIN check", got.Reason)
+	}
+}
+
+// TestReconcile_BuyerTINIsNeverComparedToTheEntity covers both cases the AC names: a buyer_tin
+// equal to the entity's own TIN, and one that differs. One case alone would not prove "never
+// compared" -- an implementation that happened to compare and always pass the equal case would
+// look identical to a correct one until the differing case is checked too.
+func TestReconcile_BuyerTINIsNeverComparedToTheEntity(t *testing.T) {
+	cases := []struct {
+		name      string
+		candidate string
+	}{
+		{"equal to the entity's TIN", "99999999-0101"},
+		{"differing from the entity's TIN", "99999999-0102"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := extraction.Input{
+				Candidates: []extraction.Candidate{rcCandidate("buyer_tin", tc.candidate)},
+				Entity:     extraction.Entity{TIN: "99999999-0101"},
+			}
+			results := extraction.Reconcile(in)
+			got, ok := rcFind(results, "buyer_tin")
+			if !ok {
+				t.Fatalf(`"buyer_tin" not found in %+v`, results)
+			}
+			if got.Reason != extraction.ReasonNone {
+				t.Errorf("buyer_tin reason = %q, want ReasonNone -- buyer_tin is never compared to the entity, whatever its value", got.Reason)
+			}
+		})
+	}
+}
+
+func TestReconcile_AMissingBuyerTINIsMissingNotInconsistent(t *testing.T) {
+	in := extraction.Input{Entity: extraction.Entity{TIN: "99999999-0101"}}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "buyer_tin")
+	if !ok {
+		t.Fatalf(`"buyer_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonMissing {
+		t.Errorf("buyer_tin reason = %q, want ReasonMissing -- zero candidates, and buyer_tin takes no part in the supplier check anyway", got.Reason)
+	}
+}
+
+func TestReconcile_AnAmbiguousSupplierTINKeepsItsReason(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{
+			rcCandAt("supplier_tin", "99999999-0102", extraction.TierGeneric, 0.01),
+			rcCandAt("supplier_tin", "99999999-0103", extraction.TierGeneric, 0.01),
+		},
+		Entity: extraction.Entity{TIN: "99999999-0101"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("supplier_tin reason = %q, want ReasonAmbiguous -- an already-ambiguous field keeps its reason (AC-6), never rewritten to inconsistent by the supplier check", got.Reason)
+	}
+}
+
+func TestReconcile_AMissingSupplierNameKeepsItsReason(t *testing.T) {
+	in := extraction.Input{Entity: extraction.Entity{Name: "Honeywell Group"}}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_name")
+	if !ok {
+		t.Fatalf(`"supplier_name" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonMissing {
+		t.Errorf("supplier_name reason = %q, want ReasonMissing -- a missing field keeps its reason (AC-6), never rewritten to inconsistent by the supplier check", got.Reason)
+	}
+}
+
+// TestReconcile_SupplierTINWhitespaceInRawTokenStillMatches is QA's own addition: a raw OCR
+// token padded with whitespace goes through ShapeTIN.Normalize before it ever becomes a
+// Candidate.Value (resolve.go's own contract), so by the time Reconcile's plain == runs, both
+// sides already share one spelling. A comparison that skipped that contract and matched on raw
+// substrings would flag every whitespace-padded document as inconsistent.
+func TestReconcile_SupplierTINWhitespaceInRawTokenStillMatches(t *testing.T) {
+	readings := extraction.ShapeTIN.Normalize("  99999999-0101  ")
+	if len(readings) != 1 {
+		t.Fatalf("ShapeTIN.Normalize(padded raw) = %v, want exactly one clean reading", readings)
+	}
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_tin", readings[0])},
+		Entity:     extraction.Entity{TIN: "99999999-0101"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonNone {
+		t.Errorf("supplier_tin reason = %q, want ReasonNone -- the raw token's whitespace never reaches Reconcile", got.Reason)
+	}
+}
+
+// TestReconcile_EmptyEntityTINDoesNotSuppressTheNameCheck is QA's own addition, pinning AC-3's
+// independence: an empty Entity.TIN and a set Entity.Name are independent gates. A bug that
+// short-circuited both checks together on any one empty field would hide a real supplier-name
+// mismatch behind a supplier with no TIN on file.
+func TestReconcile_EmptyEntityTINDoesNotSuppressTheNameCheck(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_name", "Acme Trading")},
+		Entity:     extraction.Entity{TIN: "", Name: "Honeywell Group"},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_name")
+	if !ok {
+		t.Fatalf(`"supplier_name" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonInconsistent {
+		t.Errorf("supplier_name reason = %q, want ReasonInconsistent -- an empty Entity.TIN must not suppress the independent name check", got.Reason)
+	}
+}

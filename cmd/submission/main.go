@@ -152,6 +152,10 @@ func main() {
 		_, _ = w.Write([]byte(`{"service":"submission","status":"ok"}`))
 	})
 
+	// GET /v1/extractions -- reached as /api/submission/v1/extractions: the gateway routes
+	// on the first segment under /api/ and forwards the subpath, so the pattern has no prefix.
+	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler((&extraction.Reader{Pool: pool}).JobsForDocument, app.Logger))
+
 	if err := app.Run(ctx); err != nil {
 		log.Fatalf("submission: %v", err)
 	}

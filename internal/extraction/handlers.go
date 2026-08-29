@@ -1,5 +1,5 @@
-// handlers.go: GET /v1/extraction-jobs. Reached through the gateway as
-// /api/submission/v1/extraction-jobs — the gateway routes on the first segment under /api/
+// handlers.go: GET /v1/extractions. Reached through the gateway as
+// /api/submission/v1/extractions — the gateway routes on the first segment under /api/
 // and forwards the subpath, so the mux pattern carries no prefix.
 //
 // writeJSON/writeError/statusForErr mirror internal/audit/handlers.go:42-64 verbatim;
@@ -42,7 +42,7 @@ func statusForErr(err error) (status int, msg string) {
 	}
 }
 
-// JobsHandler returns GET /v1/extraction-jobs. Identity is checked FIRST, before any
+// JobsHandler returns GET /v1/extractions. Identity is checked FIRST, before any
 // parameter is read, so an unauthenticated caller cannot learn which parameters exist by
 // watching 400s (TestExtractionJobsHandler_UnauthenticatedIs401BeforeParsing).
 //

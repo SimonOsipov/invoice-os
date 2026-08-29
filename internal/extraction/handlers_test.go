@@ -1,4 +1,4 @@
-// handlers_test.go: the nine-row status/body contract of GET /v1/extraction-jobs, driven with
+// handlers_test.go: the nine-row status/body contract of GET /v1/extractions, driven with
 // httptest and a spy list func. No database — this file must never call stRequire, the
 // package's one sanctioned skip site, because scripts/ci/rls-test-gate.sh fails a step on any
 // skip.
@@ -35,7 +35,7 @@ import (
 
 const (
 	hndSource      = "handlers.go"
-	hndRoute       = "/v1/extraction-jobs"
+	hndRoute       = "/v1/extractions"
 	hndContentType = "application/json"
 
 	// The four wire messages. db.NotActiveMemberMessage is deliberately absent: the 403 body is
@@ -643,7 +643,7 @@ func TestExtractionJobsHandler_UrnPrefixedUuidReachesTheReaderCanonicalised(t *t
 }
 
 // The handler answers any method. EXTR-07-03 must therefore register a method-qualified pattern
-// ("GET /v1/extraction-jobs"); nothing in here will 405 for it.
+// ("GET /v1/extractions"); nothing in here will 405 for it.
 func TestExtractionJobsHandler_LeavesMethodEnforcementToTheMux(t *testing.T) {
 	methods := []string{http.MethodPost, http.MethodDelete}
 	if len(methods) == 0 {

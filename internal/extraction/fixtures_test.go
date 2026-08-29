@@ -341,10 +341,10 @@ func fxBuildCorpusSplitLabels() []byte {
 	)
 }
 
-// fxBuildCorpusStackedLabels stacks each value 16pt under its label at the same x, the only
-// layout where below reaches the name fields. A label clears its own group's values by at
-// most 0.027 normalised and the next group's first token by at least 0.090, so below cannot
-// span two groups.
+// fxBuildCorpusStackedLabels stacks each value 16pt under its label at the same x -- the only
+// layout with no inline field at all. A label clears its own group's values by at most 0.027
+// normalised and the next group's label by at least 0.087, so below cannot span two groups:
+// TestCorpus_StackedValuesSitBelowTheirLabels.
 func fxBuildCorpusStackedLabels() []byte {
 	return fxTextPage(
 		fxLine{24, 72, 720, "INVOICE"},
@@ -363,11 +363,11 @@ func fxBuildCorpusStackedLabels() []byte {
 	)
 }
 
-// fxBuildCorpusTwoColumn splits supplier and buyer across columns rather than down the page,
-// so its fingerprint differs from its siblings' by column band. Both TINs sit inside a longer
-// token, so the buyer/supplier split here is decided by label and not by page half.
-// x=400, not the 340 the plan named: columnBand is centre-X thirds, and at 340 both buyer
-// labels centre at 0.58/0.65 and land in the MIDDLE band. 400 puts them in the right one.
+// fxBuildCorpusTwoColumn puts the supplier and buyer blocks in different column bands, the only
+// corpus layout whose labels reach the right-hand third:
+// TestCorpus_TwoColumnPartiesLandInTheOuterBands. x=400 and not 340, which centres the buyer
+// labels at 0.58/0.65, inside the MIDDLE band. Both TINs sit inside a longer token, so the
+// buyer/supplier split here is decided by label and not by page half.
 func fxBuildCorpusTwoColumn() []byte {
 	return fxTextPage(
 		fxLine{24, 72, 720, "INVOICE"},

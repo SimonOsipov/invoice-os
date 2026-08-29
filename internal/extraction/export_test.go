@@ -43,3 +43,18 @@ func NewPDFiumExtractorWithReaderForTest(r PageReader) *PDFiumExtractor {
 func NewDoclingExtractorWithReaderForTest(r PageReader) *DoclingExtractor {
 	return &DoclingExtractor{reader: r}
 }
+
+// ColumnBandForTest exposes the band Fingerprint sorts and hashes by, so the corpus specs
+// assert the production thirds rather than a reimplementation of them.
+func ColumnBandForTest(r Region) int { return columnBand(r) }
+
+// AnchorLabelIDsForTest returns every anchorLexicon ID whose pattern matches text.
+func AnchorLabelIDsForTest(text string) []string {
+	var ids []string
+	for _, m := range anchorLabelMatchers {
+		if m.RE.MatchString(text) {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
+}

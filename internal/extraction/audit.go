@@ -24,7 +24,7 @@ const (
 )
 
 // Valid reports whether k is one of the four kinds. "" is invalid: a success carries no kind,
-// so the adapter can use this to refuse a half-filled failure payload.
+// and the adapter gates its failure branch on this, refusing a half-filled failure payload.
 func (k FailureKind) Valid() bool {
 	switch k {
 	case FailureDocumentUnavailable, FailurePagesNotRendered,

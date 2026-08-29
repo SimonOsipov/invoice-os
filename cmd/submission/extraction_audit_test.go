@@ -72,6 +72,13 @@ var (
 	// The spellings an adapter reaching for extraction_jobs.last_error would use. That column
 	// is free text the audit-payload rule forbids and the jobs table already holds.
 	eaForbiddenKeys = []string{"body", "detail", "error", "last_error", "message", "raw", "wire"}
+
+	// What an unassigned or drifted kind looks like. "" is the zero value and the only one
+	// Work() could ever hand over; the rest are the spellings a rename or a hand-typed
+	// constant lands on, none of which internal/extraction would accept back.
+	eaInvalidKinds = []extraction.FailureKind{
+		"", "document_unavailble", "DOCUMENT_UNAVAILABLE", "extract_failed ", "unknown",
+	}
 )
 
 // ---------------------------------------------------------------------------
@@ -206,6 +213,48 @@ func TestNewExtractionAuditor_FailedWritesTheFailedEvent(t *testing.T) {
 	}
 	if !reflect.DeepEqual(row.payload, want) {
 		t.Errorf("payload = %v, want %v", row.payload, want)
+	}
+}
+
+// TestNewExtractionAuditor_FailedRefusesAnInvalidFailureKind: the adapter is the one chokepoint
+// between the struct and the row, and audit_log never rewrites a row. Work() assigns a kind on
+// every error path, so "" is unreachable today -- this gate is what keeps it unreachable, and
+// without it extraction.FailureKind.Valid() has no production caller at all.
+func TestNewExtractionAuditor_FailedRefusesAnInvalidFailureKind(t *testing.T) {
+	// Control needle: a filled failure passes the gate and still writes its row. Without it a
+	// gate that refused every failure would satisfy each refusal below.
+	if row := eaRun(t, eaFullEvent(false)); row.event != eaFailedEvent {
+		t.Fatalf("control needle: a filled failure wrote %q, want %q -- the gate refuses everything, so the refusals below prove nothing", row.event, eaFailedEvent)
+	}
+
+	checked := 0
+	for _, kind := range eaInvalidKinds {
+		if kind.Valid() {
+			t.Errorf("%q is an accepted kind, so the case below asserts the opposite of the gate", kind)
+			continue
+		}
+		ev := eaFullEvent(false)
+		ev.FailureKind = kind
+		checked++
+
+		tx := &eaTx{}
+		if err := newExtractionAuditor()(context.Background(), tx, ev); err == nil {
+			t.Errorf("a failure carrying kind %q returned nil, want an error -- the row it writes names a kind nothing in Work() produces, and audit_log is append-only", kind)
+		}
+		if len(tx.execs) != 0 {
+			t.Errorf("a failure carrying kind %q issued %d statement(s), want 0 -- refusing after the INSERT leaves the wrong row behind on any caller that swallows the error", kind, len(tx.execs))
+		}
+	}
+	if checked != len(eaInvalidKinds) {
+		t.Fatalf("checked %d kind(s), want %d -- a shrunken set reports the gate closed over spellings nobody tried", checked, len(eaInvalidKinds))
+	}
+
+	// The gate is on the failure branch alone: a success carries no kind by construction and
+	// must not be refused for it.
+	success := eaFullEvent(true)
+	success.FailureKind = ""
+	if row := eaRun(t, success); row.event != eaSucceededEvent {
+		t.Errorf("a success carrying no failure kind wrote %q, want %q -- the gate is guarding the wrong branch", row.event, eaSucceededEvent)
 	}
 }
 

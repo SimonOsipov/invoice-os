@@ -226,6 +226,13 @@ func newExtractionAuditor() extraction.RecordExtractionAudit {
 				"flagged_count":     ev.FlaggedCount,
 			})
 		}
+		// audit_log is append-only, so a failure_kind written wrong is wrong forever. Work()
+		// assigns a kind on every error path, making "" unreachable today; this is what keeps
+		// it unreachable (TestNewExtractionAuditor_FailedRefusesAnInvalidFailureKind).
+		if !ev.FailureKind.Valid() {
+			return fmt.Errorf("extraction audit: job %s reports failure with failure kind %q",
+				ev.ExtractionJobID, ev.FailureKind)
+		}
 		return audit.Record(ctx, tx, "system", "extraction.failed", map[string]any{
 			"document_id":       ev.DocumentID,
 			"extraction_job_id": ev.ExtractionJobID,

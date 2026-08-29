@@ -1,18 +1,17 @@
 // reader.go: the request seam over extraction_jobs. The tenant comes from the verified
 // Identity in ctx, never from an argument — the opposite of store.go's worker seam, which is
 // why this cannot live in store.go (TestExtractionStore_UsesTenantTxNotRequestTx).
-//
-// STUB — EXTR-07-01 Stage 2.5. Only the wire shape is real; JobsForDocument is not
-// implemented, so reader_db_test.go is red on its own assertions rather than on a compile
-// error. The executor replaces the method body.
 package extraction
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // maxJobsPerDocument bounds a response a client polls every 2s: D-6 permits many jobs per
@@ -40,5 +39,46 @@ type Reader struct{ Pool *pgxpool.Pool }
 
 // JobsForDocument returns every extraction job for one document, newest first.
 func (r *Reader) JobsForDocument(ctx context.Context, documentID string) (JobsResponse, error) {
-	return JobsResponse{Jobs: []JobState{}}, errors.New("extraction: JobsForDocument not implemented")
+	jobs := []JobState{}
+	if err := db.WithinRequestTenantTx(ctx, r.Pool, func(tx pgx.Tx) error {
+		var err error
+		jobs, err = jobsForDocumentTx(ctx, tx, documentID)
+		return err
+	}); err != nil {
+		// Discarded on every error, including a commit that failed after the scan: a failed
+		// read answers with an empty list, never a partial or uncommitted one.
+		return JobsResponse{Jobs: []JobState{}}, err
+	}
+	return JobsResponse{Jobs: jobs}, nil
+}
+
+// jobsForDocumentTx names no tenant_id: the tenant_isolation policy supplies that predicate,
+// so writing one by hand would make TestRLS_ExtractionJobsCrossTenantReadRefused prove
+// nothing. Returns an empty slice rather than nil on every path — nil marshals to JSON null.
+func jobsForDocumentTx(ctx context.Context, tx pgx.Tx, documentID string) ([]JobState, error) {
+	out := []JobState{}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, document_id, state, created_at, last_error
+		   FROM extraction_jobs
+		  WHERE document_id = $1
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT $2`,
+		documentID, maxJobsPerDocument)
+	if err != nil {
+		return out, fmt.Errorf("extraction: read jobs for document %s: %w", documentID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var j JobState
+		if err := rows.Scan(&j.ID, &j.DocumentID, &j.State, &j.CreatedAt, &j.LastError); err != nil {
+			return out, fmt.Errorf("extraction: scan job for document %s: %w", documentID, err)
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("extraction: read jobs for document %s: %w", documentID, err)
+	}
+	return out, nil
 }

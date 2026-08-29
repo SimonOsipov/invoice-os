@@ -24,8 +24,8 @@ const tier1RuleCount = 32
 // own group is 0.0267, and the next group's label is no closer than 0.087.
 //
 // Each float is paired with its JSON spelling because strconv is outside this file's import
-// allowlist. TestTier1_EveryRuleHasACompiledMatcher parses every shipped rule back against the
-// float, so the pair cannot drift.
+// allowlist. TestTier1_EveryRuleHasACompiledMatcher checks every shipped rule's parsed distance
+// against the float, so the pair cannot drift.
 const (
 	tier1MaxDistanceRight     = 0.35
 	tier1MaxDistanceRightJSON = "0.35"

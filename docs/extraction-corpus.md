@@ -57,6 +57,12 @@ pretending an unreached field is a pass would inflate it. `corpus_stacked_labels
 asserted in the table either; EXTR-04-09 owns the match semantics and the accuracy floor, and
 that floor's constant lives with the test that enforces it, not here.
 
+`TestTier1_ReachesEveryCorpusExpectation` resolves every layout against `Tier1Rules` alone and
+fails on any expected value the shipped set cannot reach. One pair is exempt and listed in
+`t1aGaps`: `corpus_two_column.pdf` / `buyer_tin`, per that layout's row above. The exemption is
+asserted still-unreached, so EXTR-04-09 closing it is a deliberate diff rather than a silent
+pass.
+
 ## Regenerating
 
 ```
@@ -92,6 +98,10 @@ Four edits, no new test:
    missing layout; update its expected count with it.
 4. The layout's token count in `corpusTokenFloor`, in `corpus_adversarial_test.go`. That table
    must name every layout, so a new one without an entry fails rather than going unmeasured.
+
+Every value in the new row must also be reachable by `Tier1Rules`, or the pair goes in `t1aGaps`
+in `tier1_adversarial_test.go` with the reason. An unreachable expectation with no entry there
+is a red test, which is the point.
 
 Then regenerate as above and commit the new `.pdf` with its generator. Every value in the new
 `corpusExpect` row must be readable out of the new fixture:

@@ -1,11 +1,12 @@
-// tier1_internal_test.go: G-01, G-14 and G-16. Package extraction, not extraction_test: these
-// read the unexported compiled matcher on the SHIPPED value, and compare labels against
-// anchorLexicon byte for byte.
+// tier1_internal_test.go: G-01, G-14, G-16 and the adversarial specs below. Package extraction,
+// not extraction_test: these read the unexported compiled matcher on the SHIPPED value, compare
+// labels against anchorLexicon byte for byte, and call mustTier1Rule and anchorPattern.
 package extraction
 
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -147,5 +148,123 @@ func TestTier1_TheTINSweepMatchesOnlyABareToken(t *testing.T) {
 	}
 	if sweeps != 2 {
 		t.Fatalf("found %d rule(s) carrying tier1TINSweepLabel, want 2; the assertions above ran over the wrong rules", sweeps)
+	}
+}
+
+// --- adversarial -------------------------------------------------------------
+
+// t1KeySuffixKind pairs a key suffix with the relation it names.
+var t1KeySuffixKind = []struct {
+	suffix string
+	kind   RelationKind
+}{
+	{".same_token", RelSameToken},
+	{".right", RelRight},
+	{".below", RelBelow},
+	{".sweep", RelSameToken},
+}
+
+// A rule keyed ".below" carrying RelRight at tier1MaxDistanceRight survived every other spec:
+// the key list, the count, the lexicon check and t1Defective's distance pair all stay green.
+// The key lands in Candidate.RuleID and is persisted, so it must name the relation it used.
+func TestTier1_EveryKeyNamesItsOwnRelation(t *testing.T) {
+	if len(Tier1Rules) != tier1RuleCount {
+		t.Fatalf("Tier1Rules holds %d rule(s), want %d; the suffix scan would run over the wrong set", len(Tier1Rules), tier1RuleCount)
+	}
+
+	matched := 0
+	for _, r := range Tier1Rules {
+		var want RelationKind
+		found := false
+		for _, s := range t1KeySuffixKind {
+			if strings.HasSuffix(r.Key, s.suffix) {
+				want, found = s.kind, true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("key %q ends in no known relation suffix; nothing then ties it to the relation it used", r.Key)
+			continue
+		}
+		matched++
+		if r.Rule.Relation.Kind != want {
+			t.Errorf("key %q names %q but the rule uses %q; RuleID is persisted and would attribute the candidate to the wrong relation", r.Key, want, r.Rule.Relation.Kind)
+		}
+	}
+	if matched != tier1RuleCount {
+		t.Errorf("%d of %d key(s) carried a known suffix; the comparison above ran over a subset", matched, tier1RuleCount)
+	}
+}
+
+// mustTier1Rule panics rather than shipping a rule that resolves nothing and says nothing.
+func TestTier1_MustTier1RulePanicsOnARuleParseRuleRefuses(t *testing.T) {
+	// Positive control first: the same call with a sound label must NOT panic, or the recover
+	// below would fire on any input and prove nothing.
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("a sound rule panicked with %v; the panic assertion below would hold for the wrong reason", p)
+			}
+		}()
+		if r := mustTier1Rule("t1.total.control", "total", `(?i)\btotal\b`, RelSameToken, tier1MaxDistanceSameTokenJSON, ShapeAmount, BandAnywhere); r.Rule.re == nil {
+			t.Fatal("the control rule built with no compiled matcher")
+		}
+	}()
+
+	for _, c := range []struct {
+		name, label, maxDistance string
+		kind                     RelationKind
+		shape                    Shape
+	}{
+		{"a label RE2 refuses", `(?i)\b(unclosed`, tier1MaxDistanceSameTokenJSON, RelSameToken, ShapeAmount},
+		{"an unknown relation kind", `(?i)\btotal\b`, tier1MaxDistanceSameTokenJSON, RelationKind("diagonal"), ShapeAmount},
+		{"an unknown shape", `(?i)\btotal\b`, tier1MaxDistanceSameTokenJSON, RelSameToken, Shape("money")},
+		{"a max_distance outside [0,1]", `(?i)\btotal\b`, "2", RelRight, ShapeAmount},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("mustTier1Rule returned instead of panicking; a rule that failed to build resolves nothing and reports nothing")
+				}
+			}()
+			mustTier1Rule("t1.total.bad", "total", c.label, c.kind, c.maxDistance, c.shape, BandAnywhere)
+		})
+	}
+}
+
+// anchorPattern panics on an id no lexicon entry owns: an empty Label compiles and then matches
+// every token.
+func TestTier1_AnchorPatternPanicsOnAnUnknownID(t *testing.T) {
+	if got := anchorPattern("total"); got == "" {
+		t.Fatal("anchorPattern returned an empty pattern for a known id; the panic below would prove nothing")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("anchorPattern returned for an unknown id; a typo would ship a rule with an empty Label")
+		}
+	}()
+	anchorPattern("no_such_lexicon_entry")
+}
+
+// jsonString is hand-rolled because encoding/json is outside this file's import allowlist. No
+// lexicon pattern carries a double quote, so nothing else exercises that branch.
+func TestTier1_JSONStringRoundTripsABackslashAndAQuote(t *testing.T) {
+	for _, label := range []string{
+		`(?i)\bre"f\\d\b`,
+		`(?i)\b(total|"grand"\s*total)\b`,
+		`^\s*[0-9]{8}-[0-9]{4}\s*$`,
+	} {
+		r := mustTier1Rule("t1.total.escape", "total", label, RelSameToken, tier1MaxDistanceSameTokenJSON, ShapeAmount, BandAnywhere)
+		if r.Rule.Label != label {
+			t.Errorf("Label round-tripped as %q, want %q; the escape and the decode disagree", r.Rule.Label, label)
+		}
+		if r.Rule.re == nil {
+			t.Errorf("label %q built no compiled matcher", label)
+		}
+	}
+	// Needle: an unescaped body must fail, or the round-trip above holds over an encoder that
+	// does nothing.
+	if _, err := ParseRule([]byte(`{"label":"a"b","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`)); err == nil {
+		t.Error("ParseRule accepted an unescaped double quote; jsonString's escaping is untested by the round trip above")
 	}
 }

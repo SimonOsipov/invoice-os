@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -408,11 +409,25 @@ func TestExtractionHandlers_NamesNoStateLiteral(t *testing.T) {
 	}
 
 	f, fset := mxParse(t, hndSource)
+	// Without this, hndSource can be pointed at any other file in the package and the scan
+	// reports clean over the wrong source.
+	if !hndDeclaresFunc(f, "JobsHandler") {
+		t.Fatalf("%s declares no JobsHandler; this scan examined the wrong file", hndSource)
+	}
+	importPaths := map[*ast.BasicLit]bool{}
+	for _, im := range f.Imports {
+		importPaths[im.Path] = true
+	}
 
 	var lits int
 	ast.Inspect(f, func(n ast.Node) bool {
 		bl, ok := n.(*ast.BasicLit)
 		if !ok || bl.Kind != token.STRING {
+			return true
+		}
+		// Import paths are string literals too, and they would hold the floor below above zero
+		// on a file whose own code carried none.
+		if importPaths[bl] {
 			return true
 		}
 		lits++
@@ -441,8 +456,19 @@ func TestExtractionHandlers_NamesNoStateLiteral(t *testing.T) {
 		return true
 	})
 	if lits == 0 {
-		t.Fatalf("%s holds no string literals, so this scan examined nothing", hndSource)
+		t.Fatalf("%s holds no string literals of its own, so this scan examined nothing", hndSource)
 	}
+}
+
+// hndDeclaresFunc reports whether the file declares that top-level func.
+func hndDeclaresFunc(f *ast.File, name string) bool {
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if ok && fd.Recv == nil && fd.Name.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // AC 6, a verify-not-edit. GREEN from the start — it reads internal/gateway/cors.go and is
@@ -477,4 +503,134 @@ func hndCorsAllowMethods(t *testing.T) string {
 		t.Fatalf("no corsAllowMethods constant in %s; the extraction lost its anchor", path)
 	}
 	return string(m[1])
+}
+
+// --- adversarial: the edges the nine rows do not name ------------------------------------------
+
+// The nil-logger fallback has no other oracle. Every other case that passes nil drives an arm
+// that logs nothing, so removing the fallback would only panic on the 500 path.
+func TestExtractionJobsHandler_NilLoggerFallsBackToTheDefaultLogger(t *testing.T) {
+	log, buf := hndLogger()
+	prev := slog.Default()
+	slog.SetDefault(log)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const internalText = "fallback probe: the default logger received this"
+	spy := &hndSpy{err: errors.New(internalText)}
+
+	w := hndServe(t, spy, hndValidQuery(t), &hndIdentity, nil)
+
+	hndAssert(t, w, http.StatusInternalServerError, hndErrBody(t, hndMsgInternal))
+	lines := hndLogLines(buf.String())
+	if len(lines) != 1 {
+		t.Fatalf("a nil logger emitted %d line(s) to the default logger, want exactly 1: %q", len(lines), buf.String())
+	}
+	if !strings.Contains(lines[0], internalText) {
+		t.Errorf("the fallback logger dropped the internal error: %q", lines[0])
+	}
+}
+
+// url.Values.Get returns the FIRST value. A caller that repeats the parameter gets the first
+// document read, never a merge and never a refusal.
+func TestExtractionJobsHandler_RepeatedDocumentIDTakesTheFirst(t *testing.T) {
+	second := "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+	if second == hndDocumentID {
+		t.Fatal("the two ids are the same string, so this case proves nothing")
+	}
+	spy := &hndSpy{resp: extraction.JobsResponse{Jobs: []extraction.JobState{}}}
+
+	w := hndGet(t, spy, "document_id="+hndDocumentID+"&document_id="+second)
+
+	hndAssert(t, w, http.StatusOK, "{\"jobs\":[]}\n")
+	if spy.got != hndDocumentID {
+		t.Errorf("the reader received document_id %q, want the first value %q", spy.got, hndDocumentID)
+	}
+}
+
+// A value uuid.Parse refuses never reaches the reader, whatever its shape or length.
+func TestExtractionJobsHandler_HostileDocumentIDValuesAre400(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"leading space", " " + hndDocumentID},
+		{"trailing space", hndDocumentID + " "},
+		{"embedded newline", hndDocumentID[:18] + "\n" + hndDocumentID[19:]},
+		{"sql fragment", "' OR 1=1 --"},
+		{"eight kilobytes", strings.Repeat("a", 8192)},
+		{"one hyphen short", strings.Replace(hndDocumentID, "-", "", 1)},
+	}
+	if len(cases) == 0 {
+		t.Fatal("the hostile-value table is empty, so this case examined nothing")
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &hndSpy{}
+			w := hndGet(t, spy, "document_id="+url.QueryEscape(tc.value))
+
+			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, hndMsgMalformed))
+			if spy.calls != 0 {
+				t.Errorf("the reader ran %d time(s) on %q, want 0", spy.calls, tc.name)
+			}
+		})
+	}
+}
+
+// Every spelling the gate accepts must reach the reader as the SAME uuid. The assertion is on
+// the parsed value, not the bytes: canonicalising the spelling would be a valid implementation,
+// forwarding a different document would not.
+func TestExtractionJobsHandler_AcceptedSpellingsReachTheReaderAsTheSameUuid(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"canonical", hndDocumentID},
+		{"uppercase", strings.ToUpper(hndDocumentID)},
+		{"braces", "{" + hndDocumentID + "}"},
+		{"hyphenless", strings.ReplaceAll(hndDocumentID, "-", "")},
+	}
+	if len(cases) == 0 {
+		t.Fatal("the spelling table is empty, so this case examined nothing")
+	}
+	want := uuid.MustParse(hndDocumentID)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &hndSpy{resp: extraction.JobsResponse{Jobs: []extraction.JobState{}}}
+			w := hndGet(t, spy, "document_id="+url.QueryEscape(tc.value))
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%q)", w.Code, w.Body.String())
+			}
+			if spy.calls != 1 {
+				t.Fatalf("the reader ran %d time(s), want 1", spy.calls)
+			}
+			got, err := uuid.Parse(spy.got)
+			if err != nil {
+				t.Fatalf("the reader received %q, which is not a uuid at all: %v", spy.got, err)
+			}
+			if got != want {
+				t.Errorf("the reader received uuid %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// The handler answers any method. EXTR-07-03 must therefore register a method-qualified pattern
+// ("GET /v1/extraction-jobs"); nothing in here will 405 for it.
+func TestExtractionJobsHandler_LeavesMethodEnforcementToTheMux(t *testing.T) {
+	methods := []string{http.MethodPost, http.MethodDelete}
+	if len(methods) == 0 {
+		t.Fatal("the method list is empty, so this case examined nothing")
+	}
+	for _, m := range methods {
+		t.Run(m, func(t *testing.T) {
+			spy := &hndSpy{resp: extraction.JobsResponse{Jobs: []extraction.JobState{}}}
+			r := httptest.NewRequest(m, hndRoute+"?"+hndValidQuery(t), nil)
+			r = r.WithContext(auth.WithIdentity(r.Context(), hndIdentity))
+			w := httptest.NewRecorder()
+			extraction.JobsHandler(spy.list, nil)(w, r)
+
+			hndAssert(t, w, http.StatusOK, "{\"jobs\":[]}\n")
+		})
+	}
 }

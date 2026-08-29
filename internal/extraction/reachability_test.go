@@ -293,8 +293,8 @@ func rxExportedFuncsAccepting(files map[string]*ast.File, want string) []string 
 // Exact-match, never a prefix: river.JobArgs requires InsertOpts, so a no-Insert* rule would
 // red-fail the shipped worker.
 //
-// rxTypeNames' nested-func-signature descent has no in-population needle -- this package
-// declares no exported func that takes a func -- so it is mutation-proven, not needle-proven.
+// rxTypeNames' nested-func-signature descent is mutation-proven, not needle-proven. JobsHandler
+// is the package's one exported func taking a func, and its signature names no banned type.
 func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
 	files := rxExtractionFiles(t)
 

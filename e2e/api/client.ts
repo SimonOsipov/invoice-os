@@ -1025,3 +1025,30 @@ export function getAuditLog(token: string, query?: AuditLogQuery): Promise<Audit
   const qs = params.toString()
   return apiFetch<AuditResponse>(`${apiBase()}/api/invoice/v1/audit-log${qs ? `?${qs}` : ''}`, { token })
 }
+
+// EXTR-07: GET /v1/extractions on the submission binary -- the extraction job reader.
+// Mirrors extraction.JobsResponse / extraction.JobState (internal/extraction/reader.go:23-35).
+// documentId is OPTIONAL so a spec can exercise the required-parameter arm, and the guard is
+// `!== undefined` (getAuditLog's convention) so '' stays sendable -- the handler treats absent
+// and empty alike (internal/extraction/handlers.go:65-69) and both arms must be reachable.
+export interface ExtractionJob {
+  id: string
+  document_id: string
+  state: string
+  created_at: string
+  last_error: string | null
+}
+
+export interface ExtractionJobsResponse {
+  jobs: ExtractionJob[]
+}
+
+export function getExtractions(token: string, documentId?: string): Promise<ExtractionJobsResponse> {
+  const params = new URLSearchParams()
+  if (documentId !== undefined) params.set('document_id', documentId)
+  const qs = params.toString()
+  return apiFetch<ExtractionJobsResponse>(
+    `${apiBase()}/api/submission/v1/extractions${qs ? `?${qs}` : ''}`,
+    { token },
+  )
+}

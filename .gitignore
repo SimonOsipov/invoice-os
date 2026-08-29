@@ -57,6 +57,8 @@ CLAUDE.md
 # existed, and /post-merge-cleanup deletes the directory on the documented
 # assumption that it is ignored.
 .playwright-mcp/
+# RALPH per-story scratch (design notes, checkpoints), never repo content.
+.ralph/
 
 # ---- Editor / OS ----
 .DS_Store

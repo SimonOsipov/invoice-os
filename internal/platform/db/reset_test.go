@@ -311,6 +311,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed extraction_page_images fixture: %v", err)
 	}
 
+	// Hangs off no document: the rule belongs to a computed layout fingerprint.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_anchor_rules (tenant_id, layout_fingerprint, field_name, rule, rule_schema_version)
+		 VALUES ($1, $2, $3, $4::jsonb, 1)`,
+		tenantID, "v1:"+strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), earField, earRuleBody,
+	); err != nil {
+		t.Fatalf("seed extraction_anchor_rules fixture: %v", err)
+	}
+
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO river_job (kind, max_attempts, args) VALUES ($1, 25, '{}')`,
 		marker,

@@ -257,6 +257,11 @@ jobs:
           tags: docling:test
           load: true
           push: false
+      # Lint before the suite: ruff is pinned in requirements-dev.txt and installed in this
+      # same stage, so it needs no Python on the runner and no second image build. Nothing in
+      # this repository prescribed a Python linter before this service (D-18).
+      - name: Lint with ruff
+        run: docker run --rm --entrypoint ruff docling:test check --no-cache .
       - name: Run the pytest suite
         run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -e REPO_ROOT=/repo docling:test
 

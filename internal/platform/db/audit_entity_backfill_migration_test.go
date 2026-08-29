@@ -889,9 +889,16 @@ func TestRLS_AuditResolverDefinerIsTheLatestMigration(t *testing.T) {
 	}
 }
 
-// AC-2: the replacement is reversible. Its Down restores the shipped body instead of
-// dropping the function, which the write-time trigger calls on every insert. Executed as
-// the migrator in a rolled-back transaction.
+// AC-2: the LATEST replacement is reversible. Its Down restores the previously shipped
+// body instead of dropping the function, which the write-time trigger calls on every
+// insert. Executed as the migrator in a rolled-back transaction.
+//
+// The target is resolved by content, so this test follows whichever migration currently
+// defines the resolver last. That is EXTR-08-06's, which adds extraction.field_corrected
+// and whose Down restores AUDIT-03's body -- where submission.failed IS attributed. So the
+// event this test watches flip is the newest one, and submission.failed and
+// submission.accepted are the two controls: they stay attributed through both bodies, and
+// a dropped or wrong-body Down cannot fake that.
 func TestRLS_AuditResolverReplacementIsReversible(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -916,30 +923,67 @@ func TestRLS_AuditResolverReplacementIsReversible(t *testing.T) {
 		}
 		return got
 	}
+	wantEntity := func(event, stage string) {
+		t.Helper()
+		switch got := resolve(event, stage); {
+		case got == nil:
+			t.Errorf("after the %s body, %s resolves to NULL, want %s", stage, event, f.entity)
+		case *got != f.entity:
+			t.Errorf("after the %s body, %s resolves to %s, want %s", stage, event, *got, f.entity)
+		}
+	}
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, "Up")); err != nil {
 		t.Fatalf("Up body of %s failed: %v", definer, err)
 	}
-	switch got := resolve("submission.failed", "Up"); {
-	case got == nil:
-		t.Fatalf("after the Up body, submission.failed resolves to NULL, want %s", f.entity)
-	case *got != f.entity:
-		t.Fatalf("after the Up body, submission.failed resolves to %s, want %s", *got, f.entity)
-	}
+	wantEntity("extraction.field_corrected", "Up")
+	wantEntity("submission.failed", "Up")
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, "Down")); err != nil {
 		t.Fatalf("Down body of %s failed: %v", definer, err)
 	}
-	if got := resolve("submission.failed", "Down"); got != nil {
-		t.Errorf("after the Down body, submission.failed resolves to %s, want NULL", *got)
+	if got := resolve("extraction.field_corrected", "Down"); got != nil {
+		t.Errorf("after the Down body, extraction.field_corrected resolves to %s, want NULL", *got)
 	}
-	// The control the Down cannot fake: a dropped resolver would error here, and a Down
-	// that reverted the wrong line would return NULL.
-	switch got := resolve("submission.accepted", "Down"); {
-	case got == nil:
-		t.Errorf("after the Down body, submission.accepted resolves to NULL, want %s", f.entity)
-	case *got != f.entity:
-		t.Errorf("after the Down body, submission.accepted resolves to %s, want %s", *got, f.entity)
+	// The controls the Down cannot fake: a dropped resolver would error here, and a Down
+	// that reverted the wrong line would return NULL for these too.
+	wantEntity("submission.failed", "Down")
+	wantEntity("submission.accepted", "Down")
+}
+
+// T6-7: exactly one audit_log_entity_for overload exists at every stage. AUDIT-01's Down is
+// an unqualified `DROP FUNCTION audit_log_entity_for`, which raises 42725 against two
+// overloads -- so a replacement that changed the signature would make the whole audit_log
+// family irreversible, and nothing else says so.
+func TestRLS_AuditResolverIsExactlyOneOverloadAtEveryStage(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	definer := auditResolverDefinerName(t)
+	tx := migratorTx(t, ctx)
+	overloads := func(stage string) int {
+		t.Helper()
+		var n int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM pg_proc WHERE proname = 'audit_log_entity_for'`).Scan(&n); err != nil {
+			t.Fatalf("count audit_log_entity_for overloads at the %s stage: %v", stage, err)
+		}
+		return n
+	}
+
+	// Control needle: the applied schema must already hold exactly one, or a later zero
+	// would read as "still one overload" rather than "the function is gone".
+	if n := overloads("baseline"); n != 1 {
+		t.Fatalf("audit_log_entity_for overloads before any replay = %d, want 1 -- is the "+
+			"database migrated? (`make migrate-up`)", n)
+	}
+	for _, section := range []string{"Up", "Down"} {
+		if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, section)); err != nil {
+			t.Fatalf("%s body of %s failed: %v", section, definer, err)
+		}
+		if n := overloads(section); n != 1 {
+			t.Errorf("audit_log_entity_for overloads after %s's %s body = %d, want 1", definer, section, n)
+		}
 	}
 }
 

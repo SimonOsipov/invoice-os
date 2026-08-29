@@ -68,12 +68,26 @@ def pipeline_options():
 
 
 def _construct_converter():
-    """The real, expensive DocumentConverter build (torch/onnxruntime imports + model load)."""
+    """The real, expensive DocumentConverter build (torch/onnxruntime imports + model load).
+
+    The backend is named EXPLICITLY. PdfFormatOption's default is
+    ThreadedDoclingParseDocumentBackend -- the v1 parser -- which hands the OCR stage no
+    bitmap region for a scanned page and yields ZERO text for a document RapidOCR reads
+    fine on its own (test_backend.py). Measured on dense_invoice.pdf: default 0 cells,
+    v4 55, pypdfium2 55. v4 is the maintained docling-parse line and measured marginally
+    cheaper than pypdfium2 on both latency and peak RSS.
+    """
+    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
     from docling.datamodel.base_models import InputFormat
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     return DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options())}
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options(),
+                backend=DoclingParseV4DocumentBackend,
+            )
+        }
     )
 
 

@@ -3285,7 +3285,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     const reason = page.getByTestId('activity-chip-documents-reason')
     await expect(reason).toBeVisible()
     await expect(reason).toHaveText(
-      'Document uploads and reads are recorded against the workspace, not against a single invoice, so none can appear here.',
+      'Document and extraction events are recorded against the workspace, not against a single invoice, so none can appear here.',
     )
     const reasonId = await reason.getAttribute('id')
     expect(reasonId, 'the reason element must carry an id for aria-describedby to point at').toBeTruthy()

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { AuditEvent } from './audit'
-import { auditEventView } from './auditVocabulary'
+import { AUDIT_EVENTS, auditEventView } from './auditVocabulary'
 import { AUDIT_PAGE_SIZES } from './auditView'
 import {
   ACTIVITY_CHIP_LABELS,
@@ -144,6 +144,31 @@ describe('activityChips', () => {
     expect(inv.count).toBeGreaterThan(0)
     expect(inv.inert).toBe(false)
     expect(inv.reason).toBeNull()
+  })
+
+  // The reason must keep naming every event family the Documents chip stands for. Derived
+  // from AUDIT_EVENTS by prefix, never a hand-typed label list: the old enumeration went
+  // stale twice in silence -- document.reused at DOC-02, then both extraction.* events.
+  // Prefixes, not identifiers, so EXTR-14's extraction.field_corrected keeps it green.
+  it('invoiceActivity_documentsInertCopyNamesEveryFamilyTheChipCovers', () => {
+    const prefixes = new Set(
+      Object.entries(AUDIT_EVENTS)
+        .filter(([, def]) => def.domain === 'documents')
+        .map(([id]) => id.split('.')[0]),
+    )
+    // Floor + needles: an empty or one-prefix set would make the loop below vacuous, and
+    // `document` alone is what the copy already said before extraction.* joined the domain.
+    expect(prefixes.size).toBe(2)
+    expect(prefixes).toContain('document')
+    expect(prefixes).toContain('extraction')
+
+    const copy = ACTIVITY_COPY.documentsInert.toLowerCase()
+    for (const p of prefixes) {
+      expect(copy, `${p}.* counts under the Documents chip but the reason never names it`).toContain(p)
+    }
+    // The structural claim itself, which this story does not touch: extraction.* is in
+    // neither of the generated column's two lists, so no such row reaches a scoped read.
+    expect(copy).toContain('so none can appear here')
   })
 
   it('invoiceActivity_reconciliationChipCountsItsTwoTypes', () => {

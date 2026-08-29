@@ -3,7 +3,8 @@
 -- This is the THIRD migration to define audit_log_entity_for, and the fifth audit_log
 -- migration since the table's creation -- four precede it (20260803104130, 20260820150810,
 -- 20260821135423, 20260822080722). It ALTERs no table; only three migrations ever have.
--- Q15 waived it. A fourth waiver is the wrong answer: fix the hardcoded-list dispatch instead.
+-- Q15 waived it, the second such waiver -- AUDIT-03 took the first. A fourth migration is
+-- the wrong answer: fix the hardcoded-list dispatch rather than renew the waiver.
 -- A separate ELSIF, not a growth of rule B: rules A and B are set-equal-pinned to the
 -- generated invoice_id column, and growing either rewrites that column across the table.
 -- Otherwise byte-identical to 20260821135423_audit_log_entity_for_submission_failed.sql.

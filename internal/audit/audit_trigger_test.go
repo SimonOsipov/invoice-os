@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The 21 attributable events, by rule, plus the 15 workspace-level ones.
+// The 21 attributable events, by rule, plus the 17 workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -56,10 +56,12 @@ var (
 )
 
 // triggerRuleDPayloads pairs each workspace-level event with the payload shape its call
-// site writes. document.* deliberately gets a REAL invoice id here: attribution is
-// event-scoped, so a key-scoped resolver would wrongly attribute it.
+// site writes. document.* and extraction.* deliberately get a REAL invoice id here, under
+// both spellings the resolver reads: attribution is event-scoped, so a key-scoped resolver
+// would wrongly attribute them. extraction.field_corrected is NOT here — it resolves
+// through its invoice (TestExtraction_FieldCorrectedIsNotInTheWorkspaceVocabulary).
 func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
-	policyID, userID := uuid.NewString(), uuid.NewString()
+	policyID, userID, docID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	return map[string]map[string]any{
 		"approval_policy.created":   {"policy_id": policyID},
 		"approval_policy.updated":   {"policy_id": policyID},
@@ -72,6 +74,8 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"document.created":          {"id": invoiceID},
 		"document.read":             {"id": invoiceID},
 		"document.reused":           {"id": invoiceID},
+		"extraction.succeeded":      {"document_id": docID, "invoice_id": invoiceID},
+		"extraction.failed":         {"document_id": docID, "id": invoiceID},
 		"membership.suspended":      {"user_id": userID},
 		"membership.reactivated":    {"user_id": userID},
 		"validation.rule.enabled":   {"key": "buyer-tin-present"},
@@ -145,16 +149,20 @@ func TestAudit_InsertTriggerResolvesPortfolioEventsFromTheirOwnPayload(t *testin
 	}
 }
 
-// AC-13: the 15 workspace-level events stay NULL even when their payload holds a real
+// AC-13: the 17 workspace-level events stay NULL even when their payload holds a real
 // invoice id. The rule-A row in the same test is the positive control.
+//
+// For the two extraction.* names this is a DRIFT GUARD, not proof of their scope: the
+// resolver's ELSE RETURN NULL answers the same for an event it has never heard of. Its
+// value is that a later extraction event must be classified by a human.
 func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	f := requireFixture(t)
 	requireInsertTrigger(t, f)
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 15 {
-		t.Fatalf("rule-D payload map holds %d events, want 15", len(ruleD))
+	if len(ruleD) != 17 {
+		t.Fatalf("rule-D payload map holds %d events, want 17", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

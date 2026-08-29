@@ -4,6 +4,7 @@
 #                            assert-db-dsns <environment-id|--source-only|--self-test>|
 #                            select-domain [--self-test]|
 #                            reconcile-fork <environment-id>|
+#                            verify-spa-domains <environment-id|--self-test>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            set-approvals-enforced <environment-id|--self-test>|
 #                            delete-environment <name>|list-environments>
@@ -636,6 +637,11 @@ DOMAIN_CREATE_MUTATION='mutation domCreate($input: ServiceDomainCreateInput!) {
   serviceDomainCreate(input: $input) { id domain targetPort }
 }'
 
+# shellcheck disable=SC2016  # $id is a GraphQL variable — not a shell expansion.
+DOMAIN_DELETE_MUTATION='mutation domDelete($id: String!) {
+  serviceDomainDelete(id: $id)
+}'
+
 # shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
 SEALED_AUDIT_QUERY='query sealedAudit($e: String!) {
   environment(id: $e) {
@@ -932,9 +938,11 @@ cmd_assert_db_dsns() {
 # passes a present-but-null value, which then reads as [] and silently prefers
 # the generated domain. Fixture T8 fails on the `has()` form.
 DOMAIN_GUARD_JQ='(.data.domains? // {}) | .customDomains != null'
-DOMAIN_SELECT_JQ='.data.domains
-| ((.customDomains // []) + (.serviceDomains // []))
-| {count: length, domain: (.[0].domain // ""), targetPort: (.[0].targetPort)}'
+# The preference rule itself, shared so `verify-spa-domains` cannot drift from it.
+DOMAIN_PICK_JQ='.data.domains
+| ((.customDomains // []) + (.serviceDomains // []))'
+DOMAIN_SELECT_JQ="$DOMAIN_PICK_JQ
+| {count: length, domain: (.[0].domain // \"\"), targetPort: (.[0].targetPort)}"
 
 # select_domain <domains-response-json>
 # Pure: no token, no network. Echoes {count, domain, targetPort} compactly.
@@ -1171,6 +1179,149 @@ reconcile_domains() {
   reconcile_domain "$env_id" "$RAILWAY_SVC_LANDING_ID" landing
   reconcile_domain "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console
   reconcile_domain "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console
+}
+
+# --- Domain reachability: a record is not a route ----------------------------
+#
+# A serviceDomain can exist, report syncStatus ACTIVE and still not route: Railway's edge
+# answers {"status":"error","code":404,"message":"Application not found"} while the service's
+# own container is up and serving. Measured on `landing` in pr-191 and pr-192 (2026-08-29).
+# A workflow rerun, a redeploy, a `--from-source` rebuild and sleepApplication=false all
+# leave it dark; deleting and recreating the domain is the only remedy found.
+#
+# reconcile_domain proves a record EXISTS, which is not evidence that the hostname serves —
+# the same distinction this file already draws for Postgres, where a TCP connect proves
+# nothing and pg_isready is the authoritative gate. This probe runs AFTER the SPAs deploy,
+# which is why it is its own command instead of part of reconcile-fork.
+
+# domain_is_dark <http-code> <body>
+# TRUE only for Railway's edge "no route for this hostname" 404. The shared SPA Caddyfile
+# serves index.html for unknown paths, so /health cannot 404 any other way.
+# Pure: no token, no network. Guarded by `verify-spa-domains --self-test`.
+domain_is_dark() {
+  local code="$1" body="$2"
+  [ "$code" = "404" ] || return 1
+  printf '%s' "$body" | jq -e '(.message? // "") == "Application not found"' >/dev/null 2>&1
+}
+
+# probe_health <url> — sets PROBE_CODE and PROBE_BODY. Never exits.
+probe_health() {
+  local url="$1" out
+  out=$(curl -sS --connect-timeout 5 --max-time 20 -w $'\n%{http_code}' "$url/health" 2>/dev/null) \
+    || out=$'\n000'
+  PROBE_CODE=${out##*$'\n'}
+  PROBE_BODY=${out%$'\n'*}
+}
+
+# discover_domain <env-id> <svc-id> <label> — echoes "<domain-id> <domain>", empty when none.
+discover_domain() {
+  local env_id="$1" svc_id="$2" label="$3"
+  graphql_post "$(gql_body "$DOMAINS_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "reading $label domains in environment $env_id"
+  echo "$GQL_RESPONSE" | jq -r "$DOMAIN_PICK_JQ"' | if length == 0 then "" else "\(.[0].id) \(.[0].domain)" end'
+}
+
+# heal_domain <env-id> <svc-id> <label> <domain-id>
+heal_domain() {
+  local env_id="$1" svc_id="$2" label="$3" dom_id="$4"
+  echo "  $label: hostname does not route — deleting domain $dom_id and recreating it."
+  graphql_post "$(gql_body "$DOMAIN_DELETE_MUTATION" "$(jq -n --arg id "$dom_id" '{id: $id}')")" \
+    "deleting the unroutable $label domain in environment $env_id"
+  # Zero domains now, so reconcile_domain takes its create path: targetPort read from the
+  # source environment, then an independent re-query to confirm.
+  reconcile_domain "$env_id" "$svc_id" "$label"
+}
+
+domain_dark_self_test() {
+  local failures=0
+
+  dark_expect() {
+    local id="$1" code="$2" body="$3" want="$4" got=yes
+    domain_is_dark "$code" "$body" || got=no
+    if [ "$got" = "$want" ]; then
+      echo "  $id ok -> dark=$got"
+    else
+      echo "  $id FAIL -> dark=$got, wanted $want"
+      failures=$((failures + 1))
+    fi
+  }
+
+  dark_expect D1 404 '{"status":"error","code":404,"message":"Application not found","request_id":"x"}' yes
+  dark_expect D2 404 '<html><body>Not Found</body></html>' no
+  dark_expect D3 200 'OK' no
+  dark_expect D4 000 '' no
+  dark_expect D5 404 '{"message":"Not Found"}' no
+  # The signature is the code AND the body: a 502 carrying the same text is a different fault.
+  dark_expect D6 502 '{"message":"Application not found"}' no
+
+  if [ "$failures" -ne 0 ]; then
+    echo "Domain reachability self-test: $failures fixture(s) FAILED."
+    return 1
+  fi
+  echo "Domain reachability self-test: 6 fixtures passed, no token read, no network call."
+}
+
+cmd_verify_spa_domains() {
+  local env_id="${1:-}"
+
+  if [ "$env_id" = "--self-test" ]; then
+    domain_dark_self_test
+    return
+  fi
+
+  require_fork_ids
+  if [ -z "$env_id" ]; then
+    echo "::error::verify-spa-domains needs an environment id."
+    exit 1
+  fi
+
+  local pair label svc_id found dom_id domain url attempt dark
+  echo "Verifying the 4 SPA hostnames route in $env_id ..."
+  for pair in "landing:$RAILWAY_SVC_LANDING_ID" "app:$RAILWAY_SVC_APP_ID" \
+              "ops-console:$RAILWAY_SVC_OPS_CONSOLE_ID" \
+              "support-console:$RAILWAY_SVC_SUPPORT_CONSOLE_ID"; do
+    label="${pair%%:*}"
+    svc_id="${pair#*:}"
+
+    found=$(discover_domain "$env_id" "$svc_id" "$label")
+    if [ -z "$found" ]; then
+      echo "::error::$label has no domain in $env_id — reconcile-fork should have created one."
+      exit 1
+    fi
+    dom_id="${found%% *}"
+    domain="${found#* }"
+    url="https://$domain"
+
+    # A booting SPA answers 000 or 502, which is NOT dark: those belong to the build-stamp
+    # wait, which has the longer budget. Only a consistently dark hostname is repaired here.
+    dark=1
+    for attempt in 1 2 3 4 5 6; do
+      probe_health "$url"
+      if ! domain_is_dark "$PROBE_CODE" "$PROBE_BODY"; then dark=0; break; fi
+      [ "$attempt" = 6 ] || sleep 10
+    done
+
+    if [ "$dark" = 1 ]; then
+      heal_domain "$env_id" "$svc_id" "$label"
+      found=$(discover_domain "$env_id" "$svc_id" "$label")
+      domain="${found#* }"
+      url="https://$domain"
+      echo "  $label: repaired — now $url"
+    else
+      echo "  $label: $url routes (HTTP $PROBE_CODE)."
+    fi
+
+    # Publish the post-repair hostname; a recreated domain need not keep its old name.
+    if [ -n "${GITHUB_ENV:-}" ]; then
+      case "$label" in
+        landing)         echo "LANDING_URL=$url" >> "$GITHUB_ENV" ;;
+        app)             echo "APP_URL=$url" >> "$GITHUB_ENV" ;;
+        ops-console)     echo "OPS_CONSOLE_URL=$url" >> "$GITHUB_ENV" ;;
+        support-console) echo "SUPPORT_CONSOLE_URL=$url" >> "$GITHUB_ENV" ;;
+      esac
+    fi
+  done
 }
 
 # --- Reconcile C2: per-environment URL variables ------------------------------
@@ -1975,6 +2126,7 @@ case "${1:-}" in
   assert-db-dsns)            cmd_assert_db_dsns "${2:-}" ;;
   select-domain)             cmd_select_domain "${2:-}" ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
+  verify-spa-domains)        cmd_verify_spa_domains "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   set-approvals-enforced)    cmd_set_approvals_enforced "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;

@@ -868,6 +868,15 @@ jobs:
           cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile
+      # A domain record can exist, report syncStatus ACTIVE and still not route — see
+      # railway-env.sh, "Domain reachability: a record is not a route". Repair that here,
+      # before the wait below spends its whole 600s budget on a hostname the edge has no
+      # route for. Publishes the post-repair URLs, which need not keep their old names.
+      - name: Verify SPA hostnames route (repair a dark domain)
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh verify-spa-domains "$ENV_ID"
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -898,6 +907,10 @@ jobs:
             fi
           done
       - name: Install Chromium
+        # !cancelled(): skipping this when the wait fails makes topology report
+        # `browserType.launch: Executable doesn't exist` — a missing-browser error for what
+        # is really an unreachable SPA, which sends the next debugger to Playwright.
+        if: '!cancelled()'
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke

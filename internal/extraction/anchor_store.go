@@ -30,10 +30,10 @@ func (s *Store) AnchorRulesFor(ctx context.Context, tenantID, fingerprint string
 	return out, err
 }
 
-// anchorRulesForTx errors on a row the parser rejects rather than skipping it, and returns an
-// empty slice rather than the partial one, so no caller reads a truncated rule set as a result.
-// The explicit tenant_id predicate is not the isolation guard -- RLS is -- but it is what drives
-// extraction_anchor_rules_tenant_fingerprint_idx.
+// anchorRulesForTx errors on a row the parser rejects and returns an empty slice, never the
+// partial one -- TestAnchorRulesFor_AParseFailureDiscardsTheRowsAlreadyRead.
+// RLS isolates, not the tenant_id predicate: measured, the predicate only folds the RLS qual to
+// a One-Time Filter; the qual reaches the same index without it.
 func anchorRulesForTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint string) ([]AnchorRule, error) {
 	out := []AnchorRule{}
 

@@ -441,7 +441,7 @@ func TestRLS_ExtractionAnchorRulesRejectsAnEmptyFingerprintOrField(t *testing.T)
 }
 
 // R-10: versions count from 1. A 0 is the unset int Go would write if the caller forgot the
-// column, and EXTR-04-05 treats an unknown version as an error rather than a silent skip.
+// column, and AnchorRulesFor treats an unknown version as an error rather than a silent skip.
 func TestRLS_ExtractionAnchorRulesRejectsSchemaVersionBelowOne(t *testing.T) {
 	h := requireHarness(t)
 
@@ -625,7 +625,7 @@ func TestRLS_ExtractionAnchorRulesRejectsAnArrayNamingTheThreeKeys(t *testing.T)
 }
 
 // A-02: where the floor stops. `?` is key EXISTENCE, so a null-valued key satisfies it, and
-// the CHECK reads no value at all. Both bodies below LAND — ParseRule and EXTR-04-05's
+// the CHECK reads no value at all. Both bodies below LAND — ParseRule and AnchorRulesFor's
 // read-time error own them. Pinning that keeps a future tightening of the CHECK from
 // silently moving the boundary.
 func TestRLS_ExtractionAnchorRulesAdmitsBodiesOnlyParseRuleCanRefuse(t *testing.T) {

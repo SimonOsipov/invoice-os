@@ -1,10 +1,11 @@
-// anchor_store_db_test.go: EXTR-04-05's RED specs (T-01..T-08) for AnchorRulesFor. Package
-// extraction_test, so it shares store_db_test.go's TestMain, per-role pools and single skip
-// site -- stRequire stays this package's only t.Skip.
+// anchor_store_db_test.go: the acceptance specs for AnchorRulesFor. Package extraction_test,
+// so it shares store_db_test.go's TestMain, per-role pools and single skip site -- stRequire
+// stays this package's only t.Skip.
 package extraction_test
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +22,9 @@ const stAnchorRuleValid = `{"label":"invoice","relation":{"kind":"same_token","m
 // stAnchorRuleUnparseable passes the table's jsonb CHECK (label/relation/shape all present)
 // but its label is an unclosed regexp group, which ParseRule rejects.
 const stAnchorRuleUnparseable = `{"label":"(unclosed","relation":{"kind":"same_token","max_distance":0},"shape":"invoice_number"}`
+
+// stTiedRules is how many rows share one created_at in the ordering spec.
+const stTiedRules = 8
 
 // stSeedAnchorRule inserts one row as superuser: invoice_app holds SELECT only on this table.
 func stSeedAnchorRule(t *testing.T, ctx context.Context, tenantID, fingerprint, field, ruleJSON string, version int) (id string) {
@@ -95,20 +99,21 @@ func TestAnchorRulesFor_OrdersNewestFirstWithATotalTiebreak(t *testing.T) {
 
 	older := stSeedAnchorRule(t, ctx, tenantID, "layout-tie", "invoice_number", stAnchorRuleValid, extraction.RuleSchemaVersion)
 
-	// One INSERT, two VALUES tuples: now() is transaction-scoped, so both rows share one
-	// created_at and only the id tiebreak can order them.
-	id1, id2 := uuid.NewString(), uuid.NewString()
+	// One INSERT, stTiedRules tuples: now() is transaction-scoped, so every row shares one
+	// created_at and only the id tiebreak can order them. Eight, not two: with a tied PAIR an
+	// ORDER BY that dropped the id agrees with the sorted want by chance half the time, which
+	// is no oracle at all -- eight random ids agree once in 8! runs.
+	tied := make([]string, stTiedRules)
+	for i := range tied {
+		tied[i] = uuid.NewString()
+	}
 	if _, err := h.super.Exec(ctx,
 		`INSERT INTO extraction_anchor_rules (id, tenant_id, layout_fingerprint, field_name, rule, rule_schema_version)
-		 VALUES ($1, $2, $3, $4, $5, $6), ($7, $2, $3, $4, $5, $6)`,
-		id1, tenantID, "layout-tie", "total_amount", stAnchorRuleValid, extraction.RuleSchemaVersion, id2); err != nil {
-		t.Fatalf("seed the tied pair: %v", err)
+		 SELECT u, $2, $3, $4, $5, $6 FROM unnest($1::uuid[]) AS u`,
+		tied, tenantID, "layout-tie", "total_amount", stAnchorRuleValid, extraction.RuleSchemaVersion); err != nil {
+		t.Fatalf("seed the tied rows: %v", err)
 	}
-	first, second := id1, id2
-	if second < first {
-		first, second = second, first
-	}
-	want := []string{first, second, older}
+	want := append(slices.Sorted(slices.Values(tied)), older)
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		out, err := s.AnchorRulesFor(ctx, tenantID, "layout-tie")
@@ -141,7 +146,8 @@ func TestAnchorRulesFor_DecodesTheRuleBody(t *testing.T) {
 		t.Fatalf("AnchorRulesFor returned %d row(s), want 1", len(out))
 	}
 
-	// Rule.re is unexported with no accessor; T-05 is what proves ParseRule actually ran.
+	// Rule.re is unexported with no accessor; TestAnchorRulesFor_ErrorsOnAnUnparseableRule is
+	// what proves ParseRule actually ran.
 	got := out[0].Rule
 	if got.Label != "invoice" {
 		t.Errorf("Rule.Label is %q, want invoice", got.Label)

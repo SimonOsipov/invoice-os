@@ -29,8 +29,7 @@ import (
 const maxRuleLabelBytes = 512
 
 // RuleSchemaVersion is the JSON shape's version, persisted per row. ParseRule never reads it --
-// the version is a COLUMN (rule_schema_version); the unknown-version error belongs to
-// EXTR-04-05's AnchorRulesFor.
+// the version is a COLUMN (rule_schema_version); AnchorRulesFor is what errors on an unknown one.
 const RuleSchemaVersion = 1
 
 // Rule is one anchor rule: a label to find, where the value sits relative to it, and the

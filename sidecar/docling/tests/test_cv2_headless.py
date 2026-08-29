@@ -16,7 +16,12 @@ def test_cv2_imports_and_only_the_headless_distribution_is_present():
     assert cv2.__version__, "cv2 imported but reports no version"
 
     names = {d.metadata["Name"].lower() for d in metadata.distributions() if d.metadata.get("Name")}
-    assert "opencv-python-headless" in names, "opencv-python-headless dist-info missing"
-    assert "opencv-python" not in names, (
-        "the GUI opencv-python build is present -- the deps-stage swap to -headless was undone"
+
+    # Every opencv variant owns the same `cv2` namespace, so naming only `opencv-python` lets
+    # `opencv-contrib-python` (GUI, and equally a co-installation) through. Pin the whole set.
+    opencv = {n for n in names if n.startswith("opencv")}
+    assert opencv == {"opencv-python-headless"}, (
+        f"opencv distributions are {sorted(opencv) or 'none'}, want exactly "
+        "['opencv-python-headless'] -- every variant shares the cv2 namespace, so any other "
+        "one present means the deps-stage swap to -headless was undone or shadowed"
     )

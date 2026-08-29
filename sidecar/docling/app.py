@@ -31,6 +31,26 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "build": buildinfo.read_build_sha(buildinfo.BUILD_FILE)}
 
 
+async def _read_capped_body(request: Request) -> bytes | None:
+    """The body, or None once it exceeds the cap.
+
+    Streamed rather than `await request.body()`: that buffers the whole payload before any
+    check, so a chunked upload with no Content-Length costs the memory before the 413.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_DOCUMENT_BYTES:
+        return None
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_DOCUMENT_BYTES:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.post("/v1/read")
 async def read_document(request: Request) -> JSONResponse:
     """Raw document bytes in, the §3 wire contract out.
@@ -38,8 +58,8 @@ async def read_document(request: Request) -> JSONResponse:
     convert.stub_read (the real converter, off-thread via asyncio.to_thread) never runs on
     the event loop, so a slow cold-start or a large convert can't starve /healthz (T-03-14).
     """
-    body = await request.body()
-    if len(body) > MAX_DOCUMENT_BYTES:
+    body = await _read_capped_body(request)
+    if body is None:
         return JSONResponse({"error": "document exceeds the 15 MiB limit"}, status_code=413)
     if not body:
         return JSONResponse({"error": "empty body"}, status_code=400)

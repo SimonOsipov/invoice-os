@@ -59,7 +59,7 @@ missing/unset `REPO_ROOT` fails those specs loudly, it does not skip them. One c
 run from the repo root, works locally and in CI (`$GITHUB_WORKSPACE` in place of
 `$PWD`):
 
-```
+```sh
 docker build --target test -f sidecar/docling/Dockerfile -t docling:test .
 docker run --rm -v "$PWD:/repo:ro" -e REPO_ROOT=/repo docling:test
 ```
@@ -75,7 +75,7 @@ response for `native_invoice.pdf`, replayed through an `httptest.Server` because
 cannot run a Python service. `go test -update` does not touch it — Go has no generator for it.
 It is regenerated from a running container instead:
 
-```
+```sh
 docker build -f sidecar/docling/Dockerfile -t docling:canary .
 docker run -d --name docling-canary --network none docling:canary
 scripts/ci/docling-canary.sh golden dev --update    # `dev` = the build.txt stamp in the image
@@ -179,7 +179,7 @@ and timeout decisions assumed, so no finding is owed against EXTR-01 on latency.
 
 Reproduce it with:
 
-```
+```sh
 docker run -d --name docling-bench -v "$PWD:/repo:ro" docling:canary
 scripts/ci/docling-bench.sh internal/extraction/testdata/dense_invoice.pdf 20
 docker rm -f docling-bench

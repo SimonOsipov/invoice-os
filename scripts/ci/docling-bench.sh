@@ -21,6 +21,12 @@ PORT="${DOCLING_CANARY_PORT:-8080}"
 fixture="${1:?usage: docling-bench.sh <repo-relative-fixture> [runs]}"
 runs="${2:-20}"
 
+# A non-positive count collects no samples, and the p95 index below then reads samples[-1].
+if ! [[ "$runs" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::runs must be a positive integer, got '$runs'"
+  exit 1
+fi
+
 if [ ! -f "$fixture" ]; then
   echo "::error::$fixture does not exist (path is relative to the repo root)"
   exit 1

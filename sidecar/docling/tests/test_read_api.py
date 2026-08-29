@@ -4,13 +4,15 @@ The size-cap and empty-body tests are content-independent and collect in a bare 
 rest need docling importable (EXTR-03-03's real converter) -- run via the Docker `test` stage.
 """
 
+import asyncio
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
 
 import convert
-from app import MAX_DOCUMENT_BYTES, app
+from app import MAX_DOCUMENT_BYTES, _read_capped_body, app
 
 PDF_CONTENT_TYPE = "application/pdf"
 
@@ -47,6 +49,44 @@ def test_body_one_byte_under_cap_is_not_refused(client):
     body = b"0" * (MAX_DOCUMENT_BYTES - 1)
     resp = client.post("/v1/read", content=body, headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code != 413
+
+
+def test_over_cap_body_stops_being_read_mid_stream():
+    """A chunked upload carries no Content-Length, so the cap has to bite mid-stream.
+
+    Asserted against _read_capped_body directly, not through TestClient: httpx drains a
+    request-body generator to build the request, so an end-to-end 413 says nothing about how
+    much the *server* read. Counting what the stream was asked for is what discriminates --
+    `await request.body()` also returns 413, having first read every byte.
+    """
+    chunk = b"0" * (1024 * 1024)
+    over_cap_chunks = (MAX_DOCUMENT_BYTES // len(chunk)) + 4
+    served = 0
+
+    class ChunkedRequest:
+        headers: ClassVar[dict[str, str]] = {}  # no content-length -- the chunked case
+
+        async def stream(self):
+            nonlocal served
+            for _ in range(over_cap_chunks):
+                served += 1
+                yield chunk
+
+    assert asyncio.run(_read_capped_body(ChunkedRequest())) is None
+    assert served < over_cap_chunks, (
+        f"all {over_cap_chunks} chunks were pulled before the cap bit -- the limit is being "
+        "applied after buffering, which is the memory cost it exists to avoid"
+    )
+
+
+def test_over_cap_content_length_is_refused_without_reading_the_body(client):
+    """A declared oversize Content-Length is refused on the header alone."""
+    resp = client.post(
+        "/v1/read",
+        content=b"0" * 16,
+        headers={"content-type": PDF_CONTENT_TYPE, "content-length": str(MAX_DOCUMENT_BYTES + 1)},
+    )
+    assert resp.status_code == 413
 
 
 def test_t01_6_empty_body_is_400(client):

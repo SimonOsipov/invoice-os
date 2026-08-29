@@ -174,7 +174,13 @@ def test_healthz_independent_of_the_converter_construction_lock(monkeypatch):
     convert._converter = None
     convert._construction_count = 0
 
+    # Signalled, not slept: a fixed sleep only *probably* wins the race, so on a loaded runner
+    # /healthz could be measured before the lock is held and the test would pass having proven
+    # nothing.
+    constructing = threading.Event()
+
     def slow_construct():
+        constructing.set()
         time.sleep(2)
         return object()
 
@@ -182,7 +188,7 @@ def test_healthz_independent_of_the_converter_construction_lock(monkeypatch):
 
     builder = threading.Thread(target=convert.get_converter)
     builder.start()
-    time.sleep(0.1)  # let the builder thread acquire the lock before measuring
+    assert constructing.wait(timeout=5), "the builder thread never entered _construct_converter"
 
     client = TestClient(app)
     t0 = time.time()

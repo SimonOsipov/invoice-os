@@ -6,6 +6,7 @@ convert.get_converter() (EXTR-03-03), so construction_count() reaches 1 on first
 """
 
 import concurrent.futures
+import threading
 import time
 from types import SimpleNamespace
 
@@ -95,14 +96,19 @@ def test_request_arriving_during_warmup_shares_the_warmup_construction(monkeypat
     # warm-up thread actually creates -- a request landing mid-warm-up, not mid-another-request.
     convert._warmup_thread = None  # force start_warm_up() to spawn a fresh thread
 
+    # Signalled, not slept: if warm-up loses a fixed 0.1s race, get_converter() builds first and
+    # the count is still 1 -- the assertion passes without the mid-warm-up case ever happening.
+    constructing = threading.Event()
+
     def slow_construct():
+        constructing.set()
         time.sleep(1)
         return object()
 
     monkeypatch.setattr(convert, "_construct_converter", slow_construct)
 
     warmup_thread = convert.start_warm_up()
-    time.sleep(0.1)  # let warm-up acquire the lock first
+    assert constructing.wait(timeout=5), "warm-up never entered _construct_converter"
     result = convert.get_converter()  # simulates a request landing mid-warm-up
     warmup_thread.join(timeout=5)
 

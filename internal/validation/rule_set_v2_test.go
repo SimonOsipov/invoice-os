@@ -745,9 +745,7 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	root := repoRoot(t)
 	// .ralph/ is per-worktree RALPH scratch, untracked and absent from every CI checkout, so
-	// excluding it hides no shipped code. Unlike .venv and playwright-report it is NOT in
-	// .gitignore -- only .git/info/exclude, which is per-clone and unshared. The regex itself
-	// is untouched.
+	// excluding it hides no shipped code. The regex itself is untouched.
 	cmd := exec.Command("bash", "-c",
 		`grep -rnE '[Vv]ersion[[:space:]]*(:|==|!=|<>|=)[[:space:]]*1\b|[Vv]ersion\)?[[:space:]]*\.toBe\(1\)|loadV1' . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=playwright-report --exclude-dir=.venv --exclude-dir=.ralph`)
 	cmd.Dir = root
@@ -782,7 +780,10 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	// session state, draft commit messages), never committed, absent from every CI
 	// checkout. A local note quoting a version pin was failing this test on the
 	// author's machine only -- the kind of false red that gets an allowlist widened.
+	// handoffFile is the same class of scratch, dropped by EXACT path: .claude/ also holds
+	// tracked hooks and settings.json, which stay scanned.
 	const selfFile = "internal/validation/rule_set_v2_test.go"
+	const handoffFile = ".claude/handoff.yaml"
 	var lines []string
 	for _, line := range allLines {
 		file, _, ok := strings.Cut(line, ":")
@@ -791,7 +792,7 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 			continue
 		}
 		file = strings.TrimPrefix(file, "./")
-		if file == selfFile || strings.HasPrefix(file, ".scratch/") {
+		if file == selfFile || file == handoffFile || strings.HasPrefix(file, ".scratch/") {
 			continue
 		}
 		lines = append(lines, line)

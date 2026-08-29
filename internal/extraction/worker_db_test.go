@@ -3,10 +3,12 @@
 // it reach the unexported args type from out here.
 //
 // Every extraction.* row in the shared database is test debris: nothing enqueues extraction
-// yet, so these specs are its only writers. audit_log carries no foreign keys, so the suite's
-// DELETE FROM tenants cascades nothing to it, and the audit_log_no_update_delete trigger
-// raises SQLSTATE 23001 on any DELETE -- the rows accumulate forever under throwaway tenant
-// ids. Never read them as evidence that extraction audit events are emitted in production.
+// yet, so every writer of one is a test fixture. Never read them as evidence that extraction
+// audit events are emitted in production.
+//
+// This file leaves none behind -- wkPurgeAuditLog drops each fixture tenant's audit rows at
+// teardown. internal/audit's fixtures do not, and audit_log carries no foreign key for
+// DELETE FROM tenants to cascade through, so those rows accumulate under dead tenant ids.
 package extraction_test
 
 import (

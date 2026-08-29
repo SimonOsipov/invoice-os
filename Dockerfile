@@ -1,7 +1,10 @@
 # Shared build for every Go service (M2-04). The build context MUST be the repo
 # root: each binary shares the root go.mod/go.sum and the internal/ packages.
 # Parameterized by a single build arg — the image is the static binary compiled
-# from ./cmd/${SERVICE}. Do not add per-service Dockerfiles.
+# from ./cmd/${SERVICE}. Do not add a per-service Dockerfile for a GO service: that is
+# what this file is for, and a second one would fork the build contract. Non-Go services
+# carry their own, which was already true of the four SPAs before it was written down
+# (frontend/<app>/Dockerfile) and is true of the Python sidecar (sidecar/<svc>/Dockerfile).
 #
 # Pairs with Dockerfile.dockerignore: BuildKit resolves the Dockerfile-adjacent
 # ignore ahead of the root .dockerignore (which is tuned for the SPA images and

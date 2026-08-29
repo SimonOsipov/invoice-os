@@ -380,6 +380,12 @@ func assertStructFields(t *testing.T, rt reflect.Type, want map[string]reflect.T
 			t.Errorf("%s.%s is %s, want %s", rt.Name(), name, f.Type, want[name])
 		}
 	}
+
+	for i, name := range order {
+		if i < rt.NumField() && rt.Field(i).Name != name {
+			t.Errorf("%s field %d is %s, want %s", rt.Name(), i, rt.Field(i).Name, name)
+		}
+	}
 }
 
 // parsePackageFiles parses the package source, skipping tests -- the same set reasonConstants

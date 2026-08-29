@@ -26,6 +26,8 @@ internal
 !internal/platform/buildsha.txt
 migrations
 db
+# Python sidecar (sidecar/docling/Dockerfile is its own image, own build context)
+sidecar
 Makefile
 docker-compose.yml
 *.go

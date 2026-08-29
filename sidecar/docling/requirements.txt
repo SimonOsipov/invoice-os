@@ -1,0 +1,19 @@
+fastapi==0.141.1
+uvicorn==0.52.4
+
+# EXTR-03 story sec. 4 pins table. docling[rapidocr] is mandatory, not bare docling:
+# bare docling ships rapidocr without onnxruntime, so RapidOcrOptions() fails at ONNX
+# session creation on the first scan rather than at install.
+docling[rapidocr]==2.123.1
+rapidocr==3.9.2
+onnxruntime==1.29.0
+
+# opencv-python-headless==5.0.0.93 (cv2, no X11/GL libs) is pinned and installed in
+# the Dockerfile instead of here -- it replaces rapidocr's transitive opencv-python
+# and needs an uninstall step between the two installs, which a requirements.txt
+# line can't express.
+
+# CPU wheel index (torch is not avoidable -- layout/TableFormer need it; this avoids
+# the ~2 GB CUDA payload).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.9.1+cpu

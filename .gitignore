@@ -20,6 +20,11 @@ frontend/**/.vite/
 frontend/**/.verify/
 *.tsbuildinfo
 
+# ---- Python (sidecar/docling) ----
+__pycache__/
+*.pyc
+.venv/
+
 # ---- Playwright (e2e smoke suite) ----
 e2e/test-results/
 e2e/playwright-report/

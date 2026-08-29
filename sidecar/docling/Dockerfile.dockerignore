@@ -1,0 +1,57 @@
+# Dockerfile-adjacent ignore-file for sidecar/docling/Dockerfile (same mechanism the
+# root Dockerfile.dockerignore uses): BuildKit resolves this ahead of the root
+# .dockerignore, so the docling build gets its own lean context instead of the
+# SPA-tuned root one. Build context is still the repo root -- KEEP
+# sidecar/docling/** and internal/platform/buildsha.txt; exclude everything else.
+
+# Frontend / Node
+node_modules
+**/node_modules
+frontend
+packages
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+Caddyfile
+**/dist
+**/.vite
+**/.verify
+
+# Go backend + DB/migration tooling -- not part of this image
+cmd
+internal
+!internal/platform/buildsha.txt
+migrations
+db
+*.go
+go.mod
+go.sum
+
+# VCS / CI / tooling / docs
+.git
+.github
+.claude
+backlog
+docs
+e2e
+*.md
+
+# Docker / env / editor / OS
+Dockerfile
+Dockerfile.dockerignore
+.dockerignore
+Makefile
+docker-compose.yml
+.env
+.env.*
+**/.env
+.DS_Store
+**/.DS_Store
+
+# Local dev cruft under sidecar/docling/ itself
+sidecar/docling/__pycache__
+sidecar/docling/**/__pycache__
+sidecar/docling/.pytest_cache
+sidecar/docling/.ruff_cache
+sidecar/docling/.venv
+sidecar/docling/build.txt

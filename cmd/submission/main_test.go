@@ -1007,6 +1007,108 @@ func TestNewPageSink_PutsToTheDocumentStore(t *testing.T) {
 // document.StorageKey already builds. This test lives here rather than in internal/extraction
 // because deps_test.go's scan B covers test imports too, so no extraction test may reach
 // internal/document.
+// ---------------------------------------------------------------------------
+// EXTR-03-07: the EXTRACTOR selector. selectExtractor is main()'s own testable
+// function, the same shape newExtractWorker/newPageSink already use -- reading
+// the two env vars stays in main(), so no test here needs t.Setenv on a global.
+// Mode A (test-spec) RED: main.go's selectExtractor is still the not-implemented
+// stub, so every test below fails on its own assertion, not a compile error.
+// ---------------------------------------------------------------------------
+
+// TestSelectExtractor_MockIsTheDefault: T-07-1 and T-07-2. EXTRACTOR unset or "mock" must be
+// byte-identical to the fleet's behaviour before this story: extraction.NewMockExtractor().
+func TestSelectExtractor_MockIsTheDefault(t *testing.T) {
+	for _, name := range []string{"", "mock"} {
+		t.Run("EXTRACTOR="+name, func(t *testing.T) {
+			got, err := selectExtractor(name, "")
+			if err != nil {
+				t.Fatalf("selectExtractor(%q, \"\") returned error %v, want a *MockExtractor and no error", name, err)
+			}
+			if _, ok := got.(*extraction.MockExtractor); !ok {
+				t.Errorf("selectExtractor(%q, \"\") = %T, want *extraction.MockExtractor", name, got)
+			}
+		})
+	}
+}
+
+// TestSelectExtractor_DoclingWithValidURL: T-07-3.
+func TestSelectExtractor_DoclingWithValidURL(t *testing.T) {
+	const doclingURL = "http://docling.railway.internal:8080"
+	got, err := selectExtractor("docling", doclingURL)
+	if err != nil {
+		t.Fatalf("selectExtractor(\"docling\", %q) returned error %v, want a *DoclingExtractor and no error", doclingURL, err)
+	}
+	ext, ok := got.(*extraction.DoclingExtractor)
+	if !ok {
+		t.Fatalf("selectExtractor(\"docling\", %q) = %T, want *extraction.DoclingExtractor", doclingURL, got)
+	}
+	if ext.Name() != "docling" {
+		t.Errorf("Name() = %q, want %q", ext.Name(), "docling")
+	}
+}
+
+// TestSelectExtractor_DoclingRequiresURL: T-07-4. An empty DOCLING_URL is fatal at boot in
+// every environment, matching submission.Select's M5-04-08 posture -- the error must name the
+// variable an operator needs to set, not the empty string it tried to parse.
+func TestSelectExtractor_DoclingRequiresURL(t *testing.T) {
+	got, err := selectExtractor("docling", "")
+	if err == nil {
+		t.Fatal("selectExtractor(\"docling\", \"\") returned a nil error, want one naming DOCLING_URL")
+	}
+	if got != nil {
+		t.Errorf("selectExtractor(\"docling\", \"\") = %T on the error path, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "DOCLING_URL") {
+		t.Errorf("err = %q, want it to name DOCLING_URL", err.Error())
+	}
+	// "Unset" and "malformed" are separate cases in the AC and read differently to whoever is
+	// looking at a boot log. Without this, deleting the empty check passes: NewDoclingExtractor
+	// rejects "" on its own and the wrapper still says DOCLING_URL, so the operator gets a
+	// complaint about a URL scheme instead of "you have not set this".
+	if _, bad := selectExtractor("docling", "://nope"); bad == nil || err.Error() == bad.Error() {
+		t.Errorf("the empty-DOCLING_URL error %q does not read differently from the malformed one", err.Error())
+	}
+	if !strings.Contains(err.Error(), "requires") {
+		t.Errorf("err = %q, want it to say DOCLING_URL is required rather than report a parse failure", err.Error())
+	}
+}
+
+// TestSelectExtractor_DoclingRejectsMalformedURL: T-07-5. A malformed DOCLING_URL must fail at
+// selection, not produce a *DoclingExtractor pointed at a broken address.
+func TestSelectExtractor_DoclingRejectsMalformedURL(t *testing.T) {
+	const bad = "://nope"
+	got, err := selectExtractor("docling", bad)
+	if err == nil {
+		t.Fatalf("selectExtractor(\"docling\", %q) returned a nil error, want one rejecting the URL", bad)
+	}
+	if got != nil {
+		t.Errorf("selectExtractor(\"docling\", %q) = %T on the error path, want nil -- not a client pointed at a broken URL", bad, got)
+	}
+	if !strings.Contains(err.Error(), bad) {
+		t.Errorf("err = %q, want it to name the malformed URL %q", err.Error(), bad)
+	}
+}
+
+// TestSelectExtractor_UnrecognisedIsFatal: T-07-6. An unrecognised EXTRACTOR value must never
+// fall back to mock -- it is fatal, naming the value.
+func TestSelectExtractor_UnrecognisedIsFatal(t *testing.T) {
+	got, err := selectExtractor("typo", "")
+	if err == nil {
+		t.Fatal(`selectExtractor("typo", "") returned a nil error, want one naming the unrecognised value`)
+	}
+	if got != nil {
+		t.Errorf(`selectExtractor("typo", "") = %T, want nil -- an unrecognised value must never silently select mock`, got)
+	}
+	if !strings.Contains(err.Error(), "typo") {
+		t.Errorf("err = %q, want it to name the unrecognised value %q", err.Error(), "typo")
+	}
+}
+
+// T-07-7 (PageStore.Reader stays a *PDFiumReader) has no test of its own here: the assertion
+// already exists in TestSubmissionMain_WiresTheQueueSeams above, which reads the literal's
+// Reader field off the AST. A source-substring scan beside it would be a weaker duplicate --
+// it breaks on a reformat and passes on a comment quoting the string.
+
 func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
 	const (
 		tenant = "3f2a1c88-0b6d-4e19-9f31-5c7a2d840e11"

@@ -63,12 +63,12 @@ func TestPageCarriesBorrowedImageBytes(t *testing.T) {
 	rt := reflect.TypeOf(extraction.Page{})
 
 	// First, so a renamed field fails here rather than being skipped below.
-	if got := rt.NumField(); got != 7 {
-		t.Fatalf("Page has %d fields, want 7: Number, WidthPt, HeightPt, ImageWidth, "+
-			"ImageHeight, ImagePNG, Tokens", got)
+	if got := rt.NumField(); got != 8 {
+		t.Fatalf("Page has %d fields, want 8: Number, WidthPt, HeightPt, ImageWidth, "+
+			"ImageHeight, ImagePNG, Tokens, Tables", got)
 	}
 
-	order := []string{"Number", "WidthPt", "HeightPt", "ImageWidth", "ImageHeight", "ImagePNG", "Tokens"}
+	order := []string{"Number", "WidthPt", "HeightPt", "ImageWidth", "ImageHeight", "ImagePNG", "Tokens", "Tables"}
 	want := map[string]reflect.Type{
 		"Number":      reflect.TypeOf(0),
 		"WidthPt":     reflect.TypeOf(float64(0)),
@@ -77,6 +77,42 @@ func TestPageCarriesBorrowedImageBytes(t *testing.T) {
 		"ImageHeight": reflect.TypeOf(0),
 		"ImagePNG":    reflect.TypeOf([]byte(nil)),
 		"Tokens":      reflect.TypeOf([]extraction.Token(nil)),
+		"Tables":      reflect.TypeOf([]extraction.Table(nil)),
+	}
+	assertStructFields(t, rt, want, order)
+}
+
+// Table's Rows/Cols are the table's own dimensions, not len(Cells): a merged cell occupies
+// several (row,col) positions and cannot be recovered by counting.
+func TestTableCarriesRowsColsAndCells(t *testing.T) {
+	rt := reflect.TypeOf(extraction.Table{})
+
+	if got := rt.NumField(); got != 3 {
+		t.Fatalf("Table has %d fields, want 3: Rows, Cols, Cells", got)
+	}
+	assertStructFields(t, rt, map[string]reflect.Type{
+		"Rows":  reflect.TypeOf(0),
+		"Cols":  reflect.TypeOf(0),
+		"Cells": reflect.TypeOf([]extraction.TableCell(nil)),
+	}, []string{"Rows", "Cols", "Cells"})
+}
+
+// TableCell.Region is nil when the source carried no box: an empty cell, or any DOCX table,
+// which has no provenance at all. Region is last, matching Field.Region's position.
+func TestTableCellCarriesSixFieldsRegionLast(t *testing.T) {
+	rt := reflect.TypeOf(extraction.TableCell{})
+
+	if got := rt.NumField(); got != 6 {
+		t.Fatalf("TableCell has %d fields, want 6: Row, Col, RowSpan, ColSpan, Text, Region", got)
+	}
+	order := []string{"Row", "Col", "RowSpan", "ColSpan", "Text", "Region"}
+	want := map[string]reflect.Type{
+		"Row":     reflect.TypeOf(0),
+		"Col":     reflect.TypeOf(0),
+		"RowSpan": reflect.TypeOf(0),
+		"ColSpan": reflect.TypeOf(0),
+		"Text":    reflect.TypeOf(""),
+		"Region":  reflect.TypeOf((*extraction.Region)(nil)),
 	}
 	assertStructFields(t, rt, want, order)
 }
@@ -128,6 +164,8 @@ func TestPageReaderValueTypesCarryNoStructTags(t *testing.T) {
 		reflect.TypeOf(extraction.Token{}),
 		reflect.TypeOf(extraction.Page{}),
 		reflect.TypeOf(extraction.PageResult{}),
+		reflect.TypeOf(extraction.Table{}),
+		reflect.TypeOf(extraction.TableCell{}),
 	} {
 		if rt.Kind() != reflect.Struct {
 			t.Fatalf("%s is %s, want a struct", rt.Name(), rt.Kind())

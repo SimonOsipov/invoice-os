@@ -28,6 +28,8 @@ const (
 	fxNative3  = "native_3page.pdf"
 	fxScanned  = "scanned_invoice.pdf"
 	fxHybrid   = "hybrid_invoice.pdf"
+	fxTable    = "table_invoice.pdf"
+	fxDense    = "dense_invoice.pdf"
 	fxMinBytes = 200 // floor: every fixture carries a catalog, a page tree, a page and a stream
 )
 
@@ -39,6 +41,8 @@ var fxCorpus = []struct {
 	{fxNative3, fxBuildNative3Page},
 	{fxScanned, fxBuildScanned},
 	{fxHybrid, fxBuildHybrid},
+	{fxTable, fxBuildTable},
+	{fxDense, fxBuildDense},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -198,6 +202,339 @@ func fxBuildHybrid() []byte {
 		fxStream([]byte(fxImageDraw)),
 		fxObject(fxHelvetica),
 		fxImageObject(4, 4, fxPixels),
+	})
+}
+
+// fxTableColXs are the 4-column table's vertical rule positions (5 boundaries, 117pt wide
+// columns). fxTableRowYs are its horizontal rule positions: top of header, header/row1,
+// row1/row2, bottom. Header/body text matches build_docx.py's for cross-format parity.
+var (
+	fxTableColXs  = [5]int{72, 189, 306, 423, 540}
+	fxTableRowYs  = [4]int{650, 626, 602, 578}
+	fxTableHeader = []string{"Description", "Qty", "Unit Price", "Total"}
+	fxTableBody   = [][]string{
+		{"Widget", "2", "500.00", "1000.00"},
+		{"Gadget", "1", "500.00", "500.00"},
+	}
+)
+
+// fxRuleH is a stroked horizontal line at y from x0 to x1.
+func fxRuleH(y, x0, x1 int) string {
+	return fmt.Sprintf("%d %d m\n%d %d l\nS\n", x0, y, x1, y)
+}
+
+// fxRuleV is a stroked vertical line at x from y0 to y1.
+func fxRuleV(x, y0, y1 int) string {
+	return fmt.Sprintf("%d %d m\n%d %d l\nS\n", x, y0, x, y1)
+}
+
+// fxTableRowText lays one row of cell strings on a baseline, 4pt into each column.
+func fxTableRowText(baseline int, cells []string) []fxLine {
+	lines := make([]fxLine, len(cells))
+	for i, text := range cells {
+		lines[i] = fxLine{10, fxTableColXs[i] + 4, baseline, text}
+	}
+	return lines
+}
+
+// fxBuildTable is one US-Letter page: a title plus a ruled 4-column, 3-row table (a header
+// row and two body rows). EXTR-03-04's table-mapping fixture -- TableFormer's own read of
+// it is asserted only to a coarse floor (T-04-14), never pinned exactly, because an ML
+// model's row/column verdict on a synthetic page is not a contract this story can hold.
+func fxBuildTable() []byte {
+	lines := []fxLine{{24, 72, 720, "INVOICE"}}
+	lines = append(lines, fxTableRowText(638, fxTableHeader)...)
+	lines = append(lines, fxTableRowText(614, fxTableBody[0])...)
+	lines = append(lines, fxTableRowText(590, fxTableBody[1])...)
+
+	var rules bytes.Buffer
+	for _, y := range fxTableRowYs {
+		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxTableRowYs[len(fxTableRowYs)-1], fxTableRowYs[0]))
+	}
+
+	content := fxText(lines...)
+	content = append(content, rules.Bytes()...)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxHelvetica),
+	})
+}
+
+// --- the raster half --------------------------------------------------------
+
+// The dense fixture is drawn as pixels, not as text operators: OCR only has work to do if the
+// glyphs are ink. 1275x1651 is exactly pdfium's 150-DPI grid for US-Letter
+// (pdfium_render_test.go's prLetterWidthPx/prLetterHeightPx), so its render resamples nothing.
+const (
+	fxRasterW = 1275
+	fxRasterH = 1651
+)
+
+// The bitmap font cell. fxGlyphAdvance leaves one blank column between glyphs.
+const (
+	fxGlyphW       = 5
+	fxGlyphH       = 7
+	fxGlyphAdvance = 6
+)
+
+// fxGlyphs is a 5x7 dot-matrix font: the set bits draw the glyph, so a wrong pixel is visible in
+// the source. Uppercase only -- 5x7 lowercase with descenders reads far worse under OCR than the
+// all-caps an invoice prints anyway. Indexed, never ranged, so it cannot reorder any output.
+var fxGlyphs = map[byte][fxGlyphH]uint8{
+	' ': {0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000},
+	'.': {0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100},
+	',': {0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b00100, 0b01000},
+	'-': {0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000},
+	':': {0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000},
+	'(': {0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010},
+	')': {0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000},
+	'%': {0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011},
+	'0': {0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110},
+	'1': {0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110},
+	'2': {0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111},
+	'3': {0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110},
+	'4': {0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010},
+	'5': {0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110},
+	'6': {0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110},
+	'7': {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000},
+	'8': {0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110},
+	'9': {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100},
+	'A': {0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001},
+	'B': {0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110},
+	'C': {0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110},
+	'D': {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110},
+	'E': {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111},
+	'F': {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000},
+	'G': {0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111},
+	'H': {0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001},
+	'I': {0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110},
+	'J': {0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100},
+	'K': {0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001},
+	'L': {0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111},
+	'M': {0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001},
+	'N': {0b10001, 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001},
+	'O': {0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110},
+	'P': {0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000},
+	'Q': {0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101},
+	'R': {0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001},
+	'S': {0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110},
+	'T': {0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100},
+	'U': {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110},
+	'V': {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100},
+	'W': {0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010},
+	'X': {0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001},
+	'Y': {0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100},
+	'Z': {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111},
+}
+
+// fxCanvas is a one-byte-per-pixel ink mask; pack turns it into the 1-bit image once, at the end.
+type fxCanvas struct {
+	w, h int
+	ink  []byte
+}
+
+func fxNewCanvas(w, h int) *fxCanvas { return &fxCanvas{w: w, h: h, ink: make([]byte, w*h)} }
+
+// fill inks a half-open rectangle, clipped to the canvas.
+func (c *fxCanvas) fill(x0, y0, x1, y1 int) {
+	for y := max(y0, 0); y < min(y1, c.h); y++ {
+		for x := max(x0, 0); x < min(x1, c.w); x++ {
+			c.ink[y*c.w+x] = 1
+		}
+	}
+}
+
+// draw lays a string with each glyph cell scaled by scale; x,y is the first cell's top-left. An
+// unmapped byte panics rather than drawing nothing: a typo must not ship as a silent hole.
+func (c *fxCanvas) draw(s string, x, y, scale int) {
+	for i := range len(s) {
+		rows, ok := fxGlyphs[s[i]]
+		if !ok {
+			panic(fmt.Sprintf("fixtures: no glyph for %q in %q", s[i], s))
+		}
+		gx := x + i*fxGlyphAdvance*scale
+		for r, bits := range rows {
+			for col := range fxGlyphW {
+				if bits&(1<<(fxGlyphW-1-col)) != 0 {
+					c.fill(gx+col*scale, y+r*scale, gx+(col+1)*scale, y+(r+1)*scale)
+				}
+			}
+		}
+	}
+}
+
+// fxTextW is a drawn string's ink width: the trailing inter-glyph column is not part of it.
+func fxTextW(s string, scale int) int { return len(s)*fxGlyphAdvance*scale - scale }
+
+// drawRight lays a string ending at x.
+func (c *fxCanvas) drawRight(s string, x, y, scale int) { c.draw(s, x-fxTextW(s, scale), y, scale) }
+
+// pack emits 1-bit /DeviceGray rows: bit 1 is white, bit 0 is ink. The row padding bits stay
+// white, so no black sliver appears down the right edge.
+func (c *fxCanvas) pack() []byte {
+	stride := (c.w + 7) / 8
+	out := bytes.Repeat([]byte{0xFF}, stride*c.h)
+	for y := range c.h {
+		for x := range c.w {
+			if c.ink[y*c.w+x] != 0 {
+				out[y*stride+x/8] &^= 0x80 >> (x % 8)
+			}
+		}
+	}
+	return out
+}
+
+// fxRunLength encodes src with the PDF /RunLengthDecode filter: a length byte 0..127 means the
+// next n+1 bytes are literal, 129..255 repeats the next byte 257-n times, 128 is EOD. Hand-rolled
+// rather than compress/flate because these bytes are byte-compared and flate's output is not
+// promised stable across Go releases.
+func fxRunLength(src []byte) []byte {
+	out := make([]byte, 0, len(src)/8)
+	for i := 0; i < len(src); {
+		j := i + 1
+		for j < len(src) && src[j] == src[i] && j-i < 128 {
+			j++
+		}
+		if j-i >= 2 {
+			out = append(out, byte(257-(j-i)), src[i])
+			i = j
+			continue
+		}
+		k := i
+		for k < len(src) && k-i < 128 {
+			if k+2 < len(src) && src[k] == src[k+1] && src[k+1] == src[k+2] {
+				break
+			}
+			k++
+		}
+		out = append(out, byte(k-i-1))
+		out = append(out, src[i:k]...)
+		i = k
+	}
+	return append(out, 128)
+}
+
+// fxImageObjectRLE is a 1-bit /DeviceGray XObject under /RunLengthDecode. Uncompressed 8-bit
+// would commit ~2 MB for one page of line art.
+func fxImageObjectRLE(w, h int, packed []byte) fxObject {
+	body := fxRunLength(packed)
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /RunLengthDecode /Length %d >>\nstream\n", w, h, len(body))
+	b.Write(body)
+	b.WriteString("\nendstream")
+	return b.Bytes()
+}
+
+// fxDenseRows are the line items. Every amount is qty x unit price and stays under 1,000,000 so
+// it fits its column at this glyph scale; the grand total sits on its own row and need not.
+var fxDenseRows = [][4]string{
+	{"CEMENT 50KG BAG", "120", "7,850.00", "942,000.00"},
+	{"STEEL ROD 12MM", "40", "18,250.00", "730,000.00"},
+	{"ROOFING SHEET 0.5MM", "85", "9,400.00", "799,000.00"},
+	{"PVC PIPE 110MM", "150", "3,275.00", "491,250.00"},
+	{"PAINT 20L EMULSION", "60", "12,500.00", "750,000.00"},
+	{"HARDWOOD PLANK 4M", "95", "6,300.00", "598,500.00"},
+}
+
+// fxDenseCols are the table's five vertical rules; fxDenseRights are the anchors the three
+// numeric columns are right-aligned to, 10 px inside their cell.
+var (
+	fxDenseCols   = [5]int{45, 560, 700, 970, 1235}
+	fxDenseRights = [3]int{690, 960, 1225}
+)
+
+const (
+	fxDenseTableTop = 606 // the rule above the header row
+	fxDenseHeadRule = 656 // the rule under it, and row 0's top
+	fxDenseRowPitch = 44
+	fxDenseRule     = 3 // grid line thickness
+	fxDenseCellPad  = 8 // a row's top to its glyph cell's top
+	fxDenseBody     = 4 // body glyph scale: 28 px tall, ~13 pt at 150 DPI
+)
+
+// fxBuildDense is the p95 fixture: one US-Letter page of Nigerian-shaped invoice content drawn
+// entirely as raster glyphs, so it reads as a scan and OCR has to do the work. Its TINs are the
+// NNNNNNNN-NNNN FIRS shape (internal/portfolio/tin.go) and pass that package's Luhn check;
+// neither the TINs nor the company names appear in db/seed.dev.sql, so a seed edit cannot
+// silently change what this document means, and neither is in the 99999999-* block the mock APP
+// adapter reserves as submission triggers.
+func fxBuildDense() []byte {
+	c := fxNewCanvas(fxRasterW, fxRasterH)
+
+	c.draw("INVOICE", 45, 55, 8)
+	c.fill(45, 130, 1235, 136)
+
+	c.draw("KADUNA SUPPLY LTD", 45, 165, 5)
+	c.draw("27 ALI AKILU ROAD", 45, 215, fxDenseBody)
+	c.draw("KADUNA, KADUNA STATE", 45, 253, fxDenseBody)
+	c.draw("TIN: 30154829-0032", 45, 291, fxDenseBody)
+	c.draw("RC NUMBER: RC-441209", 45, 329, fxDenseBody)
+
+	c.draw("INVOICE NO: ASC-2026-0417", 635, 165, fxDenseBody)
+	c.draw("ISSUE DATE: 12 AUG 2026", 635, 203, fxDenseBody)
+	c.draw("DUE DATE: 11 SEP 2026", 635, 241, fxDenseBody)
+	c.draw("CURRENCY: NGN", 635, 279, fxDenseBody)
+	c.draw("PO NUMBER: PO-88213", 635, 317, fxDenseBody)
+
+	c.draw("BILL TO:", 45, 390, fxDenseBody)
+	c.draw("ENUGU CERAMICS LIMITED", 45, 428, 5)
+	c.draw("5 OGUI ROAD, ENUGU", 45, 478, fxDenseBody)
+	c.draw("ENUGU STATE, NIGERIA", 45, 516, fxDenseBody)
+	c.draw("TIN: 40287316-0012", 45, 554, fxDenseBody)
+
+	// A fully ruled grid, so a table detector sees a table and not a block of text.
+	bottom := fxDenseHeadRule + fxDenseRowPitch*len(fxDenseRows)
+	c.fill(fxDenseCols[0], fxDenseTableTop, fxDenseCols[4], fxDenseTableTop+fxDenseRule)
+	for i := range len(fxDenseRows) + 1 {
+		y := fxDenseHeadRule + fxDenseRowPitch*i
+		c.fill(fxDenseCols[0], y, fxDenseCols[4], y+fxDenseRule)
+	}
+	for _, x := range fxDenseCols {
+		c.fill(x, fxDenseTableTop, x+fxDenseRule, bottom+fxDenseRule)
+	}
+
+	head := fxDenseTableTop + fxDenseRule + fxDenseCellPad
+	c.draw("DESCRIPTION", fxDenseCols[0]+10, head, fxDenseBody)
+	for i, label := range [3]string{"QTY", "UNIT PRICE", "AMOUNT"} {
+		c.drawRight(label, fxDenseRights[i], head, fxDenseBody)
+	}
+	for i, row := range fxDenseRows {
+		y := fxDenseHeadRule + fxDenseRowPitch*i + fxDenseRule + fxDenseCellPad
+		c.draw(row[0], fxDenseCols[0]+10, y, fxDenseBody)
+		for j := range fxDenseRights {
+			c.drawRight(row[j+1], fxDenseRights[j], y, fxDenseBody)
+		}
+	}
+
+	tot := bottom + fxDenseRule
+	c.drawRight("SUBTOTAL", 900, tot+30, fxDenseBody)
+	c.drawRight("4,310,750.00", 1225, tot+30, fxDenseBody)
+	c.drawRight("VAT 7.5%", 900, tot+72, fxDenseBody)
+	c.drawRight("323,306.25", 1225, tot+72, fxDenseBody)
+	c.fill(700, tot+112, 1235, tot+114)
+	c.drawRight("TOTAL DUE (NGN)", 900, tot+128, fxDenseBody)
+	c.drawRight("4,634,056.25", 1225, tot+128, fxDenseBody)
+	c.fill(700, tot+170, 1235, tot+176)
+
+	c.draw("REMIT TO ACCOUNT 3081447726", 45, 1160, fxDenseBody)
+	c.draw("SORT CODE 011152303", 45, 1198, fxDenseBody)
+	c.draw("PAYMENT DUE WITHIN 30 DAYS", 45, 1236, fxDenseBody)
+	c.draw("ISSUED UNDER THE FIRS", 45, 1300, fxDenseBody)
+	c.draw("E-INVOICING REGULATIONS 2026", 45, 1338, fxDenseBody)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxImageRes(5), 4),
+		fxStream([]byte(fxImageDraw)),
+		fxImageObjectRLE(fxRasterW, fxRasterH, c.pack()),
 	})
 }
 

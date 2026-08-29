@@ -30,7 +30,13 @@ first compute consumer. If M2-12 has to deviate, update this doc in the same PR.
 
 ## 0. Naming and placeholders
 
-A backend service is one Go binary under `cmd/<svc>/`. Throughout this doc:
+A backend service is usually one Go binary under `cmd/<svc>/`, and this recipe is written
+for that case. Two other shapes exist and follow different rules — the static SPAs
+(`frontend/<app>/Dockerfile`, four of them) and, since EXTR-03, the Python sidecar
+(`sidecar/<svc>/Dockerfile`). See the appendix table at the end of this document before
+assuming a new service is a Go binary.
+
+Throughout this doc:
 
 - `<svc>` — the service name, identical in: the `cmd/<svc>` directory, the Railway
   service name, and the private-networking hostname `<svc>.railway.internal`.
@@ -318,3 +324,29 @@ Live services: `landing`, `app`, `ops-console`, `support-console` — see
 `support-console` (added 2026-07-27) is the most recent walk-through of this recipe, and
 confirmed step 1's warning is still live: `serviceCreate` **did** attach a `main` deployment
 trigger, which had to be `deploymentTriggerDelete`d before the invariants workflow would pass.
+
+---
+
+## Appendix: Python sidecar variant (shape only — NOT provisioned)
+
+**No `docling` service exists in the Railway fleet.** EXTR-03 built the image and the Go
+client; it did not provision anything. `sidecar/docling/railway.json` is committed and
+referenced by nothing, `EXTRACTOR` defaults to `mock`, and the fleet count is unchanged.
+This appendix records the *shape* a Python sidecar takes, so the next one has a recipe —
+it does not describe a running service.
+
+| | Compute (this recipe) | Python sidecar (shape) |
+|---|---|---|
+| Source | `cmd/<svc>/` (Go) | `sidecar/<svc>/` (Python) |
+| Config file | `cmd/<svc>/railway.json` | `sidecar/<svc>/railway.json` |
+| Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-service `sidecar/<svc>/Dockerfile` |
+| Health | `/healthz` | `/healthz` (same contract, same `build` field) |
+| Ingress | private-networking only (gateway is the exception) | private-networking only |
+| Watch patterns | empty (§3) | empty (§3) |
+
+Provisioning `docling` would still require: creating the service, setting `DOCLING_URL` on
+whatever component calls it (today only `cmd/submission`, and only when `EXTRACTOR=docling`),
+and taking the fleet-visibility decision recorded as D-10/D-16. All three are deferred.
+
+Sizing, if it is ever provisioned: measured peak RSS is ~2.2 GiB on a one-page scan (see
+`docs/docling-sidecar.md`). Memory, not CPU, is the constraint.

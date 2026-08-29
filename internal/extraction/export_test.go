@@ -36,3 +36,10 @@ func PDFiumCleanupsForTest() int64 { return pdfiumCleanups.Load() }
 func NewPDFiumExtractorWithReaderForTest(r PageReader) *PDFiumExtractor {
 	return &PDFiumExtractor{reader: r}
 }
+
+// NewDoclingExtractorWithReaderForTest builds an extractor over a substitute PageReader,
+// bypassing NewDoclingExtractor's baseURL requirement.
+// TestDoclingExtractor_ChecksCancellationBeforeTheReader counts the calls that reach it.
+func NewDoclingExtractorWithReaderForTest(r PageReader) *DoclingExtractor {
+	return &DoclingExtractor{reader: r}
+}

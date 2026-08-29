@@ -3,9 +3,14 @@
 package extraction_test
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math/rand"
+	"reflect"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -58,13 +63,12 @@ func TestReconcile_FieldWithTwoCandidatesIsSilentlyAbsent(t *testing.T) {
 	}
 }
 
-// TestReconcile_AllLineTotalsUnparseableLeavesTheBlockReportedPresent pins the other
-// interpretation call: a line total that parses fails to count toward "have a line total"
-// (correct per D-19 -- the sum check below stays skipped, not defaulted to a mismatch), but the
-// line_items presence flag itself only asks len(Lines)==0, so a row that exists with corrupt
-// numbers still reports the block as ReasonNone, not missing. That is the current, documented
-// behaviour -- not a claim that it is the final word once a "corrupt row" reason code exists.
-func TestReconcile_AllLineTotalsUnparseableLeavesTheBlockReportedPresent(t *testing.T) {
+// TestReconcile_AllLineTotalsUnparseableLeavesTheBlockMissing pins D-21: the line_items block
+// reports ReasonNone only when the sum check could actually run, i.e. at least one line carries
+// a parseable total. A row that exists but contributes nothing parseable leaves the sum check
+// unable to run, which must read as ReasonMissing -- not the ReasonNone a genuinely reconciled
+// block gets, and not indistinguishable from having zero lines either.
+func TestReconcile_AllLineTotalsUnparseableLeavesTheBlockMissing(t *testing.T) {
 	in := extraction.Input{
 		Candidates: []extraction.Candidate{rcCandidate("subtotal", "1500.00")},
 		Lines: []extraction.DocLine{
@@ -86,8 +90,8 @@ func TestReconcile_AllLineTotalsUnparseableLeavesTheBlockReportedPresent(t *test
 	if !ok {
 		t.Fatalf(`"line_items" result not found in %+v`, results)
 	}
-	if lineBlock.Reason != extraction.ReasonNone {
-		t.Errorf("line_items reason = %q, want ReasonNone -- today's presence rule is len(Lines)==0 only; a row with corrupt numbers still counts as present", lineBlock.Reason)
+	if lineBlock.Reason != extraction.ReasonMissing {
+		t.Errorf("line_items reason = %q, want ReasonMissing (D-21) -- a row present with no usable total means the sum check could not run", lineBlock.Reason)
 	}
 }
 
@@ -199,5 +203,118 @@ func f(s string) (decimal.Decimal, error) {
 	}
 	if controlHits := rcFloatHits(rcParse(t, "control.go", floatControl)); len(controlHits) != 0 {
 		t.Errorf("the control source only calls decimal.NewFromString, an allowed idiom, and the scan flagged %v; the scan is not specific", controlHits)
+	}
+}
+
+// --- EXTR-05-04: totality, ambiguity and reason precedence --------------------------
+
+func TestReconcile_IgnoresACandidateOutsideTheVocabulary(t *testing.T) {
+	in := extraction.Input{Candidates: []extraction.Candidate{rcCandidate("not_a_field", "x")}}
+	results := extraction.Reconcile(in)
+	want := rcExpectedNames()
+	if len(results) != len(want) {
+		t.Fatalf("got %d results %v, want exactly %d: %v -- a candidate outside HeaderFields must not change the total", len(results), rcNames(results), len(want), want)
+	}
+	if got := rcNames(results); !rcNamesEqual(got, want) {
+		t.Errorf("result names = %v, want %v in exactly this order", got, want)
+	}
+	if _, ok := rcFind(results, "not_a_field"); ok {
+		t.Error(`"not_a_field" found in Reconcile's output; a candidate outside HeaderFields must never surface as its own result`)
+	}
+}
+
+func TestReconcile_ANativePDFWithNoTablesIsMissingNotClean(t *testing.T) {
+	missing := extraction.Reconcile(extraction.Input{Lines: nil})
+	clean := extraction.Reconcile(extraction.Input{
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00")},
+		},
+	})
+
+	missingBlock, ok := rcFind(missing, "line_items")
+	if !ok {
+		t.Fatalf(`"line_items" not found in %+v`, missing)
+	}
+	cleanBlock, ok := rcFind(clean, "line_items")
+	if !ok {
+		t.Fatalf(`"line_items" not found in %+v`, clean)
+	}
+	if missingBlock.Reason != extraction.ReasonMissing {
+		t.Errorf("line_items reason = %q for a Tables==nil document (Lines empty), want ReasonMissing", missingBlock.Reason)
+	}
+	if missingBlock.Reason == cleanBlock.Reason {
+		t.Errorf("a document with no tables and a document with one clean line both report line_items reason %q; the two states must differ", missingBlock.Reason)
+	}
+}
+
+// TestReconcile_IsPermutationInvariantOnEqualInput asserts the output against a literal expected
+// result, not merely self-consistency across shuffles -- a permutation check that only compares
+// shuffles to each other cannot catch a non-total comparator (D-9's own oracle note). It also
+// runs 13 candidates for one field, past the n=12 insertion-sort cutover in Go's sort, so both
+// sort paths are exercised.
+func TestReconcile_IsPermutationInvariantOnEqualInput(t *testing.T) {
+	const n = 13
+	base := make([]extraction.Candidate, 0, n)
+	for i := 1; i <= n; i++ {
+		base = append(base, rcCandAt("vat", fmt.Sprintf("V%02d", i), extraction.TierGeneric, float64(i)/100))
+	}
+
+	want := []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "issue_date", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "supplier_tin", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "supplier_name", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_tin", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_name", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "currency", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "subtotal", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "vat", Value: rcStr("V01"), Reason: extraction.ReasonNone}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "total", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "line_items", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+	}
+
+	for i := 0; i < 100; i++ {
+		shuffled := make([]extraction.Candidate, len(base))
+		copy(shuffled, base)
+		rand.New(rand.NewSource(int64(i))).Shuffle(len(shuffled), func(a, b int) {
+			shuffled[a], shuffled[b] = shuffled[b], shuffled[a]
+		})
+		got := extraction.Reconcile(extraction.Input{Candidates: shuffled})
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("permutation %d: Reconcile(shuffled) = %+v, want the literal %+v -- output must not depend on candidate order", i, got, want)
+		}
+	}
+}
+
+func TestReconcile_MutatesNeitherItsInputSliceNorItsCandidates(t *testing.T) {
+	region := &extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.2, Y1: 0.2}
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{
+			rcCandAt("total", "1500.00", extraction.TierGeneric, 0.01),
+			{Field: "total", Value: "1600.00", Region: region, Tier: extraction.TierGeneric, Distance: 0.01, RuleID: "r1"},
+			rcCandidate("subtotal", "1000.00"),
+		},
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("1"), UnitPrice: rcStr("1000.00"), LineTotal: rcStr("1000.00")},
+		},
+		Entity: extraction.Entity{TIN: "12345678-0001", Name: "Acme Ltd"},
+	}
+
+	before, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal input before Reconcile: %v", err)
+	}
+	beforeSum := sha256.Sum256(before)
+
+	_ = extraction.Reconcile(in)
+
+	after, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal input after Reconcile: %v", err)
+	}
+	afterSum := sha256.Sum256(after)
+
+	if beforeSum != afterSum {
+		t.Errorf("Input changed after Reconcile: before %x, after %x -- Reconcile must not mutate its input", beforeSum, afterSum)
 	}
 }

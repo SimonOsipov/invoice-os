@@ -67,12 +67,16 @@ func JobsHandler(list func(ctx context.Context, documentID string) (JobsResponse
 			writeError(w, http.StatusBadRequest, "document_id is required")
 			return
 		}
-		if _, err := uuid.Parse(documentID); err != nil {
+		parsed, err := uuid.Parse(documentID)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
 			return
 		}
 
-		out, err := list(r.Context(), documentID)
+		// Forward the canonical spelling, not the raw value: uuid.Parse accepts a "urn:uuid:"
+		// prefix that Postgres rejects with 22P02, which would surface as a 500
+		// (TestExtractionJobsHandler_UrnPrefixedUuidReachesTheReaderCanonicalised).
+		out, err := list(r.Context(), parsed.String())
 		if err != nil {
 			status, body := statusForErr(err)
 			if status == http.StatusInternalServerError {

@@ -615,6 +615,33 @@ func TestExtractionJobsHandler_AcceptedSpellingsReachTheReaderAsTheSameUuid(t *t
 	}
 }
 
+// "urn:uuid:<id>" is the one spelling uuid.Parse accepts and Postgres refuses (SQLSTATE 22P02),
+// so forwarding the raw querystring turned a caller-supplied string into a 500 and an
+// operator-alerting ERROR line on a route the frontend polls every 2s. The spy has no Postgres
+// parser behind it, so the exact bytes the reader receives ARE the oracle here: assert the
+// canonical form, not the parsed value.
+func TestExtractionJobsHandler_UrnPrefixedUuidReachesTheReaderCanonicalised(t *testing.T) {
+	want := uuid.MustParse(hndDocumentID).String()
+	if want != hndDocumentID {
+		t.Fatalf("the fixture id %q is not its own canonical form %q; this case asserts the wrong string", hndDocumentID, want)
+	}
+	value := "urn:uuid:" + hndDocumentID
+	if value == want {
+		t.Fatal("the urn value equals the canonical form, so this case proves nothing")
+	}
+
+	spy := &hndSpy{resp: extraction.JobsResponse{Jobs: []extraction.JobState{}}}
+	w := hndGet(t, spy, "document_id="+url.QueryEscape(value))
+
+	hndAssert(t, w, http.StatusOK, "{\"jobs\":[]}\n")
+	if spy.calls != 1 {
+		t.Fatalf("the reader ran %d time(s), want 1", spy.calls)
+	}
+	if spy.got != want {
+		t.Errorf("the reader received document_id %q, want the canonical %q; Postgres refuses anything else", spy.got, want)
+	}
+}
+
 // The handler answers any method. EXTR-07-03 must therefore register a method-qualified pattern
 // ("GET /v1/extraction-jobs"); nothing in here will 405 for it.
 func TestExtractionJobsHandler_LeavesMethodEnforcementToTheMux(t *testing.T) {

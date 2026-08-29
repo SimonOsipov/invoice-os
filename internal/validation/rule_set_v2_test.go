@@ -773,8 +773,8 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	// 90-hit baseline the architecture verified live against the repo --
 	// excluded from the scope check below by NAME, the same way the command's
 	// own --exclude-dir flags already carve out non-reviewed directories.
-	// This filters the OUTPUT for the assertion only; the command string
-	// above stays byte-for-byte verbatim.
+	// This filters the OUTPUT for the assertion only; no allowlist entry is
+	// written into the command string above.
 	//
 	// .scratch/ is dropped for the same reason: per-worktree agent scratch (RALPH
 	// session state, draft commit messages), never committed, absent from every CI

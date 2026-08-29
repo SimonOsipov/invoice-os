@@ -1,10 +1,14 @@
-// anchor_store.go: the learned-rule read. Stage 3 implements AnchorRulesFor; this stub keeps
-// EXTR-04-05's RED tests failing on assertion, never on a compile error.
+// anchor_store.go: the learned-rule read. The tenant is a parameter, never ctx -- the worker
+// has no request identity. A row the parser rejects is an error, not a skip.
 package extraction
 
 import (
 	"context"
-	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // AnchorRule is one stored rule: its row identity plus its decoded body.
@@ -15,7 +19,56 @@ type AnchorRule struct {
 }
 
 // AnchorRulesFor returns the tenant's anchor rules for one layout fingerprint, newest first,
-// never a nil slice. Not yet implemented.
+// never a nil slice.
 func (s *Store) AnchorRulesFor(ctx context.Context, tenantID, fingerprint string) ([]AnchorRule, error) {
-	return []AnchorRule{}, errors.New("AnchorRulesFor: not implemented")
+	out := []AnchorRule{}
+	err := db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
+		var err error
+		out, err = anchorRulesForTx(ctx, tx, tenantID, fingerprint)
+		return err
+	})
+	return out, err
+}
+
+// anchorRulesForTx errors on a row the parser rejects rather than skipping it, and returns an
+// empty slice rather than the partial one, so no caller reads a truncated rule set as a result.
+// The explicit tenant_id predicate is not the isolation guard -- RLS is -- but it is what drives
+// extraction_anchor_rules_tenant_fingerprint_idx.
+func anchorRulesForTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint string) ([]AnchorRule, error) {
+	out := []AnchorRule{}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, field_name, rule, rule_schema_version
+		   FROM extraction_anchor_rules
+		  WHERE tenant_id = $1 AND layout_fingerprint = $2
+		  ORDER BY created_at DESC, id`,
+		tenantID, fingerprint)
+	if err != nil {
+		return out, fmt.Errorf("extraction: read anchor rules for fingerprint %s: %w", fingerprint, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			a       AnchorRule
+			body    []byte
+			version int
+		)
+		if err := rows.Scan(&a.ID, &a.Field, &body, &version); err != nil {
+			return []AnchorRule{}, fmt.Errorf("extraction: scan anchor rule for fingerprint %s: %w", fingerprint, err)
+		}
+		if version != RuleSchemaVersion {
+			return []AnchorRule{}, fmt.Errorf("extraction: anchor rule %s: schema version %d, want %d", a.ID, version, RuleSchemaVersion)
+		}
+		r, err := ParseRule(body)
+		if err != nil {
+			return []AnchorRule{}, fmt.Errorf("extraction: anchor rule %s: %w", a.ID, err)
+		}
+		a.Rule = r
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return []AnchorRule{}, fmt.Errorf("extraction: read anchor rules for fingerprint %s: %w", fingerprint, err)
+	}
+	return out, nil
 }

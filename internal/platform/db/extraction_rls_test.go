@@ -2551,6 +2551,7 @@ func TestRLS_ExtractionFieldResultsColumnShapeAndNullability(t *testing.T) {
 		{"bbox_y1", "double precision", false, ""},
 		{"reason_code", "text", false, ""},
 		{"created_at", "timestamp with time zone", true, "now()"},
+		{"candidate_rank", "integer", true, "0"},
 	}
 
 	rows, err := h.super.Query(ctx,
@@ -2649,6 +2650,84 @@ func TestRLS_ExtractionFieldResultsColumnShapeAndNullability(t *testing.T) {
 	}
 	if created.IsZero() {
 		t.Error("created_at on a bare insert is the zero time, want the transaction's now()")
+	}
+}
+
+// EXTR-05-01: candidate_rank never goes negative. 0 is the decided reading; 1..N are the
+// surviving alternatives Reconcile keeps — a negative rank has no such meaning.
+func TestRLS_ExtractionFieldResultsCandidateRankRejectsNegative(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EXTR-05-01/negative.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	id := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, id)
+	}()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, candidate_rank)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			id, h.tenantA, jobA, efrField, -1)
+		return err
+	})
+	if failIfUndefinedFieldResults(t, "INSERT candidate_rank = -1", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("INSERT with candidate_rank = -1 succeeded, want CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("INSERT candidate_rank = -1: SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_results WHERE id = $1`, id); n != 0 {
+		t.Errorf("rows after the refused candidate_rank = -1 INSERT = %d, want 0", n)
+	}
+}
+
+// EXTR-05-01: an INSERT naming none of the optional columns still gets candidate_rank = 0,
+// so the pre-existing writer (which knows nothing of ranks) keeps working untouched.
+func TestRLS_ExtractionFieldResultsCandidateRankDefaultsToZero(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EXTR-05-01/default.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	id := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_results WHERE id = $1`, id)
+	}()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name)
+			 VALUES ($1, $2, $3, $4)`,
+			id, h.tenantA, jobA, efrField)
+		return err
+	})
+	if failIfUndefinedFieldResults(t, "INSERT naming only the required columns", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("INSERT naming only the required columns: want success, got: %v", err)
+	}
+
+	var rank int
+	if err := h.super.QueryRow(ctx,
+		`SELECT candidate_rank FROM extraction_field_results WHERE id = $1`, id,
+	).Scan(&rank); err != nil {
+		t.Fatalf("read back candidate_rank: %v", err)
+	}
+	if rank != 0 {
+		t.Errorf("candidate_rank on an insert that never named it = %d, want 0", rank)
 	}
 }
 

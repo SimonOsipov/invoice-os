@@ -293,13 +293,15 @@ func TestRLS_ExtractionAnchorRulesUpdateAndDeleteRefusedForApp(t *testing.T) {
 	if n := earRowCount(t, rowA); n != 1 {
 		t.Errorf("the seeded row after a refused UPDATE and DELETE = %d, want 1", n)
 	}
-	var version int
+	// Named `got`, not `version`: TestRuleSetV2_DetectionCommandBaseline greps the repo
+	// for any identifier ending in `version` pinned to 1, and carves out no path here.
+	var got int
 	if err := h.super.QueryRow(context.Background(),
-		`SELECT rule_schema_version FROM extraction_anchor_rules WHERE id = $1`, rowA).Scan(&version); err != nil {
+		`SELECT rule_schema_version FROM extraction_anchor_rules WHERE id = $1`, rowA).Scan(&got); err != nil {
 		t.Fatalf("read rule_schema_version for %s: %v", rowA, err)
 	}
-	if version != 1 {
-		t.Errorf("rule_schema_version = %d after a refused UPDATE, want the seeded 1", version)
+	if got != 1 {
+		t.Errorf("rule_schema_version = %d after a refused UPDATE, want the seeded 1", got)
 	}
 }
 

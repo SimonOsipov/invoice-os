@@ -163,7 +163,7 @@ func TestTier1_ResolvesWithNoLearnedRules(t *testing.T) {
 	rvFloor(t, got, "the shipped Tier-1 set over "+t1Inline)
 
 	// Contains, never rank: the total rule mints a candidate off the Sub-total label too, and
-	// measured, "1000.00" ranks first. EXTR-04-09 owns rank.
+	// measured, "1000.00" ranks first. Ranking beyond tier precedence is EXTR-05's.
 	for _, want := range []struct{ field, value string }{
 		{"invoice_number", "INV-1001"},
 		{"issue_date", "2026-03-04"},

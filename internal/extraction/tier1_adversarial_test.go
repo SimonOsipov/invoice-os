@@ -16,7 +16,7 @@ import (
 // --- harness ----------------------------------------------------------------
 
 // t1aGaps are the corpusExpect pairs Tier-1 cannot reach. Asserted STILL missing, so closing one
-// in EXTR-04-09 is a deliberate diff rather than a silent pass. buyer_tin's party word is
+// is a deliberate diff rather than a silent pass. buyer_tin's party word is
 // required (anchor.go:128) while supplier_tin's is optional (:127), and corpus_two_column.pdf
 // puts both TINs in the same page half, so neither the label path nor the banded sweep reaches
 // the buyer's.
@@ -207,7 +207,8 @@ func TestTier1_ABandedSweepIgnoresALaterPage(t *testing.T) {
 
 // The page-half split is the sweeps' ONLY discriminator, so a layout that puts both TINs in one
 // half gives both to one field and none to the other. corpus_two_column.pdf is the real
-// instance; this is the mechanism, and it is EXTR-04-09's to fix.
+// instance; this is the mechanism. Unfixed: the fix is a lexicon change, and anchorLexicon is
+// Fingerprint input.
 func TestTier1_TheSweepCannotSeparateTwoTINsInOnePageHalf(t *testing.T) {
 	t1Floor(t)
 
@@ -251,7 +252,7 @@ func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	}
 
 	// The label path reaches the BUYER's TIN too: the supplier pattern's party word is optional
-	// (anchor.go:127). Harmless here because the sweep outranks it; recorded for EXTR-04-09.
+	// (anchor.go:127). Harmless here because the sweep outranks it; recorded and carried forward.
 	var fromLabel []string
 	for _, c := range got[1:] {
 		if c.RuleID == "t1.supplier_tin.sweep" {

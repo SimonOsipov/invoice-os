@@ -38,7 +38,7 @@ func t1Defective(r Tier1Rule) string {
 	}
 
 	// The distance a rule ships with must be the named constant, not a literal beside it:
-	// EXTR-04-09 retunes by editing the constants and nothing else reads a distance.
+	// a retune edits the constants and nothing else reads a distance.
 	want := map[RelationKind]float64{
 		RelSameToken: 0,
 		RelRight:     tier1MaxDistanceRight,

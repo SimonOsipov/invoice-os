@@ -110,9 +110,10 @@ The floor lives in `internal/extraction/accuracy_test.go` as two pinned integers
    gated step runs this package through `rlsgate`, which deletes a passing test's output.
 2. Edit `tier1AccuracyHits` and `tier1AccuracyPairs` to the measured values.
 3. Update both tables in this section **in the same commit**, or
-   `TestCorpusDoc_RecordsTheMeasuredFloor` fails: it parses the per-layout rows and compares
-   each against a live measurement, so a table that sums correctly with the numbers in the
-   wrong layouts is still red.
+   `TestCorpusDoc_RecordsTheMeasuredFloor` (per layout) and
+   `TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement` (per field) fail: each parses its own
+   table's rows and compares them against a live measurement, so a table that sums correctly
+   with the numbers in the wrong rows is still red.
 4. If a recorded gap closed, drop it from `t1aGaps` in the same commit, or both
    `TestTier1_ReachesEveryCorpusExpectation` and
    `TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps` fail.

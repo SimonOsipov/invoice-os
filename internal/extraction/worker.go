@@ -49,6 +49,7 @@ type ExtractWorker struct {
 	Extractor Extractor
 	Open      OpenDocument
 	Pages     *PageStore
+	Audit     RecordExtractionAudit
 	Logger    *slog.Logger
 }
 

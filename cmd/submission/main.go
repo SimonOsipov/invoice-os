@@ -19,9 +19,11 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -131,7 +133,7 @@ func main() {
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		app.Logger)
+		newExtractionAuditor(), app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
@@ -209,6 +211,32 @@ func newPageSink(objects document.ObjectStore) extraction.PageSink {
 	}
 }
 
+// newExtractionAuditor adapts the audit module to the extraction seam. Two call sites, each
+// with its event name spelled once: a const identifier here reads as a non-literal to
+// internal/platform/db's audit.Record scan and lands the site in no bucket.
+func newExtractionAuditor() extraction.RecordExtractionAudit {
+	return func(ctx context.Context, tx pgx.Tx, ev extraction.ExtractionAudit) error {
+		if ev.Succeeded {
+			return audit.Record(ctx, tx, "system", "extraction.succeeded", map[string]any{
+				"document_id":       ev.DocumentID,
+				"extraction_job_id": ev.ExtractionJobID,
+				"extractor":         ev.Extractor,
+				"extractor_version": ev.ExtractorVersion,
+				"field_count":       ev.FieldCount,
+				"flagged_count":     ev.FlaggedCount,
+			})
+		}
+		return audit.Record(ctx, tx, "system", "extraction.failed", map[string]any{
+			"document_id":       ev.DocumentID,
+			"extraction_job_id": ev.ExtractionJobID,
+			"extractor":         ev.Extractor,
+			"extractor_version": ev.ExtractorVersion,
+			"state":             ev.State,
+			"failure_kind":      string(ev.FailureKind),
+		})
+	}
+}
+
 // selectExtractor resolves EXTRACTOR to an extraction.Extractor, the shape submission.Select
 // already uses for APP_ADAPTER. Unset means mock, so a fleet that sets nothing behaves exactly
 // as it did before the sidecar existed. An unrecognised value is an error, never a silent fall
@@ -236,8 +264,8 @@ func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, er
 
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails
 // only on the first job (TestNewExtractWorker_SetsEveryCollaborator).
-func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument, pages *extraction.PageStore, logger *slog.Logger) *extraction.ExtractWorker {
-	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages, Logger: logger}
+func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument, pages *extraction.PageStore, auditor extraction.RecordExtractionAudit, logger *slog.Logger) *extraction.ExtractWorker {
+	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages, Audit: auditor, Logger: logger}
 }
 
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow

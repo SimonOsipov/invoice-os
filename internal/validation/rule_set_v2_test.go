@@ -746,7 +746,7 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	root := repoRoot(t)
 	cmd := exec.Command("bash", "-c",
-		`grep -rnE '[Vv]ersion[[:space:]]*(:|==|!=|<>|=)[[:space:]]*1\b|[Vv]ersion\)?[[:space:]]*\.toBe\(1\)|loadV1' . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=playwright-report`)
+		`grep -rnE '[Vv]ersion[[:space:]]*(:|==|!=|<>|=)[[:space:]]*1\b|[Vv]ersion\)?[[:space:]]*\.toBe\(1\)|loadV1' . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=playwright-report --exclude-dir=.venv`)
 	cmd.Dir = root
 	out, runErr := cmd.Output()
 	if runErr != nil {

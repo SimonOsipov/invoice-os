@@ -1,14 +1,18 @@
-// docling.go: DoclingReader, the PageReader over the Docling sidecar's POST /v1/read. Read is
-// a stub pending EXTR-03-05's real implementation; NewDoclingReader's URL validation is real
-// since EXTR-03-07 (T-07-5) needs a malformed DOCLING_URL to fail at boot.
+// docling.go: DoclingReader, the PageReader over the Docling sidecar's POST /v1/read.
 package extraction
 
 import (
+	"bytes"
+	"cmp"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
+	"unicode"
 )
 
 const (
@@ -55,10 +59,126 @@ func (r *DoclingReader) Name() string { return doclingReaderName }
 
 func (r *DoclingReader) Version() string { return doclingReaderVersion }
 
-// Read is a stub: EXTR-03-05's real implementation lands separately. Every T-05-* spec in
-// docling_test.go is red against this until then.
+// Read posts doc.Bytes to the sidecar and calls onPage once per page in ascending order.
+//
+// ctx.Err() is tested before the request is built, so a cancelled call never dispatches (law
+// E12). The totals are assigned only once the whole document is through, so any failure
+// returns a zero PageResult.
 func (r *DoclingReader) Read(ctx context.Context, doc Document, onPage func(Page) error) (PageResult, error) {
-	return PageResult{}, errors.New("docling: Read not implemented")
+	if err := ctx.Err(); err != nil {
+		return PageResult{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.baseURL+doclingReadPath, bytes.NewReader(doc.Bytes))
+	if err != nil {
+		return PageResult{}, fmt.Errorf("docling: build %s request: %w", doclingReadPath, err)
+	}
+	// Empty when unknown; the sidecar already falls back to .pdf, so no header beats a blank one.
+	if doc.ContentType != "" {
+		req.Header.Set("Content-Type", doc.ContentType)
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return PageResult{}, fmt.Errorf("docling: post %s: %w", doclingReadPath, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return PageResult{}, doclingStatusError(resp)
+	}
+
+	var wire doclingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+		return PageResult{}, fmt.Errorf("docling: decode %s response: %w", doclingReadPath, err)
+	}
+
+	// The service sorts already; this is the defence, not the mechanism.
+	slices.SortStableFunc(wire.Pages, func(a, b doclingPage) int { return cmp.Compare(a.Number, b.Number) })
+
+	totals := PageResult{Pages: len(wire.Pages)}
+	for _, wp := range wire.Pages {
+		tokens, chars := doclingTokens(wp.Tokens, wp.Number)
+		totals.TextChars += chars
+		if chars > 0 {
+			totals.PagesWithText++
+		}
+
+		if err := onPage(Page{
+			Number:   wp.Number,
+			WidthPt:  wp.WidthPt,
+			HeightPt: wp.HeightPt,
+			Tokens:   tokens,
+			Tables:   doclingTables(wp.Tables, wp.Number),
+		}); err != nil {
+			return PageResult{}, err
+		}
+	}
+	return totals, nil
+}
+
+// doclingStatusError names the status and the service's own reason, so a 422 (unreadable
+// document) is distinguishable from a 500 without a sentinel error type.
+func doclingStatusError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, doclingErrBodyMax))
+
+	reason := strings.TrimSpace(string(body))
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != "" {
+		reason = payload.Error
+	}
+	if reason == "" {
+		reason = http.StatusText(resp.StatusCode)
+	}
+	return fmt.Errorf("docling: %s returned %d: %s", doclingReadPath, resp.StatusCode, reason)
+}
+
+// doclingTokens converts one page's wire tokens and counts the non-whitespace runes they carry,
+// the same predicate pdfiumTokens uses.
+//
+// A boxless token is kept with a zero box on the right page: every DOCX token arrives with no
+// box at all, and dropping them would report every DOCX as unreadable.
+func doclingTokens(wire []doclingToken, page int) ([]Token, int) {
+	tokens := make([]Token, 0, len(wire))
+	chars := 0
+
+	for _, wt := range wire {
+		for _, r := range wt.Text {
+			if !unicode.IsSpace(r) {
+				chars++
+			}
+		}
+
+		region := Region{Page: page}
+		if boxed := wt.region(page); boxed != nil {
+			region = *boxed
+		}
+		tokens = append(tokens, Token{Text: wt.Text, Region: region})
+	}
+	return tokens, chars
+}
+
+// doclingTables collapses a wire "tables": [] to a nil slice, so Tables == nil means "no tables"
+// for this reader exactly as it does for PDFiumReader.
+func doclingTables(wire []doclingTable, page int) []Table {
+	var out []Table
+	for _, wt := range wire {
+		cells := make([]TableCell, 0, len(wt.Cells))
+		for _, wc := range wt.Cells {
+			cells = append(cells, TableCell{
+				Row:     wc.Row,
+				Col:     wc.Col,
+				RowSpan: wc.RowSpan,
+				ColSpan: wc.ColSpan,
+				Text:    wc.Text,
+				Region:  wc.region(page),
+			})
+		}
+		out = append(out, Table{Rows: wt.Rows, Cols: wt.Cols, Cells: cells})
+	}
+	return out
 }
 
 // doclingResponse is the wire body of POST /v1/read. "reader", "version" and the live

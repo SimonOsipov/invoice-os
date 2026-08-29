@@ -536,14 +536,24 @@ func TestDoclingReader_RetainsNoReferenceToDocBytes(t *testing.T) {
 	}
 	dcAssertPagesMatch(t, firstPages, pages)
 
-	copy(doc.Bytes, []byte("body B")) // same backing array Read was given, mutated in place
+	// Two transitions, because the two ways to retain doc.Bytes hide from different ones.
+	// In place first: a reader holding a COPY taken on the first call still sends "body A".
+	copy(doc.Bytes, []byte("body B"))
 
 	if _, err := r.Read(t.Context(), doc, func(extraction.Page) error { return nil }); err != nil {
 		t.Fatalf("second Read: %v", err)
 	}
 
-	if len(seen) != 2 {
-		t.Fatalf("the server saw %d request(s), want 2", len(seen))
+	// Then a fresh slice: a reader holding the original slice HEADER reads the old array,
+	// which the in-place mutation above would have updated under it.
+	doc.Bytes = []byte("body C")
+
+	if _, err := r.Read(t.Context(), doc, func(extraction.Page) error { return nil }); err != nil {
+		t.Fatalf("third Read: %v", err)
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("the server saw %d request(s), want 3", len(seen))
 	}
 	if got := string(seen[0]); got != "body A" {
 		t.Errorf("the first request body was %q, want %q", got, "body A")
@@ -551,6 +561,10 @@ func TestDoclingReader_RetainsNoReferenceToDocBytes(t *testing.T) {
 	if got := string(seen[1]); got != "body B" {
 		t.Errorf("the second request body was %q, want %q -- Read must send doc.Bytes as it is now, "+
 			"not a copy taken on the first call", got, "body B")
+	}
+	if got := string(seen[2]); got != "body C" {
+		t.Errorf("the third request body was %q, want %q -- Read must re-read doc.Bytes, not a slice "+
+			"header kept from an earlier call", got, "body C")
 	}
 
 	// The first read's copied pages must not have changed just because a second Read ran.

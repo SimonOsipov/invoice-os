@@ -64,6 +64,34 @@ func TestLineItems_DropsACellWholeShapeRejects(t *testing.T) {
 	liWant(t, got[0].LineTotal, "8.00", "LineTotal")
 }
 
+// The line-total cell's box is positional provenance, independent of whether its text parses:
+// a reviewer still needs to see where the rejected value came from.
+func TestLineItems_RegionSurvivesALineTotalShapeRejection(t *testing.T) {
+	box := liBox(1, 0.1, 0.5, 0.3, 0.55)
+	tbl := extraction.Table{
+		Rows: 2, Cols: 3,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Qty", nil), liCell(0, 1, "Price", nil), liCell(0, 2, "Total", nil),
+			liCell(1, 0, "1", nil),
+			liCell(1, 1, "8.00", nil),
+			{Row: 1, Col: 2, RowSpan: 1, ColSpan: 1, Text: "n/a", Region: box}, // boxed, but the shape rejects the text
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s), want 1", len(got))
+	}
+	liWantNil(t, got[0].LineTotal, "LineTotal")
+	if got[0].Region == nil {
+		t.Fatal("Region = nil, want the rejected cell's box (Region tracks the box, not value validity)")
+	}
+	if *got[0].Region != *box {
+		t.Errorf("Region = %+v, want %+v", *got[0].Region, *box)
+	}
+}
+
 func TestLineItems_IsDeterministic(t *testing.T) {
 	tbl := extraction.Table{
 		Rows: 3, Cols: 4,
@@ -112,6 +140,64 @@ func TestLineItems_OutOfOrderCellsStillYieldAscendingRows(t *testing.T) {
 	liWant(t, got[1].LineTotal, "20.00", "line 1 total (table row 2)")
 	if got[0].Index != 1 || got[1].Index != 2 {
 		t.Errorf("Index = [%d %d], want [1 2]", got[0].Index, got[1].Index)
+	}
+}
+
+// The exact-match lexicon (liLexicon) exists to reject a header like "Total Weight" that only
+// contains a role word as a substring; a substring-matching regression would misclassify it.
+func TestLineItems_SubstringHeaderIsNotAFalsePositive(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 1,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Total Weight", nil), // contains "total" as substring, is not the line total
+			liCell(1, 0, "12", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a header that only substring-contains a role name, want 0", len(got))
+	}
+}
+
+// Go's own sort.Ints uses insertion sort below n=12; liSortInts is hand-rolled and has no such
+// threshold, but a fixture at or below 12 rows can't tell a correct sort from a lucky one that
+// only works in that range. 20 rows, supplied in a scrambled (non-monotonic, non-reversed)
+// order, forces liSortInts through swaps a small or already-mostly-sorted fixture would not.
+func TestLineItems_SortsMoreThanTwelveOutOfOrderRows(t *testing.T) {
+	const n = 20
+	order := []int{13, 2, 19, 7, 1, 16, 4, 11, 20, 8, 5, 17, 3, 14, 9, 18, 6, 12, 10, 15}
+	if len(order) != n {
+		t.Fatalf("test setup: order has %d entries, want %d", len(order), n)
+	}
+	seen := make(map[int]bool, n)
+	for _, r := range order {
+		if r < 1 || r > n || seen[r] {
+			t.Fatalf("test setup: order is not a permutation of 1..%d", n)
+		}
+		seen[r] = true
+	}
+
+	cells := []extraction.TableCell{liCell(0, 0, "Qty", nil), liCell(0, 1, "Total", nil)}
+	wantTotal := make([]string, n)
+	for _, row := range order {
+		total := strconv.Itoa(row) + ".00"
+		cells = append(cells, liCell(row, 0, "1", nil), liCell(row, 1, total, nil))
+		wantTotal[row-1] = total
+	}
+	tbl := extraction.Table{Rows: n + 1, Cols: 2, Cells: cells}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != n {
+		t.Fatalf("LineItems returned %d line(s), want %d", len(got), n)
+	}
+	for i, line := range got {
+		if line.Index != i+1 {
+			t.Errorf("line %d Index = %d, want %d", i, line.Index, i+1)
+		}
+		liWant(t, line.LineTotal, wantTotal[i], "line total")
 	}
 }
 

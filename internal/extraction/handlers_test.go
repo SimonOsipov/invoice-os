@@ -3,7 +3,7 @@
 // package's one sanctioned skip site, because scripts/ci/rls-test-gate.sh fails a step on any
 // skip.
 //
-// Helpers use an hnd* prefix; rd st wk dc fx mx px pr ps pt pd pb pe rx de are taken.
+// Helpers use an hnd* prefix; rd st wk dc fx mx px pr ps pt pd pb pe rx de rp are taken.
 package extraction_test
 
 import (

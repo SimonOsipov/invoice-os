@@ -240,9 +240,8 @@ func rpExplain(t *testing.T, f rpFixture) string {
 }
 
 // rpScanNode is one scan node and the Index Cond lines belonging to it ALONE. Concatenating
-// across nodes — internal/audit's planCondLines, which excludes a JOINed table rather than a
-// sibling index — passes a BitmapAnd of two indexes on the same table, whose separate cond
-// lines together name both columns.
+// across nodes (internal/audit's planCondLines) accepts a BitmapAnd whose two cond lines
+// together name both columns; pinning the node to the exact index name is what rejects it.
 type rpScanNode struct {
 	target string
 	conds  []string
@@ -276,14 +275,14 @@ func rpScanTarget(line string) (string, bool) {
 	return "", false
 }
 
-// AC-2 and AC-3. The node TYPE is deliberately unasserted: a 1-job document plans as
-// "Index Scan using ...", the 50-job document this reader serves as a Bitmap pair.
+// AC-2 and AC-3: the RLS policy's tenant predicate and the reader's document predicate are
+// served by ONE index lookup, not by a scan plus a filter. Node type is deliberately unasserted
+// — a 1-job document plans as "Index Scan using", the 50-job document as a Bitmap pair.
 //
-// The coarse guard, not the proof. Neither assertion here falls to any reader.go edit: the
-// index name survives document_id being demoted to a Filter, and extraction_jobs_tenant_id_id_uq
-// always covers the tenant lead, so only dropping BOTH indexes yields a Seq Scan.
-// TestRLS_ExtractionReaderPlanPushesTheTenantPredicateIntoTheIndexCond carries the proof.
-func TestRLS_ExtractionReaderPlanUsesTheTenantDocumentIndex(t *testing.T) {
+// The name and no-Seq-Scan checks are coarse: no reader.go edit reaches either, and both go red
+// only on a migration that drops or renames the index. The Index Cond check is the falsifiable
+// one — uuid_eq is proleakproof, so FORCE RLS holds neither predicate back from it.
+func TestRLS_ExtractionReaderPlanPushesTheTenantPredicateIntoTheIndexCond(t *testing.T) {
 	f := rpCorpus(t)
 	plan := rpExplain(t, f)
 
@@ -293,16 +292,6 @@ func TestRLS_ExtractionReaderPlanUsesTheTenantDocumentIndex(t *testing.T) {
 	if strings.Contains(plan, "Seq Scan on "+rpTable) {
 		t.Errorf("plan = %s\nmust not Seq Scan %s", plan, rpTable)
 	}
-}
-
-// AC-3, the half that makes a new migration unnecessary: the RLS policy's tenant predicate and
-// the reader's document predicate are served by ONE index lookup, not by a scan plus a filter.
-//
-// uuid_eq is proleakproof, which is why FORCE RLS holds neither predicate back from the Index
-// Cond. The [[audit-04-scope]] finding concerns ILIKE, ->> and @@, none of which this uses.
-func TestRLS_ExtractionReaderPlanPushesTheTenantPredicateIntoTheIndexCond(t *testing.T) {
-	f := rpCorpus(t)
-	plan := rpExplain(t, f)
 
 	nodes := rpScanNodes(plan)
 	if len(nodes) == 0 {

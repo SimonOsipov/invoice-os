@@ -457,8 +457,8 @@ func triggerNames(states map[string]string) []string {
 // checks out at fetch-depth 1, where `git diff main...HEAD` exits 128 with "ambiguous argument".
 // This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
 const (
-	auditNumberMigrationCount  = 53
-	auditNumberNewestMigration = "20260829195203_audit_log_entity_for_extraction.sql"
+	auditNumberMigrationCount  = 54
+	auditNumberNewestMigration = "20260829211136_extraction_field_results_candidate_rank.sql"
 )
 
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of

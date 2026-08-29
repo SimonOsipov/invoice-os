@@ -58,3 +58,7 @@ func AnchorLabelIDsForTest(text string) []string {
 	}
 	return ids
 }
+
+// MaxCandidatesPerFieldForTest exposes the per-field cap so V-13 asserts the production
+// constant rather than a copy of it.
+const MaxCandidatesPerFieldForTest = maxCandidatesPerField

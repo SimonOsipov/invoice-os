@@ -2,9 +2,9 @@
 // the next subtask, which must not redeclare Tier1Rule.
 package extraction
 
-// Tier1Rule is a shipped generic rule. A struct, not a stored row: these are compiled in and a
-// test proves every one parses, so a Tier-1 rule cannot fail validation at run time the way a
-// stored row can.
+// Tier1Rule is a shipped generic rule. A struct, not a stored row, so nothing validates one at
+// run time: Tier1Rules must build every Rule through ParseRule, because Resolve silently emits
+// nothing for a rule with no compiled matcher (TestResolve_IgnoresAnUncompiledRule).
 type Tier1Rule struct {
 	Key   string // stable, e.g. "t1.invoice_number.same_token"
 	Field string

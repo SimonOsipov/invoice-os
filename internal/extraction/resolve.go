@@ -1,6 +1,6 @@
 // resolve.go: rule application. Every candidate every rule produced, grouped in HeaderFields
 // order and ordered within a field, never a nil slice. Pure -- no database, no clock, no
-// network, no goroutine, and no map on the path (resolve_internal_test.go scans for all four).
+// network, no goroutine, and no map on the path (resolve_internal_test.go scans for each).
 package extraction
 
 import (
@@ -177,8 +177,9 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 			return nil
 		}
 
-		// ov > 0 is redundant while usableBox forces a positive span, and is kept only so a
-		// zero span could never satisfy the half-span test vacuously if that ever loosens.
+		// A subnormal span halves to zero, so ov >= 0.5*span would admit a zero overlap. The
+		// strict conjunct is what rejects one:
+		// TestResolve_RejectsAZeroOverlapUnderASubnormalSpan.
 		if gap > rel.MaxDistance || ov <= 0 || ov < 0.5*span {
 			continue
 		}

@@ -567,3 +567,99 @@ func TestUploadHandler_EnqueuesTheStoredIdNotACallerSuppliedOne(t *testing.T) {
 		t.Errorf("document_id = %q, want the store seam's %q", got, spy.id)
 	}
 }
+
+// --- CLASSIFY-5 (EXTR-09-04, task-771, Test-first) --------------------------------------------
+
+// The picker's table lives in TypeScript and this one lives in Go; nothing but this test
+// makes them one table. It reads the SOURCE of both, because reading either through an
+// exported symbol would agree with whatever value that symbol held.
+const upPickerSource = "../../frontend/app/src/lib/importFlow.ts"
+
+var (
+	// Whole-line comments only, so a mid-line slash inside a content type survives.
+	// importFlow.ts documents the expected literal in prose; stripping it keeps the
+	// example below from being read as the table.
+	upTSCommentRE = regexp.MustCompile(`(?m)^[ \t]*//.*$`)
+	upTSTableRE   = regexp.MustCompile(`(?s)ACCEPTED_PICKED_TYPES[^=]*=\s*\[(.*?)\n\]`)
+	upTSRowRE     = regexp.MustCompile(`(?s)\{\s*ext:\s*'([^']*)'\s*,\s*kind:\s*'([^']*)'\s*,\s*contentTypes:\s*\[([^\]]*)\]`)
+	upTSStringRE  = regexp.MustCompile(`'([^']*)'`)
+)
+
+func upSortedKeys(m map[string]bool) string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+// TestUploadHandler_BrowserAndGoAcceptedTypeTablesAgree (CLASSIFY-5) pins the picker's
+// document half to classify.go. Without it, "all six layers agree" is true the day it
+// merges and unfalsifiable afterwards.
+//
+// Only the DOCUMENT half is compared, and that is the whole claim: Go holds the document
+// types alone (spreadsheets have their own route), so the shared domain is the six document
+// extensions. The TypeScript table also carries .csv/.xlsx, which is why a .csv declared
+// application/pdf classifies as a spreadsheet in the browser and as a PDF here.
+func TestUploadHandler_BrowserAndGoAcceptedTypeTablesAgree(t *testing.T) {
+	raw, err := os.ReadFile(upPickerSource)
+	if err != nil {
+		t.Fatalf("read %s: %v", upPickerSource, err)
+	}
+	src := upTSCommentRE.ReplaceAll(raw, nil)
+
+	m := upTSTableRE.FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("no ACCEPTED_PICKED_TYPES = [ ... ] literal in %s; CLASSIFY-5 reads it as one\n"+
+			"    { ext: %s, kind: %s, contentTypes: [%s] },\n"+
+			"row per entry, closed by a newline and a bare ]", upPickerSource, "'.pdf'", "'document'", "'application/pdf'")
+	}
+
+	rows := upTSRowRE.FindAllSubmatch(m[1], -1)
+	if len(rows) == 0 {
+		t.Fatalf("the ACCEPTED_PICKED_TYPES literal in %s parsed to 0 rows; every assertion below would pass over nothing", upPickerSource)
+	}
+
+	tsExt := map[string]bool{}
+	tsCT := map[string]bool{}
+	kinds := map[string]int{}
+	for _, r := range rows {
+		ext, kind := string(r[1]), string(r[2])
+		kinds[kind]++
+		if kind != "document" {
+			continue
+		}
+		tsExt[ext] = true
+		for _, q := range upTSStringRE.FindAllSubmatch(r[3], -1) {
+			tsCT[string(q[1])] = true
+		}
+	}
+
+	// Floors. The spreadsheet count proves the regex read the WHOLE literal rather than a
+	// leading fragment that happened to hold only document rows.
+	if kinds["spreadsheet"] == 0 {
+		t.Fatalf("parsed %d row(s) from %s and none of kind spreadsheet; the read landed on a fragment, not the table", len(rows), upPickerSource)
+	}
+	if len(tsExt) == 0 || len(tsCT) == 0 {
+		t.Fatalf("the TypeScript document half parsed to %d extension(s) and %d content type(s); the comparison below would be vacuous", len(tsExt), len(tsCT))
+	}
+
+	goTable := extractionAcceptedTypes(t)
+	if len(goTable) == 0 {
+		t.Fatal("acceptedDocumentTypes parsed empty out of classify.go; the comparison below would be vacuous")
+	}
+	goExt := map[string]bool{}
+	goCT := map[string]bool{}
+	for ext, ct := range goTable {
+		goExt[ext] = true
+		goCT[ct] = true
+	}
+
+	if got, want := upSortedKeys(tsExt), upSortedKeys(goExt); got != want {
+		t.Errorf("extension sets differ.\n  %s: %s\n  classify.go: %s", upPickerSource, got, want)
+	}
+	if got, want := upSortedKeys(tsCT), upSortedKeys(goCT); got != want {
+		t.Errorf("content-type sets differ.\n  %s: %s\n  classify.go: %s", upPickerSource, got, want)
+	}
+}

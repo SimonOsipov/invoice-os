@@ -68,6 +68,38 @@ export function hasImportableExtension(name: string): boolean {
   return n.endsWith('.csv') || n.endsWith('.xlsx')
 }
 
+// The picker's per-file verdict (EXTR-09 §1). 'spreadsheet' keeps the shipped
+// preview/mapping flow, 'document' routes to POST /v1/documents, null is refused at
+// selection with a named reason.
+export type PickedKind = 'spreadsheet' | 'document'
+
+// One row of the accepted-type table. The table LITERAL is Stage 3's to write, in this
+// exact shape and under this exact name:
+//
+//   export const ACCEPTED_PICKED_TYPES: readonly AcceptedPickedType[] = [
+//     { ext: '.csv', kind: 'spreadsheet', contentTypes: ['text/csv', 'text/plain'] },
+//     ...
+//   ]
+//
+// The shape is load-bearing, not taste: CLASSIFY-5 (internal/extraction/
+// handlers_upload_test.go) reads that literal out of THIS source and compares its
+// document half to classify.go's acceptedDocumentTypes. A shape change there fails loudly.
+export interface AcceptedPickedType {
+  ext: string
+  kind: PickedKind
+  contentTypes: readonly string[]
+}
+
+// STUB (EXTR-09-04, Stage 2.5, test-first) — CLASSIFY-1..4 pin the contract before this
+// body exists. It returns null unconditionally so those specs fail on their own
+// assertions, never on a missing export. Stage 3 writes ACCEPTED_PICKED_TYPES and makes
+// this read it; hasImportableExtension then becomes a delegate of this, not the reverse.
+export function classifyPickedFile(name: string, type: string): PickedKind | null {
+  void name
+  void type
+  return null
+}
+
 // = file !== null && hasImportableExtension(file.name). One predicate is the sole gate —
 // the extension rule is not also duplicated in the setter.
 //

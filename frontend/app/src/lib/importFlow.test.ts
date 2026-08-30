@@ -44,6 +44,7 @@ import {
   STAGE_OF,
   canReadColumns,
   canStartImport,
+  classifyPickedFile,
   columnLetter,
   computeNoEntity,
   hasImportableExtension,
@@ -51,6 +52,7 @@ import {
   previewColumns,
   wizardHeader,
 } from './importFlow'
+import type { PickedKind } from './importFlow'
 import type { Entity } from './portfolio'
 import type { ImportPreview } from './importApi'
 import type { CreateStep, Mapping } from '../types'
@@ -813,5 +815,98 @@ describe('canReadColumns — no client-side size gate (FLOW-DOC-01)', () => {
     Object.defineProperty(big, 'size', { value: 20 * 1024 * 1024 })
     expect(big.size).toBe(20 * 1024 * 1024)
     expect(canReadColumns(big)).toBe(true)
+  })
+})
+
+// CLASSIFY-1..4 (EXTR-09-04, task-771, Test-first) — RED specs for classifyPickedFile, the
+// one selection gate that replaces hasImportableExtension. They fail today because the stub
+// returns null unconditionally (importFlow.ts), which is an assertion failure, not a
+// missing export.
+//
+// The table below is SPELLED HERE, not read off ACCEPTED_PICKED_TYPES: a spec that
+// recomputed the expectation through the implementation's own literal would agree with any
+// value it happened to hold. Story §1 is the source. The cross-language pin that the two
+// literals stay one table is CLASSIFY-5, in internal/extraction/handlers_upload_test.go.
+//
+// Load-bearing beyond `accept`: CreateUpload.tsx:123-127 hands a DROPPED file straight to
+// addPickedFiles with no filter at all, so the accept attribute gates the OS picker only.
+// This function is the real client gate, and widening accept without it widens nothing.
+const CLASSIFY_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const CLASSIFY_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+const CLASSIFY_TABLE: Array<[string, string, PickedKind]> = [
+  ['ledger.csv', 'text/csv', 'spreadsheet'],
+  ['ledger.csv', 'text/plain', 'spreadsheet'],
+  ['book.xlsx', CLASSIFY_XLSX, 'spreadsheet'],
+  ['scan.pdf', 'application/pdf', 'document'],
+  ['scan.png', 'image/png', 'document'],
+  ['scan.jpg', 'image/jpeg', 'document'],
+  ['scan.jpeg', 'image/jpeg', 'document'],
+  ['scan.webp', 'image/webp', 'document'],
+  ['letter.docx', CLASSIFY_DOCX, 'document'],
+]
+
+describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
+  // CLASSIFY-1 — every row of story §1 resolves, by extension AND by declared type. The
+  // second half matters because §1's rule is detectFormat's: a recognised extension is the
+  // verdict, an UNRECOGNISED one falls through to the declared content type.
+  it('CLASSIFY-1: every row of the accepted-type table resolves', () => {
+    // Vacuity floor: an empty table would make the loop below assert over nothing.
+    expect(CLASSIFY_TABLE.length, 'the §1 table must have all nine rows').toBe(9)
+
+    for (const [name, contentType, expected] of CLASSIFY_TABLE) {
+      expect(classifyPickedFile(name, contentType), `${name} declared ${contentType}`).toBe(expected)
+    }
+
+    // By content type alone — no extension to read, so the declared type decides.
+    expect(classifyPickedFile('scan', 'application/pdf')).toBe('document')
+    expect(classifyPickedFile('export', 'text/csv')).toBe('spreadsheet')
+    expect(classifyPickedFile('book', CLASSIFY_XLSX)).toBe('spreadsheet')
+    expect(classifyPickedFile('letter', CLASSIFY_DOCX)).toBe('document')
+  })
+
+  // CLASSIFY-2 — a recognised extension beats a disagreeing declared type, in both
+  // directions. Browsers guess Content-Type from the extension anyway, so a disagreement is
+  // either a rename or a lie; the extension is the half the user can see.
+  //
+  // The two languages DISAGREE on ('ledger.csv', 'application/pdf') and that is by
+  // construction, not drift. Go's acceptedDocumentTypes (classify.go) holds the DOCUMENT
+  // half only, so '.csv' is unrecognised there and classifyDocumentType falls through to
+  // the declared 'application/pdf' and accepts the file as a PDF — EXTR-09-02's QA found
+  // exactly that. TypeScript's table holds BOTH halves, so '.csv' is recognised and the
+  // verdict is 'spreadsheet'. The file therefore never reaches POST /v1/documents on the
+  // client path. The two tables agree on the domain they share (the six document
+  // extensions); CLASSIFY-5 is what pins that shared domain.
+  it('CLASSIFY-2: the extension wins over a disagreeing content type', () => {
+    expect(classifyPickedFile('scan.pdf', 'text/csv')).toBe('document')
+    expect(classifyPickedFile('a.csv', 'application/pdf')).toBe('spreadsheet')
+    expect(classifyPickedFile('book.xlsx', 'image/png')).toBe('spreadsheet')
+    expect(classifyPickedFile('letter.docx', 'text/plain')).toBe('document')
+  })
+
+  // CLASSIFY-3 — filename case, content-type case and ";charset=" parameters change no
+  // verdict. Mirrors mime.ParseMediaType on the Go side (classify.go:33-36).
+  it('CLASSIFY-3: case and charset parameters do not change the verdict', () => {
+    expect(classifyPickedFile('SCAN.PDF', 'APPLICATION/PDF; charset=utf-8')).toBe('document')
+    expect(classifyPickedFile('Ledger.CSV', 'TEXT/CSV; charset=windows-1252')).toBe('spreadsheet')
+    expect(classifyPickedFile('BOOK.XLSX', CLASSIFY_XLSX.toUpperCase())).toBe('spreadsheet')
+    // Extension absent, so the parameterised declared type is the only thing to read.
+    expect(classifyPickedFile('noextension', 'text/csv; charset=utf-8')).toBe('spreadsheet')
+    expect(classifyPickedFile('noextension', 'Image/JPEG; charset=binary')).toBe('document')
+  })
+
+  // CLASSIFY-4 — null is a refusal, never a fallback kind. The positive control runs FIRST
+  // and is not optional: the Stage-2.5 stub returns null for everything, so the three null
+  // assertions below would pass vacuously against it without a needle that must be found.
+  it('CLASSIFY-4: an unlisted type is null, not a default', () => {
+    expect(classifyPickedFile('ledger.csv', 'text/csv'), 'control needle: a listed row must NOT be null, or the nulls below prove nothing').not.toBeNull()
+    expect(classifyPickedFile('scan.pdf', 'application/pdf'), 'control needle: a listed document row must NOT be null').not.toBeNull()
+
+    expect(classifyPickedFile('archive.zip', 'application/zip')).toBeNull()
+    expect(classifyPickedFile('x', '')).toBeNull()
+    expect(classifyPickedFile('notes.txt', 'text/plain')).toBeNull()
+    // '.csv.bak' is not a csv: hasImportableExtension's last-segment rule (FLOW-05) must
+    // survive the replacement, not be loosened into a substring match.
+    expect(classifyPickedFile('ledger.csv.bak', 'application/octet-stream')).toBeNull()
   })
 })

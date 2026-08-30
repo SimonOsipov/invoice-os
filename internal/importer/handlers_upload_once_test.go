@@ -35,7 +35,7 @@ import (
 // storeSpec / openSpec are document.Service.Store / document.Service.Open's
 // shapes. Declared here as test-side aliases only: the handlers are asserted
 // structurally, so production stays free to name (or not name) these types.
-type storeSpec = func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error)
+type storeSpec = func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error)
 
 type openSpec = func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error)
 
@@ -72,22 +72,22 @@ func newFakeDocStore() *fakeDocStore {
 // to EOF, one rewind, then the PUT reads to EOF again. Nothing rewinds after
 // that, so a handler that does not Seek(0) before Decode reads zero bytes (G1).
 func (f *fakeDocStore) fn() storeSpec {
-	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error) {
+	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error) {
 		b, err := io.ReadAll(body)
 		if err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		if _, err := body.Seek(0, io.SeekStart); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		if _, err := io.Copy(io.Discard, body); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		f.calls = append(f.calls, storeCall{filename: filename, contentType: contentType, size: size, body: b})
 		if f.err != nil {
-			return document.Document{}, f.err
+			return document.Document{}, false, f.err
 		}
-		return f.doc, nil
+		return f.doc, false, nil
 	}
 }
 

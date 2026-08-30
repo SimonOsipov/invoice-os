@@ -140,7 +140,7 @@ func TestServiceStore_SanitizesFilenameAtStoreTime(t *testing.T) {
 
 	// Path segments, a Windows path, a NUL (22021 on insert) and a newline.
 	const raw = "../../etc/pa\x00ss\nwd.csv"
-	doc, err := svc.Store(c, raw, "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, raw, "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store with a hostile filename: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestServiceStore_FilenameSanitizingToEmptyPersistsAsNULL(t *testing.T) {
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
 
-	doc, err := svc.Store(c, "\x01\x02  \x7f", "", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "\x01\x02  \x7f", "", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store with a filename that sanitizes to empty: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestServiceStore_NoIdentityTouchesNoObjectStore(t *testing.T) {
 	svc := document.NewService(document.NewStore(app), objs)
 
 	body := []byte("hello world")
-	doc, err := svc.Store(context.Background(), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(context.Background(), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if !errors.Is(err, db.ErrNoTenant) {
 		t.Fatalf("Store with no identity in context = %v, want db.ErrNoTenant", err)
 	}
@@ -216,7 +216,7 @@ func TestServiceStore_ZeroByteDocumentIsStored(t *testing.T) {
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	doc, err := svc.Store(c, "empty.csv", "text/csv", 0, bytes.NewReader(nil))
+	doc, _, err := svc.Store(c, "empty.csv", "text/csv", 0, bytes.NewReader(nil))
 	if err != nil {
 		t.Fatalf("Store of a zero-byte body: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestServiceStore_UnderDeclaredSizeIsOverridden(t *testing.T) {
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	doc, err := svc.Store(c, "a.csv", "text/csv", 3, bytes.NewReader([]byte("hello world")))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", 3, bytes.NewReader([]byte("hello world")))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestServiceStore_AuditPayloadsCiteTheDocumentID(t *testing.T) {
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
 
-	first, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	first, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("first Store: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestServiceStore_AuditPayloadsCiteTheDocumentID(t *testing.T) {
 		t.Errorf("document.created payload = %s, want it to cite %s", got, first.ID)
 	}
 
-	if _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
+	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
 		t.Fatalf("second Store: %v", err)
 	}
 	if got := auditPayload(t, app, tenantID, "document.reused"); !strings.Contains(got, first.ID) {
@@ -314,7 +314,7 @@ func TestServiceStore_DedupeWritesNoReadAudit(t *testing.T) {
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
 
 	for i := range 2 {
-		if _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
+		if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
 			t.Fatalf("Store #%d: %v", i+1, err)
 		}
 	}
@@ -343,7 +343,7 @@ func TestServiceStore_CancellationMidStoreCommitsNothing(t *testing.T) {
 	svc := document.NewService(document.NewStore(app), objs)
 
 	body := []byte("hello world")
-	doc, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Store cancelled after the PUT = %v, want a context.Canceled", err)
 	}
@@ -392,7 +392,7 @@ func TestServiceStore_ConcurrentIdenticalStoresYieldOneRow(t *testing.T) {
 			defer wg.Done()
 			objs := &fakeObjects{onPut: release} // per-goroutine: the fake is not concurrency safe
 			svc := document.NewService(document.NewStore(app), objs)
-			doc, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+			doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 			results[i] = result{doc, err}
 		}()
 	}
@@ -433,15 +433,15 @@ func TestServiceStore_EveryCommittedRowHasAStoredObject(t *testing.T) {
 	svc := document.NewService(document.NewStore(app), objs)
 
 	stored := []byte("hello world")
-	if _, err := svc.Store(c, "a.csv", "text/csv", int64(len(stored)), bytes.NewReader(stored)); err != nil {
+	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(stored)), bytes.NewReader(stored)); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.Store(c, "a.csv", "text/csv", int64(len(stored)), bytes.NewReader(stored)); err != nil {
+	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(stored)), bytes.NewReader(stored)); err != nil {
 		t.Fatalf("dedupe: %v", err)
 	}
 	objs.putErr = errPutBoom
 	refused := []byte("never stored")
-	if _, err := svc.Store(c, "b.csv", "text/csv", int64(len(refused)), bytes.NewReader(refused)); !errors.Is(err, errPutBoom) {
+	if _, _, err := svc.Store(c, "b.csv", "text/csv", int64(len(refused)), bytes.NewReader(refused)); !errors.Is(err, errPutBoom) {
 		t.Fatalf("failing PUT = %v, want errPutBoom", err)
 	}
 
@@ -495,7 +495,7 @@ func TestServiceOpen_FetchesTheStoredKeyAndForwardsRange(t *testing.T) {
 	}}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	stored, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	stored, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestServiceOpen_CrossTenantRefusedBeforeAnyObjectFetch(t *testing.T) {
 	objs := &fakeObjects{getObject: document.Object{Body: io.NopCloser(strings.NewReader("leak")), Size: 4}}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	stored, err := svc.Store(cA, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	stored, _, err := svc.Store(cA, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store as A: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestServiceOpen_ObjectFailureReturnsNoDocument(t *testing.T) {
 	objs := &fakeObjects{getErr: document.ErrRangeNotSatisfiable}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	stored, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	stored, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}

@@ -2,6 +2,12 @@
 // resolves one. Spreadsheets are refused here — they have their own route.
 package extraction
 
+import (
+	"mime"
+	"path/filepath"
+	"strings"
+)
+
 // acceptedDocumentTypes maps a lowercased filename extension to the canonical content type
 // recorded on the documents row. A package-level literal on purpose: EXTR-09-04's CLASSIFY-5
 // reads this table and compares it to the picker's TypeScript one, so an inline switch would
@@ -18,9 +24,22 @@ var acceptedDocumentTypes = map[string]string{
 // classifyDocumentType resolves the canonical content type from the filename extension
 // first, then from the declared content type with its parameters stripped, mirroring
 // detectFormat (internal/importer/handlers.go:142-162). "" means refuse.
-//
-// Stage-2.5 stub: refuses everything. Stage 3 owns the real resolution.
 func classifyDocumentType(filename, contentType string) string {
-	_, _ = filename, contentType
+	if ct, ok := acceptedDocumentTypes[strings.ToLower(filepath.Ext(filename))]; ok {
+		return ct
+	}
+
+	// mime.ParseMediaType strips any "; charset=..." parameters a client might send.
+	base := contentType
+	if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+		base = parsed
+	}
+	// The table is keyed by extension, so the declared type is matched against its VALUES:
+	// the canonical spelling is the only one accepted, and it is the value recorded.
+	for _, ct := range acceptedDocumentTypes {
+		if base == ct {
+			return ct
+		}
+	}
 	return ""
 }

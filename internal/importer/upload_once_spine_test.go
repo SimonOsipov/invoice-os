@@ -84,7 +84,7 @@ func storeDocumentAs(t *testing.T, svc *document.Service, tenantID, filename, co
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
 		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
-	doc, err := svc.Store(ctx, filename, contentType, int64(len(content)), bytes.NewReader(content))
+	doc, _, err := svc.Store(ctx, filename, contentType, int64(len(content)), bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("store document: %v", err)
 	}

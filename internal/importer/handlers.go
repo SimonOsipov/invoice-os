@@ -360,7 +360,7 @@ func CreateHandler(
 // disagree about where the header is -- the exact failure [column-source]
 // exists to prevent. PRV-16 pins that by comparing against a direct Decode.
 func PreviewHandler(
-	store func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error),
+	store func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error),
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -395,7 +395,8 @@ func PreviewHandler(
 
 		// The RAW part filename: Service.Store owns the sanitization, and two
 		// copies of a security coercion drift apart.
-		doc, err := store(r.Context(), fh.Filename, fh.Header.Get("Content-Type"), fh.Size, file)
+		// The reuse flag is discarded: the preview wire is unchanged (PRV-01..PRV-19).
+		doc, _, err := store(r.Context(), fh.Filename, fh.Header.Get("Content-Type"), fh.Size, file)
 		if err != nil {
 			// Same statusForErr idiom as GetHandler: a suspended caller's
 			// db.ErrNotActiveMember must not fall to the 500 default.

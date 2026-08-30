@@ -31,27 +31,30 @@ func NewService(store *Store, objects ObjectStore) *Service {
 // value the caller declared, and is deliberately overridden. filename is
 // sanitized here rather than by the caller, so every path into storage is
 // coerced.
-func (s *Service) Store(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (Document, error) {
+//
+// reused is true when the tenant already held this content hash: it is Upsert's created
+// flag, inverted once here so no caller has to.
+func (s *Service) Store(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (doc Document, reused bool, err error) {
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
-		return Document{}, db.ErrNoTenant
+		return Document{}, false, db.ErrNoTenant
 	}
 
 	h := sha256.New()
 	n, err := io.Copy(h, body)
 	if err != nil {
-		return Document{}, fmt.Errorf("document: hash body: %w", err)
+		return Document{}, false, fmt.Errorf("document: hash body: %w", err)
 	}
 	// Put transmits from the reader's CURRENT offset and the hash pass above left
 	// it at EOF, so without this the PUT sends zero bytes under a declared length.
 	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		return Document{}, fmt.Errorf("document: rewind body: %w", err)
+		return Document{}, false, fmt.Errorf("document: rewind body: %w", err)
 	}
 
 	hash := hex.EncodeToString(h.Sum(nil))
 	key := StorageKey(id.TenantID, hash)
 	if err := s.objects.Put(ctx, key, body, n); err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
 
 	d := Document{StorageKey: key, ContentHash: hash, SizeBytes: n}
@@ -62,11 +65,11 @@ func (s *Service) Store(ctx context.Context, filename, contentType string, size 
 		d.DeclaredContentType = &contentType
 	}
 
-	stored, _, err := s.store.Upsert(ctx, d)
+	stored, created, err := s.store.Upsert(ctx, d)
 	if err != nil {
-		return Document{}, err
+		return Document{}, false, err
 	}
-	return stored, nil
+	return stored, !created, nil
 }
 
 // Open resolves the document row, then fetches its object. rangeHeader is

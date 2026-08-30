@@ -97,7 +97,7 @@ func TestServiceStore_PutPrecedesRowInsert(t *testing.T) {
 	objs.onPut = func() { rowsAtPut = tenantDocCount(t, super, tenantID) }
 	svc := document.NewService(document.NewStore(app), objs)
 
-	doc, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestServiceStore_PutFailureWritesNoRow(t *testing.T) {
 	objs := &fakeObjects{putErr: errPutBoom}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	doc, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if !errors.Is(err, errPutBoom) {
 		t.Fatalf("Store with a failing PUT = %v, want the PUT error (return it, or wrap it with %%w)", err)
 	}
@@ -158,7 +158,7 @@ func TestServiceStore_ComputesHashAndSizeServerSide(t *testing.T) {
 	svc := document.NewService(document.NewStore(app), objs)
 
 	// 999 is the caller-declared size; it must not survive.
-	doc, err := svc.Store(c, "a.csv", "text/csv", 999, bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", 999, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestServiceStore_RewindsBodyBeforePut(t *testing.T) {
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	if _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
+	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if len(objs.putBodies) != 1 {
@@ -225,7 +225,7 @@ func TestServiceStore_UpsertFailureAfterSuccessfulPutReturnsErrorNoID(t *testing
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	doc, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err == nil {
 		t.Fatal("Store under a nonexistent tenant succeeded, want the documents FK violation")
 	}
@@ -256,13 +256,13 @@ func TestServiceStore_RetryAfterUpsertFailureSucceedsWithNoDuplicateObject(t *te
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	if _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err == nil {
+	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err == nil {
 		t.Fatal("first Store under a nonexistent tenant succeeded, want the documents FK violation")
 	}
 
 	seedTenantWithID(t, super, tenantID, "svc retry after failure")
 
-	doc, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("retried Store: %v", err)
 	}
@@ -296,11 +296,11 @@ func TestServiceStore_IdenticalBytesSameTenantDedupes(t *testing.T) {
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	first, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	first, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("first Store: %v", err)
 	}
-	second, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	second, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("second Store: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestServiceStore_DedupeReturnsExistingRowNotZeroValue(t *testing.T) {
 	body := []byte("hello world")
 	svc := document.NewService(document.NewStore(app), &fakeObjects{})
 
-	first, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	first, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("first Store: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestServiceStore_DedupeReturnsExistingRowNotZeroValue(t *testing.T) {
 		t.Fatalf("first Store returned an underpopulated Document (created_at %v, storage_key %q)", first.CreatedAt, first.StorageKey)
 	}
 
-	second, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	second, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("second Store: %v", err)
 	}
@@ -377,11 +377,11 @@ func TestServiceStore_IdenticalBytesDifferentTenantsDoNotDedupe(t *testing.T) {
 	objs := &fakeObjects{}
 	svc := document.NewService(document.NewStore(app), objs)
 
-	docA, err := svc.Store(cA, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	docA, _, err := svc.Store(cA, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store as A: %v", err)
 	}
-	docB, err := svc.Store(cB, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	docB, _, err := svc.Store(cB, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("Store as B: %v", err)
 	}
@@ -415,11 +415,11 @@ func TestServiceStore_IdenticalBytesDifferentTenantsDoNotDedupe(t *testing.T) {
 // FIRST row's created_at. Service.Store keeps its declared-size parameter, which
 // is what ComputesHashAndSizeServerSide overrides.
 var (
-	_ document.ObjectStore                                                                                      = (*fakeObjects)(nil)
-	_ func(*pgxpool.Pool) *document.Store                                                                       = document.NewStore
-	_ func(*document.Store, document.ObjectStore) *document.Service                                             = document.NewService
-	_ func(*document.Store, context.Context, document.Document) (document.Document, bool, error)                = (*document.Store).Upsert
-	_ func(*document.Store, context.Context, string) (document.Document, error)                                 = (*document.Store).Get
-	_ func(*document.Service, context.Context, string, string, int64, io.ReadSeeker) (document.Document, error) = (*document.Service).Store
-	_ func(*document.Service, context.Context, string, string) (document.Document, document.Object, error)      = (*document.Service).Open
+	_ document.ObjectStore                                                                                            = (*fakeObjects)(nil)
+	_ func(*pgxpool.Pool) *document.Store                                                                             = document.NewStore
+	_ func(*document.Store, document.ObjectStore) *document.Service                                                   = document.NewService
+	_ func(*document.Store, context.Context, document.Document) (document.Document, bool, error)                      = (*document.Store).Upsert
+	_ func(*document.Store, context.Context, string) (document.Document, error)                                       = (*document.Store).Get
+	_ func(*document.Service, context.Context, string, string, int64, io.ReadSeeker) (document.Document, bool, error) = (*document.Service).Store
+	_ func(*document.Service, context.Context, string, string) (document.Document, document.Object, error)            = (*document.Service).Open
 )

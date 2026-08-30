@@ -5,6 +5,8 @@ package importer
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -84,9 +86,61 @@ func (s *Store) SettledExtraction(ctx context.Context, documentID string) (Settl
 	return ex, nil
 }
 
+// mapperFieldNames is internal/importer's own copy of extraction.HeaderFields, in the same
+// order -- internal/importer cannot import internal/extraction (document_deps_test.go /
+// SX-09), so nothing compiler-links the two lists; TestDocumentCreateInput_
+// MapperFieldNamesMatchesHeaderFieldsInOrder (MAP-11) is the drift guard.
+var mapperFieldNames = []string{
+	"invoice_number", "issue_date", "supplier_tin", "supplier_name",
+	"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
+}
+
 // documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput.
-// STUB (Mode A, task-762): body not yet implemented -- returns zero values so this package
-// compiles while document_map_test.go's RED specs pin the real mapping (EXTR-06-02).
+// Pure. supplier_tin/supplier_name are never set -- Store.Create overwrites both from the
+// entity on every write (store.go:220-221, Q11), so writing a value here would state a claim
+// the store then silently discards. SourceRows and LineItems stay nil: SourceRows because the
+// column CHECKs reject both '{}' and any element < 2, so NULL is the only legal value here;
+// LineItems because nothing extracted feeds it yet (D-13).
 func documentCreateInput(entityID, documentID string, ex SettledExtraction) (invoice.CreateInput, *RowError) {
-	return invoice.CreateInput{}, nil
+	values := make(map[string]*string, len(ex.Fields))
+	for _, f := range ex.Fields {
+		values[f.Name] = f.Value
+	}
+
+	invoiceNumber := ""
+	if v := values["invoice_number"]; v != nil {
+		invoiceNumber = strings.TrimSpace(*v)
+	}
+	if invoiceNumber == "" {
+		return invoice.CreateInput{}, &RowError{
+			Field:   "invoice_number",
+			Message: "invoice_number is missing or blank",
+		}
+	}
+
+	var issueDate *time.Time
+	if v := values["issue_date"]; v != nil {
+		parsed, err := parseIssueDate(*v)
+		if err != nil {
+			return invoice.CreateInput{}, &RowError{
+				Field:   "issue_date",
+				Message: err.Error(),
+			}
+		}
+		issueDate = parsed
+	}
+
+	docID := documentID
+	return invoice.CreateInput{
+		EntityID:         entityID,
+		InvoiceNumber:    invoiceNumber,
+		IssueDate:        issueDate,
+		BuyerTIN:         values["buyer_tin"],
+		BuyerName:        values["buyer_name"],
+		Currency:         values["currency"],
+		Subtotal:         values["subtotal"],
+		VAT:              values["vat"],
+		Total:            values["total"],
+		SourceDocumentID: &docID,
+	}, nil
 }

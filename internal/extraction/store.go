@@ -42,7 +42,8 @@ func (s *Store) Advance(ctx context.Context, tenantID, jobID, state, lastErr str
 	})
 }
 
-// WriteFieldResults appends one row per field to the job.
+// WriteFieldResults appends one row per field at rank 0 (the decided reading) plus one row
+// per alternative at ranks 1..N, in slice order.
 func (s *Store) WriteFieldResults(ctx context.Context, tenantID, jobID string, fields []FieldResult) error {
 	return db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
 		return writeFieldResultsTx(ctx, tx, tenantID, jobID, fields)

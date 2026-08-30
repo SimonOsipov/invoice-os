@@ -1134,6 +1134,65 @@ func TestRLS_FieldResultsOrphanAlternativeIsAHardError(t *testing.T) {
 	}
 }
 
+// KNOWN GAP (QA, EXTR-05-06): nothing forbids a second WriteFieldResults call from landing a
+// second rank-0 row for a field_name already decided in this job. AC-2 specifies the read
+// order as `created_at, field_name, candidate_rank`; the shipped fieldResultsTx orders by
+// `field_name, candidate_rank` alone (created_at dropped -- ties within one call, so the
+// existing single-call tests can't see the difference). candidate_rank sorts globally across
+// writes, so this drops rank-0 rows from both calls together, ahead of every rank>0 row, and
+// the grouping loop's indexOf overwrites the first write's entry with the second's -- the
+// first write's own alternative (X) silently reattaches to the second write's decided value
+// (B) rather than the first (A). Restoring `created_at` as the leading key (verified: fixes
+// this while leaving every existing ordering test green, since it only adds a leading column
+// that ties within one call) would close this. Not reachable via ExtractWorker today --
+// EnsureJob gives every river_job_id its own extraction_jobs row, and OncePerJob admits one
+// write per job -- but nothing in the Store's public signature enforces that.
+func TestRLS_FieldResultsTwoWritesToSameJobMisattributeAlternatives(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902901)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{
+			Field:        extraction.Field{Name: "invoice_number", Value: stPtr("A"), Reason: extraction.ReasonAmbiguous},
+			Alternatives: []extraction.Field{{Name: "invoice_number", Value: stPtr("X")}},
+		},
+	}); err != nil {
+		t.Fatalf("first WriteFieldResults: %v", err)
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{
+			Field:        extraction.Field{Name: "invoice_number", Value: stPtr("B"), Reason: extraction.ReasonAmbiguous},
+			Alternatives: []extraction.Field{{Name: "invoice_number", Value: stPtr("Y")}},
+		},
+	}); err != nil {
+		t.Fatalf("second WriteFieldResults: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("got %d FieldResult(s) for two rank-0 writes of the same field_name, want 2 (this test documents the current shape, not the desired one)", len(out))
+	}
+	// Documents today's mis-grouping: X (written alongside A) ends up under B, and A loses
+	// its own alternative entirely. A fix restoring `created_at` to the ORDER BY would instead
+	// keep A/[X] and B/[Y] as two separate, correctly-paired groups.
+	first, second := out[0], out[1]
+	if first.Value == nil || *first.Value != "A" || len(first.Alternatives) != 0 {
+		t.Errorf("first group = value %v, %d alternative(s); the current (buggy) shape has A stripped of its own alternative X", first.Value, len(first.Alternatives))
+	}
+	if second.Value == nil || *second.Value != "B" || len(second.Alternatives) != 2 {
+		t.Errorf("second group = value %v, %d alternative(s); the current (buggy) shape has both X and Y misattributed to B", second.Value, len(second.Alternatives))
+	}
+}
+
 // stPageKey is the shape extraction_page_images_key_tenant_scoped admits. uuid::text
 // renders lowercase and the CHECK compares bytes, so the tenant segment is never
 // case-transformed.

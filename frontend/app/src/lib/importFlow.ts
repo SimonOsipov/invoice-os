@@ -62,42 +62,59 @@ export function wizardHeader(createStep: CreateStep): { steps: [string, string][
     : { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }
 }
 
-// Last-segment match only: 'a.csv'/'a.xlsx' (any case) match; 'a.csv.bak' does not.
-export function hasImportableExtension(name: string): boolean {
-  const n = name.toLowerCase()
-  return n.endsWith('.csv') || n.endsWith('.xlsx')
-}
-
 // The picker's per-file verdict (EXTR-09 §1). 'spreadsheet' keeps the shipped
 // preview/mapping flow, 'document' routes to POST /v1/documents, null is refused at
 // selection with a named reason.
 export type PickedKind = 'spreadsheet' | 'document'
 
-// One row of the accepted-type table. The table LITERAL is Stage 3's to write, in this
-// exact shape and under this exact name:
-//
-//   export const ACCEPTED_PICKED_TYPES: readonly AcceptedPickedType[] = [
-//     { ext: '.csv', kind: 'spreadsheet', contentTypes: ['text/csv', 'text/plain'] },
-//     ...
-//   ]
-//
-// The shape is load-bearing, not taste: CLASSIFY-5 (internal/extraction/
-// handlers_upload_test.go) reads that literal out of THIS source and compares its
-// document half to classify.go's acceptedDocumentTypes. A shape change there fails loudly.
+// One row of the accepted-type table. The shape is load-bearing, not taste: CLASSIFY-5
+// (internal/extraction/handlers_upload_test.go) reads the literal below out of THIS source
+// and compares its document half to classify.go's acceptedDocumentTypes.
 export interface AcceptedPickedType {
   ext: string
   kind: PickedKind
   contentTypes: readonly string[]
 }
 
-// STUB (EXTR-09-04, Stage 2.5, test-first) — CLASSIFY-1..4 pin the contract before this
-// body exists. It returns null unconditionally so those specs fail on their own
-// assertions, never on a missing export. Stage 3 writes ACCEPTED_PICKED_TYPES and makes
-// this read it; hasImportableExtension then becomes a delegate of this, not the reverse.
+// The one accepted-type table: `accept`, the classifier and the copy all trace here.
+//
+// contentTypes holds only the types that DECIDE a verdict on the fallback path, so story
+// §1's `text/plain` alias for .csv is not listed: an unrecognised extension falls through
+// to the declared type, and listing it would make 'notes.txt' declared text/plain a
+// spreadsheet (CLASSIFY-4 requires null). A .csv declared text/plain still resolves — by
+// its extension, which wins (CLASSIFY-1).
+export const ACCEPTED_PICKED_TYPES: readonly AcceptedPickedType[] = [
+  { ext: '.csv', kind: 'spreadsheet', contentTypes: ['text/csv'] },
+  { ext: '.xlsx', kind: 'spreadsheet', contentTypes: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'] },
+  { ext: '.pdf', kind: 'document', contentTypes: ['application/pdf'] },
+  { ext: '.png', kind: 'document', contentTypes: ['image/png'] },
+  { ext: '.jpg', kind: 'document', contentTypes: ['image/jpeg'] },
+  { ext: '.jpeg', kind: 'document', contentTypes: ['image/jpeg'] },
+  { ext: '.webp', kind: 'document', contentTypes: ['image/webp'] },
+  { ext: '.docx', kind: 'document', contentTypes: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'] },
+]
+
+// The selection gate (EXTR-09 §1). Last-segment extension first, then the declared type
+// with its parameters stripped, both case-insensitively — detectFormat's rule
+// (internal/importer/handlers.go), mirrored by classifyDocumentType server-side. null is a
+// refusal, never a fallback kind.
 export function classifyPickedFile(name: string, type: string): PickedKind | null {
-  void name
-  void type
-  return null
+  const lower = name.toLowerCase()
+  const dot = lower.lastIndexOf('.')
+  const byExt = dot === -1 ? undefined : ACCEPTED_PICKED_TYPES.find((row) => row.ext === lower.slice(dot))
+  if (byExt) return byExt.kind
+
+  // Drops any "; charset=…" parameter, as mime.ParseMediaType does on the Go side.
+  const base = type.split(';')[0].trim().toLowerCase()
+  return ACCEPTED_PICKED_TYPES.find((row) => row.contentTypes.includes(base))?.kind ?? null
+}
+
+// Thin delegate over the table above, so the spreadsheet path's shipped call sites keep
+// their meaning. The empty content type leaves the extension as the only input, which is
+// exactly the shipped last-segment rule: 'a.csv'/'a.xlsx' (any case) match, 'a.csv.bak'
+// does not (FLOW-05).
+export function hasImportableExtension(name: string): boolean {
+  return classifyPickedFile(name, '') === 'spreadsheet'
 }
 
 // = file !== null && hasImportableExtension(file.name). One predicate is the sole gate —

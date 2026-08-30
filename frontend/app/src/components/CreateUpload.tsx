@@ -100,9 +100,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             id="pf-import-file"
             className="pf-file"
             type="file"
-            accept=".csv,.xlsx"
+            accept=".csv,.xlsx,.pdf,.png,.jpg,.jpeg,.webp,.docx"
             multiple
-            aria-label="Choose a spreadsheet to import"
+            aria-label="Choose files to import"
             onChange={(e) => ctx.addPickedFiles(Array.from(e.target.files ?? []))}
           />
           <label
@@ -151,7 +151,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               </>
             ) : (
               <>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag spreadsheets here, or click to choose'}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag files here, or click to choose'}</div>
                 {/* The string here used to read "one row per invoice", which is simply
                     FALSE: one row is one LINE ITEM, and rows group into invoices by the
                     column mapped to invoice_number — exactly what the next step says
@@ -169,10 +169,12 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           </label>
 
           {/* A <span>, and it lives OUTSIDE the label on purpose — see the placement
-              note on the panel below. The file input's own accept="" is the real gate;
-              this is the human-readable statement of it, not a second source of truth. */}
+              note on the panel below. It states ACCEPTED_PICKED_TYPES (lib/importFlow.ts)
+              in human terms, not a second source of truth; PICKER-2 pins it to the accept
+              attribute. Neither is the gate: a DROPPED file never meets accept (onDrop
+              above hands it straight to addPickedFiles), so classifyPickedFile is. */}
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.06em' }}>
-            ACCEPTED · CSV · XLSX
+            ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX
           </span>
 
           {/* The chosen-files list, per-file remove control and per-file bad-extension
@@ -203,7 +205,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                       </div>
                       {badExtension && (
                         <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>
-                          Not a spreadsheet — choose a .csv or .xlsx file.
+                          Unsupported file type — choose one of the accepted types above.
                         </p>
                       )}
                     </div>

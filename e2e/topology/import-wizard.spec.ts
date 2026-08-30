@@ -228,7 +228,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // longer a UI path to a file-only, entity-empty state).
   await expect(readColumnsBtn, 'disabled with no file selected').toBeDisabled()
 
-  const fileInput = page.locator('input[type="file"][accept=".csv,.xlsx"]')
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
   await fileInput.setInputFiles({ name: 'ui-perf.csv', mimeType: 'text/csv', buffer: Buffer.from(buildPerfCsv(), 'utf8') })
   await expect(readColumnsBtn, 'enabled once a file is chosen').toBeEnabled()
 
@@ -423,7 +423,7 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   // (workspace switcher) already made `entity` the active selection CreateUpload's
   // entityId mirrors, so there is nothing left to pick here.
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'ui-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -617,7 +617,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   // run exists only to seed the store for run 2's collisions.
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'ui-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const preview1 = page.waitForResponse(
@@ -651,7 +651,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   // this is a genuinely fresh wizard pass, not a resubmission of run 1's in-memory state.
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'ui-mixed-2.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const preview2 = page.waitForResponse(
@@ -949,7 +949,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
 
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'inhouse.csv', mimeType: 'text/csv', buffer: Buffer.from(`Invoice No,Subtotal\n${invoiceNumber},100\n`, 'utf8') })
   await expect(readColumnsBtn, 'arms on the file alone').toBeEnabled()
 
@@ -1078,7 +1078,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'e2e-loop.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -1221,7 +1221,7 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
   const invoiceNumber = `INV-E2E-SINGLE-${Date.now()}`
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'single.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(invoiceNumber), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -1265,7 +1265,7 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'header-only.csv', mimeType: 'text/csv', buffer: Buffer.from(buildHeaderOnlyCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -1320,7 +1320,7 @@ test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derive
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'e2e-deep-link.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -1393,7 +1393,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'e2e-keep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -1496,7 +1496,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  const fileInput = page.locator('input[type="file"][accept=".csv,.xlsx"]')
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
   const fileRow = (name: string) => page.locator('ul li').filter({ hasText: name })
   const fileNames = page.locator('ul li div.mono')
 
@@ -1612,7 +1612,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  await page.locator('input[type="file"][accept=".csv,.xlsx"]').setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL])
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL])
 
   const previewResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
@@ -1693,7 +1693,7 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel]): a cross-file duplicate
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  await page.locator('input[type="file"][accept=".csv,.xlsx"]').setInputFiles([PARTIAL_FIRST, PARTIAL_DUPE])
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles([PARTIAL_FIRST, PARTIAL_DUPE])
 
   const previewResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
@@ -1795,7 +1795,7 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'doc-wire.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(`INV-E2E-DOC-${Date.now()}`), 'utf8') })
 
   const previewResp = page.waitForResponse(

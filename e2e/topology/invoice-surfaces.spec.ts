@@ -703,7 +703,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // entityId mirrors, so there is nothing left to pick here.
 
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'm4-14-arc.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -1992,7 +1992,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   // Day-60 test above drives the identical steps).
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'doc02-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(
@@ -2060,7 +2060,7 @@ test('invoice detail: a 1,500-row source file renders through the window, not al
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'doc02-window.csv', mimeType: 'text/csv', buffer: Buffer.from(buildPerfCsv(), 'utf8') })
 
   const previewResp = page.waitForResponse(

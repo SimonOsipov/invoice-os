@@ -27,8 +27,8 @@ const QueueName = "extraction"
 // request seam's suspension gate has nothing to refuse. Precedent: backfillActor.
 const workerActor = "extraction-worker"
 
-// extractArgs stays unexported so no package outside this one can enqueue extraction work
-// (TestExtractArgsTypeIsUnexported).
+// extractArgs stays unexported so extraction work can only be enqueued through
+// EnqueueExtraction (TestExtractArgsTypeIsUnexported, TestExtractionExposesExactlyOneEnqueueSeam).
 type extractArgs struct {
 	TenantID       string `json:"tenant_id"`
 	DocumentID     string `json:"document_id"`

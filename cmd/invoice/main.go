@@ -196,6 +196,9 @@ func main() {
 	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
+	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
+	// extraction becomes an invoice with no file/mapping wire at all.
+	app.Mux.HandleFunc("POST /v1/imports/document", importer.CreateDocumentHandler(impSvc.ImportDocument, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
 	// import_batches and, until now, reached the browser only inside the POST

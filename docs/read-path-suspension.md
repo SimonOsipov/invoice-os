@@ -299,6 +299,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/evidence-bundle/preview` | invoice | covered | |
 | `POST /v1/imports` | invoice | covered | |
 | `POST /v1/imports/preview` | invoice | covered | |
+| `POST /v1/imports/document` | invoice | covered | |
 | `GET /v1/imports/{id}` | invoice | covered | |
 | `GET /v1/documents/{id}` | invoice | covered | |
 | `GET /v1/documents/{id}/sheet` | invoice | covered | |

@@ -1,5 +1,7 @@
-// document.go: the settled-extraction read (EXTR-06-01, task-761) and the field-to-CreateInput
-// mapper (EXTR-06-02, task-762). See .ralph/EXTR-06-finalized.md, "The settled-extraction input
+// document.go: the settled-extraction read (EXTR-06-01, task-761), the field-to-CreateInput
+// mapper (EXTR-06-02, task-762), and the document-import orchestration entrypoint
+// (EXTR-06-03, task-763) -- a second entry into internal/importer alongside Import()'s
+// spreadsheet path (service.go). See .ralph/EXTR-06-finalized.md, "The settled-extraction input
 // type".
 package importer
 

@@ -60,14 +60,16 @@
 // InvoicesList.tsx), and this file's own selectEntity() helper (a copy of
 // invoice-surfaces.spec.ts's, see its doc comment) now uses them -- role/exact-text is
 // no longer the exclusive idiom in this file, just the original one.
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
 import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
+import { gaps, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
 
@@ -1842,6 +1844,506 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
   // and not just the moment the import response landed (same fixture and mapping as
   // INVCR-E2E-2 above, which owns this route).
   await expect(page.getByTestId('invoice-detail'), 'the document-id contract completes the run').toBeVisible({ timeout: 30_000 })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-09 · the document fork, and the picker's geometry ---------------------------
+//
+// A browser is the only honest oracle for the fork: the unit suite pins the pure reducer,
+// and nothing at node level proves App.tsx computes `runKind` from the real selection.
+// EXTR09-E2E-03 is the load-bearing one — with no run kind there is nothing for an
+// incoming file to contradict, so the refusal never fires.
+//
+// Outcomes are NOT asserted here. internal/extraction/mock.go:92-98 stamps MOCK-INV-0001
+// on every fixture, so two documents in one run collide by design;
+// e2e/api/contract-document-upload.spec.ts owns the outcome assertions and handles that
+// collision. QA disposition A-2: Core AC #9's deploy-gate evidence is collision-recovery
+// only — independent parallel success awaits a non-mock extractor (EXTR-17).
+//
+// AC-1 AMENDMENT: the story says a PDF reaches "a review landing naming one batch". The
+// untouched routers say otherwise at ONE file — routeAfterRun sees files.length === 1 and
+// routeAfterImport resolves {kind:'single'}, because DOCUP-02/03 pin a clean document
+// import at status 'completed' / ready_invoices 1 and reviewQuery(batchId,'all') lists the
+// draft it wrote. The landing is the real InvoiceDetail, the route INVCR-E2E-2 already
+// proves for a single-invoice CSV.
+
+const DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
+// Committed by EXTR-09-03; shared with e2e/api/contract-document-upload.spec.ts.
+const NATIVE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'native_invoice.pdf'))
+
+// Fresh bytes per pick, contract-document-upload.spec.ts's own recipe: a trailing PDF
+// comment moves the content hash without moving a byte offset, so `startxref` still
+// resolves. Without it, per-tenant dedupe reuses an earlier row and the PERMANENT
+// per-document enqueue key skips the enqueue — the poll would then settle on a PREVIOUS
+// run's job and stay green while extraction is broken.
+function uniquePdfBytes(): Buffer {
+  return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// The step strip carries no testid, so it is anchored on the 'Import' chip label E2E-10
+// above established is unique here: label span -> chip div -> strip, one chip per direct
+// child div. Self-checking — a wrong ancestor resolves zero chips.
+function stepChips(page: Page): Locator {
+  return page.getByText('Import', { exact: true }).locator('xpath=../../..').locator('xpath=./div')
+}
+
+// A dispatched drop, not a mouse drag ([import-upload-unify] above records why). This is
+// the path that matters: onDrop hands dataTransfer.files straight to addPickedFiles, so
+// `accept` never sees them and classifyPickedFile is the only gate. `bytes` sizes the file
+// for the oversize note; nothing dropped is ever uploaded.
+async function dropFiles(page: Page, specs: { name: string; type: string; bytes?: number }[]): Promise<void> {
+  await page.evaluate((list) => {
+    const label = document.querySelector('label[for="pf-import-file"]')
+    if (!label) throw new Error('dropzone label[for="pf-import-file"] not found')
+    const dt = new DataTransfer()
+    for (const spec of list) {
+      const body: BlobPart[] = spec.bytes ? [new Uint8Array(spec.bytes)] : [`e2e ${spec.name}`]
+      dt.items.add(new File(body, spec.name, { type: spec.type }))
+    }
+    label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  }, specs)
+}
+
+// The CONTENT box, never the bounding box: children sit inside the card's own gutter, so
+// a border-box comparison passes a row that overflows it. scrollWidth/clientWidth ride
+// along because a stretched flex item keeps its box while its TEXT overflows — and this
+// story grew the accepted-types line from three tokens to eight.
+function edgesOf(el: HTMLElement) {
+  const r = el.getBoundingClientRect()
+  const cs = getComputedStyle(el)
+  return {
+    left: r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft),
+    right: r.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight),
+    outerLeft: r.left,
+    outerRight: r.right,
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }
+}
+
+// Two consecutive AGREEING reads, never one: a boundingBox taken as a panel opens measures
+// the transform mid-flight, and two different values on two reads is the tell.
+async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T> {
+  let previous = ''
+  await expect
+    .poll(
+      async () => {
+        const key = JSON.stringify(await read())
+        const stable = key === previous
+        previous = key
+        return stable
+      },
+      { message: `${label}: geometry never settled across two consecutive reads`, timeout: 15_000 },
+    )
+    .toBe(true)
+  return read()
+}
+
+// The accepted-types line verbatim — the eight tokens this story grew it to.
+const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX'
+
+// kindRefusal() verbatim (lib/importRun.ts owns the copy), both directions — a run's kind
+// is whichever file landed first.
+const REFUSE_DOCUMENT_IN_SPREADSHEET_RUN =
+  'A run holds one kind of file: this is a spreadsheet run, so the document was not added. Remove the spreadsheet files first, or start a separate document run.'
+const REFUSE_SPREADSHEET_IN_DOCUMENT_RUN =
+  'A run holds one kind of file: this is a document run, so the spreadsheet was not added. Remove the document files first, or start a separate spreadsheet run.'
+
+test('EXTR09-E2E-01 (AC-1/AC-5): a PDF forks to the document path, extracts, and lands on a real invoice', async ({ page }) => {
+  // Upload + extraction poll (1.5s interval, 120s budget) + import, on a fleet that may be
+  // cold. Well above the api suite's own 180s for the same three calls.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // The spreadsheet path must never be touched. Counted rather than asserted at one
+  // moment: a single preview would prove the fork is not live, whenever it fired.
+  const previewCalls: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/api/invoice/v1/imports/preview')) {
+      previewCalls.push(req.url())
+    }
+  })
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-09-08 fork ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'native_invoice.pdf', mimeType: 'application/pdf', buffer: uniquePdfBytes() })
+
+  // The fork, at selection time — this is what an always-null runKind fails. The strip is
+  // the document strip, the Map chip it never visits is absent, and the primary names the
+  // action it will actually perform.
+  await expect(stepChips(page), 'a document run has two steps, not three').toHaveText([/^1\s*Import$/, /^2\s*Review$/])
+  await expect(page.getByText('Map', { exact: true }), 'documents are never mapped').toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Extract invoices' }), 'the primary IS the commit on a document run').toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Read columns' }), 'the spreadsheet primary is gone').toHaveCount(0)
+
+  const uploadResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/submission/v1/documents'),
+    { timeout: 120_000 },
+  )
+  // endsWith, never includes(): '/v1/imports' is a PREFIX of '/v1/imports/document'.
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/document'),
+    { timeout: 240_000 },
+  )
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  // Asserted BEFORE either response is awaited: startDocumentRun dispatches the reducer's
+  // 'start' and setCreateStep('documents') synchronously in the click handler, so this
+  // card is on screen before any request settles. Awaiting the upload first would race a
+  // fast run past its own progress card.
+  await expect(page.getByText('Importing 1 file', { exact: true }), 'the run started').toBeVisible({ timeout: 30_000 })
+  await expect(stepChips(page), 'the strip stays the document strip while the run is live').toHaveText([
+    /^1\s*Import$/,
+    /^2\s*Review$/,
+  ])
+
+  expect((await uploadResp).status(), 'the document upload returns 201').toBe(201)
+  expect((await importResp).status(), 'a settled document imports 201').toBe(201)
+
+  // The landing, named rather than waited on: a wrong landing fails saying WHICH one
+  // appeared. See the AC-1 amendment in this section's header for why this is the detail
+  // page and not the review shell.
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('invoice-detail').isVisible()) return 'invoice detail'
+        if (await page.getByText(/^BATCH /).first().isVisible()) return 'review batch surface'
+        if (await page.getByRole('button', { name: 'Extract invoices' }).isVisible()) return 'back on the picker (the run failed)'
+        return 'nothing yet'
+      },
+      { message: 'the document run must land on the real invoice detail (routeAfterRun single)', timeout: 60_000 },
+    )
+    .toBe('invoice detail')
+  await expect(page.getByTestId('status-strip'), 'the real detail carries the state strip').toBeVisible()
+  await expect(page.getByTestId('review-table'), 'never a one-row review grid').toHaveCount(0)
+
+  expect(previewCalls, `the document path must never call the spreadsheet preview:\n${previewCalls.join('\n')}`).toEqual([])
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR09-E2E-02 (AC-2): the spreadsheet journey is unchanged end to end', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  // The document route must stay untouched on this path, the mirror image of E2E-01's
+  // preview counter.
+  const documentCalls: string[] = []
+  page.on('request', (req) => {
+    const path = new URL(req.url()).pathname
+    if (req.method() === 'POST' && (path.endsWith('/api/submission/v1/documents') || path.endsWith('/api/invoice/v1/imports/document'))) {
+      documentCalls.push(req.url())
+    }
+  })
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-09-08 sheet ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const invoiceNumber = `INV-E2E-EXTR0908-${Date.now()}`
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'unchanged.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(invoiceNumber), 'utf8') })
+
+  // The widened picker did not move the spreadsheet fork: three chips, Map among them.
+  await expect(stepChips(page), 'a spreadsheet run still has three steps').toHaveText([
+    /^1\s*Import$/,
+    /^2\s*Map$/,
+    /^3\s*Review$/,
+  ])
+  await expect(page.getByRole('button', { name: 'Extract invoices' }), 'the document primary is absent').toHaveCount(0)
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  expect((await importResp).status(), 'the shipped spreadsheet import still returns 201').toBe(201)
+
+  await expect(page.getByTestId('invoice-detail'), 'N=1 still routes to the real detail').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  expect(documentCalls, `the spreadsheet path must never call the document route:\n${documentCalls.join('\n')}`).toEqual([])
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-3, the load-bearing spec. Four arms: both refusal directions, and both selection
+// paths — the dropped file never meets `accept`, so a stale predicate survives there
+// unnoticed (CreateUpload.tsx:123-127).
+//
+// Every arm asserts NO refusal is on screen immediately before the one it expects.
+// `filesRefusal` is sticky (removeFile does not clear it) and both arms of a direction
+// render the SAME sentence, so without that the second arm would pass on the first arm's
+// leftover text. The row COUNT is the claim that cannot go stale: an always-null runKind
+// adds the contradicting file, so two rows appear where one is required.
+test('EXTR09-E2E-03 (AC-3): a mixed selection is refused in the browser, picked or dropped', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  // A fixture entity, selected before the wizard opens: `Extract invoices` is the document
+  // run's COMMIT, so it gates on the resolved entity ([gate-on-the-resolved-entity]) and
+  // arm C's enabled-primary claim would otherwise depend on whichever client the switcher
+  // happened to open on. Nothing is imported here, so the entity stays empty.
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-09-08 refusal ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
+
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  const fileNames = page.locator('ul li div.mono')
+  const documentRefusal = page.getByText(REFUSE_DOCUMENT_IN_SPREADSHEET_RUN, { exact: true })
+  const spreadsheetRefusal = page.getByText(REFUSE_SPREADSHEET_IN_DOCUMENT_RUN, { exact: true })
+  const csv = (name: string) => ({ name, mimeType: 'text/csv', buffer: Buffer.from('invoice_number,subtotal\nMIX-1,100\n', 'utf8') })
+  const pdf = (name: string) => ({ name, mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 e2e refusal probe\n', 'utf8') })
+
+  // --- Arm A: spreadsheet run, PDF PICKED ---
+  await fileInput.setInputFiles([csv('mix-a.csv')])
+  await expect(fileNames, 'the run starts as one spreadsheet').toHaveText(['mix-a.csv'])
+  await expect(documentRefusal, 'no refusal yet — the next assertion must not pass on stale text').toHaveCount(0)
+
+  await fileInput.setInputFiles([pdf('mix-b.pdf')])
+  await expect(documentRefusal, 'the refusal names BOTH kinds and which one was dropped').toBeVisible()
+  await expect(fileNames, 'the CSV stays selected and the PDF was NOT added').toHaveText(['mix-a.csv'])
+  await expect(page.getByRole('button', { name: 'Read columns' }), 'the spreadsheet run is still armed').toBeEnabled()
+  await expect(stepChips(page), 'and it is still the spreadsheet strip').toHaveText([/^1\s*Import$/, /^2\s*Map$/, /^3\s*Review$/])
+
+  // --- Arm B: spreadsheet run, PDF DROPPED (never meets `accept`) ---
+  await fileInput.setInputFiles([csv('mix-c.csv')])
+  await expect(fileNames, 'a second spreadsheet is accepted, which clears the refusal').toHaveText(['mix-a.csv', 'mix-c.csv'])
+  await expect(documentRefusal, 'refusal cleared before the drop arm').toHaveCount(0)
+
+  await dropFiles(page, [{ name: 'mix-d.pdf', type: 'application/pdf' }])
+  await expect(documentRefusal, 'a DROPPED document is refused by classifyPickedFile, not by accept').toBeVisible()
+  await expect(fileNames, 'both spreadsheets stay, the dropped PDF was not added').toHaveText(['mix-a.csv', 'mix-c.csv'])
+
+  // --- Arm C: document run, CSV PICKED ---
+  await page.locator('ul li').filter({ hasText: 'mix-a.csv' }).getByRole('button', { name: 'Remove' }).click()
+  await page.locator('ul li').filter({ hasText: 'mix-c.csv' }).getByRole('button', { name: 'Remove' }).click()
+  await expect(fileNames, 'the selection is empty, so the run has no kind again').toHaveCount(0)
+
+  await fileInput.setInputFiles([pdf('mix-e.pdf')])
+  await expect(fileNames, 'the run starts as one document').toHaveText(['mix-e.pdf'])
+  // An accepted pick sets refusal to null, which also clears Arm B's leftover sentence.
+  await expect(documentRefusal, "arm B's refusal is gone").toHaveCount(0)
+  await expect(spreadsheetRefusal, 'and the opposite one has never fired').toHaveCount(0)
+
+  await fileInput.setInputFiles([csv('mix-f.csv')])
+  await expect(spreadsheetRefusal, 'the refusal reads the other way round, naming both kinds').toBeVisible()
+  await expect(fileNames, 'the PDF stays selected and the CSV was NOT added').toHaveText(['mix-e.pdf'])
+  await expect(page.getByRole('button', { name: 'Extract invoices' }), 'the document run is still armed').toBeEnabled()
+
+  // --- Arm D: document run, CSV DROPPED ---
+  await fileInput.setInputFiles([pdf('mix-g.pdf')])
+  await expect(fileNames, 'a second document is accepted, which clears the refusal').toHaveText(['mix-e.pdf', 'mix-g.pdf'])
+  await expect(spreadsheetRefusal, 'refusal cleared before the drop arm').toHaveCount(0)
+
+  await dropFiles(page, [{ name: 'mix-h.csv', type: 'text/csv' }])
+  await expect(spreadsheetRefusal, 'a DROPPED spreadsheet is refused on a document run').toBeVisible()
+  await expect(fileNames, 'both documents stay, the dropped CSV was not added').toHaveText(['mix-e.pdf', 'mix-g.pdf'])
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-4. The picker card's content changed twice in this story — the accepted-types line
+// grew from three tokens to eight, and a chosen-file row may now carry a second note — so
+// this sweeps the wide end where an unguarded cap has room to strand a band
+// (topology/layout.ts's own header records BUG-03-05, where `width <= 1082` passed on
+// 588px of dead space). Nothing here asserts a raw dimension: every claim is a
+// relationship between two measured boxes, or an element against its own scroll width.
+test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every width', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  await signInFirm(page)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
+
+  // One drop, three files, so a single addFiles call sets the run kind from the FIRST
+  // classifiable file and the other two disagree with it — the only way a row carries a
+  // kind note at all (addFiles refuses a contradicting file on any LATER call). The 16 MiB
+  // spreadsheet therefore carries BOTH notes: the kind mismatch and the size cap. Dropped
+  // rather than picked: nothing is uploaded here, and 16 MiB never crosses the CDP wire.
+  await dropFiles(page, [
+    { name: 'geometry-native.pdf', type: 'application/pdf' },
+    { name: 'geometry-oversize-and-wrong-kind.csv', type: 'text/csv', bytes: 16 * 1024 * 1024 },
+    { name: 'geometry-wrong-kind.csv', type: 'text/csv' },
+  ])
+
+  const acceptedLine = page.getByText(ACCEPTED_LINE, { exact: true })
+  await expect(acceptedLine, 'the accepted-types line states all eight types').toBeVisible()
+
+  // The ancestor chain, self-checked: the accepted line's parent is the card's padded
+  // content div, whose parent is the card, whose grandparent is the wizard column
+  // (CreateFlow's `padding: 24px 36px 56px` body). Each link is asserted by what it must
+  // and must not contain, so a DOM change measures nothing rather than the wrong box.
+  const cardBody = acceptedLine.locator('xpath=..')
+  const card = cardBody.locator('xpath=..')
+  const wizardColumn = card.locator('xpath=../..')
+  await expect(card, 'the card carries its own header').toContainText('Import invoices ·')
+  await expect(cardBody, 'the content div is INSIDE that header, not the card itself').not.toContainText('Import invoices ·')
+  await expect(wizardColumn.getByRole('button', { name: /Cancel|Invoices/ }), 'the column carries the wizard header row').toHaveCount(1)
+
+  const rows = cardBody.locator('ul li')
+  // Non-empty FIRST: an empty locator list satisfies every assertion in the loop below,
+  // and on a broken deploy that is exactly how this sweep would go green.
+  await expect(rows, 'three files were dropped, so three rows must be measured').toHaveCount(3)
+
+  const twoNoteRow = rows.filter({ hasText: 'geometry-oversize-and-wrong-kind.csv' })
+  await expect(twoNoteRow, 'the second note this story added — the size cap').toContainText(
+    /over the 15 MB limit\. Remove it, or split it into smaller files\./,
+  )
+  await expect(twoNoteRow, 'beside the first — the kind mismatch').toContainText(/a spreadsheet cannot be imported beside it/)
+
+  const read = async () => {
+    const [cardBox, columnBox, content, accepted, rowEdges] = await Promise.all([
+      card.boundingBox(),
+      wizardColumn.boundingBox(),
+      cardBody.evaluate(edgesOf),
+      acceptedLine.evaluate(edgesOf),
+      rows.evaluateAll((els) =>
+        els.map((el) => {
+          const r = el.getBoundingClientRect()
+          return { left: r.left, right: r.right, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }
+        }),
+      ),
+    ])
+    return { cardBox, columnBox, content, accepted, rowEdges }
+  }
+
+  const measured: { width: number; gapLeft: number; gapRight: number; acceptedOverhang: number; worstRowOverhang: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a cap strands only what the window
+    // gives it room to strand.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const m = await settledRead(read, `picker card at ${width}px`)
+      expect(m.cardBox && m.columnBox, `the card and its column must both render at ${width}px`).toBeTruthy()
+      expect(m.rowEdges.length, `all three rows must still be measurable at ${width}px`).toBe(3)
+
+      // 1. The accepted-types line sits inside the card's CONTENT box, and its eight
+      //    tokens fit the box they were given (a stretched flex item keeps its width while
+      //    its text overflows, so the box check alone cannot see the second failure).
+      expect(m.accepted.outerLeft, `the accepted-types line must start inside the card at ${width}px`).toBeGreaterThanOrEqual(m.content.left - 0.5)
+      expect(m.accepted.outerRight, `the accepted-types line must end inside the card at ${width}px`).toBeLessThanOrEqual(m.content.right + 0.5)
+      expect(m.accepted.scrollWidth, `the accepted-types line's text must fit its own box at ${width}px`).toBeLessThanOrEqual(m.accepted.clientWidth + 1)
+
+      // 2. Every chosen-file row, the same two facts.
+      for (const [i, row] of m.rowEdges.entries()) {
+        expect(row.left, `file row ${i} must start inside the card at ${width}px`).toBeGreaterThanOrEqual(m.content.left - 0.5)
+        expect(row.right, `file row ${i} must end inside the card at ${width}px`).toBeLessThanOrEqual(m.content.right + 0.5)
+        expect(row.scrollWidth, `file row ${i}'s content must fit its own box at ${width}px`).toBeLessThanOrEqual(row.clientWidth + 1)
+      }
+
+      // 3. Nothing in the card forces a horizontal scroll — the one check that sees an
+      //    overflow from an element no assertion above names.
+      expect(m.content.scrollWidth, `the card's contents must not scroll horizontally at ${width}px`).toBeLessThanOrEqual(m.content.clientWidth + 1)
+
+      // 4. The card is CENTRED in its column, not merely narrow enough for it. Both gaps,
+      //    never one: a right-only measurement reads a left-pinned cap as a wide right gap
+      //    and a right-pinned one as a perfect fit (layout.ts's gaps() doc comment).
+      const g = gaps(
+        { x: m.cardBox!.x, width: m.cardBox!.width },
+        { x: m.columnBox!.x, width: m.columnBox!.width },
+      )
+      expect(g.left, `the card must not overflow its column's left edge at ${width}px`).toBeGreaterThanOrEqual(-0.5)
+      expect(g.right, `the card must not overflow its column's right edge at ${width}px`).toBeGreaterThanOrEqual(-0.5)
+      expect(
+        Math.abs(g.left - g.right),
+        `the card's left and right margins must agree at ${width}px (left ${g.left}, right ${g.right})`,
+      ).toBeLessThanOrEqual(1)
+
+      measured.push({
+        width,
+        gapLeft: g.left,
+        gapRight: g.right,
+        acceptedOverhang: m.accepted.outerRight - m.content.right,
+        worstRowOverhang: Math.max(...m.rowEdges.map((r) => r.right - m.content.right)),
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // The sweep ran every width, in order — a loop that measured fewer would otherwise pass
+  // on whatever it did reach.
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('picker-card-geometry.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-5. The strip is DERIVED from the selection (runKindOf(pickedFiles)), never stored, so
+// it must follow the picker in both directions — including back to the spreadsheet strip
+// when the last document is removed. A stored-and-stale run kind passes the first leg and
+// fails the third.
+test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dropped', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  await signInFirm(page)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
+
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  const fileNames = page.locator('ul li div.mono')
+  const IMPORT_STRIP = [/^1\s*Import$/, /^2\s*Map$/, /^3\s*Review$/]
+  const DOCUMENT_STRIP = [/^1\s*Import$/, /^2\s*Review$/]
+
+  // Leg 1 — no selection, no run kind: the shipped 3-step import strip (E2E-10's entry
+  // claim, restated here as this spec's own baseline).
+  await expect(stepChips(page), 'an empty picker shows the import strip').toHaveText(IMPORT_STRIP)
+
+  // Leg 2 — a picked PDF: two chips, and Map is absent from the whole screen.
+  await fileInput.setInputFiles([{ name: 'strip.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 e2e strip probe\n', 'utf8') }])
+  await expect(fileNames).toHaveText(['strip.pdf'])
+  await expect(stepChips(page), 'a document run has exactly two chips').toHaveText(DOCUMENT_STRIP)
+  await expect(page.getByText('Map', { exact: true }), 'the strip must never name a step it does not visit').toHaveCount(0)
+
+  // Leg 3 — remove it: the strip goes BACK, which a stored run kind cannot do.
+  await page.locator('ul li').filter({ hasText: 'strip.pdf' }).getByRole('button', { name: 'Remove' }).click()
+  await expect(fileNames).toHaveCount(0)
+  await expect(stepChips(page), 'clearing the selection clears the run kind').toHaveText(IMPORT_STRIP)
+
+  // Leg 4 — a DROPPED PDF forks the same way, on the path `accept` never sees.
+  await dropFiles(page, [{ name: 'strip-dropped.pdf', type: 'application/pdf' }])
+  await expect(fileNames).toHaveText(['strip-dropped.pdf'])
+  await expect(stepChips(page), 'a dropped document forks the strip too').toHaveText(DOCUMENT_STRIP)
+
+  // Leg 5 — a spreadsheet keeps the shipped strip.
+  await page.locator('ul li').filter({ hasText: 'strip-dropped.pdf' }).getByRole('button', { name: 'Remove' }).click()
+  await fileInput.setInputFiles([{ name: 'strip.csv', mimeType: 'text/csv', buffer: Buffer.from('invoice_number,subtotal\nSTRIP-1,100\n', 'utf8') }])
+  await expect(fileNames).toHaveText(['strip.csv'])
+  await expect(stepChips(page), 'a spreadsheet run still shows all three steps').toHaveText(IMPORT_STRIP)
+  await expect(page.getByRole('button', { name: 'Read columns' }), 'and the spreadsheet primary is back').toBeEnabled()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

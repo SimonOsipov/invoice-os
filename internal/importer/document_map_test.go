@@ -1,5 +1,6 @@
-// document_map_test.go: RED specs for documentCreateInput (EXTR-06-02, task-762), authored
-// against the stub in document.go before any real mapping exists -- Mode A. Pure Go, no DB.
+// document_map_test.go: specs for documentCreateInput (EXTR-06-02, task-762). Pure Go, no DB.
+// Authored RED in Mode A against a stub, now green against the real mapper (commit a93a9518);
+// QA added adversarial coverage below the MAP-11 spec section (task-762 Mode B).
 //
 // Spec-to-test map (Test Specs table, EXTR-06-02 / task-762):
 //
@@ -15,10 +16,10 @@
 //	MAP-10 TestDocumentCreateInput_LineItemsNilNoAppendInBody
 //	MAP-11 TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder
 //
-// RED (Stage 2, document.go stub): documentCreateInput always returns (invoice.CreateInput{},
-// nil), so every spec below is paired with at least one POSITIVE expected-value assertion
-// (not just an absent-field check that the zero-value stub would satisfy vacuously) -- each
-// one fails on VALUE, not on a compile or panic error.
+// Every spec below carries at least one POSITIVE expected-value assertion (not just an
+// absent-field check a zero-value stub would satisfy vacuously) -- mutation-confirmed
+// (task-762 QA pass) to still fail on VALUE, for the AC each spec covers, not just on a
+// compile or panic error.
 package importer
 
 import (
@@ -487,6 +488,106 @@ func TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder(t *testi
 	}
 	if !slices.Equal(mapperNames, extractionNames) {
 		t.Errorf("mapperFieldNames = %v, want %v (element-for-element, in order, matching extraction.HeaderFields)", mapperNames, extractionNames)
+	}
+}
+
+// --- Adversarial coverage (QA, task-762 Mode B) ------------------------------------------
+
+// TestDocumentCreateInput_DuplicateFieldNameLastWriteWins: two rank-0 rows for the same
+// field_name are legal (EXTR-05 D-4 -- SettledExtraction never dedupes). The mapper builds
+// its values map by iterating ex.Fields in order, so the LAST matching entry wins; determinism
+// end-to-end rests on SettledExtraction's `ORDER BY created_at, id` (SX-05-FIX), not on
+// anything here -- this test pins the mapper's own half of that contract.
+func TestDocumentCreateInput_DuplicateFieldNameLastWriteWins(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-FIRST")},
+		{Name: "invoice_number", Value: mpPtr("INV-LAST")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if got.InvoiceNumber != "INV-LAST" {
+		t.Errorf("InvoiceNumber = %q, want %q (last entry in Fields order wins)", got.InvoiceNumber, "INV-LAST")
+	}
+}
+
+// TestDocumentCreateInput_EmptyStringSubtotalPassesThroughVerbatim: AC #7 is byte-verbatim
+// passthrough, and the mapper's only "absent" test is `!= nil` (extractedField.Value), never
+// `!= ""` -- so a non-NULL empty string is a decided value, not a missing one, and it must
+// flow through unmodified. (Store.Create binds it $N::text::numeric; Postgres rejects "" at
+// write time -- invoice/store.go:229 -- a store-level concern, not the mapper's.)
+func TestDocumentCreateInput_EmptyStringSubtotalPassesThroughVerbatim(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-EMPTY-1")},
+		{Name: "subtotal", Value: mpPtr("")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if got.Subtotal == nil || *got.Subtotal != "" {
+		t.Errorf("Subtotal = %v, want a non-nil pointer to \"\" -- empty-string is a decided value, not NULL", got.Subtotal)
+	}
+}
+
+// TestDocumentCreateInput_NullIssueDateWithMissingReasonLeavesDateNil: a NULL issue_date
+// value (Value: nil) flagged with a "missing" reason must leave IssueDate nil and produce no
+// RowError -- parseIssueDate is never called on a NULL value in the first place (only on a
+// non-nil *string), so the "missing" reason carries no special handling of its own.
+func TestDocumentCreateInput_NullIssueDateWithMissingReasonLeavesDateNil(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-NULLDATE-1")},
+		{Name: "issue_date", Value: nil, Reason: mpPtr("missing")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if got.InvoiceNumber != "INV-NULLDATE-1" {
+		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, "INV-NULLDATE-1")
+	}
+	if got.IssueDate != nil {
+		t.Errorf("IssueDate = %v, want nil", got.IssueDate)
+	}
+}
+
+// TestDocumentCreateInput_OnlyUnknownFieldNamesReturnsInvoiceNumberRowError: an extraction
+// carrying nothing but unknown field_names must fall through to the same structural
+// invoice_number RowError as a genuinely empty extraction -- not a silently-empty
+// invoice.CreateInput{} with a nil error.
+func TestDocumentCreateInput_OnlyUnknownFieldNamesReturnsInvoiceNumberRowError(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_date", Value: mpPtr("2026-01-01")},
+		{Name: "total_amount", Value: mpPtr("500.00")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr == nil {
+		t.Fatal("rowErr = nil, want a structural RowError on invoice_number")
+	}
+	if rowErr.Field != "invoice_number" {
+		t.Errorf("rowErr.Field = %q, want %q", rowErr.Field, "invoice_number")
+	}
+	if !reflect.DeepEqual(got, invoice.CreateInput{}) {
+		t.Errorf("CreateInput = %+v, want the zero value", got)
+	}
+}
+
+// TestDocumentCreateInput_SourceDocumentIDIsDocumentIDNotJobID: documentID and ex.JobID are
+// deliberately distinct values here -- if the mapper ever wired SourceDocumentID to the job
+// id (an adjacent string of the same shape) instead of the documentID argument, this is the
+// only test that would catch it.
+func TestDocumentCreateInput_SourceDocumentIDIsDocumentIDNotJobID(t *testing.T) {
+	ex := SettledExtraction{
+		JobID:  "job-should-not-appear",
+		Fields: []extractedField{{Name: "invoice_number", Value: mpPtr("INV-SRC-1")}},
+	}
+	got, rowErr := documentCreateInput("entity-1", "doc-distinct-id", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if got.SourceDocumentID == nil || *got.SourceDocumentID != "doc-distinct-id" {
+		t.Errorf("SourceDocumentID = %v, want %q", got.SourceDocumentID, "doc-distinct-id")
 	}
 }
 

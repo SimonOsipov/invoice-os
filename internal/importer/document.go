@@ -1,5 +1,6 @@
-// document.go: the settled-extraction read (EXTR-06-01, task-761). See
-// .ralph/EXTR-06-finalized.md, "The settled-extraction input type".
+// document.go: the settled-extraction read (EXTR-06-01, task-761) and the field-to-CreateInput
+// mapper (EXTR-06-02, task-762). See .ralph/EXTR-06-finalized.md, "The settled-extraction input
+// type".
 package importer
 
 import (

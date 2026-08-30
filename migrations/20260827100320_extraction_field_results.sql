@@ -1,4 +1,5 @@
--- extraction_field_results — one row per extracted field per job. Append-only by grant.
+-- extraction_field_results — one row per candidate reading per field per job (candidate_rank,
+-- added later, discriminates the decided reading from its alternatives). Append-only by grant.
 --
 -- The FK is composite (tenant_id, extraction_job_id) -> extraction_jobs (tenant_id, id):
 -- referential-integrity checks run with RLS bypassed, so a bare extraction_job_id would

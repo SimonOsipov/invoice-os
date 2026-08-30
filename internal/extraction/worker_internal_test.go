@@ -41,6 +41,27 @@ func TestExtractArgs_QueueIsNotRiverDefault(t *testing.T) {
 	}
 }
 
+// EXTR-05-06 AC-6: flaggedCount stops at the top level. An alternative never carries its own
+// reason by FieldResult's own contract, but the count must not descend into Alternatives
+// regardless -- two alternatives here, alongside the one decided field that is actually
+// flagged, so a loop that flattened Alternatives in would inflate the count past 1.
+func TestExtractWorker_FlaggedCountIgnoresAlternatives(t *testing.T) {
+	v := "x"
+	results := []FieldResult{
+		{Field: Field{Name: "invoice_number", Value: &v, Reason: ReasonNone}},
+		{
+			Field: Field{Name: "issue_date", Value: &v, Reason: ReasonAmbiguous},
+			Alternatives: []Field{
+				{Name: "issue_date", Value: &v},
+				{Name: "issue_date", Value: &v},
+			},
+		},
+	}
+	if got, want := flaggedCount(results), 1; got != want {
+		t.Errorf("flaggedCount = %d, want %d -- one decided field is flagged; its two alternatives must not inflate the count", got, want)
+	}
+}
+
 // River resolves cmp.Or(workUnit.Timeout(), clientJobTimeout), so a per-worker Timeout wins
 // over the client default without raising it for SubmitWorker and PollWorker too.
 func TestExtractWorker_TimeoutExceedsRiverDefault(t *testing.T) {

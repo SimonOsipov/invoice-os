@@ -167,19 +167,15 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		return err
 	}
 
-	flagged := 0
-	for _, f := range fields {
-		if f.Reason != ReasonNone {
-			flagged++
-		}
-	}
+	results := asFieldResults(fields)
+	flagged := flaggedCount(results)
 
 	return db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
 		// The marker, the result rows, the advance to succeeded and the audit row share one
 		// transaction and one fate (TestRLS_ExtractWorkerResultWriteIsGuardedByTheJobMarker,
 		// TestExtractWorker_AuditWriteIsLastInItsClosure).
 		_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
-			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, fields); err != nil {
+			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, results); err != nil {
 				return err
 			}
 			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt); err != nil {
@@ -197,4 +193,27 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		})
 		return err
 	})
+}
+
+// asFieldResults lifts the extractor's flat fields into rank-0 results with no alternatives:
+// the extractor produces none on its own, only Reconcile does, and nothing wires Reconcile's
+// output into the worker yet (EXTR-05-07).
+func asFieldResults(fields []Field) []FieldResult {
+	out := make([]FieldResult, len(fields))
+	for i, f := range fields {
+		out[i] = FieldResult{Field: f, Alternatives: []Field{}}
+	}
+	return out
+}
+
+// flaggedCount counts decided fields only: it stops at the top level and never descends into
+// Alternatives, which by FieldResult's own contract carry no reason of their own.
+func flaggedCount(results []FieldResult) int {
+	n := 0
+	for _, r := range results {
+		if r.Reason != ReasonNone {
+			n++
+		}
+	}
+	return n
 }

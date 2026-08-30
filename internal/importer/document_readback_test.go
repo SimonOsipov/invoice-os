@@ -22,10 +22,11 @@
 //	RB-08       TestImportDocumentReadback_RealGateLeavesZeroLineDraftWithLineItemsRequired
 //
 // AC #6 (Core AC 8's extraction half) is NOT met by this story -- D-19
-// (.ralph/EXTR-06-finalized.md): nothing wires Reconcile's output into the worker yet, and
-// extraction_field_results carries no line-item values, so no `line_items=missing` reason row
-// is ever written. There is no oracle for that absence, so asserting it would be vacuous; this
-// comment is the story's evidence for AC #6 instead of a test row.
+// (.ralph/EXTR-06-finalized.md), now owned by EXTR-17 The Pipeline Runs End To End: nothing wires
+// Reconcile's output into the worker yet, and extraction_field_results carries no line-item
+// values, so no `line_items=missing` reason row is ever written. There is no oracle for that
+// absence, so asserting it would be vacuous; this comment is the story's evidence for AC #6
+// instead of a test row.
 package importer
 
 import (

@@ -365,3 +365,130 @@ func TestSettledExtraction_NullFilenameSurfacesAsEmptyString(t *testing.T) {
 		t.Errorf("Filename = %q, want \"\" for a NULL documents.filename", ex.Filename)
 	}
 }
+
+// QA additions below (not in the Test Specs table) -- adversarial/edge coverage found during
+// task-761 verification.
+
+// QA-01: a newer succeeded job with FEWER fields than an older one still wins. Guards against a
+// selection query that (accidentally) picks the job with the most field rows rather than the
+// truly newest one.
+func TestSettledExtraction_NewerJobWithFewerFieldsStillWins(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "QA-01 tenant")
+	documentID := seedDocument(t, super, tenantID)
+
+	now := time.Now().UTC()
+	older := seedExtractionJob(t, super, tenantID, documentID, "succeeded", now.Add(-1*time.Hour))
+	newer := seedExtractionJob(t, super, tenantID, documentID, "succeeded", now)
+
+	seedExtractionField(t, super, tenantID, older, "field_a", sxPtr("A"), nil, 0, now.Add(-1*time.Hour))
+	seedExtractionField(t, super, tenantID, older, "field_b", sxPtr("B"), nil, 0, now.Add(-1*time.Hour))
+	seedExtractionField(t, super, tenantID, older, "field_c", sxPtr("C"), nil, 0, now.Add(-1*time.Hour))
+	seedExtractionField(t, super, tenantID, newer, "field_only", sxPtr("ONLY"), nil, 0, now)
+
+	store := NewStore(app)
+	ex, err := store.SettledExtraction(sxIdentity(ctx, tenantID), documentID)
+	if err != nil {
+		t.Fatalf("SettledExtraction: %v", err)
+	}
+	if ex.JobID != newer {
+		t.Fatalf("JobID = %q, want the newer job %q (fewer fields must not lose the pick)", ex.JobID, newer)
+	}
+	if len(ex.Fields) != 1 || ex.Fields[0].Name != "field_only" {
+		t.Errorf("Fields = %+v, want exactly the newer job's one field", ex.Fields)
+	}
+}
+
+// QA-02: a succeeded job whose field results are entirely candidate_rank >= 1 (no rank-0 winner
+// was ever written) is schema-legal, per the architecture notes (WriteFieldResults normally
+// commits a rank-0 row atomically with the succeeded transition, but nothing in this table
+// enforces that). The read must still succeed -- the job exists and is succeeded -- and Fields
+// must come back empty, not an error and not the rank-1 rows themselves.
+func TestSettledExtraction_JobWithOnlyAboveZeroRanksReturnsEmptyFieldsNotError(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "QA-02 tenant")
+	documentID := seedDocument(t, super, tenantID)
+	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", time.Now().UTC())
+	seedExtractionField(t, super, tenantID, job, "orphan_alt", sxPtr("ALT"), nil, 1, time.Now().UTC())
+
+	store := NewStore(app)
+	ex, err := store.SettledExtraction(sxIdentity(ctx, tenantID), documentID)
+	if err != nil {
+		t.Fatalf("SettledExtraction: %v, want success (the job itself is succeeded)", err)
+	}
+	if ex.JobID != job {
+		t.Fatalf("JobID = %q, want %q", ex.JobID, job)
+	}
+	if ex.Fields == nil {
+		t.Error("Fields is nil, want a non-nil empty slice")
+	}
+	if len(ex.Fields) != 0 {
+		t.Errorf("Fields = %+v, want empty (no rank-0 row exists)", ex.Fields)
+	}
+}
+
+// QA-03: a rank-0 field with value IS NULL and reason_code set (the unreadable/ambiguous/
+// inconsistent/missing case) surfaces both Value=nil and the reason code, not a scan error.
+// EXTR-06-02's mapper needs to tell this apart from a clean field.
+func TestSettledExtraction_NullValueWithReasonCodeSurfaces(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "QA-03 tenant")
+	documentID := seedDocument(t, super, tenantID)
+	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", time.Now().UTC())
+	seedExtractionField(t, super, tenantID, job, "tax_id", nil, sxPtr("unreadable"), 0, time.Now().UTC())
+
+	store := NewStore(app)
+	ex, err := store.SettledExtraction(sxIdentity(ctx, tenantID), documentID)
+	if err != nil {
+		t.Fatalf("SettledExtraction: %v", err)
+	}
+	if len(ex.Fields) != 1 {
+		t.Fatalf("len(Fields) = %d, want 1", len(ex.Fields))
+	}
+	if ex.Fields[0].Value != nil {
+		t.Errorf("Value = %v, want nil", ex.Fields[0].Value)
+	}
+	if ex.Fields[0].Reason == nil || *ex.Fields[0].Reason != "unreadable" {
+		t.Errorf("Reason = %v, want \"unreadable\"", ex.Fields[0].Reason)
+	}
+}
+
+// QA-04: a document that was never inserted at all and a document that exists but has never
+// had an extraction job both return ErrNotFound, via the same zero-rows path -- the two cases
+// are indistinguishable to the caller. This is intended (task-761: "Zero succeeded jobs =>
+// ErrNotFound"), not a gap; this test pins that intent so a future change that starts
+// distinguishing them is a deliberate decision, not an accident.
+func TestSettledExtraction_NoDocumentAndDocumentWithNoJobBothReturnErrNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	t.Run("documentNeverExisted", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "QA-04 tenant a")
+		ex, err := store.SettledExtraction(sxIdentity(ctx, tenantID), uuid.NewString())
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		if ex.Fields == nil {
+			t.Error("Fields is nil, want a non-nil empty slice")
+		}
+	})
+
+	t.Run("documentExistsNoJob", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "QA-04 tenant b")
+		documentID := seedDocument(t, super, tenantID)
+		ex, err := store.SettledExtraction(sxIdentity(ctx, tenantID), documentID)
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		if ex.Fields == nil {
+			t.Error("Fields is nil, want a non-nil empty slice")
+		}
+	})
+}

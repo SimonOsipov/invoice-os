@@ -914,3 +914,104 @@ func TestReconcile_EmptyEntityTINDoesNotSuppressTheNameCheck(t *testing.T) {
 		t.Errorf("supplier_name reason = %q, want ReasonInconsistent -- an empty Entity.TIN must not suppress the independent name check", got.Reason)
 	}
 }
+
+// --- QA's own addition: the TIN-spelling convergence claim --------------------------
+//
+// The plan asserts internal/invoice's MBSSupplierTIN (the ONLY writer of Input.Entity.TIN in
+// production) and this package's own normalizeTIN always land on the same NNNNNNNN-NNNN
+// spelling, so Reconcile's plain == needs no re-normalisation. internal/extraction may not
+// import internal/invoice (TestExtractionPackage_DoesNotImportDocumentPackage's fence, scan B,
+// forbids any in-module edge outside internal/platform/*), so rcShadowMBSSupplierTIN below is a
+// deliberate shadow of MBSSupplierTIN's own two branches (supplier_tin.go), pinned by VALUE
+// against the real normalizeTIN via extraction.ShapeTIN.Normalize.
+
+// rcShadowMBSSupplierTIN mirrors internal/invoice's MBSSupplierTIN: a 12-bare-digit canonical
+// FIRS TIN gets the hyphen restored at position 8; anything else (a 10-digit JTB TIN, an
+// already-hyphenated row) passes through unchanged.
+func rcShadowMBSSupplierTIN(tin string) string {
+	if len(tin) != 12 {
+		return tin
+	}
+	for _, r := range tin {
+		if r < '0' || r > '9' {
+			return tin
+		}
+	}
+	return tin[:8] + "-" + tin[8:]
+}
+
+// TestReconcile_EntityTINSpellingConvergesWithNormalizeTIN feeds a 12-digit canonical FIRS TIN
+// through the entity side (rcShadowMBSSupplierTIN) and a spread of real-world printed spellings
+// of the SAME TIN through the extraction side (ShapeTIN.Normalize), and requires they agree.
+// Disagreement here would mean Reconcile's == flags every genuinely-matching document with that
+// spelling as ReasonInconsistent -- a false positive, not a formatting nuance.
+func TestReconcile_EntityTINSpellingConvergesWithNormalizeTIN(t *testing.T) {
+	const canonicalBare = "123456789012" // business_entities.tin as ValidateTIN stores it
+	entitySide := rcShadowMBSSupplierTIN(canonicalBare)
+	if entitySide != "12345678-9012" {
+		t.Fatalf("rcShadowMBSSupplierTIN(%q) = %q, want \"12345678-9012\" -- shadow itself is wrong, the cases below would prove nothing", canonicalBare, entitySide)
+	}
+
+	printedSpellings := []string{
+		"12345678-9012",   // no interior whitespace
+		"12345678 - 9012", // spaced both sides of the hyphen
+		"12345678 -9012",  // spaced before only
+		"12345678- 9012",  // spaced after only
+	}
+	for _, raw := range printedSpellings {
+		t.Run(raw, func(t *testing.T) {
+			readings := extraction.ShapeTIN.Normalize(raw)
+			if len(readings) != 1 {
+				t.Fatalf("ShapeTIN.Normalize(%q) = %v, want exactly one reading", raw, readings)
+			}
+			if readings[0] != entitySide {
+				t.Errorf("ShapeTIN.Normalize(%q) = %q, entity side = %q -- the two paths disagree on the SAME TIN, a false ReasonInconsistent waiting to happen", raw, readings[0], entitySide)
+			}
+		})
+	}
+}
+
+// TestReconcile_AJTBEntityTINNeverProducesAFalseInconsistent covers the one shape the two paths
+// do NOT converge on: a 10-digit JTB TIN. MBSSupplierTIN leaves it bare (no hyphen to restore),
+// but normalizeTIN's shape requires a hyphen, so no printed spelling of a bare JTB TIN can ever
+// become a matching candidate. The gap is safe, not a defect: with zero comparable candidates
+// the field decides ReasonMissing before the entity check ever runs (flagIfInconsistent only
+// touches ReasonNone), so a JTB-TIN entity gets no supplier_tin check at all -- never a false
+// ReasonInconsistent.
+func TestReconcile_AJTBEntityTINNeverProducesAFalseInconsistent(t *testing.T) {
+	const jtbBare = "1234567890" // 10 digits, MBSSupplierTIN's own "unchanged" branch
+	if entitySide := rcShadowMBSSupplierTIN(jtbBare); entitySide != jtbBare {
+		t.Fatalf("rcShadowMBSSupplierTIN(%q) = %q, want unchanged %q -- shadow itself is wrong", jtbBare, entitySide, jtbBare)
+	}
+
+	for _, raw := range []string{jtbBare, jtbBare + " ", "12 3456 7890"} {
+		if readings := extraction.ShapeTIN.Normalize(raw); len(readings) != 0 {
+			t.Errorf("ShapeTIN.Normalize(%q) = %v, want zero readings -- a bare JTB TIN must never become a comparable candidate", raw, readings)
+		}
+	}
+
+	// The genuinely-matching case: no candidate reaches Reconcile at all (the real JTB TIN
+	// prints no shape normalizeTIN accepts), so the field is Missing, never Inconsistent.
+	noCandidateIn := extraction.Input{Entity: extraction.Entity{TIN: jtbBare}}
+	noCandidateResults := extraction.Reconcile(noCandidateIn)
+	missing, ok := rcFind(noCandidateResults, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, noCandidateResults)
+	}
+	if missing.Reason != extraction.ReasonMissing {
+		t.Errorf("supplier_tin reason = %q, want ReasonMissing -- a JTB entity's own TIN can never become a candidate, so this must read Missing, never a false Inconsistent", missing.Reason)
+	}
+
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("supplier_tin", "99999999-0102")},
+		Entity:     extraction.Entity{TIN: jtbBare},
+	}
+	results := extraction.Reconcile(in)
+	got, ok := rcFind(results, "supplier_tin")
+	if !ok {
+		t.Fatalf(`"supplier_tin" not found in %+v`, results)
+	}
+	if got.Reason != extraction.ReasonInconsistent {
+		t.Errorf("supplier_tin reason = %q, want ReasonInconsistent -- 99999999-0102 genuinely differs from the JTB entity, whatever its own TIN shape", got.Reason)
+	}
+}

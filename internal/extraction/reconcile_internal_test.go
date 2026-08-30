@@ -210,3 +210,20 @@ func f() {
 		t.Errorf("the goroutine control source only calls a function and the scan reported %v; the scan is not specific", hits)
 	}
 }
+
+// --- EXTR-05-05: flagIfInconsistent's ReasonNone gate, isolated -----------------------
+//
+// TestReconcile_AMissingSupplierNameKeepsItsReason (reconcile_test.go) exercises this same
+// guard only through Reconcile, where a Missing field always carries a nil Value -- so removing
+// the `Reason != ReasonNone` half of flagIfInconsistent's gate is invisible there: the nil-Value
+// check alone still saves it. This test builds the FieldResult directly, with a Value no real
+// Missing field can carry, so only the Reason check can save it -- QA's fix for that decorative
+// gap (mutation: drop `|| out[i].Reason != ReasonNone` from flagIfInconsistent).
+func TestFlagIfInconsistent_ReasonGateAloneProtectsAFieldItDidNotDecide(t *testing.T) {
+	leaked := "leaked-value"
+	out := []FieldResult{{Field: Field{Name: "supplier_name", Reason: ReasonMissing, Value: &leaked}}}
+	flagIfInconsistent(out, "supplier_name", func(string) bool { return false })
+	if out[0].Reason != ReasonMissing {
+		t.Errorf("Reason = %q, want ReasonMissing -- flagIfInconsistent must never touch a field whose Reason is not ReasonNone, value or no value", out[0].Reason)
+	}
+}

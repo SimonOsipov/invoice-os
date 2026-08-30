@@ -339,8 +339,10 @@ func CreateHandler(
 }
 
 // PreviewHandler returns POST /v1/imports/preview: the [upload-once] entry
-// point. It is the ONLY route by which a source document reaches storage --
-// it writes the bytes to object storage and a row to documents, then previews
+// point, and this service's only route by which a source document reaches
+// storage (EXTR-09 added a second on the submission service, POST
+// /v1/documents) -- it writes the bytes to object storage and a row to
+// documents, then previews
 // them ([preview-auth] still holds; [preview-stateless] does not, which is why
 // it now takes a store and a logger). Flow: identity-first-401 -> upload-cap
 // via http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (MaxBytesError

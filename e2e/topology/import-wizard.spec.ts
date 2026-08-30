@@ -773,12 +773,14 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
 
 // E2E-10 (FLOW-07, [wizard-steps-split], INVCR-01-04/task-280): the header path
 // resolver, re-anchored again. `Build`/`Validate`/`Approve`/`Report` are retired by
-// this subtask -- the typed path is now the 1-item `Enter` strip and the
-// import path is `Import · Map · Review`, sharing no label between them anymore.
-// The sample-PDF click that used to flip the strip is deleted with the mock, so
-// manual entry ('Skip — enter manually' -> skipUpload -> createStep 'form') is still
-// the only way to reach a DOCUMENT_ONLY_STEP. No SANDBOX toggle: with the document
-// card gone, LIVE and SANDBOX render an identical first step.
+// this subtask -- the typed path is the 1-item `Enter` strip and the import path is
+// `Import · Map · Review`, sharing no label between them. EXTR-09-06 added a third,
+// the document strip `Import · Review`, which DOES share the import path's labels;
+// EXTR09-E2E-05 owns it. Manual entry ('Skip — enter manually' -> skipUpload ->
+// createStep 'form') is still the only way to reach a TYPED_ONLY_STEPS member (the
+// name DOCUMENT_ONLY_STEPS carried until EXTR-09-06 renamed it, since "document"
+// now means a real document). No SANDBOX toggle: with the mock document card gone,
+// LIVE and SANDBOX render an identical first step.
 //
 // [closes-d-04a-typed-review-residual]: the stageIndex-0-vs-2 ambiguity a 2-item
 // strip used to have (index 0 and the retired index 2 rendering the same two

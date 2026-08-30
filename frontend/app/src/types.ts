@@ -371,8 +371,8 @@ export type PlatformCtx = {
   // kindRefusal's reason. Derived from `pickedFiles` by lib/importRun's runKindOf --
   // never its own independently-written state.
   runKind: PickedKind | null
-  // The refusal text from the most recent addPickedFiles call (lib/importRun's
-  // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
+  // The refusal text from the most recent addPickedFiles call (lib/importRun's capRefusal
+  // or kindRefusal) — null when nothing was dropped. Same idiom as `importError`: state
   // lives on ctx, the component renders it verbatim.
   filesRefusal: string | null
   // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
@@ -386,9 +386,10 @@ export type PlatformCtx = {
   // complete mapping and starts the run only once it is the LAST group.
   groupIndex: number
   preview: ImportPreview | null
-  // The sequential run's whole state (BULK-01-05, task-308) — one createImport in
-  // flight at a time, one outcome per file, continuation through failures
-  // ([partial-success-kept]). App.tsx's startRun() is the sole writer, via
+  // The run's whole state (BULK-01-05, task-308) — for a SPREADSHEET run, one
+  // createImport in flight at a time; a document run fills the same shape concurrently
+  // (see `startDocumentRun` below). One outcome per file either way, continuation through
+  // failures ([partial-success-kept]). App.tsx's startRun() writes it here, via
   // lib/importRun.ts's runReducer; every view over it (runBatchIds/runFailures/
   // runFileRows/routeAfterRun) is a pure derivation of THIS value, never re-computed
   // ad hoc by a component. `status: 'idle'` both before a run starts and once

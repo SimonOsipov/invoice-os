@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
-// RED specs (EXTR-09-07, task-774, Mode A / test-first) — the picker must stop
-// contradicting itself. EXTR-09-04 widened `accept` and the ACCEPTED copy to all seven
-// types but left three selection-time gates reading hasImportableExtension, so on this
-// branch a picked PDF is listed as "Unsupported file type" one line under copy that says
-// PDF is accepted. task-774's Implementation Notes make ending that this subtask's job.
+// The picker must not contradict itself. EXTR-09-04 widened `accept` and the ACCEPTED
+// copy to all seven types but left three selection-time gates reading
+// hasImportableExtension, so a picked PDF was listed as "Unsupported file type" one line
+// under copy saying PDF is accepted. Authored RED against that state; EXTR-09-07 ended it.
 //
 // Both halves are asserted every time: a PDF must produce NO unsupported note, no invalid
 // dropzone and a live primary, while a genuinely unlisted type (.zip) must still produce

@@ -1,13 +1,14 @@
-// Create flow · step 1 — THE import surface: one spreadsheet upload, server-backed
-// (M4-08-04: previewImport -> mapping -> createImport). It is the only card here, and
-// every pixel of it talks to a real endpoint.
+// Create flow · step 1 — THE import surface, server-backed. One card, two paths off the
+// same picker (EXTR-09): spreadsheets take previewImport -> mapping -> createImport, and
+// documents take ctx.startDocumentRun (upload -> poll -> import). Every pixel talks to a
+// real endpoint.
 //
 // It used to be joined by a second, sandbox-gated "import a document" card: a local
 // setInterval fixture over two hardcoded sample filenames, with zero network and no
 // OCR/parse endpoint behind it. INVCR-01-01 deleted it outright rather than leave a fake
 // parse anchoring a five-step strip that will never ship in that shape ([one-flow],
-// [prereq-delete-mock]). Real document ingestion is explicitly out of scope (§14) — do
-// not reintroduce a client-side stand-in for it.
+// [prereq-delete-mock]). Never reintroduce a client-side stand-in: document ingestion is
+// real now, and its only route is the one above.
 //
 // The entity picker is gone too: entityId now mirrors ctx.active.entityId (the
 // company already chosen via the workspace switcher) instead of a second, separate
@@ -202,10 +203,10 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           </span>
 
           {/* The chosen-files list, per-file remove control and the two per-file refusal
-              notes — bad extension (BULK-01-03) and over the size cap (EXTR-09-05). A
-              refused file is still listed here — addFiles drops only on the five-file
-              count cap — so the user can see and remove it rather than wonder why it
-              silently vanished. */}
+              notes — bad extension (BULK-01-03) and over the size cap (EXTR-09-05). Both
+              are still listed here, so the user can see and remove one rather than wonder
+              why it silently vanished. addFiles drops on two things only: the five-file
+              count cap, and a file contradicting the run's already-committed kind. */}
           {pickedFiles.length > 0 && (
             <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: 0, padding: 0, listStyle: 'none' }}>
               {pickedFiles.map((pf) => {
@@ -252,9 +253,10 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             </ul>
           )}
 
-          {/* Cap-refusal (BULK-01-03, Core AC 1) — capRefusal's text verbatim, sole copy
-              owner in lib/importRun.ts. Never a silent truncation: whenever addPickedFiles
-              drops any incoming file past MAX_RUN_FILES, this names the cap and the count. */}
+          {/* The selection refusal — capRefusal's or kindRefusal's text verbatim, both
+              owned by lib/importRun.ts. Never a silent truncation: whenever addPickedFiles
+              drops an incoming file, past MAX_RUN_FILES or against the run's committed
+              kind, this names why. */}
           {filesRefusal && (
             <p style={{ fontSize: 12.5, color: 'var(--status-amber-text)', margin: 0, lineHeight: 1.5 }}>{filesRefusal}</p>
           )}

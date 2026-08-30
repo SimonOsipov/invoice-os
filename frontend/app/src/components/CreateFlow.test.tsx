@@ -84,10 +84,10 @@ describe('CreateFlow — step-strip connector spans (BUG-03-07 item 10)', () => 
   })
 })
 
-// RED specs (EXTR-09-07, task-774, Mode A / test-first) — the header must fork with the
-// run. wizardHeader(step, runKind) shipped in EXTR-09-06 and is already right; CreateFlow
-// still calls it with the step alone, so a document run renders the 3-step spreadsheet
-// strip. Wiring ctx through is this subtask's job.
+// The header forks with the run: wizardHeader(step, runKind) shipped in EXTR-09-06, and
+// EXTR-09-07 wired CreateFlow to pass the run kind through. Authored RED against a
+// CreateFlow that called wizardHeader with the step alone and rendered the 3-step
+// spreadsheet strip for a document run.
 describe('CreateFlow — the header follows the run kind (EXTR-09-07, AC-2)', () => {
   afterEach(() => cleanup())
 

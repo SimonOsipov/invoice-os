@@ -306,8 +306,8 @@ describe('capRefusal — the copy names both numbers (QA Mode B)', () => {
 })
 
 // SIZE-3..5a (EXTR-09-05, task-772, Mode A) — the size gate as the SELECTION meets it.
-// RED today on assertions: canReadColumns does not consult MAX_UPLOAD_BYTES yet, and
-// oversizeNote's Stage-2.5 stub returns ''.
+// Authored RED on assertions: canReadColumns did not consult MAX_UPLOAD_BYTES, and
+// oversizeNote's Stage-2.5 stub returned ''.
 function sizedFile(name: string, size: number): File {
   const f = new File([], name)
   Object.defineProperty(f, 'size', { value: size })
@@ -1163,9 +1163,9 @@ function repoSource(rel: string): string {
 }
 
 describe('addFiles — a run is homogeneous (FORK-1, AC-3)', () => {
-  // Falsification: today addFiles has no kind concept at all, so it appends the .pdf and
-  // answers refusal:null. `files` is asserted FIRST so the RED lands on that, not on a
-  // copy-text comparison against a stub.
+  // Falsification: addFiles had no kind concept when this was written, so it appended the
+  // .pdf and answered refusal:null. `files` is asserted FIRST so the RED landed on that,
+  // not on a copy-text comparison against a stub.
   it('FORK-1: a .pdf offered to a spreadsheet run is refused, and the run keeps its files', () => {
     const current = addFiles([], [csv('ledger.csv')]).files
     expect(names(current)).toEqual(['ledger.csv'])

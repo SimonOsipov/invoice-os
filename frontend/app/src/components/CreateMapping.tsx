@@ -116,7 +116,9 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // No invoice count: how many invoices these rows resolve to is the SERVER's verdict,
   // reported after the import, and computing it in the browser first is exactly the
   // duplicated-judgement this story removes (Core AC3). Rows are the honest unit here.
-  // The commit gate — and the one step of the wizard that genuinely needs an entity.
+  // The commit gate of the SPREADSHEET path — and the one step of it that genuinely needs
+  // an entity. (A document run commits on the upload step instead, and gates on the entity
+  // there: CreateUpload.tsx's `readReady`.)
   // Upload and mapping do not (the preview endpoint takes the file alone), but the import
   // writes import_batches.entity_id and invoices.entity_id, both NOT NULL, so with no
   // linked entity there is nothing to file the rows against: startImport() returns early

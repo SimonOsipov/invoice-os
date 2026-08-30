@@ -29,11 +29,11 @@ export interface SelectionResult {
   refusal: string | null
 }
 
-// Appends `incoming` onto `current`, preserving order, capped at MAX_RUN_FILES. Only the
-// COUNT is capped here — a bad-extension file is still appended; that gate belongs to
-// canReadColumnsAll, not to selection (AC3). Whenever the cap drops any incoming file,
-// `refusal` names the cap and how many were not added (via capRefusal) — never a silent
-// truncation. Exactly at cap, under cap, or zero incoming: refusal is null.
+// Appends `incoming` onto `current`, preserving order, capped at MAX_RUN_FILES. A
+// bad-extension file is still appended; that gate belongs to canReadColumnsAll, not to
+// selection (AC3). Whenever the cap drops any incoming file, `refusal` names the cap and
+// how many were not added (via capRefusal) — never a silent truncation. Under the cap
+// with no kind mismatch, refusal is null.
 //
 // EXTR-09-07 adds the kind gate: a file whose kind contradicts the run's COMMITTED kind
 // (runKindOf(current) — the files already selected, never one accepted earlier in this

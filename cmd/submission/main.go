@@ -7,8 +7,8 @@
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
 //
-// EXTR-07 gives the service its first domain route, GET /v1/extractions: the HTTP surface is
-// no longer /healthz + /readyz + the ping stub.
+// The domain HTTP surface is GET /v1/extractions (EXTR-07) and POST /v1/documents (EXTR-09),
+// which stores the upload and enqueues its extraction on this service's own River client.
 package main
 
 import (

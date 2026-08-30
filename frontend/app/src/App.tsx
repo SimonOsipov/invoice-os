@@ -439,8 +439,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const activeGroup = groups[groupIndex] ?? null
   const preview = activeGroup?.preview ?? null
   const mapping = activeGroup?.mapping ?? null
-  // The sequential run's whole state (BULK-01-05, task-308) — REPLACES the old
-  // single-file `uploadPhase` state. `startRun` (below) is the sole writer, via
+  // The run's whole state (BULK-01-05, task-308) — REPLACES the old single-file
+  // `uploadPhase` state. `startRun` (spreadsheets, sequential) and `startDocumentRun`
+  // (documents, concurrent, bounded at MAX_RUN_FILES) are its two writers, via
   // lib/importRun's runReducer; `run` is tracked in a local variable inside that
   // function's own async loop (a `setState` call does not resolve synchronously) and
   // mirrored here purely for rendering — same discipline readAllColumns' local
@@ -456,14 +457,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [filing, setFiling] = useState(false)
   const [filingError, setFilingError] = useState<ApiError | null>(null)
 
-  // Re-entrancy guard for the THREE server round trips this workspace fires. A ref, not
+  // Re-entrancy guard for the FOUR server round trips this workspace fires. A ref, not
   // state: React batches state updates, so a fast double-click can fire the handler twice
   // before a `disabled` prop re-renders — and for startImport that would create the SAME
   // import twice, i.e. duplicate invoices, while for fileDraft it would persist TWO
   // separately-submittable invoices (createRequest carries no idempotency key; that field
-  // is batch-submit-only). readColumns (upload step), startImport (mapping step) and
-  // fileDraft (form step) live on different steps and can never overlap, so one flag covers
-  // all three. A ref also cannot get stuck the way a component-local flag would: the
+  // is batch-submit-only). readColumns and startDocumentRun (upload step, one per run
+  // kind), startImport (mapping step) and fileDraft (form step) live on different steps or
+  // different run kinds and can never overlap, so one flag covers all four. A ref also
+  // cannot get stuck the way a component-local flag would: the
   // wizard components never observe the rejection that would clear it, since errors come
   // back through ctx.importError / ctx.filingError.
   const reqInFlight = useRef(false)
@@ -637,9 +639,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // Appends onto the run's file selection (BULK-01-03) via lib/importRun's addFiles —
   // capped at MAX_RUN_FILES, never silently truncating. `filesRefusal` carries the
-  // refusal text CreateUpload renders verbatim whenever the cap drops any incoming file;
-  // a rejected-extension file still lands in `pickedFiles` and the per-file note
-  // explains why (that gate is canReadColumnsAll, not selection).
+  // refusal text CreateUpload renders verbatim whenever addFiles drops an incoming file —
+  // past the cap (capRefusal) or against the run's committed kind (kindRefusal). A
+  // rejected-extension file still lands in `pickedFiles` and the per-file note explains
+  // why (that gate is canReadColumnsAll, not selection).
   function addPickedFiles(files: File[]) {
     const result = addFiles(pickedFiles, files)
     setPickedFiles(result.files)
@@ -648,7 +651,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // Removes one entry by id, preserving the order of the rest (lib/importRun's
   // removeFile). An unknown id is a no-op. Also clears `filesRefusal`: that message
-  // names files that were NOT added past the five-file cap, and removing an
+  // names files that were NOT added, and removing an
   // already-added file can never be what it is still talking about — left uncleared, it
   // used to linger on screen after the very removal that (partially) makes room for more
   // (BULK-01-03 QA gap, dfc3a19).

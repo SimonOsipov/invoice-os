@@ -1,6 +1,7 @@
-// SPA import API module (M4-08-02, task-171) — previewImport + createImport over a
-// single private XHR transport, the two-phase upload progress contract, and the
-// report normalization D1 requires. Pinned by importApi.test.ts (IMPAPI-01..20).
+// SPA import API module (M4-08-02, task-171) — previewImport, createImport and
+// uploadSourceDocument over a single private XHR transport, the two-phase upload progress
+// contract, and the report normalization D1 requires. Pinned by importApi.test.ts
+// (IMPAPI-01..20).
 //
 // Types mirror the wire shapes emitted by internal/importer/handlers.go's
 // importResponse (:63-80) / previewResponse (:96-109), internal/importer/store.go's
@@ -35,10 +36,11 @@
 // previewImport/createImport cannot use apiFetch (D2): apiFetch JSON-serializes any
 // body and always sets Content-Type: application/json, with no FormData branch — a
 // FormData body would be sent as "{}" and the server 400s "invalid multipart form".
-// Both multipart calls go through ONE private XHR transport instead (not exported here
-// — xhrJson), so there is exactly one non-apiFetch code path rather than two that could
-// silently disagree on auth/error shaping (IMPAPI-20 is the anti-fork guard, mirroring
-// PRV-16's role on the backend).
+// Every multipart call goes through ONE private XHR transport instead (not exported here
+// — xhrJson): previewImport, createImport and uploadSourceDocument (EXTR-09), so there is
+// exactly one non-apiFetch code path rather than several that could silently disagree on
+// auth/error shaping (IMPAPI-20 is the anti-fork guard, mirroring PRV-16's role on the
+// backend).
 //
 // makeImportAuth(session, onSignOut, onSuspended) mirrors makeAuthedFetch with the same
 // three parameters (D3, AUDIT-10-07): PlatformCtx (src/types.ts:239) exposes only

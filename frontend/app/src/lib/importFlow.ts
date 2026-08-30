@@ -155,6 +155,10 @@ export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 // entity clause here or to anything upstream of `Read columns`; that is precisely the
 // belt-and-braces copy the paragraph above describes, and re-adding it re-closes the front
 // door on in-house workspaces.
+//
+// This rule is the SPREADSHEET path's. On a document run the same button is "Extract
+// invoices" and IS the commit, so it does carry an entity clause — CreateUpload.tsx's
+// `readReady`.
 export function canReadColumns(file: File | null): boolean {
   return file !== null && hasImportableExtension(file.name) && file.size <= MAX_UPLOAD_BYTES
 }

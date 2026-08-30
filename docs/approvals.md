@@ -797,9 +797,10 @@ approver could act on right now — a notify step is rendered nowhere on that pa
 
 All three sentences rest on a repo-wide **absence**, and an absence is not something a test can pin.
 Verified at the time of writing: no mail, SMS or push dependency in any `package.json`; the AWS
-SDK is `service/s3` only, with no SES, SNS or Pinpoint; and of seven River job kinds exactly two
-run in production — `submission_submit` and `submission_poll`, both registered in
-`internal/submission/worker.go`. Nothing sends.
+SDK is `service/s3` only, with no SES, SNS or Pinpoint; and of nine declared River job kinds
+exactly three run in production — `submission_submit` and `submission_poll`
+(`internal/submission/worker.go`) and `extraction_extract` (`internal/extraction/worker.go`,
+enqueued by `POST /v1/documents` since EXTR-09). None of the three sends anything.
 
 **No guard was built for this, deliberately.** A test asserting "none of these transport names
 appear" passes on any transport not in its list, so its green would be indistinguishable from a

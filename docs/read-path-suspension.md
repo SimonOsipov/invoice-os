@@ -330,6 +330,7 @@ is the one exception and its row says so.
 | `tools/backfill-source-rows` (`internal/importer/backfill.go`) | operator CLI; it carries a job tenant |
 | `tools/revalidate-invoices` (`internal/invoice/revalidate.go`) | operator CLI; same |
 | the submission and poll workers (`internal/submission`) | River jobs; the job row carries the tenant |
+| the extraction worker (`internal/extraction`) | River job; the job's own args carry the tenant, and its `document.read` audit rows are attributed to the non-uuid subject `extraction-worker`, which can hold no membership. Live in production since EXTR-09 wired `POST /v1/documents` to `EnqueueExtraction` |
 | the reconciliation sweep (`internal/reconciliation`) | scheduled worker; it also enumerates tenants as `invoice_tenant_reader` with no GUC set |
 | the demo approval-policy seeder (`internal/demopolicy`) | boot-time, before the first request is served |
 | the demo source-document seeder (`internal/demodocs`) | boot-time; its admin lookup carries none. **It is the exception**: `seedTenant` synthesizes an identity for the admin it found and writes through the gated seam, so the gate does apply to it. `tenantAdmin` therefore selects `AND status = 'active'` — without it a suspended admin sorting first would cost that tenant every source document, silently, since `cmd/invoice/main.go` logs a seeder failure and keeps serving (D-11) |

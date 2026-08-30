@@ -846,9 +846,9 @@ describe('canReadColumns — entity contract did not move (BULK-03-11, BULK-01-0
 
 // SIZE-1..2 (EXTR-09-05, task-772, Mode A) — RED specs for the client-side size gate.
 //
-// SIZE-1 fails today on its assertion, not on a missing export: importFlow.ts's Stage-2.5
-// stub exports MAX_UPLOAD_BYTES and canReadColumns does not consult it, so an over-cap
-// file still opens the read gate. SIZE-2 is GREEN at birth by construction — the stub
+// SIZE-1 was authored RED on its assertion, not on a missing export: importFlow.ts's
+// Stage-2.5 stub exported MAX_UPLOAD_BYTES and canReadColumns did not consult it, so an
+// over-cap file still opened the read gate. SIZE-2 was GREEN at birth by construction — the stub
 // carries the real value, because a deliberately-wrong constant would make every boundary
 // in SIZE-1 (and both Go agreement tests) meaningless rather than red.
 function sizedFile(name: string, size: number): File {
@@ -890,8 +890,8 @@ describe('canReadColumns — the client-side size gate (SIZE-1..2, EXTR-09-05)',
 
 // SIZE-5b (EXTR-09-05, task-772, Mode A) — the "exactly one owner" half of AC-2/AC-5.
 // SIZE-5a (importRun.test.ts) pins what the sentence SAYS; this pins who may say it.
-// RED today: CreateUpload.tsx still spells its own per-file note inline, so the scan
-// returns only lib/importRun.ts.
+// Authored RED against a CreateUpload.tsx that spelled its own per-file note inline, so
+// the scan returned only lib/importRun.ts.
 describe('the size-refusal copy has exactly one owner (SIZE-5b, EXTR-09-05)', () => {
   const srcRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -1010,10 +1010,10 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
 // ============================================================================
 // STEPS-D1..D9 (EXTR-09-06, task-773, Mode A) — RED specs for the three-strip step model.
 // ============================================================================
-// RED today, every one on an assertion: WIZARD_STEPS is still the one-item typed strip,
-// ENTER_STEPS is an empty Stage-2.5 stub, 'documents' is not a CreateStep member yet
+// Authored RED, every one on an assertion: WIZARD_STEPS was the one-item typed strip,
+// ENTER_STEPS an empty Stage-2.5 stub, 'documents' not yet a CreateStep member
 // (DOCUMENTS_STEP casts it, as this file cast 'review' before INVCR-01-04), and
-// wizardHeader accepts the run kind but ignores it.
+// wizardHeader accepted the run kind but ignored it.
 //
 // The strips are SPELLED here, never read back off the implementation: a spec that
 // recomputed its expectation through the code under test would agree with any value the

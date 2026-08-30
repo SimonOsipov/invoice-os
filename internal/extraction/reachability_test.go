@@ -306,7 +306,8 @@ const (
 // InsertOpts, so an Insert prefix would red-fail the shipped worker.
 //
 // rxTypeNames' nested-func-signature descent is mutation-proven, not needle-proven. JobsHandler
-// is the package's one exported func taking a func, and its signature names no banned type.
+// and UploadHandler are the package's exported funcs taking funcs, and neither signature names a
+// banned type.
 func TestExtractionExposesExactlyOneEnqueueSeam(t *testing.T) {
 	files := rxExtractionFiles(t)
 

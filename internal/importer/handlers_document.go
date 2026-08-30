@@ -8,6 +8,7 @@ package importer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -16,15 +17,19 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
+// maxCreateDocumentBodyBytes bounds the request body BEFORE it is decoded (CodeRabbit,
+// CWE-400): the body carries only entity_id and document_id, two uuids.
+const maxCreateDocumentBodyBytes = 4 * 1024
+
 // createDocumentRequest is the POST /v1/imports/document JSON body.
 type createDocumentRequest struct {
 	EntityID   string `json:"entity_id"`
 	DocumentID string `json:"document_id"`
 }
 
-// CreateDocumentHandler returns POST /v1/imports/document: identity-first-401 -> json.Decode
-// (400) -> entity_id/document_id presence+uuid guards (400) -> imp -> statusForErr -> 201
-// importResponse (format "document", delimiter/encoding null).
+// CreateDocumentHandler returns POST /v1/imports/document: identity-first-401 -> body cap
+// (413) -> json.Decode (400) -> entity_id/document_id presence+uuid guards (400) -> imp ->
+// statusForErr -> 201 importResponse (format "document", delimiter/encoding null).
 func CreateDocumentHandler(
 	imp func(ctx context.Context, entityID, documentID string) (BatchResult, error),
 	log *slog.Logger,
@@ -38,8 +43,17 @@ func CreateDocumentHandler(
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxCreateDocumentBodyBytes)
 		var req createDocumentRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			// The 413 check MUST precede the generic 400: MaxBytesReader surfaces the cap
+			// as a *http.MaxBytesError from Decode, otherwise indistinguishable from
+			// malformed JSON (internal/validation/handlers.go:217-225).
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

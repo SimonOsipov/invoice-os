@@ -13,15 +13,27 @@
 // field shape, the decode-error check at handlers_document.go's json.Decode call is structurally
 // subsumed by the entity_id/document_id blank guards for every reachable malformed input -- not a
 // defect, just an unfalsifiable-by-black-box-input branch.
+//
+// Also covers the CodeRabbit body-cap fix (maxCreateDocumentBodyBytes, CWE-400): an
+// over-cap body is 413 not 400, identity still wins 401 over an over-cap body, and a
+// normal body still succeeds under the cap.
 package importer
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+// docJSONBodyOversized pads a well-formed body past maxCreateDocumentBodyBytes with an
+// ignored extra field, so it fails ONLY the size cap -- never the decode or the field guards.
+func docJSONBodyOversized(entityID, documentID string) string {
+	return fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"padding":%q}`,
+		entityID, documentID, strings.Repeat("x", maxCreateDocumentBodyBytes))
+}
 
 // --- Identity-first ordering (AC #1: "before the body is read") -------------------------------
 
@@ -103,5 +115,53 @@ func TestCreateDocumentHandler_QuarantineResultStillReturns201(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "blank invoice number") {
 		t.Errorf("quarantine error message missing from body: %s", raw)
+	}
+}
+
+// --- Body cap (CodeRabbit, CWE-400) ------------------------------------------------------------
+
+// TestCreateDocumentHandler_OversizedBodyReturns413ImpNeverCalled proves the body cap fires as
+// a 413, distinct from the generic 400 a malformed body gets.
+func TestCreateDocumentHandler_OversizedBodyReturns413ImpNeverCalled(t *testing.T) {
+	id := testIdentity()
+	spy := &docImpSpy{}
+	rec, raw, _ := doImportDocumentPost(t, spy.fn(), &id, docJSONBodyOversized(uuid.NewString(), uuid.NewString()))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 -- raw body %s", rec.Code, raw)
+	}
+	if len(spy.calls) != 0 {
+		t.Errorf("imp called %d time(s), want 0", len(spy.calls))
+	}
+}
+
+// TestCreateDocumentHandler_NoIdentityWithOversizedBodyStill401 proves identity-first ordering
+// holds against an oversized body too: the 401 must fire before the cap is even checked, so a
+// stranger sending a huge body still gets 401, not 413.
+func TestCreateDocumentHandler_NoIdentityWithOversizedBodyStill401(t *testing.T) {
+	spy := &docImpSpy{}
+	rec, raw, _ := doImportDocumentPost(t, spy.fn(), nil, docJSONBodyOversized(uuid.NewString(), uuid.NewString()))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 -- raw body %s", rec.Code, raw)
+	}
+	if len(spy.calls) != 0 {
+		t.Errorf("imp called %d time(s), want 0", len(spy.calls))
+	}
+}
+
+// TestCreateDocumentHandler_WellFormedBodyUnderCapReturns201 guards against the cap being set
+// absurdly low: a normal two-uuid body must still succeed.
+func TestCreateDocumentHandler_WellFormedBodyUnderCapReturns201(t *testing.T) {
+	id := testIdentity()
+	spy := &docImpSpy{res: BatchResult{
+		ID: "doc-batch-cap", Status: "completed",
+		RowsTotal: 1, RowsValid: 1, ReadyInvoices: 1,
+		Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{},
+	}}
+	rec, raw, _ := doImportDocumentPost(t, spy.fn(), &id, docJSONBody(uuid.NewString(), uuid.NewString()))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("status = %d, want 201 -- raw body %s", rec.Code, raw)
+	}
+	if len(spy.calls) != 1 {
+		t.Errorf("imp called %d time(s), want 1", len(spy.calls))
 	}
 }

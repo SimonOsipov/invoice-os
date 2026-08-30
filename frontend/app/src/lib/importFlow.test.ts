@@ -41,6 +41,7 @@ import { canSubmitMapping } from './mapping'
 import {
   IMPORT_STAGE_OF,
   IMPORT_STEPS,
+  MAX_UPLOAD_BYTES,
   STAGE_OF,
   canReadColumns,
   canStartImport,
@@ -804,17 +805,93 @@ describe('canReadColumns — entity contract did not move (BULK-03-11, BULK-01-0
   })
 })
 
-// FLOW-DOC-01 (DOC-01-07, task-355) — AC-6 is a "do not add" criterion, so this is a
-// regression guard, GREEN from the moment it is authored: no size gate exists anywhere in
-// frontend/app/src today and none may be introduced. The 15 MB cap is the server's, and
-// the 413 is the server's to give — a client-side gate would refuse files the server
-// would have accepted and would need its own copy of a limit it cannot see.
-describe('canReadColumns — no client-side size gate (FLOW-DOC-01)', () => {
-  it('FLOW-DOC-01: a 20 MB csv still opens the read gate — the cap stays server-side', () => {
-    const big = new File([], 'twenty-megabytes.csv')
-    Object.defineProperty(big, 'size', { value: 20 * 1024 * 1024 })
-    expect(big.size).toBe(20 * 1024 * 1024)
-    expect(canReadColumns(big)).toBe(true)
+// ============================================================================
+// FLOW-DOC-01 IS RETIRED — EXTR-09 (EXTR-09-05, task-772), Core AC #4.
+// ============================================================================
+// The spec that stood here (DOC-01-07, task-355, AC-6) asserted that a 20 MB csv still
+// opens the read gate, and its comment read "no size gate exists anywhere in
+// frontend/app/src today and none may be introduced". EXTR-09 Core AC #4 REVERSES that
+// decision deliberately: the picker now accepts five document types the extractor reads
+// byte-by-byte, so a file the server will 413 must be refused where the user can still
+// see and remove it, not after a 15 MiB upload.
+//
+// The guarantee FLOW-DOC-01 actually protected — that no client copy of the limit can
+// drift away from the server's — is NOT dropped. It moves to
+// TestMaxUploadBytes_MatchesTheBrowserConstant and
+// TestMaxUploadBytes_MatchesTheColumnCheck (internal/importer/handlers_upload_once_test.go),
+// which read MAX_UPLOAD_BYTES out of importFlow.ts, maxUploadBytes out of handlers.go and
+// documents.size_bytes' CHECK ceiling out of the migration, and fail loudly if any of the
+// three regexes matches nothing. SIZE-1/SIZE-2 below are what replace the assertion.
+//
+// Nothing here removes the SERVER's 413: the client gate is an addition, not a substitute.
+
+// SIZE-1..2 (EXTR-09-05, task-772, Mode A) — RED specs for the client-side size gate.
+//
+// SIZE-1 fails today on its assertion, not on a missing export: importFlow.ts's Stage-2.5
+// stub exports MAX_UPLOAD_BYTES and canReadColumns does not consult it, so an over-cap
+// file still opens the read gate. SIZE-2 is GREEN at birth by construction — the stub
+// carries the real value, because a deliberately-wrong constant would make every boundary
+// in SIZE-1 (and both Go agreement tests) meaningless rather than red.
+function sizedFile(name: string, size: number): File {
+  const f = new File([], name)
+  // File([]) is always 0 bytes; the property override is how this suite has always made a
+  // size assertion possible without allocating 15 MiB (the retired FLOW-DOC-01 did the
+  // same). Asserted below before it is relied on.
+  Object.defineProperty(f, 'size', { value: size })
+  return f
+}
+
+describe('canReadColumns — the client-side size gate (SIZE-1..2, EXTR-09-05)', () => {
+  // AC-1. Falsification: a `<` where the spec says `<=` (which would refuse a file of
+  // exactly the cap the server accepts), a decimal-MB cap, or a gate that replaces the
+  // extension rule instead of ANDing with it.
+  it('SIZE-1: the boundary is exact — at the cap accepted, one byte over refused', () => {
+    // The override must actually take, or every assertion below reads size 0 and passes
+    // vacuously against any implementation.
+    expect(sizedFile('probe.csv', MAX_UPLOAD_BYTES + 1).size, 'File.size override did not take').toBe(MAX_UPLOAD_BYTES + 1)
+
+    expect(canReadColumns(sizedFile('under.csv', MAX_UPLOAD_BYTES - 1)), 'one byte under the cap').toBe(true)
+    expect(canReadColumns(sizedFile('exact.csv', MAX_UPLOAD_BYTES)), 'exactly the cap').toBe(true)
+    expect(canReadColumns(sizedFile('over.csv', MAX_UPLOAD_BYTES + 1)), 'one byte over the cap').toBe(false)
+    expect(canReadColumns(sizedFile('way-over.xlsx', 40 * 1024 * 1024)), 'far over the cap').toBe(false)
+
+    // The size gate is ANDed onto the extension rule, never a replacement for it: a
+    // small file of an unreadable type is still refused, and an empty csv is still fine.
+    expect(canReadColumns(sizedFile('archive.zip', 10))).toBe(false)
+    expect(canReadColumns(sizedFile('empty.csv', 0))).toBe(true)
+  })
+
+  // AC-1's second half. Falsification: 15_000_000, or 15 * 1000 * 1000.
+  it('SIZE-2: the cap is binary MiB, matching the server, never 15,000,000 decimal', () => {
+    expect(MAX_UPLOAD_BYTES).toBe(15728640)
+    expect(MAX_UPLOAD_BYTES).toBe(15 * 1024 * 1024)
+    expect(MAX_UPLOAD_BYTES).not.toBe(15_000_000)
+  })
+})
+
+// SIZE-5b (EXTR-09-05, task-772, Mode A) — the "exactly one owner" half of AC-2/AC-5.
+// SIZE-5a (importRun.test.ts) pins what the sentence SAYS; this pins who may say it.
+// RED today: CreateUpload.tsx still spells its own per-file note inline, so the scan
+// returns only lib/importRun.ts.
+describe('the size-refusal copy has exactly one owner (SIZE-5b, EXTR-09-05)', () => {
+  const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+
+  it('SIZE-5b: oversizeNote is defined in lib/ and rendered by CreateUpload — nobody re-words it', () => {
+    // Needle built from parts, same idiom as QA-MOCK-2/DEL-1 below: a literal spelling
+    // here would put THIS file in every hit set. Spec files are excluded outright — they
+    // legitimately name the function, and they are not the copy's owner either way.
+    const needle = 'oversize' + 'Note'
+    const isSpec = (relPath: string) => /\.test\.tsx?$/.test(relPath)
+
+    // Population floor: prove the walker reached a real subtree before any set equality
+    // below is trusted. Every module under src has at least one `export`.
+    expect(scanForIdentifier(srcRoot, 'export').length, 'population floor: the scan must reach the real src tree').toBeGreaterThan(50)
+    // Control needle: capRefusal is oversizeNote's shipped sibling and is known to live in
+    // exactly these two kinds of place, so a scan that found nothing would fail HERE.
+    expect(scanForIdentifier(srcRoot, 'capRefusal').filter((p) => !isSpec(p)).length, 'control needle: capRefusal must be found').toBeGreaterThan(0)
+
+    const hits = scanForIdentifier(srcRoot, needle).filter((p) => !isSpec(p))
+    expect(hits.sort()).toEqual([path.join('components', 'CreateUpload.tsx'), path.join('lib', 'importRun.ts')])
   })
 })
 

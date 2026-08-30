@@ -67,6 +67,15 @@ export function capRefusal(dropped: number): string {
   return `A run accepts at most ${MAX_RUN_FILES} files — ${dropped} ${noun} ${verb} not added.`
 }
 
+// STAGE-2.5 STUB (EXTR-09-05, task-772, test-first). Sole copy owner of the per-file
+// size refusal, beside capRefusal — CreateUpload renders what this returns verbatim.
+// Returns '' for now so SIZE-5 fails on its assertions rather than on a missing export;
+// the real string names the file, the file's own size and the MAX_UPLOAD_BYTES cap, both
+// in human units.
+export function oversizeNote(_file: File): string {
+  return ''
+}
+
 // Thin delegator (AC #4): `true` iff `files` is non-empty AND canReadColumns (imported
 // unmodified from ./importFlow) is true for every file — one bad file blocks the whole
 // selection's read gate. Does not re-implement the extension check or add an entity

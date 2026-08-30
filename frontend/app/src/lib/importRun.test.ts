@@ -37,6 +37,7 @@ import {
   capRefusal,
   markRunFailed,
   markRunRouted,
+  oversizeNote,
   removeFile,
   routeAfterRun,
   runBatchIds,
@@ -50,6 +51,10 @@ import type { ImportPreview, ImportReport } from './importApi'
 // Read-only cross-module import, same licence as filesStrip below: BULK-DOC-01's claim is
 // that document ids do NOT follow layout grouping, which needs the real groupByLayout as
 // the counterweight rather than a hand-rolled restatement of it.
+// Read-only cross-module import: the size gate lives on canReadColumns (importFlow.ts),
+// which canReadColumnsAll already delegates to per file — SIZE-3/SIZE-4 read it directly
+// rather than restating the boundary.
+import { MAX_UPLOAD_BYTES, canReadColumns } from './importFlow'
 import { groupByLayout } from './mappingGroups'
 // Read-only cross-module import: filesStrip is reviewBatch.ts's, not this module's,
 // but the ONE describe block below that uses it exists to pin the actual App.tsx
@@ -292,6 +297,66 @@ describe('capRefusal — the copy names both numbers (QA Mode B)', () => {
     const msg = capRefusal(4)
     expect(msg).toContain(String(MAX_RUN_FILES))
     expect(msg).toContain('4')
+  })
+})
+
+// SIZE-3..5a (EXTR-09-05, task-772, Mode A) — the size gate as the SELECTION meets it.
+// RED today on assertions: canReadColumns does not consult MAX_UPLOAD_BYTES yet, and
+// oversizeNote's Stage-2.5 stub returns ''.
+function sizedFile(name: string, size: number): File {
+  const f = new File([], name)
+  Object.defineProperty(f, 'size', { value: size })
+  return f
+}
+
+const overCap = (name: string) => sizedFile(name, MAX_UPLOAD_BYTES + 1)
+
+describe('the client-side size gate (SIZE-3..5a, EXTR-09-05)', () => {
+  // AC-2. Falsification: an impl that filters over-cap files out of addFiles, so the user
+  // sees a file vanish with no reason given.
+  it('SIZE-3: an over-cap file is refused but stays listed — never silently dropped', () => {
+    // .csv, not .pdf: an unreadable EXTENSION already shuts the read gate, so a .pdf here
+    // would pass this spec today and prove nothing about the size gate.
+    const result = addFiles([], [overCap('huge.csv')])
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0].file.name).toBe('huge.csv')
+    // `refusal` is the COUNT-cap copy (capRefusal) and nothing else; the size refusal is
+    // per-file and rendered from oversizeNote.
+    expect(result.refusal).toBeNull()
+    // Control: the same name UNDER the cap opens the gate, so the `false` below is the
+    // size and nothing else.
+    expect(canReadColumns(sizedFile('huge.csv', 1)), 'control: an under-cap .csv opens the gate').toBe(true)
+    // "Refused" = its read gate is shut, which is what marks it over-cap.
+    expect(canReadColumns(result.files[0].file)).toBe(false)
+  })
+
+  // AC-3. The primary button reads canReadColumnsAll (CreateUpload.tsx), so this IS the
+  // disabled-button claim at the node layer. Falsification: an OR across the selection.
+  it('SIZE-4: one over-cap file closes the read gate for the whole selection', () => {
+    const good: PickedFile = { id: 'ok', file: new File([], 'a.csv'), documentId: null }
+    const big: PickedFile = { id: 'big', file: overCap('huge.csv'), documentId: null }
+    // Positive control: the valid file alone opens the gate, so the two `false`s below
+    // are the size gate closing it and not some unrelated refusal.
+    expect(canReadColumnsAll([good]), 'control: a valid file alone opens the gate').toBe(true)
+    expect(canReadColumnsAll([good, big])).toBe(false)
+    expect(canReadColumnsAll([big])).toBe(false)
+  })
+
+  // AC-5 / story section 5. Wording is deliberately not pinned; what is pinned is that the
+  // sentence carries the file's name, a HUMAN size (not a raw byte count) and the cap, and
+  // that it varies with the file's own size rather than only naming the limit.
+  it('SIZE-5a: the refusal names the file, its own size and the cap, in human units', () => {
+    const note = oversizeNote(sizedFile('scan-of-a-long-invoice.pdf', 40 * 1024 * 1024))
+    expect(note, 'expected a sentence naming the file, its size and the 15 MiB cap').toContain('scan-of-a-long-invoice.pdf')
+    expect(note, 'expected a human unit, e.g. MB').toMatch(/MB/i)
+    expect(note, 'expected the cap named as 15, not as a raw byte count').toContain('15')
+    expect(note, 'a raw byte count is not a human size').not.toContain(String(MAX_UPLOAD_BYTES))
+
+    // The file's OWN size is in the copy, not only the cap: two different oversize files
+    // must not produce the same sentence.
+    const sixteen = oversizeNote(sizedFile('a.pdf', 16 * 1024 * 1024))
+    const forty = oversizeNote(sizedFile('a.pdf', 40 * 1024 * 1024))
+    expect(sixteen, 'the note must vary with the file size, not only name the cap').not.toBe(forty)
   })
 })
 

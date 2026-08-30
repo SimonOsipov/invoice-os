@@ -117,6 +117,14 @@ export function hasImportableExtension(name: string): boolean {
   return classifyPickedFile(name, '') === 'spreadsheet'
 }
 
+// STAGE-2.5 STUB (EXTR-09-05, task-772, test-first). Exported so SIZE-1/SIZE-2 compile;
+// canReadColumns below does NOT consult it yet — Stage 3 owns the gate itself. Binary
+// MiB, the same number as internal/importer's maxUploadBytes and documents.size_bytes'
+// CHECK ceiling; TestMaxUploadBytes_MatchesTheBrowserConstant /
+// TestMaxUploadBytes_MatchesTheColumnCheck (internal/importer/handlers_upload_once_test.go)
+// are what keep the three equal.
+export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
 // = file !== null && hasImportableExtension(file.name). One predicate is the sole gate —
 // the extension rule is not also duplicated in the setter.
 //

@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { WIZARD_STEPS } from '../data'
+import { ENTER_STEPS, WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
 import {
   IMPORT_STAGE_OF,
@@ -53,10 +53,15 @@ import {
   previewColumns,
   wizardHeader,
 } from './importFlow'
-import type { PickedKind } from './importFlow'
+import type { PickedKind, WizardPath } from './importFlow'
 import type { Entity } from './portfolio'
 import type { ImportPreview } from './importApi'
 import type { CreateStep, Mapping } from '../types'
+
+// EXTR-09-06: 'documents' joins CreateStep in Stage 3, not here — the cast keeps
+// STEPS-D3's key-set assertion genuinely red instead of green at birth. Same precedent as
+// 'review', which this file cast until INVCR-01-04 widened the union. Stage 3 drops it.
+const DOCUMENTS_STEP = 'documents' as unknown as CreateStep
 
 function mkPreview(overrides: Partial<ImportPreview> = {}): ImportPreview {
   return {
@@ -205,11 +210,11 @@ describe('columnLetter (FLOW-10)', () => {
 })
 
 describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
-  // [closes-d-04a-typed-review-residual]: WIZARD_STEPS is down to the single 'Enter'
-  // step; the phantom 'Review' entry D-04a flagged (not fixed) is retired.
-  it('routes the single-document steps to WIZARD_STEPS at their existing stage index', () => {
-    expect(wizardHeader('form')).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
-    expect(WIZARD_STEPS.length).toBe(1)
+  // EXTR-09-06: WIZARD_STEPS is the DOCUMENT strip now (Import · Review); manual entry's
+  // one-item strip moved to ENTER_STEPS, so the typed assertion follows it there.
+  it('routes the typed step to ENTER_STEPS at its existing stage index', () => {
+    expect(wizardHeader('form', 'typed')).toEqual({ steps: ENTER_STEPS, stageIndex: 0 })
+    expect(WIZARD_STEPS.length).toBe(2)
   })
 
   // FLOW-12 absorbs FLOW-13's one surviving assertion (bare 'upload' -> IMPORT_STEPS@0)
@@ -249,17 +254,17 @@ describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
     })
   })
 
-  // AC-2 regression guard (QA addition, not in the architect's FLOW map): pins the
-  // 1-arg SIGNATURE itself, not just return values. Verified against a local stub both
-  // directions before landing this: a 2-arg call against a 1-arg fn is a real TS2554
-  // the directive suppresses; a bare 1-arg call needs no directive. If wizardHeader
-  // ever regresses to 2/3-arg, @ts-expect-error goes unused (TS2578) and typecheck
-  // fails on THIS line, not silently elsewhere.
-  it('AC-2: wizardHeader is 1-arg only under noUnusedParameters — a stale 2-arg call does not compile', () => {
-    // @ts-expect-error — regression guard: the story's original AC#2 wording specified a
-    // 2-arg signature, which does not compile once uploadFile/importFile are dropped (D-01a).
-    const twoArg = wizardHeader('upload', null)
+  // EXTR-09-06 turns this guard around: wizardHeader takes the run kind as a second
+  // argument now, so a 1-arg regression makes the two-arg call below a TS2554 and
+  // typecheck fails on THIS line. The directive moves onto a THIRD argument, which is
+  // still refused; if a third parameter is ever added it goes unused (TS2578) and fails
+  // here too.
+  it('AC-2: wizardHeader takes the step and the run kind — two arguments, never three', () => {
+    const twoArg = wizardHeader('upload', 'import')
     expect(twoArg).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+    // @ts-expect-error — a third argument does not compile.
+    const threeArg = wizardHeader('upload', 'import', null)
+    expect(threeArg).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
   })
 })
 
@@ -291,10 +296,10 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
     ])
   })
 
-  // [closes-d-04a-typed-review-residual]: WIZARD_STEPS collapses to the single 'Enter'
-  // entry; D-04a's phantom 'Review' step is retired, not reasserted.
+  // EXTR-09-06: the typed strip moved to ENTER_STEPS; WIZARD_STEPS is the document strip
+  // now, whose literal STEPS-D1 owns.
   it('STEPS-2: typed strip is Enter', () => {
-    expect(WIZARD_STEPS).toEqual([['1', 'Enter']])
+    expect(ENTER_STEPS).toEqual([['1', 'Enter']])
   })
 
   // AC-2. STAGE_OF must stay a TOTAL Record<CreateStep, number>, not become
@@ -302,9 +307,11 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
   // leaves the runtime key as 'report', both fail this. RED before the
   // rename: form was 2 (not 0) and the runtime key was 'report'.
   it('STEPS-3: STAGE_OF is total, renamed to review, and form resolves to 0', () => {
-    expect(STAGE_OF).toEqual({ upload: 0, mapping: 1, form: 0, review: 2 })
+    // EXTR-09-06: 'documents' joins at stage 0. `review` still mirrors IMPORT_STAGE_OF
+    // (QA-MIRROR-1 below), never the document strip's own index 1.
+    expect(STAGE_OF).toEqual({ upload: 0, mapping: 1, form: 0, review: 2, documents: 0 })
     expect(Object.keys(STAGE_OF)).not.toContain('report')
-    expect(Object.keys(STAGE_OF)).toHaveLength(4)
+    expect(Object.keys(STAGE_OF)).toHaveLength(5)
   })
 
   // AC-2. RED before the rename: IMPORT_STAGE_OF's third key was 'report'.
@@ -326,7 +333,8 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
   // AC-3. RED before the rename: STAGE_OF.form was 2 (the old 5-item index),
   // so wizardHeader('form') returned stageIndex 2, not 0.
   it('STEPS-5: typed path lights Enter at index 0', () => {
-    expect(wizardHeader('form')).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
+    // EXTR-09-06: the strip is ENTER_STEPS now, for every run kind.
+    expect(wizardHeader('form', 'typed')).toEqual({ steps: ENTER_STEPS, stageIndex: 0 })
   })
 
   // AC-4. Falsification: an impl that renames the type member but leaves any
@@ -336,13 +344,16 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
   // not twice.
   // [closes-d-04a-typed-review-residual]: WIZARD_STEPS no longer carries a 'Review'
   // label, so only IMPORT_STEPS' own entry remains.
-  it('STEPS-6: no removed stage name survives in either table', () => {
-    const labels = [...IMPORT_STEPS, ...WIZARD_STEPS].map(([, label]) => label)
+  it('STEPS-6: no removed stage name survives in any table', () => {
+    // EXTR-09-06: three strips now, and 'Review' is the last stage on TWO of them —
+    // the import report and the document run's own review surface.
+    const labels = [...IMPORT_STEPS, ...WIZARD_STEPS, ...ENTER_STEPS].map(([, label]) => label)
+    expect(labels.length, 'vacuity floor: the three strips are not all empty').toBeGreaterThan(0)
     expect(labels).not.toContain('Build')
     expect(labels).not.toContain('Validate')
     expect(labels).not.toContain('Approve')
     expect(labels).not.toContain('Report')
-    expect(labels.filter((l) => l === 'Review')).toHaveLength(1)
+    expect(labels.filter((l) => l === 'Review')).toHaveLength(2)
   })
 
   // AC-6. The ONLY runtime proof that App.tsx's setCreateStep(...) call in
@@ -408,10 +419,10 @@ describe('STAGE_OF / IMPORT_STAGE_OF structural invariants (QA, task-280)', () =
     expect(IMPORT_STEPS.length).toBe(maxReachable + 1)
   })
 
-  // [closes-d-04a-typed-review-residual]: same ceiling shape, now valid for WIZARD_STEPS
-  // too — its lone reachable index is STAGE_OF.form.
-  it('QA-NO-PHANTOM-TYPED-STEP: WIZARD_STEPS carries no entry past STAGE_OF.form’s reachable ceiling', () => {
-    expect(WIZARD_STEPS.length).toBe(STAGE_OF.form + 1)
+  // EXTR-09-06: the typed strip is ENTER_STEPS now; STAGE_OF.form is still its only
+  // reachable index. WIZARD_STEPS' own ceiling moves to STEPS-D7.
+  it('QA-NO-PHANTOM-TYPED-STEP: ENTER_STEPS carries no entry past STAGE_OF.form’s reachable ceiling', () => {
+    expect(ENTER_STEPS.length).toBe(STAGE_OF.form + 1)
   })
 })
 
@@ -429,8 +440,8 @@ describe('STAGE_OF / IMPORT_STAGE_OF structural invariants (QA, task-280)', () =
 describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
   it("has no 'parsing' stage left in the runtime step tables", () => {
     expect(Object.keys(STAGE_OF)).not.toContain('parsing')
-    // 6 -> 4 in INVCR-01-03, which deleted two more members; STEP-1 below owns that count.
-    expect(Object.keys(STAGE_OF)).toHaveLength(4)
+    // 6 -> 4 in INVCR-01-03, 4 -> 5 in EXTR-09-06 ('documents'); STEP-1 below owns the count.
+    expect(Object.keys(STAGE_OF)).toHaveLength(5)
   })
 
   // STEP-1 (INVCR-01-03, task-279, Mode A — RED-first): 'validating'/'results' leave
@@ -440,10 +451,11 @@ describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
   // task-279 plan §5.6/§10. Genuinely RED at runtime today: STAGE_OF still carries both
   // keys (6 total), so this discriminates against an INCOMPLETE deletion, not a wrong
   // algorithm.
-  it("STEP-1: 'validating'/'results' leave the runtime step table, which stays a total 4-key Record", () => {
+  it("STEP-1: 'validating'/'results' leave the runtime step table, which stays a total Record", () => {
     expect(Object.keys(STAGE_OF)).not.toContain('validating')
     expect(Object.keys(STAGE_OF)).not.toContain('results')
-    expect(Object.keys(STAGE_OF)).toHaveLength(4)
+    // 4 -> 5 in EXTR-09-06: 'documents' joins the union.
+    expect(Object.keys(STAGE_OF)).toHaveLength(5)
   })
 })
 
@@ -453,10 +465,12 @@ describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
   // Literal expected values, not re-derived from STAGE_OF/IMPORT_STAGE_OF. The 1-arg
   // signature makes every step a pure function of createStep alone, so there is no
   // file-state axis left to hold constant across (FLOW-13's old reason is gone with it).
-  it('routes document-only steps to WIZARD_STEPS at their fixed index', () => {
+  it('routes typed-only steps to ENTER_STEPS at their fixed index', () => {
+    // EXTR-09-06: renamed with the strip. 'form' answers ENTER_STEPS for EVERY run kind.
     const expected: Array<[CreateStep, number]> = [['form', 0]]
     expected.forEach(([step, idx]) => {
-      expect(wizardHeader(step)).toEqual({ steps: WIZARD_STEPS, stageIndex: idx })
+      expect(wizardHeader(step, 'typed')).toEqual({ steps: ENTER_STEPS, stageIndex: idx })
+      expect(wizardHeader(step, 'document')).toEqual({ steps: ENTER_STEPS, stageIndex: idx })
     })
   })
 
@@ -479,13 +493,18 @@ describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
   // STAGE_OF but forgets DOCUMENT_ONLY_STEPS/IMPORT_STAGE_OF is caught by a set-equality
   // failure here, rather than only by silently falling through the `?? 0` fallback
   // (covered separately below).
-  it('QA-WH-KEYS: the document/import partition covers exactly the members STAGE_OF is compiler-required to have — no member left un-partitioned', () => {
-    const documentSet: CreateStep[] = ['form']
+  it('QA-WH-KEYS / STEPS-D6: the typed/import/document cover matches exactly the members STAGE_OF is compiler-required to have', () => {
+    // EXTR-09-06: three sets, and 'review' is deliberately in TWO of them — that overlap
+    // is the whole reason wizardHeader needs the run kind (AC-4). So this is a COVER, not
+    // a disjoint partition, and the old disjointness clause retires with the two-path model.
+    const typedSet: CreateStep[] = ['form']
     const importSet: CreateStep[] = ['upload', 'mapping', 'review']
-    expect([...documentSet, ...importSet].slice().sort()).toEqual(Object.keys(STAGE_OF).sort())
-    // Positive companion: the two sets are actually disjoint, so the equality above
-    // isn't hiding a step counted (or miscounted) on both sides.
-    expect(documentSet.filter((s) => (importSet as string[]).includes(s))).toEqual([])
+    const documentSet: CreateStep[] = [DOCUMENTS_STEP, 'review']
+    const cover = [...new Set([...typedSet, ...importSet, ...documentSet])].sort()
+    // Both directions, plus a floor so an emptied STAGE_OF could not satisfy this vacuously.
+    expect(cover).toEqual(Object.keys(STAGE_OF).sort())
+    expect(cover.length).toBe(5)
+    Object.keys(STAGE_OF).forEach((k) => expect(cover, k).toContain(k))
   })
 
   // QA (Stage 4, task-277): none of the 6 real CreateStep members exercises the `?? 0`
@@ -985,5 +1004,171 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
     // '.csv.bak' is not a csv: hasImportableExtension's last-segment rule (FLOW-05) must
     // survive the replacement, not be loosened into a substring match.
     expect(classifyPickedFile('ledger.csv.bak', 'application/octet-stream')).toBeNull()
+  })
+})
+
+// ============================================================================
+// STEPS-D1..D9 (EXTR-09-06, task-773, Mode A) — RED specs for the three-strip step model.
+// ============================================================================
+// RED today, every one on an assertion: WIZARD_STEPS is still the one-item typed strip,
+// ENTER_STEPS is an empty Stage-2.5 stub, 'documents' is not a CreateStep member yet
+// (DOCUMENTS_STEP casts it, as this file cast 'review' before INVCR-01-04), and
+// wizardHeader accepts the run kind but ignores it.
+//
+// The strips are SPELLED here, never read back off the implementation: a spec that
+// recomputed its expectation through the code under test would agree with any value the
+// code happened to hold.
+const ENTER_STRIP: [string, string][] = [['1', 'Enter']]
+const IMPORT_STRIP: [string, string][] = [
+  ['1', 'Import'],
+  ['2', 'Map'],
+  ['3', 'Review'],
+]
+const DOC_STRIP: [string, string][] = [
+  ['1', 'Import'],
+  ['2', 'Review'],
+]
+
+const RUN_KINDS: Array<WizardPath | null> = ['typed', 'import', 'document', null]
+const ALL_CREATE_STEPS: CreateStep[] = ['upload', 'mapping', 'form', 'review', DOCUMENTS_STEP]
+
+type HeaderRow = [CreateStep, WizardPath | null, [string, string][], number]
+
+describe('the three-strip step model (STEPS-D1..D9, EXTR-09-06)', () => {
+  // AC-1. Falsification: a strip that keeps 'Map' (documents are never mapped), or one
+  // that leaves the typed 'Enter' entry sitting on the document path.
+  it('STEPS-D1: WIZARD_STEPS is the document strip', () => {
+    expect(WIZARD_STEPS).toEqual(DOC_STRIP)
+    expect(WIZARD_STEPS.length).toBe(2)
+  })
+
+  // AC-1. INVCR-01-03's one-screen decision must survive the move, not be regressed by it.
+  it('STEPS-D2: ENTER_STEPS keeps the typed path at one item', () => {
+    expect(ENTER_STEPS).toEqual(ENTER_STRIP)
+    expect(ENTER_STEPS.length).toBe(1)
+  })
+
+  // AC-3. Runtime key set, five members, and no retired step creeping back in.
+  it('STEPS-D3: STAGE_OF is total over five members and carries no retired step', () => {
+    expect(Object.keys(STAGE_OF).sort()).toEqual(['documents', 'form', 'mapping', 'review', 'upload'])
+    const retired = ['report', 'parsing', 'validating', 'results']
+    expect(retired.length, 'vacuity floor').toBe(4)
+    retired.forEach((dead) => {
+      expect(Object.keys(STAGE_OF), dead).not.toContain(dead)
+    })
+  })
+
+  // AC-3's compiler half. Totality is a TYPE claim, so it is pinned at the type layer,
+  // in both directions:
+  //   - the witness assignment stops compiling if STAGE_OF is widened to Partial<...>,
+  //     i.e. if a member is allowed to have no stage;
+  //   - the directive goes unused (TS2578) if STAGE_OF is widened to Record<string,
+  //     number>, i.e. if the key domain stops being CreateStep at all.
+  // Either widening fails `pnpm -r typecheck` on THIS block, which is what makes
+  // "a member added without a stage stops importFlow.ts compiling" enforced rather than
+  // merely true today.
+  it('STEPS-D3b: STAGE_OF totality is compiler-enforced, not merely satisfied today', () => {
+    const witness: Record<CreateStep, number> = STAGE_OF
+    expect(Object.keys(witness)).toEqual(Object.keys(STAGE_OF))
+    // @ts-expect-error — a key outside CreateStep is not indexable on Record<CreateStep, number>
+    expect(STAGE_OF['reconcile']).toBeUndefined()
+  })
+
+  // AC-4. Literal expectations for every REACHABLE (step, run kind) pair. The four
+  // unreachable pairs — upload/mapping/review on a 'typed' run, mapping on a 'document'
+  // run — are deliberately left to STEPS-D4b's totality check rather than pinned to a
+  // guess Stage 3 has no reason to honour.
+  it('STEPS-D4: the truth table over step × run kind is exact wherever the pair is reachable', () => {
+    const table: HeaderRow[] = [
+      ['form', 'typed', ENTER_STRIP, 0],
+      ['form', 'import', ENTER_STRIP, 0],
+      ['form', 'document', ENTER_STRIP, 0],
+      ['form', null, ENTER_STRIP, 0],
+      ['upload', 'import', IMPORT_STRIP, 0],
+      ['upload', null, IMPORT_STRIP, 0],
+      ['upload', 'document', DOC_STRIP, 0],
+      ['mapping', 'import', IMPORT_STRIP, 1],
+      ['mapping', null, IMPORT_STRIP, 1],
+      ['review', 'import', IMPORT_STRIP, 2],
+      ['review', null, IMPORT_STRIP, 2],
+      ['review', 'document', DOC_STRIP, 1],
+      [DOCUMENTS_STEP, 'typed', DOC_STRIP, 0],
+      [DOCUMENTS_STEP, 'import', DOC_STRIP, 0],
+      [DOCUMENTS_STEP, 'document', DOC_STRIP, 0],
+      [DOCUMENTS_STEP, null, DOC_STRIP, 0],
+    ]
+    expect(table.length, 'vacuity floor: the table must not be empty').toBe(16)
+    table.forEach(([step, kind, steps, stageIndex]) => {
+      expect(wizardHeader(step, kind), `${step} × ${String(kind)}`).toEqual({ steps, stageIndex })
+    })
+  })
+
+  // AC-4's totality half, over ALL 20 pairs including the unreachable ones: a strip is
+  // always non-empty and the index always lands inside it — never undefined, never NaN.
+  it('STEPS-D4b: every step × run kind resolves to a real index inside a real strip', () => {
+    let checked = 0
+    ALL_CREATE_STEPS.forEach((step) => {
+      RUN_KINDS.forEach((kind) => {
+        const label = `${step} × ${String(kind)}`
+        const { steps, stageIndex } = wizardHeader(step, kind)
+        expect(steps.length, label).toBeGreaterThan(0)
+        expect(Number.isInteger(stageIndex), label).toBe(true)
+        expect(stageIndex, label).toBeGreaterThanOrEqual(0)
+        expect(stageIndex, label).toBeLessThan(steps.length)
+        checked += 1
+      })
+    })
+    expect(checked, 'vacuity floor: 5 steps × 4 run kinds').toBe(20)
+  })
+
+  // AC-4, stated as the reason the second argument exists at all: 'review' is shared, so
+  // the two answers must genuinely differ.
+  it('STEPS-D5: review resolves per path — the step alone cannot pick a strip', () => {
+    expect(wizardHeader('review', 'document')).toEqual({ steps: DOC_STRIP, stageIndex: 1 })
+    expect(wizardHeader('review', 'import')).toEqual({ steps: IMPORT_STRIP, stageIndex: 2 })
+    expect(wizardHeader('review', 'document'), 'the run-kind axis must change the answer').not.toEqual(wizardHeader('review', 'import'))
+  })
+
+  // AC-3. Ceilings derived through wizardHeader itself, so this survives an edit that
+  // changes a strip literal and its snapshot spec together: no strip may carry an entry
+  // past the highest index anything can actually stand on.
+  it('STEPS-D7: no strip carries an entry past its own reachable ceiling', () => {
+    const reachable = new Map<[string, string][], number[]>()
+    ALL_CREATE_STEPS.forEach((step) => {
+      RUN_KINDS.forEach((kind) => {
+        const { steps, stageIndex } = wizardHeader(step, kind)
+        reachable.set(steps, [...(reachable.get(steps) ?? []), stageIndex])
+      })
+    })
+    const strips: Array<[string, [string, string][]]> = [
+      ['ENTER_STEPS', ENTER_STEPS],
+      ['IMPORT_STEPS', IMPORT_STEPS],
+      ['WIZARD_STEPS', WIZARD_STEPS],
+    ]
+    strips.forEach(([name, strip]) => {
+      const indices = reachable.get(strip) ?? []
+      // Floor: a strip nothing routes to would satisfy any ceiling vacuously.
+      expect(indices.length, `${name} must be reachable from some step × run kind`).toBeGreaterThan(0)
+      expect(strip.length, `${name} ceiling`).toBe(Math.max(...indices) + 1)
+    })
+  })
+
+  // D-08: "document" stops meaning "manually typed" inside this module. Source scan
+  // because the constant is module-private and has no runtime surface.
+  it('STEPS-D9: DOCUMENT_ONLY_STEPS is renamed TYPED_ONLY_STEPS', () => {
+    const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+    const isSpec = (relPath: string) => /\.test\.tsx?$/.test(relPath)
+    // Needles built from parts so this file's own text is not a hit; spec files are
+    // excluded outright, they are not the owner either way.
+    const gone = 'DOCUMENT_ONLY' + '_STEPS'
+    const arrived = 'TYPED_ONLY' + '_STEPS'
+
+    // Population floor + control needle: the walker must reach the real subtree and find
+    // something known, or the absence assertion below proves nothing.
+    expect(scanForIdentifier(srcRoot, 'export').length, 'population floor').toBeGreaterThan(50)
+    expect(scanForIdentifier(srcRoot, 'wizardHeader').filter((p) => !isSpec(p)).length, 'control needle').toBeGreaterThan(0)
+
+    expect(scanForIdentifier(srcRoot, gone).filter((p) => !isSpec(p))).toEqual([])
+    expect(scanForIdentifier(srcRoot, arrived).filter((p) => !isSpec(p))).toEqual([path.join('lib', 'importFlow.ts')])
   })
 })

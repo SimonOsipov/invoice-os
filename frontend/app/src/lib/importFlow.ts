@@ -16,7 +16,9 @@ import type { ImportPreview } from './importApi'
 import type { AsyncStatus } from '@invoice-os/api-client'
 import type { Entity } from './portfolio'
 
-export type WizardPath = 'document' | 'import'
+// Repurposed by EXTR-09-06 (D-08): 'document' used to mean the manually TYPED single
+// invoice here, which stops being readable in the story that makes source documents real.
+export type WizardPath = 'typed' | 'import' | 'document'
 
 export const IMPORT_STEPS: [string, string][] = [
   ['1', 'Import'],
@@ -56,7 +58,10 @@ export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0,
 // typed invoice, the import report for a batch.
 const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form']
 
-export function wizardHeader(createStep: CreateStep): { steps: [string, string][]; stageIndex: number } {
+// STAGE-2.5 STUB (EXTR-09-06, task-773): the run kind is ACCEPTED AND IGNORED. 'review'
+// is shared by all three paths, so the step alone cannot pick a strip — STEPS-D4/STEPS-D5
+// fail on that until Stage 3 reads this argument.
+export function wizardHeader(createStep: CreateStep, _runKind?: WizardPath | null): { steps: [string, string][]; stageIndex: number } {
   return DOCUMENT_ONLY_STEPS.includes(createStep)
     ? { steps: WIZARD_STEPS, stageIndex: STAGE_OF[createStep] ?? 0 }
     : { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }

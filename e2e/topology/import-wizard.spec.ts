@@ -799,7 +799,7 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
   await signInFirm(page)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  // Leg 1 -- createStep 'upload' is NOT in DOCUMENT_ONLY_STEPS, so IMPORT_STEPS
+  // Leg 1 -- createStep 'upload' is NOT in TYPED_ONLY_STEPS (EXTR-09-06), so IMPORT_STEPS
   // (Import/Map/Review) renders; the typed-path-only 'Enter' label is absent.
   await expect(page.getByText('Import', { exact: true }), '3-step IMPORT_STEPS strip expected on entry').toBeVisible({ timeout: 30_000 })
   await expect(page.getByText('Map', { exact: true })).toBeVisible()
@@ -815,11 +815,13 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
   expect(await colorOf('Import')).not.toBe(await colorOf('Map'))
   expect(await colorOf('Map')).toBe(await colorOf('Review'))
 
-  // Leg 2 -- 'form' IS in DOCUMENT_ONLY_STEPS, so wizardHeader must return
-  // WIZARD_STEPS (Enter) at STAGE_OF.form === 0, and the import-only
-  // 'Import'/'Map'/'Review' labels must disappear.
+  // Leg 2 -- 'form' IS in TYPED_ONLY_STEPS, so wizardHeader must return ENTER_STEPS
+  // (Enter) at STAGE_OF.form === 0, and the import-only 'Import'/'Map'/'Review'
+  // labels must disappear. EXTR-09-06 moved the typed strip off WIZARD_STEPS, which
+  // is the two-item document strip now; this leg is STEPS-D8 (manual entry still
+  // renders exactly one step).
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByText('Enter', { exact: true }), '1-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
+  await expect(page.getByText('Enter', { exact: true }), '1-step ENTER_STEPS strip expected on manual entry (EXTR-09-06)').toBeVisible()
   await expect(page.getByText('Review', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Import', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Map', { exact: true })).toHaveCount(0)

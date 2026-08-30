@@ -154,6 +154,11 @@ export const WIZARD_STEPS: [string, string][] = [
   ['1', 'Enter'],
 ]
 
+// STAGE-2.5 STUB (EXTR-09-06, task-773). Manual entry's own strip, moving off
+// WIZARD_STEPS so the latter can become the document strip. Left EMPTY on purpose —
+// spelling [['1', 'Enter']] here would make STEPS-D2 green at birth.
+export const ENTER_STEPS: [string, string][] = []
+
 // Canonical invoice fields the Map step targets (Platform.dc.html ~L1115).
 export const CANON: CanonField[] = [
   { key: 'invoice_number', required: true },

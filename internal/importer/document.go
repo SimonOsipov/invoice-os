@@ -145,3 +145,10 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 		SourceDocumentID: &docID,
 	}, nil
 }
+
+// ImportDocument is the document-import orchestration entrypoint (EXTR-06-03, task-763):
+// read -> map -> mint batch -> dedup precheck -> create -> finalize. Not implemented yet --
+// stub for the RED specs in document_service_db_test.go.
+func (s *Service) ImportDocument(ctx context.Context, entityID, documentID string) (BatchResult, error) {
+	return BatchResult{}, nil
+}

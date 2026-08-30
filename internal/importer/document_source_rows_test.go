@@ -10,9 +10,7 @@
 //	         already assert NULL-accepted and 23514/invoices_source_rows_are_sheet_rows for
 //	         '{}' and '{1}'.
 //
-// SR-05/SR-06 scan only document.go: handlers_document.go does not exist on this branch yet
-// (EXTR-06-06 creates it) -- that subtask's own suite owes handlers_document.go the same
-// banned-identifier scan once the file exists.
+// SR-05/SR-06 now scan both document.go and handlers_document.go (EXTR-06-06, task-766).
 package importer
 
 import (
@@ -35,7 +33,7 @@ import (
 // SR-05 is the absence of the seven spreadsheet-only names.
 func TestImporterDocumentGo_NamesNoSpreadsheetOnlyHelpers(t *testing.T) {
 	root := sxDepsRepoRoot(t)
-	targets := []string{"document.go"} // handlers_document.go joins this list in EXTR-06-06
+	targets := []string{"document.go", "handlers_document.go"}
 
 	banned := map[string]bool{
 		"buildCreateInput":          true,
@@ -76,8 +74,8 @@ func TestImporterDocumentGo_NamesNoSpreadsheetOnlyHelpers(t *testing.T) {
 	if !needleFound {
 		t.Fatal("control needle failed: invoice.CreateInput not found in document.go -- the scan below would be vacuous")
 	}
-	if len(parsedFiles) != 1 {
-		t.Fatalf("parsed %d file(s), want 1 -- the walk did not scan the intended target list", len(parsedFiles))
+	if len(parsedFiles) != 2 {
+		t.Fatalf("parsed %d file(s), want 2 -- the walk did not scan the intended target list", len(parsedFiles))
 	}
 	if len(offenders) > 0 {
 		for name, ids := range offenders {

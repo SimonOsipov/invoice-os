@@ -546,9 +546,10 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 	}
 }
 
-// Import is the importer's orchestration entrypoint (THE HEART): map ->
+// Import is the spreadsheet-path orchestration entrypoint (THE HEART): map ->
 // normalize -> group -> classify -> (dry-run classify-only | real
-// CreateBatch/Create/Finalize).
+// CreateBatch/Create/Finalize). ImportDocument (document.go) is the second
+// entrypoint, for the document path.
 //
 //  1. Resolve mapping -> column indices against header (ErrValidation before
 //     any write if invoice_number is unmapped, or a mapped header string is

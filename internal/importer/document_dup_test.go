@@ -17,6 +17,19 @@
 // not less) or require passing race state across functions -- the shipped precedent
 // (TestServiceImport_ConcurrentDuplicateLoserReportedAsFirstClassViolation, service_dup_test.go
 // :224) combines the same four concerns into one test for the same reason.
+//
+// QA pass (task-764): the winners==1/losers==racers-1 assertion holds identically whether the
+// racers truly overlap or run fully serialized -- Create's unique-constraint 23505 fires on the
+// 2nd..Nth attempt to write one number either way, and this test never asserted anything that
+// would tell the two apart (loser InvoiceID is deliberately unchecked, see DUP-D3's own doc
+// comment). TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnrichedNoOrphans
+// now also times each racer's ImportDocument call and asserts at least one pair of intervals
+// truly overlaps -- this is the one assertion in the file that actually distinguishes "raced"
+// from "serialized-and-happened-to-match." Also added: TestServiceImportDocument_
+// EightConcurrentRacersYieldExactlyOneWinnerSevenLosers (wider N), TestServiceImportDocument_
+// MixedCollisionRaceIsolatesPerEntityOutcomes (same document/different entities interleaved with
+// a same-entity collision), TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFrom
+// DuplicateQuarantineUnderRace (two quarantine reasons in one race stay distinguishable).
 package importer
 
 import (
@@ -24,6 +37,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -75,6 +89,29 @@ func countStatusHistoryForEntity(t *testing.T, super *pgxpool.Pool, entityID str
 		t.Fatalf("count invoice_status_history for entity: %v", err)
 	}
 	return n
+}
+
+// countAuditLogForEntity counts invoice.created audit_log rows attributed to entityID -- the
+// event's own resolver (migrations/20260829195203_audit_log_entity_for_extraction.sql) joins
+// invoices on the id in payload to fill audit_log.entity_id, so this is entity-scoped even
+// though the INSERT itself never names entity_id directly. audit.Record (internal/invoice/
+// store.go, Create) runs LAST inside Create's tx, after the invoices INSERT -- a loser's 23505
+// aborts that tx before audit.Record is ever reached, so a loser can leave no row here either.
+func countAuditLogForEntity(t *testing.T, super *pgxpool.Pool, entityID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE entity_id = $1 AND event = 'invoice.created'`,
+		entityID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count audit_log for entity: %v", err)
+	}
+	return n
+}
+
+// intervalsOverlap reports whether [aStart,aEnd) and [bStart,bEnd) share any instant.
+func intervalsOverlap(aStart, aEnd, bStart, bEnd time.Time) bool {
+	return aStart.Before(bEnd) && bStart.Before(aEnd)
 }
 
 // DUP-D2/D3/D4/D8: 4 goroutines, one close(start), ONE shared entityID, 4 documents each
@@ -133,6 +170,8 @@ func TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnriched
 
 	results := make([]BatchResult, racers)
 	errs := make([]error, racers)
+	callStart := make([]time.Time, racers)
+	callEnd := make([]time.Time, racers)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(racers)
@@ -140,11 +179,31 @@ func TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnriched
 		go func(i int) {
 			defer wg.Done()
 			<-start
+			callStart[i] = time.Now()
 			results[i], errs[i] = svc.ImportDocument(callCtx, racerEntityIDs[i], documentIDs[i])
+			callEnd[i] = time.Now()
 		}(i)
 	}
 	close(start)
 	wg.Wait()
+
+	// QA pass (task-764): winners==1/losers==racers-1 alone holds even under complete
+	// serialization (Create's 23505 fires on the 2nd..Nth write attempt regardless of overlap),
+	// so it does NOT by itself prove concurrency -- only that the constraint works. This is the
+	// one assertion that does: at least one pair of racers' ImportDocument calls must have truly
+	// overlapped in wall-clock time, or the goroutines never actually raced.
+	overlapped := false
+	for i := 0; i < racers && !overlapped; i++ {
+		for j := i + 1; j < racers; j++ {
+			if intervalsOverlap(callStart[i], callEnd[i], callStart[j], callEnd[j]) {
+				overlapped = true
+				break
+			}
+		}
+	}
+	if !overlapped {
+		t.Errorf("no two racers' ImportDocument calls overlapped in time (starts=%v ends=%v) -- the goroutines ran fully serialized, so this run proves only that the constraint works, not that it works under concurrency (Core AC 6)", callStart, callEnd)
+	}
 
 	// DUP-D4: no racer returns a non-nil error, none reports status "failed".
 	for i, err := range errs {
@@ -204,6 +263,11 @@ func TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnriched
 	}
 	if got := countStatusHistoryForEntity(t, super, entityID); got != 1 {
 		t.Errorf("invoice_status_history rows for entity = %d, want exactly 1 (only the winner transitions)", got)
+	}
+	// QA pass (task-764): a loser's 23505 aborts Create's tx before audit.Record runs (it is
+	// the LAST statement in that tx), so no loser can leave an orphaned audit_log row either.
+	if got := countAuditLogForEntity(t, super, entityID); got != 1 {
+		t.Errorf("audit_log invoice.created rows for entity = %d, want exactly 1 (only the winner's Create reaches audit.Record)", got)
 	}
 }
 
@@ -381,5 +445,293 @@ func TestServiceImportDocument_SameNumberDifferentEntitiesBothWrite(t *testing.T
 	}
 	if got := countInvoicesByNumber(t, super, entityB, number); got != 1 {
 		t.Errorf("entityB stored %s rows = %d, want 1", number, got)
+	}
+}
+
+// --- QA pass: wider N -------------------------------------------------------
+
+// QA pass (task-764): the same DUP-D2 race at N=8 -- if the 1-winner/(N-1)-loser split were an
+// artifact of racers=4 specifically, a wider N would expose it.
+func TestServiceImportDocument_EightConcurrentRacersYieldExactlyOneWinnerSevenLosers(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DUP-QA-8 tenant")
+	entityID := seedEntity(t, super, tenantID, "DUP-QA-8 entity")
+
+	const racers = 8
+	const raceNumber = "INV-EXTR06-RACE8"
+
+	documentIDs := make([]string, racers)
+	for i := 0; i < racers; i++ {
+		documentIDs[i] = docSeedDocument(t, super, tenantID)
+		docSeedExtraction(t, super, tenantID, documentIDs[i], docCleanValues(raceNumber))
+	}
+
+	svc := newTestService(app)
+	callCtx := sxIdentity(ctx, tenantID)
+
+	results := make([]BatchResult, racers)
+	errs := make([]error, racers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(racers)
+	for i := 0; i < racers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = svc.ImportDocument(callCtx, entityID, documentIDs[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	winners, losers := 0, 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer[%d] unexpected error: %v", i, err)
+		}
+		r := results[i]
+		if r.Status != "completed" {
+			t.Errorf("racer[%d].Status = %q, want %q", i, r.Status, "completed")
+		}
+		switch {
+		case r.ReadyInvoices == 1 && r.QuarantinedInvoices == 0:
+			winners++
+		case r.ReadyInvoices == 0 && r.QuarantinedInvoices == 1:
+			losers++
+			if len(r.Errors) != 1 {
+				t.Fatalf("racer[%d] quarantined but len(Errors)=%d, want 1: %+v", i, len(r.Errors), r.Errors)
+			}
+			re := r.Errors[0]
+			if re.RuleKey != ruleKeyDuplicateInvoiceNumber || re.Severity != "error" || re.Field != "invoice_number" {
+				t.Errorf("racer[%d] (loser) RowError = %+v, want the enriched duplicate shape (rule_key=%q severity=error field=invoice_number)", i, re, ruleKeyDuplicateInvoiceNumber)
+			}
+		default:
+			t.Errorf("racer[%d] unexpected verdict (ReadyInvoices=%d QuarantinedInvoices=%d), want exactly one of (1,0)/(0,1)", i, r.ReadyInvoices, r.QuarantinedInvoices)
+		}
+	}
+	if winners != 1 || losers != racers-1 {
+		t.Fatalf("aggregate racer outcome (winners=%d losers=%d), want (1,%d)", winners, losers, racers-1)
+	}
+	if got := countInvoicesByNumber(t, super, entityID, raceNumber); got != 1 {
+		t.Errorf("stored %s rows = %d, want exactly 1 despite %d concurrent commit attempts", raceNumber, got, racers)
+	}
+}
+
+// --- QA pass: mixed collision ------------------------------------------
+
+// QA pass (task-764): interleaves a NON-colliding pair (one document imported into two
+// different entities -- no key collision, since the guarantee is entity-scoped, mirrors DUP-D7
+// via document sharing instead of number sharing) with a colliding pair (two documents, same
+// entity, same number) in ONE concurrent race released by the same close(start). Proves the two
+// outcomes stay isolated under one shared release: the colliding pair's 1-winner/1-loser split
+// does not leak into the non-colliding pair's both-succeed outcome, or vice versa.
+func TestServiceImportDocument_MixedCollisionRaceIsolatesPerEntityOutcomes(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DUP-QA-MIX tenant")
+	entityA := seedEntity(t, super, tenantID, "DUP-QA-MIX entity A")
+	entityB := seedEntity(t, super, tenantID, "DUP-QA-MIX entity B")
+
+	const sharedNumber = "INV-EXTR06-MIXSHARED"
+	const collideNumber = "INV-EXTR06-MIXCOLLIDE"
+
+	sharedDoc := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, sharedDoc, docCleanValues(sharedNumber))
+
+	collideDoc1 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, collideDoc1, docCleanValues(collideNumber))
+	collideDoc2 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, collideDoc2, docCleanValues(collideNumber))
+
+	svc := newTestService(app)
+	callCtx := sxIdentity(ctx, tenantID)
+
+	type mixRacer struct {
+		entityID, documentID string
+	}
+	// 0/1 share a document across two entities (no collision); 2/3 share an entity and number
+	// (collision). All four release from the same close(start) below.
+	racers := []mixRacer{
+		{entityA, sharedDoc},
+		{entityB, sharedDoc},
+		{entityA, collideDoc1},
+		{entityA, collideDoc2},
+	}
+
+	results := make([]BatchResult, len(racers))
+	errs := make([]error, len(racers))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(len(racers))
+	for i, r := range racers {
+		go func(i int, r mixRacer) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = svc.ImportDocument(callCtx, r.entityID, r.documentID)
+		}(i, r)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer[%d] unexpected error: %v", i, err)
+		}
+	}
+
+	// Racers 0/1: different entities sharing one document -- no collision, both must win.
+	for i, name := range map[int]string{0: "entityA (shared doc)", 1: "entityB (shared doc)"} {
+		r := results[i]
+		if r.Status != "completed" || r.ReadyInvoices != 1 || r.QuarantinedInvoices != 0 {
+			t.Errorf("racer[%d] (%s) = %+v, want completed/ready=1/quarantined=0 (no cross-entity collision)", i, name, r)
+		}
+	}
+
+	// Racers 2/3: same entity, same number -- exactly one winner, one loser.
+	winners, losers := 0, 0
+	for _, i := range []int{2, 3} {
+		r := results[i]
+		switch {
+		case r.ReadyInvoices == 1 && r.QuarantinedInvoices == 0:
+			winners++
+		case r.ReadyInvoices == 0 && r.QuarantinedInvoices == 1:
+			losers++
+			if len(r.Errors) != 1 {
+				t.Fatalf("racer[%d] quarantined but len(Errors)=%d, want 1", i, len(r.Errors))
+			}
+			re := r.Errors[0]
+			if re.RuleKey != ruleKeyDuplicateInvoiceNumber || re.Severity != "error" || re.Field != "invoice_number" {
+				t.Errorf("racer[%d] (loser) RowError = %+v, want the enriched duplicate shape", i, re)
+			}
+		default:
+			t.Errorf("racer[%d] unexpected verdict (ReadyInvoices=%d QuarantinedInvoices=%d)", i, r.ReadyInvoices, r.QuarantinedInvoices)
+		}
+	}
+	if winners != 1 || losers != 1 {
+		t.Fatalf("collision-pair outcome (winners=%d losers=%d), want (1,1)", winners, losers)
+	}
+
+	if got := countInvoicesByNumber(t, super, entityA, sharedNumber); got != 1 {
+		t.Errorf("entityA stored %s rows = %d, want 1", sharedNumber, got)
+	}
+	if got := countInvoicesByNumber(t, super, entityB, sharedNumber); got != 1 {
+		t.Errorf("entityB stored %s rows = %d, want 1", sharedNumber, got)
+	}
+	if got := countInvoicesByNumber(t, super, entityA, collideNumber); got != 1 {
+		t.Errorf("entityA stored %s rows = %d, want exactly 1 despite 2 concurrent commit attempts", collideNumber, got)
+	}
+}
+
+// --- QA pass: distinguishable quarantine reasons under race -----------------
+
+// QA pass (task-764): one entity, 3 racers -- two collide on a valid number (DUP-D2 shape,
+// scaled down), the third carries an unreadable invoice_number (mapper quarantine, the
+// pre-Create path documentCreateInput's own early return takes). All three release from the
+// same close(start). The mapper-quarantined racer must never be mistaken for a duplicate loser:
+// its RowError carries no RuleKey/Severity (documentCreateInput sets only Field/Message) and a
+// different Message, while a duplicate loser's RowError always carries
+// ruleKeyDuplicateInvoiceNumber/"error".
+func TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFromDuplicateQuarantineUnderRace(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DUP-QA-DISTINCT tenant")
+	entityID := seedEntity(t, super, tenantID, "DUP-QA-DISTINCT entity")
+
+	const dupNumber = "INV-EXTR06-DISTINCTDUP"
+
+	dupDoc1 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, dupDoc1, docCleanValues(dupNumber))
+	dupDoc2 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, dupDoc2, docCleanValues(dupNumber))
+
+	unreadableDoc := docSeedDocument(t, super, tenantID)
+	unreadableValues := docCleanValues("unused")
+	unreadableValues["invoice_number"] = nil
+	docSeedExtraction(t, super, tenantID, unreadableDoc, unreadableValues)
+
+	svc := newTestService(app)
+	callCtx := sxIdentity(ctx, tenantID)
+
+	documentIDs := []string{dupDoc1, dupDoc2, unreadableDoc}
+	results := make([]BatchResult, 3)
+	errs := make([]error, 3)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(3)
+	for i, docID := range documentIDs {
+		go func(i int, docID string) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = svc.ImportDocument(callCtx, entityID, docID)
+		}(i, docID)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer[%d] unexpected error: %v", i, err)
+		}
+	}
+
+	// Racers 0/1: exactly one winner, one duplicate loser with the enriched shape.
+	winners, losers := 0, 0
+	for _, i := range []int{0, 1} {
+		r := results[i]
+		switch {
+		case r.ReadyInvoices == 1 && r.QuarantinedInvoices == 0:
+			winners++
+		case r.ReadyInvoices == 0 && r.QuarantinedInvoices == 1:
+			losers++
+			if len(r.Errors) != 1 {
+				t.Fatalf("racer[%d] quarantined but len(Errors)=%d, want 1", i, len(r.Errors))
+			}
+			re := r.Errors[0]
+			if re.RuleKey != ruleKeyDuplicateInvoiceNumber {
+				t.Errorf("racer[%d] (duplicate loser) RuleKey = %q, want %q", i, re.RuleKey, ruleKeyDuplicateInvoiceNumber)
+			}
+			if re.Severity != "error" {
+				t.Errorf("racer[%d] (duplicate loser) Severity = %q, want %q", i, re.Severity, "error")
+			}
+		default:
+			t.Errorf("racer[%d] unexpected verdict (ReadyInvoices=%d QuarantinedInvoices=%d)", i, r.ReadyInvoices, r.QuarantinedInvoices)
+		}
+	}
+	if winners != 1 || losers != 1 {
+		t.Fatalf("duplicate-pair outcome (winners=%d losers=%d), want (1,1)", winners, losers)
+	}
+
+	// Racer 2: mapper-quarantined for an UNRELATED reason -- must never carry the duplicate
+	// guard's RuleKey/Severity/Message.
+	mapperResult := results[2]
+	if mapperResult.Status != "completed" || mapperResult.ReadyInvoices != 0 || mapperResult.QuarantinedInvoices != 1 {
+		t.Fatalf("racer[2] (unreadable number) = %+v, want completed/ready=0/quarantined=1", mapperResult)
+	}
+	if len(mapperResult.Errors) != 1 {
+		t.Fatalf("racer[2] len(Errors) = %d, want 1", len(mapperResult.Errors))
+	}
+	mre := mapperResult.Errors[0]
+	if mre.RuleKey != "" {
+		t.Errorf("racer[2] (mapper quarantine) RuleKey = %q, want empty -- a mapper error must never be mistaken for the duplicate guard", mre.RuleKey)
+	}
+	if mre.Severity != "" {
+		t.Errorf("racer[2] (mapper quarantine) Severity = %q, want empty", mre.Severity)
+	}
+	if mre.Field != "invoice_number" {
+		t.Errorf("racer[2] (mapper quarantine) Field = %q, want %q", mre.Field, "invoice_number")
+	}
+	if mre.Message != "invoice_number is missing or blank" {
+		t.Errorf("racer[2] (mapper quarantine) Message = %q, want the mapper's own message", mre.Message)
+	}
+	if mre.Message == msgDuplicateInvoiceNumber {
+		t.Fatalf("racer[2] (mapper quarantine) Message equals the duplicate guard's message -- the two quarantine reasons are indistinguishable")
+	}
+
+	if got := countInvoicesByNumber(t, super, entityID, dupNumber); got != 1 {
+		t.Errorf("stored %s rows = %d, want exactly 1", dupNumber, got)
 	}
 }

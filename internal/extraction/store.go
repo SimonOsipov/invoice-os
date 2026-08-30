@@ -126,29 +126,43 @@ func advanceJobTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, state, lastEr
 	return nil
 }
 
-// writeFieldResultsTx binds ReasonNone and a nil Region as SQL NULL: the reason_code CHECK
-// admits four words or NULL, and the all-NULL arm is what _region_complete accepts for a
-// field with no box. The CHECK set is the only validation; the extractor contract is the
-// first line and duplicating either in Go buys nothing.
+// writeFieldResultsTx writes one row per decided field at candidate_rank 0, then one row per
+// alternative at ranks 1..N in slice order. It binds ReasonNone and a nil Region as SQL NULL:
+// the reason_code CHECK admits four words or NULL, and the all-NULL arm is what
+// _region_complete accepts for a field with no box. The CHECK set is the only validation; the
+// extractor contract is the first line and duplicating either in Go buys nothing.
 func writeFieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string, fields []FieldResult) error {
-	for _, f := range fields {
-		var reason any
-		if f.Reason != ReasonNone {
-			reason = string(f.Reason)
+	for _, fr := range fields {
+		if err := writeFieldResultRowTx(ctx, tx, tenantID, jobID, fr.Field, 0); err != nil {
+			return err
 		}
-		var page, x0, y0, x1, y1 any
-		if f.Region != nil {
-			page, x0, y0, x1, y1 = f.Region.Page, f.Region.X0, f.Region.Y0, f.Region.X1, f.Region.Y1
+		for i, alt := range fr.Alternatives {
+			if err := writeFieldResultRowTx(ctx, tx, tenantID, jobID, alt, i+1); err != nil {
+				return err
+			}
 		}
+	}
+	return nil
+}
 
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO extraction_field_results
-			     (tenant_id, extraction_job_id, field_name, value, page,
-			      bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			tenantID, jobID, f.Name, f.Value, page, x0, y0, x1, y1, reason); err != nil {
-			return fmt.Errorf("extraction: write field result %s for job %s: %w", f.Name, jobID, err)
-		}
+// writeFieldResultRowTx writes one candidate_rank row for one field.
+func writeFieldResultRowTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string, f Field, rank int) error {
+	var reason any
+	if f.Reason != ReasonNone {
+		reason = string(f.Reason)
+	}
+	var page, x0, y0, x1, y1 any
+	if f.Region != nil {
+		page, x0, y0, x1, y1 = f.Region.Page, f.Region.X0, f.Region.Y0, f.Region.X1, f.Region.Y1
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO extraction_field_results
+		     (tenant_id, extraction_job_id, field_name, value, page,
+		      bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code, candidate_rank)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		tenantID, jobID, f.Name, f.Value, page, x0, y0, x1, y1, reason, rank); err != nil {
+		return fmt.Errorf("extraction: write field result %s (rank %d) for job %s: %w", f.Name, rank, jobID, err)
 	}
 	return nil
 }
@@ -177,31 +191,37 @@ func writePageImagesTx(ctx context.Context, tx pgx.Tx, tenantID, documentID stri
 	return nil
 }
 
-// fieldResultsTx returns an empty slice rather than nil on every path: nil marshals to a
-// JSON null where a caller expects an array.
+// fieldResultsTx groups rows by field_name: rank 0 is the decided reading, ranks 1..N become
+// its Alternatives in rank order. Never returns nil: nil marshals to a JSON null where a
+// caller expects an array. created_at ties across every row one WriteFieldResults call
+// writes (it is the transaction timestamp), so it cannot order fields against each other --
+// the read leads with (field_name, candidate_rank) instead, an application invariant rather
+// than a DB constraint.
 func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]FieldResult, error) {
 	out := []FieldResult{}
 
 	rows, err := tx.Query(ctx,
-		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code
+		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code, candidate_rank
 		   FROM extraction_field_results
 		  WHERE tenant_id = $1 AND extraction_job_id = $2
-		  ORDER BY created_at, field_name`,
+		  ORDER BY field_name, candidate_rank`,
 		tenantID, jobID)
 	if err != nil {
 		return out, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
 	}
 	defer rows.Close()
 
+	indexOf := map[string]int{} // field_name -> position in out, for attaching alternatives
 	for rows.Next() {
 		var (
 			f              Field
 			page           *int
 			x0, y0, x1, y1 *float64
 			reason         *string
+			rank           int
 		)
-		if err := rows.Scan(&f.Name, &f.Value, &page, &x0, &y0, &x1, &y1, &reason); err != nil {
-			return out, fmt.Errorf("extraction: scan field result for job %s: %w", jobID, err)
+		if err := rows.Scan(&f.Name, &f.Value, &page, &x0, &y0, &x1, &y1, &reason, &rank); err != nil {
+			return []FieldResult{}, fmt.Errorf("extraction: scan field result for job %s: %w", jobID, err)
 		}
 		// _region_complete makes the five columns all-or-none, so page decides the box.
 		if page != nil {
@@ -210,11 +230,22 @@ func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]F
 		if reason != nil {
 			f.Reason = Reason(*reason)
 		}
-		// OLD-behavior read: one row in, one FieldResult out, rank 0 only, no grouping.
-		out = append(out, FieldResult{Field: f, Alternatives: []Field{}})
+
+		if rank == 0 {
+			indexOf[f.Name] = len(out)
+			out = append(out, FieldResult{Field: f, Alternatives: []Field{}})
+			continue
+		}
+		i, ok := indexOf[f.Name]
+		if !ok {
+			// A rank>0 row with no rank-0 sibling is a shape Reconcile never produces; refuse it
+			// rather than dropping it (loses audit data) or promoting it (fabricates a reading).
+			return []FieldResult{}, fmt.Errorf("extraction: field result for job %s: alternative at rank %d for %q has no decided reading", jobID, rank, f.Name)
+		}
+		out[i].Alternatives = append(out[i].Alternatives, f)
 	}
 	if err := rows.Err(); err != nil {
-		return out, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
+		return []FieldResult{}, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
 	}
 	return out, nil
 }

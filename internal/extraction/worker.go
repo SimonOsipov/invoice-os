@@ -167,19 +167,15 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		return err
 	}
 
-	flagged := 0
-	for _, f := range fields {
-		if f.Reason != ReasonNone {
-			flagged++
-		}
-	}
+	results := asFieldResults(fields)
+	flagged := flaggedCount(results)
 
 	return db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
 		// The marker, the result rows, the advance to succeeded and the audit row share one
 		// transaction and one fate (TestRLS_ExtractWorkerResultWriteIsGuardedByTheJobMarker,
 		// TestExtractWorker_AuditWriteIsLastInItsClosure).
 		_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
-			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, asFieldResults(fields)); err != nil {
+			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, results); err != nil {
 				return err
 			}
 			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt); err != nil {

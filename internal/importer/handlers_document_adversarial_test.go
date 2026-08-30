@@ -91,8 +91,8 @@ func TestCreateDocumentHandler_QuarantineResultStillReturns201(t *testing.T) {
 		ID: "doc-batch-q", Status: "completed",
 		RowsTotal: 1, RowsValid: 0, RowsInvalid: 1,
 		ReadyInvoices: 0, QuarantinedInvoices: 1,
-		Errors:             []RowError{{Row: 1, Field: "invoice_number", Message: "blank invoice number: row cannot be grouped"}},
-		InvoiceViolations:  []InvoiceViolations{},
+		Errors:            []RowError{{Row: 1, Field: "invoice_number", Message: "blank invoice number: row cannot be grouped"}},
+		InvoiceViolations: []InvoiceViolations{},
 	}}
 	rec, raw, resp := doImportDocumentPost(t, spy.fn(), &id, docJSONBody(uuid.NewString(), uuid.NewString()))
 	if rec.Code != http.StatusCreated {

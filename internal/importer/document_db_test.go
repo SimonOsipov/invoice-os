@@ -21,6 +21,7 @@ package importer
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -71,19 +72,31 @@ func seedExtractionJob(t *testing.T, super *pgxpool.Pool, tenantID, documentID, 
 	return id
 }
 
-// seedTwoExtractionJobsSameInstant inserts two succeeded jobs for documentID in ONE INSERT
-// statement, so both share the exact transaction now() for created_at (SX-05: the tie must
-// come from the clock, not from two Exec calls landing microseconds apart).
-func seedTwoExtractionJobsSameInstant(t *testing.T, super *pgxpool.Pool, tenantID, documentID string) (idA, idB string) {
+// seedNExtractionJobsSameInstant inserts n succeeded jobs for documentID in ONE INSERT
+// statement, so all n share the exact transaction now() for created_at (SX-05: the tie must
+// come from the clock, not from separate Exec calls landing microseconds apart). n must be
+// >= 2. A 2-job fixture (the original SX-05 shape) is too small: Postgres returns a stable
+// pick for 2 tied rows even with no id tiebreak, so it never exercises `, j.id DESC` at all
+// (task-762 SX-05-FIX).
+func seedNExtractionJobsSameInstant(t *testing.T, super *pgxpool.Pool, tenantID, documentID string, n int) []string {
 	t.Helper()
-	rows, err := super.Query(context.Background(),
-		`INSERT INTO extraction_jobs (tenant_id, document_id, state, extractor, extractor_version)
-		 VALUES ($1, $2, 'succeeded', $3, $4), ($1, $2, 'succeeded', $3, $4)
-		 RETURNING id`,
-		tenantID, documentID, sxExtractor, sxExtractorVersion,
-	)
+	if n < 2 {
+		t.Fatalf("seedNExtractionJobsSameInstant: n = %d, want >= 2", n)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO extraction_jobs (tenant_id, document_id, state, extractor, extractor_version) VALUES `)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("($1, $2, 'succeeded', $3, $4)")
+	}
+	sb.WriteString(" RETURNING id")
+
+	rows, err := super.Query(context.Background(), sb.String(), tenantID, documentID, sxExtractor, sxExtractorVersion)
 	if err != nil {
-		t.Fatalf("seed tied extraction_jobs: %v", err)
+		t.Fatalf("seed %d tied extraction_jobs: %v", n, err)
 	}
 	defer rows.Close()
 
@@ -98,10 +111,10 @@ func seedTwoExtractionJobsSameInstant(t *testing.T, super *pgxpool.Pool, tenantI
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read tied extraction_jobs ids: %v", err)
 	}
-	if len(ids) != 2 {
-		t.Fatalf("seeded %d tied extraction_jobs, want 2", len(ids))
+	if len(ids) != n {
+		t.Fatalf("seeded %d tied extraction_jobs, want %d", len(ids), n)
 	}
-	return ids[0], ids[1]
+	return ids
 }
 
 // seedExtractionField inserts one extraction_field_results row as the superuser.
@@ -246,33 +259,45 @@ func TestSettledExtraction_ExcludesCandidateRankAboveZero(t *testing.T) {
 
 // SX-05: two jobs tied on created_at still resolve to exactly one job, and the same one,
 // across 20 calls -- a created_at-only ORDER BY could answer differently call to call.
+//
+// SX-05-FIX (task-762): a bare stability check ("every call returns the same job") does NOT
+// catch a missing `, j.id DESC` -- confirmed by mutation, at both 12 and 200 tied jobs:
+// Postgres deterministically repeats the SAME arbitrary pick for identical, unmodified data
+// on every call within a process, tiebreak or no tiebreak. The assertion that actually
+// catches the mutation is CORRECTNESS: the winner must be the tied job with the highest id
+// (what `id DESC` selects), not merely self-consistent. Mutation-confirmed: removing
+// `, j.id DESC` made every call return the SAME wrong job (not the highest id) -- stable, but
+// incorrect; restoring it made every call return the highest id, correctly.
 func TestSettledExtraction_TiedCreatedAtResolvesStablyAcross20Calls(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
 	tenantID := seedTenant(t, super, "SX-05 tenant")
 	documentID := seedDocument(t, super, tenantID)
-	idA, idB := seedTwoExtractionJobsSameInstant(t, super, tenantID, documentID)
-	valid := map[string]bool{idA: true, idB: true}
+	// 12, not 2: the original 2-job fixture happened to pass this same accidental-stability
+	// trap too -- enlarging alone does not fix it; the correctness assertion below does.
+	ids := seedNExtractionJobsSameInstant(t, super, tenantID, documentID, 12)
+	valid := map[string]bool{}
+	for _, id := range ids {
+		valid[id] = true
+	}
+	sorted := append([]string{}, ids...)
+	sort.Strings(sorted)
+	wantWinner := sorted[len(sorted)-1] // `ORDER BY ..., id DESC` picks the highest id among ties
 
 	store := NewStore(app)
 	c := sxIdentity(ctx, tenantID)
 
-	var first string
 	for i := 0; i < 20; i++ {
 		ex, err := store.SettledExtraction(c, documentID)
 		if err != nil {
 			t.Fatalf("call %d: SettledExtraction: %v", i, err)
 		}
 		if !valid[ex.JobID] {
-			t.Fatalf("call %d: JobID = %q, want one of the two tied jobs %v", i, ex.JobID, []string{idA, idB})
+			t.Fatalf("call %d: JobID = %q, want one of the %d tied jobs %v", i, ex.JobID, len(ids), ids)
 		}
-		if i == 0 {
-			first = ex.JobID
-			continue
-		}
-		if ex.JobID != first {
-			t.Fatalf("call %d: JobID = %q, want the stable winner %q from call 0 (tie not broken deterministically)", i, ex.JobID, first)
+		if ex.JobID != wantWinner {
+			t.Fatalf("call %d: JobID = %q, want %q (the highest id among the tied jobs, i.e. `id DESC` actually governing the tiebreak)", i, ex.JobID, wantWinner)
 		}
 	}
 }

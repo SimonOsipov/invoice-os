@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -81,4 +82,11 @@ func (s *Store) SettledExtraction(ctx context.Context, documentID string) (Settl
 		return SettledExtraction{Fields: []extractedField{}}, err
 	}
 	return ex, nil
+}
+
+// documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput.
+// STUB (Mode A, task-762): body not yet implemented -- returns zero values so this package
+// compiles while document_map_test.go's RED specs pin the real mapping (EXTR-06-02).
+func documentCreateInput(entityID, documentID string, ex SettledExtraction) (invoice.CreateInput, *RowError) {
+	return invoice.CreateInput{}, nil
 }

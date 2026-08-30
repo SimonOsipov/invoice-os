@@ -314,7 +314,7 @@ func TestServiceStore_IdenticalBytesSameTenantDedupes(t *testing.T) {
 	if keys := objs.distinctPutKeys(); len(keys) != 1 {
 		t.Errorf("distinct PUT keys = %v, want 1", keys)
 	}
-	// Service.Store returns no created flag, so the dedupe is observed on the trail.
+	// The audit trail, independently of Store's reuse flag (service_reuse_value_test.go).
 	if n := auditCount(t, app, tenantID, "document.created"); n != 1 {
 		t.Errorf("document.created audit rows = %d, want 1", n)
 	}

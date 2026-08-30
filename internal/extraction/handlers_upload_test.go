@@ -3,8 +3,8 @@
 // stRequire, the package's one sanctioned skip site, because scripts/ci/rls-test-gate.sh
 // fails a step on any skip.
 //
-// Written RED, before UploadHandler does anything: the Stage-2.5 stub answers 501 on every
-// path, so each case below fails on its status or its spy count, never on a compile error.
+// Edge and negative cases live in handlers_upload_adversarial_test.go, which shares this
+// file's harness; the two DB-backed claims live in handlers_upload_db_test.go.
 //
 // Helpers use an up* prefix; hnd rd st wk dc fx mx px pr ps pt pd pb pe rx de rp eq are taken.
 package extraction_test

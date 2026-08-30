@@ -1,9 +1,7 @@
-// service_reuse_flag_test.go: Service.Store must hand its caller the reuse verdict Upsert
-// already computes and service.go:66 currently discards.
+// service_reuse_flag_test.go: Service.Store's SIGNATURE carries Upsert's reuse verdict.
 //
-// Reflection, not the compile-time var pin at service_test.go:423: while the signature is
-// still (Document, error) a var pin would fail to BUILD, and a build failure is not a test
-// result. Stage 3 widens the signature and updates that pin.
+// The signature only. An inverted flag has the same type and passes here; the value is pinned
+// by service_reuse_value_test.go.
 package document_test
 
 import (

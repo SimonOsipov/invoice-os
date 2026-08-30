@@ -3,7 +3,6 @@ package extraction
 
 import (
 	"context"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -13,7 +12,17 @@ import (
 // EnqueueExtraction records the business key and inserts the extraction job on tx, so both
 // share the caller's transaction and its fate. tx must be tenant-scoped to tenantID.
 //
-// Stage-2.5 stub: the body lands with the implementation.
+// The key is per-document and the dedupe behind it is permanent, not in-flight: a document
+// whose extraction dead-letters is never re-enqueued here
+// (TestRLS_EnqueueExtractionRefusesEvenAfterTheJobDeadLetters). Re-extraction is EXTR-17's.
+//
+// opts stays nil: extractArgs.InsertOpts already routes the job to QueueName, and a non-nil
+// opts would replace it.
 func EnqueueExtraction(ctx context.Context, tx pgx.Tx, q *queue.Client, tenantID, documentID string) (skipped bool, err error) {
-	return false, errors.New("extraction: EnqueueExtraction not implemented")
+	key := "extract:" + documentID
+	return q.EnqueueTx(ctx, tx, tenantID, key, extractArgs{
+		TenantID:       tenantID,
+		DocumentID:     documentID,
+		IdempotencyKey: key,
+	}, nil)
 }

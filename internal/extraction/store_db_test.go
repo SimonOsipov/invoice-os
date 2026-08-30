@@ -894,6 +894,9 @@ func TestRLS_FieldResultsRoundTripsAnAmbiguousField(t *testing.T) {
 
 // AC-2: candidate_rank is the read's own tiebreak, independent of insertion order -- rows
 // planted at ranks 2,0,1 must still read back grouped with the alternatives in rank order.
+// All three rows are seeded in one transaction, sharing one created_at, exactly as one real
+// WriteFieldResults call would (a real write is one transaction) -- three separate Execs
+// would give each row its own created_at, a shape production never produces.
 func TestRLS_FieldResultsOrdersByCandidateRank(t *testing.T) {
 	ctx := t.Context()
 	s := stStore(t)
@@ -905,16 +908,24 @@ func TestRLS_FieldResultsOrdersByCandidateRank(t *testing.T) {
 		t.Fatalf("EnsureJob: %v", err)
 	}
 
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin seed tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
 	for _, row := range []struct {
 		rank  int
 		value string
 	}{{2, "third"}, {0, "first"}, {1, "second"}} {
-		if _, err := h.super.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO extraction_field_results (tenant_id, extraction_job_id, field_name, value, candidate_rank)
 			 VALUES ($1, $2, $3, $4, $5)`,
 			tenantID, job.ID, "total_amount", row.value, row.rank); err != nil {
 			t.Fatalf("seed rank %d: %v", row.rank, err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit seed tx: %v", err)
 	}
 
 	out, err := s.FieldResults(ctx, tenantID, job.ID)
@@ -1134,20 +1145,11 @@ func TestRLS_FieldResultsOrphanAlternativeIsAHardError(t *testing.T) {
 	}
 }
 
-// KNOWN GAP (QA, EXTR-05-06): nothing forbids a second WriteFieldResults call from landing a
-// second rank-0 row for a field_name already decided in this job. AC-2 specifies the read
-// order as `created_at, field_name, candidate_rank`; the shipped fieldResultsTx orders by
-// `field_name, candidate_rank` alone (created_at dropped -- ties within one call, so the
-// existing single-call tests can't see the difference). candidate_rank sorts globally across
-// writes, so this drops rank-0 rows from both calls together, ahead of every rank>0 row, and
-// the grouping loop's indexOf overwrites the first write's entry with the second's -- the
-// first write's own alternative (X) silently reattaches to the second write's decided value
-// (B) rather than the first (A). Restoring `created_at` as the leading key (verified: fixes
-// this while leaving every existing ordering test green, since it only adds a leading column
-// that ties within one call) would close this. Not reachable via ExtractWorker today --
-// EnsureJob gives every river_job_id its own extraction_jobs row, and OncePerJob admits one
-// write per job -- but nothing in the Store's public signature enforces that.
-func TestRLS_FieldResultsTwoWritesToSameJobMisattributeAlternatives(t *testing.T) {
+// A second WriteFieldResults call landing a second rank-0 row for a field_name already
+// decided in this job must not cross-attach alternatives: each write's own alternative stays
+// with that write's decided value (A keeps X, B keeps Y), because created_at leads the read
+// order and separates the two writes' rows before field_name/candidate_rank group within one.
+func TestRLS_FieldResultsTwoWritesToSameJobKeepAlternativesWithTheirOwnWrite(t *testing.T) {
 	ctx := t.Context()
 	s := stStore(t)
 	tenantID, documentID := stTenant(t, ctx)
@@ -1179,17 +1181,14 @@ func TestRLS_FieldResultsTwoWritesToSameJobMisattributeAlternatives(t *testing.T
 		t.Fatalf("FieldResults: %v", err)
 	}
 	if len(out) != 2 {
-		t.Fatalf("got %d FieldResult(s) for two rank-0 writes of the same field_name, want 2 (this test documents the current shape, not the desired one)", len(out))
+		t.Fatalf("got %d FieldResult(s) for two rank-0 writes of the same field_name, want 2 (kept as separate groups)", len(out))
 	}
-	// Documents today's mis-grouping: X (written alongside A) ends up under B, and A loses
-	// its own alternative entirely. A fix restoring `created_at` to the ORDER BY would instead
-	// keep A/[X] and B/[Y] as two separate, correctly-paired groups.
 	first, second := out[0], out[1]
-	if first.Value == nil || *first.Value != "A" || len(first.Alternatives) != 0 {
-		t.Errorf("first group = value %v, %d alternative(s); the current (buggy) shape has A stripped of its own alternative X", first.Value, len(first.Alternatives))
+	if first.Value == nil || *first.Value != "A" || len(first.Alternatives) != 1 || first.Alternatives[0].Value == nil || *first.Alternatives[0].Value != "X" {
+		t.Errorf("first group = value %v, alternatives %v; want A with its own alternative X", first.Value, first.Alternatives)
 	}
-	if second.Value == nil || *second.Value != "B" || len(second.Alternatives) != 2 {
-		t.Errorf("second group = value %v, %d alternative(s); the current (buggy) shape has both X and Y misattributed to B", second.Value, len(second.Alternatives))
+	if second.Value == nil || *second.Value != "B" || len(second.Alternatives) != 1 || second.Alternatives[0].Value == nil || *second.Alternatives[0].Value != "Y" {
+		t.Errorf("second group = value %v, alternatives %v; want B with its own alternative Y", second.Value, second.Alternatives)
 	}
 }
 

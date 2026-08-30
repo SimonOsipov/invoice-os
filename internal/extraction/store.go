@@ -194,10 +194,9 @@ func writePageImagesTx(ctx context.Context, tx pgx.Tx, tenantID, documentID stri
 
 // fieldResultsTx groups rows by field_name: rank 0 is the decided reading, ranks 1..N become
 // its Alternatives in rank order. Never returns nil: nil marshals to a JSON null where a
-// caller expects an array. created_at ties across every row one WriteFieldResults call
-// writes (it is the transaction timestamp), so it cannot order fields against each other --
-// the read leads with (field_name, candidate_rank) instead, an application invariant rather
-// than a DB constraint.
+// caller expects an array. created_at leads the ORDER BY -- rows from one WriteFieldResults
+// call share a transaction timestamp, so it separates writes; (field_name, candidate_rank)
+// then orders within one write.
 func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]FieldResult, error) {
 	out := []FieldResult{}
 
@@ -205,7 +204,7 @@ func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]F
 		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code, candidate_rank
 		   FROM extraction_field_results
 		  WHERE tenant_id = $1 AND extraction_job_id = $2
-		  ORDER BY field_name, candidate_rank`,
+		  ORDER BY created_at, field_name, candidate_rank`,
 		tenantID, jobID)
 	if err != nil {
 		return out, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)

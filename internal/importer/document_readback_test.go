@@ -18,8 +18,10 @@
 //	RB-04       TestImportDocumentReadback_InvoicesCreatedCountsAtTwoCheckpoints
 //	RB-05       TestImportDocumentReadback_AuditActorIsCallerSubjectNotWorkerLiteral
 //	RB-06       TestImportDocumentReadback_WrittenInvoiceIsDraftWithZeroLineItems
-//	RB-07       TestImporterSpreadsheetPath_UntouchedByDocumentPath
 //	RB-08       TestImportDocumentReadback_RealGateLeavesZeroLineDraftWithLineItemsRequired
+//
+// RB-07 is not a Go test: CI checks out refs/pull/N/merge with fetch-depth 1, so origin/main is
+// unresolvable and the spreadsheet-path diff can't be observed. Verified as PR evidence instead.
 //
 // AC #6 (Core AC 8's extraction half) is NOT met by this story -- D-19
 // (.ralph/EXTR-06-finalized.md), now owned by EXTR-17 The Pipeline Runs End To End: nothing wires
@@ -32,7 +34,6 @@ package importer
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -320,88 +321,5 @@ func TestImportDocumentReadback_RealGateLeavesZeroLineDraftWithLineItemsRequired
 	}
 	if !found {
 		t.Errorf("violations = %+v, want one naming line-items-required", vs)
-	}
-}
-
-// --- RB-07 -------------------------------------------------------------
-
-// rbRepoRoot resolves the worktree root the git commands below must run from -- duplicated
-// (not imported) from document_deps_test.go's sxDepsRepoRoot, same rationale: unrelated fence,
-// different test file.
-func rbRepoRoot(t *testing.T) string {
-	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("git rev-parse --show-toplevel: %v", err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// RB-07: the spreadsheet path's own files are untouched since origin/main. Precondition (an
-// unresolvable ref makes an empty diff indistinguishable from a clean one) and control needle
-// (document.go must show as added, or the diff read nothing) both guard the absence check below
-// from proving nothing (task-767 Implementation Notes). service.go is the one exception: it
-// carries an authorized comment-only diff (naming Import/ImportDocument as sibling entrypoints,
-// subtask 04's QA), so it is checked for "no non-comment line changed", not byte-identity.
-func TestImporterSpreadsheetPath_UntouchedByDocumentPath(t *testing.T) {
-	root := rbRepoRoot(t)
-
-	mergeBase := exec.Command("git", "merge-base", "--is-ancestor", "origin/main", "HEAD")
-	mergeBase.Dir = root
-	if err := mergeBase.Run(); err != nil {
-		t.Fatalf("git merge-base --is-ancestor origin/main HEAD: %v -- origin/main is not an ancestor of HEAD, so an empty diff below would be indistinguishable from a clean one", err)
-	}
-
-	nameOnly := exec.Command("git", "diff", "--name-only", "origin/main...HEAD", "--", "internal/importer")
-	nameOnly.Dir = root
-	out, err := nameOnly.Output()
-	if err != nil {
-		t.Fatalf("git diff --name-only origin/main...HEAD -- internal/importer: %v", err)
-	}
-	changed := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			changed[line] = true
-		}
-	}
-
-	if !changed["internal/importer/document.go"] {
-		t.Fatalf("diff = %v, want it to list internal/importer/document.go as added (control needle -- an empty/wrong diff proves nothing)", out)
-	}
-
-	spreadsheetFiles := []string{
-		"internal/importer/service_test.go",
-		"internal/importer/service_dup_test.go",
-		"internal/importer/store.go",
-		"internal/importer/store_test.go",
-		"internal/importer/dup_parity_test.go",
-		"internal/importer/decode.go",
-	}
-	for _, f := range spreadsheetFiles {
-		if changed[f] {
-			t.Errorf("diff lists %q as changed, want the spreadsheet path byte-unchanged since origin/main", f)
-		}
-	}
-
-	serviceDiffCmd := exec.Command("git", "diff", "origin/main...HEAD", "--", "internal/importer/service.go")
-	serviceDiffCmd.Dir = root
-	serviceDiff, err := serviceDiffCmd.Output()
-	if err != nil {
-		t.Fatalf("git diff origin/main...HEAD -- internal/importer/service.go: %v", err)
-	}
-	for _, line := range strings.Split(string(serviceDiff), "\n") {
-		if !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") {
-			continue
-		}
-		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
-			continue
-		}
-		content := strings.TrimSpace(line[1:])
-		if content == "" {
-			continue
-		}
-		if !strings.HasPrefix(content, "//") {
-			t.Errorf("service.go diff has a non-comment changed line: %q, want the diff to touch comments only", line)
-		}
 	}
 }

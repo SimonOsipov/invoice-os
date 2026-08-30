@@ -1,10 +1,10 @@
-// reachability_test.go: the two absence guards that fence the mock out of any live path. The
-// compiler already refuses to let another package name the unexported args type; these close
-// the routes it cannot -- a live file naming the type after a rename, and this package growing
-// its own exported enqueue surface.
+// reachability_test.go: the two guards that fence the mock out of any live path. The compiler
+// already refuses to let another package name the unexported args type; these close the routes
+// it cannot -- a live file naming the type after a rename, and this package growing a SECOND
+// enqueue surface beside the one EXTR-09 sanctioned.
 //
-// Both are green from the start. Their value is the control needle and the floor: an absence
-// scan that reached nothing reports all-clear, which reads exactly like a clean repo.
+// Both are green once the seam is implemented. Their value is the control needle and the
+// floor: a scan that reached nothing reports all-clear, which reads exactly like a clean repo.
 //
 // Mode 0 parsing: comments are never attached to the AST, so a banned name inside a comment
 // cannot fail either scan. This file carries no skip call and no database-DSN variable name:
@@ -284,18 +284,30 @@ func rxExportedFuncsAccepting(files map[string]*ast.File, want string) []string 
 	return rxExportedFuncs(files, want, true)
 }
 
-// TestExtractionPackageDeclaresNoEnqueueHelper: AC #6 and AC #7. The unexported args type stops
-// another package constructing one; it does not stop THIS package handing one out. Five bans:
-// no enqueue SELECTOR, no enqueue FUNC DECLARATION of the same name, no exported func returning
-// the args type, and no exported func returning or ACCEPTING river.JobArgs -- the interface
-// river.Client.Insert and queue.EnqueueTx both take, which the name bans alone miss.
+// The one sanctioned enqueue surface, keyed as the attribution map below keys it.
+const (
+	rxSeamFile = "enqueue.go"
+	rxSeamFunc = "EnqueueExtraction"
+	rxSeamKey  = rxSeamFile + ":" + rxSeamFunc
+)
+
+// TestExtractionExposesExactlyOneEnqueueSeam: the retired absence ban, now a count. EXTR-01's
+// AC #6 and AC #7 forbade this package any enqueue surface at all; EXTR-09 opened exactly one
+// at the user's critical-fork gate, so the fence counts to one rather than to zero.
+// EnqueueExtraction in enqueue.go is what replaced the absence.
 //
-// Exact-match, never a prefix: river.JobArgs requires InsertOpts, so a no-Insert* rule would
-// red-fail the shipped worker.
+// Five bans, four of them unchanged: no func DECLARED with a banned enqueue name, no exported
+// func returning the args type, and no exported func returning or ACCEPTING river.JobArgs --
+// the interface river.Client.Insert and queue.EnqueueTx both take, which the name bans miss.
+// The fifth, the enqueue SELECTOR, is now attributed to its enclosing func: exactly one func
+// may reach one, and it must be the seam.
+//
+// Exact-match on the name ban, and the Enqueue prefix only on the count: river.JobArgs requires
+// InsertOpts, so an Insert prefix would red-fail the shipped worker.
 //
 // rxTypeNames' nested-func-signature descent is mutation-proven, not needle-proven. JobsHandler
 // is the package's one exported func taking a func, and its signature names no banned type.
-func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
+func TestExtractionExposesExactlyOneEnqueueSeam(t *testing.T) {
 	files := rxExtractionFiles(t)
 
 	banned := map[string]bool{
@@ -306,50 +318,118 @@ func TestExtractionPackageDeclaresNoEnqueueHelper(t *testing.T) {
 	// sits OUTSIDE this walk, so it can only prove the matcher compiles.
 	control := map[string]bool{"OncePerJob": false, "WithinTenantTx": false}
 
-	offenders := map[string][]string{}
+	// seamHits attributes every tracked selector -- banned AND control -- to the func whose
+	// body holds it, keyed file:func. The control selectors ride this same map so the needle
+	// below proves the attribution reached a real body; a hit outside every body keys "file:"
+	// and is an offender.
+	seamHits := map[string][]string{}
 	declared := map[string][]string{}
-	for name, f := range files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			declared[name] = append(declared[name], fd.Name.Name)
-			if banned[fd.Name.Name] {
-				offenders[name] = append(offenders[name], "func "+fd.Name.Name)
-			}
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
+	nameOffenders := map[string][]string{}
+	var exportedEnqueue []string
+	seamDecls := 0
+	seamExported := false
+
+	scan := func(key string, root ast.Node) {
+		ast.Inspect(root, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
 			if banned[sel.Sel.Name] {
-				offenders[name] = append(offenders[name], sel.Sel.Name)
+				seamHits[key] = append(seamHits[key], sel.Sel.Name)
 			}
 			if _, tracked := control[sel.Sel.Name]; tracked {
 				control[sel.Sel.Name] = true
+				seamHits[key] = append(seamHits[key], sel.Sel.Name)
 			}
 			return true
 		})
+	}
+
+	for name, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				scan(name+":", decl)
+				continue
+			}
+			declared[name] = append(declared[name], fd.Name.Name)
+			if banned[fd.Name.Name] {
+				nameOffenders[name] = append(nameOffenders[name], "func "+fd.Name.Name)
+			}
+			if fd.Name.IsExported() && strings.HasPrefix(fd.Name.Name, "Enqueue") {
+				exportedEnqueue = append(exportedEnqueue, name+":"+fd.Name.Name)
+			}
+			if name == rxSeamFile && fd.Name.Name == rxSeamFunc {
+				seamDecls++
+				seamExported = fd.Name.IsExported()
+			}
+			// A closure nested in this body still attributes to the func that holds it.
+			if fd.Body != nil {
+				scan(name+":"+fd.Name.Name, fd.Body)
+			}
+		}
 	}
 	for name, seen := range control {
 		if !seen {
 			t.Fatalf("the selector matcher did not find %s anywhere in internal/extraction non-test files; it can no longer find a planted hit, so the absences reported below mean nothing", name)
 		}
 	}
+	// Control for the per-func attribution: without a planted hit under a known key, an
+	// attribution map that reached no body at all would report exactly one clean seam.
+	if !slices.Contains(seamHits["worker.go:Work"], "OncePerJob") {
+		t.Fatalf("the attribution collected %v for worker.go:Work, want it to include OncePerJob; it no longer reaches a func body, so the one-seam count below means nothing", seamHits["worker.go:Work"])
+	}
 	// Control for the declaration-name matcher: a selector scan cannot see a func DECLARED with
 	// a banned name, which is the route an enqueue helper walked through.
 	if !slices.Contains(declared["worker.go"], "AddTo") {
 		t.Fatalf("the declaration-name matcher collected %v from worker.go, want it to include AddTo; it can no longer find a planted hit, so the name bans mean nothing", declared["worker.go"])
 	}
-	names := make([]string, 0, len(offenders))
-	for name := range offenders {
+
+	// The seam must exist before the count below can mean one rather than zero.
+	if seamDecls != 1 {
+		t.Fatalf("internal/extraction/%s declares %s %d time(s), want exactly 1; the seam is gone, so this guard is now vacuous", rxSeamFile, rxSeamFunc, seamDecls)
+	}
+	if !seamExported {
+		t.Errorf("internal/extraction/%s declares %s unexported; no handler outside this package could reach it", rxSeamFile, rxSeamFunc)
+	}
+
+	// The selector ban, as a count. Every func that reaches an enqueue selector must be the seam.
+	seamKeys := make([]string, 0, len(seamHits))
+	for key, sels := range seamHits {
+		for _, s := range sels {
+			if banned[s] {
+				seamKeys = append(seamKeys, key)
+				break
+			}
+		}
+	}
+	sort.Strings(seamKeys)
+	if !slices.Equal(seamKeys, []string{rxSeamKey}) {
+		for _, key := range seamKeys {
+			if key == rxSeamKey {
+				continue
+			}
+			t.Errorf("internal/extraction/%s names %v: this package must enqueue only through %s, or the unexported args type fences nothing", key, seamHits[key], rxSeamFunc)
+		}
+		if !slices.Contains(seamKeys, rxSeamKey) {
+			t.Errorf("no enqueue selector is attributed to %s; the seam enqueues nothing, so this guard counts to zero rather than to one", rxSeamKey)
+		}
+	}
+
+	// AC-4 directly: a second exported Enqueue-prefixed decl is a second seam whatever it calls.
+	sort.Strings(exportedEnqueue)
+	if !slices.Equal(exportedEnqueue, []string{rxSeamKey}) {
+		t.Errorf("the package exports %v as Enqueue-prefixed funcs, want exactly [%s]", exportedEnqueue, rxSeamKey)
+	}
+
+	names := make([]string, 0, len(nameOffenders))
+	for name := range nameOffenders {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		t.Errorf("internal/extraction/%s names %v: this package must never enqueue, or the unexported args type fences nothing", name, offenders[name])
+		t.Errorf("internal/extraction/%s declares %v: a func named for the client's own method is an enqueue surface whatever it does", name, nameOffenders[name])
 	}
 
 	// Control for the result-list matcher, same files, same matcher: a bare local type, a

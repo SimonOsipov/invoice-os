@@ -7,6 +7,7 @@ import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview } from './lib/importApi'
 import type { ImportRun, PickedFile } from './lib/importRun'
+import type { PickedKind } from './lib/importFlow'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
@@ -365,6 +366,11 @@ export type PlatformCtx = {
   // `entityId` does ([multi-invoice import path] above): CreateUpload UNMOUNTS when
   // createStep leaves 'upload'.
   pickedFiles: PickedFile[]
+  // A run is homogeneous (EXTR-09-07): the first picked file that classifies sets this,
+  // clearing the selection clears it, and a file of the other kind is refused with
+  // kindRefusal's reason. Derived from `pickedFiles` by lib/importRun's runKindOf --
+  // never its own independently-written state.
+  runKind: PickedKind | null
   // The refusal text from the most recent addPickedFiles call (lib/importRun's
   // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
   // lives on ctx, the component renders it verbatim.

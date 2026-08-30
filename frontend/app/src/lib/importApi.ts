@@ -156,6 +156,21 @@ export interface ImportBatch {
   created_at: string
 }
 
+// GET /api/submission/v1/extractions. Mirrors extraction.JobState / extraction.JobsResponse
+// (internal/extraction/reader.go:23-35) and e2e/api/client.ts's own copy field for field --
+// `state` stays a bare string on both sides because the column is one (EXTR-09-07).
+export interface ExtractionJob {
+  id: string
+  document_id: string
+  state: string
+  created_at: string
+  last_error: string | null
+}
+
+export interface ExtractionJobsResponse {
+  jobs: ExtractionJob[]
+}
+
 export type XhrCtor = new () => XMLHttpRequest
 
 export interface ImportAuth {

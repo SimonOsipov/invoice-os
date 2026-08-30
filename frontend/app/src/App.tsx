@@ -1244,6 +1244,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     refetchRoles: rolesAsync.run,
     entityId,
     pickedFiles,
+    // STAGE-2.5 STUB (EXTR-09-07): inert so the type compiles. Stage 3 binds this to
+    // runKindOf(pickedFiles) -- FORK-4 (lib/importRun.test.ts) is what refuses the
+    // literal below.
+    runKind: null,
     filesRefusal,
     groups,
     groupIndex,

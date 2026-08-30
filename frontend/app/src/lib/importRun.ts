@@ -11,6 +11,7 @@
 // (dependency order); BULK-01-05 EXTENDS it, never recreates it (task-308 correction).
 
 import { MAX_UPLOAD_BYTES, canReadColumns } from './importFlow'
+import type { PickedKind } from './importFlow'
 import { formatBytes } from './sourceDocument'
 
 export const MAX_RUN_FILES = 5 // [five-file-cap] — Core AC 1: a run accepts at most 5 files.
@@ -58,6 +59,24 @@ export function attachDocumentIds(
     ...pf,
     documentId: previewed.find((p) => p.fileId === pf.id)?.preview.document_id ?? null,
   }))
+}
+
+// STAGE-2.5 STUB (EXTR-09-07, test-first) — throwing rather than guessing keeps FORK-2/
+// FORK-3 RED on an assertion/not-implemented mismatch, never on a compile error.
+//
+// A run is homogeneous: its kind is the first picked file that classifies at all. An
+// unclassifiable file (a .zip) is still LISTED (BULK-03-8) and carries no kind, so it
+// neither sets nor contradicts the run's.
+export function runKindOf(_files: readonly PickedFile[]): PickedKind | null {
+  throw new Error(
+    "not implemented — runKindOf must return the classifyPickedFile kind of the FIRST file that classifies ('spreadsheet' or 'document'), and null for an empty selection or one holding only unclassifiable files",
+  )
+}
+
+// STAGE-2.5 STUB (EXTR-09-07, test-first). Sole copy owner of the mixed-run refusal,
+// beside capRefusal and oversizeNote.
+export function kindRefusal(_runKind: PickedKind, _incomingKind: PickedKind): string {
+  throw new Error('not implemented — kindRefusal must return a non-empty reason naming BOTH kinds, the run\'s and the refused file\'s')
 }
 
 // Sole copy owner of the cap-refusal text — CreateUpload renders whatever this returns

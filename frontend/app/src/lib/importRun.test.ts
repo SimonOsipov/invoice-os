@@ -27,6 +27,9 @@
 // reports as a test failure), never an import/compile error. Same precedent as
 // importFlow.ts's computeNoEntity STUB (task-304, INVCR-01-19) and this same file's own
 // wizardHeader/canReadColumns/canStartImport stubs before M4-08-04 landed.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -35,6 +38,7 @@ import {
   attachDocumentIds,
   canReadColumnsAll,
   capRefusal,
+  kindRefusal,
   markRunFailed,
   markRunRouted,
   oversizeNote,
@@ -44,6 +48,7 @@ import {
   runFailures,
   runFileRows,
   runIsActive,
+  runKindOf,
   runReducer,
 } from './importRun'
 import type { FileOutcome, ImportRun, PickedFile, RunFile } from './importRun'
@@ -1126,5 +1131,263 @@ describe('attachDocumentIds — adversarial (QA)', () => {
     expect(result.map((pf) => pf.documentId)).toEqual(ids)
     // `file` must survive the spread by REFERENCE — readAllColumns re-previews from it.
     result.forEach((pf, i) => expect(pf.file).toBe(files[i].file))
+  })
+})
+
+// ============================================================================
+// RED specs (EXTR-09-07, task-774, Mode A / test-first) — the document fork. task-774's
+// Test Specs table (FORK-1..3, RUN-2, RUN-3, RUN-5 here; POLL-1..4, RUN-1, RUN-4 in
+// documentRun.test.ts) is authoritative.
+//
+// The shipped BULK-03-*/BULK-05-* blocks ABOVE are this story's untouched control (AC-1):
+// they are the spreadsheet path's own behaviour, and a document fork that changes any of
+// them has leaked into it.
+// ============================================================================
+
+function csv(name: string): File {
+  return new File([], name, { type: 'text/csv' })
+}
+
+function pdf(name: string): File {
+  return new File([], name, { type: 'application/pdf' })
+}
+
+function names(files: readonly PickedFile[]): string[] {
+  return files.map((pf) => pf.file.name)
+}
+
+// Runtime source reads, wireMirrors.test.ts:18-20's helper verbatim — four levels up from
+// src/lib/ is the repo root.
+function repoSource(rel: string): string {
+  return readFileSync(fileURLToPath(new URL(`../../../../${rel}`, import.meta.url)), 'utf8')
+}
+
+describe('addFiles — a run is homogeneous (FORK-1, AC-3)', () => {
+  // Falsification: today addFiles has no kind concept at all, so it appends the .pdf and
+  // answers refusal:null. `files` is asserted FIRST so the RED lands on that, not on a
+  // copy-text comparison against a stub.
+  it('FORK-1: a .pdf offered to a spreadsheet run is refused, and the run keeps its files', () => {
+    const current = addFiles([], [csv('ledger.csv')]).files
+    expect(names(current)).toEqual(['ledger.csv'])
+
+    const result = addFiles(current, [pdf('scan.pdf')])
+
+    expect(names(result.files)).toEqual(['ledger.csv'])
+    expect(result.refusal).not.toBeNull()
+    // Names BOTH kinds (AC-3), and is kindRefusal's text verbatim — one copy owner, so a
+    // component can never reword it.
+    expect(result.refusal).toBe(kindRefusal('spreadsheet', 'document'))
+    expect(result.refusal ?? '').toMatch(/spreadsheet/i)
+    expect(result.refusal ?? '').toMatch(/document/i)
+  })
+
+  it('FORK-1b: the reverse — a .csv offered to a document run is refused just as hard', () => {
+    const current = addFiles([], [pdf('scan.pdf')]).files
+    expect(names(current)).toEqual(['scan.pdf'])
+
+    const result = addFiles(current, [csv('ledger.csv')])
+
+    expect(names(result.files)).toEqual(['scan.pdf'])
+    expect(result.refusal).toBe(kindRefusal('document', 'spreadsheet'))
+  })
+})
+
+describe('runKindOf — the first accepted file decides the run kind (FORK-2, AC-3)', () => {
+  it('FORK-2: an empty run takes the kind of the first file, and then refuses the other kind', () => {
+    const first = addFiles([], [pdf('scan.pdf')])
+    expect(names(first.files)).toEqual(['scan.pdf'])
+    expect(first.refusal).toBeNull()
+
+    const second = addFiles(first.files, [csv('ledger.csv')])
+    expect(names(second.files)).toEqual(['scan.pdf'])
+    expect(second.refusal).not.toBeNull()
+
+    expect(runKindOf(first.files)).toBe('document')
+  })
+
+  it('FORK-2b: an unclassifiable file is still LISTED (BULK-03-8) and sets no kind', () => {
+    // The .zip must keep reaching the selection so the user can see and remove it; only a
+    // file whose kind CONTRADICTS the run's is refused.
+    const result = addFiles([], [new File([], 'archive.zip', { type: 'application/zip' })])
+    expect(names(result.files)).toEqual(['archive.zip'])
+    expect(result.refusal).toBeNull()
+    expect(runKindOf(result.files)).toBeNull()
+  })
+})
+
+describe('runKindOf — clearing the selection clears the kind (FORK-3, AC-3)', () => {
+  it('FORK-3: after removing every file, the other kind is accepted again', () => {
+    const docRun = addFiles([], [pdf('scan.pdf')]).files
+    expect(docRun).toHaveLength(1)
+
+    const emptied = removeFile(docRun, docRun[0].id)
+    expect(emptied).toEqual([])
+
+    const next = addFiles(emptied, [csv('ledger.csv')])
+    expect(names(next.files)).toEqual(['ledger.csv'])
+    expect(next.refusal).toBeNull()
+
+    expect(runKindOf(emptied)).toBeNull()
+    expect(runKindOf(next.files)).toBe('spreadsheet')
+  })
+})
+
+describe('App.tsx binds ctx.runKind to a real answer (FORK-4, AC-3)', () => {
+  // Deliberately NOT a check that runKind is derived rather than useState — either is a
+  // legitimate implementation. What this refuses is the Stage-2.5 placeholder shipping:
+  // `runKind: null,` in the ctx literal makes every FORK spec above pass at the module
+  // level while the wizard never forks at all.
+  it('FORK-4: the ctx literal no longer carries the inert `runKind: null` placeholder', () => {
+    const source = repoSource('frontend/app/src/App.tsx')
+    // Floor + control needle: a wrong or empty read must not pass as a clean one.
+    expect(source.length).toBeGreaterThan(40_000)
+    expect(source).toContain('pickedFiles,')
+    expect(source).toContain('runKind')
+
+    expect(source).not.toMatch(/runKind:\s*null\s*,/)
+  })
+})
+
+describe('routeAfterRun over document outcomes — the SHIPPED router, unchanged (RUN-2, RUN-3, AC-2, AC-7)', () => {
+  // Green from birth by design: AC-7 is "the document path reuses these routers", so a RED
+  // here would mean a router had already moved. Falsifiability is RUN-5's job below, which
+  // fails the moment either router's source changes.
+  it('RUN-2: three imported documents route to review with three batch ids in run order', () => {
+    const run = startRun([
+      mkRunFile('f1', 'first.pdf', { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } }),
+      mkRunFile('f2', 'second.pdf', { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2' } }),
+      mkRunFile('f3', 'third.pdf', { kind: 'imported', batchId: 'b3', report: { ...BASE_RUN_REPORT, id: 'b3' } }),
+    ])
+
+    expect(run.files).toHaveLength(3)
+    expect(routeAfterRun(run, 'inv-1')).toEqual({ kind: 'review', batchIds: ['b1', 'b2', 'b3'] })
+  })
+
+  it('RUN-3: one document that imports one ready invoice routes single to the detail page', () => {
+    const run = startRun([
+      mkRunFile('f1', 'only.pdf', {
+        kind: 'imported',
+        batchId: 'b1',
+        report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1 },
+      }),
+    ])
+
+    expect(run.files).toHaveLength(1)
+    expect(routeAfterRun(run, 'inv-77')).toEqual({ kind: 'single', invoiceId: 'inv-77' })
+  })
+})
+
+// --- RUN-5 -----------------------------------------------------------------
+
+// AC-6: neither router moved. task-774's Test Specs row words this as "identical to
+// main's" via `git show origin/main:...`, which CANNOT run here — CI checks out
+// refs/pull/N/merge at fetch-depth 1, so origin/main is unresolvable, which is exactly why
+// EXTR-06-07's RB-07 was deleted one commit ago (702aa274). The pin is therefore a LITERAL
+// copy of both functions as they stand on origin/main, embedded below; it fails on any
+// edit, in CI and locally alike. Following RB-07's own precedent it covers the declaration
+// through its closing brace (inline comments included), not the doc comment above it.
+const ROUTE_AFTER_IMPORT_ON_MAIN: readonly string[] = [
+  'export function routeAfterImport(report: ImportReport, resolvedInvoiceId: string | null): PostImportRoute {',
+  '  // 1. STATUS first, through the SHIPPED predicate. reportSummary keys `failed` on',
+  '  //    `status !== \'completed\'` (importReport.ts, Trap B), which is deliberately not a',
+  '  //    `=== \'failed\'` whitelist -- normalizeReport does not validate `status`, so an',
+  '  //    unrecognised one must fail safe. Re-writing that comparison here would be a',
+  '  //    second copy of a spec-pinned predicate, free to drift (the fork AC-10 forbids).',
+  '  if (reportSummary(report).kind === \'failed\') return { kind: \'rejected\', batchId: report.id }',
+  '  // 2. Then the COUNT. Nothing was created, so there is nothing to open.',
+  '  if (report.ready_invoices === 0) return { kind: \'rejected\', batchId: report.id }',
+  '  // 3. Then the ID, and only at EXACTLY one -- `> 1` falls through to the batch surface',
+  '  //    even when an id resolved, which is what makes `if (resolvedInvoiceId) return',
+  '  //    single` a failing implementation rather than an equivalent one.',
+  '  //',
+  '  //    Truthiness, NEVER `!= null`: the id comes from `r.invoices[0]?.id`, so `\'\'` is',
+  '  //    representable, and `\'\'` is a string that passes a null check. Routing the detail',
+  '  //    view at an empty id is exactly the failure this degrade-to-review branch exists',
+  '  //    to prevent -- a clean single invoice is COUNTED by the report but never LISTED',
+  '  //    in it (Go appends InvoiceViolations only when a violation exists), so the id can',
+  '  //    only ever come from the follow-up list page, which can legitimately come back',
+  '  //    empty.',
+  '  if (report.ready_invoices === 1 && resolvedInvoiceId) return { kind: \'single\', invoiceId: resolvedInvoiceId }',
+  '  return { kind: \'review\', batchId: report.id }',
+  '}',
+]
+
+const ROUTE_AFTER_RUN_ON_MAIN: readonly string[] = [
+  'export function routeAfterRun(run: ImportRun, resolvedInvoiceId: string | null): RunRoute {',
+  '  const batchIds = runBatchIds(run)',
+  '  if (batchIds.length === 0) return { kind: \'none\' }',
+  '  if (run.files.length === 1) {',
+  '    const outcome = run.files[0].outcome',
+  '    if (outcome.kind === \'imported\') {',
+  '      const route = routeAfterImport(outcome.report, resolvedInvoiceId)',
+  '      if (route.kind === \'single\') return { kind: \'single\', invoiceId: route.invoiceId }',
+  '    }',
+  '  }',
+  '  return { kind: \'review\', batchIds }',
+  '}',
+]
+
+// Slices `export function <name>(` through the first line that is exactly a bare brace.
+function functionSource(source: string, name: string): string[] {
+  const lines = source.split('\n')
+  const start = lines.findIndex((l) => l.startsWith(`export function ${name}(`))
+  if (start === -1) return []
+  const end = lines.findIndex((l, i) => i >= start && l === '}')
+  if (end === -1) return []
+  return lines.slice(start, end + 1)
+}
+
+describe('routeAfterImport and routeAfterRun are byte-identical to main (RUN-5, AC-6)', () => {
+  it('RUN-5: neither router moved', () => {
+    // Both pins are non-empty and must start with the declaration the extractor looked
+    // for, so a rename or a failed slice cannot pass as an unchanged function.
+    expect(ROUTE_AFTER_IMPORT_ON_MAIN.length).toBeGreaterThan(5)
+    expect(ROUTE_AFTER_RUN_ON_MAIN.length).toBeGreaterThan(5)
+
+    const actualImport = functionSource(repoSource('frontend/app/src/lib/reviewBatch.ts'), 'routeAfterImport')
+    const actualRun = functionSource(repoSource('frontend/app/src/lib/importRun.ts'), 'routeAfterRun')
+
+    expect(actualImport[0]).toBe(ROUTE_AFTER_IMPORT_ON_MAIN[0])
+    expect(actualRun[0]).toBe(ROUTE_AFTER_RUN_ON_MAIN[0])
+    expect(actualImport).toEqual([...ROUTE_AFTER_IMPORT_ON_MAIN])
+    expect(actualRun).toEqual([...ROUTE_AFTER_RUN_ON_MAIN])
+  })
+})
+
+// --- AC-1's control --------------------------------------------------------
+
+describe('a spreadsheet-only run is untouched by the document fork (AC-1)', () => {
+  it('SPREADSHEET-CONTROL: a csv-only selection is a spreadsheet run and every shipped gate still answers as on main', () => {
+    const result = addFiles([], [csv('a.csv'), csv('b.csv')])
+
+    expect(names(result.files)).toEqual(['a.csv', 'b.csv'])
+    expect(result.refusal).toBeNull()
+    expect(canReadColumnsAll(result.files)).toBe(true)
+    expect(runKindOf(result.files)).toBe('spreadsheet')
+  })
+
+  // The [sequential-not-parallel] markers are SCOPED to the spreadsheet path by this
+  // story, never deleted: the ExistingNumbers duplicate precheck is a per-file
+  // against-stored DB read that only a sequentially-awaited next file can see, and Q12's
+  // parallelism must not leak into it. Presence per site, with a per-file control needle
+  // so an unreadable or wrong file cannot read as a clean one.
+  it('SPREADSHEET-CONTROL-2: all five [sequential-not-parallel] mentions survive, at their four sites', () => {
+    const SITES: readonly [string, number, string][] = [
+      ['frontend/app/src/App.tsx', 1, 'function startRun('],
+      ['frontend/app/src/lib/importRun.ts', 1, 'export function routeAfterRun('],
+      ['frontend/app/src/components/ReviewBatch.tsx', 1, 'export function ReviewBatch('],
+      ['e2e/topology/import-wizard.spec.ts', 2, 'BULK-E2E-03'],
+    ]
+    expect(SITES).toHaveLength(4)
+
+    let total = 0
+    for (const [rel, floor, needle] of SITES) {
+      const source = repoSource(rel)
+      expect(source, rel).toContain(needle)
+      const hits = source.split('[sequential-not-parallel]').length - 1
+      expect(hits, rel).toBeGreaterThanOrEqual(floor)
+      total += hits
+    }
+    expect(total).toBeGreaterThanOrEqual(5)
   })
 })

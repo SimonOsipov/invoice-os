@@ -11,6 +11,7 @@ package extraction_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -327,9 +328,9 @@ func TestExtractionStore_WriteFieldResultsMapsReasonNoneToNull(t *testing.T) {
 	}
 
 	// The reason_code CHECK admits four words or NULL; a zero-length reason_code is 23514.
-	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.Field{
-		{Name: "invoice_number", Value: stPtr("INV-0001"), Reason: extraction.ReasonNone},
-		{Name: "buyer_tin", Reason: extraction.ReasonMissing},
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-0001"), Reason: extraction.ReasonNone}},
+		{Field: extraction.Field{Name: "buyer_tin", Reason: extraction.ReasonMissing}},
 	}); err != nil {
 		t.Fatalf("WriteFieldResults: %v", err)
 	}
@@ -365,8 +366,8 @@ func TestExtractionStore_WriteFieldResultsMapsNilRegionToNulls(t *testing.T) {
 
 	// The insert succeeding is _region_complete being satisfied: its first arm is the
 	// all-NULL case. A zero page would be 23514 on page_check instead.
-	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.Field{
-		{Name: "total_amount", Value: stPtr("1000.00"), Reason: extraction.ReasonNone},
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "total_amount", Value: stPtr("1000.00"), Reason: extraction.ReasonNone}},
 	}); err != nil {
 		t.Fatalf("WriteFieldResults with a nil Region: %v", err)
 	}
@@ -406,8 +407,8 @@ func TestExtractionStore_WriteFieldResultsRoundTripsRegion(t *testing.T) {
 	}
 
 	want := extraction.Region{Page: 2, X0: 0.1, Y0: 0.2, X1: 0.3, Y1: 0.4}
-	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.Field{
-		{Name: "invoice_number", Value: stPtr("INV-0002"), Region: &want, Reason: extraction.ReasonNone},
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-0002"), Region: &want, Reason: extraction.ReasonNone}},
 	}); err != nil {
 		t.Fatalf("WriteFieldResults: %v", err)
 	}
@@ -474,8 +475,8 @@ func TestRLS_ExtractionStoreCannotWriteAcrossTenants(t *testing.T) {
 	if err := s.Advance(ctx, tenantA, jobB.ID, "failed", "boom", 1); err == nil {
 		t.Error("Advance scoped to tenant A accepted tenant B's job id and reported no error")
 	}
-	if err := s.WriteFieldResults(ctx, tenantA, jobB.ID, []extraction.Field{
-		{Name: "invoice_number", Value: stPtr("LEAK"), Reason: extraction.ReasonNone},
+	if err := s.WriteFieldResults(ctx, tenantA, jobB.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("LEAK"), Reason: extraction.ReasonNone}},
 	}); err == nil {
 		t.Error("WriteFieldResults scoped to tenant A accepted tenant B's job id and reported no error")
 	}
@@ -617,10 +618,10 @@ func TestExtractionStore_FieldResultsRoundTripValueAndReason(t *testing.T) {
 
 	// created_at is now(), which is transaction-start time and so identical for every row one
 	// WriteFieldResults writes: field_name is what orders a batch, and these are in that order.
-	want := []extraction.Field{
-		{Name: "buyer_tin", Reason: extraction.ReasonMissing},
-		{Name: "invoice_number", Value: stPtr("INV-0003"), Reason: extraction.ReasonNone},
-		{Name: "total_amount", Value: stPtr("1000.00"), Reason: extraction.ReasonAmbiguous},
+	want := []extraction.FieldResult{
+		{Field: extraction.Field{Name: "buyer_tin", Reason: extraction.ReasonMissing}},
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-0003"), Reason: extraction.ReasonNone}},
+		{Field: extraction.Field{Name: "total_amount", Value: stPtr("1000.00"), Reason: extraction.ReasonAmbiguous}},
 	}
 	if err := s.WriteFieldResults(ctx, tenantID, job.ID, want); err != nil {
 		t.Fatalf("WriteFieldResults: %v", err)
@@ -670,13 +671,13 @@ func TestExtractionStore_FieldResultsAreScopedToOneJob(t *testing.T) {
 		t.Fatalf("EnsureJob second: %v", err)
 	}
 
-	if err := s.WriteFieldResults(ctx, tenantID, first.ID, []extraction.Field{
-		{Name: "invoice_number", Value: stPtr("INV-FIRST"), Reason: extraction.ReasonNone},
+	if err := s.WriteFieldResults(ctx, tenantID, first.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-FIRST"), Reason: extraction.ReasonNone}},
 	}); err != nil {
 		t.Fatalf("WriteFieldResults for the first job: %v", err)
 	}
-	if err := s.WriteFieldResults(ctx, tenantID, second.ID, []extraction.Field{
-		{Name: "invoice_number", Value: stPtr("INV-SECOND"), Reason: extraction.ReasonNone},
+	if err := s.WriteFieldResults(ctx, tenantID, second.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-SECOND"), Reason: extraction.ReasonNone}},
 	}); err != nil {
 		t.Fatalf("WriteFieldResults for the second job: %v", err)
 	}
@@ -706,8 +707,8 @@ func TestExtractionStore_WritesTheTextLayerVerdict(t *testing.T) {
 		t.Fatalf("EnsureJob: %v", err)
 	}
 
-	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.Field{
-		{Name: "document_text_layer", Reason: extraction.ReasonUnreadable},
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "document_text_layer", Reason: extraction.ReasonUnreadable}},
 	}); err != nil {
 		t.Fatalf("WriteFieldResults for the text-layer verdict: %v", err)
 	}
@@ -741,6 +742,395 @@ func TestExtractionStore_WritesTheTextLayerVerdict(t *testing.T) {
 		if c.got != nil {
 			t.Errorf("%s is %v, want SQL NULL", c.col, *c.got)
 		}
+	}
+}
+
+// --- EXTR-05-06: ranked field results and their alternatives --------------------------
+
+// AC-1: a decided field with no alternatives writes exactly one row, at rank 0.
+func TestRLS_WriteFieldResultsWritesRankZeroForTheDecidedField(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902001)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-RANK0"), Reason: extraction.ReasonNone}},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	var rank int
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT candidate_rank FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2`, job.ID, "invoice_number").Scan(&rank); err != nil {
+		t.Fatalf("read candidate_rank: %v", err)
+	}
+	if rank != 0 {
+		t.Errorf("candidate_rank is %d, want 0 for a decided field with no alternatives", rank)
+	}
+}
+
+// AC-1: one ambiguous FieldResult with 2 alternatives writes 3 rows, ranked 0,1,2 in slice
+// order -- the decided reading first, then each alternative in the order Reconcile produced it.
+func TestRLS_WriteFieldResultsRanksAlternativesInSliceOrder(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902101)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	fr := extraction.FieldResult{
+		Field: extraction.Field{Name: "issue_date", Value: stPtr("2026-03-12"), Reason: extraction.ReasonAmbiguous},
+		Alternatives: []extraction.Field{
+			{Name: "issue_date", Value: stPtr("2026-12-03")},
+			{Name: "issue_date", Value: stPtr("2026-03-20")},
+		},
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{fr}); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT candidate_rank, value FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2 ORDER BY candidate_rank`,
+		job.ID, "issue_date")
+	if err != nil {
+		t.Fatalf("read ranked rows: %v", err)
+	}
+	defer rows.Close()
+
+	type rankedRow struct {
+		rank  int
+		value *string
+	}
+	var got []rankedRow
+	for rows.Next() {
+		var r rankedRow
+		if err := rows.Scan(&r.rank, &r.value); err != nil {
+			t.Fatalf("scan ranked row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read ranked rows: %v", err)
+	}
+
+	want := []string{"2026-03-12", "2026-12-03", "2026-03-20"}
+	if len(got) != len(want) {
+		t.Fatalf("wrote %d row(s) for one ambiguous field with 2 alternatives, want %d (ranks 0,1,2)", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].rank != i {
+			t.Errorf("row %d has candidate_rank %d, want %d", i, got[i].rank, i)
+			continue
+		}
+		if got[i].value == nil || *got[i].value != w {
+			t.Errorf("rank %d value is %v, want %q", i, got[i].value, w)
+		}
+	}
+}
+
+// AC-2/3: a written ambiguous field round-trips as ONE FieldResult with its alternatives
+// attached, not as separate rows -- value, region and reason all survive for both the decided
+// reading and its alternative.
+func TestRLS_FieldResultsRoundTripsAnAmbiguousField(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902201)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	decidedRegion := extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.2, Y1: 0.2}
+	altRegion := extraction.Region{Page: 1, X0: 0.3, Y0: 0.3, X1: 0.4, Y1: 0.4}
+	want := extraction.FieldResult{
+		Field: extraction.Field{Name: "issue_date", Value: stPtr("2026-03-12"), Region: &decidedRegion, Reason: extraction.ReasonAmbiguous},
+		Alternatives: []extraction.Field{
+			{Name: "issue_date", Value: stPtr("2026-12-03"), Region: &altRegion},
+		},
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{want}); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("FieldResults returned %d result(s) for one ambiguous field, want 1 (grouped)", len(out))
+	}
+	got := out[0]
+	if got.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("decided reading reason is %q, want ambiguous", got.Reason)
+	}
+	if got.Value == nil || *got.Value != *want.Value {
+		t.Errorf("decided reading value is %v, want %q", got.Value, *want.Value)
+	}
+	if got.Region == nil || *got.Region != decidedRegion {
+		t.Errorf("decided reading region is %v, want %+v", got.Region, decidedRegion)
+	}
+	if len(got.Alternatives) != 1 {
+		t.Fatalf("FieldResults returned %d alternative(s), want 1", len(got.Alternatives))
+	}
+	alt := got.Alternatives[0]
+	if alt.Value == nil || *alt.Value != *want.Alternatives[0].Value {
+		t.Errorf("alternative value is %v, want %q", alt.Value, *want.Alternatives[0].Value)
+	}
+	if alt.Region == nil || *alt.Region != altRegion {
+		t.Errorf("alternative region is %v, want %+v", alt.Region, altRegion)
+	}
+}
+
+// AC-2: candidate_rank is the read's own tiebreak, independent of insertion order -- rows
+// planted at ranks 2,0,1 must still read back grouped with the alternatives in rank order.
+func TestRLS_FieldResultsOrdersByCandidateRank(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	h := stRequire(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902301)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	for _, row := range []struct {
+		rank  int
+		value string
+	}{{2, "third"}, {0, "first"}, {1, "second"}} {
+		if _, err := h.super.Exec(ctx,
+			`INSERT INTO extraction_field_results (tenant_id, extraction_job_id, field_name, value, candidate_rank)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			tenantID, job.ID, "total_amount", row.value, row.rank); err != nil {
+			t.Fatalf("seed rank %d: %v", row.rank, err)
+		}
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("FieldResults returned %d result(s) for one field written at three ranks, want 1 (grouped)", len(out))
+	}
+	got := out[0]
+	if got.Value == nil || *got.Value != "first" {
+		t.Errorf("decided reading (rank 0) value is %v, want %q", got.Value, "first")
+	}
+	if len(got.Alternatives) != 2 {
+		t.Fatalf("FieldResults returned %d alternative(s), want 2 (ranks 1 and 2)", len(got.Alternatives))
+	}
+	wantAlts := []string{"second", "third"}
+	for i, w := range wantAlts {
+		if got.Alternatives[i].Value == nil || *got.Alternatives[i].Value != w {
+			t.Errorf("alternative %d value is %v, want %q -- the read must order by candidate_rank, not insertion order", i, got.Alternatives[i].Value, w)
+		}
+	}
+}
+
+// AC-4: a job with no rows at all still returns a non-nil, zero-length slice.
+func TestRLS_FieldResultsOnAnEmptyJobIsEmptyNotNil(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902401)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if out == nil {
+		t.Fatal("FieldResults returned a nil slice for a job with zero results, want a non-nil empty slice")
+	}
+	if len(out) != 0 {
+		t.Errorf("FieldResults returned %d result(s) for a job with zero rows, want 0", len(out))
+	}
+}
+
+// AC-4: Alternatives marshals as "[]", never "null" -- a nil slice would read as absent data
+// to any consumer, not as "no alternatives".
+func TestRLS_FieldResultAlternativesMarshalAsArrayNotNull(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902501)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-JSON"), Reason: extraction.ReasonNone}},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("FieldResults returned %d result(s), want 1", len(out))
+	}
+	if out[0].Alternatives == nil {
+		t.Fatal("FieldResults returned a nil Alternatives slice, want non-nil empty")
+	}
+
+	raw, err := json.Marshal(out[0])
+	if err != nil {
+		t.Fatalf("marshal FieldResult: %v", err)
+	}
+	if !strings.Contains(string(raw), `"alternatives":[]`) {
+		t.Errorf("marshaled FieldResult = %s, want the literal substring \"alternatives\":[]", raw)
+	}
+}
+
+// AC-5: ReasonNone and a nil Region still bind SQL NULL through the []FieldResult signature.
+func TestRLS_ReasonNoneAndNilRegionBindNull(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902601)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, []extraction.FieldResult{
+		{Field: extraction.Field{Name: "supplier_tin", Value: stPtr("MOCK-TIN"), Reason: extraction.ReasonNone}},
+	}); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	var (
+		reason         *string
+		page           *int
+		x0, y0, x1, y1 *float64
+	)
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT reason_code, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1 FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2`, job.ID, "supplier_tin").
+		Scan(&reason, &page, &x0, &y0, &x1, &y1); err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if reason != nil {
+		t.Errorf("reason_code is %q, want SQL NULL for ReasonNone", *reason)
+	}
+	if page != nil {
+		t.Errorf("page is %d, want SQL NULL for a nil Region", *page)
+	}
+	for _, c := range []struct {
+		col string
+		got *float64
+	}{{"bbox_x0", x0}, {"bbox_y0", y0}, {"bbox_x1", x1}, {"bbox_y1", y1}} {
+		if c.got != nil {
+			t.Errorf("%s is %v, want SQL NULL", c.col, *c.got)
+		}
+	}
+}
+
+// The read-order invariant: created_at is transaction-start time, identical for every row one
+// WriteFieldResults call writes, so (field_name, candidate_rank) is what must resolve the read
+// -- an application invariant, not a DB constraint (no unique index exists). Fields are
+// written out of field_name order on purpose, so an ORDER BY that dropped field_name in favour
+// of insertion order could not pass by accident.
+func TestRLS_FieldResultsReadOrderPinsFieldNameThenCandidateRank(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902701)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	write := []extraction.FieldResult{
+		{Field: extraction.Field{Name: "total_amount", Value: stPtr("1000.00"), Reason: extraction.ReasonNone}},
+		{Field: extraction.Field{Name: "buyer_tin", Value: stPtr("B-1"), Reason: extraction.ReasonNone}},
+		{
+			Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-A"), Reason: extraction.ReasonAmbiguous},
+			Alternatives: []extraction.Field{
+				{Name: "invoice_number", Value: stPtr("INV-B")},
+				{Name: "invoice_number", Value: stPtr("INV-C")},
+			},
+		},
+	}
+	if err := s.WriteFieldResults(ctx, tenantID, job.ID, write); err != nil {
+		t.Fatalf("WriteFieldResults: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err != nil {
+		t.Fatalf("FieldResults: %v", err)
+	}
+	if len(out) != len(write) {
+		t.Fatalf("FieldResults returned %d result(s), want %d (one per field, grouped)", len(out), len(write))
+	}
+
+	wantNames := []string{"buyer_tin", "invoice_number", "total_amount"}
+	for i, name := range wantNames {
+		if out[i].Name != name {
+			t.Fatalf("result %d is %q, want %q -- the read must order by field_name when every row shares one created_at", i, out[i].Name, name)
+		}
+	}
+
+	inv := out[1]
+	if len(inv.Alternatives) != 2 {
+		t.Fatalf("invoice_number carries %d alternative(s), want 2", len(inv.Alternatives))
+	}
+	wantAlts := []string{"INV-B", "INV-C"}
+	for i, w := range wantAlts {
+		if inv.Alternatives[i].Value == nil || *inv.Alternatives[i].Value != w {
+			t.Errorf("invoice_number alternative %d is %v, want %q -- alternatives order by candidate_rank", i, inv.Alternatives[i].Value, w)
+		}
+	}
+	if inv.Value == nil || *inv.Value != "INV-A" {
+		t.Errorf("invoice_number decided value is %v, want %q", inv.Value, "INV-A")
+	}
+}
+
+// The orphan invariant: a rank>0 row whose field_name has no rank-0 sibling is a shape
+// Reconcile never produces, but nothing in the schema forbids it. FieldResults must refuse it
+// rather than silently drop it (losing audit data) or promote it (fabricating a reading
+// Reconcile never made).
+func TestRLS_FieldResultsOrphanAlternativeIsAHardError(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	h := stRequire(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 902801)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_field_results (tenant_id, extraction_job_id, field_name, value, candidate_rank)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		tenantID, job.ID, "issue_date", "2026-12-03", 1); err != nil {
+		t.Fatalf("seed the orphan alternative: %v", err)
+	}
+
+	out, err := s.FieldResults(ctx, tenantID, job.ID)
+	if err == nil {
+		t.Fatal("FieldResults accepted a rank>0 row with no rank-0 sibling and reported no error")
+	}
+	if len(out) != 0 {
+		t.Errorf("FieldResults returned %d result(s) alongside its error, want an empty slice", len(out))
 	}
 }
 

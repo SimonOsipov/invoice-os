@@ -1374,6 +1374,46 @@ func TestRLS_ExtractWorkerEmitsSucceededOnce(t *testing.T) {
 	}
 }
 
+// EXTR-05-06 AC-6: the extractor's own output carries no alternatives, so every row the
+// worker writes for it lands at rank 0.
+func TestRLS_ExtractWorkerWritesRankZeroForEveryExtractorField(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	fields := wkFlaggedFields()
+	const riverJobID = int64(909901)
+	if err := wkWorker(t, wkFieldsExtractor(fields), wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT candidate_rank FROM extraction_field_results WHERE extraction_job_id = $1`, xid)
+	if err != nil {
+		t.Fatalf("read candidate_rank column: %v", err)
+	}
+	defer rows.Close()
+
+	var n int
+	for rows.Next() {
+		var rank int
+		if err := rows.Scan(&rank); err != nil {
+			t.Fatalf("scan candidate_rank: %v", err)
+		}
+		if rank != 0 {
+			t.Errorf("row has candidate_rank %d, want 0 -- the extractor's own output carries no alternatives", rank)
+		}
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read candidate_rank column: %v", err)
+	}
+	if n != len(fields) {
+		t.Fatalf("found %d field result row(s), want %d", n, len(fields))
+	}
+}
+
 // T3-2. AC-D3: a failed-but-will-retry attempt is non-terminal in substance and must emit
 // nothing. The dead-lettered arm below is the population floor that stops the retry arm's zero
 // from passing on a worker that emits nothing at all.

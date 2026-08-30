@@ -28,7 +28,9 @@ type Entity struct {
 // ambiguous field keeps. The decided Field carries the reason code; an alternative never does.
 type FieldResult struct {
 	Field
-	Alternatives []Field // never nil; non-empty only when Field.Reason is ReasonAmbiguous
+	// No omitempty: a nil slice marshals to null; never nil here, non-empty only when
+	// Field.Reason is ReasonAmbiguous.
+	Alternatives []Field `json:"alternatives"`
 }
 
 // reconcileTolerance is one kobo, looser than internal/validation's 0.005: validation checks

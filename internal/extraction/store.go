@@ -43,7 +43,7 @@ func (s *Store) Advance(ctx context.Context, tenantID, jobID, state, lastErr str
 }
 
 // WriteFieldResults appends one row per field to the job.
-func (s *Store) WriteFieldResults(ctx context.Context, tenantID, jobID string, fields []Field) error {
+func (s *Store) WriteFieldResults(ctx context.Context, tenantID, jobID string, fields []FieldResult) error {
 	return db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
 		return writeFieldResultsTx(ctx, tx, tenantID, jobID, fields)
 	})
@@ -65,8 +65,8 @@ func (s *Store) WritePageImages(ctx context.Context, tenantID, documentID string
 }
 
 // FieldResults returns the job's stored fields, never a nil slice.
-func (s *Store) FieldResults(ctx context.Context, tenantID, jobID string) ([]Field, error) {
-	out := []Field{}
+func (s *Store) FieldResults(ctx context.Context, tenantID, jobID string) ([]FieldResult, error) {
+	out := []FieldResult{}
 	err := db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
 		var err error
 		out, err = fieldResultsTx(ctx, tx, tenantID, jobID)
@@ -130,7 +130,7 @@ func advanceJobTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, state, lastEr
 // admits four words or NULL, and the all-NULL arm is what _region_complete accepts for a
 // field with no box. The CHECK set is the only validation; the extractor contract is the
 // first line and duplicating either in Go buys nothing.
-func writeFieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string, fields []Field) error {
+func writeFieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string, fields []FieldResult) error {
 	for _, f := range fields {
 		var reason any
 		if f.Reason != ReasonNone {
@@ -179,8 +179,8 @@ func writePageImagesTx(ctx context.Context, tx pgx.Tx, tenantID, documentID stri
 
 // fieldResultsTx returns an empty slice rather than nil on every path: nil marshals to a
 // JSON null where a caller expects an array.
-func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]Field, error) {
-	out := []Field{}
+func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]FieldResult, error) {
+	out := []FieldResult{}
 
 	rows, err := tx.Query(ctx,
 		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code
@@ -210,7 +210,8 @@ func fieldResultsTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]F
 		if reason != nil {
 			f.Reason = Reason(*reason)
 		}
-		out = append(out, f)
+		// OLD-behavior read: one row in, one FieldResult out, rank 0 only, no grouping.
+		out = append(out, FieldResult{Field: f, Alternatives: []Field{}})
 	}
 	if err := rows.Err(); err != nil {
 		return out, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)

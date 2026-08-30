@@ -180,7 +180,10 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflow
 // INVCR-01-09 cashed that distinction by deleting CreateReport.tsx outright. 'review' now
 // renders ReviewBatch.tsx off `reviewBatchIds` + two live GETs, which is also why the step
 // is reachable by URL (`#review/<uuid>`) where the payload-backed one never could be.
-export type CreateStep = 'upload' | 'mapping' | 'form' | 'review'
+// EXTR-09-06 added 'documents' — the extraction run's own first step, on a strip that has
+// no Map. Every member needs an entry in lib/importFlow.ts's STAGE_OF or that file stops
+// compiling (STEPS-D3b).
+export type CreateStep = 'upload' | 'mapping' | 'form' | 'review' | 'documents'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.

@@ -150,14 +150,17 @@ export const CFG: ClientCfg[] = [
 /* Create-flow static content                                          */
 /* ------------------------------------------------------------------ */
 
+// The document path's strip. No Map step — a document's fields are extracted, never
+// mapped onto columns.
 export const WIZARD_STEPS: [string, string][] = [
-  ['1', 'Enter'],
+  ['1', 'Import'],
+  ['2', 'Review'],
 ]
 
-// STAGE-2.5 STUB (EXTR-09-06, task-773). Manual entry's own strip, moving off
-// WIZARD_STEPS so the latter can become the document strip. Left EMPTY on purpose —
-// spelling [['1', 'Enter']] here would make STEPS-D2 green at birth.
-export const ENTER_STEPS: [string, string][] = []
+// Manual entry's strip. One screen, one round trip (INVCR-01-03).
+export const ENTER_STEPS: [string, string][] = [
+  ['1', 'Enter'],
+]
 
 // Canonical invoice fields the Map step targets (Platform.dc.html ~L1115).
 export const CANON: CanonField[] = [

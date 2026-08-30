@@ -9,7 +9,7 @@
 // CreateStep union, and STAGE_OF below is the ONLY total Record<CreateStep, number> in
 // the frontend, so the union addition cascades to it too.
 
-import { WIZARD_STEPS } from '../data'
+import { ENTER_STEPS, WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
 import type { CreateStep, Mapping } from '../types'
 import type { ImportPreview } from './importApi'
@@ -30,41 +30,43 @@ export const IMPORT_STEPS: [string, string][] = [
 // drift). CreateFlow deletes its local STAGE_OF + wizardStage and calls wizardHeader
 // instead (M4-08-04 step 4).
 //
-// Do NOT "dedupe" this against IMPORT_STAGE_OF. `form` is the ONLY entry wizardHeader
-// ever reads here — DOCUMENT_ONLY_STEPS is ['form'], so every other step routes to
-// IMPORT_STAGE_OF instead. upload/mapping/review exist solely to keep the type a TOTAL
-// Record<CreateStep, number>: that totality is the compiler's exhaustiveness anchor (a
-// member added to CreateStep without a stage stops this file compiling) and it is the
-// ground truth two shipped deletion guards in importFlow.test.ts read via
-// Object.keys(STAGE_OF) to prove a deleted step never creeps back. Their values mirror
-// IMPORT_STAGE_OF's so the two tables can never disagree.
+// Do NOT "dedupe" this against the two per-path tables. `form` is the ONLY entry
+// wizardHeader ever reads here — TYPED_ONLY_STEPS is ['form'], so every other step routes
+// to IMPORT_STAGE_OF or DOCUMENT_STAGE_OF instead. The rest exist solely to keep the type
+// a TOTAL Record<CreateStep, number>: that totality is the compiler's exhaustiveness
+// anchor (a member added to CreateStep without a stage stops this file compiling, pinned
+// both ways by STEPS-D3b) and it is the ground truth the deletion guards in
+// importFlow.test.ts read via Object.keys(STAGE_OF). Their values mirror IMPORT_STAGE_OF's
+// so the two tables can never disagree.
 export const STAGE_OF: Record<CreateStep, number> = {
   upload: 0,
   mapping: 1,
-  form: 0, // WIZARD_STEPS[0] = 'Enter' — the one entry that is actually read
+  form: 0, // ENTER_STEPS[0] = 'Enter' — the one entry that is actually read
   review: 2, // mirrors IMPORT_STAGE_OF; present so the Record stays total
+  documents: 0, // mirrors DOCUMENT_STAGE_OF; present so the Record stays total
 }
 
 export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, mapping: 1, review: 2 }
 
-// The header-path resolver ([wizard-steps-split], debate finding J1). Exact rule:
-// path = 'document' iff createStep === 'form'; otherwise 'import'. Total over CreateStep
-// via `?? 0` — a step added to the union without an IMPORT_STAGE_OF entry falls to the
-// import path at index 0 rather than ever returning undefined/NaN (FLOW-14).
-//
-// The two strips it resolves between ([three-stages], INVCR-01-04): typing an invoice by
-// hand is `Enter · Review` and lights 'Enter'; dropping a file is `Import · Map · Review`.
-// 'Review' is the last stage on both paths — the real invoice detail view for a single
-// typed invoice, the import report for a batch.
-const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form']
+// The document path's own indices. Separate from STAGE_OF because 'review' is SHARED and
+// lands at a different index on each path: 1 of 2 here, 2 of 3 on the import strip.
+const DOCUMENT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, documents: 0, review: 1 }
 
-// STAGE-2.5 STUB (EXTR-09-06, task-773): the run kind is ACCEPTED AND IGNORED. 'review'
-// is shared by all three paths, so the step alone cannot pick a strip — STEPS-D4/STEPS-D5
-// fail on that until Stage 3 reads this argument.
-export function wizardHeader(createStep: CreateStep, _runKind?: WizardPath | null): { steps: [string, string][]; stageIndex: number } {
-  return DOCUMENT_ONLY_STEPS.includes(createStep)
-    ? { steps: WIZARD_STEPS, stageIndex: STAGE_OF[createStep] ?? 0 }
-    : { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }
+// Steps that belong to the typed path whatever the run kind is.
+const TYPED_ONLY_STEPS: readonly CreateStep[] = ['form']
+
+// The header-path resolver. Three strips, so the step ALONE cannot pick one: 'review' is
+// shared by the import and document paths (STEPS-D5), which is why the run kind is an
+// argument. Total over CreateStep via `?? 0` — a step added to the union without a
+// per-path entry lands at index 0 rather than ever returning undefined/NaN (FLOW-14,
+// STEPS-D4b).
+//
+// Typing an invoice by hand is `Enter`; dropping a spreadsheet is `Import · Map · Review`;
+// dropping a document is `Import · Review` — no Map step, documents are never mapped.
+export function wizardHeader(createStep: CreateStep, runKind?: WizardPath | null): { steps: [string, string][]; stageIndex: number } {
+  if (TYPED_ONLY_STEPS.includes(createStep)) return { steps: ENTER_STEPS, stageIndex: STAGE_OF[createStep] ?? 0 }
+  if (createStep === 'documents' || runKind === 'document') return { steps: WIZARD_STEPS, stageIndex: DOCUMENT_STAGE_OF[createStep] ?? 0 }
+  return { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }
 }
 
 // The picker's per-file verdict (EXTR-09 §1). 'spreadsheet' keeps the shipped

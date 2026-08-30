@@ -17,13 +17,16 @@ import { ReviewBatch } from './ReviewBatch'
 import { ImportProgress } from './ImportProgress'
 import type { PlatformCtx } from '../types'
 
-// The wizard serves TWO paths with different step lists — the 1-step Enter typed
-// path and the 3-step Import/Map/Review import — so the header is resolved by wizardHeader
-// (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which has no concept
-// of which path the user is on. STAGE_OF moved there with it: one table, one owner, no
-// second copy to drift. wizardHeader takes the step ALONE: the file arguments existed
-// only to disambiguate 'upload' between the two paths, and with the document mock deleted
-// (INVCR-01-01) 'upload' belongs unambiguously to the import path.
+// The wizard serves THREE paths with different step lists — the 1-step Enter typed path,
+// the 3-step Import/Map/Review spreadsheet import and the 2-step Import/Review document
+// run — so the header is resolved by wizardHeader (lib/importFlow.ts) rather than a flat
+// Record<CreateStep, number>, which has no concept of which path the user is on. STAGE_OF
+// moved there with it: one table, one owner, no second copy to drift.
+//
+// wizardHeader takes the run kind as a SECOND argument, because 'review' is shared by the
+// import and document paths and lands at a different index on each. This call passes only
+// the step, which resolves the two shipped paths correctly; EXTR-09-07 wires the run kind
+// through ctx when the document path gains an entry point.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
   const { createStep, run } = ctx
   const { steps, stageIndex } = wizardHeader(createStep)

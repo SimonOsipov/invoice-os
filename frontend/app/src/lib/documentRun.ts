@@ -9,43 +9,52 @@ import type { ExtractionJob, ImportReport } from './importApi'
 // extractor's sub-second work, below the worker's own 10-minute River timeout.
 export const EXTRACTION_POLL_BUDGET_MS = 120_000
 
-export const EXTRACTION_POLL_INTERVAL_MS = 2_000
+export const EXTRACTION_POLL_INTERVAL_MS = 1_500
 
 // 'waiting' is the only non-terminal verdict; both terminal ones carry what the caller
 // needs to settle a FileOutcome without re-reading the job.
 export type PollVerdict = { kind: 'waiting' } | { kind: 'succeeded'; jobId: string } | { kind: 'failed'; reason: string }
 
-// STAGE-2.5 STUB (EXTR-09-07, test-first) — throwing rather than guessing keeps every
-// spec RED on an assertion/not-implemented mismatch, never on a compile error.
-export function isTerminalExtractionState(_state: string): boolean {
-  throw new Error(
-    "not implemented — isTerminalExtractionState must return true for 'succeeded' and 'dead_lettered' only; 'queued'/'extracting'/'failed' are still in flight (River retries a 'failed' attempt)",
-  )
+// 'failed' is NOT terminal — River retries a failed attempt; only a dead-letter ends it.
+export function isTerminalExtractionState(state: string): boolean {
+  return state === 'succeeded' || state === 'dead_lettered'
 }
 
 // The newest job by created_at, NOT jobs[0] — the array's order is the server's, and a
 // reducer that trusts it is right only by coincidence.
-export function newestJob(_jobs: readonly ExtractionJob[]): ExtractionJob | null {
-  throw new Error('not implemented — newestJob must return the job with the greatest created_at, or null for an empty array')
+export function newestJob(jobs: readonly ExtractionJob[]): ExtractionJob | null {
+  let newest: ExtractionJob | null = null
+  for (const job of jobs) {
+    if (newest === null || job.created_at > newest.created_at) newest = job
+  }
+  return newest
 }
 
 // Sole copy owner of the budget-expiry reason, beside deadLetterRefusal — the run renders
 // what these return verbatim. Distinct texts: AC-5 wants the three failure causes
 // distinguishable.
 export function pollBudgetRefusal(): string {
-  throw new Error('not implemented — pollBudgetRefusal must return the non-empty budget-expiry reason, distinct from deadLetterRefusal')
+  return `Extraction is still running after ${Math.round(EXTRACTION_POLL_BUDGET_MS / 1000)} seconds. The document was stored and its extraction continues — open it again later.`
 }
 
-export function deadLetterRefusal(_lastError: string | null): string {
-  throw new Error("not implemented — deadLetterRefusal must carry last_error VERBATIM inside a non-empty reason, and must not render a null last_error as the text 'null'")
+export function deadLetterRefusal(lastError: string | null): string {
+  const detail = lastError === null || lastError === '' ? 'the server gave no reason' : lastError
+  return `Extraction failed for this document — ${detail}`
 }
 
 // The reducer: the whole jobs[] array plus how long this document has been polled, in.
 // One verdict out. Budget arithmetic lives here so no caller re-derives the boundary.
-export function pollVerdict(_jobs: readonly ExtractionJob[], _elapsedMs: number): PollVerdict {
-  throw new Error(
-    "not implemented — pollVerdict must reduce jobs[] newest-first to {kind:'succeeded'|'failed'|'waiting'}, and must return {kind:'failed', reason: pollBudgetRefusal()} once elapsedMs exceeds EXTRACTION_POLL_BUDGET_MS rather than waiting forever",
-  )
+//
+// A terminal job outranks the budget: once the server has settled, the elapsed clock is
+// no longer the honest reason.
+export function pollVerdict(jobs: readonly ExtractionJob[], elapsedMs: number): PollVerdict {
+  const job = newestJob(jobs)
+  if (job !== null && isTerminalExtractionState(job.state)) {
+    if (job.state === 'succeeded') return { kind: 'succeeded', jobId: job.id }
+    return { kind: 'failed', reason: deadLetterRefusal(job.last_error) }
+  }
+  if (elapsedMs > EXTRACTION_POLL_BUDGET_MS) return { kind: 'failed', reason: pollBudgetRefusal() }
+  return { kind: 'waiting' }
 }
 
 export interface DocumentRunFile {
@@ -68,12 +77,32 @@ export interface DocumentRunOutcome {
   outcome: FileOutcome
 }
 
-// STAGE-2.5 STUB (EXTR-09-07, test-first) — the real body is Stage 3's.
-//
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 // N pipelines, each upload -> poll -> import, all started before any of them is awaited
-// (Core AC #9). One file's failure settles that file and nothing else.
-export function startDocumentRun(_files: readonly DocumentRunFile[], _deps: DocumentPipelineDeps): Promise<DocumentRunOutcome[]> {
-  throw new Error(
-    'not implemented — startDocumentRun must start every file\'s upload before awaiting any of them (Promise.all over N pipelines, never a sequential for-await), and must resolve one DocumentRunOutcome per input file in input order, a rejected pipeline settling as {kind:\'failed\'} rather than rejecting the run',
+// (Core AC #9). One file's failure settles that file and nothing else — every pipeline
+// catches its own, so Promise.all can never reject. Pinned by RUN-1 / RUN-4.
+export function startDocumentRun(
+  files: readonly DocumentRunFile[],
+  deps: DocumentPipelineDeps,
+): Promise<DocumentRunOutcome[]> {
+  return Promise.all(
+    files.map(async (f): Promise<DocumentRunOutcome> => {
+      try {
+        const documentId = await deps.upload(f.file)
+        const verdict = await deps.poll(documentId)
+        // Carried VERBATIM: the poll owns the wording, this only relays it.
+        if (verdict.kind !== 'succeeded') {
+          const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
+          return { id: f.id, name: f.name, outcome: { kind: 'failed', message: reason } }
+        }
+        const report = await deps.importDocument(documentId)
+        return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report } }
+      } catch (err) {
+        return { id: f.id, name: f.name, outcome: { kind: 'failed', message: messageOf(err) } }
+      }
+    }),
   )
 }

@@ -456,6 +456,13 @@ export type PlatformCtx = {
   // `importError` naming the failing file and stays on 'upload' — never silently drops
   // the file, never carries it into the run. Renamed from the single-file `readColumns`.
   readAllColumns: () => void
+  // The document path's whole run (EXTR-09-07): N concurrent upload -> poll -> import
+  // pipelines, one FileOutcome each, landing through the SAME routeAfterRun/applyRoute
+  // pair the spreadsheet run uses. Fire-and-forget, like startRun — outcomes arrive
+  // through `run`. The picker's primary calls this instead of readAllColumns whenever the
+  // selection's kind is 'document'; documents are never mapped, so there is no step
+  // between the pick and the commit.
+  startDocumentRun: () => void
   // Splits `fileId` out of whichever group currently holds it
   // (lib/mappingGroups.ts's splitOut) — a no-op on a single-file group. The split
   // group's mapping is a COPY of the shared group's mapping at split time, never a

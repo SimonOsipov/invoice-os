@@ -1669,9 +1669,10 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
 // partial-first.csv imports BULK-DUP-001/002 cleanly; partial-dupe.csv's only invoice
 // number (BULK-DUP-001) already exists for this run's entity by the time its OWN
 // createImport call runs -- [sequential-not-parallel] (App.tsx's startRun never
-// Promise.all's the per-file calls) is what makes this reachable at all: a concurrent
-// implementation would let both files' ExistingNumbers precheck race the same DB read
-// and both would succeed. Verified directly against internal/importer/service.go: this
+// Promise.all's the per-file SPREADSHEET calls) is what makes this reachable at all: a
+// concurrent implementation would let both files' ExistingNumbers precheck race the same
+// DB read and both would succeed. EXTR-09-07's startDocumentRun IS concurrent, and may
+// be: ImportDocument never runs that precheck. Verified directly against internal/importer/service.go: this
 // second batch still finalizes 'completed' (:923) with ready_invoices/rows_valid 0 --
 // the rowsTotal==0 early-'failed' finalize (:782-790) is a DIFFERENT path, for a file
 // with literally zero data rows, which partial-dupe.csv (one real data row) never hits.
@@ -1681,7 +1682,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
 // (`batch.errors`, [reason-comes-from-errors-not-status]) surfaces in
 // review-files-strip-row instead. BULK-E2E-03b/03d assert on that reason TEXT below,
 // never on a 'failed' status this shape does not emit.
-test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel]): a cross-file duplicate quarantines one file while the run keeps its earlier successes, named by reason not status', async ({
+test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cross-file duplicate quarantines one file while the run keeps its earlier successes, named by reason not status', async ({
   page,
 }) => {
   test.setTimeout(120_000)

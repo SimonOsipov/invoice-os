@@ -171,6 +171,17 @@ export interface ExtractionJobsResponse {
   jobs: ExtractionJob[]
 }
 
+// The 201 body of POST /api/submission/v1/documents, field for field
+// (e2e/api/contract-document-upload.spec.ts pins the whole key set). `reused` is the
+// per-tenant content-hash dedupe verdict, not an error.
+export interface SourceDocumentUpload {
+  document_id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  reused: boolean
+}
+
 export type XhrCtor = new () => XMLHttpRequest
 
 export interface ImportAuth {
@@ -327,6 +338,53 @@ export async function createImport(
   form.append('document_id', req.documentId)
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
+  return normalizeReport(raw)
+}
+
+// The document path's upload (EXTR-09-07). Multipart, so it shares previewImport's XHR
+// transport rather than apiFetch (D2) — one part named `file`, exactly as
+// internal/extraction/handlers_upload.go reads it. `onPhase` is optional: a document run
+// dispatches no per-file phase events (its N pipelines overlap, and runReducer's 'phase'
+// writes onto one cursor).
+export async function uploadSourceDocument(
+  auth: ImportAuth,
+  base: string,
+  file: File,
+  onPhase: ((p: UploadPhase) => void) | null = null,
+  xhrCtor: XhrCtor = globalThis.XMLHttpRequest,
+): Promise<SourceDocumentUpload> {
+  const form = new FormData()
+  form.append('file', file)
+  const raw = (await xhrJson(auth, 'POST', base + '/api/submission/v1/documents', form, onPhase, xhrCtor)) as SourceDocumentUpload | null
+  // The one validated field, same reason previewImport validates its own: an absent id
+  // would reach the poll as the string "undefined" and 400 there instead of here.
+  if (!raw || !raw.document_id) {
+    throw new ApiError('malformed', 'upload response is missing document_id', null, raw)
+  }
+  return raw
+}
+
+// GET /api/submission/v1/extractions?document_id=… — the poll's one read. Plain JSON, so
+// it goes through authedFetch, and `jobs` is resolved verbatim: reader.go guarantees an
+// array, never null.
+export function getExtractions(authedFetch: AuthedFetch, base: string, documentId: string): Promise<ExtractionJobsResponse> {
+  return authedFetch<ExtractionJobsResponse>(
+    `${base}/api/submission/v1/extractions?document_id=${encodeURIComponent(documentId)}`,
+  )
+}
+
+// POST /api/invoice/v1/imports/document — JSON, not multipart: the bytes are already
+// stored. Returns the SAME ImportReport shape the spreadsheet import does, so it takes the
+// same normalizeReport pass and every downstream run/route view reads one type.
+export async function importDocument(
+  authedFetch: AuthedFetch,
+  base: string,
+  req: { entityId: string; documentId: string },
+): Promise<ImportReport> {
+  const raw = await authedFetch<unknown>(`${base}/api/invoice/v1/imports/document`, {
+    method: 'POST',
+    body: { entity_id: req.entityId, document_id: req.documentId },
+  })
   return normalizeReport(raw)
 }
 

@@ -33,7 +33,9 @@
 // the paragraph above records ([inhouse-can-start]) and would falsify importFlow.ts's
 // stated contract ("Preview gate = file only; commit gate = entity"). Nothing upstream
 // of `Read columns` may ever acquire an entity check — the dropzone, the file input and
-// the button stay live for both personas, whatever this panel says.
+// the button stay live for both personas, whatever this panel says. EXTR-09-07 leaves
+// that untouched and adds the OTHER half of the same contract: on a DOCUMENT run this
+// button is itself the commit, so there it does gate on the resolved entity.
 // Ported shell from Platform.dc.html ~L407-448.
 
 import { useState } from 'react'
@@ -41,9 +43,20 @@ import { useState } from 'react'
 import { gatewayBase } from '@invoice-os/api-client'
 
 import { importGlyph } from '../glyphs'
-import { computeNoEntity, hasImportableExtension } from '../lib/importFlow'
-import { canReadColumnsAll, oversizeNote } from '../lib/importRun'
+import { classifyPickedFile, computeNoEntity } from '../lib/importFlow'
+import { canReadColumnsAll, canStartDocumentRun, kindMismatchNote, oversizeNote, runKindOf } from '../lib/importRun'
+import type { PickedKind } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
+
+// The per-file verdict the list renders, '' for an acceptable file. Two refusals, in
+// order: a type the picker does not accept at all, then a type that contradicts the run's
+// own kind (one pick can carry both — addFiles keeps them listed, BULK-03-8).
+function fileNote(file: File, runKind: PickedKind | null): string {
+  const kind = classifyPickedFile(file.name, file.type)
+  if (kind === null) return 'Unsupported file type — choose one of the accepted types above.'
+  if (runKind !== null && kind !== runKind) return kindMismatchNote(runKind, kind)
+  return ''
+}
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   const { active, pickedFiles, filesRefusal, importError, activeEntity, entitiesState, entities, clients, mode } = ctx
@@ -70,11 +83,22 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   // configured there is nothing to POST the preview to.
   const base = gatewayBase()
 
-  const readReady = canReadColumnsAll(pickedFiles)
+  // EXTR-09-07: every selection-time gate below reads classifyPickedFile, never
+  // hasImportableExtension. That delegate is spreadsheet-only by construction, so while
+  // the picker's own feedback consulted it a chosen PDF was listed as "Unsupported file
+  // type" one line under copy saying PDF is accepted. runKindOf is derived from the
+  // selection rather than read off ctx, so the picker's verdict cannot lag it.
+  const runKind = runKindOf(pickedFiles)
+  const documentRun = runKind === 'document'
+  // The document run IS the commit (documents are never mapped), so it carries the
+  // entity gate the Map step carries for spreadsheets — the same resolved-object
+  // predicate every filing gate reads ([gate-on-the-resolved-entity]). Nothing upstream
+  // of `Read columns` gains one: that branch is unchanged.
+  const readReady = documentRun ? canStartDocumentRun(pickedFiles) && activeEntity !== null : canReadColumnsAll(pickedFiles)
   // Aggregate over the whole selection, for the dropzone's border cue only — the
-  // per-file note (rendered after the label, alongside the chosen-files list) is what
-  // actually names which file is bad.
-  const anyBadExtension = pickedFiles.some((pf) => !hasImportableExtension(pf.file.name))
+  // per-file notes (rendered after the label, alongside the chosen-files list) are what
+  // actually name which file is bad.
+  const anyBadFile = pickedFiles.some((pf) => fileNote(pf.file, runKind) !== '')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -130,7 +154,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               flexDirection: 'column',
               alignItems: 'center',
               textAlign: 'center',
-              border: `1.5px dashed ${anyBadExtension ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
+              border: `1.5px dashed ${anyBadFile ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
               borderRadius: 'var(--radius-md)',
               padding: '30px 20px',
               background: dragOver ? 'var(--action-tint)' : 'var(--bg-1)',
@@ -146,7 +170,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                   {pickedFiles.length} file{pickedFiles.length === 1 ? '' : 's'} selected
                 </div>
                 <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                  Selected — click Read columns below, drop more files to add them, or remove one from the list below.
+                  Selected — click {documentRun ? 'Extract invoices' : 'Read columns'} below, drop more files to add them, or remove one from the list below.
                 </p>
               </>
             ) : (
@@ -185,8 +209,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           {pickedFiles.length > 0 && (
             <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: 0, padding: 0, listStyle: 'none' }}>
               {pickedFiles.map((pf) => {
-                const badExtension = !hasImportableExtension(pf.file.name)
-                // '' for a file within the cap — the boundary lives in oversizeNote.
+                // '' for an acceptable file — the two boundaries live in fileNote and
+                // oversizeNote, never re-derived here.
+                const kindNote = fileNote(pf.file, runKind)
                 const sizeNote = oversizeNote(pf.file)
                 return (
                   <li
@@ -198,7 +223,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                       gap: 10,
                       padding: '8px 12px',
                       borderRadius: 'var(--radius-md)',
-                      border: `1px solid ${badExtension || sizeNote !== '' ? 'var(--status-red-border)' : 'var(--line-1)'}`,
+                      border: `1px solid ${kindNote !== '' || sizeNote !== '' ? 'var(--status-red-border)' : 'var(--line-1)'}`,
                       background: 'var(--bg-1)',
                     }}
                   >
@@ -206,10 +231,8 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                       <div className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {pf.file.name}
                       </div>
-                      {badExtension && (
-                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>
-                          Unsupported file type — choose one of the accepted types above.
-                        </p>
+                      {kindNote !== '' && (
+                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>{kindNote}</p>
                       )}
                       {sizeNote !== '' && (
                         <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>{sizeNote}</p>
@@ -282,13 +305,17 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           )}
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {/* One button, two paths. A document is never mapped, so its primary starts
+                the whole run rather than reading columns for a step that does not exist;
+                the label follows the action, since a button whose word and effect
+                disagree is the same contradiction the notes above just closed. */}
             <button
-              onClick={ctx.readAllColumns}
+              onClick={documentRun ? ctx.startDocumentRun : ctx.readAllColumns}
               disabled={base == null || !readReady}
               className="v2-btn v2-btn-primary pf-btn"
               style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
             >
-              <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Read columns
+              <span style={{ display: 'inline-flex' }}>{importGlyph}</span> {documentRun ? 'Extract invoices' : 'Read columns'}
             </button>
             {/* Load-bearing: the only from-scratch creation path (manual entry) must
                 render in BOTH live and sandbox — and for both personas. */}

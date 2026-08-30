@@ -126,9 +126,10 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
       base != null && batchIds.length > 0
         ? Promise.all([
             // Concurrent, deliberately — [parallel-gets-are-not-parallel-uploads]:
-            // these are idempotent GETs, unlike startRun()'s sequential upload path
+            // these are idempotent GETs, unlike startRun()'s SPREADSHEET upload path
             // ([sequential-not-parallel]), which the ExistingNumbers precheck requires
-            // to stay sequential. Nothing here touches that precheck.
+            // to stay sequential. Nothing here touches that precheck, and neither does
+            // startDocumentRun(), which is concurrent for the same reason this is.
             Promise.all(batchIds.map((id) => getImportBatch(ctx.authedFetch, base, id))),
             // `limit: 1`, never 0 — ListHandler 400s on `limit < 1`. Only
             // `pagination.total` is read; the one returned row is discarded.

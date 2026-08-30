@@ -1,6 +1,7 @@
 // Create flow orchestrator — the wizard header + a step router keyed on `ctx.createStep`,
-// serving two paths: manual entry (a single 'form' step that files straight to the server)
-// and a server-backed spreadsheet import (upload → mapping → review). Ported from
+// serving three paths: manual entry (a single 'form' step that files straight to the
+// server), a server-backed spreadsheet import (upload → mapping → review) and a document
+// run (upload → review; documents are never mapped). Ported from
 // Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
 //
 // The manual path has no step after 'form': INVCR-01-03 replaced the mock
@@ -9,7 +10,7 @@
 // router may affirm a filing — there is no branch left that could.
 
 import { wizardHeader } from '../lib/importFlow'
-import { runIsActive } from '../lib/importRun'
+import { runFailures, runIsActive } from '../lib/importRun'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
@@ -24,12 +25,13 @@ import type { PlatformCtx } from '../types'
 // moved there with it: one table, one owner, no second copy to drift.
 //
 // wizardHeader takes the run kind as a SECOND argument, because 'review' is shared by the
-// import and document paths and lands at a different index on each. This call passes only
-// the step, which resolves the two shipped paths correctly; EXTR-09-07 wires the run kind
-// through ctx when the document path gains an entry point.
+// import and document paths and lands at a different index on each. `runKind` is the
+// PICKER's vocabulary ('spreadsheet' | 'document'); the header's is WizardPath, where the
+// spreadsheet strip is called 'import' — hence the one mapping below rather than a widened
+// signature.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
-  const { createStep, run } = ctx
-  const { steps, stageIndex } = wizardHeader(createStep)
+  const { createStep, run, runKind } = ctx
+  const { steps, stageIndex } = wizardHeader(createStep, runKind === 'document' ? 'document' : 'import')
 
   // The in-flight run owns the whole body, not a corner of the mapping footer. The
   // footer's two buttons already disabled themselves while uploading, but the GRID never
@@ -49,6 +51,9 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
   // below and CreateMapping renders again (its own footer shows the failure list),
   // instead of leaving this dead-end card (no buttons) on screen forever.
   const importing = runIsActive(run)
+
+  // Rendered on the 'documents' branch below, where an all-failed document run lands.
+  const documentFailures = runFailures(run)
 
   return (
     <div style={{ padding: '24px 36px 56px' }}>
@@ -91,6 +96,26 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
           {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
 
           {createStep === 'form' && <CreateForm ctx={ctx} />}
+
+          {/* The document run's own step. A run where EVERY file failed lands here
+              (applyRoute's `none` route -> markRunFailed), which is why the picker
+              renders rather than a dead-end progress card — the same correction
+              CreateMapping carries for the spreadsheet path. Each failure keeps its
+              filename and the server's reason verbatim. */}
+          {createStep === 'documents' && (
+            <>
+              <CreateUpload ctx={ctx} />
+              {documentFailures.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 14 }}>
+                  {documentFailures.map((f, i) => (
+                    <span key={i} style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>
+                      <span className="mono" style={{ fontSize: 11 }}>{f.name}</span>: {f.message}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
 
           {createStep === 'review' && <ReviewBatch ctx={ctx} />}
         </>

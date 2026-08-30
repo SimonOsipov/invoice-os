@@ -147,8 +147,93 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 }
 
 // ImportDocument is the document-import orchestration entrypoint (EXTR-06-03, task-763):
-// read -> map -> mint batch -> dedup precheck -> create -> finalize. Not implemented yet --
-// stub for the RED specs in document_service_db_test.go.
+// read -> map -> mint batch -> dedup precheck -> create -> finalize. rows_total is always 1
+// (D-5, one document = one invoice); no gate runs (RuleSetVersion stays nil, AC #6).
+//
+// SettledExtraction precedes CreateBatch so a document with nothing to import mints no batch
+// (D-10). CreateBatch runs BEFORE the mapper's RowError is checked, so an unreadable
+// invoice_number still leaves an auditable, completed-and-quarantined batch (D-17/D-9) rather
+// than a silent no-op.
 func (s *Service) ImportDocument(ctx context.Context, entityID, documentID string) (BatchResult, error) {
-	return BatchResult{}, nil
+	ex, err := s.batch.SettledExtraction(ctx, documentID)
+	if err != nil {
+		return BatchResult{}, err
+	}
+
+	in, mapErr := documentCreateInput(entityID, documentID, ex)
+
+	batchID, err := s.batch.CreateBatch(ctx, entityID, ex.Filename, documentID)
+	if err != nil {
+		return BatchResult{}, err
+	}
+
+	if mapErr != nil {
+		errs := []RowError{*mapErr}
+		if err := s.batch.Finalize(ctx, batchID, 1, 0, 1, errs, "completed"); err != nil {
+			return BatchResult{}, err
+		}
+		return BatchResult{
+			ID:                  batchID,
+			Status:              "completed",
+			RowsTotal:           1,
+			RowsInvalid:         1,
+			QuarantinedInvoices: 1,
+			Errors:              errs,
+			InvoiceViolations:   []InvoiceViolations{},
+		}, nil
+	}
+	in.ImportBatchID = &batchID
+
+	// ExistingNumbers only resolves the colliding id for a nicer message in the non-racing
+	// case (D-12) -- Create's own unique-constraint 23505 below is the real guard. Its own
+	// operational failure has no test fixture (no fault-injection seam reaches it, see
+	// TestServiceImportDocument_MintFailurePropagatesRawErrorClosestInducibleForExistingNumbersGap's
+	// doc comment) but the batch is already minted, so it must still best-effort finalize
+	// 'failed' rather than strand the batch at 'processing'.
+	existing, err := s.batch.ExistingNumbers(ctx, entityID, []string{in.InvoiceNumber})
+	if err != nil {
+		_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
+		return BatchResult{}, err
+	}
+
+	if _, createErr := s.inv.Create(ctx, in); createErr != nil {
+		msg, isDomainErr := domainCreateErrorMessage(createErr)
+		if !isDomainErr {
+			_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
+			return BatchResult{}, createErr
+		}
+
+		var quarantineErr RowError
+		if errors.Is(createErr, invoice.ErrDuplicateNumber) {
+			quarantineErr = storeDuplicateRowError(nil, existing[in.InvoiceNumber])
+		} else {
+			quarantineErr = RowError{Message: msg}
+		}
+		errs := []RowError{quarantineErr}
+		if err := s.batch.Finalize(ctx, batchID, 1, 0, 1, errs, "completed"); err != nil {
+			return BatchResult{}, err
+		}
+		return BatchResult{
+			ID:                  batchID,
+			Status:              "completed",
+			RowsTotal:           1,
+			RowsInvalid:         1,
+			QuarantinedInvoices: 1,
+			Errors:              errs,
+			InvoiceViolations:   []InvoiceViolations{},
+		}, nil
+	}
+
+	if err := s.batch.Finalize(ctx, batchID, 1, 1, 0, []RowError{}, "completed"); err != nil {
+		return BatchResult{}, err
+	}
+	return BatchResult{
+		ID:                batchID,
+		Status:            "completed",
+		RowsTotal:         1,
+		RowsValid:         1,
+		ReadyInvoices:     1,
+		Errors:            []RowError{},
+		InvoiceViolations: []InvoiceViolations{},
+	}, nil
 }

@@ -1156,8 +1156,9 @@ func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
 	}
 }
 
-// TestSubmissionMain_RegistersTheExtractionsRoute (EXTR-07-03 AC-1): GET /v1/extractions must
-// be mounted on app.Mux dispatching to extraction.JobsHandler(...). AST, not a byte scan, so
+// TestSubmissionMain_RegistersTheExtractionsRoute: GET /v1/extractions must be mounted on
+// app.Mux dispatching to extraction.JobsHandler(...), and POST /v1/documents on the same mux
+// dispatching to extraction.UploadHandler(...). AST, not a byte scan, so
 // gofmt cannot break the anchor. The GET /v1/ping needle is a control: it proves the argument
 // matcher still finds a real, already-shipped registration before a negative result is trusted.
 // The receiver is asserted too -- a route on a locally built mux is registered and unreachable.
@@ -1167,7 +1168,7 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
 
-	var foundPing, pingOnAppMux, foundExtractions bool
+	var foundPing, pingOnAppMux, foundExtractions, foundUpload bool
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -1203,6 +1204,24 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "extraction" {
 				t.Errorf(`GET /v1/extractions' handler is not extraction.JobsHandler(...), got %s`, wtRender(handlerCall.Fun))
 			}
+		case "POST /v1/documents":
+			foundUpload = true
+			if got := wtRender(sel.X); got != "app.Mux" {
+				t.Errorf(`POST /v1/documents is registered on %s, want app.Mux -- only app.Mux is served, so any other mux answers nothing at /api/submission/v1/documents`, got)
+			}
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				t.Errorf(`POST /v1/documents' second argument is %T, want a call expression`, call.Args[1])
+				return true
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "UploadHandler" {
+				t.Errorf(`POST /v1/documents' handler call is not ....UploadHandler(...), got %s`, wtRender(handlerCall.Fun))
+				return true
+			}
+			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "extraction" {
+				t.Errorf(`POST /v1/documents' handler is not extraction.UploadHandler(...), got %s`, wtRender(handlerCall.Fun))
+			}
 		}
 		return true
 	})
@@ -1215,5 +1234,8 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 	}
 	if !foundExtractions {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler(...)) registration found in cmd/submission/main.go`)
+	}
+	if !foundUpload {
+		t.Error(`no app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(...)) registration found in cmd/submission/main.go`)
 	}
 }

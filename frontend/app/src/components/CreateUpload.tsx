@@ -42,7 +42,7 @@ import { gatewayBase } from '@invoice-os/api-client'
 
 import { importGlyph } from '../glyphs'
 import { computeNoEntity, hasImportableExtension } from '../lib/importFlow'
-import { canReadColumnsAll } from '../lib/importRun'
+import { canReadColumnsAll, oversizeNote } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
@@ -177,14 +177,17 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX
           </span>
 
-          {/* The chosen-files list, per-file remove control and per-file bad-extension
-              note (BULK-01-03, Core AC 1). A bad-extension file is still listed here —
-              addFiles never drops on extension, only on the five-file count cap — so the
-              user can see and remove it rather than wonder why it silently vanished. */}
+          {/* The chosen-files list, per-file remove control and the two per-file refusal
+              notes — bad extension (BULK-01-03) and over the size cap (EXTR-09-05). A
+              refused file is still listed here — addFiles drops only on the five-file
+              count cap — so the user can see and remove it rather than wonder why it
+              silently vanished. */}
           {pickedFiles.length > 0 && (
             <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: 0, padding: 0, listStyle: 'none' }}>
               {pickedFiles.map((pf) => {
                 const badExtension = !hasImportableExtension(pf.file.name)
+                // '' for a file within the cap — the boundary lives in oversizeNote.
+                const sizeNote = oversizeNote(pf.file)
                 return (
                   <li
                     key={pf.id}
@@ -195,7 +198,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                       gap: 10,
                       padding: '8px 12px',
                       borderRadius: 'var(--radius-md)',
-                      border: `1px solid ${badExtension ? 'var(--status-red-border)' : 'var(--line-1)'}`,
+                      border: `1px solid ${badExtension || sizeNote !== '' ? 'var(--status-red-border)' : 'var(--line-1)'}`,
                       background: 'var(--bg-1)',
                     }}
                   >
@@ -207,6 +210,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                         <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>
                           Unsupported file type — choose one of the accepted types above.
                         </p>
+                      )}
+                      {sizeNote !== '' && (
+                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>{sizeNote}</p>
                       )}
                     </div>
                     <button

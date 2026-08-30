@@ -122,16 +122,18 @@ export function hasImportableExtension(name: string): boolean {
   return classifyPickedFile(name, '') === 'spreadsheet'
 }
 
-// STAGE-2.5 STUB (EXTR-09-05, task-772, test-first). Exported so SIZE-1/SIZE-2 compile;
-// canReadColumns below does NOT consult it yet — Stage 3 owns the gate itself. Binary
-// MiB, the same number as internal/importer's maxUploadBytes and documents.size_bytes'
-// CHECK ceiling; TestMaxUploadBytes_MatchesTheBrowserConstant /
+// Binary MiB, the same number as internal/importer's maxUploadBytes and
+// documents.size_bytes' CHECK ceiling. TestMaxUploadBytes_MatchesTheBrowserConstant /
 // TestMaxUploadBytes_MatchesTheColumnCheck (internal/importer/handlers_upload_once_test.go)
-// are what keep the three equal.
+// keep the three equal — they parse this line's right-hand side as text.
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
-// = file !== null && hasImportableExtension(file.name). One predicate is the sole gate —
-// the extension rule is not also duplicated in the setter.
+// = file !== null && hasImportableExtension(file.name) && file.size <= MAX_UPLOAD_BYTES.
+// One predicate is the sole gate — neither rule is duplicated in the setter.
+//
+// The size clause is ANDed onto the extension rule, never a replacement for it (SIZE-1):
+// a file the server would 413 is refused where the user can still see and remove it.
+// lib/importRun.ts owns the sentence that says which file and why (SIZE-5b).
 //
 // Deliberately does NOT gate on an entity. POST /api/invoice/v1/imports/preview sends the
 // file and nothing else (importApi.previewImport), and the server's PreviewHandler is
@@ -152,7 +154,7 @@ export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 // belt-and-braces copy the paragraph above describes, and re-adding it re-closes the front
 // door on in-house workspaces.
 export function canReadColumns(file: File | null): boolean {
-  return file !== null && hasImportableExtension(file.name)
+  return file !== null && hasImportableExtension(file.name) && file.size <= MAX_UPLOAD_BYTES
 }
 
 // = preview !== null && canSubmitMapping(mapping). Delegates to M4-08-03's shipped

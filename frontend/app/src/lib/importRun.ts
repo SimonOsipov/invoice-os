@@ -10,7 +10,8 @@
 // runFileRows, routeAfterRun — is BULK-01-05's job. BULK-01-03 creates this module first
 // (dependency order); BULK-01-05 EXTENDS it, never recreates it (task-308 correction).
 
-import { canReadColumns } from './importFlow'
+import { MAX_UPLOAD_BYTES, canReadColumns } from './importFlow'
+import { formatBytes } from './sourceDocument'
 
 export const MAX_RUN_FILES = 5 // [five-file-cap] — Core AC 1: a run accepts at most 5 files.
 
@@ -67,13 +68,13 @@ export function capRefusal(dropped: number): string {
   return `A run accepts at most ${MAX_RUN_FILES} files — ${dropped} ${noun} ${verb} not added.`
 }
 
-// STAGE-2.5 STUB (EXTR-09-05, task-772, test-first). Sole copy owner of the per-file
-// size refusal, beside capRefusal — CreateUpload renders what this returns verbatim.
-// Returns '' for now so SIZE-5 fails on its assertions rather than on a missing export;
-// the real string names the file, the file's own size and the MAX_UPLOAD_BYTES cap, both
-// in human units.
-export function oversizeNote(_file: File): string {
-  return ''
+// Sole copy owner of the per-file size refusal, beside capRefusal — CreateUpload renders
+// what this returns verbatim (SIZE-5b pins that to those two files). '' for a file within
+// the cap, so no caller re-derives the boundary. Sizes come from the shipped formatBytes,
+// so the cap reads "15 MB", never a raw byte count.
+export function oversizeNote(file: File): string {
+  if (file.size <= MAX_UPLOAD_BYTES) return ''
+  return `${file.name} is ${formatBytes(file.size)} — over the ${formatBytes(MAX_UPLOAD_BYTES)} limit. Remove it, or split it into smaller files.`
 }
 
 // Thin delegator (AC #4): `true` iff `files` is non-empty AND canReadColumns (imported

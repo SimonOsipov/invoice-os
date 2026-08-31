@@ -1336,6 +1336,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     groupIndex,
     preview,
     run,
+    documentStages: {},
     importError,
     reviewBatchIds,
     importedInvoiceId: detailSel.importedInvoiceId,

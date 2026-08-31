@@ -331,10 +331,10 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
 
 // --- RUN-5..10 (EXTR-10-03, task-785) ---------------------------------------
 //
-// RED: DocumentPipelineDeps now carries a REQUIRED onStage, but startDocumentRun's body
-// (documentRun.ts:135-156) never calls it yet -- that wiring is task-785's own GREEN
-// phase. Every spec below fails on a real assertion (an onStage spy never called, or
-// poll's fileId argument coming through as undefined), never on a type or throw error.
+// GREEN: startDocumentRun reports onStage(fileId, ...) for the import leg, each settle,
+// and every failure arm; poll receives (documentId, fileId). Mutation-verified in the
+// QA pass: each spec below fails on a real assertion when its own source line is
+// mutated, never on a type or throw error.
 
 describe('startDocumentRun — the import leg gets its own word (RUN-5, Core AC 3, task-785)', () => {
   it('RUN-5: onStage(id,{kind:"processing"}) fires before importDocument is invoked', async () => {
@@ -506,6 +506,171 @@ describe("startDocumentRun — the imported stage carries the server's own ready
     const importedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'imported')
     expect(importedCalls).toHaveLength(1)
     expect(importedCalls[0]).toEqual([files[0].id, { kind: 'imported', count: 0 }])
+  })
+})
+
+// --- RUN-11..15 (task-785 QA pass) -------------------------------------------
+//
+// Adversarial coverage the RED phase (RUN-5..10) did not exercise.
+
+describe('startDocumentRun — the happy-path sequence is exact and total, not just present (RUN-11, Core AC 3)', () => {
+  it('RUN-11: one succeeding file reports exactly [processing, imported], nothing before or after', async () => {
+    const files = docFiles(['a.pdf'])
+    const stages: string[] = []
+    const onStage = vi.fn((_fileId: string, state: DocumentRowState) => stages.push(state.kind))
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    expect(stages).toEqual(['processing', 'imported'])
+  })
+})
+
+describe('startDocumentRun — importDocument itself throwing is a third, distinct failure route (RUN-12, Core AC 4)', () => {
+  it('RUN-12: importDocument rejecting (not poll, not upload) reports failed with messageOf(err), same string on the outcome', async () => {
+    const MSG = 'POST /v1/imports: 502 bad gateway'
+    const files = docFiles(['a.pdf'])
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async () => {
+        throw new Error(MSG)
+      },
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(1)
+    const [fileId, state] = failedCalls[0]
+    expect(fileId).toBe(files[0].id)
+    if (state.kind !== 'failed') throw new Error('unreachable — filtered above')
+    expect(state.reason).toBe(MSG)
+
+    expect(outcomes).toHaveLength(1)
+    const outcome = outcomes[0].outcome
+    if (outcome.kind !== 'failed') throw new Error('unreachable — importDocument threw')
+    expect(outcome.message).toBe(state.reason)
+
+    // The processing report already fired before the import leg blew up -- it is not
+    // rolled back, only the eventual outcome is failed.
+    expect(onStage.mock.calls.filter(([, s]) => s.kind === 'processing')).toHaveLength(1)
+  })
+})
+
+describe('startDocumentRun — the reported reason and the returned outcome never disagree (RUN-13, D-14 invariant)', () => {
+  it('RUN-13: a poll-failed verdict, an upload throw, and an import throw each carry one identical string on both sides', async () => {
+    type Case = { name: string; build: (msg: string) => Omit<DocumentPipelineDeps, 'onStage'> }
+    const cases: Case[] = [
+      {
+        name: 'poll-failed',
+        build: (msg) => ({
+          upload: async (file) => `doc-${file.name}`,
+          poll: async () => ({ kind: 'failed', reason: msg }),
+          importDocument: async (documentId) => report(`batch-${documentId}`),
+        }),
+      },
+      {
+        name: 'upload-throw',
+        build: (msg) => ({
+          upload: async () => {
+            throw new Error(msg)
+          },
+          poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+          importDocument: async (documentId) => report(`batch-${documentId}`),
+        }),
+      },
+      {
+        name: 'import-throw',
+        build: (msg) => ({
+          upload: async (file) => `doc-${file.name}`,
+          poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+          importDocument: async () => {
+            throw new Error(msg)
+          },
+        }),
+      },
+    ]
+    expect(cases).toHaveLength(3)
+
+    for (const { name, build } of cases) {
+      const msg = `${name}: boom`
+      const files = docFiles(['a.pdf'])
+      const onStage = vi.fn()
+      const outcomes = await startDocumentRun(files, { ...build(msg), onStage })
+
+      const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+      expect(failedCalls, name).toHaveLength(1)
+      const [, state] = failedCalls[0]
+      if (state.kind !== 'failed') throw new Error(`unreachable — ${name} is a failure case`)
+
+      const outcome = outcomes[0].outcome
+      if (outcome.kind !== 'failed') throw new Error(`unreachable — ${name} is a failure case`)
+
+      expect(state.reason, name).toBe(outcome.message)
+    }
+  })
+})
+
+describe('startDocumentRun — every file failing still resolves once, each on its own id (RUN-14, AC-4/AC-5)', () => {
+  it('RUN-14: three failing files each report their own failed stage; Promise.all resolves; outcomes stay length 3 in file order', async () => {
+    const files = docFiles(['a.pdf', 'b.pdf', 'c.pdf'])
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'failed', reason: `${documentId}: dead-lettered` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(3)
+    expect(outcomes.map((o) => o.name)).toEqual(['a.pdf', 'b.pdf', 'c.pdf'])
+    expect(outcomes.every((o) => o.outcome.kind === 'failed')).toBe(true)
+
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(3)
+    expect(new Set(failedCalls.map(([id]) => id))).toEqual(new Set(files.map((f) => f.id)))
+  })
+})
+
+describe('startDocumentRun — a throwing onStage is swallowed by that pipeline’s own catch, not the run (RUN-15, AC-4 boundary)', () => {
+  it('RUN-15: onStage throwing while reporting one file imported turns THAT outcome to failed; the sibling is untouched', async () => {
+    const files = docFiles(['ok.pdf', 'boom.pdf'])
+    const onStage = vi.fn((fileId: string, state: DocumentRowState) => {
+      if (fileId === files[1].id && state.kind === 'imported') {
+        throw new Error('setState on an unmounted component')
+      }
+    })
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(2)
+    expect(outcomes[0].outcome.kind).toBe('imported')
+
+    // Pinned, not endorsed: startDocumentRun's per-pipeline try/catch has no way to tell
+    // "the import already succeeded, onStage merely misbehaved" apart from "the import
+    // failed" -- both land in the same catch. The document WAS imported server-side; the
+    // outcome the caller sees says otherwise. Flagged in the QA report, not fixed here --
+    // no AC of this subtask asks for onStage to be treated as fallible.
+    expect(outcomes[1].outcome.kind).toBe('failed')
+    const boomOutcome = outcomes[1].outcome
+    if (boomOutcome.kind !== 'failed') throw new Error('unreachable — asserted above')
+    expect(boomOutcome.message).toBe('setState on an unmounted component')
   })
 })
 

@@ -65,11 +65,11 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
-import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS } from '../api/client'
+import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS, type ExtractionDetail } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
-import { gaps, WIDE_WIDTHS } from './layout'
+import { gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
 
@@ -2637,6 +2637,393 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 
   await testInfo.attach('progress-row-geometry.json', {
     body: JSON.stringify({ shortSweep, longSweep }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-11 · the review screen's document pane: the ratio oracle, the grid, the band ---
+//
+// Written in EXTR-11-05 (Mode A), red until EXTR-11-07 builds the screen and EXTR-11-08 the
+// route. They RUN at the gate, when EXTR-11-09 removes `skip-visual`.
+//
+// CONTRACT OWED BY EXTR-11-08: the entry control on SourceDocumentCard must carry
+// `data-testid="open-extraction-review"`. Its copy is that subtask's to choose; the testid is
+// the only handle these four specs have, and a role/name locator would guess the copy.
+
+/** The document journey EXTR09-E2E-01 proved, stopped at the real invoice detail. */
+async function extractOneDocument(page: Page, label: string): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'native_invoice.pdf', mimeType: 'application/pdf', buffer: uniquePdfBytes() })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  await expect(page.getByTestId('invoice-detail'), 'the document run must land on the real invoice detail').toBeVisible({
+    timeout: 240_000,
+  })
+}
+
+// Opens the review screen and RETURNS the 200 the SPA itself consumed. Every wire fact these
+// specs assert comes off this one response -- never a literal copied out of mock.go, which
+// would assert the fixture against itself.
+async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
+  // `$`-anchored: the LIST route has no id segment and the page route ends in /pages/{n}.
+  const settled = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+    { timeout: 120_000 },
+  )
+  await page.getByTestId('open-extraction-review').click()
+
+  const res = await settled
+  expect(res.status(), 'the review screen must read its detail over a 200').toBe(200)
+  await expect(page.getByTestId('extraction-review'), 'the review screen must open').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('extraction-page-1'), 'the canvas must render at least one frame').toBeVisible({
+    timeout: 60_000,
+  })
+  return (await res.json()) as ExtractionDetail
+}
+
+/** The first field the extractor pointed somewhere. The specs read its region off the wire. */
+function firstLocatedField(detail: ExtractionDetail) {
+  const field = detail.fields.find((f) => f.region !== null)
+  expect(field, 'no field on this document carries a region -- every ratio below would be vacuous').toBeTruthy()
+  return { name: field!.name, region: field!.region! }
+}
+
+async function boxOf(page: Page, testid: string): Promise<Rect> {
+  const box = await page.getByTestId(testid).boundingBox()
+  expect(box, `${testid} did not render`).not.toBeNull()
+  return box as Rect
+}
+
+// AC-4's ONLY real oracle. `overlapOf(highlight, image) === highlight` is true for a box
+// anywhere inside the page and VACUOUSLY true for a 0x0 box entirely off it -- overlapOf
+// clamps per axis with Math.max(0, …), so the intersection collapses to the highlight's own
+// rect (layout.ts:68). Containment therefore rides along below as a cheap extra, never as the
+// assertion.
+//
+// Per-axis pixel tolerance, not a strict float compare: the browser resolves `left: 62%` and
+// `width: 28%` against the frame independently, so an edge can carry two roundings, and a
+// strict toEqual on boundingBox() floats flakes. 1.5px on a 560-960px frame is under 0.3% --
+// three orders coarser than the defect this catches (a wrong axis, an inverted origin, or a
+// transform, all of which land tens of percent out).
+const RATIO_TOL_PX = 1.5
+
+test('EXTR11-E2E-03 (AC-4): the highlight lands where the region says, at every zoom', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 ratio')
+  const detail = await openExtractionReview(page)
+  const { name, region } = firstLocatedField(detail)
+
+  await page.getByTestId(`extraction-field-${name}`).click()
+  const imageId = `extraction-page-image-${region.page}`
+  // The selection loads its own page directly, without waiting on the observer (AC-6).
+  await expect(page.getByTestId(imageId), "the selected field's page must load").toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('extraction-highlight'), 'the selection must draw exactly one highlight').toHaveCount(1)
+
+  type Measured = {
+    zoom: number
+    image: Rect
+    highlight: Rect
+    expected: { x: number; y: number; width: number; height: number }
+  }
+  const measured: Measured[] = []
+
+  for (const zoom of [50, 100, 150]) {
+    await page.getByTestId(`extraction-zoom-${zoom}`).click()
+
+    // settledRead, not a bare read: selecting a field scrolls the ground with
+    // `behavior: 'smooth'`, and two boundingBox() calls taken mid-scroll disagree
+    // ([[drawer-animation-defeats-geometry-specs]]). Both boxes move together, so the
+    // RATIO is scroll-invariant -- but only if the pair is read from one settled frame.
+    const m = await settledRead(async () => {
+      const [image, highlight] = await Promise.all([boxOf(page, imageId), boxOf(page, 'extraction-highlight')])
+      return { image, highlight }
+    }, `highlight ratio at zoom ${zoom}`)
+
+    const expected = {
+      x: m.image.x + region.x0 * m.image.width,
+      y: m.image.y + region.y0 * m.image.height,
+      width: (region.x1 - region.x0) * m.image.width,
+      height: (region.y1 - region.y0) * m.image.height,
+    }
+
+    // The frame really did change size, or all three zooms measure one rendering.
+    expect(m.image.width, `the page image has no width at zoom ${zoom}`).toBeGreaterThan(0)
+
+    for (const axis of ['x', 'y', 'width', 'height'] as const) {
+      expect(
+        Math.abs(m.highlight[axis] - expected[axis]),
+        `zoom ${zoom}: the highlight's ${axis} is ${m.highlight[axis]}, the wire's region says ${expected[axis]}`,
+      ).toBeLessThanOrEqual(RATIO_TOL_PX)
+    }
+
+    // The cheap extras, stated as extras.
+    expect(m.highlight.width, `zoom ${zoom}: a zero-width highlight satisfies containment vacuously`).toBeGreaterThan(0)
+    expect(m.highlight.height, `zoom ${zoom}: a zero-height highlight satisfies containment vacuously`).toBeGreaterThan(0)
+    const inside = overlapOf(m.highlight, m.image)
+    expect(Math.round(inside.width), `zoom ${zoom}: the highlight escapes its page horizontally`).toBe(
+      Math.round(m.highlight.width),
+    )
+    expect(Math.round(inside.height), `zoom ${zoom}: the highlight escapes its page vertically`).toBe(
+      Math.round(m.highlight.height),
+    )
+
+    measured.push({ zoom, image: m.image, highlight: m.highlight, expected })
+  }
+
+  // The sweep ran all three, in order -- a loop that measured fewer would otherwise pass on
+  // whatever it did reach.
+  expect(measured.map((m) => m.zoom), 'every zoom must be measured').toEqual([50, 100, 150])
+  // And they really were three different renderings, not one page measured three times.
+  expect(new Set(measured.map((m) => Math.round(m.image.width))).size, 'zoom moved nothing').toBeGreaterThan(1)
+
+  await testInfo.attach('extraction-highlight-ratio.json', {
+    body: JSON.stringify({ region, measured }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR11-E2E-04 and -04b read the SAME 200, so they share one journey rather than paying for
+// two -- the file's own E2E-04/E2E-09 precedent, with labelled blocks.
+test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly the contract', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 grid')
+  const detail = await openExtractionReview(page)
+
+  // -- EXTR11-E2E-04 -- the intrinsic pixels ARE the stored grid.
+  //
+  // go-pdfium ceils `pt * dpi / 72` (pdfium.go:154-159), so a recomputed grid is off by one
+  // row on US-Letter at 150 DPI -- 1651, not 1650. Nothing else in the suite compares the
+  // bytes the browser decoded against the numbers the frame was locked to.
+  expect(detail.pages.length, 'a document with no page rows cannot prove a grid').toBeGreaterThan(0)
+
+  const grids: { page: number; wire: [number, number]; natural: [number, number] }[] = []
+  for (const p of detail.pages) {
+    const img = page.getByTestId(`extraction-page-image-${p.page}`)
+    // Lazy by design: scroll the frame in and let the observer fire (AC-6).
+    await page.getByTestId(`extraction-page-${p.page}`).scrollIntoViewIfNeeded()
+    await expect(img, `page ${p.page} must load its bytes`).toBeVisible({ timeout: 60_000 })
+
+    // Polled, never read once: naturalWidth is 0 until the blob decodes, and 0 === 0 would
+    // make an unloaded image agree with a zero grid.
+    let natural = ''
+    await expect
+      .poll(
+        async () => {
+          natural = await img.evaluate((el) => {
+            const i = el as HTMLImageElement
+            return i.complete && i.naturalWidth > 0 ? `${i.naturalWidth}x${i.naturalHeight}` : ''
+          })
+          return natural
+        },
+        { message: `page ${p.page}'s bytes never decoded`, timeout: 60_000 },
+      )
+      .not.toBe('')
+
+    expect(natural, `page ${p.page}: the decoded bytes are not the grid the frame was locked to`).toBe(
+      `${p.width_px}x${p.height_px}`,
+    )
+    const [nw, nh] = natural.split('x').map(Number)
+    grids.push({ page: p.page, wire: [p.width_px, p.height_px], natural: [nw, nh] })
+  }
+  expect(grids.length, 'no page was measured').toBe(detail.pages.length)
+
+  // -- EXTR11-E2E-04b -- the wire key set, off that same 200.
+  //
+  // It cannot live in e2e/api/extractions.spec.ts: that file creates no row, so it can never
+  // hold a settled job (:29-32). This is the only DEPLOYED check of Go's `[]T` nil -> `null`
+  // coercion, which no `omitempty`-free struct tag prevents.
+  expect(Object.keys(detail).sort(), 'the top-level key set drifted from internal/extraction/reader.go').toEqual(
+    ['document', 'document_id', 'fields', 'id', 'pages', 'state'].sort(),
+  )
+  expect(Array.isArray(detail.pages), 'pages arrived as null, not []').toBe(true)
+  expect(Array.isArray(detail.fields), 'fields arrived as null, not []').toBe(true)
+  expect(detail.document, 'document arrived as null').not.toBeNull()
+  expect(typeof detail.document, 'document is not an object').toBe('object')
+  expect(Object.keys(detail.document).sort()).toEqual(['content_type', 'filename', 'size_bytes', 'stored_at'].sort())
+  expect(Object.keys(detail.pages[0]).sort()).toEqual(['height_px', 'page', 'width_px'].sort())
+  expect(detail.fields.length, 'a settled job with no fields cannot prove a field key set').toBeGreaterThan(0)
+  expect(Object.keys(detail.fields[0]).sort()).toEqual(['name', 'region', 'value'].sort())
+
+  await testInfo.attach('extraction-wire.json', {
+    body: JSON.stringify({ grids, keys: Object.keys(detail).sort(), detail }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where it fits', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 band')
+  await openExtractionReview(page)
+
+  const frame = page.getByTestId('extraction-page-1')
+  const ground = page.getByTestId('extraction-ground')
+  // The ground's inner pad -- the frame's actual containing block. Its only element child,
+  // which ExtractionCanvas.test.tsx pins from the other side.
+  const innerPad = ground.locator('> div').first()
+
+  type Fit = {
+    width: number
+    zoom: number
+    frameWidth: number
+    innerWidth: number
+    gapLeft: number
+    gapRight: number
+    fits: boolean
+    groundScrollsX: boolean
+    bodyScrollsX: boolean
+  }
+  const measured: Fit[] = []
+
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a band strands only what the window
+    // gives it room to strand.
+    for (const zoom of [100, 150]) {
+      await page.getByTestId(`extraction-zoom-${zoom}`).click()
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 1080 })
+
+        const m = await settledRead(async () => {
+          const [frameBox, innerBox, scroll] = await Promise.all([
+            frame.boundingBox(),
+            innerPad.boundingBox(),
+            ground.evaluate((el) => ({
+              groundScrollsX: el.scrollWidth > el.clientWidth + 1,
+              bodyScrollsX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+            })),
+          ])
+          return { frameBox, innerBox, ...scroll }
+        }, `page frame at ${width}px, zoom ${zoom}`)
+
+        expect(m.frameBox && m.innerBox, `the frame and its pad must both render at ${width}px`).toBeTruthy()
+        const g = gaps({ x: m.frameBox!.x, width: m.frameBox!.width }, { x: m.innerBox!.x, width: m.innerBox!.width })
+
+        // 1. The band. pageFrameStyle's min/max-width are absolute, so this holds at every
+        //    width whether or not the frame fits its column.
+        const [floor, ceiling] = zoom === 100 ? [560, 640] : [840, 960]
+        expect(m.frameBox!.width, `the frame is below its ${floor}px floor at ${width}px, zoom ${zoom}`).toBeGreaterThanOrEqual(floor - 1)
+        expect(m.frameBox!.width, `the frame is above its ${ceiling}px ceiling at ${width}px, zoom ${zoom}`).toBeLessThanOrEqual(ceiling + 1)
+
+        // 2. `margin: 0 auto` -- but only where there is room. An overflowing block resolves
+        //    both auto margins to zero and spills right, so asserting symmetry at every width
+        //    would fail on CORRECT rendering wherever the floor exceeds the column.
+        const fits = m.frameBox!.width <= m.innerBox!.width + 1
+        if (fits) {
+          expect(
+            Math.abs(g.left - g.right),
+            `the frame's margins must agree at ${width}px, zoom ${zoom} (left ${g.left}, right ${g.right})`,
+          ).toBeLessThanOrEqual(2)
+        } else {
+          // 3. Where it does NOT fit, the GROUND is what scrolls.
+          expect(m.groundScrollsX, `the frame overflows at ${width}px, zoom ${zoom}, and the ground does not scroll`).toBe(true)
+        }
+
+        // 4. The body never scrolls sideways, at any width or zoom. `overflow: hidden` on the
+        //    body row is what contains the enlarged page; without it the whole app slides.
+        expect(m.bodyScrollsX, `the page itself scrolls horizontally at ${width}px, zoom ${zoom}`).toBe(false)
+
+        measured.push({
+          width,
+          zoom,
+          frameWidth: m.frameBox!.width,
+          innerWidth: m.innerBox!.width,
+          gapLeft: g.left,
+          gapRight: g.right,
+          fits,
+          groundScrollsX: m.groundScrollsX,
+          bodyScrollsX: m.bodyScrollsX,
+        })
+      }
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(
+    measured.map((m) => `${m.zoom}@${m.width}`),
+    'every zoom x WIDE_WIDTHS cell must be measured, widest first',
+  ).toEqual([100, 150].flatMap((z) => WIDE_WIDTHS.map((w) => `${z}@${w}`)))
+
+  // Both branches must have been exercised, or the two assertions above are each vacuous on
+  // half the sweep and nobody would know which half.
+  expect(measured.some((m) => m.fits), 'the frame never fit its column -- the centring assertion never ran').toBe(true)
+  expect(measured.some((m) => !m.fits), 'the frame always fit -- the ground-scroll assertion never ran').toBe(true)
+
+  await testInfo.attach('extraction-frame-band.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-08 (AC-5): the toolbar never overlaps the ground', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 clearance')
+  await openExtractionReview(page)
+
+  const toolbar = page.getByTestId('extraction-toolbar')
+  const ground = page.getByTestId('extraction-ground')
+
+  const measured: { width: number; toolbar: Rect; ground: Rect; overlap: Rect }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [t, g] = await Promise.all([toolbar.boundingBox(), ground.boundingBox()])
+        return { t, g }
+      }, `toolbar clearance at ${width}px`)
+
+      expect(m.t && m.g, `the toolbar and the ground must both render at ${width}px`).toBeTruthy()
+      // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
+      expect(m.t!.height, `the toolbar has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.g!.height, `the ground has no height at ${width}px`).toBeGreaterThan(0)
+
+      // Both axes, never one: `flex: none` on the toolbar plus `minHeight: 0` on the ground is
+      // what keeps them stacked; without the pair the ground grows to its content and slides
+      // under the toolbar (SourceDocumentModal.test.tsx spec 1's defect, one pane over).
+      const overlap = overlapOf(m.t as Rect, m.g as Rect)
+      expect(
+        rectsOverlap(m.t as Rect, m.g as Rect),
+        `the toolbar covers ${overlap.width}x${overlap.height}px of the ground at ${width}px`,
+      ).toBe(false)
+
+      measured.push({ width, toolbar: m.t as Rect, ground: m.g as Rect, overlap })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-toolbar-clearance.json', {
+    body: JSON.stringify(measured, null, 2),
     contentType: 'application/json',
   })
 

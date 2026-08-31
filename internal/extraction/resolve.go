@@ -84,6 +84,9 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band Pa
 			if loc == nil {
 				continue
 			}
+			if tier == TierGeneric && anchorOutranked(tok.Text, loc) {
+				continue
+			}
 			if !inBand(band, page.Number, tok.Region) {
 				continue
 			}
@@ -101,6 +104,24 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band Pa
 		}
 	}
 	return dst
+}
+
+// anchorOutranked reports whether another anchor-lexicon entry claims a strictly wider span of
+// text that contains loc. A narrower label owns nothing on the token -- "Supplier" inside
+// "Supplier TIN: 99999999-0101", "total" inside "Sub-total" -- so it must not anchor its rule.
+// Strict containment only: an equal span is a rule meeting its own entry, and a non-strict test
+// would suppress every shipped rule.
+func anchorOutranked(text string, loc []int) bool {
+	for _, m := range anchorLabelMatchers {
+		other := m.RE.FindStringIndex(text)
+		if other == nil {
+			continue
+		}
+		if other[0] <= loc[0] && other[1] >= loc[1] && other[1]-other[0] > loc[1]-loc[0] {
+			return true
+		}
+	}
+	return false
 }
 
 // appendReadings emits one candidate per reading the shape accepts, so an ambiguous numeric

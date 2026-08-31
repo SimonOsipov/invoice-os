@@ -163,10 +163,21 @@ func TestCorpusDoc_RecordsTheDecisionRate(t *testing.T) {
 		}
 	}
 
-	if len(acFalseDecided) == 0 {
-		t.Fatal("acFalseDecided pins no false decision; the comparison below would be vacuous and the doc could say anything")
-	}
 	rows := aaDecisionRowRE.FindAllStringSubmatch(section, -1)
+
+	// Zero pins has its own oracle: the doc's table must be gone too. Guarded by a probe row,
+	// because a scan that stopped matching also finds nothing and would read as a clean doc.
+	if len(acFalseDecided) == 0 {
+		const probe = "| `corpus_probe.pdf` | `supplier_name` | `X` |"
+		if !aaDecisionRowRE.MatchString(probe) {
+			t.Fatalf("aaDecisionRowRE no longer matches a well-formed row (%s); the absence below is a broken scan, not a clean doc", probe)
+		}
+		if len(rows) != 0 {
+			t.Errorf("%s's %q section records %d false-decision row(s) while acFalseDecided pins none", acDoc, acDocDecisionSection, len(rows))
+		}
+		return
+	}
+
 	// Control needle: a scan that stopped matching finds no row, which reads exactly like a doc
 	// with no fabrication left to record.
 	if len(rows) == 0 {

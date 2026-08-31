@@ -34,7 +34,7 @@ compare trimmed.
 | `corpus_stacked_labels.pdf` | `below` — the only layout where *every* label's value sits under it, 16pt down at the same `x`, invoice number and date and total included. Every value `corpusExpect` requires from a `below` rule here sits at most 0.009111 normalised under its label, and the next group's label is no closer than 0.087010 — a 9.55x window, so a `below` rule anchored on a label cannot span two groups. (The widest *intra-group* gap is 0.026631, a party block's TIN line that no expectation requires; `TestCorpus_StackedValuesSitBelowTheirLabels` asserts that one and the 0.087010 separation, and `TestTier1_DialsStayInsideTheirMeasuredWindow` asserts the window.) `corpus_two_column.pdf` stacks its two party blocks the same way, so `below` reaches the name fields there too; what is unique here is that nothing else in this layout is inline. Its bare TINs are not unique either — `corpus_split_labels.pdf` carries one in each page half as well. | 13 | 1109 |
 | `corpus_two_column.pdf` | Column bands. Supplier labels centre at X 0.15–0.21 (band 0), buyer labels at 0.68–0.74 (band 2). It is the only layout whose anchor labels reach the right-hand third at all, and so the only one whose fingerprint carries a band above 1; `TestCorpus_TwoColumnPartiesLandInTheOuterBands` enforces both halves of that. Both TINs sit inside a longer token (`TIN: 99999999-0401` and `TIN: 99999999-0402`, both at `Y0` 0.2341), so neither format-only sweep can fire and neither is separated by page half. Under Tier-1 they are not separated by label either: the `supplier_tin` pattern's party word is optional, so a bare `TIN` label matches it and `supplier_tin` collects **both**, while `buyer_tin` — whose party word is required — is unreachable on this layout. That is a Tier-1 accuracy defect, not a corpus defect. EXTR-04-09 measured it and carried it forward rather than closing it: widening the lexicon would change every stored document's fingerprint, so the fix needs a `FingerprintVersion` bump. | 10 | 1031 |
 | `corpus_ambiguous_date.pdf` | `12/03/2026` — both components at most 12 and no month name, so `ShapeDate` returns both readings and `issue_date` keeps two candidates. The one layout whose expectation row carries two values. | 6 | 873 |
-| `corpus_totals_block.pdf` | The lexicon overlap: `Sub-total` matches both `subtotal` and `\btotal\b`, because `-` is a non-word character, so one label mints a candidate for two fields. Right-aligned split totals. The VAT label carries no percentage — a `7.5%` remainder would mint a spurious amount candidate. | 9 | 938 |
+| `corpus_totals_block.pdf` | The lexicon overlap: `Sub-total` matches both `subtotal` and `\btotal\b`, because `-` is a non-word character. The `subtotal` entry claims the wider span of that token, so since EXTR-16 the `total` rule does not anchor there and the overlap mints one candidate, not two. Right-aligned split totals. The VAT label carries no percentage — a `7.5%` remainder would mint a spurious amount candidate. | 9 | 938 |
 
 Every TIN is drawn from the free part of the reserved `99999999-` block: `-0101`, `-0102`,
 `-0201`, `-0202`, `-0301`, `-0302`, `-0401`, `-0402`, `-0501`, `-0601`. The whole block is
@@ -73,9 +73,9 @@ and the ambiguous-date row's two accepted readings are one pair, not two.
 That number is **recall**. A pair is a **hit** when the expected value appears **anywhere**
 among that field's candidates; which of them the pipeline goes on to decide is not read here at
 all. It is **not** end-to-end accuracy. EXTR-04 shipped it as the headline accuracy figure and
-it never was that: recall is monotone in the candidate list, so it reads 43/44 while every party
-name on every layout decides a label. What the pipeline decides is recorded under **Tier-1
-decision rate** below.
+it never was that: recall is monotone in the candidate list, so it read 43/44 while every party
+name on every layout decided a label. What the pipeline decides is recorded under **Tier-1
+decision rate** below. The two numbers coincide today; they are still two measures.
 
 | Layout | Hits | Pairs |
 |---|---|---|
@@ -144,28 +144,35 @@ names the wrong candidate each widened dial produces.
 ## Tier-1 decision rate
 
 Measured 2026-08-31 on `feature/extr-16-the-ranking-defect`, over the same 44 pairs the recall
-rate scores: the pipeline **decides** the value `corpusExpect` names on **30 of 44** —
-**0.6818**. The 13-pair gap between the two numbers is the ranking defect: the correct reading
-is reached and then out-ranked, usually by the field's own label.
+rate scores: the pipeline **decides** the value `corpusExpect` names on **43 of 44** —
+**0.9773**. It read 30 of 44 — 0.6818 — before EXTR-16, and every one of the 13 pairs it gained
+moved for the same two reasons: a Tier-1 rule no longer anchors on a token another lexicon entry
+matches more widely, and a value one lexicon entry matches whole is no longer a name or an
+invoice number. The layouts that moved are `corpus_inline_labels.pdf`, `corpus_split_labels.pdf`,
+`corpus_stacked_labels.pdf`, `corpus_two_column.pdf`, `corpus_ambiguous_date.pdf` and
+`corpus_totals_block.pdf` — all six. The one remaining miss is the unreachable `t1aGaps` pair,
+the same pair recall misses.
 
 `internal/extraction/accuracy_test.go` pins it as `tier1DecisionHits` / `tier1DecisionPairs`,
 and `TestTier1Accuracy_DecisionRateOverTheCorpus` re-measures it. Unlike the floor above this is
 a **measurement, not a ratchet**: move the pin to what is measured and say which layouts moved.
-Its mutilation control — dropping every `invoice_number` rule must lower it, 30 to 25 — is what
+Its mutilation control — dropping every `invoice_number` rule must lower it, 43 to 37 — is what
 stops it becoming a second number blind to rank.
 
-**False decisions: 1.** A false decision is a field decided with a value its layout never
+The two numbers now agree on this corpus, so neither the shipped rate nor the mutilation cut can
+still tell a decision measure from a candidate-containment one.
+`TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate` carries that job in a **decoy rule set**: a
+`same_token` rule that reads `corpus_totals_block.pdf`'s Sub-total amount token whole and files
+it under `total`. It sits at Distance 0 and out-ranks the layout's real total, which `Resolve`
+still reaches — so recall holds at 43/44 while the decision rate falls to 42/44.
+
+**False decisions: 0.** A false decision is a field decided with a value its layout never
 prints. `corpusExpect` names no such field on that layout, so no hit and no miss is scored for
-it and the recall rate cannot see it at all.
-
-| Layout | Field | Decided |
-|---|---|---|
-| `corpus_totals_block.pdf` | `supplier_name` | `TIN: 99999999-0601` |
-
-That page prints `Supplier TIN: 99999999-0601` and no party name at all, so the residue after
-the label is decided as the supplier's name. `acFalseDecided` pins the row by identity and
-`TestCorpusDoc_RecordsTheDecisionRate` reads this table, so a fix that closes this fabrication
-while opening another is red rather than green.
+it and the recall rate cannot see it at all. `corpus_totals_block.pdf` / `supplier_name` was the
+one such row — that page prints `Supplier TIN: 99999999-0601` and no party name, and the residue
+after the label was decided as the supplier's name. It now reads `missing`. `acFalseDecided` is
+empty and `TestCorpusDoc_RecordsTheDecisionRate` asserts this section carries no
+false-decision row, so a new fabrication is red rather than green.
 
 ## Regenerating
 

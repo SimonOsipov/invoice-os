@@ -296,14 +296,16 @@ func TestTier1_SubtotalAndTotalBothMatchAStackedTotalsBlock(t *testing.T) {
 	if !slices.Contains(sub, "5000.00") {
 		t.Errorf("subtotal = %v, want it to contain 5000.00", sub)
 	}
-	for _, want := range []string{"5000.00", "5375.00"} {
-		if !slices.Contains(total, want) {
-			t.Errorf("total = %v, want it to contain %q; \\btotal\\b matches inside \"Sub-total\" because \"-\" is a non-word character", total, want)
-		}
+	if !slices.Contains(total, "5375.00") {
+		t.Errorf("total = %v, want it to contain 5375.00", total)
 	}
 
-	// The asymmetric half. sub[\s-]*total requires "sub", so the subtotal rule can never reach
-	// the Total row -- without this a resolver that floods both fields passes.
+	// Neither rule reaches the other's row. \btotal\b still matches inside "Sub-total", but the
+	// subtotal entry claims a strictly wider span of that token, so the total rule does not
+	// anchor there. sub[\s-]*total requires "sub", so the subtotal rule never had the Total row.
+	if slices.Contains(total, "5000.00") {
+		t.Errorf("total = %v and reached the Sub-total row; the wider subtotal match owns that token", total)
+	}
 	if slices.Contains(sub, "5375.00") {
 		t.Errorf("subtotal = %v and reached the Total row; the lexicon overlap runs one way only", sub)
 	}

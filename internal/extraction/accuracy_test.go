@@ -114,8 +114,8 @@ func acExpectedValues(p acPair) []string {
 }
 
 // acScoreRules resolves every corpus layout against rules alone and counts the pairs whose
-// expected value appears ANYWHERE among that field's candidates. Rank is deliberately not read:
-// ranking beyond tier precedence is EXTR-05's (AC #2).
+// expected value appears ANYWHERE among that field's candidates. Rank is deliberately not read
+// here -- that is what makes this recall; the decision rate below is what reads rank.
 func acScoreRules(t *testing.T, what string, rules []extraction.Tier1Rule) acScore {
 	t.Helper()
 
@@ -726,29 +726,26 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 
 // --- the decision rate ------------------------------------------------------
 
-// What the pipeline DECIDES, over the same 44 pairs the rate above scores. acScoreRules reads
-// Resolve's candidate list and never asks which candidate decideField picks (its own comment
-// says so), so every field on every layout can read a bare label while that number reads 43/44.
-// Measured on e763fccd, before EXTR-16 touches any ranking.
+// What the pipeline DECIDES, over the same 44 pairs the rate above scores. Measured after
+// anchor specificity and the label/value split: every pair Resolve reaches is now also the pair
+// Reconcile decides, so the two numbers coincide on this corpus and the remaining miss is the
+// unreachable t1aGaps pair. The decision measure is still not the recall measure -- the decoy
+// set in TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate is what separates them.
 const (
-	tier1DecisionHits  = 30
+	tier1DecisionHits  = 43
 	tier1DecisionPairs = 44 // the recall denominator; asserted equal below, never assumed
 	tier1DecisionRate  = float64(tier1DecisionHits) / float64(tier1DecisionPairs)
 )
 
 // The decision rate with acMutilatedField's rules removed -- the pairs invoice_number decides
 // correctly, gone. M-05's acMutilatedHits is the same cut scored on recall.
-const acMutilatedDecisionHits = 25
+const acMutilatedDecisionHits = 37
 
 // acFalseDecided is every field decided with a value its layout never prints. corpusExpect
 // names the fields each layout carries, so a decided field it does not name is a reading
-// fabricated out of a label. Pinned by identity: "one false decision" is a different fact
-// depending on which field it is.
-var acFalseDecided = []struct{ file, field, value string }{
-	// corpus_totals_block.pdf prints "Supplier TIN: 99999999-0601" and no party name at all
-	// (fixtures_test.go:403-412); the residue after the label is decided as the name, unflagged.
-	{"corpus_totals_block.pdf", "supplier_name", "TIN: 99999999-0601"},
-}
+// fabricated out of a label. Pinned by identity, and empty since the label/value split closed
+// the one fabrication: "no false decision" is asserted against the live set, not assumed.
+var acFalseDecided = []struct{ file, field, value string }{}
 
 // acDecided is one field's decided reading, for a failure message. value is "" when the field
 // decided nothing.
@@ -890,9 +887,10 @@ func acMutilatedRuleSet(t *testing.T) []extraction.Tier1Rule {
 	return out
 }
 
-// M-11. The rank-aware measure EXTR-16 moves. The floor above is recall and is monotone in the
-// candidate list, so it reads 43/44 while every party name on every layout decides a label.
-// The mutilation subtest is what stops this becoming a second blind number.
+// M-11. The rank-aware measure EXTR-16 moves: 30/44 before anchor specificity and the
+// label/value split, 43/44 after. The floor above is recall and is monotone in the candidate
+// list, so it read 43/44 throughout. The mutilation subtest is what stops this becoming a
+// second blind number.
 func TestTier1Accuracy_DecisionRateOverTheCorpus(t *testing.T) {
 	t1Floor(t)
 	pages := acCorpusPages(t)
@@ -969,8 +967,29 @@ func TestTier1Accuracy_DecisionRateOverTheCorpus(t *testing.T) {
 	})
 }
 
-// M-12. The two measures are not one measure. A decision rate that quietly scored candidate
-// containment would read 43/44 and every other assertion in this file would still pass.
+// The ranking decoy: one same_token rule that reads corpus_totals_block.pdf's Sub-total AMOUNT
+// token whole and files it under total. A same_token relation sits at Distance 0, and that
+// layout's only real total candidate sits at 0.154431, so the decoy takes the rank while
+// Resolve still reaches 5375.00. No lexicon entry matches a bare amount, so anchor specificity
+// leaves the decoy alone -- it is a ranking decoy, not a reach decoy.
+const (
+	acDecoyKey   = "decoy.total.same_token"
+	acDecoyLabel = `^\s*5,000\.00\s*$`
+	acDecoyFile  = "corpus_totals_block.pdf"
+	acDecoyField = "total"
+	acDecoyValue = "5000.00"
+)
+
+func acDecoyRuleSet(t *testing.T) []extraction.Tier1Rule {
+	t.Helper()
+	return append(slices.Clone(extraction.Tier1Rules),
+		rvTier1(t, acDecoyKey, acDecoyField, acDecoyLabel, extraction.RelSameToken, 0, extraction.ShapeAmount))
+}
+
+// M-12. The two measures are not one measure. On the shipped set they now coincide at 43/44 --
+// every pair Resolve reaches, Reconcile decides -- so the shipped numbers alone can no longer
+// tell a decision measure from a candidate-containment one. The decoy set can: it out-ranks a
+// value Resolve still reaches, so recall holds and only the decision rate drops.
 func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 	t1Floor(t)
 	pages := acCorpusPages(t)
@@ -988,9 +1007,6 @@ func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 		t.Errorf("the pipeline decides %d/%d, want the pinned %d/%d", decision.hits, decision.total, tier1DecisionHits, tier1DecisionPairs)
 	}
 
-	if decision.hits == recall.hits {
-		t.Errorf("both measures read %d/%d; a decision measure that agrees with candidate containment on every pair is reading the candidate list, not the decision", decision.hits, decision.total)
-	}
 	if decision.hits > recall.hits {
 		t.Errorf("the decision rate %d/%d is above recall %d/%d; decideField picks one of the candidates, so it can never decide a value Resolve did not reach -- one of the two measures is wrong", decision.hits, decision.total, recall.hits, recall.total)
 	}
@@ -1009,4 +1025,39 @@ func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 			t.Errorf("recall never reaches %s / %s, yet the decision rate counts it as decided correctly; the decision measure is scoring something Resolve did not produce", p.file, p.field)
 		}
 	}
+
+	// The discriminator. A measure that scored candidate containment reads the decoy set at
+	// 43/44 exactly as recall does; only a measure that reads rank sees the pair the decoy takes.
+	t.Run("decoy", func(t *testing.T) {
+		rules := acDecoyRuleSet(t)
+		decoyDecision := acScoreDecisions(t, pages, "the shipped set plus the ranking decoy", rules)
+		decoyRecall := acScoreRules(t, "the shipped set plus the ranking decoy", rules)
+
+		if decoyRecall.hits != recall.hits {
+			t.Fatalf("the decoy set reaches %d pair(s) and the shipped set %d; a decoy that changes REACH cannot separate the two measures", decoyRecall.hits, recall.hits)
+		}
+		if decoyDecision.hits >= decoyRecall.hits {
+			t.Errorf("the decoy set decides %d/%d and reaches %d/%d; a decision measure that agrees with candidate containment even here is reading the candidate list, not the decision",
+				decoyDecision.hits, decoyDecision.total, decoyRecall.hits, decoyRecall.total)
+		}
+		if want := decision.hits - 1; decoyDecision.hits != want {
+			t.Errorf("the decoy set decides %d pair(s), want %d; the decoy out-ranks exactly one reached value", decoyDecision.hits, want)
+		}
+
+		// By identity, not by count: a drop of one somewhere else is a different fact.
+		taken := acPair{file: acDecoyFile, field: acDecoyField}
+		found := false
+		for _, d := range decoyDecision.wrong {
+			if d.acPair != taken {
+				continue
+			}
+			found = true
+			if d.value != acDecoyValue {
+				t.Errorf("%s / %s decides %q under the decoy set, want %q", d.file, d.field, d.value, acDecoyValue)
+			}
+		}
+		if !found {
+			t.Errorf("%s / %s is still decided correctly under the decoy set; the decoy never took the rank it exists to take", acDecoyFile, acDecoyField)
+		}
+	})
 }

@@ -69,14 +69,17 @@ export type DocumentRowState =
 
 // The ONE place extraction_jobs.state becomes a word. null -> queued: the worker's own tx
 // makes state='queued' unobservable, so an empty jobs[] must still read as "started".
-export function stageOf(_job: ExtractionJob | null): DocumentRowState | null {
-  throw new Error('EXTR-10-01: not implemented')
+export function stageOf(job: ExtractionJob | null): DocumentRowState | null {
+  if (job === null || job.state === 'queued') return { kind: 'queued' }
+  if (job.state === 'extracting') return { kind: 'reading' }
+  if (job.state === 'failed') return { kind: 'retrying' }
+  return null
 }
 
 // One row per run.files entry, joined by RunFile.id -- never by name (importRun.ts:77-78
 // records why a name-keyed join is wrong).
-export function documentRunRows(_run: ImportRun, _stages: Readonly<Record<string, DocumentRowState>>): RunFileRow[] {
-  throw new Error('EXTR-10-01: not implemented')
+export function documentRunRows(run: ImportRun, stages: Readonly<Record<string, DocumentRowState>>): RunFileRow[] {
+  return run.files.map((f) => ({ name: f.name, ...(stages[f.id] ?? { kind: 'queued' }) }))
 }
 
 export interface DocumentRunFile {

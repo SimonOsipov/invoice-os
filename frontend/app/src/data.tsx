@@ -150,7 +150,15 @@ export const CFG: ClientCfg[] = [
 /* Create-flow static content                                          */
 /* ------------------------------------------------------------------ */
 
+// The document path's strip. No Map step — a document's fields are extracted, never
+// mapped onto columns.
 export const WIZARD_STEPS: [string, string][] = [
+  ['1', 'Import'],
+  ['2', 'Review'],
+]
+
+// Manual entry's strip. One screen, one round trip (INVCR-01-03).
+export const ENTER_STEPS: [string, string][] = [
   ['1', 'Enter'],
 ]
 

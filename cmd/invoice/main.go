@@ -153,12 +153,13 @@ func main() {
 	// exactly) -- no second gate, no adapter type, one gate driving both the
 	// manual validate endpoint and the importer's batch pre-check
 	// ([import-validates]/[dry-run-evaluates]).
-	// /v1/imports/preview sits on the same mux and middleware chain and is the
-	// only ROUTE by which a source document reaches storage ([upload-once]): it
-	// writes the uploaded bytes to object storage and a row to documents, then
-	// previews them. POST /v1/imports takes the id it returns instead of a
-	// second copy of the file. (demodocs.Seed below also stores, but off the
-	// mux entirely and only for the seed tenants.)
+	// /v1/imports/preview sits on the same mux and middleware chain and is this
+	// service's only ROUTE by which a source document reaches storage
+	// ([upload-once]): it writes the uploaded bytes to object storage and a row
+	// to documents, then previews them. POST /v1/imports takes the id it returns
+	// instead of a second copy of the file. Two other writers exist, both off
+	// this mux: demodocs.Seed below (seed tenants only) and, since EXTR-09,
+	// POST /v1/documents on the submission service.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
 
 	// Give the SQL-seeded demo invoices the file they would have been imported

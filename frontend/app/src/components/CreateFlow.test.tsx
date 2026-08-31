@@ -16,9 +16,10 @@ import { CreateFlow } from './CreateFlow'
 // render here. Neither mounts a useEffect or calls ctx.authedFetch, so no fetch mock is
 // needed. `run.status: 'idle'` keeps runIsActive(run) false so the step router renders,
 // not ImportProgress.
-function createFlowCtx(createStep: CreateStep): PlatformCtx {
+function createFlowCtx(createStep: CreateStep, runKind: 'spreadsheet' | 'document' | null = null): PlatformCtx {
   const ctx = {
     createStep,
+    runKind,
     run: { files: [], cursor: 0, status: 'idle' },
     closeCreate: () => {},
     mode: 'firm',
@@ -47,6 +48,14 @@ function createFlowCtx(createStep: CreateStep): PlatformCtx {
     removeItem: () => {},
     addItem: () => {},
     fileDraft: () => {},
+    // ReviewBatch — the document path's step 2. Enumerated by grepping `ctx\.` in
+    // ReviewBatch.tsx; an empty id list keeps its own fetch effect from firing.
+    reviewBatchIds: [],
+    authedFetch: async () => {
+      throw new Error('no fetch expected — reviewBatchIds is empty')
+    },
+    openImportedInvoice: () => {},
+    restartImport: () => {},
   }
   return ctx as unknown as PlatformCtx
 }
@@ -72,5 +81,43 @@ describe('CreateFlow — step-strip connector spans (BUG-03-07 item 10)', () => 
   it('1-step typed path (createStep form): exactly 0 connectors', () => {
     const { container } = render(<CreateFlow ctx={createFlowCtx('form')} />)
     expect(connectorCount(container)).toBe(0)
+  })
+})
+
+// The header forks with the run: wizardHeader(step, runKind) shipped in EXTR-09-06, and
+// EXTR-09-07 wired CreateFlow to pass the run kind through. Authored RED against a
+// CreateFlow that called wizardHeader with the step alone and rendered the 3-step
+// spreadsheet strip for a document run.
+describe('CreateFlow — the header follows the run kind (EXTR-09-07, AC-2)', () => {
+  afterEach(() => cleanup())
+
+  function stepLabels(container: HTMLElement): string[] {
+    // The step-number span is width/height 22 (connectorCount above pins the 36x1
+    // connector against exactly this pair); its label is the sibling right after it.
+    return Array.from(container.querySelectorAll('span'))
+      .filter((s) => s.style.width === '22px' && s.style.height === '22px')
+      .map((s) => (s.nextElementSibling as HTMLElement | null)?.textContent ?? '')
+  }
+
+  it('FORK-HDR-1: a document run on the upload step renders the 2-step Import · Review strip', () => {
+    const { container } = render(<CreateFlow ctx={createFlowCtx('upload', 'document')} />)
+    const labels = stepLabels(container)
+
+    expect(labels.length).toBeGreaterThan(0)
+    expect(labels).toEqual(['Import', 'Review'])
+    expect(connectorCount(container)).toBe(1)
+  })
+
+  it('FORK-HDR-2 (AC-1 control): a spreadsheet run still renders the shipped 3-step strip', () => {
+    const { container } = render(<CreateFlow ctx={createFlowCtx('upload', 'spreadsheet')} />)
+
+    expect(stepLabels(container)).toEqual(['Import', 'Map', 'Review'])
+    expect(connectorCount(container)).toBe(2)
+  })
+
+  it('FORK-HDR-3: the shared Review step lands at index 1 of 2 on the document path, not 2 of 3', () => {
+    const { container } = render(<CreateFlow ctx={createFlowCtx('review', 'document')} />)
+
+    expect(stepLabels(container)).toEqual(['Import', 'Review'])
   })
 })

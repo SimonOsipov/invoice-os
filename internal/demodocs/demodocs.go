@@ -54,7 +54,7 @@ const firstDataSheetRow = 2
 
 // StoreFunc is document.Service.Store. Taking the method rather than the
 // service keeps this package off internal/document's object-storage half.
-type StoreFunc func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error)
+type StoreFunc func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error)
 
 type Result struct {
 	DocumentsStored int
@@ -150,7 +150,7 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, store StoreFunc, tenant
 	res := Result{EligibleRows: len(rows), Note: "seeded"}
 	for _, group := range groupByEntity(rows) {
 		body, sheetRows := buildCSV(group.rows)
-		doc, err := store(ctx, filenameFor(group.entityName), "text/csv", int64(len(body)), bytes.NewReader(body))
+		doc, _, err := store(ctx, filenameFor(group.entityName), "text/csv", int64(len(body)), bytes.NewReader(body))
 		if err != nil {
 			res.Note = "storing " + group.entityName + "'s file failed"
 			return res, err

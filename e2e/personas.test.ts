@@ -890,4 +890,47 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(/\blet\s+activeNav\b/.test(CONST_FIXTURE)).toBe(false)
     expect(/\bconst\s+activeNav\b/.test(CONST_FIXTURE)).toBe(true)
   })
+
+  // --- EXTR-09-08 (task-775) -- the document fork moves no coverage ----------------------
+  //
+  // The wizard's document path is a STEP inside the create flow, not a nav destination, so
+  // this story must leave the catalogue and the coverage map exactly where it found them.
+  // G3/G6 above go red either way; this row states the claim rather than leaving it implied,
+  // so a later story that quietly adds a Documents surface meets a named expectation.
+  it('EXTR09-P-1 -- the document fork adds no nav surface and no coverage cell', () => {
+    // Hand-written literal, never SURFACES.map(...) -- row 3's rule: registry exports must
+    // not supply the expectation used to test the registry.
+    expect(SURFACES.map((s) => s.navConst), 'the app SPA nav catalogue is unchanged by EXTR-09').toEqual([
+      'NAV_DASHBOARD',
+      'NAV_INVOICES',
+      'NAV_VALIDATION',
+      'NAV_WORKFLOWS',
+      'NAV_RULES',
+      'NAV_APPROVALS',
+      'NAV_CUSTOMERS',
+      'NAV_REPORTS',
+      'NAV_CLIENTS',
+      'NAV_AUDIT',
+      'NAV_SETTINGS',
+    ])
+
+    const cells = PERSONA_IDS.flatMap((id) => PERSONAS[id].coverage ?? [])
+    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(20)
+
+    // The fork's own vocabulary, in either half of the map. `Import` is deliberately absent
+    // from this list: the wizard has always been reached from Invoices, and no surface is
+    // named for it.
+    const forkWords = /document|extract|upload/i
+    const surfaceHits = SURFACES.filter((s) => forkWords.test(s.navConst) || forkWords.test(s.label))
+    expect(surfaceHits, `EXTR-09 must add no nav surface: ${surfaceHits.map((s) => s.navConst).join(', ')}`).toEqual([])
+    const cellHits = cells.filter((c) => forkWords.test(c.navConst))
+    expect(cellHits, `EXTR-09 must add no coverage cell: ${cellHits.map((c) => c.navConst).join(', ')}`).toEqual([])
+  })
+
+  it('EXTR09-P-1-neg -- the fork-word scan fires on a surface that would move the map (non-vacuity control)', () => {
+    const forkWords = /document|extract|upload/i
+    expect(forkWords.test('NAV_DOCUMENTS'), 'the scan must see a Documents surface').toBe(true)
+    expect(forkWords.test('Extraction'), 'the scan must see an Extraction label').toBe(true)
+    expect(forkWords.test('NAV_INVOICES'), 'and must not fire on the shipped catalogue').toBe(false)
+  })
 })

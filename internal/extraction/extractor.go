@@ -4,8 +4,9 @@ import (
 	"context"
 )
 
-// OpenDocument returns one document's bytes. The only route from this package to stored
-// content; internal/extraction never imports internal/document (deps_test.go).
+// OpenDocument returns one document's bytes -- this package's read seam onto stored content
+// (UploadHandler's injected store is the write one). internal/extraction never imports
+// internal/document (deps_test.go).
 type OpenDocument func(ctx context.Context, documentID string) (Document, error)
 
 // Extractor is the versioned seam between the extraction worker and any way of reading a

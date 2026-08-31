@@ -75,18 +75,18 @@ type previewBody struct {
 // every one of them exercises the handler's rewind. Records nothing, so it is
 // safe to share across goroutines. A spec that IS about storage passes its own
 // (handlers_upload_once_test.go's fakeDocStore).
-func previewStore() func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error) {
-	return func(_ context.Context, _, _ string, _ int64, body io.ReadSeeker) (document.Document, error) {
+func previewStore() func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error) {
+	return func(_ context.Context, _, _ string, _ int64, body io.ReadSeeker) (document.Document, bool, error) {
 		if _, err := io.Copy(io.Discard, body); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		if _, err := body.Seek(0, io.SeekStart); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		if _, err := io.Copy(io.Discard, body); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
-		return document.Document{ID: uuid.NewString()}, nil
+		return document.Document{ID: uuid.NewString()}, false, nil
 	}
 }
 

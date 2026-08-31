@@ -34,9 +34,10 @@
 // it decodes the bytes, it just writes nothing.
 //
 // The second describe covers GET /v1/documents/{id}, the download half of
-// [upload-once]. It is hosted in THIS file rather than a sibling because a
-// document can only be minted by POST /v1/imports/preview -- the multipart seam
-// above -- and a separate spec would need a third copy of it.
+// [upload-once]. It is hosted in THIS file rather than a sibling because it needs
+// a minted document and the multipart seam above already mints one.
+// POST /v1/documents (EXTR-09) mints them too, from the submission service --
+// contract-document-upload.spec.ts owns that route.
 import { test, expect } from '@playwright/test'
 import { login, createEntity, apiBase, PERSONAS } from './client'
 import { freshTin } from './fixtures'
@@ -88,8 +89,9 @@ function buildCleanCsv(num: string): string {
   return `${IMPORT_HEADER}\n${row}`
 }
 
-// previewFetch(): POST /v1/imports/preview -- since [upload-once] the ONLY
-// route by which a file reaches the server. Returns the whole RawResult
+// previewFetch(): POST /v1/imports/preview -- since [upload-once] the only route by
+// which a SPREADSHEET reaches the server (documents take POST /v1/documents on the
+// submission service, EXTR-09). Returns the whole RawResult
 // because its two POST-STORE 4xx bodies carry document_id alongside error,
 // which the unrecognized-format case below relies on.
 async function previewFetch(token: string, csv: string, filename = 'import.csv', type = 'text/csv'): Promise<RawResult> {

@@ -1,0 +1,108 @@
+// The document run's pure half — the poll-state reducer, the terminal-state predicate and
+// the budget arithmetic. No DOM, no network: App.tsx injects the transport, matching
+// importRun.ts's own node-testable discipline. Pinned by documentRun.test.ts.
+
+import type { FileOutcome } from './importRun'
+import type { ExtractionJob, ImportReport } from './importApi'
+
+// Mirrors e2e/api/contract-document-upload.spec.ts's POLL_BUDGET_MS: above the mock
+// extractor's sub-second work, below the worker's own 10-minute River timeout.
+export const EXTRACTION_POLL_BUDGET_MS = 120_000
+
+export const EXTRACTION_POLL_INTERVAL_MS = 1_500
+
+// 'waiting' is the only non-terminal verdict; both terminal ones carry what the caller
+// needs to settle a FileOutcome without re-reading the job.
+export type PollVerdict = { kind: 'waiting' } | { kind: 'succeeded'; jobId: string } | { kind: 'failed'; reason: string }
+
+// 'failed' is NOT terminal — River retries a failed attempt; only a dead-letter ends it.
+export function isTerminalExtractionState(state: string): boolean {
+  return state === 'succeeded' || state === 'dead_lettered'
+}
+
+// The newest job by created_at, NOT jobs[0] — the array's order is the server's, and a
+// reducer that trusts it is right only by coincidence.
+export function newestJob(jobs: readonly ExtractionJob[]): ExtractionJob | null {
+  let newest: ExtractionJob | null = null
+  for (const job of jobs) {
+    if (newest === null || job.created_at > newest.created_at) newest = job
+  }
+  return newest
+}
+
+// Sole copy owner of the budget-expiry reason, beside deadLetterRefusal — the run renders
+// what these return verbatim. Distinct texts: AC-5 wants the three failure causes
+// distinguishable.
+export function pollBudgetRefusal(): string {
+  return `Extraction is still running after ${Math.round(EXTRACTION_POLL_BUDGET_MS / 1000)} seconds. The document was stored and its extraction continues — open it again later.`
+}
+
+export function deadLetterRefusal(lastError: string | null): string {
+  const detail = lastError === null || lastError === '' ? 'the server gave no reason' : lastError
+  return `Extraction failed for this document — ${detail}`
+}
+
+// The reducer: the whole jobs[] array plus how long this document has been polled, in.
+// One verdict out. Budget arithmetic lives here so no caller re-derives the boundary.
+//
+// A terminal job outranks the budget: once the server has settled, the elapsed clock is
+// no longer the honest reason.
+export function pollVerdict(jobs: readonly ExtractionJob[], elapsedMs: number): PollVerdict {
+  const job = newestJob(jobs)
+  if (job !== null && isTerminalExtractionState(job.state)) {
+    if (job.state === 'succeeded') return { kind: 'succeeded', jobId: job.id }
+    return { kind: 'failed', reason: deadLetterRefusal(job.last_error) }
+  }
+  if (elapsedMs > EXTRACTION_POLL_BUDGET_MS) return { kind: 'failed', reason: pollBudgetRefusal() }
+  return { kind: 'waiting' }
+}
+
+export interface DocumentRunFile {
+  id: string
+  name: string
+  file: File
+}
+
+// The injected transport. `poll` resolves only once the document reaches a terminal
+// verdict (or the budget expires); the loop and its clock are the caller's.
+export interface DocumentPipelineDeps {
+  upload: (file: File) => Promise<string>
+  poll: (documentId: string) => Promise<PollVerdict>
+  importDocument: (documentId: string) => Promise<ImportReport>
+}
+
+export interface DocumentRunOutcome {
+  id: string
+  name: string
+  outcome: FileOutcome
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+// N pipelines, each upload -> poll -> import, all started before any of them is awaited
+// (Core AC #9). One file's failure settles that file and nothing else — every pipeline
+// catches its own, so Promise.all can never reject. Pinned by RUN-1 / RUN-4.
+export function startDocumentRun(
+  files: readonly DocumentRunFile[],
+  deps: DocumentPipelineDeps,
+): Promise<DocumentRunOutcome[]> {
+  return Promise.all(
+    files.map(async (f): Promise<DocumentRunOutcome> => {
+      try {
+        const documentId = await deps.upload(f.file)
+        const verdict = await deps.poll(documentId)
+        // Carried VERBATIM: the poll owns the wording, this only relays it.
+        if (verdict.kind !== 'succeeded') {
+          const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
+          return { id: f.id, name: f.name, outcome: { kind: 'failed', message: reason } }
+        }
+        const report = await deps.importDocument(documentId)
+        return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report } }
+      } catch (err) {
+        return { id: f.id, name: f.name, outcome: { kind: 'failed', message: messageOf(err) } }
+      }
+    }),
+  )
+}

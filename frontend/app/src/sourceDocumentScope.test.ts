@@ -1,7 +1,7 @@
 // Scope-fence guards (DOC-02-09): mechanical source scans proving the Out-of-Scope fences
 // hold. Extends lib/sourceDocument.test.ts:589-602's guard idiom -- which scans
-// sourceDocument.ts alone -- to the six SourceDocument*.tsx components, the CSV/XLSX-only
-// picker, and a repo-wide check for the prototype's state-switcher strip.
+// sourceDocument.ts alone -- to the six SourceDocument*.tsx components and a repo-wide
+// check for the prototype's state-switcher strip. Its picker block is retired below.
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -63,18 +63,12 @@ describe('no download affordance in the source-document components', () => {
   })
 })
 
-describe('the import picker is unchanged', () => {
-  const src = readFileSync(join(COMPONENTS_DIR, 'CreateUpload.tsx'), 'utf8')
-
-  it('the import picker is unchanged', () => {
-    expect(src.length, 'CreateUpload.tsx must be non-empty').toBeGreaterThan(0)
-    // Positive control runs before the negatives: proves the read landed on the real picker.
-    expect(src).toContain('accept=".csv,.xlsx"')
-    for (const needle of [/\.pdf/, /\.png/, /\.jpe?g/, /\.webp/, /image\//]) {
-      expect(src, `CreateUpload.tsx must not match ${needle}`).not.toMatch(needle)
-    }
-  })
-})
+// RETIRED (EXTR-09, Core AC #2): "the import picker is unchanged" pinned CreateUpload.tsx
+// to accept=".csv,.xlsx" and refused .pdf/.png/.jpe?g/.webp/image/ anywhere in it. EXTR-09
+// widens the picker to those exact types, so the fence it guarded no longer exists.
+// Replaced by importPicker.test.ts (PICKER-1..3): the accept attribute, the visible copy
+// and the e2e locators are pinned there instead. The three describe blocks around this
+// note are untouched — they guard DOC-02's other fences and still hold.
 
 describe('no prototype state strip ships', () => {
   // Built at runtime, never written as one contiguous literal -- this file lives under

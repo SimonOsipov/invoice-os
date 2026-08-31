@@ -128,14 +128,14 @@ func newInvoice(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number st
 // right one.
 func stubStore(t *testing.T, super *pgxpool.Pool, bodies *[][]byte) StoreFunc {
 	t.Helper()
-	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error) {
+	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error) {
 		id, ok := auth.IdentityFromContext(ctx)
 		if !ok {
-			return document.Document{}, db.ErrNoTenant
+			return document.Document{}, false, db.ErrNoTenant
 		}
 		b, err := io.ReadAll(body)
 		if err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		*bodies = append(*bodies, b)
 		sum := sha256.Sum256(b)
@@ -148,7 +148,7 @@ func stubStore(t *testing.T, super *pgxpool.Pool, bodies *[][]byte) StoreFunc {
 			 ON CONFLICT (tenant_id, content_hash) DO UPDATE SET filename = documents.filename
 			 RETURNING id::text`,
 			id.TenantID, "test/"+hash, hash, len(b), filename).Scan(&docID)
-		return document.Document{ID: docID, ContentHash: hash, SizeBytes: int64(len(b))}, err
+		return document.Document{ID: docID, ContentHash: hash, SizeBytes: int64(len(b))}, false, err
 	}
 }
 
@@ -364,11 +364,11 @@ func TestRLS_DemoDocsLinkWillNotReclaimALinkedInvoice(t *testing.T) {
 	var bodies [][]byte
 	store := stubStore(t, super, &bodies)
 
-	first, err := store(ctx, "first.csv", "text/csv", 3, strings.NewReader("a,b\n1,2\n"))
+	first, _, err := store(ctx, "first.csv", "text/csv", 3, strings.NewReader("a,b\n1,2\n"))
 	if err != nil {
 		t.Fatalf("store first: %v", err)
 	}
-	second, err := store(ctx, "second.csv", "text/csv", 3, strings.NewReader("c,d\n3,4\n"))
+	second, _, err := store(ctx, "second.csv", "text/csv", 3, strings.NewReader("c,d\n3,4\n"))
 	if err != nil {
 		t.Fatalf("store second: %v", err)
 	}

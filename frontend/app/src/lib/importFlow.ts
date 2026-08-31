@@ -9,14 +9,16 @@
 // CreateStep union, and STAGE_OF below is the ONLY total Record<CreateStep, number> in
 // the frontend, so the union addition cascades to it too.
 
-import { WIZARD_STEPS } from '../data'
+import { ENTER_STEPS, WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
 import type { CreateStep, Mapping } from '../types'
 import type { ImportPreview } from './importApi'
 import type { AsyncStatus } from '@invoice-os/api-client'
 import type { Entity } from './portfolio'
 
-export type WizardPath = 'document' | 'import'
+// Repurposed by EXTR-09-06 (D-08): 'document' used to mean the manually TYPED single
+// invoice here, which stops being readable in the story that makes source documents real.
+export type WizardPath = 'typed' | 'import' | 'document'
 
 export const IMPORT_STEPS: [string, string][] = [
   ['1', 'Import'],
@@ -28,48 +30,112 @@ export const IMPORT_STEPS: [string, string][] = [
 // drift). CreateFlow deletes its local STAGE_OF + wizardStage and calls wizardHeader
 // instead (M4-08-04 step 4).
 //
-// Do NOT "dedupe" this against IMPORT_STAGE_OF. `form` is the ONLY entry wizardHeader
-// ever reads here — DOCUMENT_ONLY_STEPS is ['form'], so every other step routes to
-// IMPORT_STAGE_OF instead. upload/mapping/review exist solely to keep the type a TOTAL
-// Record<CreateStep, number>: that totality is the compiler's exhaustiveness anchor (a
-// member added to CreateStep without a stage stops this file compiling) and it is the
-// ground truth two shipped deletion guards in importFlow.test.ts read via
-// Object.keys(STAGE_OF) to prove a deleted step never creeps back. Their values mirror
-// IMPORT_STAGE_OF's so the two tables can never disagree.
+// Do NOT "dedupe" this against the two per-path tables. `form` is the ONLY entry
+// wizardHeader ever reads here — TYPED_ONLY_STEPS is ['form'], so every other step routes
+// to IMPORT_STAGE_OF or DOCUMENT_STAGE_OF instead. The rest exist solely to keep the type
+// a TOTAL Record<CreateStep, number>: that totality is the compiler's exhaustiveness
+// anchor (a member added to CreateStep without a stage stops this file compiling, pinned
+// both ways by STEPS-D3b) and it is the ground truth the deletion guards in
+// importFlow.test.ts read via Object.keys(STAGE_OF). Their values mirror IMPORT_STAGE_OF's
+// so the two tables can never disagree.
 export const STAGE_OF: Record<CreateStep, number> = {
   upload: 0,
   mapping: 1,
-  form: 0, // WIZARD_STEPS[0] = 'Enter' — the one entry that is actually read
+  form: 0, // ENTER_STEPS[0] = 'Enter' — the one entry that is actually read
   review: 2, // mirrors IMPORT_STAGE_OF; present so the Record stays total
+  documents: 0, // mirrors DOCUMENT_STAGE_OF; present so the Record stays total
 }
 
 export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, mapping: 1, review: 2 }
 
-// The header-path resolver ([wizard-steps-split], debate finding J1). Exact rule:
-// path = 'document' iff createStep === 'form'; otherwise 'import'. Total over CreateStep
-// via `?? 0` — a step added to the union without an IMPORT_STAGE_OF entry falls to the
-// import path at index 0 rather than ever returning undefined/NaN (FLOW-14).
+// The document path's own indices. Separate from STAGE_OF because 'review' is SHARED and
+// lands at a different index on each path: 1 of 2 here, 2 of 3 on the import strip.
+const DOCUMENT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, documents: 0, review: 1 }
+
+// Steps that belong to the typed path whatever the run kind is.
+const TYPED_ONLY_STEPS: readonly CreateStep[] = ['form']
+
+// The header-path resolver. Three strips, so the step ALONE cannot pick one: 'review' is
+// shared by the import and document paths (STEPS-D5), which is why the run kind is an
+// argument. Total over CreateStep via `?? 0` — a step added to the union without a
+// per-path entry lands at index 0 rather than ever returning undefined/NaN (FLOW-14,
+// STEPS-D4b).
 //
-// The two strips it resolves between ([three-stages], INVCR-01-04): typing an invoice by
-// hand is `Enter · Review` and lights 'Enter'; dropping a file is `Import · Map · Review`.
-// 'Review' is the last stage on both paths — the real invoice detail view for a single
-// typed invoice, the import report for a batch.
-const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form']
-
-export function wizardHeader(createStep: CreateStep): { steps: [string, string][]; stageIndex: number } {
-  return DOCUMENT_ONLY_STEPS.includes(createStep)
-    ? { steps: WIZARD_STEPS, stageIndex: STAGE_OF[createStep] ?? 0 }
-    : { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }
+// Typing an invoice by hand is `Enter`; dropping a spreadsheet is `Import · Map · Review`;
+// dropping a document is `Import · Review` — no Map step, documents are never mapped.
+export function wizardHeader(createStep: CreateStep, runKind?: WizardPath | null): { steps: [string, string][]; stageIndex: number } {
+  if (TYPED_ONLY_STEPS.includes(createStep)) return { steps: ENTER_STEPS, stageIndex: STAGE_OF[createStep] ?? 0 }
+  if (createStep === 'documents' || runKind === 'document') return { steps: WIZARD_STEPS, stageIndex: DOCUMENT_STAGE_OF[createStep] ?? 0 }
+  return { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }
 }
 
-// Last-segment match only: 'a.csv'/'a.xlsx' (any case) match; 'a.csv.bak' does not.
+// The picker's per-file verdict (EXTR-09 §1). 'spreadsheet' keeps the shipped
+// preview/mapping flow, 'document' routes to POST /v1/documents, null is refused at
+// selection with a named reason.
+export type PickedKind = 'spreadsheet' | 'document'
+
+// One row of the accepted-type table. The shape is load-bearing, not taste: CLASSIFY-5
+// (internal/extraction/handlers_upload_test.go) reads the literal below out of THIS source
+// and compares its document half to classify.go's acceptedDocumentTypes.
+export interface AcceptedPickedType {
+  ext: string
+  kind: PickedKind
+  contentTypes: readonly string[]
+}
+
+// The one accepted-type table: `accept`, the classifier and the copy all trace here.
+//
+// contentTypes holds only the types that DECIDE a verdict on the fallback path, so story
+// §1's `text/plain` alias for .csv is not listed: an unrecognised extension falls through
+// to the declared type, and listing it would make 'notes.txt' declared text/plain a
+// spreadsheet (CLASSIFY-4 requires null). A .csv declared text/plain still resolves — by
+// its extension, which wins (CLASSIFY-1).
+export const ACCEPTED_PICKED_TYPES: readonly AcceptedPickedType[] = [
+  { ext: '.csv', kind: 'spreadsheet', contentTypes: ['text/csv'] },
+  { ext: '.xlsx', kind: 'spreadsheet', contentTypes: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'] },
+  { ext: '.pdf', kind: 'document', contentTypes: ['application/pdf'] },
+  { ext: '.png', kind: 'document', contentTypes: ['image/png'] },
+  { ext: '.jpg', kind: 'document', contentTypes: ['image/jpeg'] },
+  { ext: '.jpeg', kind: 'document', contentTypes: ['image/jpeg'] },
+  { ext: '.webp', kind: 'document', contentTypes: ['image/webp'] },
+  { ext: '.docx', kind: 'document', contentTypes: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'] },
+]
+
+// The selection gate (EXTR-09 §1). Last-segment extension first, then the declared type
+// with its parameters stripped, both case-insensitively — detectFormat's rule
+// (internal/importer/handlers.go), mirrored by classifyDocumentType server-side. null is a
+// refusal, never a fallback kind.
+export function classifyPickedFile(name: string, type: string): PickedKind | null {
+  const lower = name.toLowerCase()
+  const dot = lower.lastIndexOf('.')
+  const byExt = dot === -1 ? undefined : ACCEPTED_PICKED_TYPES.find((row) => row.ext === lower.slice(dot))
+  if (byExt) return byExt.kind
+
+  // Drops any "; charset=…" parameter, as mime.ParseMediaType does on the Go side.
+  const base = type.split(';')[0].trim().toLowerCase()
+  return ACCEPTED_PICKED_TYPES.find((row) => row.contentTypes.includes(base))?.kind ?? null
+}
+
+// Thin delegate over the table above, so the spreadsheet path's shipped call sites keep
+// their meaning. The empty content type leaves the extension as the only input, which is
+// exactly the shipped last-segment rule: 'a.csv'/'a.xlsx' (any case) match, 'a.csv.bak'
+// does not (FLOW-05).
 export function hasImportableExtension(name: string): boolean {
-  const n = name.toLowerCase()
-  return n.endsWith('.csv') || n.endsWith('.xlsx')
+  return classifyPickedFile(name, '') === 'spreadsheet'
 }
 
-// = file !== null && hasImportableExtension(file.name). One predicate is the sole gate —
-// the extension rule is not also duplicated in the setter.
+// Binary MiB, the same number as internal/importer's maxUploadBytes and
+// documents.size_bytes' CHECK ceiling. TestMaxUploadBytes_MatchesTheBrowserConstant /
+// TestMaxUploadBytes_MatchesTheColumnCheck (internal/importer/handlers_upload_once_test.go)
+// keep the three equal — they parse this line's right-hand side as text.
+export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+// = file !== null && hasImportableExtension(file.name) && file.size <= MAX_UPLOAD_BYTES.
+// One predicate is the sole gate — neither rule is duplicated in the setter.
+//
+// The size clause is ANDed onto the extension rule, never a replacement for it (SIZE-1):
+// a file the server would 413 is refused where the user can still see and remove it.
+// lib/importRun.ts owns the sentence that says which file and why (SIZE-5b).
 //
 // Deliberately does NOT gate on an entity. POST /api/invoice/v1/imports/preview sends the
 // file and nothing else (importApi.previewImport), and the server's PreviewHandler is
@@ -89,8 +155,12 @@ export function hasImportableExtension(name: string): boolean {
 // entity clause here or to anything upstream of `Read columns`; that is precisely the
 // belt-and-braces copy the paragraph above describes, and re-adding it re-closes the front
 // door on in-house workspaces.
+//
+// This rule is the SPREADSHEET path's. On a document run the same button is "Extract
+// invoices" and IS the commit, so it does carry an entity clause — CreateUpload.tsx's
+// `readReady`.
 export function canReadColumns(file: File | null): boolean {
-  return file !== null && hasImportableExtension(file.name)
+  return file !== null && hasImportableExtension(file.name) && file.size <= MAX_UPLOAD_BYTES
 }
 
 // = preview !== null && canSubmitMapping(mapping). Delegates to M4-08-03's shipped

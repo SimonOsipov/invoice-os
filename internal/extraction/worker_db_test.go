@@ -2,9 +2,9 @@
 // store_db_test.go's TestMain, per-role pools and single skip site; export_test.go is what lets
 // it reach the unexported args type from out here.
 //
-// Every extraction.* row in the shared database is test debris: nothing enqueues extraction
-// yet, so every writer of one is a test fixture. Never read them as evidence that extraction
-// audit events are emitted in production.
+// Every extraction.* row this suite sees is its own debris. Production enqueues only through
+// POST /v1/documents (cmd/submission/main.go), which nothing in this file drives, so never read
+// these rows as evidence that extraction audit events are emitted in production.
 //
 // This file leaves none behind -- wkPurgeAuditLog drops each fixture tenant's audit rows at
 // teardown. internal/audit's fixtures do not, and audit_log carries no foreign key for

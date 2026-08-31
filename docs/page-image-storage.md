@@ -1,7 +1,10 @@
 # Page-image storage
 
-Every document that goes through extraction is rendered to one PNG per page, and those PNGs are
-what a review canvas will draw a highlighted region on. This page records the four things about
+Every **PDF** that goes through extraction is rendered to one PNG per page, and those PNGs are
+what a review canvas will draw a highlighted region on. Since EXTR-09 the upload route also
+accepts PNG, JPEG, WebP and DOCX; `PageStore.Ingest` reads PDFs only, so those four render zero
+pages and their job dead-letters at `FailurePagesNotRendered` before the extractor ever runs
+([docs/document-upload.md](document-upload.md)). This page records the four things about
 them that are not obvious from the code: the render profile, the object-key scheme, where the
 800-page cap comes from, and how long the objects live.
 
@@ -76,10 +79,11 @@ model or format means minting `v2` keys rather than overwriting v1 objects, and 
 does that to decide explicitly what happens to the rows already pointing at v1. The page number
 is zero-padded to four digits, so keys sort in page order and `p0800` — the cap — still fits.
 
-Because the hash is of the document's bytes, the keys are stable: a River retry, or a second
-extraction job over the same document, re-renders identical pixels to identical keys and
-overwrites them. Nothing accumulates per attempt, and the row set is replaced whole (DELETE then
-INSERT in one transaction) rather than appended to.
+Because the hash is of the document's bytes, the keys are stable: a River retry re-renders
+identical pixels to identical keys and overwrites them. A *second* extraction job over the same
+document would do the same, but no seam can mint one — see Retention below. Nothing accumulates
+per attempt, and the row set is replaced whole (DELETE then INSERT in one transaction) rather
+than appended to.
 
 ## The page cap
 
@@ -144,8 +148,13 @@ purge already takes for `documents` itself, and it is enumerated in
 
 Orphans are therefore expected in two ways, both cheap and both inherited rather than new: a
 failed PUT part-way through a render, and a purged demo tenant. Neither is reachable from the
-application, because reaching an object requires a row, and both are recoverable by re-running
-extraction, which mints the same content-derived keys.
+application, because reaching an object requires a row.
+
+They are **not** recoverable by re-running extraction today. EXTR-09's `EnqueueExtraction` records
+a permanent per-document key `extract:<document_id>`, so the one sanctioned seam can never mint a
+second job for a document — pinned by `TestRLS_EnqueueExtractionRefusesEvenAfterTheJobDeadLetters`.
+Within a job River's own retries still re-render to the same content-derived keys. Re-extraction is
+EXTR-17's.
 
 ## What this does not cover
 

@@ -1,13 +1,14 @@
-// Create flow · step 1 — THE import surface: one spreadsheet upload, server-backed
-// (M4-08-04: previewImport -> mapping -> createImport). It is the only card here, and
-// every pixel of it talks to a real endpoint.
+// Create flow · step 1 — THE import surface, server-backed. One card, two paths off the
+// same picker (EXTR-09): spreadsheets take previewImport -> mapping -> createImport, and
+// documents take ctx.startDocumentRun (upload -> poll -> import). Every pixel talks to a
+// real endpoint.
 //
 // It used to be joined by a second, sandbox-gated "import a document" card: a local
 // setInterval fixture over two hardcoded sample filenames, with zero network and no
 // OCR/parse endpoint behind it. INVCR-01-01 deleted it outright rather than leave a fake
 // parse anchoring a five-step strip that will never ship in that shape ([one-flow],
-// [prereq-delete-mock]). Real document ingestion is explicitly out of scope (§14) — do
-// not reintroduce a client-side stand-in for it.
+// [prereq-delete-mock]). Never reintroduce a client-side stand-in: document ingestion is
+// real now, and its only route is the one above.
 //
 // The entity picker is gone too: entityId now mirrors ctx.active.entityId (the
 // company already chosen via the workspace switcher) instead of a second, separate
@@ -33,7 +34,9 @@
 // the paragraph above records ([inhouse-can-start]) and would falsify importFlow.ts's
 // stated contract ("Preview gate = file only; commit gate = entity"). Nothing upstream
 // of `Read columns` may ever acquire an entity check — the dropzone, the file input and
-// the button stay live for both personas, whatever this panel says.
+// the button stay live for both personas, whatever this panel says. EXTR-09-07 leaves
+// that untouched and adds the OTHER half of the same contract: on a DOCUMENT run this
+// button is itself the commit, so there it does gate on the resolved entity.
 // Ported shell from Platform.dc.html ~L407-448.
 
 import { useState } from 'react'
@@ -41,9 +44,20 @@ import { useState } from 'react'
 import { gatewayBase } from '@invoice-os/api-client'
 
 import { importGlyph } from '../glyphs'
-import { computeNoEntity, hasImportableExtension } from '../lib/importFlow'
-import { canReadColumnsAll } from '../lib/importRun'
+import { classifyPickedFile, computeNoEntity } from '../lib/importFlow'
+import { canReadColumnsAll, canStartDocumentRun, kindMismatchNote, oversizeNote, runKindOf } from '../lib/importRun'
+import type { PickedKind } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
+
+// The per-file verdict the list renders, '' for an acceptable file. Two refusals, in
+// order: a type the picker does not accept at all, then a type that contradicts the run's
+// own kind (one pick can carry both — addFiles keeps them listed, BULK-03-8).
+function fileNote(file: File, runKind: PickedKind | null): string {
+  const kind = classifyPickedFile(file.name, file.type)
+  if (kind === null) return 'Unsupported file type — choose one of the accepted types above.'
+  if (runKind !== null && kind !== runKind) return kindMismatchNote(runKind, kind)
+  return ''
+}
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   const { active, pickedFiles, filesRefusal, importError, activeEntity, entitiesState, entities, clients, mode } = ctx
@@ -70,11 +84,22 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   // configured there is nothing to POST the preview to.
   const base = gatewayBase()
 
-  const readReady = canReadColumnsAll(pickedFiles)
+  // EXTR-09-07: every selection-time gate below reads classifyPickedFile, never
+  // hasImportableExtension. That delegate is spreadsheet-only by construction, so while
+  // the picker's own feedback consulted it a chosen PDF was listed as "Unsupported file
+  // type" one line under copy saying PDF is accepted. runKindOf is derived from the
+  // selection rather than read off ctx, so the picker's verdict cannot lag it.
+  const runKind = runKindOf(pickedFiles)
+  const documentRun = runKind === 'document'
+  // The document run IS the commit (documents are never mapped), so it carries the
+  // entity gate the Map step carries for spreadsheets — the same resolved-object
+  // predicate every filing gate reads ([gate-on-the-resolved-entity]). Nothing upstream
+  // of `Read columns` gains one: that branch is unchanged.
+  const readReady = documentRun ? canStartDocumentRun(pickedFiles) && activeEntity !== null : canReadColumnsAll(pickedFiles)
   // Aggregate over the whole selection, for the dropzone's border cue only — the
-  // per-file note (rendered after the label, alongside the chosen-files list) is what
-  // actually names which file is bad.
-  const anyBadExtension = pickedFiles.some((pf) => !hasImportableExtension(pf.file.name))
+  // per-file notes (rendered after the label, alongside the chosen-files list) are what
+  // actually name which file is bad.
+  const anyBadFile = pickedFiles.some((pf) => fileNote(pf.file, runKind) !== '')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -100,9 +125,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             id="pf-import-file"
             className="pf-file"
             type="file"
-            accept=".csv,.xlsx"
+            accept=".csv,.xlsx,.pdf,.png,.jpg,.jpeg,.webp,.docx"
             multiple
-            aria-label="Choose a spreadsheet to import"
+            aria-label="Choose files to import"
             onChange={(e) => ctx.addPickedFiles(Array.from(e.target.files ?? []))}
           />
           <label
@@ -130,7 +155,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               flexDirection: 'column',
               alignItems: 'center',
               textAlign: 'center',
-              border: `1.5px dashed ${anyBadExtension ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
+              border: `1.5px dashed ${anyBadFile ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
               borderRadius: 'var(--radius-md)',
               padding: '30px 20px',
               background: dragOver ? 'var(--action-tint)' : 'var(--bg-1)',
@@ -146,12 +171,12 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                   {pickedFiles.length} file{pickedFiles.length === 1 ? '' : 's'} selected
                 </div>
                 <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                  Selected — click Read columns below, drop more files to add them, or remove one from the list below.
+                  Selected — click {documentRun ? 'Extract invoices' : 'Read columns'} below, drop more files to add them, or remove one from the list below.
                 </p>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag spreadsheets here, or click to choose'}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag files here, or click to choose'}</div>
                 {/* The string here used to read "one row per invoice", which is simply
                     FALSE: one row is one LINE ITEM, and rows group into invoices by the
                     column mapped to invoice_number — exactly what the next step says
@@ -169,20 +194,26 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           </label>
 
           {/* A <span>, and it lives OUTSIDE the label on purpose — see the placement
-              note on the panel below. The file input's own accept="" is the real gate;
-              this is the human-readable statement of it, not a second source of truth. */}
+              note on the panel below. It states ACCEPTED_PICKED_TYPES (lib/importFlow.ts)
+              in human terms, not a second source of truth; PICKER-2 pins it to the accept
+              attribute. Neither is the gate: a DROPPED file never meets accept (onDrop
+              above hands it straight to addPickedFiles), so classifyPickedFile is. */}
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.06em' }}>
-            ACCEPTED · CSV · XLSX
+            ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX
           </span>
 
-          {/* The chosen-files list, per-file remove control and per-file bad-extension
-              note (BULK-01-03, Core AC 1). A bad-extension file is still listed here —
-              addFiles never drops on extension, only on the five-file count cap — so the
-              user can see and remove it rather than wonder why it silently vanished. */}
+          {/* The chosen-files list, per-file remove control and the two per-file refusal
+              notes — bad extension (BULK-01-03) and over the size cap (EXTR-09-05). Both
+              are still listed here, so the user can see and remove one rather than wonder
+              why it silently vanished. addFiles drops on two things only: the five-file
+              count cap, and a file contradicting the run's already-committed kind. */}
           {pickedFiles.length > 0 && (
             <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: 0, padding: 0, listStyle: 'none' }}>
               {pickedFiles.map((pf) => {
-                const badExtension = !hasImportableExtension(pf.file.name)
+                // '' for an acceptable file — the two boundaries live in fileNote and
+                // oversizeNote, never re-derived here.
+                const kindNote = fileNote(pf.file, runKind)
+                const sizeNote = oversizeNote(pf.file)
                 return (
                   <li
                     key={pf.id}
@@ -193,7 +224,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                       gap: 10,
                       padding: '8px 12px',
                       borderRadius: 'var(--radius-md)',
-                      border: `1px solid ${badExtension ? 'var(--status-red-border)' : 'var(--line-1)'}`,
+                      border: `1px solid ${kindNote !== '' || sizeNote !== '' ? 'var(--status-red-border)' : 'var(--line-1)'}`,
                       background: 'var(--bg-1)',
                     }}
                   >
@@ -201,10 +232,11 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                       <div className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {pf.file.name}
                       </div>
-                      {badExtension && (
-                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>
-                          Not a spreadsheet — choose a .csv or .xlsx file.
-                        </p>
+                      {kindNote !== '' && (
+                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>{kindNote}</p>
+                      )}
+                      {sizeNote !== '' && (
+                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>{sizeNote}</p>
                       )}
                     </div>
                     <button
@@ -221,9 +253,10 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             </ul>
           )}
 
-          {/* Cap-refusal (BULK-01-03, Core AC 1) — capRefusal's text verbatim, sole copy
-              owner in lib/importRun.ts. Never a silent truncation: whenever addPickedFiles
-              drops any incoming file past MAX_RUN_FILES, this names the cap and the count. */}
+          {/* The selection refusal — capRefusal's or kindRefusal's text verbatim, both
+              owned by lib/importRun.ts. Never a silent truncation: whenever addPickedFiles
+              drops an incoming file, past MAX_RUN_FILES or against the run's committed
+              kind, this names why. */}
           {filesRefusal && (
             <p style={{ fontSize: 12.5, color: 'var(--status-amber-text)', margin: 0, lineHeight: 1.5 }}>{filesRefusal}</p>
           )}
@@ -274,13 +307,17 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           )}
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {/* One button, two paths. A document is never mapped, so its primary starts
+                the whole run rather than reading columns for a step that does not exist;
+                the label follows the action, since a button whose word and effect
+                disagree is the same contradiction the notes above just closed. */}
             <button
-              onClick={ctx.readAllColumns}
+              onClick={documentRun ? ctx.startDocumentRun : ctx.readAllColumns}
               disabled={base == null || !readReady}
               className="v2-btn v2-btn-primary pf-btn"
               style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
             >
-              <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Read columns
+              <span style={{ display: 'inline-flex' }}>{importGlyph}</span> {documentRun ? 'Extract invoices' : 'Read columns'}
             </button>
             {/* Load-bearing: the only from-scratch creation path (manual entry) must
                 render in BOTH live and sandbox — and for both personas. */}

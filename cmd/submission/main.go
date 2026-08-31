@@ -7,8 +7,8 @@
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
 //
-// EXTR-07 gives the service its first domain route, GET /v1/extractions: the HTTP surface is
-// no longer /healthz + /readyz + the ping stub.
+// The domain HTTP surface is GET /v1/extractions (EXTR-07) and POST /v1/documents (EXTR-09),
+// which stores the upload and enqueues its extraction on this service's own River client.
 package main
 
 import (
@@ -31,6 +31,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
@@ -161,6 +162,13 @@ func main() {
 	// on the first segment under /api/ and forwards the subpath, so the pattern has no prefix.
 	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler((&extraction.Reader{Pool: pool}).JobsForDocument, app.Logger))
 
+	// POST /v1/documents -- the upload that stores a source document and queues its
+	// extraction. Two transactions on purpose: Service.Store commits its own, the enqueue
+	// opens a second. A crash between them leaves a document with no job, which is the safe
+	// direction; recovery is EXTR-17's (internal/extraction/enqueue.go).
+	app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(
+		newDocumentStorer(docSvc.Store), newExtractionEnqueuer(pool, q), app.Logger))
+
 	if err := app.Run(ctx); err != nil {
 		log.Fatalf("submission: %v", err)
 	}
@@ -206,6 +214,49 @@ func newDocumentOpener(open documentOpen) extraction.OpenDocument {
 			ct = *doc.DeclaredContentType
 		}
 		return extraction.Document{Bytes: b, ContentType: ct}, nil
+	}
+}
+
+// documentStore is document.Service.Store's shape, so a test can substitute one.
+type documentStore func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error)
+
+// newDocumentStorer adapts the document service to the upload seam: internal/extraction never
+// imports internal/document, so the stored row is projected into its own shape here, the way
+// newDocumentOpener projects an opened one. Every field comes off the STORED row -- filename
+// and size are the sanitized, server-computed values, not what the caller declared.
+func newDocumentStorer(store documentStore) func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (extraction.StoredDocument, error) {
+	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (extraction.StoredDocument, error) {
+		doc, reused, err := store(ctx, filename, contentType, size, body)
+		if err != nil {
+			return extraction.StoredDocument{}, err
+		}
+		out := extraction.StoredDocument{ID: doc.ID, SizeBytes: doc.SizeBytes, Reused: reused}
+		if doc.Filename != nil {
+			out.Filename = *doc.Filename
+		}
+		if doc.DeclaredContentType != nil {
+			out.ContentType = *doc.DeclaredContentType
+		}
+		return out, nil
+	}
+}
+
+// newExtractionEnqueuer adapts the sanctioned enqueue seam to the upload handler. The tenant
+// comes off the request identity, never the wire, and the business key and the job insert
+// share one transaction (internal/extraction/enqueue.go).
+func newExtractionEnqueuer(pool *pgxpool.Pool, q *queue.Client) func(ctx context.Context, documentID string) (bool, error) {
+	return func(ctx context.Context, documentID string) (bool, error) {
+		id, ok := auth.IdentityFromContext(ctx)
+		if !ok {
+			return false, db.ErrNoTenant
+		}
+		var skipped bool
+		err := db.WithinRequestTenantTx(ctx, pool, func(tx pgx.Tx) error {
+			var e error
+			skipped, e = extraction.EnqueueExtraction(ctx, tx, q, id.TenantID, documentID)
+			return e
+		})
+		return skipped, err
 	}
 }
 

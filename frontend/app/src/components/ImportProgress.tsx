@@ -4,11 +4,15 @@
 // beside it rather than the state of the whole screen.
 //
 // BULK-01-05 (task-308) turned this from a single-file card into a PER-FILE LIST: one
-// row per file in the run, in run order (lib/importRun.ts's runFileRows), live while a
-// createImport call is actually in flight or just settled (CreateFlow's body-swap gate,
-// runIsActive(run) — true for 'running' and the brief 'finished' tick before a route is
-// chosen). The rewrite is additive to the card's own honesty rules, not a relaxation of
-// them.
+// row per file in the run, in run order (lib/importRun.ts's runFileRows), live while the
+// run is active (CreateFlow's body-swap gate, runIsActive(run) — true for 'running' and
+// the brief 'finished' tick before a route is chosen). The rewrite is additive to the
+// card's own honesty rules, not a relaxation of them.
+//
+// It renders for a DOCUMENT run too (EXTR-09), and there every row reads QUEUED until the
+// run settles: startDocumentRun dispatches no `phase`, because runReducer's phase writes
+// onto a single cursor and the document run's files are concurrent. Per-file document
+// progress needs a status map in App state, and is EXTR-10's.
 //
 // It does NOT stay on screen once EVERY file has failed (AC #9, corrected by QA under
 // this same task-308 after the first cut of this rewrite shipped it as a dead end):
@@ -22,14 +26,14 @@
 // rather than a missing feature:
 //
 // 1. NO STAGE LIST — not ticked, not even static. Two independent reasons.
-//    (a) Nothing can drive one. `POST /v1/imports` is synchronous with no job to poll:
-//        the invoice service routes only POST /v1/imports and POST /v1/imports/preview
-//        (no GET, no status endpoint), there is no http.Flusher / text/event-stream
-//        anywhere in internal/importer, and no EventSource / ReadableStream anywhere in
-//        this app. importApi.ts's own progress contract already states the consequence —
-//        after `upload.onload` everything (server parse, decode, DB writes, rule
-//        evaluation, response travel) is unobservable, "so any stage label there would
-//        be invented".
+//    (a) Nothing can drive one on the SPREADSHEET path. `POST /v1/imports` is synchronous
+//        with no job to poll, there is no http.Flusher / text/event-stream anywhere in
+//        internal/importer, and no EventSource / ReadableStream anywhere in this app.
+//        (A document run does have a job to poll — GET /v1/extractions every 1.5s — but
+//        it dispatches no phase either; see the note above.) importApi.ts's own progress
+//        contract already states the consequence — after `upload.onload` everything
+//        (server parse, decode, DB writes, rule evaluation, response travel) is
+//        unobservable, "so any stage label there would be invented".
 //    (b) Even a static list would MISDESCRIBE the server. The real pipeline
 //        (internal/importer/service.go) is: resolve mapping → group → classify/quarantine
 //        → entity lookup → count → CreateBatch + Store.Create per READY group →

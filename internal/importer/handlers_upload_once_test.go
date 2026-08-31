@@ -21,6 +21,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +39,7 @@ import (
 // storeSpec / openSpec are document.Service.Store / document.Service.Open's
 // shapes. Declared here as test-side aliases only: the handlers are asserted
 // structurally, so production stays free to name (or not name) these types.
-type storeSpec = func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error)
+type storeSpec = func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error)
 
 type openSpec = func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error)
 
@@ -72,22 +76,22 @@ func newFakeDocStore() *fakeDocStore {
 // to EOF, one rewind, then the PUT reads to EOF again. Nothing rewinds after
 // that, so a handler that does not Seek(0) before Decode reads zero bytes (G1).
 func (f *fakeDocStore) fn() storeSpec {
-	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error) {
+	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error) {
 		b, err := io.ReadAll(body)
 		if err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		if _, err := body.Seek(0, io.SeekStart); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		if _, err := io.Copy(io.Discard, body); err != nil {
-			return document.Document{}, err
+			return document.Document{}, false, err
 		}
 		f.calls = append(f.calls, storeCall{filename: filename, contentType: contentType, size: size, body: b})
 		if f.err != nil {
-			return document.Document{}, f.err
+			return document.Document{}, false, f.err
 		}
-		return f.doc, nil
+		return f.doc, false, nil
 	}
 }
 
@@ -835,5 +839,133 @@ func TestGetBatch_BodyOmitsDocumentID(t *testing.T) {
 	}
 	if !bytes.Contains(raw, []byte(`"filename":"q.csv"`)) {
 		t.Errorf("filename is no longer on the wire as before: %s", raw)
+	}
+}
+
+// --- EXTR-09-05 (task-772): one upload cap, three sources -------------------
+//
+// The client-side size gate gives the browser its own copy of a limit it cannot see, so
+// these two pin the copies to each other. Idiom is handlers_document_test.go H-07's
+// corsAllowMethods read: a regex over a sibling source that FAILS LOUDLY when the shape
+// it expects is gone, never one that silently finds nothing.
+//
+// tools/fixturegen/gen_test.go's canonicalUploadCap mirrors the same 15 << 20 by literal;
+// nothing here contradicts it.
+//
+// Both are green from the start (they read constants, not behaviour) -- the RED half of
+// EXTR-09-05 is SIZE-1/SIZE-3/SIZE-4/SIZE-5 in the browser suite, where canReadColumns
+// does not consult MAX_UPLOAD_BYTES yet.
+
+var (
+	// maxUploadBytes = 15 << 20
+	goUploadCapRE = regexp.MustCompile(`maxUploadBytes\s*=\s*(\d+)\s*<<\s*(\d+)`)
+	// export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024 -- captures the whole RHS so a
+	// reshaping into a single literal still parses rather than silently missing.
+	tsUploadCapRE = regexp.MustCompile(`MAX_UPLOAD_BYTES\s*=\s*([0-9_ */]+)`)
+	// CHECK (size_bytes >= 0 AND size_bytes <= 15728640)
+	sizeBytesCheckRE = regexp.MustCompile(`size_bytes\s*<=\s*(\d+)`)
+)
+
+// parseUploadCapProduct reads "15 * 1024 * 1024" (or "15728640", or "15_728_640") as one
+// number. Any factor it cannot parse is an error, never a skipped term.
+func parseUploadCapProduct(raw string) (int64, error) {
+	var product int64 = 1
+	factors := strings.Split(raw, "*")
+	if len(factors) == 0 {
+		return 0, fmt.Errorf("no factors in %q", raw)
+	}
+	for _, f := range factors {
+		clean := strings.ReplaceAll(strings.TrimSpace(f), "_", "")
+		if clean == "" {
+			return 0, fmt.Errorf("empty factor in %q", raw)
+		}
+		n, err := strconv.ParseInt(clean, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("factor %q in %q: %w", clean, raw, err)
+		}
+		product *= n
+	}
+	return product, nil
+}
+
+// TestMaxUploadBytes_MatchesTheBrowserConstant reads the Go constant as TEXT as well as
+// compiled, then the browser's MAX_UPLOAD_BYTES, and asserts the two agree.
+func TestMaxUploadBytes_MatchesTheBrowserConstant(t *testing.T) {
+	goRaw, err := os.ReadFile("handlers.go")
+	if err != nil {
+		t.Fatalf("read handlers.go: %v", err)
+	}
+	gm := goUploadCapRE.FindSubmatch(goRaw)
+	if gm == nil {
+		t.Fatal(`no "maxUploadBytes = N << M" in handlers.go; this test lost the anchor it reads (EXTR-09-05 AC-4)`)
+	}
+	base, err := strconv.ParseInt(string(gm[1]), 10, 64)
+	if err != nil {
+		t.Fatalf("parse maxUploadBytes base %q: %v", gm[1], err)
+	}
+	shift, err := strconv.ParseInt(string(gm[2]), 10, 64)
+	if err != nil {
+		t.Fatalf("parse maxUploadBytes shift %q: %v", gm[2], err)
+	}
+	fromText := base << uint(shift)
+	// The regex oracle must agree with what the compiler actually built, or every
+	// comparison below is against a number this package does not use.
+	if fromText != maxUploadBytes {
+		t.Fatalf("handlers.go text says %d (%d << %d) but the compiled maxUploadBytes is %d", fromText, base, shift, maxUploadBytes)
+	}
+
+	tsPath := filepath.Join("..", "..", "frontend", "app", "src", "lib", "importFlow.ts")
+	tsRaw, err := os.ReadFile(tsPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tsPath, err)
+	}
+	tm := tsUploadCapRE.FindSubmatch(tsRaw)
+	if tm == nil {
+		t.Fatalf("no MAX_UPLOAD_BYTES assignment in %s; the client-side size gate lost its constant (EXTR-09-05 AC-4). Expected a line of the form: export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024", tsPath)
+	}
+	browser, err := parseUploadCapProduct(string(tm[1]))
+	if err != nil {
+		t.Fatalf("parse MAX_UPLOAD_BYTES from %s: %v", tsPath, err)
+	}
+	if browser != maxUploadBytes {
+		t.Errorf("MAX_UPLOAD_BYTES = %d, want %d (internal/importer maxUploadBytes) -- the browser would refuse or admit files the server does not", browser, maxUploadBytes)
+	}
+}
+
+// TestMaxUploadBytes_MatchesTheColumnCheck reads documents.size_bytes CHECK ceiling out of
+// the migration that declares the column and asserts it equals maxUploadBytes.
+func TestMaxUploadBytes_MatchesTheColumnCheck(t *testing.T) {
+	dir := filepath.Join("..", "..", "migrations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	var owners []string
+	var body string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		if sizeBytesCheckRE.Match(raw) {
+			owners = append(owners, e.Name())
+			body = string(raw)
+		}
+	}
+	// Loud on BOTH zero (the anchor moved) and many (the ceiling has two owners, which is
+	// itself the drift this test exists to catch).
+	if len(owners) != 1 {
+		t.Fatalf(`expected exactly one migration carrying a "size_bytes <= N" CHECK, found %d: %v`, len(owners), owners)
+	}
+	m := sizeBytesCheckRE.FindStringSubmatch(body)
+	ceiling, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		t.Fatalf("parse size_bytes ceiling %q from %s: %v", m[1], owners[0], err)
+	}
+	if ceiling != maxUploadBytes {
+		t.Errorf("documents.size_bytes CHECK ceiling = %d (%s), want %d -- a file the handler accepts would violate the column constraint", ceiling, owners[0], maxUploadBytes)
 	}
 }

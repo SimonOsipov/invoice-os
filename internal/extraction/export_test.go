@@ -70,3 +70,7 @@ const (
 	Tier1MaxDistanceRightForTest = tier1MaxDistanceRight
 	Tier1MaxDistanceBelowForTest = tier1MaxDistanceBelow
 )
+
+// MaxUploadBytesForTest exposes the request-body cap so the 413 spec asserts the production
+// constant rather than a copy of it.
+const MaxUploadBytesForTest = maxUploadBytes

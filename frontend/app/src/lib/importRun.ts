@@ -10,7 +10,9 @@
 // runFileRows, routeAfterRun — is BULK-01-05's job. BULK-01-03 creates this module first
 // (dependency order); BULK-01-05 EXTENDS it, never recreates it (task-308 correction).
 
-import { canReadColumns } from './importFlow'
+import { MAX_UPLOAD_BYTES, canReadColumns, classifyPickedFile } from './importFlow'
+import type { PickedKind } from './importFlow'
+import { formatBytes } from './sourceDocument'
 
 export const MAX_RUN_FILES = 5 // [five-file-cap] — Core AC 1: a run accepts at most 5 files.
 
@@ -27,17 +29,42 @@ export interface SelectionResult {
   refusal: string | null
 }
 
-// Appends `incoming` onto `current`, preserving order, capped at MAX_RUN_FILES. Only the
-// COUNT is capped here — a bad-extension file is still appended; that gate belongs to
-// canReadColumnsAll, not to selection (AC3). Whenever the cap drops any incoming file,
-// `refusal` names the cap and how many were not added (via capRefusal) — never a silent
-// truncation. Exactly at cap, under cap, or zero incoming: refusal is null.
+// Appends `incoming` onto `current`, preserving order, capped at MAX_RUN_FILES. A
+// bad-extension file is still appended; that gate belongs to canReadColumnsAll, not to
+// selection (AC3). Whenever the cap drops any incoming file, `refusal` names the cap and
+// how many were not added (via capRefusal) — never a silent truncation. Under the cap
+// with no kind mismatch, refusal is null.
+//
+// EXTR-09-07 adds the kind gate: a file whose kind contradicts the run's COMMITTED kind
+// (runKindOf(current) — the files already selected, never one accepted earlier in this
+// same call) is refused, and the run keeps every file it had. One call may still carry
+// both kinds at once (BULK-03-8 keeps them listed); the picker's per-file note names the
+// odd one out, and the run gate stays shut on it either way.
+//
+// A cap refusal outranks a kind refusal: `refusal` holds one sentence, and the cap is the
+// shipped one.
 export function addFiles(current: PickedFile[], incoming: File[]): SelectionResult {
   const room = Math.max(0, MAX_RUN_FILES - current.length)
-  const accepted = incoming.slice(0, room)
-  const dropped = incoming.length - accepted.length
+  const runKind = runKindOf(current)
+  const accepted: File[] = []
+  let dropped = 0
+  let kindNote: string | null = null
+
+  for (const file of incoming) {
+    const kind = classifyPickedFile(file.name, file.type)
+    if (runKind !== null && kind !== null && kind !== runKind) {
+      kindNote = kindNote ?? kindRefusal(runKind, kind)
+      continue
+    }
+    if (accepted.length >= room) {
+      dropped += 1
+      continue
+    }
+    accepted.push(file)
+  }
+
   const files = [...current, ...accepted.map((file) => ({ id: crypto.randomUUID(), file, documentId: null }))]
-  return { files, refusal: dropped > 0 ? capRefusal(dropped) : null }
+  return { files, refusal: dropped > 0 ? capRefusal(dropped) : kindNote }
 }
 
 // Removes the file matching `id`, preserving the order of the rest. An unknown id is a
@@ -59,12 +86,45 @@ export function attachDocumentIds(
   }))
 }
 
+// A run is homogeneous: its kind is the first picked file that classifies at all. An
+// unclassifiable file (a .zip) is still LISTED (BULK-03-8) and carries no kind, so it
+// neither sets nor contradicts the run's. Derived — `ctx.runKind` is this call, never its
+// own state, so clearing the selection clears the kind for free.
+export function runKindOf(files: readonly PickedFile[]): PickedKind | null {
+  for (const pf of files) {
+    const kind = classifyPickedFile(pf.file.name, pf.file.type)
+    if (kind !== null) return kind
+  }
+  return null
+}
+
+// Sole copy owner of the mixed-run refusal, beside capRefusal and oversizeNote.
+export function kindRefusal(runKind: PickedKind, incomingKind: PickedKind): string {
+  return `A run holds one kind of file: this is a ${runKind} run, so the ${incomingKind} was not added. Remove the ${runKind} files first, or start a separate ${incomingKind} run.`
+}
+
+// The same rule seen from the LIST rather than from the refusal. One pick can carry both
+// kinds at once — addFiles keeps them all (BULK-03-8) — and this names the file that does
+// not match, so the primary is never dead without a reason.
+export function kindMismatchNote(runKind: PickedKind, fileKind: PickedKind): string {
+  return `This is a ${runKind} run — a ${fileKind} cannot be imported beside it. Remove it, or import it in a run of its own.`
+}
+
 // Sole copy owner of the cap-refusal text — CreateUpload renders whatever this returns
 // verbatim, never a re-worded copy of it. Names MAX_RUN_FILES and `dropped`.
 export function capRefusal(dropped: number): string {
   const noun = dropped === 1 ? 'file' : 'files'
   const verb = dropped === 1 ? 'was' : 'were'
   return `A run accepts at most ${MAX_RUN_FILES} files — ${dropped} ${noun} ${verb} not added.`
+}
+
+// Sole copy owner of the per-file size refusal, beside capRefusal — CreateUpload renders
+// what this returns verbatim (SIZE-5b pins that to those two files). '' for a file within
+// the cap, so no caller re-derives the boundary. Sizes come from the shipped formatBytes,
+// so the cap reads "15 MB", never a raw byte count.
+export function oversizeNote(file: File): string {
+  if (file.size <= MAX_UPLOAD_BYTES) return ''
+  return `${file.name} is ${formatBytes(file.size)} — over the ${formatBytes(MAX_UPLOAD_BYTES)} limit. Remove it, or split it into smaller files.`
 }
 
 // Thin delegator (AC #4): `true` iff `files` is non-empty AND canReadColumns (imported
@@ -76,17 +136,31 @@ export function canReadColumnsAll(files: PickedFile[]): boolean {
   return files.length > 0 && files.every((pf) => canReadColumns(pf.file))
 }
 
+// The document path's counterpart (EXTR-09-07): every file classifies as a document and
+// none is over the size cap — the same two clauses canReadColumns ANDs, read through
+// classifyPickedFile instead of the spreadsheet-only delegate. One odd file shuts the
+// whole selection's gate, same aggregate rule as canReadColumnsAll (BULK-03-9).
+export function canStartDocumentRun(files: PickedFile[]): boolean {
+  return (
+    files.length > 0 &&
+    files.every((pf) => classifyPickedFile(pf.file.name, pf.file.type) === 'document' && pf.file.size <= MAX_UPLOAD_BYTES)
+  )
+}
+
 // ============================================================================
 // RUN-REDUCER HALF (BULK-01-05, task-308)
 // ============================================================================
 //
 // Extends this module (BULK-01-03 created the selection half above) with the
-// sequential-run state machine: one createImport in flight at a time, each file its
-// own outcome, continuation through failures ([partial-success-kept], Core AC 2/5/6).
-// App.tsx's startRun() is the only writer of RunAction — it awaits each createImport
-// in turn (never Promise.all — [sequential-not-parallel]) and dispatches 'phase'/
-// 'settled' off that one call, so this reducer never has to reason about more than one
-// in-flight request at a time.
+// run state machine: each file its own outcome, continuation through failures
+// ([partial-success-kept], Core AC 2/5/6).
+//
+// [sequential-not-parallel] is the SPREADSHEET path's rule, and EXTR-09-07 narrowed it to
+// that path: App.tsx's startRun() awaits each createImport in turn and dispatches
+// 'phase'/'settled' off that one call, because the ExistingNumbers precheck only sees a
+// previous file's committed rows sequentially. The DOCUMENT path (startDocumentRun) runs
+// its N pipelines concurrently and dispatches only 'settled', in run order, once each has
+// resolved — so this reducer still never reasons about more than one in-flight request.
 import { routeAfterImport } from './reviewBatch'
 import type { ImportPreview, ImportReport, UploadPhase } from './importApi'
 

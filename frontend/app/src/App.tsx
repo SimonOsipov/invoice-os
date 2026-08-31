@@ -14,19 +14,35 @@ import {
   addFiles,
   attachDocumentIds,
   canReadColumnsAll,
+  canStartDocumentRun,
   markRunFailed,
   markRunRouted,
   removeFile,
   routeAfterRun,
+  runKindOf,
   runReducer,
   type ImportRun,
   type PickedFile,
   type RunFile,
   type RunRoute,
 } from './lib/importRun'
+import {
+  EXTRACTION_POLL_INTERVAL_MS,
+  pollVerdict,
+  startDocumentRun as runDocumentPipelines,
+  type PollVerdict,
+} from './lib/documentRun'
 import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
-import { createImport, makeImportAuth, previewImport, type ImportPreview } from './lib/importApi'
+import {
+  createImport,
+  getExtractions,
+  importDocument,
+  makeImportAuth,
+  previewImport,
+  uploadSourceDocument,
+  type ImportPreview,
+} from './lib/importApi'
 import {
   listMembers,
   membersViewState,
@@ -423,8 +439,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const activeGroup = groups[groupIndex] ?? null
   const preview = activeGroup?.preview ?? null
   const mapping = activeGroup?.mapping ?? null
-  // The sequential run's whole state (BULK-01-05, task-308) — REPLACES the old
-  // single-file `uploadPhase` state. `startRun` (below) is the sole writer, via
+  // The run's whole state (BULK-01-05, task-308) — REPLACES the old single-file
+  // `uploadPhase` state. `startRun` (spreadsheets, sequential) and `startDocumentRun`
+  // (documents, concurrent, bounded at MAX_RUN_FILES) are its two writers, via
   // lib/importRun's runReducer; `run` is tracked in a local variable inside that
   // function's own async loop (a `setState` call does not resolve synchronously) and
   // mirrored here purely for rendering — same discipline readAllColumns' local
@@ -440,14 +457,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [filing, setFiling] = useState(false)
   const [filingError, setFilingError] = useState<ApiError | null>(null)
 
-  // Re-entrancy guard for the THREE server round trips this workspace fires. A ref, not
+  // Re-entrancy guard for the FOUR server round trips this workspace fires. A ref, not
   // state: React batches state updates, so a fast double-click can fire the handler twice
   // before a `disabled` prop re-renders — and for startImport that would create the SAME
   // import twice, i.e. duplicate invoices, while for fileDraft it would persist TWO
   // separately-submittable invoices (createRequest carries no idempotency key; that field
-  // is batch-submit-only). readColumns (upload step), startImport (mapping step) and
-  // fileDraft (form step) live on different steps and can never overlap, so one flag covers
-  // all three. A ref also cannot get stuck the way a component-local flag would: the
+  // is batch-submit-only). readColumns and startDocumentRun (upload step, one per run
+  // kind), startImport (mapping step) and fileDraft (form step) live on different steps or
+  // different run kinds and can never overlap, so one flag covers all four. A ref also
+  // cannot get stuck the way a component-local flag would: the
   // wizard components never observe the rejection that would clear it, since errors come
   // back through ctx.importError / ctx.filingError.
   const reqInFlight = useRef(false)
@@ -621,9 +639,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // Appends onto the run's file selection (BULK-01-03) via lib/importRun's addFiles —
   // capped at MAX_RUN_FILES, never silently truncating. `filesRefusal` carries the
-  // refusal text CreateUpload renders verbatim whenever the cap drops any incoming file;
-  // a rejected-extension file still lands in `pickedFiles` and the per-file note
-  // explains why (that gate is canReadColumnsAll, not selection).
+  // refusal text CreateUpload renders verbatim whenever addFiles drops an incoming file —
+  // past the cap (capRefusal) or against the run's committed kind (kindRefusal). A
+  // rejected-extension file still lands in `pickedFiles` and the per-file note explains
+  // why (that gate is canReadColumnsAll, not selection).
   function addPickedFiles(files: File[]) {
     const result = addFiles(pickedFiles, files)
     setPickedFiles(result.files)
@@ -632,7 +651,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // Removes one entry by id, preserving the order of the rest (lib/importRun's
   // removeFile). An unknown id is a no-op. Also clears `filesRefusal`: that message
-  // names files that were NOT added past the five-file cap, and removing an
+  // names files that were NOT added, and removing an
   // already-added file can never be what it is still talking about — left uncleared, it
   // used to linger on screen after the very removal that (partially) makes room for more
   // (BULK-01-03 QA gap, dfc3a19).
@@ -756,16 +775,40 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setRun(markRunFailed)
   }
 
-  // The sequential run (BULK-01-05, task-308): one createImport in flight at a time,
-  // each file its own outcome, continuation through failures ([partial-success-kept]).
-  // Replaces the single-file startImport.
+  // Core AC 8's single-invoice shortcut, shared by BOTH runs so the two can never ask a
+  // different question: fired ONLY when the run holds exactly one file that came back
+  // with exactly one ready invoice — any other shape discards the answer in routeAfterRun
+  // anyway, so asking is pure cost.
   //
-  // `[sequential-not-parallel]`: each file is AWAITED before the next one starts —
+  // DEGRADES to null, never setImportError. The import SUCCEEDED and the rows are in the
+  // ledger; an error banner here would say "failed" about data that landed. routeAfterRun
+  // turns a null id into the review surface, which is the honest fallback — the batch is
+  // real either way.
+  async function resolveSoleInvoiceId(finished: ImportRun, base: string): Promise<string | null> {
+    const onlyFile = finished.files.length === 1 ? finished.files[0] : null
+    if (!onlyFile || onlyFile.outcome.kind !== 'imported') return null
+    const soleReport = onlyFile.outcome.report
+    if (soleReport.status !== 'completed' || soleReport.ready_invoices !== 1) return null
+    return listInvoices(authedFetch, base, reviewQuery(soleReport.id, 'all', { limit: 1 })).then(
+      (r) => r.invoices[0]?.id ?? null,
+      () => null,
+    )
+  }
+
+  // The SPREADSHEET run (BULK-01-05, task-308): one createImport in flight at a time,
+  // each file its own outcome, continuation through failures ([partial-success-kept]).
+  // Replaces the single-file startImport. The document path has its own run below.
+  //
+  // `[sequential-not-parallel]` is this path's rule and only this path's (narrowed by
+  // EXTR-09-07, Q12): each SPREADSHEET file is AWAITED before the next one starts —
   // NEVER Promise.all, never fire-and-forget. internal/importer/service.go's
   // ExistingNumbers duplicate precheck is a synchronous, against-stored DB read per
   // file, committed before Import() returns — only a sequentially-awaited next file's
   // precheck actually sees the previous file's committed rows; running them
-  // concurrently would race straight past it into a raw 23505.
+  // concurrently would race straight past it into a raw 23505. startDocumentRun below
+  // runs concurrently BECAUSE it never reaches that precheck: ImportDocument writes one
+  // invoice per document and lets the (entity, number) unique constraint quarantine a
+  // collision as a domain outcome instead.
   //
   // `entityId` is read ONCE here and passed to EVERY file's createImport call
   // ([entity-picker] step 3 of 3, extended to a run — Core AC 6: a run never spans
@@ -852,28 +895,78 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           setRun(localRun)
         }
 
-        // Core AC 8's single-invoice shortcut, extended to a run: fired ONLY when the
-        // run holds exactly one file that came back with exactly one ready invoice —
-        // any other shape discards the answer in routeAfterRun anyway, so asking is
-        // pure cost.
-        let resolvedInvoiceId: string | null = null
-        const onlyFile = localRun.files.length === 1 ? localRun.files[0] : null
-        if (onlyFile && onlyFile.outcome.kind === 'imported' && onlyFile.outcome.report.status === 'completed' && onlyFile.outcome.report.ready_invoices === 1) {
-          const soleReport = onlyFile.outcome.report
-          resolvedInvoiceId = await listInvoices(authedFetch, base, reviewQuery(soleReport.id, 'all', { limit: 1 })).then(
-            (r) => r.invoices[0]?.id ?? null,
-            // DEGRADES to null, never setImportError. The import SUCCEEDED and the
-            // rows are in the ledger; an error banner here would say "failed" about
-            // data that landed. routeAfterRun turns a null id into the review
-            // surface, which is the honest fallback — the batch is real either way.
-            () => null,
-          )
-        }
-        applyRoute(routeAfterRun(localRun, resolvedInvoiceId))
+        applyRoute(routeAfterRun(localRun, await resolveSoleInvoiceId(localRun, base)))
       } finally {
         reqInFlight.current = false
       }
     })()
+  }
+
+  // The DOCUMENT run (EXTR-09-07, Core AC #9). N pipelines, each upload -> poll ->
+  // import, started together and settled per file — the opposite of startRun's
+  // [sequential-not-parallel] loop, and legitimately so: ImportDocument never runs the
+  // ExistingNumbers precheck that rule protects.
+  //
+  // Same landing as the spreadsheet run, through the SAME pair: routeAfterRun then
+  // applyRoute, with the same two arguments. Neither router is touched.
+  //
+  // The entity gate is startRun's, for startRun's reason ([entity-picker] step 3 of 3):
+  // this IS the commit for a document, so it is where the entity is genuinely required.
+  function startDocumentRun() {
+    const base = gatewayBase()
+    if (base == null || !entityId || !canStartDocumentRun(pickedFiles)) return
+    if (reqInFlight.current) return
+    reqInFlight.current = true
+    setImportError(null)
+
+    const filesSnapshot = pickedFiles
+    const runFiles: RunFile[] = filesSnapshot.map((pf) => ({
+      id: pf.id,
+      name: pf.file.name,
+      // No mapping groups on this path — a document is never mapped.
+      groupId: '',
+      outcome: { kind: 'pending' },
+    }))
+
+    let localRun: ImportRun = runReducer({ files: [], cursor: 0, status: 'idle' }, { type: 'start', files: runFiles })
+    setRun(localRun)
+    setCreateStep('documents')
+
+    void (async () => {
+      try {
+        const outcomes = await runDocumentPipelines(
+          filesSnapshot.map((pf) => ({ id: pf.id, name: pf.file.name, file: pf.file })),
+          {
+            upload: (file) => uploadSourceDocument(importAuth, base, file).then((r) => r.document_id),
+            poll: (documentId) => pollExtraction(base, documentId),
+            importDocument: (documentId) => importDocument(authedFetch, base, { entityId, documentId }),
+          },
+        )
+        // Settled in RUN order, not completion order: runReducer's 'settled' writes at
+        // the cursor and advances it, so the reducer stays the sequential one it is.
+        for (const o of outcomes) {
+          if (o.outcome.kind !== 'imported' && o.outcome.kind !== 'failed') continue
+          localRun = runReducer(localRun, { type: 'settled', outcome: o.outcome })
+          setRun(localRun)
+        }
+        applyRoute(routeAfterRun(localRun, await resolveSoleInvoiceId(localRun, base)))
+      } finally {
+        reqInFlight.current = false
+      }
+    })()
+  }
+
+  // One document's poll, bounded by pollVerdict's own budget so a run can never hang. A
+  // GET failure is NOT swallowed: it rejects, and the pipeline settles that one file
+  // 'failed' with the ApiError's message.
+  async function pollExtraction(base: string, documentId: string): Promise<PollVerdict> {
+    const startedAt = Date.now()
+    for (;;) {
+      const { jobs } = await getExtractions(authedFetch, base, documentId)
+      const verdict = pollVerdict(jobs, Date.now() - startedAt)
+      if (verdict.kind !== 'waiting') return verdict
+      await new Promise((resolve) => setTimeout(resolve, EXTRACTION_POLL_INTERVAL_MS))
+    }
   }
 
   function armField(k: string) {
@@ -1244,6 +1337,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     refetchRoles: rolesAsync.run,
     entityId,
     pickedFiles,
+    // Derived, never its own state: resetImport clears the selection and the kind goes
+    // with it for free.
+    runKind: runKindOf(pickedFiles),
     filesRefusal,
     groups,
     groupIndex,
@@ -1274,6 +1370,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     addPickedFiles,
     removePickedFile,
     readAllColumns,
+    startDocumentRun,
     splitOutFile,
     backToImport,
     restartImport,

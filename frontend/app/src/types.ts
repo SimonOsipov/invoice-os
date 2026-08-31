@@ -7,6 +7,7 @@ import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview } from './lib/importApi'
 import type { ImportRun, PickedFile } from './lib/importRun'
+import type { PickedKind } from './lib/importFlow'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
@@ -180,7 +181,10 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflow
 // INVCR-01-09 cashed that distinction by deleting CreateReport.tsx outright. 'review' now
 // renders ReviewBatch.tsx off `reviewBatchIds` + two live GETs, which is also why the step
 // is reachable by URL (`#review/<uuid>`) where the payload-backed one never could be.
-export type CreateStep = 'upload' | 'mapping' | 'form' | 'review'
+// EXTR-09-06 added 'documents' — the extraction run's own first step, on a strip that has
+// no Map. Every member needs an entry in lib/importFlow.ts's STAGE_OF or that file stops
+// compiling (STEPS-D3b).
+export type CreateStep = 'upload' | 'mapping' | 'form' | 'review' | 'documents'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.
@@ -362,8 +366,13 @@ export type PlatformCtx = {
   // `entityId` does ([multi-invoice import path] above): CreateUpload UNMOUNTS when
   // createStep leaves 'upload'.
   pickedFiles: PickedFile[]
-  // The refusal text from the most recent addPickedFiles call (lib/importRun's
-  // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
+  // A run is homogeneous (EXTR-09-07): the first picked file that classifies sets this,
+  // clearing the selection clears it, and a file of the other kind is refused with
+  // kindRefusal's reason. Derived from `pickedFiles` by lib/importRun's runKindOf --
+  // never its own independently-written state.
+  runKind: PickedKind | null
+  // The refusal text from the most recent addPickedFiles call (lib/importRun's capRefusal
+  // or kindRefusal) — null when nothing was dropped. Same idiom as `importError`: state
   // lives on ctx, the component renders it verbatim.
   filesRefusal: string | null
   // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
@@ -377,9 +386,10 @@ export type PlatformCtx = {
   // complete mapping and starts the run only once it is the LAST group.
   groupIndex: number
   preview: ImportPreview | null
-  // The sequential run's whole state (BULK-01-05, task-308) — one createImport in
-  // flight at a time, one outcome per file, continuation through failures
-  // ([partial-success-kept]). App.tsx's startRun() is the sole writer, via
+  // The run's whole state (BULK-01-05, task-308) — for a SPREADSHEET run, one
+  // createImport in flight at a time; a document run fills the same shape concurrently
+  // (see `startDocumentRun` below). One outcome per file either way, continuation through
+  // failures ([partial-success-kept]). App.tsx's startRun() writes it here, via
   // lib/importRun.ts's runReducer; every view over it (runBatchIds/runFailures/
   // runFileRows/routeAfterRun) is a pure derivation of THIS value, never re-computed
   // ad hoc by a component. `status: 'idle'` both before a run starts and once
@@ -447,6 +457,13 @@ export type PlatformCtx = {
   // `importError` naming the failing file and stays on 'upload' — never silently drops
   // the file, never carries it into the run. Renamed from the single-file `readColumns`.
   readAllColumns: () => void
+  // The document path's whole run (EXTR-09-07): N concurrent upload -> poll -> import
+  // pipelines, one FileOutcome each, landing through the SAME routeAfterRun/applyRoute
+  // pair the spreadsheet run uses. Fire-and-forget, like startRun — outcomes arrive
+  // through `run`. The picker's primary calls this instead of readAllColumns whenever the
+  // selection's kind is 'document'; documents are never mapped, so there is no step
+  // between the pick and the commit.
+  startDocumentRun: () => void
   // Splits `fileId` out of whichever group currently holds it
   // (lib/mappingGroups.ts's splitOut) — a no-op on a single-file group. The split
   // group's mapping is a COPY of the shared group's mapping at split time, never a

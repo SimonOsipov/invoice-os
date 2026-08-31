@@ -14,8 +14,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// maxJobsPerDocument bounds a response a client polls every 2s: D-6 permits many jobs per
-// document and nothing in the schema caps them.
+// maxJobsPerDocument bounds a response a client polls every 1.5s
+// (frontend/app/src/lib/documentRun.ts EXTRACTION_POLL_INTERVAL_MS): D-6 permits many jobs
+// per document and nothing in the schema caps them.
 const maxJobsPerDocument = 50
 
 // JobState is one extraction_jobs row as the progress screen reads it. Every field is a

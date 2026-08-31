@@ -1,14 +1,7 @@
-// main_test.go: M5-02-04 RED spec (Mode A) for the submission.Select boot-refusal wiring.
-// cmd/submission/ had no test files before this one (main() itself isn't unit-testable --
-// it calls log.Fatalf and connects a real DB pool). Mirrors cmd/gateway/main_test.go's
-// source-scan idiom exactly: os.ReadFile a relative sibling path, strings.Index an anchor,
-// t.Fatal by name if the anchor isn't found (so a future rename can't make this test
-// silently vacuous), then assert inside a fixed window following the anchor.
-//
-// This subtask does NOT wire submission.Select into main.go -- that is the executor's job.
-// This test is therefore RED against the stub tree: the "submission.Select(" anchor is not
-// yet present in main.go, so it fails via the named t.Fatal below, not the log.Fatal
-// assertion further down. That is the expected and correct RED for this stage.
+// main_test.go: cmd/submission's wiring specs. main() is not unit-testable -- it calls
+// log.Fatalf and connects a real pool -- so the claims are read off main.go's source, the
+// cmd/gateway/main_test.go idiom: locate an anchor by name, t.Fatal if it is missing so a
+// rename cannot make the scan vacuous, then assert inside a fixed window after it.
 package main
 
 import (
@@ -1156,8 +1149,9 @@ func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
 	}
 }
 
-// TestSubmissionMain_RegistersTheExtractionsRoute (EXTR-07-03 AC-1): GET /v1/extractions must
-// be mounted on app.Mux dispatching to extraction.JobsHandler(...). AST, not a byte scan, so
+// TestSubmissionMain_RegistersTheExtractionsRoute: GET /v1/extractions must be mounted on
+// app.Mux dispatching to extraction.JobsHandler(...), and POST /v1/documents on the same mux
+// dispatching to extraction.UploadHandler(...). AST, not a byte scan, so
 // gofmt cannot break the anchor. The GET /v1/ping needle is a control: it proves the argument
 // matcher still finds a real, already-shipped registration before a negative result is trusted.
 // The receiver is asserted too -- a route on a locally built mux is registered and unreachable.
@@ -1167,7 +1161,7 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
 
-	var foundPing, pingOnAppMux, foundExtractions bool
+	var foundPing, pingOnAppMux, foundExtractions, foundUpload bool
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -1203,6 +1197,41 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "extraction" {
 				t.Errorf(`GET /v1/extractions' handler is not extraction.JobsHandler(...), got %s`, wtRender(handlerCall.Fun))
 			}
+		case "POST /v1/documents":
+			foundUpload = true
+			if got := wtRender(sel.X); got != "app.Mux" {
+				t.Errorf(`POST /v1/documents is registered on %s, want app.Mux -- only app.Mux is served, so any other mux answers nothing at /api/submission/v1/documents`, got)
+			}
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				t.Errorf(`POST /v1/documents' second argument is %T, want a call expression`, call.Args[1])
+				return true
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "UploadHandler" {
+				t.Errorf(`POST /v1/documents' handler call is not ....UploadHandler(...), got %s`, wtRender(handlerCall.Fun))
+				return true
+			}
+			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "extraction" {
+				t.Errorf(`POST /v1/documents' handler is not extraction.UploadHandler(...), got %s`, wtRender(handlerCall.Fun))
+			}
+			// The two adapters are unit-tested (upload_storer_test.go) over injected seams, so
+			// only this scan can say they are built over the REAL service and pool. A storer
+			// over anything but the document service stores nowhere the reader can find.
+			if len(handlerCall.Args) != 3 {
+				t.Errorf("extraction.UploadHandler is called with %d argument(s), want 3 (store, enqueue, logger)", len(handlerCall.Args))
+				return true
+			}
+			if call, ok := handlerCall.Args[0].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newDocumentStorer" {
+				t.Errorf("UploadHandler's store argument is %s, want a newDocumentStorer(...) call", wtRender(handlerCall.Args[0]))
+			} else if len(call.Args) != 1 {
+				t.Errorf("newDocumentStorer is called with %d argument(s), want 1", len(call.Args))
+			} else if sel, ok := call.Args[0].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Store" {
+				t.Errorf("newDocumentStorer is built over %s, want the document service's .Store: the reuse flag and the sanitized filename both come off that method", wtRender(call.Args[0]))
+			}
+			if call, ok := handlerCall.Args[1].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newExtractionEnqueuer" {
+				t.Errorf("UploadHandler's enqueue argument is %s, want a newExtractionEnqueuer(...) call: only that closure puts the business key and the job insert in one transaction", wtRender(handlerCall.Args[1]))
+			}
 		}
 		return true
 	})
@@ -1215,5 +1244,8 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 	}
 	if !foundExtractions {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler(...)) registration found in cmd/submission/main.go`)
+	}
+	if !foundUpload {
+		t.Error(`no app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(...)) registration found in cmd/submission/main.go`)
 	}
 }

@@ -287,3 +287,39 @@ func TestFingerprint_FitsTheColumnCap(t *testing.T) {
 		t.Errorf("len(Fingerprint(40-row busy page)) = %d, want 67", len(got))
 	}
 }
+
+// --- EXTR-16-02: the fingerprint may not move (D-3) --------------------------
+
+// fpCorpusPinned is every committed layout's fingerprint, measured at e763fccd, before anchor
+// specificity. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads those, so
+// a pattern edit silently invalidates every stored document's layout fingerprint and every rule
+// learned against it. These six are what says such an edit happened.
+var fpCorpusPinned = map[string]string{
+	"corpus_inline_labels.pdf":  "v1:60be15050c9a80950f7d1ea69d21178fe23e6fb61021668a937cabfa139c086d",
+	"corpus_split_labels.pdf":   "v1:1ca4de9d55d90a037fa1187ff70158b635cc48cd697e50f5ae52768413b0e680",
+	"corpus_stacked_labels.pdf": "v1:fdd95d43c0d4a79dbe0e3c5c3ea09b23a8bba6b3bed73c3a7d51dfb23e4e1846",
+	"corpus_two_column.pdf":     "v1:452b9167485fb91b77eb67c9008dfb3893eefbfe819ec762b7392a06242473c5",
+	"corpus_ambiguous_date.pdf": "v1:5dd14339eef9ccb517bf3d96a2cb19fba6c6b0544b8f9d4499c65dbad6a807c5",
+	"corpus_totals_block.pdf":   "v1:91279772deacd7b7e8ffc8f7f168d3bc9735feb1917631d186d9362896f94ba4",
+}
+
+// EXTR-16-02 AC-4. Green before the fix and green after it, by design: D-3 forbids the
+// anchorLexicon edit, and this is the oracle that catches one.
+func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
+	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
+		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each, or the loop below asserts over less than the corpus",
+			len(corpusLayouts), len(fpCorpusPinned))
+	}
+
+	for _, name := range corpusLayouts {
+		want, ok := fpCorpusPinned[name]
+		if !ok {
+			t.Errorf("%s has no pinned fingerprint", name)
+			continue
+		}
+		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != want {
+			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed; that invalidates every stored rule and needs a FingerprintVersion bump, and EXTR-16 does not touch the lexicon",
+				name, got, want)
+		}
+	}
+}

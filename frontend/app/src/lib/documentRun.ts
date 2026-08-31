@@ -115,9 +115,7 @@ export interface DocumentRunFile {
 // verdict (or the budget expires); the loop and its clock are the caller's.
 export interface DocumentPipelineDeps {
   upload: (file: File) => Promise<string>
-  // fileId stays optional through the RED phase -- the call site below is not yet passing
-  // it (that pass-through is task-785's GREEN, alongside flipping this to required).
-  poll: (documentId: string, fileId?: string) => Promise<PollVerdict>
+  poll: (documentId: string, fileId: string) => Promise<PollVerdict>
   importDocument: (documentId: string) => Promise<ImportReport>
   // Required, not optional: an optional hook silently no-ops when a caller forgets it —
   // the defect class this story exists to close. Wired by EXTR-10-03 (task-785).
@@ -145,16 +143,21 @@ export function startDocumentRun(
     files.map(async (f): Promise<DocumentRunOutcome> => {
       try {
         const documentId = await deps.upload(f.file)
-        const verdict = await deps.poll(documentId)
+        const verdict = await deps.poll(documentId, f.id)
         // Carried VERBATIM: the poll owns the wording, this only relays it.
         if (verdict.kind !== 'succeeded') {
           const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
+          deps.onStage(f.id, { kind: 'failed', reason })
           return { id: f.id, name: f.name, outcome: { kind: 'failed', message: reason } }
         }
+        deps.onStage(f.id, { kind: 'processing' })
         const report = await deps.importDocument(documentId)
+        deps.onStage(f.id, { kind: 'imported', count: report.ready_invoices })
         return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report } }
       } catch (err) {
-        return { id: f.id, name: f.name, outcome: { kind: 'failed', message: messageOf(err) } }
+        const message = messageOf(err)
+        deps.onStage(f.id, { kind: 'failed', reason: message })
+        return { id: f.id, name: f.name, outcome: { kind: 'failed', message } }
       }
     }),
   )

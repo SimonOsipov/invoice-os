@@ -63,15 +63,19 @@ fails on any expected value the shipped set cannot reach. One pair is exempt and
 asserted still-unreached, so closing it is a deliberate diff rather than a silent
 pass.
 
-## Tier-1 accuracy and the floor
+## Tier-1 recall and the floor
 
 Measured 2026-08-29 on `feature/extr-04-anchor-rules-and-field-resolution`: the shipped Tier-1
 set reaches **43 of 44** of the (layout, field) pairs `corpusExpect` names — **0.9773**. The
 denominator is the pairs the table actually asserts, so a field absent from a row is not counted
 and the ambiguous-date row's two accepted readings are one pair, not two.
 
-A pair is a **hit** when the expected value appears anywhere among that field's candidates.
-Rank is deliberately not read: ranking beyond tier precedence is EXTR-05's.
+That number is **recall**. A pair is a **hit** when the expected value appears **anywhere**
+among that field's candidates; which of them the pipeline goes on to decide is not read here at
+all. It is **not** end-to-end accuracy. EXTR-04 shipped it as the headline accuracy figure and
+it never was that: recall is monotone in the candidate list, so it reads 43/44 while every party
+name on every layout decides a label. What the pipeline decides is recorded under **Tier-1
+decision rate** below.
 
 | Layout | Hits | Pairs |
 |---|---|---|
@@ -103,12 +107,12 @@ not a corpus defect — closing it changes `anchorLexicon`, which is an input to
 ### Moving the floor
 
 The floor lives in `internal/extraction/accuracy_test.go` as two pinned integers,
-`tier1AccuracyHits` and `tier1AccuracyPairs`; `tier1AccuracyFloor` is their quotient.
+`tier1RecallHits` and `tier1RecallPairs`; `tier1RecallFloor` is their quotient.
 
 1. Re-measure: `go test -count=1 -v -run TestTier1Accuracy ./internal/extraction/`. The report
    prints the two tables above. CI prints it too, from the `go` job's own reporting step — the
    gated step runs this package through `rlsgate`, which deletes a passing test's output.
-2. Edit `tier1AccuracyHits` and `tier1AccuracyPairs` to the measured values.
+2. Edit `tier1RecallHits` and `tier1RecallPairs` to the measured values.
 3. Update both tables in this section **in the same commit**, or
    `TestCorpusDoc_RecordsTheMeasuredFloor` (per layout) and
    `TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement` (per field) fail: each parses its own
@@ -136,6 +140,32 @@ One thing the rate can **never** catch: an over-wide distance dial. Widening a d
 candidates, so the rate is monotone non-decreasing in both — it goes up as the rules get
 sloppier. `TestTier1_DialsStayInsideTheirMeasuredWindow` is the only guard on that side, and it
 names the wrong candidate each widened dial produces.
+
+## Tier-1 decision rate
+
+Measured 2026-08-31 on `feature/extr-16-the-ranking-defect`, over the same 44 pairs the recall
+rate scores: the pipeline **decides** the value `corpusExpect` names on **30 of 44** —
+**0.6818**. The 13-pair gap between the two numbers is the ranking defect: the correct reading
+is reached and then out-ranked, usually by the field's own label.
+
+`internal/extraction/accuracy_test.go` pins it as `tier1DecisionHits` / `tier1DecisionPairs`,
+and `TestTier1Accuracy_DecisionRateOverTheCorpus` re-measures it. Unlike the floor above this is
+a **measurement, not a ratchet**: move the pin to what is measured and say which layouts moved.
+Its mutilation control — dropping every `invoice_number` rule must lower it, 30 to 25 — is what
+stops it becoming a second number blind to rank.
+
+**False decisions: 1.** A false decision is a field decided with a value its layout never
+prints. `corpusExpect` names no such field on that layout, so no hit and no miss is scored for
+it and the recall rate cannot see it at all.
+
+| Layout | Field | Decided |
+|---|---|---|
+| `corpus_totals_block.pdf` | `supplier_name` | `TIN: 99999999-0601` |
+
+That page prints `Supplier TIN: 99999999-0601` and no party name at all, so the residue after
+the label is decided as the supplier's name. `acFalseDecided` pins the row by identity and
+`TestCorpusDoc_RecordsTheDecisionRate` reads this table, so a fix that closes this fabrication
+while opening another is red rather than green.
 
 ## Regenerating
 

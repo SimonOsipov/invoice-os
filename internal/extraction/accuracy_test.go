@@ -24,6 +24,9 @@ import (
 
 // --- the ratchet ------------------------------------------------------------
 
+// RECALL, not accuracy: a hit is the expected value appearing anywhere among the field's
+// candidates. Which candidate decideField picks is the decision rate, pinned separately below.
+//
 // Measured 2026-08-29 on feature/extr-04-anchor-rules-and-field-resolution: the shipped Tier-1
 // set reaches 43 of the 44 (layout, field) pairs corpusExpect names across the six committed
 // layouts. The one miss is corpus_two_column.pdf / buyer_tin, the pair t1aGaps records.
@@ -32,9 +35,9 @@ import (
 // Written as a quotient of two pinned integers rather than a rounded decimal, so the run-time
 // float64(hits)/float64(total) M-01 compares against is bit-identical to the boundary.
 const (
-	tier1AccuracyHits  = 43
-	tier1AccuracyPairs = 44
-	tier1AccuracyFloor = float64(tier1AccuracyHits) / float64(tier1AccuracyPairs)
+	tier1RecallHits  = 43
+	tier1RecallPairs = 44
+	tier1RecallFloor = float64(tier1RecallHits) / float64(tier1RecallPairs)
 )
 
 // acReportMarker titles the report. ci.yml greps for it (M-09) and M-02 asserts the report
@@ -181,7 +184,7 @@ func acRenderReport(s acScore) string {
 
 	fmt.Fprintf(&b, "%s: %d / %d = %s (floor %d / %d = %s)\n",
 		acReportMarker, s.hits, s.total, strconv.FormatFloat(s.rate(), 'f', 4, 64),
-		tier1AccuracyHits, tier1AccuracyPairs, strconv.FormatFloat(tier1AccuracyFloor, 'f', 4, 64))
+		tier1RecallHits, tier1RecallPairs, strconv.FormatFloat(tier1RecallFloor, 'f', 4, 64))
 
 	b.WriteString("  per layout:\n")
 	for _, r := range s.byFile {
@@ -221,12 +224,14 @@ func acWithDistance(t *testing.T, kind extraction.RelationKind, maxDistance floa
 	return out
 }
 
-// acDoc is the operator page the floor is recorded on; acDocSection is the heading the measured
-// table lives under. Scoping the scan keeps it off the layout table in "## The six layouts",
-// whose rows share the leading cell but carry prose in the second column.
+// acDoc is the operator page both numbers are recorded on; acDocSection and
+// acDocDecisionSection are the headings they live under. Scoping each scan to its own section
+// keeps it off the layout table in "## The six layouts", whose rows share the leading cell but
+// carry prose in the second column, and keeps the two numbers' tables disjoint.
 const (
-	acDoc        = "docs/extraction-corpus.md"
-	acDocSection = "## Tier-1 accuracy and the floor"
+	acDoc                = "docs/extraction-corpus.md"
+	acDocSection         = "## Tier-1 recall and the floor"
+	acDocDecisionSection = "## Tier-1 decision rate"
 )
 
 // acDocRowRE is one row of the measured per-layout table: | `corpus_x.pdf` | hits | total |
@@ -247,20 +252,20 @@ func acRepoFile(t *testing.T, rel string) string {
 	return string(raw)
 }
 
-// acDocSectionText is acDocSection's body, up to the next heading of the same level.
-func acDocSectionText(t *testing.T, doc string) string {
+// acDocSectionText is heading's body in doc, up to the next heading of the same level.
+func acDocSectionText(t *testing.T, doc, heading string) string {
 	t.Helper()
 
-	i := strings.Index(doc, acDocSection)
+	i := strings.Index(doc, heading)
 	if i < 0 {
-		t.Fatalf("%s carries no %q section; the measured table, the procedure for moving the floor and the reason it may only go up all live there (AC #3, AC #5)", acDoc, acDocSection)
+		t.Fatalf("%s carries no %q section; the measured numbers this scan reads all live there", acDoc, heading)
 	}
-	body := doc[i+len(acDocSection):]
+	body := doc[i+len(heading):]
 	if j := strings.Index(body, "\n## "); j >= 0 {
 		body = body[:j]
 	}
 	if strings.TrimSpace(body) == "" {
-		t.Fatalf("%s's %q section is empty", acDoc, acDocSection)
+		t.Fatalf("%s's %q section is empty", acDoc, heading)
 	}
 	return body
 }
@@ -290,18 +295,18 @@ func TestTier1Accuracy_MeetsTheFloor(t *testing.T) {
 	s := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
 	t.Log("\n" + acRenderReport(s))
 
-	if s.total != tier1AccuracyPairs {
-		t.Fatalf("scored %d pair(s), want %d; the rate would be taken over the wrong denominator", s.total, tier1AccuracyPairs)
+	if s.total != tier1RecallPairs {
+		t.Fatalf("scored %d pair(s), want %d; the rate would be taken over the wrong denominator", s.total, tier1RecallPairs)
 	}
 	rate := s.rate()
-	if rate >= tier1AccuracyFloor {
+	if rate >= tier1RecallFloor {
 		return
 	}
 	for _, p := range s.missed {
 		t.Errorf("%s: %s reached none of %v; candidates were %v", p.file, p.field, acExpectedValues(p), s.saw[p])
 	}
 	t.Errorf("tier-1 reaches %d/%d = %v, below the floor %d/%d = %v. The floor is a ratchet: fix the rules, never lower it (docs/extraction-corpus.md)",
-		s.hits, s.total, rate, tier1AccuracyHits, tier1AccuracyPairs, tier1AccuracyFloor)
+		s.hits, s.total, rate, tier1RecallHits, tier1RecallPairs, tier1RecallFloor)
 }
 
 // M-02. AC #1's report, asserted rather than observed. The denominators must sum to the pinned
@@ -334,8 +339,8 @@ func TestTier1Accuracy_ReportsPerFieldNumbers(t *testing.T) {
 			t.Errorf("the rendered report never names %q; a field missing from the table reads as untested", r.name)
 		}
 	}
-	if sum != tier1AccuracyPairs {
-		t.Errorf("the per-field denominators sum to %d, want %d; a field was dropped from the report or counted twice", sum, tier1AccuracyPairs)
+	if sum != tier1RecallPairs {
+		t.Errorf("the per-field denominators sum to %d, want %d; a field was dropped from the report or counted twice", sum, tier1RecallPairs)
 	}
 
 	files := 0
@@ -345,8 +350,8 @@ func TestTier1Accuracy_ReportsPerFieldNumbers(t *testing.T) {
 			t.Errorf("the rendered report never names layout %q", r.name)
 		}
 	}
-	if files != tier1AccuracyPairs {
-		t.Errorf("the per-layout denominators sum to %d, want %d", files, tier1AccuracyPairs)
+	if files != tier1RecallPairs {
+		t.Errorf("the per-layout denominators sum to %d, want %d", files, tier1RecallPairs)
 	}
 
 	// The needle for `if total == 0 { continue }`. Every field on this corpus carries at least
@@ -374,17 +379,17 @@ func TestTier1Accuracy_ScoresAgainstANonEmptyExpectation(t *testing.T) {
 	if pairs == 0 {
 		t.Fatal("corpusExpect names no field in HeaderFields; the rate would be taken over nothing and 0/0 is not a rate")
 	}
-	if pairs != tier1AccuracyPairs {
-		t.Errorf("corpusExpect names %d (layout, field) pair(s), want %d -- move tier1AccuracyHits and tier1AccuracyPairs together, and the table in %s with them", pairs, tier1AccuracyPairs, acDoc)
+	if pairs != tier1RecallPairs {
+		t.Errorf("corpusExpect names %d (layout, field) pair(s), want %d -- move tier1RecallHits and tier1RecallPairs together, and the table in %s with them", pairs, tier1RecallPairs, acDoc)
 	}
 	if len(corpusExpect) != len(corpusLayouts) {
 		t.Errorf("corpusExpect holds %d row(s) and the corpus %d layout(s); the walk would miss a layout", len(corpusExpect), len(corpusLayouts))
 	}
-	if tier1AccuracyHits > tier1AccuracyPairs {
-		t.Errorf("tier1AccuracyHits %d exceeds tier1AccuracyPairs %d; the floor is above 1 and M-01 can never pass", tier1AccuracyHits, tier1AccuracyPairs)
+	if tier1RecallHits > tier1RecallPairs {
+		t.Errorf("tier1RecallHits %d exceeds tier1RecallPairs %d; the floor is above 1 and M-01 can never pass", tier1RecallHits, tier1RecallPairs)
 	}
-	if tier1AccuracyHits <= 0 {
-		t.Errorf("tier1AccuracyHits is %d; a floor at or below zero makes M-01 unfailable", tier1AccuracyHits)
+	if tier1RecallHits <= 0 {
+		t.Errorf("tier1RecallHits is %d; a floor at or below zero makes M-01 unfailable", tier1RecallHits)
 	}
 }
 
@@ -392,23 +397,23 @@ func TestTier1Accuracy_ScoresAgainstANonEmptyExpectation(t *testing.T) {
 // `0 < floor <= 1` alone survives floor = 0.01, which makes M-01 unfailable -- the exact defect
 // this spec exists to prevent. It is also what forces the floor UP when a gap closes.
 func TestTier1Accuracy_FloorIsNotVacuous(t *testing.T) {
-	if tier1AccuracyFloor <= 0 || tier1AccuracyFloor > 1 {
-		t.Fatalf("the floor is %v, outside (0, 1]; no rate can be compared against it meaningfully", tier1AccuracyFloor)
+	if tier1RecallFloor <= 0 || tier1RecallFloor > 1 {
+		t.Fatalf("the floor is %v, outside (0, 1]; no rate can be compared against it meaningfully", tier1RecallFloor)
 	}
 
 	s := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
-	if s.total != tier1AccuracyPairs {
-		t.Fatalf("scored %d pair(s), want %d; one pair of slack would be the wrong size", s.total, tier1AccuracyPairs)
+	if s.total != tier1RecallPairs {
+		t.Fatalf("scored %d pair(s), want %d; one pair of slack would be the wrong size", s.total, tier1RecallPairs)
 	}
 
 	rate := s.rate()
 	onePair := 1.0 / float64(s.total)
-	if tier1AccuracyFloor <= rate-onePair {
-		t.Errorf("tier-1 reaches %v and the floor is %v, a slack of %v -- a whole pair could regress unnoticed. Raise tier1AccuracyHits to %d (a ratchet only goes up) and update %s in the same commit",
-			rate, tier1AccuracyFloor, rate-tier1AccuracyFloor, s.hits, acDoc)
+	if tier1RecallFloor <= rate-onePair {
+		t.Errorf("tier-1 reaches %v and the floor is %v, a slack of %v -- a whole pair could regress unnoticed. Raise tier1RecallHits to %d (a ratchet only goes up) and update %s in the same commit",
+			rate, tier1RecallFloor, rate-tier1RecallFloor, s.hits, acDoc)
 	}
-	if tier1AccuracyFloor > rate {
-		t.Errorf("the floor %v is above the measured rate %v; M-01 can never pass and the floor is a prediction, not a ratchet", tier1AccuracyFloor, rate)
+	if tier1RecallFloor > rate {
+		t.Errorf("the floor %v is above the measured rate %v; M-01 can never pass and the floor is a prediction, not a ratchet", tier1RecallFloor, rate)
 	}
 }
 
@@ -431,11 +436,11 @@ func TestTier1Accuracy_AMutilatedRuleSetFallsBelowTheFloor(t *testing.T) {
 
 	cut := acScoreRules(t, "the shipped set minus every "+acMutilatedField+" rule", mutilated)
 	full := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
-	if cut.total != tier1AccuracyPairs || full.total != tier1AccuracyPairs {
-		t.Fatalf("scored %d and %d pair(s), want %d each; the two rates are not taken over one denominator", cut.total, full.total, tier1AccuracyPairs)
+	if cut.total != tier1RecallPairs || full.total != tier1RecallPairs {
+		t.Fatalf("scored %d and %d pair(s), want %d each; the two rates are not taken over one denominator", cut.total, full.total, tier1RecallPairs)
 	}
 	cutRate, fullRate := cut.rate(), full.rate()
-	t.Logf("mutilated %d/%d = %v, shipped %d/%d = %v, floor %v", cut.hits, cut.total, cutRate, full.hits, full.total, fullRate, tier1AccuracyFloor)
+	t.Logf("mutilated %d/%d = %v, shipped %d/%d = %v, floor %v", cut.hits, cut.total, cutRate, full.hits, full.total, fullRate, tier1RecallFloor)
 
 	if cut.hits != acMutilatedHits {
 		t.Errorf("the mutilated set reaches %d pair(s), want %d; %q contributes a different number of hits than measured", cut.hits, acMutilatedHits, acMutilatedField)
@@ -443,24 +448,24 @@ func TestTier1Accuracy_AMutilatedRuleSetFallsBelowTheFloor(t *testing.T) {
 	if cutRate <= 0 {
 		t.Errorf("the mutilated set scores %v; a zero means Resolve returned nothing at all, not that removing those rules is what cost the hits", cutRate)
 	}
-	if cutRate >= tier1AccuracyFloor {
-		t.Errorf("the mutilated set scores %v, not below the floor %v; the floor cannot be crossed by removing rules, so M-01 asserts nothing", cutRate, tier1AccuracyFloor)
+	if cutRate >= tier1RecallFloor {
+		t.Errorf("the mutilated set scores %v, not below the floor %v; the floor cannot be crossed by removing rules, so M-01 asserts nothing", cutRate, tier1RecallFloor)
 	}
-	if tier1AccuracyFloor > fullRate {
-		t.Errorf("the floor %v is above the shipped set's own rate %v; the control half of the sandwich does not hold", tier1AccuracyFloor, fullRate)
+	if tier1RecallFloor > fullRate {
+		t.Errorf("the floor %v is above the shipped set's own rate %v; the control half of the sandwich does not hold", tier1RecallFloor, fullRate)
 	}
 }
 
 // M-06. The doc is a live oracle, not prose beside the number: its per-layout table is parsed
 // and summed. A bare substring search for the float passes over a doc that never had a table.
 func TestCorpusDoc_RecordsTheMeasuredFloor(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc))
+	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocSection)
 
-	floor := strconv.FormatFloat(tier1AccuracyFloor, 'f', 4, 64)
+	floor := strconv.FormatFloat(tier1RecallFloor, 'f', 4, 64)
 	if !strings.Contains(section, floor) {
 		t.Errorf("%s's %q section does not carry the floor %s (AC #3)", acDoc, acDocSection, floor)
 	}
-	reach := fmt.Sprintf("%d of %d", tier1AccuracyHits, tier1AccuracyPairs)
+	reach := fmt.Sprintf("%d of %d", tier1RecallHits, tier1RecallPairs)
 	if !strings.Contains(section, reach) {
 		t.Errorf("%s's %q section does not carry %q", acDoc, acDocSection, reach)
 	}
@@ -512,14 +517,14 @@ func TestCorpusDoc_RecordsTheMeasuredFloor(t *testing.T) {
 			t.Errorf("%s's table has no row for %s", acDoc, name)
 		}
 	}
-	if hits != tier1AccuracyHits || total != tier1AccuracyPairs {
-		t.Errorf("%s's table sums to %d/%d, want %d/%d; the doc and the constants disagree", acDoc, hits, total, tier1AccuracyHits, tier1AccuracyPairs)
+	if hits != tier1RecallHits || total != tier1RecallPairs {
+		t.Errorf("%s's table sums to %d/%d, want %d/%d; the doc and the constants disagree", acDoc, hits, total, tier1RecallHits, tier1RecallPairs)
 	}
 
 	// AC #5: the doc must say how to move the floor and why it may only go up, not merely
 	// record the number. Without these the table is a snapshot and nothing tells the next
 	// author that lowering the constant is the one move a ratchet forbids.
-	for _, phrase := range []string{"tier1AccuracyHits", "t1aGaps", "TestTier1Accuracy", "only go up"} {
+	for _, phrase := range []string{"tier1RecallHits", "t1aGaps", "TestTier1Accuracy", "only go up"} {
 		if !strings.Contains(section, phrase) {
 			t.Errorf("%s's %q section never mentions %q; the procedure for moving the floor is incomplete (AC #5)", acDoc, acDocSection, phrase)
 		}
@@ -531,8 +536,8 @@ func TestCorpusDoc_RecordsTheMeasuredFloor(t *testing.T) {
 // t1aGaps can move independently and each will look green while contradicting the other.
 func TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps(t *testing.T) {
 	s := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
-	if s.total != tier1AccuracyPairs {
-		t.Fatalf("scored %d pair(s), want %d; over an empty walk both sets below would be empty and equal", s.total, tier1AccuracyPairs)
+	if s.total != tier1RecallPairs {
+		t.Fatalf("scored %d pair(s), want %d; over an empty walk both sets below would be empty and equal", s.total, tier1RecallPairs)
 	}
 	if s.hits+len(s.missed) != s.total {
 		t.Fatalf("%d hit(s) plus %d miss(es) is not the %d pair(s) scored", s.hits, len(s.missed), s.total)
@@ -554,13 +559,13 @@ func TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps(t *testing.T) {
 	}
 	for p := range recorded {
 		if !missed[p] {
-			t.Errorf("t1aGaps records %s / %s, which the rate reaches; drop it from t1aGaps and raise tier1AccuracyHits in the same commit", p.file, p.field)
+			t.Errorf("t1aGaps records %s / %s, which the rate reaches; drop it from t1aGaps and raise tier1RecallHits in the same commit", p.file, p.field)
 		}
 	}
 	if len(missed) != len(recorded) {
 		t.Errorf("%d missed pair(s) against %d recorded gap(s)", len(missed), len(recorded))
 	}
-	if s.hits != tier1AccuracyPairs-len(t1aGaps) {
+	if s.hits != tier1RecallPairs-len(t1aGaps) {
 		t.Errorf("%d hit(s) over %d pair(s) with %d recorded gap(s); the pinned hits, the pinned pairs and the exemption list cannot all be right", s.hits, s.total, len(t1aGaps))
 	}
 }
@@ -583,15 +588,15 @@ func TestTier1_DialsStayInsideTheirMeasuredWindow(t *testing.T) {
 
 	t.Run("right_lower_bound", func(t *testing.T) {
 		narrow := acScoreRules(t, fmt.Sprintf("right narrowed to %v", acRightTooNarrow), acWithDistance(t, extraction.RelRight, acRightTooNarrow))
-		if narrow.total != tier1AccuracyPairs {
-			t.Fatalf("scored %d pair(s), want %d", narrow.total, tier1AccuracyPairs)
+		if narrow.total != tier1RecallPairs {
+			t.Fatalf("scored %d pair(s), want %d", narrow.total, tier1RecallPairs)
 		}
-		if narrow.rate() >= tier1AccuracyFloor {
-			t.Errorf("with right narrowed to %v the rate is %v, still at or above the floor %v; %v is not the binding lower bound and this bound pins nothing", acRightTooNarrow, narrow.rate(), tier1AccuracyFloor, acRightLower)
+		if narrow.rate() >= tier1RecallFloor {
+			t.Errorf("with right narrowed to %v the rate is %v, still at or above the floor %v; %v is not the binding lower bound and this bound pins nothing", acRightTooNarrow, narrow.rate(), tier1RecallFloor, acRightLower)
 		}
 		at := acScoreRules(t, fmt.Sprintf("right at %v", acRightLower), acWithDistance(t, extraction.RelRight, acRightLower))
-		if at.rate() < tier1AccuracyFloor {
-			t.Errorf("with right at the recorded lower bound %v the rate is %v, below the floor %v; the recorded bound is too narrow", acRightLower, at.rate(), tier1AccuracyFloor)
+		if at.rate() < tier1RecallFloor {
+			t.Errorf("with right at the recorded lower bound %v the rate is %v, below the floor %v; the recorded bound is too narrow", acRightLower, at.rate(), tier1RecallFloor)
 		}
 	})
 
@@ -614,15 +619,15 @@ func TestTier1_DialsStayInsideTheirMeasuredWindow(t *testing.T) {
 
 	t.Run("below_lower_bound", func(t *testing.T) {
 		narrow := acScoreRules(t, fmt.Sprintf("below narrowed to %v", acBelowTooNarrow), acWithDistance(t, extraction.RelBelow, acBelowTooNarrow))
-		if narrow.total != tier1AccuracyPairs {
-			t.Fatalf("scored %d pair(s), want %d", narrow.total, tier1AccuracyPairs)
+		if narrow.total != tier1RecallPairs {
+			t.Fatalf("scored %d pair(s), want %d", narrow.total, tier1RecallPairs)
 		}
-		if narrow.rate() >= tier1AccuracyFloor {
-			t.Errorf("with below narrowed to %v the rate is %v, still at or above the floor %v; %v is not the binding lower bound and this bound pins nothing", acBelowTooNarrow, narrow.rate(), tier1AccuracyFloor, acBelowLower)
+		if narrow.rate() >= tier1RecallFloor {
+			t.Errorf("with below narrowed to %v the rate is %v, still at or above the floor %v; %v is not the binding lower bound and this bound pins nothing", acBelowTooNarrow, narrow.rate(), tier1RecallFloor, acBelowLower)
 		}
 		at := acScoreRules(t, fmt.Sprintf("below at %v", acBelowLower), acWithDistance(t, extraction.RelBelow, acBelowLower))
-		if at.rate() < tier1AccuracyFloor {
-			t.Errorf("with below at the recorded lower bound %v the rate is %v, below the floor %v; the recorded bound is too narrow", acBelowLower, at.rate(), tier1AccuracyFloor)
+		if at.rate() < tier1RecallFloor {
+			t.Errorf("with below at the recorded lower bound %v the rate is %v, below the floor %v; the recorded bound is too narrow", acBelowLower, at.rate(), tier1RecallFloor)
 		}
 	})
 
@@ -897,8 +902,8 @@ func TestTier1Accuracy_DecisionRateOverTheCorpus(t *testing.T) {
 
 	// The denominator, asserted three ways: a measure whose denominator can drift flatters
 	// itself by losing pairs (M-03's reason, and this rate shares that table).
-	if tier1DecisionPairs != tier1AccuracyPairs {
-		t.Fatalf("the decision rate is taken over %d pair(s) and the recall rate over %d; the two numbers are not comparable", tier1DecisionPairs, tier1AccuracyPairs)
+	if tier1DecisionPairs != tier1RecallPairs {
+		t.Fatalf("the decision rate is taken over %d pair(s) and the recall rate over %d; the two numbers are not comparable", tier1DecisionPairs, tier1RecallPairs)
 	}
 	if pairs := acCountPairs(); pairs != tier1DecisionPairs {
 		t.Fatalf("corpusExpect names %d (layout, field) pair(s), want %d", pairs, tier1DecisionPairs)
@@ -973,11 +978,11 @@ func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 	decision := acScoreDecisions(t, pages, "the shipped Tier-1 set", extraction.Tier1Rules)
 	recall := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
 
-	if decision.total != tier1DecisionPairs || recall.total != tier1AccuracyPairs || decision.total != recall.total {
+	if decision.total != tier1DecisionPairs || recall.total != tier1RecallPairs || decision.total != recall.total {
 		t.Fatalf("the decision rate scored %d pair(s) and the recall rate %d, want %d each; comparing them says nothing", decision.total, recall.total, tier1DecisionPairs)
 	}
-	if recall.hits != tier1AccuracyHits {
-		t.Errorf("recall reaches %d/%d, want the pinned %d/%d", recall.hits, recall.total, tier1AccuracyHits, tier1AccuracyPairs)
+	if recall.hits != tier1RecallHits {
+		t.Errorf("recall reaches %d/%d, want the pinned %d/%d", recall.hits, recall.total, tier1RecallHits, tier1RecallPairs)
 	}
 	if decision.hits != tier1DecisionHits {
 		t.Errorf("the pipeline decides %d/%d, want the pinned %d/%d", decision.hits, decision.total, tier1DecisionHits, tier1DecisionPairs)
@@ -992,8 +997,8 @@ func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 
 	// The per-pair half of the same claim. Two sets of the same size can still disagree about
 	// which pairs they hold, and then neither number describes the other.
-	if len(recall.missed) != tier1AccuracyPairs-tier1AccuracyHits || len(recall.missed) == 0 {
-		t.Fatalf("recall missed %d pair(s), want %d; with no miss the implication below is vacuous", len(recall.missed), tier1AccuracyPairs-tier1AccuracyHits)
+	if len(recall.missed) != tier1RecallPairs-tier1RecallHits || len(recall.missed) == 0 {
+		t.Fatalf("recall missed %d pair(s), want %d; with no miss the implication below is vacuous", len(recall.missed), tier1RecallPairs-tier1RecallHits)
 	}
 	wrong := make(map[acPair]bool, len(decision.wrong))
 	for _, d := range decision.wrong {

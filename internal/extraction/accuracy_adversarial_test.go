@@ -21,6 +21,11 @@ import (
 // from acDocRowRE by construction: a layout name carries a dot, which [a-z_]+ cannot match.
 var aaFieldRowRE = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]+) \\| ([0-9]+) \\|")
 
+// aaDecisionRowRE is one row of the decision section's false-decision table:
+// | `corpus_x.pdf` | `field` | `value` |. Disjoint from acDocRowRE, whose second cell is a
+// number, and read from a different section anyway.
+var aaDecisionRowRE = regexp.MustCompile("(?m)^\\| `(corpus_[a-z0-9_]+\\.pdf)` \\| `([a-z_]+)` \\| `([^`]+)` \\|")
+
 // aaRunFilterRE reads the -run pattern out of the ci.yml reporting step.
 var aaRunFilterRE = regexp.MustCompile(`-run '([^']+)'`)
 
@@ -89,7 +94,7 @@ func aaRequiredReach(t *testing.T, suffix string) (float64, string) {
 // only the per-LAYOUT rows. "Moving the floor" step 3 tells the next author that both tables
 // are enforced, so leaving one unread makes the doc wrong about its own oracle.
 func TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc))
+	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocSection)
 
 	rows := aaFieldRowRE.FindAllStringSubmatch(section, -1)
 	if len(rows) == 0 {
@@ -137,8 +142,57 @@ func TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement(t *testing.T) {
 			t.Errorf("%s's per-field table has no row for %s; a field missing from the table reads as untested", acDoc, field)
 		}
 	}
-	if hits != tier1AccuracyHits || total != tier1AccuracyPairs {
-		t.Errorf("%s's per-field table sums to %d/%d, want %d/%d", acDoc, hits, total, tier1AccuracyHits, tier1AccuracyPairs)
+	if hits != tier1RecallHits || total != tier1RecallPairs {
+		t.Errorf("%s's per-field table sums to %d/%d, want %d/%d", acDoc, hits, total, tier1RecallHits, tier1RecallPairs)
+	}
+}
+
+// The recall rate cannot see a false decision at all: corpusExpect names no such pair, so
+// nothing scores it. The doc is where an operator meets both numbers, and prose beside a pinned
+// var is how the two drift apart.
+func TestCorpusDoc_RecordsTheDecisionRate(t *testing.T) {
+	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocDecisionSection)
+
+	for _, want := range []string{
+		fmt.Sprintf("%d of %d", tier1DecisionHits, tier1DecisionPairs),
+		strconv.FormatFloat(tier1DecisionRate, 'f', 4, 64),
+		fmt.Sprintf("False decisions: %d", len(acFalseDecided)),
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("%s's %q section does not carry %q", acDoc, acDocDecisionSection, want)
+		}
+	}
+
+	if len(acFalseDecided) == 0 {
+		t.Fatal("acFalseDecided pins no false decision; the comparison below would be vacuous and the doc could say anything")
+	}
+	rows := aaDecisionRowRE.FindAllStringSubmatch(section, -1)
+	// Control needle: a scan that stopped matching finds no row, which reads exactly like a doc
+	// with no fabrication left to record.
+	if len(rows) == 0 {
+		t.Fatalf("%s's %q section holds no false-decision row for the %d acFalseDecided pins; a row reads exactly: | `corpus_x.pdf` | `field` | `value` |", acDoc, acDocDecisionSection, len(acFalseDecided))
+	}
+
+	// By identity in both directions, as TestTier1Accuracy_DecisionRateOverTheCorpus compares
+	// the live set: a count alone passes when one fabrication is replaced by another.
+	pinned := make(map[acPair]string, len(acFalseDecided))
+	for _, f := range acFalseDecided {
+		pinned[acPair{file: f.file, field: f.field}] = f.value
+	}
+	for _, m := range rows {
+		p := acPair{file: m[1], field: m[2]}
+		want, ok := pinned[p]
+		if !ok {
+			t.Errorf("%s records a false decision for %s / %s, which acFalseDecided does not pin", acDoc, p.file, p.field)
+			continue
+		}
+		if want != m[3] {
+			t.Errorf("%s says %s / %s decides %q; acFalseDecided pins %q", acDoc, p.file, p.field, m[3], want)
+		}
+		delete(pinned, p)
+	}
+	for p, v := range pinned {
+		t.Errorf("%s's table has no row for the pinned false decision %s / %s = %q", acDoc, p.file, p.field, v)
 	}
 }
 
@@ -213,8 +267,8 @@ func TestTier1Accuracy_TheReportNamesEveryMissedPair(t *testing.T) {
 	}
 
 	s := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
-	if s.total != tier1AccuracyPairs {
-		t.Fatalf("scored %d pair(s), want %d", s.total, tier1AccuracyPairs)
+	if s.total != tier1RecallPairs {
+		t.Fatalf("scored %d pair(s), want %d", s.total, tier1RecallPairs)
 	}
 	report := acRenderReport(s)
 	for _, miss := range s.missed {

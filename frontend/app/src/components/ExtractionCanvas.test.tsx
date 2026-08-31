@@ -1388,6 +1388,29 @@ describe('switching to another job', () => {
     })
     expect(frame(1).style.width).toBe('150%')
   })
+
+  // EXTR-11-07, Mode A. RED until the pane's [jobId] effect returns the ground to the top.
+  it('returns the ground to the top on a jobId change', () => {
+    // `D-24`. The ground sits behind this pane's private `groundRef`, so `ExtractionReview`
+    // cannot reach it and document 2 opens at document 1's scroll position. The shell's own
+    // row (ExtractionReview.test.tsx, "releases every handle, clears the selection...") states
+    // the same contract but cannot discriminate: a shell that shows `Loading` between the two
+    // details remounts this pane, and a fresh ground reads 0 whatever the effect does.
+    const { rerender } = render(canvas())
+    const g = screen.getByTestId('extraction-ground')
+
+    // MEASURED: jsdom's `scrollTop` stores what it is given. The read-back is the floor.
+    g.scrollTop = 480
+    expect(g.scrollTop, 'jsdom did not keep the scroll position -- the claim below is vacuous').toBe(480)
+
+    rerender(canvas({ jobId: OTHER_JOB_ID }))
+
+    // Identity, not presence: `<ExtractionCanvas key={jobId}>` would satisfy the reset by
+    // remounting, and `D-24` rules that out -- it resets zoom against `D-23` and makes the
+    // tagged page map and the `jobRef` guard production-dead while their specs stay green.
+    expect(screen.getByTestId('extraction-ground'), 'the pane remounted -- the reset below is vacuous').toBe(g)
+    expect(g.scrollTop, "document 2 opened at document 1's scroll position").toBe(0)
+  })
 })
 
 describe('page bytes, adversarially', () => {

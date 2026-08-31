@@ -69,7 +69,7 @@ import { login, createEntity, listInvoices, approveUntilClosed, firmApproverToke
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
-import { gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
 
@@ -3132,6 +3132,220 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
   expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
 
   await testInfo.attach('extraction-pane-spill.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-11-07 · the shell's two-pane flex row ------------------------------------------
+//
+// Written in EXTR-11-07 (Mode A), red until that subtask builds `ExtractionReview` and
+// EXTR-11-08 the route. The PR staying DRAFT is what keeps them off the gate meanwhile.
+//
+// jsdom computes no layout, so nothing above this line is an oracle for the pane
+// relationships: `ExtractionReview.test.tsx` asserts the STYLE OBJECTS as a structural
+// regression guard and stops there. These three rows are AC-6's whole oracle.
+
+test('EXTR11-E2E-02 (AC-1/AC-6): the panes tile the body and never overlap', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-07 tile')
+  await openExtractionReview(page)
+
+  const shellBody = page.getByTestId('extraction-review-body')
+  const column = page.locator('main .pf-scroll')
+  const canvas = page.getByTestId('extraction-canvas')
+  const fields = page.getByTestId('extraction-fields')
+
+  // 1. The body fills the view column at every width. A width-only assertion passes on the
+  //    very defect this exists to catch (layout.ts:1-18): a capped, left-pinned body strands
+  //    a band on the right and still measures the width it was told to.
+  const fit = await assertFillsColumn(page, shellBody, column, 'the extraction review body')
+  expect(fit.map((f) => f.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  type Tile = { width: number; body: Rect; canvas: Rect; fields: Rect; seam: number; leftEdge: number; rightEdge: number }
+  const measured: Tile[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [b, c, f] = await Promise.all([shellBody.boundingBox(), canvas.boundingBox(), fields.boundingBox()])
+        return { b, c, f }
+      }, `pane tiling at ${width}px`)
+
+      expect(m.b && m.c && m.f, `the body and both panes must render at ${width}px`).toBeTruthy()
+      // Non-empty first: three collapsed rects tile perfectly and clear each other vacuously.
+      for (const [label, r] of [['body', m.b!], ['document pane', m.c!], ['fields pane', m.f!]] as const) {
+        expect(r.width, `the ${label} has no width at ${width}px`).toBeGreaterThan(0)
+        expect(r.height, `the ${label} has no height at ${width}px`).toBeGreaterThan(0)
+      }
+
+      // 2. Both axes, never one (layout.ts's own rule). EXTR11-E2E-02a asserts this same
+      //    clearance from the fields pane's side; it is repeated here because the tiling
+      //    numbers below are meaningless over two rects that cover each other.
+      expect(rectsOverlap(m.c as Rect, m.f as Rect), `the panes overlap at ${width}px`).toBe(false)
+
+      // 3. The document pane starts at the body's left edge and the fields pane ends at its
+      //    right edge. Both edges, never one -- gaps()'s rule: a right-only check reads a
+      //    left-pinned pair as a large right gap and a right-pinned pair as a perfect fit.
+      const leftEdge = m.c!.x - m.b!.x
+      const rightEdge = m.b!.x + m.b!.width - (m.f!.x + m.f!.width)
+      expect(leftEdge, `the document pane starts ${leftEdge.toFixed(1)}px off the body's left edge at ${width}px`).toBeLessThanOrEqual(1)
+      expect(rightEdge, `the fields pane ends ${rightEdge.toFixed(1)}px off the body's right edge at ${width}px`).toBeLessThanOrEqual(1)
+
+      // 4. And they MEET. Clearance plus two flush outer edges still permits a stranded band
+      //    between them -- the BUG-03-05 shape, moved inside the row.
+      const seam = m.f!.x - (m.c!.x + m.c!.width)
+      expect(Math.abs(seam), `a ${seam.toFixed(1)}px band is stranded between the panes at ${width}px`).toBeLessThanOrEqual(2)
+
+      measured.push({ width, body: m.b as Rect, canvas: m.c as Rect, fields: m.f as Rect, seam, leftEdge, rightEdge })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-pane-tiling.json', {
+    body: JSON.stringify({ fit, measured }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-10 (AC-6): the right pane yields first, and never below its floor', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-07 floor')
+  await openExtractionReview(page)
+
+  const fields = page.getByTestId('extraction-fields')
+  const frame = page.getByTestId('extraction-page-1')
+
+  type Yield = { width: number; fieldsWidth: number; frameWidth: number }
+  const measured: Yield[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order): a floor strands only what the window is too
+    // narrow to hold, so the narrow end is where the pane is pushed onto its 470px floor.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [f, fr] = await Promise.all([fields.boundingBox(), frame.boundingBox()])
+        return { f, fr }
+      }, `pane yield at ${width}px`)
+
+      expect(m.f && m.fr, `the fields pane and the page frame must both render at ${width}px`).toBeTruthy()
+
+      // 1. The artboard's floor (`:223`). Below it the pane's `1fr 1fr` grid pushes its cells
+      //    past their column -- the spill EXTR11-E2E-02a measures from the other side.
+      expect(m.f!.width, `the fields pane is below its 470px floor at ${width}px`).toBeGreaterThanOrEqual(469)
+
+      // 2. And the document pane did not pay for it: the page frame is still inside the band
+      //    pageFrameStyle declares at zoom 100. A right pane pinned to a fixed track squeezes
+      //    the frame under its floor here.
+      expect(m.fr!.width, `the page frame fell below its 560px floor at ${width}px`).toBeGreaterThanOrEqual(559)
+      expect(m.fr!.width, `the page frame rose above its 640px ceiling at ${width}px`).toBeLessThanOrEqual(641)
+
+      measured.push({ width, fieldsWidth: m.f!.width, frameWidth: m.fr!.width })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  // 3. The pane grows with the chrome rather than pinning a track. `width === 620` would be
+  //    the tempting assertion and would FAIL on correct rendering at 2560, where both panes
+  //    grow; `>= 470` alone passes on a pane frozen at its basis. This is the relationship.
+  const widest = measured.find((m) => m.width === 2560)
+  const narrowest = measured.find((m) => m.width === 1280)
+  expect(widest && narrowest, 'the sweep did not measure both ends -- the comparison below is vacuous').toBeTruthy()
+  expect(
+    widest!.fieldsWidth,
+    `the fields pane is ${widest!.fieldsWidth}px at 2560 and ${narrowest!.fieldsWidth}px at 1280 -- it is pinned to a track, not yielding`,
+  ).toBeGreaterThan(narrowest!.fieldsWidth)
+
+  await testInfo.attach('extraction-pane-yield.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR-11-06's AC-1 ("the fields pane's body is scrollable") had no oracle at any layer: jsdom
+// computes no layout, so ExtractionFields.test.tsx pins the declaration triple and stops. This
+// subtask mounts the pane inside the shell whose `minHeight: 0` chain makes the scroll real, so
+// the claim becomes measurable here. Written in EXTR-11-07 for that reason.
+test('EXTR11-E2E-02b (AC-6): the fields pane scrolls its rows under a fixed header', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-07 scroll')
+  const detail = await openExtractionReview(page)
+  expect(detail.fields.length, 'no field on this document -- the overflow below cannot be produced').toBeGreaterThan(0)
+
+  const pane = page.getByTestId('extraction-fields')
+  // The pane's two children, in the artboard's order (`:225` header over `:230` body) --
+  // ExtractionFields.test.tsx pins that shape from the other side, so this index is not a guess.
+  const header = pane.locator('> div').first()
+  const paneBody = pane.locator('> div').nth(1)
+
+  const entryViewport = page.viewportSize()
+  let measured: Record<string, number | boolean> = {}
+  try {
+    // Short, not narrow: the rows have to outgrow the box before "scrollable" means anything.
+    await page.setViewportSize({ width: 1280, height: 320 })
+
+    measured = await settledRead(async () => {
+      const box = await paneBody.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollTop: el.scrollTop }))
+      const paneBox = await pane.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
+      const headerBox = await header.boundingBox()
+      return { ...box, paneScroll: paneBox.scrollHeight - paneBox.clientHeight, headerTop: headerBox?.y ?? -1 }
+    }, 'fields pane scroll geometry')
+
+    // The precondition, asserted rather than assumed. A failure here is the containment
+    // chain, not the fixture: if the shell's `minHeight: 0` column does not bound the pane,
+    // the whole screen grows and `.pf-scroll` scrolls the page instead.
+    expect(
+      measured.scrollHeight as number,
+      `the fields body is ${measured.scrollHeight}px of content in a ${measured.clientHeight}px box -- nothing to scroll, so the claim below is vacuous`,
+    ).toBeGreaterThan((measured.clientHeight as number) + 1)
+
+    const headerTopBefore = measured.headerTop as number
+    await paneBody.evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+    })
+
+    const after = await settledRead(async () => {
+      const scrollTop = await paneBody.evaluate((el) => el.scrollTop)
+      const headerBox = await header.boundingBox()
+      return { scrollTop, headerTop: headerBox?.y ?? -1 }
+    }, 'fields pane after scrolling')
+
+    expect(after.scrollTop, 'the fields body did not move -- it is not the scroller').toBeGreaterThan(0)
+    // The header is `flex: none` (`:225`) above the scroller, never inside it.
+    expect(
+      Math.abs(after.headerTop - headerTopBefore),
+      `the pane header moved ${(after.headerTop - headerTopBefore).toFixed(1)}px -- it scrolled away with the rows`,
+    ).toBeLessThanOrEqual(1)
+    expect(measured.paneScroll as number, 'the pane itself scrolls, so the header is inside the scroller').toBeLessThanOrEqual(1)
+
+    measured = { ...measured, scrolledTo: after.scrollTop, headerDrift: after.headerTop - headerTopBefore }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  await testInfo.attach('extraction-fields-scroll.json', {
     body: JSON.stringify(measured, null, 2),
     contentType: 'application/json',
   })

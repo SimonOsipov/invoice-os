@@ -77,9 +77,9 @@ export function toApiError(err: unknown): ApiError {
   return new ApiError('network', err instanceof Error ? err.message : String(err))
 }
 
-// Thin useReducer+useEffect wrapper over asyncReducer — NOT unit-tested here (Decision
-// (i) in the story): hook logic is covered via the extracted pure reducer + helpers
-// above; the hook's runtime path is exercised once a live surface wires it (M3-08/09).
+// Thin useReducer+useEffect wrapper over asyncReducer. Its RUNTIME path is not tested here
+// (Decision (i)): that lives with the surface that wires it. Its shape is —
+// async-state.hook-shape.test.ts pins the two facts a lazily-gated caller depends on.
 export function useAsync<T>(
   producer: () => Promise<T>,
   opts?: { immediate?: boolean; isEmpty?: (data: T) => boolean; deps?: unknown[] },

@@ -210,11 +210,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         : Promise.reject(new Error('no document to look up')),
     { immediate: shouldFetchInvoices(base) && documentId != null, deps: [documentId] },
   )
-  // Anything but a settled 200 reads as still looking: the card's reason sentence claims no
-  // job exists, which neither an unstarted nor a failed lookup has established.
+  // Only a settled 200 may claim no job exists. 'empty' is folded into `failed` on purpose --
+  // it means the body was null, which answered the question no better than a 500 did.
   const extraction = {
     jobId: newestJob(extractions.data?.jobs ?? [])?.id ?? null,
-    loading: extractions.status !== 'ready',
+    loading: extractions.status === 'idle' || extractions.status === 'loading',
+    failed: extractions.status === 'error' || extractions.status === 'empty',
   }
 
   // Not extended to the live-refresh tick below (D-23): shouldPollInvoice only ticks

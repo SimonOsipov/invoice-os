@@ -35,6 +35,16 @@ var pgdFalsified = []struct{ clause, why string }{
 		clause: "leaves this package only through",
 		why:    "storage_key now also leaves the package through (*Reader).PageImageKey, so PageStore is no longer the only exit",
 	},
+	// EXTR-11-08 (added in its QA pass). The screen is reachable from the invoice detail now,
+	// so both halves of the old unreachability sentence are claims about the past.
+	{
+		clause: "no user can reach it",
+		why:    "EXTR-11-08 shipped the 'extraction' view and the open-extraction-review control; the screen has an entry",
+	},
+	{
+		clause: "nothing routes to that screen",
+		why:    "App.tsx routes view === 'extraction' to ExtractionReview, and openExtraction(jobId) is what navigates there",
+	},
 }
 
 // pgdHistoric are EXTR-01's original clauses. They were already rewritten by EXTR-11-01, so
@@ -53,11 +63,13 @@ var pgdNames = []string{
 	"(*Reader).Detail",
 	"(*Reader).PageImageKey",
 	"GET /v1/extractions/{id}/pages/{n}",
+	// EXTR-11-08: the section must name the screen's one entry, not merely stop saying it has
+	// none. A synonym here and the testid on the card would drift apart silently.
+	"open-extraction-review",
 }
 
-// pgdStillTrue is the half of the old sentence that survives: no screen displays a page image
-// until EXTR-11-05 draws the canvas. AC 3 says keep whatever is still true, so a rewrite that
-// deletes the section wholesale is not the deliverable either.
+// pgdStillTrue names the subtask that drew the canvas. AC 3 says keep whatever is still true, so
+// a rewrite that deletes the section wholesale is not the deliverable either.
 var pgdStillTrue = []string{"EXTR-11-05"}
 
 func TestPageImageStorageDoc_NoLongerClaimsThePixelsAreUnread(t *testing.T) {

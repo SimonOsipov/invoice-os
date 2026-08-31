@@ -14,9 +14,12 @@ function shortHash(hash: string): string {
   return hash.length <= 17 ? hash : `${hash.slice(0, 8)}…${hash.slice(-8)}`
 }
 
-// Resolved by InvoiceDetail, never here. `loading` is what separates "no job exists" from
-// "we have not looked yet" — only the settled arm may claim the reason below.
-export type ExtractionEntry = { jobId: string | null; loading: boolean }
+// Resolved by InvoiceDetail, never here. Three states, not two: a lookup that failed has
+// established no more than an unfinished one, and neither may claim that no job exists.
+export type ExtractionEntry = { jobId: string | null; loading: boolean; failed: boolean }
+
+const NO_EXTRACTION = 'This document has no extraction to check.'
+const LOOKUP_FAILED = 'We could not check this document for an extraction.'
 
 export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction }: { meta: SourceDocumentAsync; onOpen: () => void; extraction: ExtractionEntry; onOpenExtraction: (jobId: string) => void }) {
   const response = meta.data
@@ -50,10 +53,10 @@ export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction 
   } else {
     const kind = classifyDocument(record.filename, record.declared_content_type)
     const tone = fileTypeTone(record.filename, record.declared_content_type)
-    // An unsettled lookup has not established that there is no job, so it gets the disabled
-    // control without the sentence.
-    const noJob = extraction.loading || extraction.jobId === null
-    const noJobSettled = !extraction.loading && extraction.jobId === null
+    const hasJob = !extraction.loading && !extraction.failed && extraction.jobId !== null
+    // One sentence per SETTLED arm. An unsettled lookup has established nothing, so it gets
+    // the disabled control and no reason at all.
+    const blockedReason = extraction.loading ? null : extraction.failed ? LOOKUP_FAILED : extraction.jobId === null ? NO_EXTRACTION : null
     body = (
       <>
         <div style={{ display: 'flex', gap: 11 }}>
@@ -89,22 +92,20 @@ export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction 
           type="button"
           data-testid="open-extraction-review"
           onClick={() => extraction.jobId !== null && onOpenExtraction(extraction.jobId)}
-          disabled={noJob}
+          disabled={!hasJob}
           className="v2-btn v2-btn-ghost pf-btn"
           style={{
             marginTop: 12,
             width: '100%',
             height: 34,
             fontSize: 13,
-            ...(noJob ? { background: 'var(--bg-3)', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+            ...(hasJob ? null : { background: 'var(--bg-3)', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' }),
           }}
         >
           Check the extraction
         </button>
-        {noJobSettled && (
-          <p style={{ margin: '8px 0 0', fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>
-            This document has no extraction to check.
-          </p>
+        {blockedReason !== null && (
+          <p style={{ margin: '8px 0 0', fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>{blockedReason}</p>
         )}
         <div className="mono" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line-1)', fontSize: 10.5, letterSpacing: '0.04em', color: 'var(--fg-3)', wordBreak: 'break-all' }}>
           SHA-256 {shortHash(record.content_hash)}

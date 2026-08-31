@@ -23,6 +23,7 @@ import { InvoiceDetail } from './InvoiceDetail'
 const TESTID = 'open-extraction-review'
 // Story `## Decisions -> Invented copy`, final. See SourceDocumentCard.extraction.test.tsx.
 const NO_JOB_REASON = 'This document has no extraction to check.'
+const LOOKUP_FAILED_REASON = 'We could not check this document for an extraction.'
 
 const DOCUMENT_ID = 'b2c3d4e5-f6a7-4b2c-8d3e-4f5a6b7c8d9e'
 const NEWER_JOB = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
@@ -107,14 +108,27 @@ type Wire = { calls: string[]; extractionCalls: string[]; sourceCalls: string[] 
 
 // Dispatched by URL, never by call order: the detail fires four concurrent requests.
 // `jobs: 'hang'` leaves the extractions read in flight forever, the idiom
-// SourceDocumentCard.test.tsx already uses for `/sheet`.
-function mockFetch(source: SourceDocumentResponse, jobs: readonly ExtractionJob[] | 'hang'): Wire {
+// SourceDocumentCard.test.tsx already uses for `/sheet`; `'500'` and `'null-body'` are the two
+// shapes that must NOT read as "this document has no extraction".
+function mockFetch(source: SourceDocumentResponse, jobs: readonly ExtractionJob[] | 'hang' | '500' | 'null-body' | 'null-jobs' | 'no-jobs-key'): Wire {
   const wire: Wire = { calls: [], extractionCalls: [], sourceCalls: [] }
   const fetchMock = vi.fn((url: string) => {
     wire.calls.push(url)
     if (url.includes('/v1/extractions')) {
       wire.extractionCalls.push(url)
       if (jobs === 'hang') return new Promise(() => {})
+      if (jobs === '500') {
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'extractions read failed' }) })
+      }
+      if (jobs === 'null-body') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(null) })
+      }
+      if (jobs === 'null-jobs') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ jobs: null }) })
+      }
+      if (jobs === 'no-jobs-key') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+      }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ jobs }) })
     }
     if (url.endsWith('/source-document')) {
@@ -257,4 +271,95 @@ describe('AC-6/AC-7: the two disabled states, end to end', () => {
       'an unsettled lookup has not established that there is no job',
     ).toBeNull()
   })
+})
+
+// QA gap, closed here. The source-document read and this one fail INDEPENDENTLY -- the card
+// body renders off a 200 while the extractions lookup 500s -- so the control has to say
+// something. The prop shape `{ jobId, loading }` could not: it mapped an error onto `loading`.
+describe('QA-1: a failed lookup gets its own reason, never the no-job one', () => {
+  for (const [label, mode] of [
+    ['a 500', '500'],
+    ['a 200 with a null body', 'null-body'],
+  ] as const) {
+    it(`invoiceDetail_${mode === '500' ? 'aFailedLookup' : 'ANullBody'}LeavesTheControlDisabledWithItsOwnReason`, async () => {
+      const wire = mockFetch(WITH_DOCUMENT, mode)
+      render(<InvoiceDetail ctx={detailCtx(vi.fn())} />)
+
+      const btn = (await screen.findByTestId(TESTID)) as HTMLButtonElement
+      // Floor: the source read really did succeed, so the card rendered its record body and
+      // the two lookups really did settle differently.
+      await screen.findByTestId('source-document-card-meta')
+      await waitFor(() => expect(wire.extractionCalls.length, `${label}: the lookup never ran`).toBeGreaterThan(0))
+
+      await waitFor(() =>
+        expect(screen.queryByText(LOOKUP_FAILED_REASON), `${label}: the control explains nothing`).not.toBeNull(),
+      )
+      expect(btn.disabled, `${label}: a failed lookup found no job, so the control must be disabled`).toBe(true)
+      expect(
+        screen.queryByText(NO_JOB_REASON),
+        `${label}: a failed lookup must not claim the document has no extraction`,
+      ).toBeNull()
+    })
+  }
+
+  it('invoiceDetail_aSettledEmptyListStillGetsTheNoJobReason', async () => {
+    // Control needle for the two rows above, through the same component and the same stub: a
+    // real settled 200 with no jobs DOES get the other sentence, so the fork is a fork.
+    mockFetch(WITH_DOCUMENT, [])
+    render(<InvoiceDetail ctx={detailCtx(vi.fn())} />)
+
+    await screen.findByTestId(TESTID)
+    await waitFor(() => expect(screen.queryByText(NO_JOB_REASON)).not.toBeNull())
+    expect(screen.queryByText(LOOKUP_FAILED_REASON), 'a settled empty list is not a failed lookup').toBeNull()
+  })
+})
+
+// The dep list is `[documentId]`, not the siblings' `[invoiceId]`. LiveInvoiceDetail is keyed
+// by invoiceId (InvoiceDetail.tsx:102), so invoiceId is CONSTANT for a mount: with it in the
+// deps the effect runs once, at mount, while documentId is still null and `immediate` is
+// false -- and the lookup never fires at all. That is what this row measures.
+describe('QA-2: the lookup fires on the documentId the source read resolved', () => {
+  it('invoiceDetail_theLookupFiresOnlyAfterTheDocumentIdResolves', async () => {
+    const wire = mockFetch(WITH_DOCUMENT, NEWEST_FIRST)
+    render(<InvoiceDetail ctx={detailCtx(vi.fn())} />)
+
+    await screen.findByTestId(TESTID)
+    await waitFor(() => expect(wire.extractionCalls.length, 'the lookup never ran').toBe(1))
+
+    // It ran AFTER the source read, never before -- a dep list that could not see documentId
+    // would have to fire at mount (with no id) or not at all.
+    const firstExtraction = wire.calls.findIndex((u) => u.includes('/v1/extractions'))
+    const firstSource = wire.calls.findIndex((u) => u.endsWith('/source-document'))
+    expect(firstSource, 'the source read never happened').toBeGreaterThan(-1)
+    expect(firstExtraction, 'the extractions read never happened').toBeGreaterThan(-1)
+    expect(firstExtraction, 'the lookup was issued before the record that names its document').toBeGreaterThan(firstSource)
+    expect(new URL(wire.extractionCalls[0]!).searchParams.get('document_id')).toBe(DOCUMENT_ID)
+  })
+})
+
+// `newestJob(jobs)` iterates its argument, so `undefined` throws -- during RENDER, not inside a
+// promise, but a throw either way. `?? []` at the call site is the only thing between the
+// component and a malformed body. Go's reader.go guarantees an array, so neither shape below is
+// reachable through the shipped server; both are one bad deploy away.
+describe('QA-4: a malformed jobs list does not take the page down', () => {
+  for (const [label, mode] of [
+    ['`jobs: null`', 'null-jobs'],
+    ['no `jobs` key at all', 'no-jobs-key'],
+  ] as const) {
+    it(`invoiceDetail_${mode === 'null-jobs' ? 'ANullJobsList' : 'AMissingJobsKey'}RendersTheNoJobArm`, async () => {
+      mockFetch(WITH_DOCUMENT, mode)
+      render(<InvoiceDetail ctx={detailCtx(vi.fn())} />)
+
+      // The page rendered at all: a throw out of newestJob takes the whole detail with it, so
+      // finding the control IS the assertion that it did not.
+      const btn = (await screen.findByTestId(TESTID)) as HTMLButtonElement
+      await screen.findByTestId('source-document-card-meta')
+      await waitFor(() => expect(btn.disabled, `${label}: no job, so the control must be disabled`).toBe(true))
+
+      // A settled 200 with an unreadable list still reads as "no job", not as a failed lookup:
+      // useAsync resolves a non-null object to 'ready' whatever is inside it.
+      await waitFor(() => expect(screen.queryByText(NO_JOB_REASON), `${label}: no reason shown`).not.toBeNull())
+      expect(screen.queryByText(LOOKUP_FAILED_REASON), `${label}: a 200 is not a failed lookup`).toBeNull()
+    })
+  }
 })

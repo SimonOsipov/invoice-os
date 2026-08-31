@@ -37,11 +37,18 @@ const TESTID = 'open-extraction-review'
 // (commit 5c108824); a reword moves the table and these literals together.
 const CONTROL_LABEL = 'Check the extraction'
 const NO_JOB_REASON = 'This document has no extraction to check.'
+// The fourth row, added in QA: the shape `{ jobId, loading }` could not represent a failed
+// lookup, so an error mapped onto `loading` and left the control disabled with nothing said.
+const LOOKUP_FAILED_REASON = 'We could not check this document for an extraction.'
 
 const JOB_ID = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const HASH = '3f9a1c02b7d4e6108a5c93f21e0d47b6c8a2f5039e1b7d4c60a8f3e2d5a86560'
 
-type ExtractionEntry = { jobId: string | null; loading: boolean }
+type ExtractionEntry = { jobId: string | null; loading: boolean; failed: boolean }
+
+const READY = (jobId: string | null): ExtractionEntry => ({ jobId, loading: false, failed: false })
+const IN_FLIGHT: ExtractionEntry = { jobId: null, loading: true, failed: false }
+const FAILED: ExtractionEntry = { jobId: null, loading: false, failed: true }
 
 type CardProps = {
   meta: SourceDocumentAsync
@@ -82,7 +89,7 @@ function renderCard(props: Partial<CardProps> = {}) {
       <Card
         meta={props.meta ?? meta(sourceRecord())}
         onOpen={props.onOpen ?? vi.fn()}
-        extraction={props.extraction ?? { jobId: JOB_ID, loading: false }}
+        extraction={props.extraction ?? READY(JOB_ID)}
         onOpenExtraction={onOpenExtraction}
       />
     </div>,
@@ -99,7 +106,7 @@ afterEach(() => {
 
 describe('AC-5: with a job the control is enabled and reports the job id', () => {
   it('card_withAJobTheControlIsEnabledAndReportsTheJobId', async () => {
-    const { onOpenExtraction } = renderCard({ extraction: { jobId: JOB_ID, loading: false } })
+    const { onOpenExtraction } = renderCard({ extraction: READY(JOB_ID) })
 
     const btn = control()
     expect(btn.disabled, 'a job exists, so the control must be enabled').toBe(false)
@@ -114,7 +121,7 @@ describe('AC-5: with a job the control is enabled and reports the job id', () =>
 
 describe('AC-6: without a job the control is disabled with visible text', () => {
   it('card_withoutAJobTheControlIsDisabledWithVisibleText', async () => {
-    const { container, onOpenExtraction } = renderCard({ extraction: { jobId: null, loading: false } })
+    const { container, onOpenExtraction } = renderCard({ extraction: READY(null) })
 
     const btn = control()
     expect(btn.disabled, 'no job, so the control must carry the real disabled attribute').toBe(true)
@@ -143,7 +150,7 @@ describe('AC-6: without a job the control is disabled with visible text', () => 
 
 describe('AC-7: in flight the control is disabled with no reason', () => {
   it('card_inFlightTheControlIsDisabledWithNoReason', () => {
-    renderCard({ extraction: { jobId: null, loading: true } })
+    renderCard({ extraction: IN_FLIGHT })
 
     expect(control().disabled, 'the lookup has not settled, so the control must be disabled').toBe(true)
     expect(
@@ -155,14 +162,75 @@ describe('AC-7: in flight the control is disabled with no reason', () => {
   it('card_theReasonIsWhatSeparatesTheTwoDisabledStates', () => {
     // Control needle for the absence above, on the same query: the settled no-job state DOES
     // render the sentence, so `queryByText` returning null there is a real difference.
-    renderCard({ extraction: { jobId: null, loading: false } })
-    expect(screen.queryByText(NO_JOB_REASON), 'control: the settled no-job state renders no reason either').not.toBeNull()
+    renderCard({ extraction: READY(null) })
+    expect(screen.queryByText(NO_JOB_REASON), 'control: the settled no-job state must render the reason').not.toBeNull()
+  })
+})
+
+// QA gap, closed here. `{ jobId, loading }` was two booleans for three states, so a failing
+// GET /v1/extractions mapped onto `loading: true` -- disabled forever, nothing said. The
+// sibling lookup's own failure renders <ErrorState/> (SourceDocumentCard.tsx:29-30) and the
+// two can fail independently, so the card body renders while this control sits mute.
+describe('QA-1: a failed lookup is disabled with its OWN reason', () => {
+  it('card_aFailedLookupIsDisabledWithItsOwnVisibleReason', async () => {
+    const { container, onOpenExtraction } = renderCard({ extraction: FAILED })
+
+    const btn = control()
+    expect(btn.disabled, 'a failed lookup found no job, so the control must be disabled').toBe(true)
+
+    const reason = screen.getByText(LOOKUP_FAILED_REASON)
+    expect(screen.getByTestId('source-document-card').contains(reason), 'the reason must sit on the card').toBe(true)
+    expect(reason.hidden, 'the reason must not be hidden').toBe(false)
+    expect(reason.style.display, 'the reason must not be display:none').not.toBe('none')
+
+    // Never the no-job sentence: nothing about a failed lookup establishes that no job exists.
+    expect(
+      screen.queryByText(NO_JOB_REASON),
+      'a failed lookup must not claim the document has no extraction',
+    ).toBeNull()
+
+    const titled = [...container.querySelectorAll('[title]')].map((el) => el.getAttribute('data-testid'))
+    expect(titled, 'the reason must be visible text -- only the control needle may carry a title').toEqual(['title-probe'])
+
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(btn)
+    expect(onOpenExtraction, 'a disabled control must swallow the click').not.toHaveBeenCalled()
+  })
+
+  it('card_theThreeDisabledArmsAreDistinguishable', () => {
+    // All three states rendered through the same query, so "distinguishable" is measured and
+    // not asserted twice from two directions. A shape that folded failed into loading would
+    // put the same value in two cells here.
+    const seen: Record<string, string | null> = {}
+    for (const [arm, extraction] of [
+      ['inFlight', IN_FLIGHT],
+      ['noJob', READY(null)],
+      ['failed', FAILED],
+    ] as const) {
+      cleanup()
+      renderCard({ extraction })
+      expect(control().disabled, `${arm}: every one of the three must be disabled`).toBe(true)
+      const p = screen.getByTestId('source-document-card').querySelector('p:not([data-testid])')
+      seen[arm] = p?.textContent ?? null
+    }
+
+    expect(seen.inFlight, 'in flight must show no reason at all').toBeNull()
+    expect(seen.noJob, 'the settled no-job arm must show its own sentence').toBe(NO_JOB_REASON)
+    expect(seen.failed, 'the failed arm must show its own sentence').toBe(LOOKUP_FAILED_REASON)
+    expect(new Set(Object.values(seen)).size, 'the three disabled arms are not distinguishable').toBe(3)
+  })
+
+  it('card_theEnabledArmShowsNoReason', () => {
+    // The fourth cell of the same table: a control that is enabled explains nothing.
+    renderCard({ extraction: READY(JOB_ID) })
+    expect(control().disabled).toBe(false)
+    expect(screen.queryByText(NO_JOB_REASON)).toBeNull()
+    expect(screen.queryByText(LOOKUP_FAILED_REASON)).toBeNull()
   })
 })
 
 describe('AC-8: the disabled control pins its own background and border', () => {
   it('card_theDisabledControlSetsBackgroundAndBorderColorInline', () => {
-    renderCard({ extraction: { jobId: null, loading: false } })
+    renderCard({ extraction: READY(null) })
     const btn = control()
 
     // `.v2-btn-ghost:hover` carries no `!important`, so an inline declaration outranks it --
@@ -172,7 +240,7 @@ describe('AC-8: the disabled control pins its own background and border', () => 
   })
 
   it('card_theControlMatchesItsSiblingsRecipe', () => {
-    renderCard({ extraction: { jobId: JOB_ID, loading: false } })
+    renderCard({ extraction: READY(JOB_ID) })
     const btn = control()
     const sibling = screen.getByTestId('view-source-document') as HTMLButtonElement
 
@@ -193,7 +261,7 @@ describe('AC-8: the disabled control pins its own background and border', () => 
 
 describe('AC-4: the control needs a document record', () => {
   it('card_noControlWithoutADocumentRecord', () => {
-    renderCard({ meta: meta(null), extraction: { jobId: JOB_ID, loading: false } })
+    renderCard({ meta: meta(null), extraction: READY(JOB_ID) })
 
     // Floor: the no-record arm really rendered, so the absence below is a decision and not
     // an empty document.
@@ -208,11 +276,7 @@ describe('AC-9: the card still fetches nothing', () => {
     const fetchMock = vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) }))
     vi.stubGlobal('fetch', fetchMock)
     try {
-      for (const extraction of [
-        { jobId: JOB_ID, loading: false },
-        { jobId: null, loading: false },
-        { jobId: null, loading: true },
-      ] as const) {
+      for (const extraction of [READY(JOB_ID), READY(null), IN_FLIGHT, FAILED]) {
         cleanup()
         renderCard({ extraction })
         // Floor: the card actually mounted in this iteration.
@@ -242,6 +306,15 @@ describe('the declarations this control depends on', () => {
 
     expect(signature, 'the card must take the extraction entry as a prop, not fetch it').toContain('extraction')
     expect(signature, 'the card must take the hand-off as a prop').toContain('onOpenExtraction')
+  })
+
+  it('card_theExtractionEntryCarriesTheFailedArm', () => {
+    const src = readFileSync(join(HERE, 'SourceDocumentCard.tsx'), 'utf8')
+    const match = src.match(/^export type ExtractionEntry = (.+)$/m)
+    expect(match, 'no ExtractionEntry declaration -- the scan anchor is broken').not.toBeNull()
+    // Control needle: proves the line read is the type and not a truncated span.
+    expect(match![1], 'the slice missed the entry type').toContain('jobId: string | null')
+    expect(match![1], 'the entry must be able to represent a failed lookup, not fold it into loading').toContain('failed: boolean')
   })
 
   // AC-11, closed across the two files that must agree. EXTR-11-05 wrote the e2e helper

@@ -166,11 +166,19 @@ both inside a request-scoped transaction (`internal/extraction/reader.go`);
 and it is a narrow one: the key is selected off an RLS-visible row and handed straight to object
 storage, so no caller-supplied text reaches a bucket and a refused read touches none.
 
-The canvas itself now exists — `frontend/app/src/components/ExtractionCanvas.tsx` renders one
-aspect-locked frame per stored page and fetches each page's bytes into a blob URL — and
-`ExtractionReview.tsx` mounts it. **No user can reach it**: nothing routes to that screen until
-EXTR-11-08 adds the view and the entry control, so its only importers are its own spec file and
-a screen no navigation renders.
+The canvas itself now exists — `frontend/app/src/components/ExtractionCanvas.tsx` (EXTR-11-05)
+renders one aspect-locked frame per stored page and fetches each page's bytes into a blob URL —
+and `ExtractionReview.tsx` mounts it. **A user can now reach it.** EXTR-11-08 added the
+`'extraction'` view, the `openExtraction(jobId)` hand-off on `PlatformCtx`, and the
+`open-extraction-review` control on the invoice detail's source-document card. That control is
+the screen's **only** entry: there is no hash route (`#review/…` is the review batch's, not
+this screen's) and no sidebar item, so an operator arrives at the review screen by opening an
+invoice whose source document has a settled extraction job, and by no other path.
+
+Reachable *in code* is not the same as *proven on the deployed build*. Nine `EXTR11-E2E-*` rows
+in `e2e/topology/import-wizard.spec.ts` walk this path and eight of them enter through that one
+control; none has executed against a deployed fleet, because the PR carrying them is draft and
+`dev-env.yml` gates its E2E job on `pull_request.draft == false`. EXTR-11-09 is what settles it.
 
 Both reads name `document_id` and no `tenant_id`, so **two** independent mechanisms stand between
 them and another tenant's rows: this table's own `tenant_isolation` policy, which scopes every

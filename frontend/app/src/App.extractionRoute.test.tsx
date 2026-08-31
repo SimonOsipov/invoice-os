@@ -170,6 +170,25 @@ describe("AC-2: carryView collapses 'extraction' to 'invoices'", () => {
     })
     expect(capturedCtx!.view, 'a non-collapsed view must pass through unchanged').toBe('approvals')
   })
+
+  // The sticky-state class `D-27` names, one screen over: a view that collapses while the id it
+  // was carrying survives leaves the NEXT openExtraction racing a stale job.
+  it('carryView_thePersonaSwitchDropsTheJobIdWithTheView', async () => {
+    await renderAppWithSeat(true)
+    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
+
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_ID)
+    })
+    // Floor: the id really was set, so the null below is a reset and not an untouched atom.
+    expect(capturedCtx!.extractionJobId, 'the id was never written').toBe(JOB_ID)
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, EXTRACTION)
+    })
+    expect(capturedCtx!.view, 'the view must collapse').toBe('invoices')
+    expect(capturedCtx!.extractionJobId, 'the job id outlived the view it belonged to').toBeNull()
+  })
 })
 
 describe('AC-3: openExtraction writes the job id and navigates in one commit', () => {
@@ -216,6 +235,49 @@ describe('AC-3: openExtraction writes the job id and navigates in one commit', (
       tail.filter((r) => r.view === 'extraction' && r.jobId !== OTHER_JOB_ID),
       'a render on the review screen lost the job id',
     ).toHaveLength(0)
+  })
+})
+
+describe('openExtraction under the two calls nothing else covers', () => {
+  it('platformCtx_twoCallsInOneCommitLandOnTheSecondJob', async () => {
+    // Both inside ONE act(), unlike platformCtx_openExtractionReplacesTheIdOnASecondCall: React
+    // batches them into a single commit, so a handler that wrote the id through a stale closure
+    // or an updater would land on the first.
+    await renderAppWithSeat(false)
+    const ctx = requireCtx()
+
+    await act(async () => {
+      ctx.openExtraction(JOB_ID)
+      ctx.openExtraction(OTHER_JOB_ID)
+    })
+
+    expect(capturedCtx!.view, 'the batched pair must still navigate').toBe('extraction')
+    expect(capturedCtx!.extractionJobId, 'the last call in the commit must win').toBe(OTHER_JOB_ID)
+    // And no committed render on the review screen carried the loser.
+    expect(
+      renders.filter((r) => r.view === 'extraction' && r.jobId !== OTHER_JOB_ID),
+      'a render on the review screen carried the superseded job id',
+    ).toHaveLength(0)
+    const last = reviewProps[reviewProps.length - 1]
+    expect(last?.jobId, 'the screen was handed the superseded job id').toBe(OTHER_JOB_ID)
+  })
+
+  it('platformCtx_anEmptyJobIdStillMountsTheScreen', async () => {
+    // `''` is not `null`, so the route's narrowing lets it through and the screen renders its
+    // own ErrorState off the 404 -- deliberate. The alternative (narrowing on truthiness) paints
+    // the crumb over an empty column, which says less. Only a malformed wire can produce it:
+    // the card's onClick forwards `newestJob(...).id` and guards on `!== null`.
+    await renderAppWithSeat(false)
+    const ctx = requireCtx()
+
+    await act(async () => {
+      ctx.openExtraction('')
+    })
+
+    expect(capturedCtx!.view, 'the handler must still navigate').toBe('extraction')
+    expect(capturedCtx!.extractionJobId, 'the empty string must be stored verbatim, not coerced to null').toBe('')
+    expect(reviewProps.length, 'the screen must mount and show its own failure, not a blank column').toBeGreaterThan(0)
+    expect(reviewProps[reviewProps.length - 1]!.jobId, 'the screen must be handed the id it was given').toBe('')
   })
 })
 

@@ -348,3 +348,49 @@ describe('ImportProgress — document rows, adversarial coverage (task-786 QA)',
     expect(hasShimmer(r[0])).toBe(true)
   })
 })
+
+// EXTR-10-05 (task-787) — Core AC 7's own named oracle: the spreadsheet card renders the
+// same five words it always did. Unlike CARD-7 (which derives its expectation from
+// runFileRows itself), this asserts the literal shipped strings, so it also catches a
+// renamed IN_FLIGHT_LABEL entry or the spreadsheet branch quietly rerouted through
+// documentRunRows.
+describe('ImportProgress — spreadsheet path unmoved (SHEET-3, EXTR-10-05, Core AC 7)', () => {
+  afterEach(() => cleanup())
+
+  it('SHEET-3: a five-file mixed spreadsheet run renders the same five words, same colours', () => {
+    const REASON = 'Row 4: invoice number is required'
+    const files: RunFile[] = [
+      sheetFile('s1', 'a.csv', { kind: 'pending' }),
+      sheetFile('s2', 'b.csv', { kind: 'uploading', phase: { kind: 'sending', loaded: 10, total: 100 } }),
+      sheetFile('s3', 'c.csv', { kind: 'uploading', phase: { kind: 'processing' } }),
+      sheetFile('s4', 'd.csv', { kind: 'imported', batchId: 'batch-1', report: BASE_REPORT }),
+      sheetFile('s5', 'e.csv', { kind: 'failed', message: REASON }),
+    ]
+    const run: ImportRun = { files, cursor: 3, status: 'running' }
+    const { container } = render(<ImportProgress ctx={progressCtx('spreadsheet', run, {})} />)
+
+    const r = rows(container)
+    expect(r).toHaveLength(5)
+    expect(r.map(rowName)).toEqual(['a.csv', 'b.csv', 'c.csv', 'd.csv', 'e.csv'])
+
+    expect(statusText(r[0])).toBe('QUEUED')
+    expect(statusColor(r[0])).toBe('var(--fg-3)')
+    expect(hasShimmer(r[0])).toBe(false)
+
+    expect(statusText(r[1])).toBe('SENDING FILE')
+    expect(statusColor(r[1])).toBe('var(--action)')
+    expect(hasShimmer(r[1])).toBe(true)
+
+    expect(statusText(r[2])).toBe('SERVER PROCESSING')
+    expect(statusColor(r[2])).toBe('var(--action)')
+    expect(hasShimmer(r[2])).toBe(true)
+
+    expect(statusText(r[3])).toBe('4 IMPORTED')
+    expect(statusColor(r[3])).toBe('var(--status-green-text)')
+    expect(hasShimmer(r[3])).toBe(false)
+
+    expect(statusText(r[4])).toBe(REASON)
+    expect(statusColor(r[4])).toBe('var(--status-red-text)')
+    expect(hasShimmer(r[4])).toBe(false)
+  })
+})

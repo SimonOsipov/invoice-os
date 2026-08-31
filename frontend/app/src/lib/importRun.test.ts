@@ -696,6 +696,73 @@ describe('runFileRows — one row per file, total over the run, and no honesty-c
 })
 
 // ============================================================================
+// EXTR-10-05 (task-787) — Core AC 7 gets its own named oracle rather than resting on the
+// absence of a failure elsewhere. runFileRows is untouched by this story (EXTR-10-01
+// widened only the RunFileRow type); these guards prove the widened union did not tempt a
+// shared field onto every row, and that the two document-only kinds stay unreachable here.
+// ============================================================================
+
+describe('SHEET-1 — runFileRows five shapes survive the widened union (EXTR-10-05, Core AC 7)', () => {
+  // Re-asserts BULK-05-12's exact expectations against the now-7-kind RunFileRow
+  // (EXTR-10-01 added 'reading'/'retrying'). A widened union is exactly what tempts a
+  // "helpful" refactor to add a shared field across every kind next time it is touched —
+  // this is that guard's own named oracle, not a restatement for its own sake.
+  it('SHEET-1: pending/uploading(sending)/uploading(processing)/imported/failed still render their own row shape, nothing more', () => {
+    const report: ImportReport = { ...BASE_RUN_REPORT, id: 'b4', ready_invoices: 4 }
+    const files: RunFile[] = [
+      pendingFile('f1', 'a.csv'),
+      mkRunFile('f2', 'b.csv', { kind: 'uploading', phase: { kind: 'sending', loaded: 10, total: 100 } }),
+      mkRunFile('f3', 'c.csv', { kind: 'uploading', phase: { kind: 'processing' } }),
+      mkRunFile('f4', 'd.csv', { kind: 'imported', batchId: 'b4', report }),
+      mkRunFile('f5', 'e.csv', { kind: 'failed', message: 'nope' }),
+    ]
+    const run: ImportRun = { files, cursor: 3, status: 'running' }
+
+    const rows = runFileRows(run)
+
+    expect(rows).toHaveLength(5)
+    expect(rows[0]).toEqual({ name: 'a.csv', kind: 'queued' })
+    expect(rows[1]).toEqual({ name: 'b.csv', kind: 'sending' })
+    expect(rows[2]).toEqual({ name: 'c.csv', kind: 'processing' })
+    expect(rows[3]).toEqual({ name: 'd.csv', kind: 'imported', count: 4 })
+    expect(rows[4]).toEqual({ name: 'e.csv', kind: 'failed', reason: 'nope' })
+
+    rows.forEach((row) => {
+      expect(row).not.toHaveProperty('percent')
+      expect(row).not.toHaveProperty('loaded')
+      expect(row).not.toHaveProperty('total')
+      expect(row).not.toHaveProperty('rows')
+      expect(row).not.toHaveProperty('rowsRead')
+      expect(row).not.toHaveProperty('bytes')
+      expect(row).not.toHaveProperty('stage')
+      expect(row).not.toHaveProperty('ruleSetVersion')
+      expect(row).not.toHaveProperty('rule_set_version')
+    })
+  })
+})
+
+describe('SHEET-2 — the two new kinds are unreachable from the spreadsheet path (EXTR-10-05, Core AC 7)', () => {
+  // Falsification: an impl that routes a FileOutcome through documentRunRows, or that adds
+  // 'reading'/'retrying' as a fallback arm in runFileRows's own switch.
+  it('SHEET-2: runFileRows never returns reading or retrying, for any FileOutcome kind', () => {
+    const samples: RunFile[] = [
+      pendingFile('f1', 'a.csv'),
+      mkRunFile('f2', 'b.csv', { kind: 'uploading', phase: { kind: 'sending', loaded: 1, total: 10 } }),
+      mkRunFile('f3', 'c.csv', { kind: 'uploading', phase: { kind: 'processing' } }),
+      mkRunFile('f4', 'd.csv', { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } }),
+      mkRunFile('f5', 'e.csv', { kind: 'failed', message: 'boom' }),
+    ]
+    const run: ImportRun = { files: samples, cursor: samples.length, status: 'finished' }
+
+    const rows = runFileRows(run)
+
+    expect(rows).toHaveLength(samples.length)
+    const allowed = new Set(['queued', 'sending', 'processing', 'imported', 'failed'])
+    rows.forEach((row) => expect(allowed.has(row.kind)).toBe(true))
+  })
+})
+
+// ============================================================================
 // QA Mode B (task-308) — adversarial/edge coverage beyond the architect's Test Specs
 // table (BULK-05-1..12). Every one of the four mutations these guard against was
 // hand-verified (revert the targeted line, confirm the corresponding spec goes red for

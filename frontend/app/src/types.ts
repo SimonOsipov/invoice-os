@@ -6,6 +6,7 @@
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview } from './lib/importApi'
+import type { DocumentRowState } from './lib/documentRun'
 import type { ImportRun, PickedFile } from './lib/importRun'
 import type { PickedKind } from './lib/importFlow'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
@@ -400,6 +401,9 @@ export type PlatformCtx = {
   // (runIsActive treats 'failed' like 'idle') until the user backs out via
   // restartImport/resetImport, or starts another run.
   run: ImportRun
+  // Per-file document stage, keyed by PickedFile.id (EXTR-10-04). ImportProgress reads it ONLY
+  // when runKind === 'document'; the spreadsheet card still derives everything from `run`.
+  documentStages: Record<string, DocumentRowState>
   importError: ApiError | null
   // The batches the review step is showing (INVCR-01-09, widened BULK-01-05).
   // REPLACES the old singular `reviewBatchId: string | null` — a run's `review` route

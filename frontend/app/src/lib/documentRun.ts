@@ -2,14 +2,13 @@
 // the budget arithmetic. No DOM, no network: App.tsx injects the transport, matching
 // importRun.ts's own node-testable discipline. Pinned by documentRun.test.ts.
 
-import type { FileOutcome } from './importRun'
+import type { FileOutcome, ImportRun, RunFileRow } from './importRun'
 import type { ExtractionJob, ImportReport } from './importApi'
+import { LIVE_POLL_MS } from './invoices'
 
 // Mirrors e2e/api/contract-document-upload.spec.ts's POLL_BUDGET_MS: above the mock
 // extractor's sub-second work, below the worker's own 10-minute River timeout.
 export const EXTRACTION_POLL_BUDGET_MS = 120_000
-
-export const EXTRACTION_POLL_INTERVAL_MS = 1_500
 
 // 'waiting' is the only non-terminal verdict; both terminal ones carry what the caller
 // needs to settle a FileOutcome without re-reading the job.
@@ -57,6 +56,55 @@ export function pollVerdict(jobs: readonly ExtractionJob[], elapsedMs: number): 
   return { kind: 'waiting' }
 }
 
+// The card's per-document word, over the migration's CHECK set (EXTR-10-01). 'succeeded'
+// and 'dead_lettered' get no word -- pollVerdict already owns their wording.
+export type DocumentRowState =
+  | { kind: 'queued' }
+  | { kind: 'reading' }
+  | { kind: 'retrying' }
+  | { kind: 'processing' }
+  | { kind: 'imported'; count: number }
+  | { kind: 'failed'; reason: string }
+
+// The ONE place extraction_jobs.state becomes a word. null -> queued: the worker's own tx
+// makes state='queued' unobservable, so an empty jobs[] must still read as "started".
+export function stageOf(job: ExtractionJob | null): DocumentRowState | null {
+  if (job === null || job.state === 'queued') return { kind: 'queued' }
+  if (job.state === 'extracting') return { kind: 'reading' }
+  if (job.state === 'failed') return { kind: 'retrying' }
+  return null
+}
+
+// The poll loop, moved out of App.tsx (EXTR-10-02) so its per-tick reporting has an
+// oracle. Reports the stage it READ on every tick; a terminal tick reports nothing
+// because stageOf already returns null for succeeded/dead_lettered (D-8).
+export async function pollUntilSettled(
+  documentId: string,
+  deps: {
+    getJobs: (documentId: string) => Promise<readonly ExtractionJob[]>
+    onStage: (state: DocumentRowState) => void
+    sleep: (ms: number) => Promise<void>
+    now: () => number
+  },
+): Promise<PollVerdict> {
+  const startedAt = deps.now()
+  for (;;) {
+    const jobs = await deps.getJobs(documentId)
+    const stage = stageOf(newestJob(jobs))
+    if (stage !== null) deps.onStage(stage)
+    const verdict = pollVerdict(jobs, deps.now() - startedAt)
+    if (verdict.kind !== 'waiting') return verdict
+    await deps.sleep(LIVE_POLL_MS)
+  }
+}
+
+// One row per run.files entry, joined by RunFile.id -- never by name (importRun.ts:77-78
+// records why a name-keyed join is wrong); the own-property check keeps an id like
+// 'constructor' from resolving through Object.prototype instead of the ?? fallback.
+export function documentRunRows(run: ImportRun, stages: Readonly<Record<string, DocumentRowState>>): RunFileRow[] {
+  return run.files.map((f) => ({ name: f.name, ...(Object.hasOwn(stages, f.id) ? stages[f.id] : { kind: 'queued' }) }))
+}
+
 export interface DocumentRunFile {
   id: string
   name: string
@@ -67,8 +115,11 @@ export interface DocumentRunFile {
 // verdict (or the budget expires); the loop and its clock are the caller's.
 export interface DocumentPipelineDeps {
   upload: (file: File) => Promise<string>
-  poll: (documentId: string) => Promise<PollVerdict>
+  poll: (documentId: string, fileId: string) => Promise<PollVerdict>
   importDocument: (documentId: string) => Promise<ImportReport>
+  // Required, not optional: an optional hook silently no-ops when a caller forgets it —
+  // the defect class this story exists to close. Wired by EXTR-10-03 (task-785).
+  onStage: (fileId: string, state: DocumentRowState) => void
 }
 
 export interface DocumentRunOutcome {
@@ -92,16 +143,21 @@ export function startDocumentRun(
     files.map(async (f): Promise<DocumentRunOutcome> => {
       try {
         const documentId = await deps.upload(f.file)
-        const verdict = await deps.poll(documentId)
+        const verdict = await deps.poll(documentId, f.id)
         // Carried VERBATIM: the poll owns the wording, this only relays it.
         if (verdict.kind !== 'succeeded') {
           const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
+          deps.onStage(f.id, { kind: 'failed', reason })
           return { id: f.id, name: f.name, outcome: { kind: 'failed', message: reason } }
         }
+        deps.onStage(f.id, { kind: 'processing' })
         const report = await deps.importDocument(documentId)
+        deps.onStage(f.id, { kind: 'imported', count: report.ready_invoices })
         return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report } }
       } catch (err) {
-        return { id: f.id, name: f.name, outcome: { kind: 'failed', message: messageOf(err) } }
+        const message = messageOf(err)
+        deps.onStage(f.id, { kind: 'failed', reason: message })
+        return { id: f.id, name: f.name, outcome: { kind: 'failed', message } }
       }
     }),
   )

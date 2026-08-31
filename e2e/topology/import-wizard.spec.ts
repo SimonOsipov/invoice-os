@@ -1883,6 +1883,15 @@ function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
+// upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
+// selection and upload, then fails pdfium.OpenDocument on every one of River's 3
+// attempts (worker.go) and dead-letters deterministically. Fresh bytes per call, same
+// permanent-enqueue-key reason as uniquePdfBytes().
+function uniqueGarbageBytes(): Buffer {
+  return Buffer.concat([Buffer.from('not a pdf at all'), Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // The step strip carries no testid, so it is anchored on the 'Import' chip label E2E-10
 // above established is unique here: label span -> chip div -> strip, one chip per direct
 // child div. Self-checking — a wrong ancestor resolves zero chips.
@@ -1953,8 +1962,8 @@ const REFUSE_SPREADSHEET_IN_DOCUMENT_RUN =
   'A run holds one kind of file: this is a document run, so the spreadsheet was not added. Remove the document files first, or start a separate spreadsheet run.'
 
 test('EXTR09-E2E-01 (AC-1/AC-5): a PDF forks to the document path, extracts, and lands on a real invoice', async ({ page }) => {
-  // Upload + extraction poll (1.5s interval, 120s budget) + import, on a fleet that may be
-  // cold. Well above the api suite's own 180s for the same three calls.
+  // Upload + extraction poll (LIVE_POLL_MS interval, 120s budget) + import, on a fleet
+  // that may be cold. Well above the api suite's own 180s for the same three calls.
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -2346,6 +2355,290 @@ test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dr
   await expect(fileNames).toHaveText(['strip.csv'])
   await expect(stepChips(page), 'a spreadsheet run still shows all three steps').toHaveText(IMPORT_STRIP)
   await expect(page.getByRole('button', { name: 'Read columns' }), 'and the spreadsheet primary is back').toBeEnabled()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-10 · the document progress card: sampling, geometry, and the truth sweep ---
+//
+// D-12: no honest deployed oracle exists for WHICH transient stage word a browser
+// catches -- the fleet default extractor is the mock and its work is sub-second, so
+// asserting a specific word would be a flaky test pretending to be a contract. Both
+// specs below assert only the closed vocabulary / geometry relationships that hold no
+// matter which words a given run happens to hit, and attach every sample as evidence.
+
+const DOCUMENT_STAGE_WORDS = new Set(['QUEUED', 'SENDING FILE', 'SERVER PROCESSING', 'READING', 'RETRYING'])
+
+test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and lands on review', async ({ page }, testInfo) => {
+  // Upload + poll + import x2 concurrent files, on a fleet that may be cold -- matches
+  // EXTR09-E2E-01's own cold-fleet budget for the same three calls.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-10-06 samples ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const fileNames = ['progress-a.pdf', 'progress-b.pdf']
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles(
+    fileNames.map((name) => ({ name, mimeType: 'application/pdf', buffer: uniquePdfBytes() })),
+  )
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  const card = page.getByTestId('import-progress')
+  const rows = page.getByTestId('import-progress-row')
+
+  // Sampled every ~250ms until the card unmounts. Structurally safe, not a guess: the
+  // card mounts synchronously in the click handler (EXTR09-E2E-01's own comment) and the
+  // unmount needs at least two sequential HTTP round trips to the PR env (upload, then
+  // import), so 250ms can never outrun either edge (Stage 1 Q1/Q2).
+  const samples: { filename: string; status: string }[][] = []
+  for (;;) {
+    if (!((await card.count()) > 0 && (await card.isVisible()))) break
+    const read = await rows.evaluateAll((els) =>
+      els.map((el) => {
+        const children = Array.from(el.children) as HTMLElement[]
+        const filename = children[0]?.textContent?.trim() ?? ''
+        const statusEl = children[1] ?? null
+        // The in-flight kinds wrap a shimmer span + a label span; read only the LAST
+        // descendant so the empty shimmer never pollutes the status text.
+        const status = statusEl
+          ? (Array.from(statusEl.querySelectorAll('*')).pop()?.textContent ?? statusEl.textContent ?? '').trim()
+          : ''
+        return { filename, status }
+      }),
+    )
+    // A genuinely empty read means the card unmounted between the visibility check above
+    // and this read (a real regression would starve EVERY tick, failing samples.length
+    // below loudly) -- discard only this one tail read rather than record a false gap.
+    if (read.length > 0) samples.push(read)
+    await page.waitForTimeout(250)
+  }
+
+  // Its own named assertion, before the closed-set check below: an empty array satisfies
+  // a `.every()` vacuously, so a selector regression capturing zero ticks must fail here
+  // first, loudly, rather than pass the vocabulary check for having nothing to check.
+  expect(samples.length, 'the card must be sampled more than once before it unmounts').toBeGreaterThan(1)
+
+  for (const [i, sample] of samples.entries()) {
+    expect(sample.map((r) => r.filename), `sample ${i}: both rows present, in picked order`).toEqual(fileNames)
+    for (const row of sample) {
+      const isStageWord = DOCUMENT_STAGE_WORDS.has(row.status)
+      const isImportedCount = /^\d+ IMPORTED$/.test(row.status)
+      // Pinned to the poll's own refusal copy (documentRun.ts deadLetterRefusal /
+      // pollBudgetRefusal). startDocumentRun can also surface a raw Error.message or
+      // 'extraction never settled', and this arm deliberately does NOT admit those: on a
+      // happy-path run they mean a real break, so failing here is the point. With the former
+      // `length > 0` the other two arms were dead code and an invented stage word passed.
+      const isReason = /^Extraction (failed for this document|is still running after \d+ seconds)/.test(row.status)
+      expect(
+        isStageWord || isImportedCount || isReason,
+        `sample ${i} (${row.filename}): "${row.status}" must be a stage word, an IMPORTED count, or one of the poll's two refusal sentences`,
+      ).toBe(true)
+      expect(row.status, `sample ${i} (${row.filename}): status must never imply an ordinal position`).not.toMatch(/\b\d+\s*(of|\/)\s*\d+\b/i)
+    }
+  }
+
+  // Both fixtures stamp MOCK-INV-0001 (mock.go:92-98) and collide by design -- with
+  // run.files.length===2, routeAfterRun can never take the single-file branch, so the
+  // landing is always the review surface (Stage 1 Q5), never the real invoice detail.
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('review-table').isVisible()) return 'review batch surface'
+        if (await page.getByText(/^BATCH /).first().isVisible()) return 'review batch surface'
+        if (await page.getByTestId('invoice-detail').isVisible()) return 'invoice detail'
+        if (await page.getByRole('button', { name: 'Extract invoices' }).isVisible()) return 'back on the picker (the run failed)'
+        return 'nothing yet'
+      },
+      { message: 'a two-document run must land on the review surface (MOCK-INV-0001 forces both files into one batch)', timeout: 60_000 },
+    )
+    .toBe('review batch surface')
+
+  await testInfo.attach('document-progress-samples.json', {
+    body: JSON.stringify(samples, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR10-E2E-02: a dead-lettered row's long reason, wrapped in the 240px span inside the
+// 520px card, must never inflate the card. Follows EXTR09-E2E-04's own sweep machinery
+// (settledRead/edgesOf/gaps/WIDE_WIDTHS, its non-empty-locator guard, its "every width
+// measured, widest first" assertion).
+//
+// The good document's own poll is held at 'extracting' from the moment its upload
+// resolves, until after both geometry sweeps. Verified from source rather than assumed:
+// on the LAST of River's 3 attempts, worker.go advances the job DIRECTLY from
+// `extracting` to `dead_lettered` (no intermediate retry state to linger on), and
+// documentRun.ts's per-file pipeline calls onStage(failed) and resolves in the very same
+// microtask chain that unblocks Promise.all and (via App.tsx's applyRoute) unmounts this
+// card -- with nothing else pending, React's automatic batching (product-advisor
+// consult, RALPH Phase 1) could coalesce the failed-reason render straight into the
+// review-routing render, so the text this spec measures might never actually paint.
+// Holding the good pipeline open removes that race structurally: Promise.all cannot
+// resolve, so the card cannot unmount, until this spec explicitly releases it.
+test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating the card', async ({ page }, testInfo) => {
+  // Upload+enqueue, ~20-40s River backoff to dead-letter (attempt^4s: 1s then 16s), two
+  // widest-first sweeps, then the held release -- matches EXTR09-E2E-01's cold-fleet budget.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-10-06 geometry ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const goodName = 'geometry-good.pdf'
+  const badName = 'geometry-dead-letter.pdf'
+
+  let goodDocId: string | null = null
+  // Record the good document's id INSIDE its POST route: the handler completes before the app
+  // can see the response, so no poll for this document can precede the assignment. A
+  // page.on('response') listener cannot give that ordering -- it awaits res.json() while the app
+  // has already resolved the same response and fired its first poll.
+  await page.route('**/api/submission/v1/documents', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    const isGood = requestBody(route.request()).includes(goodName)
+    const res = await route.fetch()
+    const text = await res.text()
+    if (isGood) {
+      try {
+        const body = JSON.parse(text)
+        if (typeof body.document_id === 'string') goodDocId = body.document_id
+      } catch {
+        /* fulfil unchanged; the toHaveCount(2) below fails loudly if the upload really broke */
+      }
+    }
+    await route.fulfill({ response: res, body: text })
+  })
+  await page.route('**/api/submission/v1/extractions*', async (route) => {
+    const url = new URL(route.request().url())
+    if (goodDocId !== null && url.searchParams.get('document_id') === goodDocId) {
+      await route.fulfill({
+        json: {
+          jobs: [{ id: 'e2e-hold', document_id: goodDocId, state: 'extracting', created_at: new Date().toISOString(), last_error: null }],
+        },
+      })
+      return
+    }
+    await route.continue()
+  })
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles([
+    { name: goodName, mimeType: 'application/pdf', buffer: uniquePdfBytes() },
+    { name: badName, mimeType: 'application/pdf', buffer: uniqueGarbageBytes() },
+  ])
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  const card = page.getByTestId('import-progress')
+  await expect(card, 'the progress card must mount').toBeVisible({ timeout: 30_000 })
+  const rows = page.getByTestId('import-progress-row')
+  // Non-empty FIRST -- an empty locator satisfies every relationship check below vacuously.
+  await expect(rows, 'both documents must be measurable').toHaveCount(2)
+  const badRow = rows.filter({ hasText: badName })
+
+  const wizardColumn = card.locator('xpath=..')
+  const read = async () => {
+    const [cardBox, columnBox, cardEdges, rowEdges] = await Promise.all([
+      card.boundingBox(),
+      wizardColumn.boundingBox(),
+      card.evaluate(edgesOf),
+      rows.evaluateAll((els) => els.map((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))),
+    ])
+    return { cardBox, columnBox, cardEdges, rowEdges }
+  }
+
+  type WidthSample = { width: number; cardWidth: number; gapLeft: number; gapRight: number }
+  async function sweepWidths(label: string): Promise<WidthSample[]> {
+    const out: WidthSample[] = []
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a cap strands only what the
+    // window gives it room to strand.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const m = await settledRead(read, `${label} at ${width}px`)
+      expect(m.cardBox && m.columnBox, `the card and its column must both render at ${width}px (${label})`).toBeTruthy()
+      expect(m.rowEdges.length, `both rows must still be measurable at ${width}px (${label})`).toBe(2)
+
+      for (const [i, row] of m.rowEdges.entries()) {
+        expect(row.scrollWidth, `row ${i}'s content must fit its own box at ${width}px (${label})`).toBeLessThanOrEqual(row.clientWidth + 1)
+      }
+      expect(m.cardEdges.scrollWidth, `the card's contents must not scroll horizontally at ${width}px (${label})`).toBeLessThanOrEqual(
+        m.cardEdges.clientWidth + 1,
+      )
+
+      const g = gaps({ x: m.cardBox!.x, width: m.cardBox!.width }, { x: m.columnBox!.x, width: m.columnBox!.width })
+      expect(g.left, `the card must not overflow its column's left edge at ${width}px (${label})`).toBeGreaterThanOrEqual(-0.5)
+      expect(g.right, `the card must not overflow its column's right edge at ${width}px (${label})`).toBeGreaterThanOrEqual(-0.5)
+      expect(
+        Math.abs(g.left - g.right),
+        `the card's left and right margins must agree at ${width}px (${label}) (left ${g.left}, right ${g.right})`,
+      ).toBeLessThanOrEqual(1)
+
+      out.push({ width, cardWidth: m.cardBox!.width, gapLeft: g.left, gapRight: g.right })
+    }
+    expect(out.map((s) => s.width), `every WIDE_WIDTHS entry must be measured, widest first (${label})`).toEqual([...WIDE_WIDTHS])
+    return out
+  }
+
+  const entryViewport = page.viewportSize()
+  let shortSweep: WidthSample[]
+  let longSweep: WidthSample[]
+  try {
+    await expect(badRow, 'the bad document must retry before it dead-letters').toContainText('RETRYING', { timeout: 60_000 })
+    // Race-free by construction: the hold above pins this document at state:'extracting' for the
+    // whole sweep, so READING is not a sampling gamble here the way it is in EXTR10-E2E-01.
+    await expect(rows.filter({ hasText: goodName }), 'the held document must read READING').toContainText('READING')
+    shortSweep = await sweepWidths('short-label (RETRYING)')
+
+    // The good pipeline is held open, so nothing can route the run away underneath this
+    // wait -- the long reason is a stable state here, not a race.
+    await expect(badRow, 'the dead-letter reason must render before the long-label sweep').toContainText(
+      'Extraction failed for this document',
+      { timeout: 90_000 },
+    )
+    longSweep = await sweepWidths('long-label (dead-lettered)')
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // D-18's actual empirical claim: a stretched flex child (the long reason) cannot
+  // inflate the 520px cap. Compared against THIS run's own earlier short-label reading,
+  // not a second run.
+  for (const [i, width] of WIDE_WIDTHS.entries()) {
+    expect(shortSweep[i].width, 'both sweeps measured the same width in the same order').toBe(width)
+    expect(longSweep[i].width, 'both sweeps measured the same width in the same order').toBe(width)
+    expect(
+      Math.abs(longSweep[i].cardWidth - shortSweep[i].cardWidth),
+      `the card's width must not change between the short and long label at ${width}px`,
+    ).toBeLessThanOrEqual(1)
+  }
+
+  await page.unroute('**/api/submission/v1/extractions*')
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('review-table').isVisible()) return 'review batch surface'
+        if (await page.getByText(/^BATCH /).first().isVisible()) return 'review batch surface'
+        return 'nothing yet'
+      },
+      { message: 'releasing the held poll must let the run settle and land on review', timeout: 60_000 },
+    )
+    .toBe('review batch surface')
+
+  await testInfo.attach('progress-row-geometry.json', {
+    body: JSON.stringify({ shortSweep, longSweep }, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

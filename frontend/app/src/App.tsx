@@ -26,12 +26,8 @@ import {
   type RunFile,
   type RunRoute,
 } from './lib/importRun'
-import {
-  EXTRACTION_POLL_INTERVAL_MS,
-  pollVerdict,
-  startDocumentRun as runDocumentPipelines,
-  type PollVerdict,
-} from './lib/documentRun'
+import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
+import type { DocumentRowState } from './lib/documentRun'
 import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
@@ -450,6 +446,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // `'failed'` (not `'finished'` — markRunFailed flips it) survives ONLY across a
   // `none` route (AC #9).
   const [run, setRun] = useState<ImportRun>({ files: [], cursor: 0, status: 'idle' })
+  // Per-file document stage (EXTR-10-04, Core AC 1/3), keyed by PickedFile.id. Cleared at
+  // every startDocumentRun; the spreadsheet path never reads it.
+  const [documentStages, setDocumentStages] = useState<Record<string, DocumentRowState>>({})
   const [importError, setImportError] = useState<ApiError | null>(null)
 
   // The manual form's one round trip (INVCR-01-03). `filing` renders the disabled/spinner
@@ -912,6 +911,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   //
   // The entity gate is startRun's, for startRun's reason ([entity-picker] step 3 of 3):
   // this IS the commit for a document, so it is where the entity is genuinely required.
+  // Non-throwing BY CONSTRUCTION and it must stay that way: startDocumentRun's per-pipeline
+  // catch cannot tell a misbehaving reporter from a failed import, so a throw here would flip
+  // an already-imported file to 'failed' (documentRun.test.ts's RUN-15 pins that). Nothing but
+  // the setState call belongs in this body.
+  function setStage(fileId: string, state: DocumentRowState) {
+    setDocumentStages((m) => ({ ...m, [fileId]: state }))
+  }
+
   function startDocumentRun() {
     const base = gatewayBase()
     if (base == null || !entityId || !canStartDocumentRun(pickedFiles)) return
@@ -930,6 +937,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
     let localRun: ImportRun = runReducer({ files: [], cursor: 0, status: 'idle' }, { type: 'start', files: runFiles })
     setRun(localRun)
+    setDocumentStages({})
     setCreateStep('documents')
 
     void (async () => {
@@ -938,8 +946,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           filesSnapshot.map((pf) => ({ id: pf.id, name: pf.file.name, file: pf.file })),
           {
             upload: (file) => uploadSourceDocument(importAuth, base, file).then((r) => r.document_id),
-            poll: (documentId) => pollExtraction(base, documentId),
+            poll: (documentId, fileId) =>
+              pollUntilSettled(documentId, {
+                getJobs: (id) => getExtractions(authedFetch, base, id).then((r) => r.jobs),
+                onStage: (state) => setStage(fileId, state),
+                sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+                now: Date.now,
+              }),
             importDocument: (documentId) => importDocument(authedFetch, base, { entityId, documentId }),
+            onStage: setStage,
           },
         )
         // Settled in RUN order, not completion order: runReducer's 'settled' writes at
@@ -954,19 +969,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         reqInFlight.current = false
       }
     })()
-  }
-
-  // One document's poll, bounded by pollVerdict's own budget so a run can never hang. A
-  // GET failure is NOT swallowed: it rejects, and the pipeline settles that one file
-  // 'failed' with the ApiError's message.
-  async function pollExtraction(base: string, documentId: string): Promise<PollVerdict> {
-    const startedAt = Date.now()
-    for (;;) {
-      const { jobs } = await getExtractions(authedFetch, base, documentId)
-      const verdict = pollVerdict(jobs, Date.now() - startedAt)
-      if (verdict.kind !== 'waiting') return verdict
-      await new Promise((resolve) => setTimeout(resolve, EXTRACTION_POLL_INTERVAL_MS))
-    }
   }
 
   function armField(k: string) {
@@ -1345,6 +1347,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     groupIndex,
     preview,
     run,
+    documentStages,
     importError,
     reviewBatchIds,
     importedInvoiceId: detailSel.importedInvoiceId,

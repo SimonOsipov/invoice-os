@@ -13,19 +13,24 @@
 // import or collection error — same precedent as importRun.test.ts's own BULK-03 header.
 import { describe, expect, it, vi } from 'vitest'
 
+import * as documentRunModule from './documentRun'
 import {
   EXTRACTION_POLL_BUDGET_MS,
   deadLetterRefusal,
+  documentRunRows,
   isTerminalExtractionState,
   newestJob,
   pollBudgetRefusal,
+  pollUntilSettled,
   pollVerdict,
+  stageOf,
   startDocumentRun,
 } from './documentRun'
-import type { DocumentPipelineDeps, DocumentRunFile } from './documentRun'
+import type { DocumentPipelineDeps, DocumentRowState, DocumentRunFile } from './documentRun'
 import type { ExtractionJob, ImportReport } from './importApi'
 import { routeAfterRun } from './importRun'
 import type { ImportRun, RunFile } from './importRun'
+import { LIVE_POLL_MS } from './invoices'
 
 function job(over: Partial<ExtractionJob>): ExtractionJob {
   return {
@@ -60,6 +65,12 @@ function report(id: string, readyInvoices = 1): ImportReport {
 
 function docFiles(names: string[]): DocumentRunFile[] {
   return names.map((name, i) => ({ id: `f${i + 1}`, name, file: new File([], name, { type: 'application/pdf' }) }))
+}
+
+// EXTR-10-01: documentRunRows joins on RunFile, not DocumentRunFile -- a fresh helper
+// rather than reusing docFiles, whose shape (a File) is the wrong side of the seam.
+function runFile(id: string, name: string): RunFile {
+  return { id, name, groupId: '', outcome: { kind: 'pending' } }
 }
 
 // --- POLL-1 ----------------------------------------------------------------
@@ -223,6 +234,7 @@ describe('startDocumentRun — the N pipelines are concurrent (RUN-1, AC-4, Core
         events.push(`import:start:${documentId}`)
         return report(`batch-${documentId}`)
       },
+      onStage: () => {},
     }
 
     try {
@@ -269,6 +281,7 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
         imported.push(documentId)
         return report(`batch-${documentId}`)
       },
+      onStage: () => {},
     }
 
     const outcomes = await startDocumentRun(files, deps)
@@ -303,6 +316,7 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
       upload: uploadSpy,
       poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
       importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage: () => {},
     }
 
     const outcomes = await startDocumentRun(files, deps)
@@ -312,5 +326,756 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
     const failed = outcomes[1].outcome
     if (failed.kind !== 'failed') throw new Error('unreachable — asserted above')
     expect(failed.message).toContain('connection reset')
+  })
+})
+
+// --- RUN-5..10 (EXTR-10-03, task-785) ---------------------------------------
+//
+// GREEN: startDocumentRun reports onStage(fileId, ...) for the import leg, each settle,
+// and every failure arm; poll receives (documentId, fileId). Mutation-verified in the
+// QA pass: each spec below fails on a real assertion when its own source line is
+// mutated, never on a type or throw error.
+
+describe('startDocumentRun — the import leg gets its own word (RUN-5, Core AC 3, task-785)', () => {
+  it('RUN-5: onStage(id,{kind:"processing"}) fires before importDocument is invoked', async () => {
+    const events: string[] = []
+    const files = docFiles(['a.pdf'])
+    const onStage = vi.fn((fileId: string, state: DocumentRowState) => {
+      if (state.kind === 'processing') events.push(`stage:processing:${fileId}`)
+    })
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => {
+        events.push(`import:start:${documentId}`)
+        return report(`batch-${documentId}`)
+      },
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    // Pin the count before trusting an index into it -- an onStage never called would
+    // make indexOf's -1 vs -1 comparison below vacuously "pass".
+    const processingCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'processing')
+    expect(processingCalls).toHaveLength(1)
+
+    const stageIdx = events.indexOf(`stage:processing:${files[0].id}`)
+    const importIdx = events.indexOf(`import:start:doc-${files[0].name}`)
+    expect(stageIdx).toBeGreaterThanOrEqual(0)
+    expect(importIdx).toBeGreaterThanOrEqual(0)
+    expect(stageIdx).toBeLessThan(importIdx)
+  })
+})
+
+describe('startDocumentRun — each settle is reported as it happens (RUN-6, Core AC 3, task-785)', () => {
+  it('RUN-6: resolving the third import first reports f3 imported while f1/f2 are still unsettled', async () => {
+    const files = docFiles(['a.pdf', 'b.pdf', 'c.pdf'])
+    const resolvers = new Map<string, (r: ImportReport) => void>()
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: (documentId) =>
+        new Promise<ImportReport>((resolve) => {
+          resolvers.set(documentId, resolve)
+        }),
+      onStage,
+    }
+
+    const runPromise = startDocumentRun(files, deps)
+
+    // A macrotask boundary flushes every pending microtask, so by here all three
+    // pipelines have genuinely reached importDocument -- not an assumption, a count.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(resolvers.size).toBe(3)
+
+    const f3 = files[2]
+    resolvers.get('doc-c.pdf')!(report('batch-doc-c.pdf'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const importedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'imported')
+    expect(importedCalls).toHaveLength(1)
+    expect(importedCalls[0][0]).toBe(f3.id)
+
+    const settledOthers = onStage.mock.calls.filter(
+      ([id, s]) => id !== f3.id && (s.kind === 'imported' || s.kind === 'failed'),
+    )
+    expect(settledOthers).toHaveLength(0)
+
+    // Let the run finish so no promise is left dangling past the test.
+    resolvers.get('doc-a.pdf')!(report('batch-doc-a.pdf'))
+    resolvers.get('doc-b.pdf')!(report('batch-doc-b.pdf'))
+    await runPromise
+  })
+})
+
+describe('startDocumentRun — a failed document reports its reason on its own id, verbatim (RUN-7, Core AC 4, task-785)', () => {
+  it('RUN-7: only the middle file gets a failed stage; f1 and f3 still import', async () => {
+    const REASON = 'R'
+    const files = docFiles(['first.pdf', 'second.pdf', 'third.pdf'])
+    const onStage = vi.fn()
+    const imported: string[] = []
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) =>
+        documentId === 'doc-second.pdf' ? { kind: 'failed', reason: REASON } : { kind: 'succeeded', jobId: `job-${documentId}` },
+      importDocument: async (documentId) => {
+        imported.push(documentId)
+        return report(`batch-${documentId}`)
+      },
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(1)
+    expect(failedCalls[0]).toEqual([files[1].id, { kind: 'failed', reason: REASON }])
+
+    // Positive half too: the two survivors actually imported.
+    expect(imported).toHaveLength(2)
+    expect(imported).toEqual(['doc-first.pdf', 'doc-third.pdf'])
+  })
+})
+
+describe('startDocumentRun — a thrown transport settles that file only (RUN-8, Core AC 4, task-785)', () => {
+  it('RUN-8: upload rejecting for one file reports failed on that file only, and the run resolves', async () => {
+    const files = docFiles(['ok.pdf', 'boom.pdf'])
+    const onStage = vi.fn()
+    const uploadSpy = vi.fn(async (file: File) => {
+      if (file.name === 'boom.pdf') throw new Error('network: connection reset')
+      return `doc-${file.name}`
+    })
+    const deps: DocumentPipelineDeps = {
+      upload: uploadSpy,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(2)
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(1)
+    expect(failedCalls[0][0]).toBe(files[1].id)
+    const stateArg = failedCalls[0][1] as DocumentRowState
+    if (stateArg.kind !== 'failed') throw new Error('unreachable — filtered above')
+    expect(stateArg.reason).toContain('connection reset')
+
+    const otherFailed = onStage.mock.calls.filter(([id, s]) => id === files[0].id && s.kind === 'failed')
+    expect(otherFailed).toHaveLength(0)
+  })
+})
+
+describe('startDocumentRun — poll is told which file it is polling (RUN-9, Core AC 3, task-785)', () => {
+  it("RUN-9: deps.poll receives each pipeline's own file id, and the three ids are distinct", async () => {
+    const files = docFiles(['a.pdf', 'b.pdf', 'c.pdf'])
+    const pollSpy = vi.fn(async (documentId: string, _fileId?: string) => ({ kind: 'succeeded' as const, jobId: `job-${documentId}` }))
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: pollSpy,
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage: () => {},
+    }
+
+    await startDocumentRun(files, deps)
+
+    expect(pollSpy).toHaveBeenCalledTimes(3)
+    const fileIdArgs = pollSpy.mock.calls.map(([, fileId]) => fileId)
+    expect(fileIdArgs).toHaveLength(3)
+    expect(new Set(fileIdArgs).size).toBe(3)
+    expect(new Set(fileIdArgs)).toEqual(new Set(files.map((f) => f.id)))
+  })
+})
+
+describe("startDocumentRun — the imported stage carries the server's own ready_invoices (RUN-10, Core AC 4, task-785)", () => {
+  it('RUN-10: a duplicate-shaped report (ready_invoices: 0) reports imported/count:0, unmodified', async () => {
+    const files = docFiles(['dup.pdf'])
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`, 0),
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    const importedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'imported')
+    expect(importedCalls).toHaveLength(1)
+    expect(importedCalls[0]).toEqual([files[0].id, { kind: 'imported', count: 0 }])
+  })
+})
+
+// --- RUN-11..15 (task-785 QA pass) -------------------------------------------
+//
+// Adversarial coverage the RED phase (RUN-5..10) did not exercise.
+
+describe('startDocumentRun — the happy-path sequence is exact and total, not just present (RUN-11, Core AC 3)', () => {
+  it('RUN-11: one succeeding file reports exactly [processing, imported], nothing before or after', async () => {
+    const files = docFiles(['a.pdf'])
+    const stages: string[] = []
+    const onStage = vi.fn((_fileId: string, state: DocumentRowState) => stages.push(state.kind))
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    expect(stages).toEqual(['processing', 'imported'])
+  })
+})
+
+describe('startDocumentRun — importDocument itself throwing is a third, distinct failure route (RUN-12, Core AC 4)', () => {
+  it('RUN-12: importDocument rejecting (not poll, not upload) reports failed with messageOf(err), same string on the outcome', async () => {
+    const MSG = 'POST /v1/imports: 502 bad gateway'
+    const files = docFiles(['a.pdf'])
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async () => {
+        throw new Error(MSG)
+      },
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(1)
+    const [fileId, state] = failedCalls[0]
+    expect(fileId).toBe(files[0].id)
+    if (state.kind !== 'failed') throw new Error('unreachable — filtered above')
+    expect(state.reason).toBe(MSG)
+
+    expect(outcomes).toHaveLength(1)
+    const outcome = outcomes[0].outcome
+    if (outcome.kind !== 'failed') throw new Error('unreachable — importDocument threw')
+    expect(outcome.message).toBe(state.reason)
+
+    // The processing report already fired before the import leg blew up -- it is not
+    // rolled back, only the eventual outcome is failed.
+    expect(onStage.mock.calls.filter(([, s]) => s.kind === 'processing')).toHaveLength(1)
+  })
+})
+
+describe('startDocumentRun — the reported reason and the returned outcome never disagree (RUN-13, D-14 invariant)', () => {
+  it('RUN-13: a poll-failed verdict, an upload throw, and an import throw each carry one identical string on both sides', async () => {
+    type Case = { name: string; build: (msg: string) => Omit<DocumentPipelineDeps, 'onStage'> }
+    const cases: Case[] = [
+      {
+        name: 'poll-failed',
+        build: (msg) => ({
+          upload: async (file) => `doc-${file.name}`,
+          poll: async () => ({ kind: 'failed', reason: msg }),
+          importDocument: async (documentId) => report(`batch-${documentId}`),
+        }),
+      },
+      {
+        name: 'upload-throw',
+        build: (msg) => ({
+          upload: async () => {
+            throw new Error(msg)
+          },
+          poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+          importDocument: async (documentId) => report(`batch-${documentId}`),
+        }),
+      },
+      {
+        name: 'import-throw',
+        build: (msg) => ({
+          upload: async (file) => `doc-${file.name}`,
+          poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+          importDocument: async () => {
+            throw new Error(msg)
+          },
+        }),
+      },
+    ]
+    expect(cases).toHaveLength(3)
+
+    for (const { name, build } of cases) {
+      const msg = `${name}: boom`
+      const files = docFiles(['a.pdf'])
+      const onStage = vi.fn()
+      const outcomes = await startDocumentRun(files, { ...build(msg), onStage })
+
+      const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+      expect(failedCalls, name).toHaveLength(1)
+      const [, state] = failedCalls[0]
+      if (state.kind !== 'failed') throw new Error(`unreachable — ${name} is a failure case`)
+
+      const outcome = outcomes[0].outcome
+      if (outcome.kind !== 'failed') throw new Error(`unreachable — ${name} is a failure case`)
+
+      expect(state.reason, name).toBe(outcome.message)
+    }
+  })
+})
+
+describe('startDocumentRun — every file failing still resolves once, each on its own id (RUN-14, AC-4/AC-5)', () => {
+  it('RUN-14: three failing files each report their own failed stage; Promise.all resolves; outcomes stay length 3 in file order', async () => {
+    const files = docFiles(['a.pdf', 'b.pdf', 'c.pdf'])
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'failed', reason: `${documentId}: dead-lettered` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(3)
+    expect(outcomes.map((o) => o.name)).toEqual(['a.pdf', 'b.pdf', 'c.pdf'])
+    expect(outcomes.every((o) => o.outcome.kind === 'failed')).toBe(true)
+
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(3)
+    expect(new Set(failedCalls.map(([id]) => id))).toEqual(new Set(files.map((f) => f.id)))
+  })
+})
+
+describe('startDocumentRun — a throwing onStage is swallowed by that pipeline’s own catch, not the run (RUN-15, AC-4 boundary)', () => {
+  it('RUN-15: onStage throwing while reporting one file imported turns THAT outcome to failed; the sibling is untouched', async () => {
+    const files = docFiles(['ok.pdf', 'boom.pdf'])
+    const onStage = vi.fn((fileId: string, state: DocumentRowState) => {
+      if (fileId === files[1].id && state.kind === 'imported') {
+        throw new Error('setState on an unmounted component')
+      }
+    })
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(2)
+    expect(outcomes[0].outcome.kind).toBe('imported')
+
+    // Pinned, not endorsed: startDocumentRun's per-pipeline try/catch has no way to tell
+    // "the import already succeeded, onStage merely misbehaved" apart from "the import
+    // failed" -- both land in the same catch. The document WAS imported server-side; the
+    // outcome the caller sees says otherwise. Flagged in the QA report, not fixed here --
+    // no AC of this subtask asks for onStage to be treated as fallible.
+    expect(outcomes[1].outcome.kind).toBe('failed')
+    const boomOutcome = outcomes[1].outcome
+    if (boomOutcome.kind !== 'failed') throw new Error('unreachable — asserted above')
+    expect(boomOutcome.message).toBe('setState on an unmounted component')
+  })
+})
+
+// --- STAGE-1..6 (EXTR-10-01, task-783) --------------------------------------
+
+describe('stageOf — classifies every state in the CHECK constraint, and only those (STAGE-1, Core AC 1/2)', () => {
+  // migrations/20260827084025_extraction_jobs.sql:20-21's five values, literal so a
+  // dropped case shrinks this list (and the length assertion below) rather than passing
+  // silently.
+  const CHECK_STATES = ['queued', 'extracting', 'succeeded', 'failed', 'dead_lettered'] as const
+
+  it('STAGE-1: stageOf classifies every state in the CHECK constraint, and only those', () => {
+    expect(CHECK_STATES).toHaveLength(5)
+
+    const TABLE: readonly [string, DocumentRowState | null][] = [
+      ['queued', { kind: 'queued' }],
+      ['extracting', { kind: 'reading' }],
+      ['succeeded', null],
+      ['failed', { kind: 'retrying' }],
+      ['dead_lettered', null],
+    ]
+    // The table's states are exactly CHECK_STATES, same order -- so this spec cannot pass
+    // by covering some other five-item list.
+    expect(TABLE.map(([state]) => state)).toEqual(CHECK_STATES)
+
+    for (const [state, expected] of TABLE) {
+      expect(stageOf(job({ state })), `state ${state}`).toEqual(expected)
+    }
+
+    // Outside the CHECK set entirely -- a fall-through to a default word is what this guards.
+    expect(stageOf(job({ state: 'weird' }))).toBeNull()
+  })
+})
+
+describe('stageOf — no extraction_jobs row yet is QUEUED, never blank (STAGE-2, Core AC 1)', () => {
+  it('STAGE-2: no extraction_jobs row yet is QUEUED, never blank', () => {
+    expect(stageOf(null)).toEqual({ kind: 'queued' })
+  })
+})
+
+describe('documentRunRows — total over the run and keeps file order (STAGE-3, Core AC 3)', () => {
+  it('STAGE-3: documentRunRows is total over the run and keeps file order', () => {
+    const files: RunFile[] = [runFile('f1', 'a.pdf'), runFile('f2', 'b.pdf'), runFile('f3', 'c.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f2: { kind: 'reading' } }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(3)
+    expect(rows.map((r) => r.name)).toEqual(['a.pdf', 'b.pdf', 'c.pdf'])
+    expect(rows[0]).toEqual({ name: 'a.pdf', kind: 'queued' })
+    expect(rows[1]).toEqual({ name: 'b.pdf', kind: 'reading' })
+    expect(rows[2]).toEqual({ name: 'c.pdf', kind: 'queued' })
+  })
+})
+
+describe('documentRunRows — rows join on file id, never on filename (STAGE-4, Core AC 3)', () => {
+  it('STAGE-4: rows join on file id, never on filename', () => {
+    // Same name, different ids -- the exact byte-identical-pick trap importRun.ts:77-78
+    // records for attachDocumentIds; documentRunRows must not repeat it.
+    const files: RunFile[] = [runFile('f1', 'dup.pdf'), runFile('f2', 'dup.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f1: { kind: 'reading' }, f2: { kind: 'retrying' } }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(2)
+    expect(rows).toEqual([
+      { name: 'dup.pdf', kind: 'reading' },
+      { name: 'dup.pdf', kind: 'retrying' },
+    ])
+  })
+})
+
+describe('documentRunRows — the map is the whole truth while the run is live (STAGE-5, Core AC 1)', () => {
+  it('STAGE-5: the map is the whole truth while the run is live', () => {
+    // outcome stays 'pending' -- runReducer's own settle hasn't happened -- while the
+    // stage map already says imported. An impl reading f.outcome first shows QUEUED for a
+    // document that has already settled: today's exact defect (App.tsx:945-951).
+    const files: RunFile[] = [runFile('f1', 'a.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f1: { kind: 'imported', count: 2 } }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toEqual({ name: 'a.pdf', kind: 'imported', count: 2 })
+  })
+})
+
+describe('documentRunRows — the widened union adds no row property (STAGE-6, Core AC 2)', () => {
+  it('STAGE-6: the widened union adds no row property', () => {
+    const STATES: readonly DocumentRowState[] = [
+      { kind: 'queued' },
+      { kind: 'reading' },
+      { kind: 'retrying' },
+      { kind: 'processing' },
+      { kind: 'imported', count: 1 },
+      { kind: 'failed', reason: 'boom' },
+    ]
+    expect(STATES).toHaveLength(6)
+
+    const files: RunFile[] = STATES.map((_, i) => runFile(`f${i + 1}`, `file${i + 1}.pdf`))
+    const stages: Record<string, DocumentRowState> = Object.fromEntries(STATES.map((s, i) => [`f${i + 1}`, s]))
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+
+    const rows = documentRunRows(run, stages)
+    expect(rows).toHaveLength(6)
+
+    // BULK-05-12's own forbidden set (importRun.test.ts:683-695) -- a stage carrying a
+    // payload reopens the honesty hole the card exists to close.
+    const FORBIDDEN = [
+      'stage',
+      'percent',
+      'loaded',
+      'total',
+      'rows',
+      'rowsRead',
+      'bytes',
+      'ruleSetVersion',
+      'rule_set_version',
+    ]
+    for (const row of rows) {
+      for (const prop of FORBIDDEN) {
+        expect(row, `${JSON.stringify(row)} should not carry "${prop}"`).not.toHaveProperty(prop)
+      }
+    }
+  })
+})
+
+// --- STAGE adversarial coverage (task-783 QA pass) --------------------------
+//
+// Added during Mode B verification, past what the RED-phase STAGE-1..6 specs cover.
+
+describe('stageOf — null for inputs outside the CHECK set, including prototype-name strings (STAGE-ADV-1, AC-1)', () => {
+  it('returns null for the empty string, whitespace, wrong case, and JS prototype keys', () => {
+    const INPUTS = ['', ' ', 'EXTRACTING', 'constructor', '__proto__', 'toString']
+    expect(INPUTS).toHaveLength(6)
+    for (const state of INPUTS) {
+      expect(stageOf(job({ state })), `state ${JSON.stringify(state)}`).toBeNull()
+    }
+  })
+})
+
+describe('documentRunRows — a zero-file run (STAGE-ADV-2, AC-2)', () => {
+  it('returns an empty array, not undefined or a thrown error', () => {
+    const run: ImportRun = { files: [], cursor: 0, status: 'idle' }
+    const rows = documentRunRows(run, {})
+    expect(rows).toHaveLength(0)
+    expect(rows).toEqual([])
+  })
+})
+
+describe('documentRunRows — a stale stage entry outlives its file (STAGE-ADV-3, AC-2)', () => {
+  it('ignores a stages entry whose id is not among run.files, and does not disturb the file that is', () => {
+    const files: RunFile[] = [runFile('f1', 'a.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    // f-ghost: a leftover from an earlier run/picker session -- must produce no row of
+    // its own and must not leak onto f1's row.
+    const stages: Record<string, DocumentRowState> = {
+      f1: { kind: 'reading' },
+      'f-ghost': { kind: 'failed', reason: 'stale' },
+    }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(1)
+    expect(rows).toEqual([{ name: 'a.pdf', kind: 'reading' }])
+  })
+})
+
+describe('documentRunRows — file order wins over id order (STAGE-ADV-4, AC-2)', () => {
+  it('preserves run.files order even when ids are not sorted', () => {
+    // ids deliberately NOT sorted, so a sort-by-id bug is distinguishable from correct
+    // insertion-order behaviour -- STAGE-3's own files happen to be id-sorted already
+    // and cannot tell the two apart.
+    const files: RunFile[] = [runFile('f3', 'third.pdf'), runFile('f1', 'first.pdf'), runFile('f2', 'second.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = {
+      f1: { kind: 'reading' },
+      f2: { kind: 'retrying' },
+      f3: { kind: 'imported', count: 1 },
+    }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(3)
+    expect(rows.map((r) => r.name)).toEqual(['third.pdf', 'first.pdf', 'second.pdf'])
+    expect(rows).toEqual([
+      { name: 'third.pdf', kind: 'imported', count: 1 },
+      { name: 'first.pdf', kind: 'reading' },
+      { name: 'second.pdf', kind: 'retrying' },
+    ])
+  })
+})
+
+describe('documentRunRows — a RunFile.id equal to a JS prototype key (STAGE-ADV-5)', () => {
+  it('"constructor" and "__proto__" as ids have no map entry and still render queued', () => {
+    // stages[f.id] on a plain object would resolve 'constructor'/'__proto__' through
+    // Object.prototype -- a function, so `?? { kind: 'queued' }` never fires and the
+    // row silently loses `kind`. Object.hasOwn gates the lookup to own properties only,
+    // so a file with no map entry renders queued like any other (AC-4). See documentRun.ts:82.
+    const files: RunFile[] = [runFile('constructor', 'evil.pdf'), runFile('__proto__', 'evil2.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages = {} as Record<string, DocumentRowState>
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(2)
+    expect(rows).toEqual([
+      { name: 'evil.pdf', kind: 'queued' },
+      { name: 'evil2.pdf', kind: 'queued' },
+    ])
+  })
+})
+
+// --- POLL-5..10 (EXTR-10-02, task-784) --------------------------------------
+//
+// pollUntilSettled's stub throws `new Error('EXTR-10-02: not implemented — …')`
+// (documentRun.ts), so every spec below is RED on that throw -- except POLL-6, which never
+// calls pollUntilSettled and fails on a real assertion: EXTRACTION_POLL_INTERVAL_MS is
+// still exported today.
+
+describe('pollUntilSettled — the document poll runs at the app’s one cadence (POLL-5, AC-3)', () => {
+  it('POLL-5: sleep is called with LIVE_POLL_MS, the imported binding, on every non-terminal tick', async () => {
+    const ticks: ExtractionJob[][] = [[], [job({ state: 'extracting' })], [job({ state: 'succeeded' })]]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async (_ms: number) => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    // Two non-terminal ticks (queued, then extracting) each sleep once; the third,
+    // terminal tick returns without a further sleep.
+    expect(sleep).toHaveBeenCalledTimes(2)
+    for (const [ms] of sleep.mock.calls) {
+      expect(ms).toBe(LIVE_POLL_MS)
+    }
+    expect(verdict).toEqual({ kind: 'succeeded', jobId: 'job-1' })
+  })
+})
+
+describe('documentRun module — there is no second interval constant (POLL-6, AC-4)', () => {
+  it('POLL-6: EXTRACTION_POLL_INTERVAL_MS is gone from the namespace, while EXTRACTION_POLL_BUDGET_MS -- the control needle -- still is', () => {
+    // Control needle first: a module that exported neither constant would make the
+    // absence below meaningless.
+    expect('EXTRACTION_POLL_BUDGET_MS' in documentRunModule).toBe(true)
+    expect('EXTRACTION_POLL_INTERVAL_MS' in documentRunModule).toBe(false)
+  })
+})
+
+describe('pollUntilSettled — every tick reports the stage it read (POLL-7, Core AC 1/2)', () => {
+  it('POLL-7: onStage sees queued then reading, in order, and nothing after the terminal tick', async () => {
+    const ticks: ExtractionJob[][] = [[], [job({ state: 'extracting' })], [job({ state: 'succeeded' })]]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(3)
+    expect(onStage).toHaveBeenCalledTimes(2)
+    expect(onStage.mock.calls.map(([s]) => s)).toEqual([{ kind: 'queued' }, { kind: 'reading' }])
+    expect(verdict).toEqual({ kind: 'succeeded', jobId: 'job-1' })
+  })
+})
+
+describe('pollUntilSettled — a terminal state reports no word (POLL-8, Core AC 2/5)', () => {
+  it('POLL-8: dead_lettered on the first tick never calls onStage, and the reason is deadLetterRefusal verbatim', async () => {
+    const LAST_ERROR = 'boom'
+    const getJobs = vi.fn(async () => [job({ state: 'dead_lettered', last_error: LAST_ERROR })])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(1)
+    expect(onStage).toHaveBeenCalledTimes(0)
+    expect(sleep).not.toHaveBeenCalled()
+    expect(verdict.kind).toBe('failed')
+    if (verdict.kind !== 'failed') throw new Error('unreachable — narrowed above')
+    expect(verdict.reason).toBe(deadLetterRefusal(LAST_ERROR))
+  })
+})
+
+describe('pollUntilSettled — the budget still ends the loop (POLL-9, AC-5)', () => {
+  it('POLL-9: an extracting job past EXTRACTION_POLL_BUDGET_MS fails with the budget reason, and the last stage reported was reading', async () => {
+    const getJobs = vi.fn(async () => [job({ state: 'extracting' })])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    // First call is startedAt; the second -- this tick's elapsed calc -- has already
+    // crossed the budget, so this pins the elapsed clock rather than a real wall-clock wait.
+    const nowValues = [0, EXTRACTION_POLL_BUDGET_MS + 1]
+    let nowCall = 0
+    const now = vi.fn(() => nowValues[nowCall++])
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+    expect(onStage).toHaveBeenCalledTimes(1)
+    expect(onStage.mock.calls[0][0]).toEqual({ kind: 'reading' })
+    expect(verdict).toEqual({ kind: 'failed', reason: pollBudgetRefusal() })
+  })
+})
+
+describe('pollUntilSettled — a getJobs rejection is not swallowed (POLL-10, Core AC 6)', () => {
+  it('POLL-10: pollUntilSettled rejects with the same sentinel getJobs rejected with', async () => {
+    const E = new Error('network: connection reset')
+    const getJobs = vi.fn(async () => {
+      throw E
+    })
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    await expect(pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })).rejects.toBe(E)
+    expect(onStage).not.toHaveBeenCalled()
+  })
+})
+
+// --- POLL-ADV (EXTR-10-02, task-784 QA) -------------------------------------
+//
+// Adversarial coverage the RED phase (POLL-5..10) did not exercise: the retry arm of the
+// story's own `(failed -> extracting)*` state sequence, undeclared dedup behaviour, the
+// pre-worker window, and newestJob's tie contract.
+
+describe('pollUntilSettled — the retry cycle reports every arm (POLL-ADV-1, Core AC 1/2)', () => {
+  it('POLL-ADV-1: extracting -> failed -> extracting -> succeeded reports reading, retrying, reading, and nothing on the terminal tick', async () => {
+    const ticks: ExtractionJob[][] = [
+      [job({ state: 'extracting' })],
+      [job({ state: 'failed' })],
+      [job({ state: 'extracting' })],
+      [job({ state: 'succeeded' })],
+    ]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(4)
+    expect(onStage).toHaveBeenCalledTimes(3)
+    expect(onStage.mock.calls.map(([s]) => s)).toEqual([{ kind: 'reading' }, { kind: 'retrying' }, { kind: 'reading' }])
+    // Three waiting ticks sleep once each; the fourth, terminal tick returns without one.
+    expect(sleep).toHaveBeenCalledTimes(3)
+    expect(verdict).toEqual({ kind: 'succeeded', jobId: 'job-1' })
+  })
+})
+
+describe('pollUntilSettled — onStage is not deduplicated across identical ticks (POLL-ADV-2, Core AC 1/2)', () => {
+  it('POLL-ADV-2: two consecutive extracting ticks fire "reading" twice, not once', async () => {
+    const ticks: ExtractionJob[][] = [[job({ state: 'extracting' })], [job({ state: 'extracting' })], [job({ state: 'succeeded' })]]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    // Pinned deliberately: documentRun.ts:79 says "every tick", not "on change" -- a
+    // future de-dup would be a silent behaviour change a React re-render (EXTR-10-04)
+    // could depend on either way.
+    expect(onStage).toHaveBeenCalledTimes(2)
+    expect(onStage.mock.calls.map(([s]) => s)).toEqual([{ kind: 'reading' }, { kind: 'reading' }])
+  })
+})
+
+describe('pollUntilSettled — no job row yet reads as queued until the budget ends it (POLL-ADV-3, AC-5)', () => {
+  it('POLL-ADV-3: getJobs returning [] on every tick reports queued each time and still expires on budget, never crashing', async () => {
+    const getJobs = vi.fn(async (): Promise<ExtractionJob[]> => [])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    // now() calls: startedAt, then one per tick's elapsed check.
+    const nowValues = [0, 30_000, 60_000, 90_000, EXTRACTION_POLL_BUDGET_MS + 1]
+    let nowCall = 0
+    const now = vi.fn(() => nowValues[nowCall++])
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(4)
+    expect(onStage).toHaveBeenCalledTimes(4)
+    for (const [s] of onStage.mock.calls) {
+      expect(s).toEqual({ kind: 'queued' })
+    }
+    expect(sleep).toHaveBeenCalledTimes(3)
+    expect(verdict).toEqual({ kind: 'failed', reason: pollBudgetRefusal() })
+  })
+})
+
+describe('newestJob — a created_at tie is broken by first occurrence, not last (POLL-ADV-4, AC-5)', () => {
+  it('POLL-ADV-4: two jobs sharing one created_at resolve to whichever the array names first', () => {
+    const first = job({ id: 'job-a', created_at: '2026-08-30T10:00:00Z' })
+    const second = job({ id: 'job-b', created_at: '2026-08-30T10:00:00Z' })
+
+    expect([first, second]).toHaveLength(2)
+    expect(newestJob([first, second])?.id).toBe('job-a')
+    expect(newestJob([second, first])?.id).toBe('job-b')
   })
 })

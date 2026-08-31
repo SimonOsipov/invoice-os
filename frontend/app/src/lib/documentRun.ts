@@ -76,6 +76,21 @@ export function stageOf(job: ExtractionJob | null): DocumentRowState | null {
   return null
 }
 
+// EXTR-10-02 STUB (task-784, test-first) — throwing rather than guessing keeps every
+// spec RED on an assertion/not-implemented mismatch, never a compile error. The executor
+// writes the real body; see task-784's Implementation Plan for the exact statement order.
+export async function pollUntilSettled(
+  _documentId: string,
+  _deps: {
+    getJobs: (documentId: string) => Promise<readonly ExtractionJob[]>
+    onStage: (state: DocumentRowState) => void
+    sleep: (ms: number) => Promise<void>
+    now: () => number
+  },
+): Promise<PollVerdict> {
+  throw new Error('EXTR-10-02: not implemented — pollUntilSettled must poll at LIVE_POLL_MS, report stageOf on every non-null tick, and propagate a getJobs rejection')
+}
+
 // One row per run.files entry, joined by RunFile.id -- never by name (importRun.ts:77-78
 // records why a name-keyed join is wrong); the own-property check keeps an id like
 // 'constructor' from resolving through Object.prototype instead of the ?? fallback.

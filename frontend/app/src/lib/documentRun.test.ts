@@ -13,6 +13,7 @@
 // import or collection error — same precedent as importRun.test.ts's own BULK-03 header.
 import { describe, expect, it, vi } from 'vitest'
 
+import * as documentRunModule from './documentRun'
 import {
   EXTRACTION_POLL_BUDGET_MS,
   deadLetterRefusal,
@@ -20,6 +21,7 @@ import {
   isTerminalExtractionState,
   newestJob,
   pollBudgetRefusal,
+  pollUntilSettled,
   pollVerdict,
   stageOf,
   startDocumentRun,
@@ -28,6 +30,7 @@ import type { DocumentPipelineDeps, DocumentRowState, DocumentRunFile } from './
 import type { ExtractionJob, ImportReport } from './importApi'
 import { routeAfterRun } from './importRun'
 import type { ImportRun, RunFile } from './importRun'
+import { LIVE_POLL_MS } from './invoices'
 
 function job(over: Partial<ExtractionJob>): ExtractionJob {
   return {
@@ -533,5 +536,115 @@ describe('documentRunRows — a RunFile.id equal to a JS prototype key (STAGE-AD
       { name: 'evil.pdf', kind: 'queued' },
       { name: 'evil2.pdf', kind: 'queued' },
     ])
+  })
+})
+
+// --- POLL-5..10 (EXTR-10-02, task-784) --------------------------------------
+//
+// pollUntilSettled's stub throws `new Error('EXTR-10-02: not implemented — …')`
+// (documentRun.ts), so every spec below is RED on that throw -- except POLL-6, which never
+// calls pollUntilSettled and fails on a real assertion: EXTRACTION_POLL_INTERVAL_MS is
+// still exported today.
+
+describe('pollUntilSettled — the document poll runs at the app’s one cadence (POLL-5, AC-3)', () => {
+  it('POLL-5: sleep is called with LIVE_POLL_MS, the imported binding, on every non-terminal tick', async () => {
+    const ticks: ExtractionJob[][] = [[], [job({ state: 'extracting' })], [job({ state: 'succeeded' })]]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async (_ms: number) => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    // Two non-terminal ticks (queued, then extracting) each sleep once; the third,
+    // terminal tick returns without a further sleep.
+    expect(sleep).toHaveBeenCalledTimes(2)
+    for (const [ms] of sleep.mock.calls) {
+      expect(ms).toBe(LIVE_POLL_MS)
+    }
+    expect(verdict).toEqual({ kind: 'succeeded', jobId: 'job-1' })
+  })
+})
+
+describe('documentRun module — there is no second interval constant (POLL-6, AC-4)', () => {
+  it('POLL-6: EXTRACTION_POLL_INTERVAL_MS is gone from the namespace, while EXTRACTION_POLL_BUDGET_MS -- the control needle -- still is', () => {
+    // Control needle first: a module that exported neither constant would make the
+    // absence below meaningless.
+    expect('EXTRACTION_POLL_BUDGET_MS' in documentRunModule).toBe(true)
+    expect('EXTRACTION_POLL_INTERVAL_MS' in documentRunModule).toBe(false)
+  })
+})
+
+describe('pollUntilSettled — every tick reports the stage it read (POLL-7, Core AC 1/2)', () => {
+  it('POLL-7: onStage sees queued then reading, in order, and nothing after the terminal tick', async () => {
+    const ticks: ExtractionJob[][] = [[], [job({ state: 'extracting' })], [job({ state: 'succeeded' })]]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(3)
+    expect(onStage).toHaveBeenCalledTimes(2)
+    expect(onStage.mock.calls.map(([s]) => s)).toEqual([{ kind: 'queued' }, { kind: 'reading' }])
+    expect(verdict).toEqual({ kind: 'succeeded', jobId: 'job-1' })
+  })
+})
+
+describe('pollUntilSettled — a terminal state reports no word (POLL-8, Core AC 2/5)', () => {
+  it('POLL-8: dead_lettered on the first tick never calls onStage, and the reason is deadLetterRefusal verbatim', async () => {
+    const LAST_ERROR = 'boom'
+    const getJobs = vi.fn(async () => [job({ state: 'dead_lettered', last_error: LAST_ERROR })])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(1)
+    expect(onStage).toHaveBeenCalledTimes(0)
+    expect(sleep).not.toHaveBeenCalled()
+    expect(verdict.kind).toBe('failed')
+    if (verdict.kind !== 'failed') throw new Error('unreachable — narrowed above')
+    expect(verdict.reason).toBe(deadLetterRefusal(LAST_ERROR))
+  })
+})
+
+describe('pollUntilSettled — the budget still ends the loop (POLL-9, AC-5)', () => {
+  it('POLL-9: an extracting job past EXTRACTION_POLL_BUDGET_MS fails with the budget reason, and the last stage reported was reading', async () => {
+    const getJobs = vi.fn(async () => [job({ state: 'extracting' })])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    // First call is startedAt; the second -- this tick's elapsed calc -- has already
+    // crossed the budget, so this pins the elapsed clock rather than a real wall-clock wait.
+    const nowValues = [0, EXTRACTION_POLL_BUDGET_MS + 1]
+    let nowCall = 0
+    const now = vi.fn(() => nowValues[nowCall++])
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+    expect(onStage).toHaveBeenCalledTimes(1)
+    expect(onStage.mock.calls[0][0]).toEqual({ kind: 'reading' })
+    expect(verdict).toEqual({ kind: 'failed', reason: pollBudgetRefusal() })
+  })
+})
+
+describe('pollUntilSettled — a getJobs rejection is not swallowed (POLL-10, Core AC 6)', () => {
+  it('POLL-10: pollUntilSettled rejects with the same sentinel getJobs rejected with', async () => {
+    const E = new Error('network: connection reset')
+    const getJobs = vi.fn(async () => {
+      throw E
+    })
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    await expect(pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })).rejects.toBe(E)
+    expect(onStage).not.toHaveBeenCalled()
   })
 })

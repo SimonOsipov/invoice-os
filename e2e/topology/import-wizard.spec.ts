@@ -2428,10 +2428,15 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
     for (const row of sample) {
       const isStageWord = DOCUMENT_STAGE_WORDS.has(row.status)
       const isImportedCount = /^\d+ IMPORTED$/.test(row.status)
-      const isReason = row.status.length > 0
+      // Pinned to the poll's own refusal copy (documentRun.ts deadLetterRefusal /
+      // pollBudgetRefusal). startDocumentRun can also surface a raw Error.message or
+      // 'extraction never settled', and this arm deliberately does NOT admit those: on a
+      // happy-path run they mean a real break, so failing here is the point. With the former
+      // `length > 0` the other two arms were dead code and an invented stage word passed.
+      const isReason = /^Extraction (failed for this document|is still running after \d+ seconds)/.test(row.status)
       expect(
         isStageWord || isImportedCount || isReason,
-        `sample ${i} (${row.filename}): "${row.status}" must be a stage word, an IMPORTED count, or a non-empty reason`,
+        `sample ${i} (${row.filename}): "${row.status}" must be a stage word, an IMPORTED count, or one of the poll's two refusal sentences`,
       ).toBe(true)
       expect(row.status, `sample ${i} (${row.filename}): status must never imply an ordinal position`).not.toMatch(/\b\d+\s*(of|\/)\s*\d+\b/i)
     }
@@ -2493,6 +2498,28 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
   const badName = 'geometry-dead-letter.pdf'
 
   let goodDocId: string | null = null
+  // Record the good document's id INSIDE its POST route: the handler completes before the app
+  // can see the response, so no poll for this document can precede the assignment. A
+  // page.on('response') listener cannot give that ordering -- it awaits res.json() while the app
+  // has already resolved the same response and fired its first poll.
+  await page.route('**/api/submission/v1/documents', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    const isGood = requestBody(route.request()).includes(goodName)
+    const res = await route.fetch()
+    const text = await res.text()
+    if (isGood) {
+      try {
+        const body = JSON.parse(text)
+        if (typeof body.document_id === 'string') goodDocId = body.document_id
+      } catch {
+        /* fulfil unchanged; the toHaveCount(2) below fails loudly if the upload really broke */
+      }
+    }
+    await route.fulfill({ response: res, body: text })
+  })
   await page.route('**/api/submission/v1/extractions*', async (route) => {
     const url = new URL(route.request().url())
     if (goodDocId !== null && url.searchParams.get('document_id') === goodDocId) {
@@ -2504,13 +2531,6 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
       return
     }
     await route.continue()
-  })
-  page.on('response', async (res) => {
-    const req = res.request()
-    if (req.method() !== 'POST' || !new URL(res.url()).pathname.endsWith('/api/submission/v1/documents')) return
-    if (!requestBody(req).includes(goodName)) return
-    const body = await res.json().catch(() => null)
-    if (body && typeof body.document_id === 'string') goodDocId = body.document_id
   })
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()

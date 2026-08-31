@@ -648,3 +648,86 @@ describe('pollUntilSettled — a getJobs rejection is not swallowed (POLL-10, Co
     expect(onStage).not.toHaveBeenCalled()
   })
 })
+
+// --- POLL-ADV (EXTR-10-02, task-784 QA) -------------------------------------
+//
+// Adversarial coverage the RED phase (POLL-5..10) did not exercise: the retry arm of the
+// story's own `(failed -> extracting)*` state sequence, undeclared dedup behaviour, the
+// pre-worker window, and newestJob's tie contract.
+
+describe('pollUntilSettled — the retry cycle reports every arm (POLL-ADV-1, Core AC 1/2)', () => {
+  it('POLL-ADV-1: extracting -> failed -> extracting -> succeeded reports reading, retrying, reading, and nothing on the terminal tick', async () => {
+    const ticks: ExtractionJob[][] = [
+      [job({ state: 'extracting' })],
+      [job({ state: 'failed' })],
+      [job({ state: 'extracting' })],
+      [job({ state: 'succeeded' })],
+    ]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(4)
+    expect(onStage).toHaveBeenCalledTimes(3)
+    expect(onStage.mock.calls.map(([s]) => s)).toEqual([{ kind: 'reading' }, { kind: 'retrying' }, { kind: 'reading' }])
+    // Three waiting ticks sleep once each; the fourth, terminal tick returns without one.
+    expect(sleep).toHaveBeenCalledTimes(3)
+    expect(verdict).toEqual({ kind: 'succeeded', jobId: 'job-1' })
+  })
+})
+
+describe('pollUntilSettled — onStage is not deduplicated across identical ticks (POLL-ADV-2, Core AC 1/2)', () => {
+  it('POLL-ADV-2: two consecutive extracting ticks fire "reading" twice, not once', async () => {
+    const ticks: ExtractionJob[][] = [[job({ state: 'extracting' })], [job({ state: 'extracting' })], [job({ state: 'succeeded' })]]
+    let call = 0
+    const getJobs = vi.fn(async () => ticks[call++])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    const now = vi.fn(() => 0)
+
+    await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    // Pinned deliberately: documentRun.ts:79 says "every tick", not "on change" -- a
+    // future de-dup would be a silent behaviour change a React re-render (EXTR-10-04)
+    // could depend on either way.
+    expect(onStage).toHaveBeenCalledTimes(2)
+    expect(onStage.mock.calls.map(([s]) => s)).toEqual([{ kind: 'reading' }, { kind: 'reading' }])
+  })
+})
+
+describe('pollUntilSettled — no job row yet reads as queued until the budget ends it (POLL-ADV-3, AC-5)', () => {
+  it('POLL-ADV-3: getJobs returning [] on every tick reports queued each time and still expires on budget, never crashing', async () => {
+    const getJobs = vi.fn(async (): Promise<ExtractionJob[]> => [])
+    const onStage = vi.fn()
+    const sleep = vi.fn(async () => {})
+    // now() calls: startedAt, then one per tick's elapsed check.
+    const nowValues = [0, 30_000, 60_000, 90_000, EXTRACTION_POLL_BUDGET_MS + 1]
+    let nowCall = 0
+    const now = vi.fn(() => nowValues[nowCall++])
+
+    const verdict = await pollUntilSettled('doc-1', { getJobs, onStage, sleep, now })
+
+    expect(getJobs).toHaveBeenCalledTimes(4)
+    expect(onStage).toHaveBeenCalledTimes(4)
+    for (const [s] of onStage.mock.calls) {
+      expect(s).toEqual({ kind: 'queued' })
+    }
+    expect(sleep).toHaveBeenCalledTimes(3)
+    expect(verdict).toEqual({ kind: 'failed', reason: pollBudgetRefusal() })
+  })
+})
+
+describe('newestJob — a created_at tie is broken by first occurrence, not last (POLL-ADV-4, AC-5)', () => {
+  it('POLL-ADV-4: two jobs sharing one created_at resolve to whichever the array names first', () => {
+    const first = job({ id: 'job-a', created_at: '2026-08-30T10:00:00Z' })
+    const second = job({ id: 'job-b', created_at: '2026-08-30T10:00:00Z' })
+
+    expect([first, second]).toHaveLength(2)
+    expect(newestJob([first, second])?.id).toBe('job-a')
+    expect(newestJob([second, first])?.id).toBe('job-b')
+  })
+})

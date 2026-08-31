@@ -59,9 +59,12 @@ const (
 	acRightUpper     = 0.4655 // t1.supplier_name.right reaches "Buyer" on corpus_two_column.pdf
 	acRightTooNarrow = 0.2059
 	acBelowLower     = 0.0095 // 43/44 here; 41/44 at acBelowTooNarrow
-	acBelowUpper     = 0.0870 // the widest clean value; the merge sits just above, at acBelowMerges
-	acBelowMerges    = 0.0875 // t1.supplier_name.below reaches "Invoice Date" on the stacked layout
+	acBelowUpper     = 0.1072 // the widest clean value; the merge sits just above, at acBelowMerges
+	acBelowMerges    = 0.1075 // t1.supplier_name.below reaches the next group's value, "22 Apr 2026"
 	acBelowTooNarrow = 0.0090
+	// The cross-party leak sits three times wider out than acBelowMerges. Asserted alongside it
+	// so a retune cannot land between the two and pass.
+	acBelowCrossParty = 0.3220 // t1.supplier_name.below reaches the buyer's "Honeywell Group"
 )
 
 // --- harness ----------------------------------------------------------------
@@ -631,20 +634,32 @@ func TestTier1_DialsStayInsideTheirMeasuredWindow(t *testing.T) {
 		}
 	})
 
+	// Since EXTR-16 a bare label is not a value, so the old oracle -- the rule reaching the next
+	// group's LABEL "Invoice Date" -- is unreachable at any width. Both merges below reach a
+	// printed VALUE, which is the stronger oracle.
 	t.Run("below_upper_bound", func(t *testing.T) {
-		const file, field, wrong = "corpus_stacked_labels.pdf", "supplier_name", "Invoice Date"
+		const file, field = "corpus_stacked_labels.pdf", "supplier_name"
 		pages := rvCorpusPages(t, file)
 
 		shipped := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
 		rvFloor(t, shipped, "the shipped set over "+file)
-		if v := rvValues(rvFor(shipped, field)); slices.Contains(v, wrong) {
-			t.Errorf("at the shipped below dial %v, %s = %v on %s and has already reached the NEXT group's label; the stacked groups are merged", below, field, v, file)
-		}
 
-		wide := extraction.Resolve(pages, extraction.RuleSet{Tier1: acWithDistance(t, extraction.RelBelow, acBelowMerges)})
-		rvControl(t, wide, fmt.Sprintf("below widened to %v over %s", acBelowMerges, file))
-		if v := rvValues(rvFor(wide, field)); !slices.Contains(v, wrong) {
-			t.Errorf("with below widened to %v, %s = %v and still does not contain %q; the absence asserted above holds for some other reason and bounds the dial from nowhere", acBelowMerges, field, v, wrong)
+		for _, c := range []struct {
+			wrong, why string
+			dial       float64
+		}{
+			{"22 Apr 2026", "reached the NEXT group's value; the stacked groups are merged", acBelowMerges},
+			{"Honeywell Group", "reached the BUYER's name; the two party blocks are merged", acBelowCrossParty},
+		} {
+			if v := rvValues(rvFor(shipped, field)); slices.Contains(v, c.wrong) {
+				t.Errorf("at the shipped below dial %v, %s = %v on %s and has already %s", below, field, v, file, c.why)
+			}
+
+			wide := extraction.Resolve(pages, extraction.RuleSet{Tier1: acWithDistance(t, extraction.RelBelow, c.dial)})
+			rvControl(t, wide, fmt.Sprintf("below widened to %v over %s", c.dial, file))
+			if v := rvValues(rvFor(wide, field)); !slices.Contains(v, c.wrong) {
+				t.Errorf("with below widened to %v, %s = %v and still does not contain %q; the absence asserted above holds for some other reason and bounds the dial from nowhere", c.dial, field, v, c.wrong)
+			}
 		}
 	})
 }
@@ -692,14 +707,15 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 		{
 			file:   "internal/extraction/tier1.go",
 			needle: "tier1MaxDistanceBelow",
-			// The binding reach, and the two merges that bound the dials from above (M-08).
-			want:   []string{"0.009111", "0.087010", "0.465497"},
-			unwant: []string{"0.0267"},
+			// The binding reach, and the merges that bound the dials from above (M-08). 0.087010
+			// bounded below until EXTR-16; it reached a bare LABEL, which is no longer a value.
+			want:   []string{"0.009111", "0.107212", "0.321571", "0.465497"},
+			unwant: []string{"0.0267", "0.087010"},
 		},
 		{
 			file:   acDoc,
 			needle: "corpus_stacked_labels.pdf",
-			want:   []string{"0.009111"},
+			want:   []string{"0.009111", "0.107212"},
 			// 0.087 / 0.027. The measured margin is 0.087010 / 0.009111 = 9.55x.
 			unwant: []string{"3.3x"},
 		},

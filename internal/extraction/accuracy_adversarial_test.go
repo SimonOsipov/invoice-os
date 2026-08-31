@@ -43,12 +43,18 @@ func aaByField(t *testing.T) map[string]acRow {
 	return out
 }
 
-// aaDistance is the distance at which ruleID reaches value on file, under rules.
-func aaDistance(t *testing.T, file, ruleID, value string, rules []extraction.Tier1Rule) (float64, bool) {
+func aaStackedPages(t *testing.T) []extraction.TokenPage {
+	t.Helper()
+	return rvCorpusPages(t, "corpus_stacked_labels.pdf")
+}
+
+// aaDistance is the distance at which ruleID reaches value on pages, under rules. what names
+// the page set for the failure message.
+func aaDistance(t *testing.T, pages []extraction.TokenPage, what, ruleID, value string, rules []extraction.Tier1Rule) (float64, bool) {
 	t.Helper()
 
-	got := extraction.Resolve(rvCorpusPages(t, file), extraction.RuleSet{Tier1: rules})
-	rvControl(t, got, "the rule set under test over "+file)
+	got := extraction.Resolve(pages, extraction.RuleSet{Tier1: rules})
+	rvControl(t, got, "the rule set under test over "+what)
 	for _, c := range got {
 		if c.RuleID == ruleID && c.Value == value {
 			return c.Distance, true
@@ -321,23 +327,25 @@ func TestTier1_TheRecordedDistancesAreTheMeasuredDistances(t *testing.T) {
 		}
 	})
 
-	// The two merges that bound the dials from above, each measured on the candidate the
-	// widened dial produces rather than read back off the prose.
+	// The merges that bound the dials from above, each measured on the candidate the widened
+	// dial produces rather than read back off the prose. Every one reaches a printed VALUE:
+	// since EXTR-16 a bare label is not one, and both dials' old oracles were labels.
 	for _, c := range []struct {
-		name, file, ruleID, value, want string
+		name, what, ruleID, value, want string
 		kind                            extraction.RelationKind
+		pages                           func(*testing.T) []extraction.TokenPage
 	}{
-		{"below_merge", "corpus_stacked_labels.pdf", "t1.supplier_name.below", "Invoice Date", "0.087010", extraction.RelBelow},
-		{"right_merge", "corpus_two_column.pdf", "t1.supplier_name.right", "Buyer", "0.465497", extraction.RelRight},
+		{"below_merge", "corpus_stacked_labels.pdf", "t1.supplier_name.below", "22 Apr 2026", "0.107212", extraction.RelBelow, aaStackedPages},
+		{"below_cross_party", "corpus_stacked_labels.pdf", "t1.supplier_name.below", "Honeywell Group", "0.321571", extraction.RelBelow, aaStackedPages},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// Widened far past both bounds, so the merge appears and its distance is readable.
-			d, ok := aaDistance(t, c.file, c.ruleID, c.value, acWithDistance(t, c.kind, 0.9))
+			d, ok := aaDistance(t, c.pages(t), c.what, c.ruleID, c.value, acWithDistance(t, c.kind, 0.9))
 			if !ok {
-				t.Fatalf("%s reaches no %q on %s even at 0.9; the recorded merge does not exist and the upper bound rests on nothing", c.ruleID, c.value, c.file)
+				t.Fatalf("%s reaches no %q on %s even at 0.9; the recorded merge does not exist and the upper bound rests on nothing", c.ruleID, c.value, c.what)
 			}
 			if got := strconv.FormatFloat(d, 'f', 6, 64); got != c.want {
-				t.Errorf("%s reaches %q on %s at %s; tier1.go records %s", c.ruleID, c.value, c.file, got, c.want)
+				t.Errorf("%s reaches %q on %s at %s; tier1.go records %s", c.ruleID, c.value, c.what, got, c.want)
 			}
 			if !strings.Contains(src, c.want) {
 				t.Errorf("tier1.go records no %s, the measured distance of this merge", c.want)

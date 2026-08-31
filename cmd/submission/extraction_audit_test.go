@@ -148,8 +148,16 @@ func eaRun(t *testing.T, ev extraction.ExtractionAudit) eaRow {
 	if err := newExtractionAuditor()(context.Background(), tx, ev); err != nil {
 		t.Fatalf("the auditor returned %v, want nil", err)
 	}
+	return eaDecodeOne(t, tx)
+}
+
+// eaDecodeOne reads the single audit_log INSERT off a recording tx. Shared with
+// document_read_audit_test.go: two copies of the decoder could disagree about what a row is.
+func eaDecodeOne(t *testing.T, tx *eaTx) eaRow {
+	t.Helper()
+
 	if len(tx.execs) != 1 {
-		t.Fatalf("the auditor issued %d statement(s), want exactly 1 -- one terminal outcome is one audit row", len(tx.execs))
+		t.Fatalf("the auditor issued %d statement(s), want exactly 1 -- one audited action is one audit row", len(tx.execs))
 	}
 	e := tx.execs[0]
 	if !strings.Contains(e.sql, "audit_log") {

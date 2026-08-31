@@ -2,8 +2,9 @@
 // as /api/submission/v1/… — the gateway routes on the first segment under /api/ and forwards
 // the subpath, so the mux patterns carry no prefix.
 //
-// writeJSON/writeError/statusForErr mirror internal/audit/handlers.go:42-64 verbatim;
-// per-package duplicates are the convention here, not a shared library.
+// writeJSON and writeError mirror internal/audit/handlers.go verbatim; statusForErr mirrors it
+// plus the 404 arm this package owns. Per-package duplicates are the convention here, not a
+// shared library.
 package extraction
 
 import (

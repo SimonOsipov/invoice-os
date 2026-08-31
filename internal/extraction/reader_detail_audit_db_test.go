@@ -1,6 +1,7 @@
 // reader_detail_audit_db_test.go: AC 8 -- one screen open leaves exactly one document.read
 // audit row naming the job's document, on the reader's own transaction, and a refused read
-// leaves none.
+// leaves none. Two cases pin what "on the reader's own transaction" buys: the audit INSERT
+// lands between that read's own begin and commit, and a recorder that refuses fails the read.
 //
 // The recorder is the test's own INSERT, not internal/audit.Record: deps_test.go fences this
 // package off everything outside internal/platform/*, and an import of internal/audit here
@@ -15,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +79,24 @@ func rdaReadRows(t *testing.T, ctx context.Context, tenantID, documentID string)
 	return n
 }
 
+// rdaPurge drops the audit rows these cases write. audit_log carries no foreign key to tenants,
+// so stTenant's teardown leaves them standing under dead ids -- and that debris is not inert:
+// internal/platform/db's TestRLS_AuditReadTenantQualIsAnIndexCondOnEveryNewIndex asserts a
+// planner index CHOICE, which moves with audit_log's global row count. worker_db_test.go's
+// wkPurgeAuditLog is the same teardown for the same reason.
+func rdaPurge(t *testing.T, tenantIDs ...string) {
+	t.Helper()
+	if len(tenantIDs) == 0 {
+		t.Fatal("rdaPurge was handed no tenant, so it drops nothing and the rows it exists to remove stay")
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		for _, id := range tenantIDs {
+			wkPurgeAuditLog(t, ctx, id)
+		}
+	})
+}
+
 // AC 8, positive half. Exactly one row, not one-or-more: a recorder called once per statement
 // would leave three and read as success to a > 0 assertion.
 func TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow(t *testing.T) {
@@ -85,6 +105,7 @@ func TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow(t *testing.T) {
 	r := rdaReader(t, rec)
 
 	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	rdaPurge(t, tenantA)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
@@ -136,6 +157,7 @@ func TestRLS_ExtractionDetailRefusalWritesNoAuditRow(t *testing.T) {
 
 	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
 	_, tenantB, docB := rdTenant(t, ctx, "active")
+	rdaPurge(t, tenantA, tenantB)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	jobB := rdSeedJob(t, ctx, tenantB, docB, "succeeded", now, nil)
@@ -186,5 +208,101 @@ func TestRLS_ExtractionDetailRefusalWritesNoAuditRow(t *testing.T) {
 	}
 	if afterB := rdAuditCount(t, ctx, tenantB); afterB != beforeB {
 		t.Errorf("audit_log for tenant %s went from %d row(s) to %d across two refused reads", tenantB, beforeB, afterB)
+	}
+}
+
+// rdaFailingRecorder refuses and writes nothing.
+type rdaFailingRecorder struct {
+	calls int
+	err   error
+}
+
+func (r *rdaFailingRecorder) record(context.Context, pgx.Tx, string, string) error {
+	r.calls++
+	return r.err
+}
+
+// AC 8's fate half. The row rides the read's own transaction, so a recorder that fails fails the
+// READ: a swallowed audit error would serve the document with no trail behind it, and every count
+// above would still read clean because their recorder succeeds.
+func TestRLS_ExtractionDetailAuditFailureFailsTheRead(t *testing.T) {
+	ctx := t.Context()
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	rdaPurge(t, tenantA)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
+
+	// Control: this fixture reads and audits when the recorder succeeds, so the refusal below is
+	// the recorder's doing rather than an empty fixture or a job A cannot see.
+	if got, err := rdaReader(t, &rdaRecorder{}).Detail(ctxA, jobA); err != nil || got.ID != jobA {
+		t.Fatalf("control: Detail returned id %q and %v, want %q and no error", got.ID, err, jobA)
+	}
+	if n := rdaReadRows(t, ctx, tenantA, docA); n != 1 {
+		t.Fatalf("control: tenant %s holds %d %s row(s) for document %s, want 1", tenantA, n, rdaReadEvent, docA)
+	}
+	before := rdAuditCount(t, ctx, tenantA)
+
+	refused := errors.New("audit: the trail is unavailable")
+	rec := &rdaFailingRecorder{err: refused}
+	got, err := (&extraction.Reader{Pool: stRequire(t).app, Audit: rec.record}).Detail(ctxA, jobA)
+
+	if rec.calls != 1 {
+		t.Fatalf("the recorder ran %d time(s), want 1 -- a read that never audited proves nothing about what a failed audit does", rec.calls)
+	}
+	if !errors.Is(err, refused) {
+		t.Fatalf("Detail returned %v, want the recorder's own error -- an audit whose failure the caller never learns of is a trail that can silently stop", err)
+	}
+	if got.ID != "" || got.DocumentID != "" || got.State != "" {
+		t.Errorf("the failed read carried id %q / document %q / state %q; a transaction that rolled back must not reach the caller", got.ID, got.DocumentID, got.State)
+	}
+	if got.Pages == nil || got.Fields == nil {
+		t.Errorf("the failed read returned Pages=%v Fields=%v; a nil slice marshals to JSON null", got.Pages, got.Fields)
+	}
+	if after := rdAuditCount(t, ctx, tenantA); after != before {
+		t.Errorf("audit_log for tenant %s went from %d row(s) to %d across a read whose audit failed, want no change", tenantA, before, after)
+	}
+}
+
+// AC 8's "on the reader's own transaction", read off the wire rather than off the recorder's
+// argument: a recorder handed a real but DIFFERENT transaction satisfies every tx assertion
+// above. One begin, three SELECTs, the audit INSERT, one commit, in that order.
+func TestRLS_ExtractionDetailAuditsInsideTheReadsOwnTransaction(t *testing.T) {
+	ctx := t.Context()
+	tr := &rdQueryTracer{}
+	rec := &rdaRecorder{}
+	r := &extraction.Reader{Pool: rdTracedPool(t, tr), Audit: rec.record}
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	rdaPurge(t, tenantA)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	// The rows make the count mean something: a read over an empty document issues the same
+	// statements whether or not it looked at anything.
+	if len(got.Pages) != 1 || len(got.Fields) != 1 {
+		t.Fatalf("got %d page(s) and %d field(s), want 1 and 1", len(got.Pages), len(got.Fields))
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("the recorder ran %d time(s), want 1", len(rec.calls))
+	}
+
+	_, seen := tr.matching(rpTable)
+	if len(seen) != 6 {
+		t.Fatalf("one audited detail read issued %d traced statement(s), want 6 (begin, three SELECTs, the audit INSERT, commit); the pool saw %v", len(seen), seen)
+	}
+	if seen[0] != "begin" || seen[5] != "commit" {
+		t.Errorf("the traced statements were %v, want one begin/commit pair around four statements", seen)
+	}
+	if !strings.Contains(seen[4], "audit_log") {
+		t.Errorf("statement 5 was %q, want the audit INSERT -- a row written on any other connection does not share the read's fate", seen[4])
 	}
 }

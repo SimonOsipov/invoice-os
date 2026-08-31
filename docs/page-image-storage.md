@@ -164,10 +164,13 @@ The inventory is read; the pixels are not. Since EXTR-11-01 `(*Reader).Detail` s
 displays one: the bytes route is EXTR-11-03's and the canvas EXTR-11-05's, so `storage_key`
 still leaves this package only through `PageStore`.
 
-That read names `document_id` and no `tenant_id`, so it is not by itself a demonstration that
-the policy on this table does anything. It could reach another tenant's rows only if a
-page-image row could point at another tenant's document, and
-`extraction_page_images_tenant_document_fk` forbids that
-(`TestRLS_ExtractionDetailChildTablesRefuseACrossTenantRow`). What a request path now exercises
-is the enclosing job's own RLS (`TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections`);
-on these rows the schema is still the load-bearing part.
+That read names `document_id` and no `tenant_id`, so **two** independent mechanisms stand between
+it and another tenant's rows: this table's own `tenant_isolation` policy, which scopes every
+statement the app role issues, and `extraction_page_images_tenant_document_fk`, which forbids a
+page-image row pointing at another tenant's document
+(`TestRLS_ExtractionDetailChildTablesRefuseACrossTenantRow`). Because the second makes the
+cross-tenant case unconstructible, no request-path test can distinguish a working policy from an
+absent one — the read is *scoped* by the policy and does not *demonstrate* it. What a request path
+now exercises is the enclosing job's own RLS
+(`TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections`); on these rows the schema is
+still the load-bearing part.

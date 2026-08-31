@@ -516,27 +516,22 @@ describe('documentRunRows — file order wins over id order (STAGE-ADV-4, AC-2)'
   })
 })
 
-describe('documentRunRows — a RunFile.id equal to a JS prototype key (STAGE-ADV-5, documented gap)', () => {
-  it('DOCUMENTED GAP: "constructor" as an id resolves through Object.prototype and drops `kind` from the row', () => {
-    // documentRunRows reads `stages[f.id]` on a plain object. Object.prototype answers
-    // 'constructor'/'__proto__'/'toString' truthily, so `?? { kind: 'queued' }` never
-    // fires (the value isn't null/undefined) and the inherited method gets spread into
-    // the row instead of a DocumentRowState. A function's own properties are all
-    // non-enumerable, so the spread contributes nothing -- the row silently loses
-    // `kind` entirely, breaking AC-2's "exactly one row, every property accounted for".
-    //
-    // NOT reachable today: the only producer of RunFile.id (importRun.ts:66,
-    // crypto.randomUUID()) can never equal a prototype key, so this is pinned as a
-    // known, non-blocking gap -- not a regression to silently reopen if a future
-    // caller ever keys `stages` by something else. See documentRun.ts:82.
-    const files: RunFile[] = [runFile('constructor', 'evil.pdf')]
+describe('documentRunRows — a RunFile.id equal to a JS prototype key (STAGE-ADV-5)', () => {
+  it('"constructor" and "__proto__" as ids have no map entry and still render queued', () => {
+    // stages[f.id] on a plain object would resolve 'constructor'/'__proto__' through
+    // Object.prototype -- a function, so `?? { kind: 'queued' }` never fires and the
+    // row silently loses `kind`. Object.hasOwn gates the lookup to own properties only,
+    // so a file with no map entry renders queued like any other (AC-4). See documentRun.ts:82.
+    const files: RunFile[] = [runFile('constructor', 'evil.pdf'), runFile('__proto__', 'evil2.pdf')]
     const run: ImportRun = { files, cursor: 0, status: 'running' }
     const stages = {} as Record<string, DocumentRowState>
 
     const rows = documentRunRows(run, stages)
 
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).not.toHaveProperty('kind')
-    expect(rows[0]).toEqual({ name: 'evil.pdf' })
+    expect(rows).toHaveLength(2)
+    expect(rows).toEqual([
+      { name: 'evil.pdf', kind: 'queued' },
+      { name: 'evil2.pdf', kind: 'queued' },
+    ])
   })
 })

@@ -77,9 +77,10 @@ export function stageOf(job: ExtractionJob | null): DocumentRowState | null {
 }
 
 // One row per run.files entry, joined by RunFile.id -- never by name (importRun.ts:77-78
-// records why a name-keyed join is wrong).
+// records why a name-keyed join is wrong); the own-property check keeps an id like
+// 'constructor' from resolving through Object.prototype instead of the ?? fallback.
 export function documentRunRows(run: ImportRun, stages: Readonly<Record<string, DocumentRowState>>): RunFileRow[] {
-  return run.files.map((f) => ({ name: f.name, ...(stages[f.id] ?? { kind: 'queued' }) }))
+  return run.files.map((f) => ({ name: f.name, ...(Object.hasOwn(stages, f.id) ? stages[f.id] : { kind: 'queued' }) }))
 }
 
 export interface DocumentRunFile {

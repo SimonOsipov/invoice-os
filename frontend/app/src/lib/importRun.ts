@@ -286,6 +286,9 @@ export type RunFileRow =
   | { name: string; kind: 'processing' }
   | { name: string; kind: 'imported'; count: number }
   | { name: string; kind: 'failed'; reason: string }
+  // Document path only (EXTR-10-01) -- runFileRows below never produces either.
+  | { name: string; kind: 'reading' }
+  | { name: string; kind: 'retrying' }
 
 // AC #10: one row per file, TOTAL over the whole run (BULK-05-12) -- every file
 // appears regardless of its own outcome kind, in file order. An 'uploading' outcome

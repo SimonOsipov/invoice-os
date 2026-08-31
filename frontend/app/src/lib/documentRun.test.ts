@@ -16,13 +16,15 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   EXTRACTION_POLL_BUDGET_MS,
   deadLetterRefusal,
+  documentRunRows,
   isTerminalExtractionState,
   newestJob,
   pollBudgetRefusal,
   pollVerdict,
+  stageOf,
   startDocumentRun,
 } from './documentRun'
-import type { DocumentPipelineDeps, DocumentRunFile } from './documentRun'
+import type { DocumentPipelineDeps, DocumentRowState, DocumentRunFile } from './documentRun'
 import type { ExtractionJob, ImportReport } from './importApi'
 import { routeAfterRun } from './importRun'
 import type { ImportRun, RunFile } from './importRun'
@@ -60,6 +62,12 @@ function report(id: string, readyInvoices = 1): ImportReport {
 
 function docFiles(names: string[]): DocumentRunFile[] {
   return names.map((name, i) => ({ id: `f${i + 1}`, name, file: new File([], name, { type: 'application/pdf' }) }))
+}
+
+// EXTR-10-01: documentRunRows joins on RunFile, not DocumentRunFile -- a fresh helper
+// rather than reusing docFiles, whose shape (a File) is the wrong side of the seam.
+function runFile(id: string, name: string): RunFile {
+  return { id, name, groupId: '', outcome: { kind: 'pending' } }
 }
 
 // --- POLL-1 ----------------------------------------------------------------
@@ -312,5 +320,135 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
     const failed = outcomes[1].outcome
     if (failed.kind !== 'failed') throw new Error('unreachable — asserted above')
     expect(failed.message).toContain('connection reset')
+  })
+})
+
+// --- STAGE-1..6 (EXTR-10-01, task-783) --------------------------------------
+//
+// stageOf/documentRunRows are stubs that throw 'EXTR-10-01: not implemented' until the
+// executor writes their bodies. Every assertion below is expected to fail on that throw.
+
+describe('stageOf — classifies every state in the CHECK constraint, and only those (STAGE-1, Core AC 1/2)', () => {
+  // migrations/20260827084025_extraction_jobs.sql:20-21's five values, literal so a
+  // dropped case shrinks this list (and the length assertion below) rather than passing
+  // silently.
+  const CHECK_STATES = ['queued', 'extracting', 'succeeded', 'failed', 'dead_lettered'] as const
+
+  it('STAGE-1: stageOf classifies every state in the CHECK constraint, and only those', () => {
+    expect(CHECK_STATES).toHaveLength(5)
+
+    const TABLE: readonly [string, DocumentRowState | null][] = [
+      ['queued', { kind: 'queued' }],
+      ['extracting', { kind: 'reading' }],
+      ['succeeded', null],
+      ['failed', { kind: 'retrying' }],
+      ['dead_lettered', null],
+    ]
+    // The table's states are exactly CHECK_STATES, same order -- so this spec cannot pass
+    // by covering some other five-item list.
+    expect(TABLE.map(([state]) => state)).toEqual(CHECK_STATES)
+
+    for (const [state, expected] of TABLE) {
+      expect(stageOf(job({ state })), `state ${state}`).toEqual(expected)
+    }
+
+    // Outside the CHECK set entirely -- a fall-through to a default word is what this guards.
+    expect(stageOf(job({ state: 'weird' }))).toBeNull()
+  })
+})
+
+describe('stageOf — no extraction_jobs row yet is QUEUED, never blank (STAGE-2, Core AC 1)', () => {
+  it('STAGE-2: no extraction_jobs row yet is QUEUED, never blank', () => {
+    expect(stageOf(null)).toEqual({ kind: 'queued' })
+  })
+})
+
+describe('documentRunRows — total over the run and keeps file order (STAGE-3, Core AC 3)', () => {
+  it('STAGE-3: documentRunRows is total over the run and keeps file order', () => {
+    const files: RunFile[] = [runFile('f1', 'a.pdf'), runFile('f2', 'b.pdf'), runFile('f3', 'c.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f2: { kind: 'reading' } }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(3)
+    expect(rows.map((r) => r.name)).toEqual(['a.pdf', 'b.pdf', 'c.pdf'])
+    expect(rows[0]).toEqual({ name: 'a.pdf', kind: 'queued' })
+    expect(rows[1]).toEqual({ name: 'b.pdf', kind: 'reading' })
+    expect(rows[2]).toEqual({ name: 'c.pdf', kind: 'queued' })
+  })
+})
+
+describe('documentRunRows — rows join on file id, never on filename (STAGE-4, Core AC 3)', () => {
+  it('STAGE-4: rows join on file id, never on filename', () => {
+    // Same name, different ids -- the exact byte-identical-pick trap importRun.ts:77-78
+    // records for attachDocumentIds; documentRunRows must not repeat it.
+    const files: RunFile[] = [runFile('f1', 'dup.pdf'), runFile('f2', 'dup.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f1: { kind: 'reading' }, f2: { kind: 'retrying' } }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(2)
+    expect(rows).toEqual([
+      { name: 'dup.pdf', kind: 'reading' },
+      { name: 'dup.pdf', kind: 'retrying' },
+    ])
+  })
+})
+
+describe('documentRunRows — the map is the whole truth while the run is live (STAGE-5, Core AC 1)', () => {
+  it('STAGE-5: the map is the whole truth while the run is live', () => {
+    // outcome stays 'pending' -- runReducer's own settle hasn't happened -- while the
+    // stage map already says imported. An impl reading f.outcome first shows QUEUED for a
+    // document that has already settled: today's exact defect (App.tsx:945-951).
+    const files: RunFile[] = [runFile('f1', 'a.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f1: { kind: 'imported', count: 2 } }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toEqual({ name: 'a.pdf', kind: 'imported', count: 2 })
+  })
+})
+
+describe('documentRunRows — the widened union adds no row property (STAGE-6, Core AC 2)', () => {
+  it('STAGE-6: the widened union adds no row property', () => {
+    const STATES: readonly DocumentRowState[] = [
+      { kind: 'queued' },
+      { kind: 'reading' },
+      { kind: 'retrying' },
+      { kind: 'processing' },
+      { kind: 'imported', count: 1 },
+      { kind: 'failed', reason: 'boom' },
+    ]
+    expect(STATES).toHaveLength(6)
+
+    const files: RunFile[] = STATES.map((_, i) => runFile(`f${i + 1}`, `file${i + 1}.pdf`))
+    const stages: Record<string, DocumentRowState> = Object.fromEntries(STATES.map((s, i) => [`f${i + 1}`, s]))
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+
+    const rows = documentRunRows(run, stages)
+    expect(rows).toHaveLength(6)
+
+    // BULK-05-12's own forbidden set (importRun.test.ts:683-695) -- a stage carrying a
+    // payload reopens the honesty hole the card exists to close.
+    const FORBIDDEN = [
+      'stage',
+      'percent',
+      'loaded',
+      'total',
+      'rows',
+      'rowsRead',
+      'bytes',
+      'ruleSetVersion',
+      'rule_set_version',
+    ]
+    for (const row of rows) {
+      for (const prop of FORBIDDEN) {
+        expect(row, `${JSON.stringify(row)} should not carry "${prop}"`).not.toHaveProperty(prop)
+      }
+    }
   })
 })

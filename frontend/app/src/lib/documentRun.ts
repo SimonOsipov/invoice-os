@@ -2,7 +2,7 @@
 // the budget arithmetic. No DOM, no network: App.tsx injects the transport, matching
 // importRun.ts's own node-testable discipline. Pinned by documentRun.test.ts.
 
-import type { FileOutcome } from './importRun'
+import type { FileOutcome, ImportRun, RunFileRow } from './importRun'
 import type { ExtractionJob, ImportReport } from './importApi'
 
 // Mirrors e2e/api/contract-document-upload.spec.ts's POLL_BUDGET_MS: above the mock
@@ -55,6 +55,28 @@ export function pollVerdict(jobs: readonly ExtractionJob[], elapsedMs: number): 
   }
   if (elapsedMs > EXTRACTION_POLL_BUDGET_MS) return { kind: 'failed', reason: pollBudgetRefusal() }
   return { kind: 'waiting' }
+}
+
+// The card's per-document word, over the migration's CHECK set (EXTR-10-01). 'succeeded'
+// and 'dead_lettered' get no word -- pollVerdict already owns their wording.
+export type DocumentRowState =
+  | { kind: 'queued' }
+  | { kind: 'reading' }
+  | { kind: 'retrying' }
+  | { kind: 'processing' }
+  | { kind: 'imported'; count: number }
+  | { kind: 'failed'; reason: string }
+
+// The ONE place extraction_jobs.state becomes a word. null -> queued: the worker's own tx
+// makes state='queued' unobservable, so an empty jobs[] must still read as "started".
+export function stageOf(_job: ExtractionJob | null): DocumentRowState | null {
+  throw new Error('EXTR-10-01: not implemented')
+}
+
+// One row per run.files entry, joined by RunFile.id -- never by name (importRun.ts:77-78
+// records why a name-keyed join is wrong).
+export function documentRunRows(_run: ImportRun, _stages: Readonly<Record<string, DocumentRowState>>): RunFileRow[] {
+  throw new Error('EXTR-10-01: not implemented')
 }
 
 export interface DocumentRunFile {

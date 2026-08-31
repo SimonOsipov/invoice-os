@@ -4,9 +4,10 @@
 // shell stays the only place that can revoke it. That is the type, not a convention.
 //
 // No page rail, thumbnail badge or page jump. Nothing in a browser exposes the page count
-// of a `blob:` PDF, the server records none, and reading the bytes to find one would be
-// parsing. The platform viewer paginates instead — its own download/print chrome is the
-// browser's, not an affordance this build offers.
+// of a `blob:` PDF, the only server-side record of one is `extraction_page_images` (which
+// this viewer never reads), and reading the bytes to find one would be parsing. The
+// platform viewer paginates instead — its own download/print chrome is the browser's, not
+// an affordance this build offers.
 
 import { useState, type CSSProperties } from 'react'
 

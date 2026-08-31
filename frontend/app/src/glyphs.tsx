@@ -47,6 +47,7 @@ export const closeGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={16} strok
 export const backGlyph = <Icon paths={['M19 12H5', 'm12 19-7-7 7-7']} size={14} />
 export const refreshGlyph = <Icon paths={['M21 4v6h-6', 'M3 20v-6h6', 'M3.5 9a9 9 0 0 1 14.9-3.4L21 8', 'M20.5 15a9 9 0 0 1-14.9 3.4L3 16']} size={14} />
 export const warnTriGlyph = <Icon paths={['m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z', 'M12 9v4', 'M12 17h.01']} size={16} />
+export const infoGlyph = <Icon paths={['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z', 'M12 11v5', 'M12 8h.01']} size={15} />
 
 // Rules screen: the lock replaces the toggle on every inherited row, and the star
 // heads the "Suggested for you" card (same glyph the Support Console's learned-rules

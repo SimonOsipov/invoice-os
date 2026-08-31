@@ -52,9 +52,17 @@ export function fmtTime(iso: string | null | undefined): string {
 // HH:MM in Lagos whatever the viewer's clock, so the literal ' WAT' beside it is true.
 // fmtTime above reads the host clock and would print a WAT-labelled UTC time on the CI
 // browser. hourCycle beats hour12: a small-ICU build silently falls back to 12h (T-4).
-// STUB — throws until EXTR-11-04's feat commit.
-export function fmtTimeWAT(_iso: string | null | undefined): string {
-  throw new Error('not implemented')
+export function fmtTimeWAT(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  // Intl.format(new Date('x')) throws RangeError, which would blank the whole toolbar.
+  if (isNaN(d.getTime())) return '—'
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Lagos',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(d)
 }
 
 export function amount(items: LineItem[]): number {

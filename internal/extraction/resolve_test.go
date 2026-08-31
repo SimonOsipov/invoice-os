@@ -658,3 +658,119 @@ func TestResolve_IgnoresAnUncompiledRule(t *testing.T) {
 	}}
 	rvControl(t, extraction.Resolve(rvPage(tok), control), "the same label built through ParseRule")
 }
+
+// --- EXTR-16-02: anchor specificity (D-A) -----------------------------------
+
+// rvSubSpanText is the fused label M1 and M3 both live on: supplier_name matches "Supplier"
+// (span 0-8) while supplier_tin matches "Supplier TIN" (span 0-12). The narrower match owns
+// nothing on this token, yet today it anchors all three supplier_name relations.
+const rvSubSpanText = "Supplier TIN: 99999999-0101"
+
+func rvSubSpanPage() []extraction.TokenPage {
+	return rvPage(rvTok(rvSubSpanText, 0.10, 0.10, 0.45, 0.13))
+}
+
+// AC-1. The zero asserted for supplier_name carries supplier_tin as its positive control in the
+// same test, per this file's second rule.
+func TestResolve_ASubSpanLabelDoesNotAnchorAGenericRule(t *testing.T) {
+	got := extraction.Resolve(rvSubSpanPage(), rvGeneric())
+
+	if names := rvValues(rvFor(got, "supplier_name")); len(names) != 0 {
+		t.Errorf("supplier_name candidates = %q, want none: on %q the supplier_name lexicon match (span 0-8) is a strict sub-span of the supplier_tin match (span 0-12), so it must not anchor a Tier-1 rule",
+			names, rvSubSpanText)
+	}
+
+	tins := rvFor(got, "supplier_tin")
+	rvControl(t, tins, "supplier_tin over the same token")
+	if got, want := rvValues(tins), []string{"99999999-0101"}; !slices.Equal(got, want) {
+		t.Errorf("supplier_tin candidates = %q, want %q", got, want)
+	}
+}
+
+// AC-1. The guard on an over-broad D-A: suppression is one-directional, so the entry holding the
+// WIDER match keeps its own rule.
+func TestResolve_TheWidestLexiconMatchKeepsItsOwnRule(t *testing.T) {
+	got := extraction.Resolve(rvSubSpanPage(), rvGeneric())
+
+	tins := rvFor(got, "supplier_tin")
+	rvControl(t, tins, "supplier_tin over the widest lexicon match on the token")
+	if got, want := rvValues(tins), []string{"99999999-0101"}; !slices.Equal(got, want) {
+		t.Errorf("supplier_tin candidates = %q, want %q: supplier_tin owns the widest match on %q and must not be suppressed by the narrower supplier_name match inside it",
+			got, want, rvSubSpanText)
+	}
+	if got, want := tins[0].RuleID, "t1.supplier_tin.same_token"; got != want {
+		t.Errorf("supplier_tin candidate RuleID = %q, want %q", got, want)
+	}
+}
+
+// AC-1. Only a STRICT sub-span loses. Two halves, because the shipped lexicon offers two
+// distinct non-strict shapes and neither may suppress:
+//
+//   - identical offsets. Measured over every label alternative, no two lexicon entries match at
+//     the same [start,end) on any token, so the identical-span case that does arise is a rule
+//     against its OWN entry -- on "Total" both are [0,5]. A containment test that is not strict
+//     suppresses every shipped rule and Resolve returns nothing at all.
+//   - overlap with no containment. On "Net Amount Due" subtotal matches [0,10] and total matches
+//     [4,14]; neither span holds the other, so both anchor.
+func TestResolve_AnEqualSpanMatchIsNotSuppressed(t *testing.T) {
+	self := rvPage(
+		rvTok("Total", 0.10, 0.30, 0.20, 0.33),
+		rvTok("5375.00", 0.40, 0.30, 0.55, 0.33),
+	)
+	got := extraction.Resolve(self, rvGeneric())
+	totals := rvFor(got, "total")
+	rvControl(t, totals, `the shipped total rule over a bare "Total" label`)
+	if got, want := rvValues(totals), []string{"5375.00"}; !slices.Equal(got, want) {
+		t.Errorf(`total candidates over "Total" = %q, want %q: the total rule's own lexicon entry matches at the identical span, and an equal span is not a strict sub-span`, got, want)
+	}
+
+	overlap := rvPage(
+		rvTok("Net Amount Due", 0.10, 0.30, 0.30, 0.33),
+		rvTok("5375.00", 0.40, 0.30, 0.55, 0.33),
+	)
+	got = extraction.Resolve(overlap, rvGeneric())
+	subs := rvFor(got, "subtotal")
+	totals = rvFor(got, "total")
+	rvControl(t, subs, `subtotal over "Net Amount Due"`)
+	rvControl(t, totals, `total over "Net Amount Due"`)
+	if got, want := rvValues(subs), []string{"5375.00"}; !slices.Equal(got, want) {
+		t.Errorf(`subtotal candidates over "Net Amount Due" = %q, want %q: subtotal matches [0,10] and total [4,14], and neither span holds the other`, got, want)
+	}
+	if got, want := rvValues(totals), []string{"5375.00"}; !slices.Equal(got, want) {
+		t.Errorf(`total candidates over "Net Amount Due" = %q, want %q: subtotal matches [0,10] and total [4,14], and neither span holds the other`, got, want)
+	}
+}
+
+// AC-1, second sentence (D-5). The lexicon is Tier-1's own vocabulary and has no authority over
+// a tenant's learned label, so the gate is on TierGeneric. The learned rule's label matches
+// [0,8] on the fused token -- the same strict sub-span that costs the shipped rule its anchor.
+func TestResolve_ALearnedRuleIsNeverSuppressedByTheLexicon(t *testing.T) {
+	pages := rvPage(
+		rvTok(rvSubSpanText, 0.10, 0.10, 0.45, 0.13),
+		rvTok("Adeyemi Trading Limited", 0.10, 0.14, 0.40, 0.17),
+	)
+	rules := extraction.RuleSet{
+		Learned: []extraction.AnchorRule{
+			rvLearned(t, "learned-supplier", "supplier_name", rvLabelSupplier, extraction.RelBelow, 0.06, extraction.ShapeName),
+		},
+		Tier1: extraction.Tier1Rules,
+	}
+
+	got := extraction.Resolve(pages, rules)
+	names := rvFor(got, "supplier_name")
+	rvControl(t, names, "the learned supplier_name rule over the fused token")
+
+	if len(names) != 1 {
+		t.Fatalf("supplier_name candidates = %+v, want exactly 1: the learned rule survives the sub-span gate while every shipped supplier_name rule loses this anchor", names)
+	}
+	c := names[0]
+	if c.Tier != extraction.TierLearned {
+		t.Errorf("supplier_name candidate Tier = %v, want TierLearned", c.Tier)
+	}
+	if c.RuleID != "learned-supplier" {
+		t.Errorf("supplier_name candidate RuleID = %q, want %q", c.RuleID, "learned-supplier")
+	}
+	if c.Value != "Adeyemi Trading Limited" {
+		t.Errorf("supplier_name candidate Value = %q, want %q", c.Value, "Adeyemi Trading Limited")
+	}
+}

@@ -21,6 +21,11 @@ import (
 // from acDocRowRE by construction: a layout name carries a dot, which [a-z_]+ cannot match.
 var aaFieldRowRE = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]+) \\| ([0-9]+) \\|")
 
+// aaDecisionRowRE is one row of the decision section's false-decision table:
+// | `corpus_x.pdf` | `field` | `value` |. Disjoint from acDocRowRE, whose second cell is a
+// number, and read from a different section anyway.
+var aaDecisionRowRE = regexp.MustCompile("(?m)^\\| `(corpus_[a-z0-9_]+\\.pdf)` \\| `([a-z_]+)` \\| `([^`]+)` \\|")
+
 // aaRunFilterRE reads the -run pattern out of the ci.yml reporting step.
 var aaRunFilterRE = regexp.MustCompile(`-run '([^']+)'`)
 
@@ -38,12 +43,37 @@ func aaByField(t *testing.T) map[string]acRow {
 	return out
 }
 
-// aaDistance is the distance at which ruleID reaches value on file, under rules.
-func aaDistance(t *testing.T, file, ruleID, value string, rules []extraction.Tier1Rule) (float64, bool) {
+// aaTokenBox is the box of the token whose text is exactly text. Fatal on a miss or on a
+// duplicate: either would silently measure some other token's edge.
+func aaTokenBox(t *testing.T, pages []extraction.TokenPage, text string) extraction.Region {
 	t.Helper()
 
-	got := extraction.Resolve(rvCorpusPages(t, file), extraction.RuleSet{Tier1: rules})
-	rvControl(t, got, "the rule set under test over "+file)
+	var out []extraction.Region
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if tok.Text == text {
+				out = append(out, tok.Region)
+			}
+		}
+	}
+	if len(out) != 1 {
+		t.Fatalf("%d token(s) read %q, want exactly 1; the edge measured below would be some other token's", len(out), text)
+	}
+	return out[0]
+}
+
+func aaStackedPages(t *testing.T) []extraction.TokenPage {
+	t.Helper()
+	return rvCorpusPages(t, "corpus_stacked_labels.pdf")
+}
+
+// aaDistance is the distance at which ruleID reaches value on pages, under rules. what names
+// the page set for the failure message.
+func aaDistance(t *testing.T, pages []extraction.TokenPage, what, ruleID, value string, rules []extraction.Tier1Rule) (float64, bool) {
+	t.Helper()
+
+	got := extraction.Resolve(pages, extraction.RuleSet{Tier1: rules})
+	rvControl(t, got, "the rule set under test over "+what)
 	for _, c := range got {
 		if c.RuleID == ruleID && c.Value == value {
 			return c.Distance, true
@@ -89,7 +119,7 @@ func aaRequiredReach(t *testing.T, suffix string) (float64, string) {
 // only the per-LAYOUT rows. "Moving the floor" step 3 tells the next author that both tables
 // are enforced, so leaving one unread makes the doc wrong about its own oracle.
 func TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc))
+	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocSection)
 
 	rows := aaFieldRowRE.FindAllStringSubmatch(section, -1)
 	if len(rows) == 0 {
@@ -137,8 +167,68 @@ func TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement(t *testing.T) {
 			t.Errorf("%s's per-field table has no row for %s; a field missing from the table reads as untested", acDoc, field)
 		}
 	}
-	if hits != tier1AccuracyHits || total != tier1AccuracyPairs {
-		t.Errorf("%s's per-field table sums to %d/%d, want %d/%d", acDoc, hits, total, tier1AccuracyHits, tier1AccuracyPairs)
+	if hits != tier1RecallHits || total != tier1RecallPairs {
+		t.Errorf("%s's per-field table sums to %d/%d, want %d/%d", acDoc, hits, total, tier1RecallHits, tier1RecallPairs)
+	}
+}
+
+// The recall rate cannot see a false decision at all: corpusExpect names no such pair, so
+// nothing scores it. The doc is where an operator meets both numbers, and prose beside a pinned
+// var is how the two drift apart.
+func TestCorpusDoc_RecordsTheDecisionRate(t *testing.T) {
+	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocDecisionSection)
+
+	for _, want := range []string{
+		fmt.Sprintf("%d of %d", tier1DecisionHits, tier1DecisionPairs),
+		strconv.FormatFloat(tier1DecisionRate, 'f', 4, 64),
+		fmt.Sprintf("False decisions: %d", len(acFalseDecided)),
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("%s's %q section does not carry %q", acDoc, acDocDecisionSection, want)
+		}
+	}
+
+	rows := aaDecisionRowRE.FindAllStringSubmatch(section, -1)
+
+	// Zero pins has its own oracle: the doc's table must be gone too. Guarded by a probe row,
+	// because a scan that stopped matching also finds nothing and would read as a clean doc.
+	if len(acFalseDecided) == 0 {
+		const probe = "| `corpus_probe.pdf` | `supplier_name` | `X` |"
+		if !aaDecisionRowRE.MatchString(probe) {
+			t.Fatalf("aaDecisionRowRE no longer matches a well-formed row (%s); the absence below is a broken scan, not a clean doc", probe)
+		}
+		if len(rows) != 0 {
+			t.Errorf("%s's %q section records %d false-decision row(s) while acFalseDecided pins none", acDoc, acDocDecisionSection, len(rows))
+		}
+		return
+	}
+
+	// Control needle: a scan that stopped matching finds no row, which reads exactly like a doc
+	// with no fabrication left to record.
+	if len(rows) == 0 {
+		t.Fatalf("%s's %q section holds no false-decision row for the %d acFalseDecided pins; a row reads exactly: | `corpus_x.pdf` | `field` | `value` |", acDoc, acDocDecisionSection, len(acFalseDecided))
+	}
+
+	// By identity in both directions, as TestTier1Accuracy_DecisionRateOverTheCorpus compares
+	// the live set: a count alone passes when one fabrication is replaced by another.
+	pinned := make(map[acPair]string, len(acFalseDecided))
+	for _, f := range acFalseDecided {
+		pinned[acPair{file: f.file, field: f.field}] = f.value
+	}
+	for _, m := range rows {
+		p := acPair{file: m[1], field: m[2]}
+		want, ok := pinned[p]
+		if !ok {
+			t.Errorf("%s records a false decision for %s / %s, which acFalseDecided does not pin", acDoc, p.file, p.field)
+			continue
+		}
+		if want != m[3] {
+			t.Errorf("%s says %s / %s decides %q; acFalseDecided pins %q", acDoc, p.file, p.field, m[3], want)
+		}
+		delete(pinned, p)
+	}
+	for p, v := range pinned {
+		t.Errorf("%s's table has no row for the pinned false decision %s / %s = %q", acDoc, p.file, p.field, v)
 	}
 }
 
@@ -213,8 +303,8 @@ func TestTier1Accuracy_TheReportNamesEveryMissedPair(t *testing.T) {
 	}
 
 	s := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
-	if s.total != tier1AccuracyPairs {
-		t.Fatalf("scored %d pair(s), want %d", s.total, tier1AccuracyPairs)
+	if s.total != tier1RecallPairs {
+		t.Fatalf("scored %d pair(s), want %d", s.total, tier1RecallPairs)
 	}
 	report := acRenderReport(s)
 	for _, miss := range s.missed {
@@ -256,27 +346,67 @@ func TestTier1_TheRecordedDistancesAreTheMeasuredDistances(t *testing.T) {
 		}
 	})
 
-	// The two merges that bound the dials from above, each measured on the candidate the
-	// widened dial produces rather than read back off the prose.
+	// The merges that bound the dials from above, each measured on the candidate the widened
+	// dial produces rather than read back off the prose. Every one reaches a printed VALUE:
+	// since EXTR-16 a bare label is not one, and both dials' old oracles were labels.
 	for _, c := range []struct {
-		name, file, ruleID, value, want string
+		name, what, ruleID, value, want string
 		kind                            extraction.RelationKind
+		pages                           func(*testing.T) []extraction.TokenPage
 	}{
-		{"below_merge", "corpus_stacked_labels.pdf", "t1.supplier_name.below", "Invoice Date", "0.087010", extraction.RelBelow},
-		{"right_merge", "corpus_two_column.pdf", "t1.supplier_name.right", "Buyer", "0.465497", extraction.RelRight},
+		{"below_merge", "corpus_stacked_labels.pdf", "t1.supplier_name.below", "22 Apr 2026", "0.107212", extraction.RelBelow, aaStackedPages},
+		{"below_cross_party", "corpus_stacked_labels.pdf", "t1.supplier_name.below", "Honeywell Group", "0.321571", extraction.RelBelow, aaStackedPages},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// Widened far past both bounds, so the merge appears and its distance is readable.
-			d, ok := aaDistance(t, c.file, c.ruleID, c.value, acWithDistance(t, c.kind, 0.9))
+			d, ok := aaDistance(t, c.pages(t), c.what, c.ruleID, c.value, acWithDistance(t, c.kind, 0.9))
 			if !ok {
-				t.Fatalf("%s reaches no %q on %s even at 0.9; the recorded merge does not exist and the upper bound rests on nothing", c.ruleID, c.value, c.file)
+				t.Fatalf("%s reaches no %q on %s even at 0.9; the recorded merge does not exist and the upper bound rests on nothing", c.ruleID, c.value, c.what)
 			}
 			if got := strconv.FormatFloat(d, 'f', 6, 64); got != c.want {
-				t.Errorf("%s reaches %q on %s at %s; tier1.go records %s", c.ruleID, c.value, c.file, got, c.want)
+				t.Errorf("%s reaches %q on %s at %s; tier1.go records %s", c.ruleID, c.value, c.what, got, c.want)
 			}
 			if !strings.Contains(src, c.want) {
 				t.Errorf("tier1.go records no %s, the measured distance of this merge", c.want)
 			}
 		})
 	}
+
+	// The right dial's merge has no corpus instance left, so it is measured on a synthetic page
+	// -- and a fixture whose geometry is invented bounds the dial at a number nobody measured.
+	// The gap is therefore re-read off corpus_two_column.pdf in the same subtest.
+	t.Run("right_merge", func(t *testing.T) {
+		const want = "0.465497"
+
+		d, ok := aaDistance(t, acRightColumnPage(), "acRightColumnPage", "t1.supplier_name.right", "Honeywell Group", acWithDistance(t, extraction.RelRight, 0.9))
+		if !ok {
+			t.Fatalf("t1.supplier_name.right reaches no %q on acRightColumnPage even at 0.9; the recorded merge does not exist and the upper bound rests on nothing", "Honeywell Group")
+		}
+		if got := strconv.FormatFloat(d, 'f', 6, 64); got != want {
+			t.Errorf("t1.supplier_name.right reaches the buyer column on acRightColumnPage at %s; tier1.go records %s", got, want)
+		}
+		if !strings.Contains(src, want) {
+			t.Errorf("tier1.go records no %s, the measured distance of this merge", want)
+		}
+
+		real := rvCorpusPages(t, "corpus_two_column.pdf")
+		supplier := aaTokenBox(t, real, "Supplier")
+		buyer := aaTokenBox(t, real, "Buyer")
+		if got := strconv.FormatFloat(buyer.X0-supplier.X1, 'f', 6, 64); got != want {
+			t.Errorf("on corpus_two_column.pdf the gap from %q to the buyer column is %s; acRightColumnPage spans %s and no longer carries the corpus's own geometry", "Supplier", got, want)
+		}
+		// Each edge, not only their difference: a fixture that shifted both by the same amount
+		// would keep the gap and stop being the corpus's geometry.
+		for _, e := range []struct {
+			what       string
+			real, fixt float64
+		}{
+			{"the \"Supplier\" label's right edge", supplier.X1, acSupplierLabelX1},
+			{"the buyer column's left edge", buyer.X0, acBuyerColumnX0},
+		} {
+			if got := strconv.FormatFloat(e.real, 'f', 6, 64); got != strconv.FormatFloat(e.fixt, 'f', 6, 64) {
+				t.Errorf("corpus_two_column.pdf puts %s at %s; acRightColumnPage is built from %v", e.what, got, e.fixt)
+			}
+		}
+	})
 }

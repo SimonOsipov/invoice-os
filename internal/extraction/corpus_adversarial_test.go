@@ -369,6 +369,47 @@ func TestCorpus_EveryExpectedValueAppearsInItsFixture(t *testing.T) {
 	}
 }
 
+// --- EXTR-16-02: the pins say what they mean ---------------------------------
+
+const (
+	corpusPinsFile   = "internal/extraction/reconcile_corpus_test.go"
+	corpusPinsStart  = "var corpusPinned = []struct {"
+	corpusPinsFloor  = 6 // one `file:` key per committed layout
+	corpusPinsKnown  = "// KNOWN GAP (t1aGaps)"
+	corpusPinsReject = "// WRONG"
+)
+
+// AC-6. corpusPinned no longer holds a reading a human would reject, so no WRONG comment may
+// survive inside it; the two out-of-scope readings carry the KNOWN GAP tag instead. Guarded
+// twice -- a floor on the keys the scanned span holds, and a control needle it must still find
+// -- because a scan that stops matching returns zero hits, and zero hits reads exactly like a
+// clean file.
+func TestReconcileCorpus_NoWrongCommentSurvivesInThePins(t *testing.T) {
+	src := acRepoFile(t, corpusPinsFile)
+
+	i := strings.Index(src, corpusPinsStart)
+	if i < 0 {
+		t.Fatalf("%s carries no %q; the scan below would read some other span", corpusPinsFile, corpusPinsStart)
+	}
+	span := src[i:]
+	j := strings.Index(span, "\n}\n")
+	if j < 0 {
+		t.Fatalf("corpusPinned's declaration in %s is unterminated; the scan has no end to stop at", corpusPinsFile)
+	}
+	span = span[:j]
+
+	if n := strings.Count(span, "file:"); n < corpusPinsFloor {
+		t.Fatalf("the scanned span holds %d `file:` key(s), want at least %d; it is not corpusPinned", n, corpusPinsFloor)
+	}
+	if !strings.Contains(span, corpusPinsKnown) {
+		t.Fatalf("the scanned span carries no %q; the two out-of-scope readings are pinned under that tag, so a span without it is the wrong span", corpusPinsKnown)
+	}
+
+	if n := strings.Count(span, corpusPinsReject); n != 0 {
+		t.Errorf("corpusPinned carries %d %q comment(s); every in-scope reading is fixed and the two out-of-scope ones are tagged %q", n, corpusPinsReject, corpusPinsKnown)
+	}
+}
+
 // C-02 builds each layout twice, which catches map-order non-determinism about 30% of the
 // time (measured: 6 of 20 runs). Repeating the build raises that to 20 of 20 without touching
 // C-02. Corpus entries only -- the raster fixtures are slow and are not this subtask's.

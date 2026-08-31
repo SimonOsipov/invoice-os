@@ -3,12 +3,9 @@
 // -> Reconcile, with Lines and Entity zero-valued. Every other reconcile_*_test.go file runs
 // hand-built candidate slices; this is the one place a real document's output is pinned.
 //
-// corpusPinned is measured, not idealised: a WRONG comment marks a reading a human would
-// reject. The defect is a same_token relation that always sits at Distance 0, and a ShapeName
-// that accepts almost any non-empty string, so a bare label like "TIN" or "Supplier" mints a
-// spurious Distance-0 candidate that outranks the correct cross-token match in
-// compareCandidates. That is EXTR-04's anchor-rule and shape territory, not this file's --
-// pinning it here freezes today's behaviour so a future fix shows up as an intentional diff.
+// corpusPinned is measured, not idealised. Two readings are still wrong and are tagged
+// KNOWN GAP where they sit: corpus_two_column.pdf's supplier_tin and buyer_tin, which need an
+// anchorLexicon edit and so a FingerprintVersion bump to close.
 package extraction_test
 
 import (
@@ -74,43 +71,30 @@ var corpusPinned = []struct {
 		fields: []corpusFieldPin{
 			{"invoice_number", rcStr("INV-1001"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-03-04"), extraction.ReasonNone, nil},
-			// WRONG (reason): the correct TIN stands alone, but the buyer's TIN token ties it
-			// at Distance 0 and rides along as a spurious alternative.
-			{"supplier_tin", rcStr("99999999-0101"), extraction.ReasonAmbiguous, []string{"99999999-0102"}},
-			// WRONG: decided value is a "Label: TIN" token, not the party name; the correct
-			// reading is demoted to the alternative.
-			{"supplier_name", rcStr("TIN: 99999999-0101"), extraction.ReasonAmbiguous, []string{"Adeyemi Trading Limited"}},
+			{"supplier_tin", rcStr("99999999-0101"), extraction.ReasonNone, nil},
+			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			{"buyer_tin", rcStr("99999999-0102"), extraction.ReasonNone, nil},
-			// WRONG: same label-not-value defect as supplier_name.
-			{"buyer_name", rcStr("TIN: 99999999-0102"), extraction.ReasonAmbiguous, []string{"Honeywell Group"}},
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
 			{"currency", rcStr("NGN"), extraction.ReasonNone, nil},
 			{"subtotal", rcStr("1000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("75.00"), extraction.ReasonNone, nil},
-			// WRONG: decided value is the subtotal's amount; the real total (1075.00) survives
-			// only as the alternative.
-			{"total", rcStr("1000.00"), extraction.ReasonAmbiguous, []string{"1075.00"}},
+			{"total", rcStr("1075.00"), extraction.ReasonNone, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
 	{
 		file: "corpus_split_labels.pdf",
 		fields: []corpusFieldPin{
-			// WRONG: reads the literal label "Supplier" from a neighbouring field, not
-			// "INV-1002" -- the defect this subtask's brief calls out by name.
-			{"invoice_number", rcStr("Supplier"), extraction.ReasonNone, nil},
+			{"invoice_number", rcStr("INV-1002"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-04-15"), extraction.ReasonNone, nil},
 			{"supplier_tin", rcStr("99999999-0201"), extraction.ReasonNone, nil},
-			// WRONG: reads the bare label "TIN", not "Adeyemi Trading Limited".
-			{"supplier_name", rcStr("TIN"), extraction.ReasonNone, nil},
+			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			{"buyer_tin", rcStr("99999999-0202"), extraction.ReasonNone, nil},
-			// WRONG: reads the bare label "TIN", not "Honeywell Group".
-			{"buyer_name", rcStr("TIN"), extraction.ReasonNone, nil},
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
 			{"currency", rcStr("NGN"), extraction.ReasonNone, nil},
 			{"subtotal", rcStr("2000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("150.00"), extraction.ReasonNone, nil},
-			// WRONG: decided value is the subtotal's amount, not "2150.00" -- and unlike
-			// inline_labels, no alternative survives to flag it.
-			{"total", rcStr("2000.00"), extraction.ReasonNone, nil},
+			{"total", rcStr("2150.00"), extraction.ReasonNone, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -120,11 +104,9 @@ var corpusPinned = []struct {
 			{"invoice_number", rcStr("INV-1003"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-04-22"), extraction.ReasonNone, nil},
 			{"supplier_tin", rcStr("99999999-0301"), extraction.ReasonNone, nil},
-			// WRONG: reads the label itself, not "Adeyemi Trading Limited".
-			{"supplier_name", rcStr("Supplier"), extraction.ReasonNone, nil},
+			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			{"buyer_tin", rcStr("99999999-0302"), extraction.ReasonNone, nil},
-			// WRONG: reads the label itself, not "Honeywell Group".
-			{"buyer_name", rcStr("Buyer"), extraction.ReasonNone, nil},
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
 			// This layout carries no currency/subtotal/vat token at all (docs/extraction-corpus.md);
 			// missing here is the correct reading, not a defect.
 			{"currency", nil, extraction.ReasonMissing, nil},
@@ -139,17 +121,16 @@ var corpusPinned = []struct {
 		fields: []corpusFieldPin{
 			{"invoice_number", rcStr("INV-1004"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-05-06"), extraction.ReasonNone, nil},
-			// WRONG (reason): the bare "TIN" label's optional party word also matches the
-			// buyer's TIN (the t1aGaps gap docs/extraction-corpus.md records), so a clean field
-			// reads ambiguous.
+			// KNOWN GAP (t1aGaps) -- still wrong, owned elsewhere; EXTR-16 does not touch the
+			// lexicon. The bare "TIN" label's optional party word also matches the buyer's TIN,
+			// so a clean field reads ambiguous.
 			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonAmbiguous, []string{"99999999-0402"}},
-			// WRONG: reads the label, not "Adeyemi Trading Limited".
-			{"supplier_name", rcStr("Supplier"), extraction.ReasonNone, nil},
-			// WRONG: the buyer's own TIN (99999999-0402) is real but never reaches this field --
+			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
+			// KNOWN GAP (t1aGaps) -- still wrong, owned elsewhere; EXTR-16 does not touch the
+			// lexicon. The buyer's own TIN (99999999-0402) is real but never reaches this field:
 			// it is entirely absorbed as supplier_tin's alternative above.
 			{"buyer_tin", nil, extraction.ReasonMissing, nil},
-			// WRONG: reads the label, not "Honeywell Group".
-			{"buyer_name", rcStr("Buyer"), extraction.ReasonNone, nil},
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
 			{"currency", nil, extraction.ReasonMissing, nil},
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
@@ -165,8 +146,7 @@ var corpusPinned = []struct {
 			// components <= 12 and no month name, so ShapeDate returns both normalisations.
 			{"issue_date", rcStr("2026-03-12"), extraction.ReasonAmbiguous, []string{"2026-12-03"}},
 			{"supplier_tin", rcStr("99999999-0501"), extraction.ReasonNone, nil},
-			// WRONG: same label-not-value defect as corpus_inline_labels.pdf.
-			{"supplier_name", rcStr("TIN: 99999999-0501"), extraction.ReasonAmbiguous, []string{"Adeyemi Trading Limited"}},
+			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			// This layout carries no buyer block at all; missing is the correct reading.
 			{"buyer_tin", nil, extraction.ReasonMissing, nil},
 			{"buyer_name", nil, extraction.ReasonMissing, nil},
@@ -184,18 +164,14 @@ var corpusPinned = []struct {
 			// This layout carries no issue_date token at all; missing is the correct reading.
 			{"issue_date", nil, extraction.ReasonMissing, nil},
 			{"supplier_tin", rcStr("99999999-0601"), extraction.ReasonNone, nil},
-			// WRONG: this layout carries no party name at all -- the field should read missing,
-			// but the "TIN: <value>" token itself gets decided as the value, unflagged.
-			{"supplier_name", rcStr("TIN: 99999999-0601"), extraction.ReasonNone, nil},
+			// This layout carries no party name at all; missing is the correct reading.
+			{"supplier_name", nil, extraction.ReasonMissing, nil},
 			{"buyer_tin", nil, extraction.ReasonMissing, nil},
 			{"buyer_name", nil, extraction.ReasonMissing, nil},
 			{"currency", nil, extraction.ReasonMissing, nil},
 			{"subtotal", rcStr("5000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("375.00"), extraction.ReasonNone, nil},
-			// WRONG: decided value is the subtotal's amount (5000.00), not "5375.00" -- the
-			// lexicon overlap ("Sub-total" matching both subtotal and \btotal\b) this layout
-			// exists to exercise. No alternative survives to flag it.
-			{"total", rcStr("5000.00"), extraction.ReasonNone, nil},
+			{"total", rcStr("5375.00"), extraction.ReasonNone, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -241,6 +217,106 @@ func TestReconcileCorpus_EveryLayoutIsTotal(t *testing.T) {
 				if !slices.Equal(valuesOf(got.Alternatives), pin.alts) {
 					t.Errorf("%s.%s alternatives = %v, want %v", lay.file, pin.name, valuesOf(got.Alternatives), pin.alts)
 				}
+			}
+		})
+	}
+	if ran != 6 {
+		t.Fatalf("exercised %d of 6 layout(s)", ran)
+	}
+}
+
+// --- EXTR-16-03: a confident field holds a value the page prints ------------------------
+
+// corpusFieldShapes is each field's shape, read off the shipped rules rather than restated here.
+func corpusFieldShapes(t *testing.T) map[string]extraction.Shape {
+	t.Helper()
+
+	out := make(map[string]extraction.Shape, len(extraction.HeaderFields))
+	for _, r := range extraction.Tier1Rules {
+		if prev, ok := out[r.Field]; ok && prev != r.Rule.Shape {
+			t.Fatalf("%s carries two shapes (%q and %q); one field takes one shape", r.Field, prev, r.Rule.Shape)
+		}
+		out[r.Field] = r.Rule.Shape
+	}
+	if len(out) != len(extraction.HeaderFields) {
+		t.Fatalf("the shipped rules name %d field(s), want %d -- a field with no rule has no shape to check against", len(out), len(extraction.HeaderFields))
+	}
+	return out
+}
+
+// corpusPageYields reports whether some token yields value under shape: the whole token, or what
+// follows the widest anchor label on it -- resolve.go's two same-token value paths.
+func corpusPageYields(pages []extraction.TokenPage, shape extraction.Shape, value string) bool {
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			raws := append([]string{tok.Text}, extraction.RcAnchorLabelResiduesForTest(tok.Text)...)
+			for _, raw := range raws {
+				if slices.Contains(shape.Normalize(raw), value) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// EXTR-16 Core AC 4's oracle, made standing: a field must not read ReasonNone while holding a
+// value the document does not print.
+//
+// Blind spot: it catches a FABRICATED value (a residue no token yields) and not a MISATTRIBUTED
+// one (a real token's text in the wrong field) -- corpusPinned above is what catches that.
+func TestReconcileCorpus_AConfidentFieldHoldsAPrintedValue(t *testing.T) {
+	corpusRequireSix(t)
+	shapes := corpusFieldShapes(t)
+
+	// The oracle's own specificity: on a fused label token it yields what the WIDEST label
+	// introduces, and not the narrower label's residue that EXTR-16's M1 defect fabricated.
+	const fused = "Supplier TIN: 99999999-0101"
+	residues := extraction.RcAnchorLabelResiduesForTest(fused)
+	if !slices.Contains(residues, "99999999-0101") {
+		t.Fatalf("the oracle reads %v off %q; it must yield the value the widest label introduces", residues, fused)
+	}
+	if slices.Contains(residues, "TIN: 99999999-0101") {
+		t.Fatalf("the oracle reads %v off %q; a narrower label's residue is the fabrication it must reject", residues, fused)
+	}
+
+	rules := extraction.RuleSet{Tier1: extraction.Tier1Rules}
+	ran := 0
+	for _, name := range corpusLayouts {
+		t.Run(name, func(t *testing.T) {
+			var pages []extraction.TokenPage
+			if _, err := extraction.NewPDFiumReader().Read(t.Context(), ptDoc(t, name), extraction.CollectTokens(&pages)); err != nil {
+				t.Fatalf("Read(%s): %v", name, err)
+			}
+			out := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rules)})
+			if len(out) == 0 {
+				t.Fatalf("%s produced no results at all", name)
+			}
+			ran++
+
+			checked := 0
+			for _, r := range out {
+				if r.Reason != extraction.ReasonNone {
+					continue
+				}
+				if r.Value == nil {
+					t.Errorf("%s.%s is decided (ReasonNone) with no value at all", name, r.Name)
+					continue
+				}
+				shape, ok := shapes[r.Name]
+				if !ok {
+					t.Errorf("%s.%s is decided (ReasonNone) and no shipped rule names it, so nothing knows its shape", name, r.Name)
+					continue
+				}
+				checked++
+				if !corpusPageYields(pages, shape, *r.Value) {
+					t.Errorf("%s.%s = %q, and no token on the page yields it under shape %q -- a confident field is holding a value the document never printed",
+						name, r.Name, *r.Value, shape)
+				}
+			}
+			// The floor: an empty ReasonNone set satisfies every assertion above.
+			if checked == 0 {
+				t.Fatalf("%s: no field is decided (ReasonNone), so the loop above asserted nothing", name)
 			}
 		})
 	}
@@ -316,15 +392,15 @@ func TestReconcileCorpus_AmbiguousDateKeepsBothReadings(t *testing.T) {
 
 // corpusMissingExpect is AC-3's own expectation table: the exact set of ReasonMissing fields
 // per layout. line_items belongs to every row (AC-7); the rest follows which fields each
-// layout's generator omits (docs/extraction-corpus.md) plus the two omissions the pipeline
-// itself introduces -- corpus_two_column.pdf's buyer_tin (WRONG, see corpusPinned above).
+// layout's generator omits (docs/extraction-corpus.md) plus the one omission the pipeline
+// itself introduces -- corpus_two_column.pdf's buyer_tin, the KNOWN GAP pinned above.
 var corpusMissingExpect = map[string][]string{
 	"corpus_inline_labels.pdf":  {"line_items"},
 	"corpus_split_labels.pdf":   {"line_items"},
 	"corpus_stacked_labels.pdf": {"currency", "subtotal", "vat", "line_items"},
 	"corpus_two_column.pdf":     {"buyer_tin", "currency", "subtotal", "vat", "line_items"},
 	"corpus_ambiguous_date.pdf": {"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "line_items"},
-	"corpus_totals_block.pdf":   {"issue_date", "buyer_tin", "buyer_name", "currency", "line_items"},
+	"corpus_totals_block.pdf":   {"issue_date", "supplier_name", "buyer_tin", "buyer_name", "currency", "line_items"},
 }
 
 // AC-3. Set equality, not containment -- a field this table omits is asserted DECIDED by its

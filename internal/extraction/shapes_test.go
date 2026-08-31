@@ -177,3 +177,42 @@ func TestShapes_AreDeterministicAcrossCalls(t *testing.T) {
 		}
 	}
 }
+
+// --- EXTR-16-02: the label/value split (D-B) ---------------------------------
+
+// EXTR-16-02 AC-2. A trimmed value that one anchor-lexicon entry matches WHOLLY is the label
+// that introduces a value, never the value. Paired with a real name so a nil-returning stub
+// cannot satisfy this test on the reject cases alone.
+func TestShapes_NameRejectsABareAnchorLabel(t *testing.T) {
+	for _, raw := range []string{"Supplier", "Buyer", "TIN", "Currency"} {
+		if got := extraction.ShapeName.Normalize(raw); len(got) != 0 {
+			t.Errorf("ShapeName.Normalize(%q) = %v, want an empty slice: one anchor-lexicon entry matches the whole trimmed value, so it is a label", raw, got)
+		}
+	}
+	if got, want := extraction.ShapeName.Normalize("Adeyemi Trading Limited"), []string{"Adeyemi Trading Limited"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ShapeName.Normalize(%q) = %v, want %v", "Adeyemi Trading Limited", got, want)
+	}
+}
+
+// EXTR-16-02 AC-2. Only a WHOLE-value match is rejected: a trading name that happens to open
+// with a label word is still a name. "Supplier" matches [0,8] of the first and "Total" [0,5] of
+// the second, and neither spans its value.
+func TestShapes_NameKeepsANameThatMerelyContainsALabelWord(t *testing.T) {
+	for _, raw := range []string{"Supplier Services Limited", "Total Logistics Limited"} {
+		if got, want := extraction.ShapeName.Normalize(raw), []string{raw}; !reflect.DeepEqual(got, want) {
+			t.Errorf("ShapeName.Normalize(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// EXTR-16-02 AC-2. The same split for the invoice number, which today rejects only a date-only
+// and an amount-only value. Paired with a real identifier so a nil-returning stub cannot satisfy
+// this test alone.
+func TestShapes_InvoiceNumberRejectsABareAnchorLabel(t *testing.T) {
+	if got := extraction.ShapeInvoiceNumber.Normalize("Supplier"); len(got) != 0 {
+		t.Errorf("ShapeInvoiceNumber.Normalize(%q) = %v, want an empty slice: the supplier_name lexicon entry matches the whole value", "Supplier", got)
+	}
+	if got, want := extraction.ShapeInvoiceNumber.Normalize("INV-1002"), []string{"INV-1002"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ShapeInvoiceNumber.Normalize(%q) = %v, want %v", "INV-1002", got, want)
+	}
+}

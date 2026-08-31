@@ -238,8 +238,20 @@ func TestTier1_TheSweepCannotSeparateTwoTINsInOnePageHalf(t *testing.T) {
 	}
 }
 
-// Two paths reach supplier_tin on a split layout and they disagree. Both survive, and RuleID is
-// what tells them apart -- picking between them is EXTR-05's.
+// t1aSweepVsLabel is one page carrying both paths to supplier_tin and making them disagree: a
+// bare TIN in the top half for the banded sweep, and a labelled one in the bottom half for the
+// label path. Synthetic because the corpus lost this control -- the disagreement there WAS the
+// cross-party reading TestTier1_TheLabelPathNoLongerReachesTheOtherPartysTin now closes.
+func t1aSweepVsLabel() []extraction.TokenPage {
+	return []extraction.TokenPage{t1aPage(1,
+		t1aTIN(1, "99999999-0501", 0.20, 0.27),
+		rvTok("Supplier TIN", 0.10, 0.60, 0.30, 0.67),
+		rvTok("99999999-0502", 0.35, 0.60, 0.55, 0.67),
+	)}
+}
+
+// Two paths reach supplier_tin and they disagree. Both survive, and RuleID is what tells them
+// apart -- picking between them is EXTR-05's.
 func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	got := rvFor(t1Shipped(t, t1Split), "supplier_tin")
 	rvFloor(t, got, "supplier_tin on "+t1Split)
@@ -250,23 +262,50 @@ func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	if got[0].RuleID != "t1.supplier_tin.sweep" || got[0].Value != "99999999-0201" {
 		t.Errorf("supplier_tin[0] = %q from %q, want 99999999-0201 from t1.supplier_tin.sweep at distance 0", got[0].Value, got[0].RuleID)
 	}
-
-	// The label path reaches the BUYER's TIN too: the supplier pattern's party word is optional
-	// (anchor.go:127). Harmless here because the sweep outranks it; recorded and carried forward.
-	var fromLabel []string
-	for _, c := range got[1:] {
-		if c.RuleID == "t1.supplier_tin.sweep" {
-			continue
-		}
-		fromLabel = append(fromLabel, c.Value)
-	}
-	if !slices.Contains(fromLabel, "99999999-0202") {
-		t.Errorf("the label path contributed %v, want it to contain the buyer's 99999999-0202; without the disagreement this spec pins nothing", fromLabel)
-	}
 	for _, c := range got {
 		if c.RuleID == "" {
 			t.Errorf("a supplier_tin candidate %q carries no RuleID; the surviving pair is indistinguishable downstream", c.Value)
 		}
+	}
+
+	// The disagreement itself, on a page that still has one.
+	synth := rvFor(extraction.Resolve(t1aSweepVsLabel(), extraction.RuleSet{Tier1: extraction.Tier1Rules}), "supplier_tin")
+	rvFloor(t, synth, "supplier_tin on the sweep-versus-label page")
+
+	byRule := make(map[string]string, len(synth))
+	for _, c := range synth {
+		if c.RuleID == "" {
+			t.Errorf("a supplier_tin candidate %q carries no RuleID; the surviving pair is indistinguishable downstream", c.Value)
+		}
+		byRule[c.RuleID] = c.Value
+	}
+	for _, want := range []struct{ ruleID, value string }{
+		{"t1.supplier_tin.sweep", "99999999-0501"},
+		{"t1.supplier_tin.right", "99999999-0502"},
+	} {
+		if byRule[want.ruleID] != want.value {
+			t.Errorf("%s contributed %q, want %q; without both paths this spec pins no disagreement", want.ruleID, byRule[want.ruleID], want.value)
+		}
+	}
+}
+
+// The supplier pattern's party word is optional (anchor.go:127), so before EXTR-16 the supplier
+// label read across the party split and collected the buyer's TIN. Closed by anchor specificity:
+// on corpus_split_labels.pdf the buyer's own label claims the wider span of that token.
+func TestTier1_TheLabelPathNoLongerReachesTheOtherPartysTin(t *testing.T) {
+	t1Floor(t)
+
+	got := t1Shipped(t, t1Split)
+	rvFloor(t, got, "the shipped set over "+t1Split)
+	for _, c := range rvFor(got, "supplier_tin") {
+		if c.Value == "99999999-0202" {
+			t.Errorf("supplier_tin carries the buyer's %q from %q; no rule may read across the party split", c.Value, c.RuleID)
+		}
+	}
+
+	// Positive control: the buyer's TIN is on the page and IS reached -- as buyer_tin.
+	if v := rvValues(rvFor(got, "buyer_tin")); !slices.Contains(v, "99999999-0202") {
+		t.Fatalf("buyer_tin = %v on %s; the absence asserted above holds equally against a page that never carried the buyer's TIN", v, t1Split)
 	}
 }
 

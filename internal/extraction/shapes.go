@@ -137,15 +137,15 @@ func normalizeCurrency(raw string) []string {
 	return nil
 }
 
-// normalizeInvoiceNumber rejects a value that is only a date or only an amount. Both guards
-// earn their place: 1,500.00 already fails reInvNum, but 1500 passes it and only the amount
-// guard rejects it.
+// normalizeInvoiceNumber rejects a value that is only a date, only an amount, or only an anchor
+// label. The amount guard earns its place separately: 1,500.00 already fails reInvNum, but 1500
+// passes it.
 func normalizeInvoiceNumber(raw string) []string {
 	trimmed := strings.TrimSpace(raw)
 	if !reInvNum.MatchString(trimmed) {
 		return nil
 	}
-	if len(normalizeDate(trimmed)) > 0 || len(normalizeAmount(trimmed)) > 0 {
+	if len(normalizeDate(trimmed)) > 0 || len(normalizeAmount(trimmed)) > 0 || isBareAnchorLabel(trimmed) {
 		return nil
 	}
 	return append([]string(nil), trimmed)
@@ -156,5 +156,20 @@ func normalizeName(raw string) []string {
 	if trimmed == "" || utf8.RuneCountInString(trimmed) > maxNameRunes {
 		return nil
 	}
+	if isBareAnchorLabel(trimmed) {
+		return nil
+	}
 	return append([]string(nil), trimmed)
+}
+
+// isBareAnchorLabel reports whether one anchor-lexicon entry matches value whole. Such a value
+// is the label that introduces a value, never the value. The match must span value, so a
+// trading name that merely opens with a label word ("Supplier Services Limited") survives.
+func isBareAnchorLabel(value string) bool {
+	for _, m := range anchorLabelMatchers {
+		if loc := m.RE.FindStringIndex(value); loc != nil && loc[0] == 0 && loc[1] == len(value) {
+			return true
+		}
+	}
+	return false
 }

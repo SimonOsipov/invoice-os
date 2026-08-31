@@ -158,19 +158,24 @@ EXTR-17's.
 
 ## What this does not cover
 
-The inventory is read; the pixels are not. Since EXTR-11-01 `(*Reader).Detail` selects
-`page_number, width_px, height_px` per document inside the request-scoped transaction
-(`internal/extraction/reader.go`, `detailPagesTx`). Nothing serves a page image and no screen
-displays one: the bytes route is EXTR-11-03's and the canvas EXTR-11-05's, so `storage_key`
-still leaves this package only through `PageStore`.
+The pixels are now served. `(*Reader).Detail` selects `page_number, width_px, height_px` per
+document and `(*Reader).PageImageKey` selects one row's `storage_key` by job id and page number,
+both inside a request-scoped transaction (`internal/extraction/reader.go`);
+`GET /v1/extractions/{id}/pages/{n}` streams the object that key names back as `image/png`
+(`internal/extraction/handlers.go`). `storage_key` therefore has a second exit from this package,
+and it is a narrow one: the key is selected off an RLS-visible row and handed straight to object
+storage, so no caller-supplied text reaches a bucket and a refused read touches none.
 
-That read names `document_id` and no `tenant_id`, so **two** independent mechanisms stand between
-it and another tenant's rows: this table's own `tenant_isolation` policy, which scopes every
+What stays owed is the canvas. No screen displays a page image until EXTR-11-05 draws one.
+
+Both reads name `document_id` and no `tenant_id`, so **two** independent mechanisms stand between
+them and another tenant's rows: this table's own `tenant_isolation` policy, which scopes every
 statement the app role issues, and `extraction_page_images_tenant_document_fk`, which forbids a
 page-image row pointing at another tenant's document
 (`TestRLS_ExtractionDetailChildTablesRefuseACrossTenantRow`). Because the second makes the
 cross-tenant case unconstructible, no request-path test can distinguish a working policy from an
 absent one — the read is *scoped* by the policy and does not *demonstrate* it. What a request path
 now exercises is the enclosing job's own RLS
-(`TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections`); on these rows the schema is
-still the load-bearing part.
+(`TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections`,
+`TestRLS_ExtractionPageImageCrossTenantRefused`); on these rows the schema is still the
+load-bearing part.

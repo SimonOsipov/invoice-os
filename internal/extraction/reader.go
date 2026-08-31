@@ -286,3 +286,36 @@ func detailFieldsTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ExtractionF
 	}
 	return out, nil
 }
+
+// PageImageKey returns the object key for one page of a job's document. The key is SELECTed off
+// the row, never rebuilt with PageKey: a rebuilt key would reach object storage with no
+// RLS-visible row proving the caller may see it
+// (TestRLS_ExtractionPageImageKeySelectsTheStoredKey). An absent page and another tenant's job
+// are one answer, the way Detail's are.
+//
+// Nothing is audited here: one open screen owes one document.read row, from Detail, not one per
+// page (TestRLS_ExtractionPageImageWritesNoAuditRow).
+func (r *Reader) PageImageKey(ctx context.Context, jobID string, page int) (string, error) {
+	var key string
+	if err := db.WithinRequestTenantTx(ctx, r.Pool, func(tx pgx.Tx) error {
+		// Names no tenant_id: the tenant_isolation policy on both tables is the only predicate
+		// (TestRLS_ExtractionDetailDocumentJoinNamesNoTenantId). The join is what turns the
+		// route's job id into the document the pages hang from.
+		err := tx.QueryRow(ctx,
+			`SELECT p.storage_key
+			   FROM extraction_page_images p
+			   JOIN extraction_jobs j ON j.document_id = p.document_id
+			  WHERE j.id = $1 AND p.page_number = $2`,
+			jobID, page).Scan(&key)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrNotFound
+		case err != nil:
+			return fmt.Errorf("extraction: read page %d image key for job %s: %w", page, jobID, err)
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return key, nil
+}

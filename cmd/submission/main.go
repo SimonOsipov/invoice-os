@@ -8,8 +8,9 @@
 // ExtractWorker, on the single bundle workerBundle builds below.
 //
 // The domain HTTP surface is GET /v1/extractions (EXTR-07), GET /v1/extractions/{id} — the
-// review screen's read, which audits document.read — and POST /v1/documents (EXTR-09), which
-// stores the upload and enqueues its extraction on this service's own River client.
+// review screen's read, which audits document.read — GET /v1/extractions/{id}/pages/{n}, which
+// streams one rendered page image, and POST /v1/documents (EXTR-09), which stores the upload
+// and enqueues its extraction on this service's own River client.
 package main
 
 import (
@@ -167,6 +168,12 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler(reader.JobsForDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/extractions/{id}", extraction.DetailHandler(reader.Detail, app.Logger))
 
+	// GET /v1/extractions/{id}/pages/{n} streams one rendered page from the same bucket
+	// newPageSink writes to. It audits nothing: one open screen owes one document.read row,
+	// from the detail route above, not one per page.
+	app.Mux.HandleFunc("GET /v1/extractions/{id}/pages/{n}",
+		extraction.PageImageHandler(reader.PageImageKey, newPageObjectReader(docObjects), app.Logger))
+
 	// POST /v1/documents -- the upload that stores a source document and queues its
 	// extraction. Two transactions on purpose: Service.Store commits its own, the enqueue
 	// opens a second. A crash between them leaves a document with no job, which is the safe
@@ -271,6 +278,28 @@ func newExtractionEnqueuer(pool *pgxpool.Pool, q *queue.Client) func(ctx context
 func newPageSink(objects document.ObjectStore) extraction.PageSink {
 	return func(ctx context.Context, key string, body []byte) error {
 		return objects.Put(ctx, key, bytes.NewReader(body), int64(len(body)))
+	}
+}
+
+// newPageObjectReader adapts the document object store to the page-image read seam: whole
+// object, no range, body handed over UNREAD so the handler streams it. The key arrives already
+// selected off an RLS-visible row, so nothing here rewrites it
+// (TestNewPageObjectReader_ReadsTheKeyItIsGiven).
+func newPageObjectReader(objects document.ObjectStore) extraction.PageObject {
+	return func(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+		obj, err := objects.Get(ctx, key, "")
+		// Closed before the error branch: a Get that hands back both a body and an error still
+		// owes a close (TestNewPageObjectReader_ClosesBodyWhenGetErrors).
+		if err != nil {
+			if obj.Body != nil {
+				_ = obj.Body.Close()
+			}
+			return nil, 0, err
+		}
+		if obj.Body == nil {
+			return nil, 0, fmt.Errorf("submission: page object %s opened with no body", key)
+		}
+		return obj.Body, obj.Size, nil
 	}
 }
 

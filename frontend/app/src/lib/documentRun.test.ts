@@ -234,6 +234,7 @@ describe('startDocumentRun — the N pipelines are concurrent (RUN-1, AC-4, Core
         events.push(`import:start:${documentId}`)
         return report(`batch-${documentId}`)
       },
+      onStage: () => {},
     }
 
     try {
@@ -280,6 +281,7 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
         imported.push(documentId)
         return report(`batch-${documentId}`)
       },
+      onStage: () => {},
     }
 
     const outcomes = await startDocumentRun(files, deps)
@@ -314,6 +316,7 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
       upload: uploadSpy,
       poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
       importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage: () => {},
     }
 
     const outcomes = await startDocumentRun(files, deps)
@@ -323,6 +326,186 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
     const failed = outcomes[1].outcome
     if (failed.kind !== 'failed') throw new Error('unreachable — asserted above')
     expect(failed.message).toContain('connection reset')
+  })
+})
+
+// --- RUN-5..10 (EXTR-10-03, task-785) ---------------------------------------
+//
+// RED: DocumentPipelineDeps now carries a REQUIRED onStage, but startDocumentRun's body
+// (documentRun.ts:135-156) never calls it yet -- that wiring is task-785's own GREEN
+// phase. Every spec below fails on a real assertion (an onStage spy never called, or
+// poll's fileId argument coming through as undefined), never on a type or throw error.
+
+describe('startDocumentRun — the import leg gets its own word (RUN-5, Core AC 3, task-785)', () => {
+  it('RUN-5: onStage(id,{kind:"processing"}) fires before importDocument is invoked', async () => {
+    const events: string[] = []
+    const files = docFiles(['a.pdf'])
+    const onStage = vi.fn((fileId: string, state: DocumentRowState) => {
+      if (state.kind === 'processing') events.push(`stage:processing:${fileId}`)
+    })
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => {
+        events.push(`import:start:${documentId}`)
+        return report(`batch-${documentId}`)
+      },
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    // Pin the count before trusting an index into it -- an onStage never called would
+    // make indexOf's -1 vs -1 comparison below vacuously "pass".
+    const processingCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'processing')
+    expect(processingCalls).toHaveLength(1)
+
+    const stageIdx = events.indexOf(`stage:processing:${files[0].id}`)
+    const importIdx = events.indexOf(`import:start:doc-${files[0].name}`)
+    expect(stageIdx).toBeGreaterThanOrEqual(0)
+    expect(importIdx).toBeGreaterThanOrEqual(0)
+    expect(stageIdx).toBeLessThan(importIdx)
+  })
+})
+
+describe('startDocumentRun — each settle is reported as it happens (RUN-6, Core AC 3, task-785)', () => {
+  it('RUN-6: resolving the third import first reports f3 imported while f1/f2 are still unsettled', async () => {
+    const files = docFiles(['a.pdf', 'b.pdf', 'c.pdf'])
+    const resolvers = new Map<string, (r: ImportReport) => void>()
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: (documentId) =>
+        new Promise<ImportReport>((resolve) => {
+          resolvers.set(documentId, resolve)
+        }),
+      onStage,
+    }
+
+    const runPromise = startDocumentRun(files, deps)
+
+    // A macrotask boundary flushes every pending microtask, so by here all three
+    // pipelines have genuinely reached importDocument -- not an assumption, a count.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(resolvers.size).toBe(3)
+
+    const f3 = files[2]
+    resolvers.get('doc-c.pdf')!(report('batch-doc-c.pdf'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const importedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'imported')
+    expect(importedCalls).toHaveLength(1)
+    expect(importedCalls[0][0]).toBe(f3.id)
+
+    const settledOthers = onStage.mock.calls.filter(
+      ([id, s]) => id !== f3.id && (s.kind === 'imported' || s.kind === 'failed'),
+    )
+    expect(settledOthers).toHaveLength(0)
+
+    // Let the run finish so no promise is left dangling past the test.
+    resolvers.get('doc-a.pdf')!(report('batch-doc-a.pdf'))
+    resolvers.get('doc-b.pdf')!(report('batch-doc-b.pdf'))
+    await runPromise
+  })
+})
+
+describe('startDocumentRun — a failed document reports its reason on its own id, verbatim (RUN-7, Core AC 4, task-785)', () => {
+  it('RUN-7: only the middle file gets a failed stage; f1 and f3 still import', async () => {
+    const REASON = 'R'
+    const files = docFiles(['first.pdf', 'second.pdf', 'third.pdf'])
+    const onStage = vi.fn()
+    const imported: string[] = []
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) =>
+        documentId === 'doc-second.pdf' ? { kind: 'failed', reason: REASON } : { kind: 'succeeded', jobId: `job-${documentId}` },
+      importDocument: async (documentId) => {
+        imported.push(documentId)
+        return report(`batch-${documentId}`)
+      },
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(1)
+    expect(failedCalls[0]).toEqual([files[1].id, { kind: 'failed', reason: REASON }])
+
+    // Positive half too: the two survivors actually imported.
+    expect(imported).toHaveLength(2)
+    expect(imported).toEqual(['doc-first.pdf', 'doc-third.pdf'])
+  })
+})
+
+describe('startDocumentRun — a thrown transport settles that file only (RUN-8, Core AC 4, task-785)', () => {
+  it('RUN-8: upload rejecting for one file reports failed on that file only, and the run resolves', async () => {
+    const files = docFiles(['ok.pdf', 'boom.pdf'])
+    const onStage = vi.fn()
+    const uploadSpy = vi.fn(async (file: File) => {
+      if (file.name === 'boom.pdf') throw new Error('network: connection reset')
+      return `doc-${file.name}`
+    })
+    const deps: DocumentPipelineDeps = {
+      upload: uploadSpy,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage,
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(2)
+    const failedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'failed')
+    expect(failedCalls).toHaveLength(1)
+    expect(failedCalls[0][0]).toBe(files[1].id)
+    const stateArg = failedCalls[0][1] as DocumentRowState
+    if (stateArg.kind !== 'failed') throw new Error('unreachable — filtered above')
+    expect(stateArg.reason).toContain('connection reset')
+
+    const otherFailed = onStage.mock.calls.filter(([id, s]) => id === files[0].id && s.kind === 'failed')
+    expect(otherFailed).toHaveLength(0)
+  })
+})
+
+describe('startDocumentRun — poll is told which file it is polling (RUN-9, Core AC 3, task-785)', () => {
+  it("RUN-9: deps.poll receives each pipeline's own file id, and the three ids are distinct", async () => {
+    const files = docFiles(['a.pdf', 'b.pdf', 'c.pdf'])
+    const pollSpy = vi.fn(async (documentId: string, _fileId?: string) => ({ kind: 'succeeded' as const, jobId: `job-${documentId}` }))
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: pollSpy,
+      importDocument: async (documentId) => report(`batch-${documentId}`),
+      onStage: () => {},
+    }
+
+    await startDocumentRun(files, deps)
+
+    expect(pollSpy).toHaveBeenCalledTimes(3)
+    const fileIdArgs = pollSpy.mock.calls.map(([, fileId]) => fileId)
+    expect(fileIdArgs).toHaveLength(3)
+    expect(new Set(fileIdArgs).size).toBe(3)
+    expect(new Set(fileIdArgs)).toEqual(new Set(files.map((f) => f.id)))
+  })
+})
+
+describe("startDocumentRun — the imported stage carries the server's own ready_invoices (RUN-10, Core AC 4, task-785)", () => {
+  it('RUN-10: a duplicate-shaped report (ready_invoices: 0) reports imported/count:0, unmodified', async () => {
+    const files = docFiles(['dup.pdf'])
+    const onStage = vi.fn()
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => `doc-${file.name}`,
+      poll: async (documentId) => ({ kind: 'succeeded', jobId: `job-${documentId}` }),
+      importDocument: async (documentId) => report(`batch-${documentId}`, 0),
+      onStage,
+    }
+
+    await startDocumentRun(files, deps)
+
+    const importedCalls = onStage.mock.calls.filter(([, s]) => s.kind === 'imported')
+    expect(importedCalls).toHaveLength(1)
+    expect(importedCalls[0]).toEqual([files[0].id, { kind: 'imported', count: 0 }])
   })
 })
 

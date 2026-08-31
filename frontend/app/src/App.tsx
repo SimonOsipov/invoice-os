@@ -933,7 +933,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           filesSnapshot.map((pf) => ({ id: pf.id, name: pf.file.name, file: pf.file })),
           {
             upload: (file) => uploadSourceDocument(importAuth, base, file).then((r) => r.document_id),
-            poll: (documentId) =>
+            poll: (documentId, _fileId) =>
               pollUntilSettled(documentId, {
                 getJobs: (id) => getExtractions(authedFetch, base, id).then((r) => r.jobs),
                 onStage: () => {},
@@ -941,6 +941,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
                 now: Date.now,
               }),
             importDocument: (documentId) => importDocument(authedFetch, base, { entityId, documentId }),
+            // Real wiring lands in EXTR-10-04; this keeps tsc green while EXTR-10-03
+            // widens the interface.
+            onStage: () => {},
           },
         )
         // Settled in RUN order, not completion order: runReducer's 'settled' writes at

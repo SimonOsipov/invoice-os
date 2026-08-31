@@ -115,8 +115,13 @@ export interface DocumentRunFile {
 // verdict (or the budget expires); the loop and its clock are the caller's.
 export interface DocumentPipelineDeps {
   upload: (file: File) => Promise<string>
-  poll: (documentId: string) => Promise<PollVerdict>
+  // fileId stays optional through the RED phase -- the call site below is not yet passing
+  // it (that pass-through is task-785's GREEN, alongside flipping this to required).
+  poll: (documentId: string, fileId?: string) => Promise<PollVerdict>
   importDocument: (documentId: string) => Promise<ImportReport>
+  // Required, not optional: an optional hook silently no-ops when a caller forgets it —
+  // the defect class this story exists to close. Wired by EXTR-10-03 (task-785).
+  onStage: (fileId: string, state: DocumentRowState) => void
 }
 
 export interface DocumentRunOutcome {

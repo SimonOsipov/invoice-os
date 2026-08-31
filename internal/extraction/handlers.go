@@ -1,6 +1,6 @@
-// handlers.go: GET /v1/extractions. Reached through the gateway as
-// /api/submission/v1/extractions — the gateway routes on the first segment under /api/
-// and forwards the subpath, so the mux pattern carries no prefix.
+// handlers.go: GET /v1/extractions and GET /v1/extractions/{id}. Reached through the gateway
+// as /api/submission/v1/… — the gateway routes on the first segment under /api/ and forwards
+// the subpath, so the mux patterns carry no prefix.
 //
 // writeJSON/writeError/statusForErr mirror internal/audit/handlers.go:42-64 verbatim;
 // per-package duplicates are the convention here, not a shared library.
@@ -37,6 +37,11 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	// Safe for the collection route, which never raises it
+	// (TestExtractionJobsForDocument_NeverReturnsErrNotFound), and narrow: everything else is
+	// still a 500 (TestStatusForErr_UnknownErrorIsStill500).
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound, "not found"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}
@@ -81,6 +86,46 @@ func JobsHandler(list func(ctx context.Context, documentID string) (JobsResponse
 			status, body := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "extraction: jobs for document", slog.Any("err", err))
+			}
+			writeError(w, status, body)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// DetailHandler returns GET /v1/extractions/{id}. Identity is checked FIRST, before the path
+// value is read, so an unauthenticated caller cannot tell a malformed id from a well-formed one
+// (TestExtractionDetailHandler_UnauthenticatedIs401BeforeParsing). An absent job and another
+// tenant's are one answer: the reader raises ErrNotFound for both and statusForErr maps it to
+// 404.
+func DetailHandler(detail func(ctx context.Context, jobID string) (ExtractionDetail, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// The message names this route's own parameter: the collection route's would tell a
+		// caller the wrong field (TestExtractionDetailHandler_MalformedIdIs400).
+		parsed, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+
+		// Forward the canonical spelling, not the raw path value: uuid.Parse accepts a
+		// "urn:uuid:" prefix that Postgres rejects with 22P02, which would surface as a 500
+		// (TestExtractionDetailHandler_UrnPrefixedUuidReachesTheReaderCanonicalised).
+		out, err := detail(r.Context(), parsed.String())
+		if err != nil {
+			status, body := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "extraction: detail for job", slog.Any("err", err))
 			}
 			writeError(w, status, body)
 			return

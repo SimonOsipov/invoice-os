@@ -315,9 +315,10 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/approval-policies/{id}/publish` | invoice | covered | |
 | `DELETE /v1/approval-policies/{id}` | invoice | covered | |
 | `GET /v1/extractions` | submission | covered | |
+| `GET /v1/extractions/{id}` | submission | covered | |
 | `POST /v1/documents` | submission | covered | |
 
-59 distinct routes, 65 registrations (`GET /v1/ping` is registered once per service).
+60 distinct routes, 66 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

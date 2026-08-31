@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -37,8 +38,18 @@ type JobsResponse struct {
 	Jobs []JobState `json:"jobs"`
 }
 
-// Reader holds the invoice_app pool. Exported field and no constructor, matching Store.
-type Reader struct{ Pool *pgxpool.Pool }
+// RecordDocumentRead writes one document.read audit row on the transaction it is handed, so
+// the row shares the read's fate. A func value, not an internal/audit import: deps_test.go
+// fences this package off everything outside internal/platform/*, and the event name is
+// spelled in cmd/submission (TestNewDocumentReadAuditor_SpellsTheEventInCmd).
+type RecordDocumentRead func(ctx context.Context, tx pgx.Tx, subject, documentID string) error
+
+// Reader holds the invoice_app pool and the audit recorder Detail writes through. Exported
+// fields and no constructor, matching Store.
+type Reader struct {
+	Pool  *pgxpool.Pool
+	Audit RecordDocumentRead
+}
 
 // JobsForDocument returns every extraction job for one document, newest first.
 func (r *Reader) JobsForDocument(ctx context.Context, documentID string) (JobsResponse, error) {
@@ -148,13 +159,25 @@ func emptyDetail() ExtractionDetail {
 }
 
 // Detail returns one job with its document, pages and decided fields. All three statements
-// share one transaction (TestRLS_ExtractionDetailUsesRequestTxNotTenantTx).
+// share one transaction (TestRLS_ExtractionDetailUsesRequestTxNotTenantTx), and a successful
+// read audits on that same transaction (TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow).
 func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, error) {
 	out := emptyDetail()
 	if err := db.WithinRequestTenantTx(ctx, r.Pool, func(tx pgx.Tx) error {
 		var err error
-		out, err = detailTx(ctx, tx, jobID)
-		return err
+		if out, err = detailTx(ctx, tx, jobID); err != nil {
+			return err
+		}
+		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at three
+		// statements (TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit).
+		// TestSubmissionMain_WiresTheDocumentReadAuditorOntoAReader is what keeps production
+		// from being one.
+		if r.Audit == nil {
+			return nil
+		}
+		// WithinRequestTenantTx already refused a ctx carrying no Identity.
+		caller, _ := auth.IdentityFromContext(ctx)
+		return r.Audit(ctx, tx, caller.Subject, out.DocumentID)
 	}); err != nil {
 		return emptyDetail(), err
 	}

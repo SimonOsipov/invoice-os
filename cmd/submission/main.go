@@ -7,8 +7,9 @@
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
 //
-// The domain HTTP surface is GET /v1/extractions (EXTR-07) and POST /v1/documents (EXTR-09),
-// which stores the upload and enqueues its extraction on this service's own River client.
+// The domain HTTP surface is GET /v1/extractions (EXTR-07), GET /v1/extractions/{id} — the
+// review screen's read, which audits document.read — and POST /v1/documents (EXTR-09), which
+// stores the upload and enqueues its extraction on this service's own River client.
 package main
 
 import (
@@ -158,9 +159,13 @@ func main() {
 		_, _ = w.Write([]byte(`{"service":"submission","status":"ok"}`))
 	})
 
-	// GET /v1/extractions -- reached as /api/submission/v1/extractions: the gateway routes
-	// on the first segment under /api/ and forwards the subpath, so the pattern has no prefix.
-	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler((&extraction.Reader{Pool: pool}).JobsForDocument, app.Logger))
+	// GET /v1/extractions and GET /v1/extractions/{id} -- reached as
+	// /api/submission/v1/extractions…: the gateway routes on the first segment under /api/ and
+	// forwards the subpath, so the patterns have no prefix. One reader serves both; only Detail
+	// audits (TestSubmissionMain_WiresTheDocumentReadAuditorOntoAReader).
+	reader := &extraction.Reader{Pool: pool, Audit: newDocumentReadAuditor()}
+	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler(reader.JobsForDocument, app.Logger))
+	app.Mux.HandleFunc("GET /v1/extractions/{id}", extraction.DetailHandler(reader.Detail, app.Logger))
 
 	// POST /v1/documents -- the upload that stores a source document and queues its
 	// extraction. Two transactions on purpose: Service.Store commits its own, the enqueue
@@ -299,6 +304,16 @@ func newExtractionAuditor() extraction.RecordExtractionAudit {
 			"state":             ev.State,
 			"failure_kind":      string(ev.FailureKind),
 		})
+	}
+}
+
+// newDocumentReadAuditor adapts the audit module to the detail seam. The event name is spelled
+// here rather than in internal/extraction: a const identifier there reads as a non-literal to
+// internal/platform/db's audit.Record scan and lands the site in no bucket
+// (TestNewDocumentReadAuditor_SpellsTheEventInCmd).
+func newDocumentReadAuditor() extraction.RecordDocumentRead {
+	return func(ctx context.Context, tx pgx.Tx, subject, documentID string) error {
+		return audit.Record(ctx, tx, subject, "document.read", map[string]any{"id": documentID})
 	}
 }
 

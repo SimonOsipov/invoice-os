@@ -53,6 +53,11 @@ const (
 	eaMinCmdFiles  = 8
 	eaMinFuncLits  = 4
 
+	// main.go's audit.Record sites: two in newExtractionAuditor plus newDocumentReadAuditor's.
+	// A floor, because this file classifies the outcome adapter only -- the repo-wide partition
+	// in internal/platform/db/audit_number_scan_test.go is what accounts for every writer.
+	eaMinMainSites = 3
+
 	// Spelled once as a production string literal, measured. The classifier must still find it,
 	// or every "spelled exactly once" clearance below is a broken walk reporting an empty set.
 	eaNeedleEvent = "reconciliation.drift_detected"
@@ -465,8 +470,10 @@ func eaSitesIn(fset *token.FileSet, rel string, f *ast.File) (sites []eaSite, fu
 	return sites, funcLits
 }
 
-// eaMainSites reads cmd/submission/main.go's two audit.Record calls, flooring the walk on both
-// the function literals it descended into and the exact number of sites it must find.
+// eaMainSites reads newExtractionAuditor's two audit.Record calls, flooring the walk on the
+// function literals it descended into, on every site main.go holds, and on the exact number
+// this file's assertions are written for. The population is the outcome adapter, not the file:
+// main.go audits other things too, and each carries its own actor, event and payload.
 func eaMainSites(t *testing.T) []eaSite {
 	t.Helper()
 
@@ -479,10 +486,19 @@ func eaMainSites(t *testing.T) []eaSite {
 	if lits < eaMinFuncLits {
 		t.Fatalf("walked %d function literal(s) in cmd/submission/main.go, want at least %d (newDocumentOpener's closure, its deferred Close, newPageSink's closure, the /v1/ping handler) -- a walk that descends into nothing finds no call site either", lits, eaMinFuncLits)
 	}
-	if len(sites) != 2 {
-		t.Fatalf("cmd/submission/main.go holds %d audit.Record call site(s) %v, want exactly 2 -- one per terminal outcome, each spelled at its own call", len(sites), sites)
+	if len(sites) < eaMinMainSites {
+		t.Fatalf("cmd/submission/main.go holds %d audit.Record call site(s) %v, want at least %d -- a walk that finds fewer has lost sites rather than found a shrinking file", len(sites), sites, eaMinMainSites)
 	}
-	return sites
+	var adapter []eaSite
+	for _, s := range sites {
+		if s.fn == eaAdapterFn {
+			adapter = append(adapter, s)
+		}
+	}
+	if len(adapter) != 2 {
+		t.Fatalf("%s holds %d audit.Record call site(s) %v, want exactly 2 -- one per terminal outcome, each spelled at its own call", eaAdapterFn, len(adapter), adapter)
+	}
+	return adapter
 }
 
 // eaControlNeedles proves the classifier reports both outcomes. Three synthetic files, each the

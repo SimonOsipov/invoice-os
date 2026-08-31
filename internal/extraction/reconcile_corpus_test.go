@@ -225,6 +225,106 @@ func TestReconcileCorpus_EveryLayoutIsTotal(t *testing.T) {
 	}
 }
 
+// --- EXTR-16-03: a confident field holds a value the page prints ------------------------
+
+// corpusFieldShapes is each field's shape, read off the shipped rules rather than restated here.
+func corpusFieldShapes(t *testing.T) map[string]extraction.Shape {
+	t.Helper()
+
+	out := make(map[string]extraction.Shape, len(extraction.HeaderFields))
+	for _, r := range extraction.Tier1Rules {
+		if prev, ok := out[r.Field]; ok && prev != r.Rule.Shape {
+			t.Fatalf("%s carries two shapes (%q and %q); one field takes one shape", r.Field, prev, r.Rule.Shape)
+		}
+		out[r.Field] = r.Rule.Shape
+	}
+	if len(out) != len(extraction.HeaderFields) {
+		t.Fatalf("the shipped rules name %d field(s), want %d -- a field with no rule has no shape to check against", len(out), len(extraction.HeaderFields))
+	}
+	return out
+}
+
+// corpusPageYields reports whether some token yields value under shape: the whole token, or what
+// follows the widest anchor label on it -- resolve.go's two same-token value paths.
+func corpusPageYields(pages []extraction.TokenPage, shape extraction.Shape, value string) bool {
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			raws := append([]string{tok.Text}, extraction.RcAnchorLabelResiduesForTest(tok.Text)...)
+			for _, raw := range raws {
+				if slices.Contains(shape.Normalize(raw), value) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// EXTR-16 Core AC 4's oracle, made standing: a field must not read ReasonNone while holding a
+// value the document does not print.
+//
+// Blind spot: it catches a FABRICATED value (a residue no token yields) and not a MISATTRIBUTED
+// one (a real token's text in the wrong field) -- corpusPinned above is what catches that.
+func TestReconcileCorpus_AConfidentFieldHoldsAPrintedValue(t *testing.T) {
+	corpusRequireSix(t)
+	shapes := corpusFieldShapes(t)
+
+	// The oracle's own specificity: on a fused label token it yields what the WIDEST label
+	// introduces, and not the narrower label's residue that EXTR-16's M1 defect fabricated.
+	const fused = "Supplier TIN: 99999999-0101"
+	residues := extraction.RcAnchorLabelResiduesForTest(fused)
+	if !slices.Contains(residues, "99999999-0101") {
+		t.Fatalf("the oracle reads %v off %q; it must yield the value the widest label introduces", residues, fused)
+	}
+	if slices.Contains(residues, "TIN: 99999999-0101") {
+		t.Fatalf("the oracle reads %v off %q; a narrower label's residue is the fabrication it must reject", residues, fused)
+	}
+
+	rules := extraction.RuleSet{Tier1: extraction.Tier1Rules}
+	ran := 0
+	for _, name := range corpusLayouts {
+		t.Run(name, func(t *testing.T) {
+			var pages []extraction.TokenPage
+			if _, err := extraction.NewPDFiumReader().Read(t.Context(), ptDoc(t, name), extraction.CollectTokens(&pages)); err != nil {
+				t.Fatalf("Read(%s): %v", name, err)
+			}
+			out := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rules)})
+			if len(out) == 0 {
+				t.Fatalf("%s produced no results at all", name)
+			}
+			ran++
+
+			checked := 0
+			for _, r := range out {
+				if r.Reason != extraction.ReasonNone {
+					continue
+				}
+				if r.Value == nil {
+					t.Errorf("%s.%s is decided (ReasonNone) with no value at all", name, r.Name)
+					continue
+				}
+				shape, ok := shapes[r.Name]
+				if !ok {
+					t.Errorf("%s.%s is decided (ReasonNone) and no shipped rule names it, so nothing knows its shape", name, r.Name)
+					continue
+				}
+				checked++
+				if !corpusPageYields(pages, shape, *r.Value) {
+					t.Errorf("%s.%s = %q, and no token on the page yields it under shape %q -- a confident field is holding a value the document never printed",
+						name, r.Name, *r.Value, shape)
+				}
+			}
+			// The floor: an empty ReasonNone set satisfies every assertion above.
+			if checked == 0 {
+				t.Fatalf("%s: no field is decided (ReasonNone), so the loop above asserted nothing", name)
+			}
+		})
+	}
+	if ran != 6 {
+		t.Fatalf("exercised %d of 6 layout(s)", ran)
+	}
+}
+
 // AC-7. D-19's pdfium-path fact, pinned rather than assumed: PDFiumReader sets no Tables at
 // all, so line_items has no candidate on any layout, however many fields the layout otherwise
 // carries.

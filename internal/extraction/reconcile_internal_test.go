@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -225,5 +226,94 @@ func TestFlagIfInconsistent_ReasonGateAloneProtectsAFieldItDidNotDecide(t *testi
 	flagIfInconsistent(out, "supplier_name", func(string) bool { return false })
 	if out[0].Reason != ReasonMissing {
 		t.Errorf("Reason = %q, want ReasonMissing -- flagIfInconsistent must never touch a field whose Reason is not ReasonNone, value or no value", out[0].Reason)
+	}
+}
+
+// --- EXTR-16-03: the printed-value oracle's lexicon input ------------------------------
+
+// riLabelSep is resolve.go's isLabelSep as a cutset. Restated, not called: an oracle that reads
+// the code it checks moves with it.
+const riLabelSep = ": -–—\t\n\v\f\r "
+
+// RcAnchorLabelResiduesForTest returns what a same-token reading can leave behind on text: the
+// remainder after each anchor-lexicon match no other entry's match strictly contains.
+// reconcile_corpus_test.go's printed-value oracle reads it, and it re-derives anchorOutranked's
+// widest-span rule rather than calling it, so a mutation there does not move the oracle too.
+func RcAnchorLabelResiduesForTest(text string) []string {
+	type span struct{ lo, hi int }
+	var spans []span
+	for _, m := range anchorLabelMatchers {
+		if loc := m.RE.FindStringIndex(text); loc != nil {
+			spans = append(spans, span{loc[0], loc[1]})
+		}
+	}
+
+	var out []string
+	for _, s := range spans {
+		if s.lo == 0 && s.hi == len(text) {
+			continue // the label IS the value; the caller's whole-token branch covers it
+		}
+		outranked := false
+		for _, o := range spans {
+			if o.lo <= s.lo && o.hi >= s.hi && o.hi-o.lo > s.hi-s.lo {
+				outranked = true
+				break
+			}
+		}
+		if !outranked {
+			out = append(out, strings.TrimLeft(text[s.hi:], riLabelSep))
+		}
+	}
+	return out
+}
+
+// --- EXTR-16-03: D-4's equal-standing group, pinned -------------------------------------
+
+func riFieldResult(t *testing.T, out []FieldResult, name string) FieldResult {
+	t.Helper()
+	for _, r := range out {
+		if r.Name == name {
+			return r
+		}
+	}
+	t.Fatalf("no %s result among %d field(s)", name, len(out))
+	return FieldResult{}
+}
+
+func riAltValues(alts []Field) []string {
+	out := make([]string, 0, len(alts))
+	for _, a := range alts {
+		if a.Value != nil {
+			out = append(out, *a.Value)
+		}
+	}
+	return out
+}
+
+// The user decided at EXTR-16's critical-fork gate (D-4) that decideField's equal-standing group
+// stays keyed on Tier AND Distance, because widening it turns 5 of 44 corpus pairs spuriously
+// ambiguous and offers cross-party junk as alternatives. A failure here is someone reversing that
+// decision, not a bug.
+func TestReconcile_TheEqualStandingGroupStillKeysOnTierAndDistance(t *testing.T) {
+	near := Candidate{Field: "supplier_name", Value: "Adeyemi Trading Limited", Tier: TierGeneric, Distance: 0.01, RuleID: "t1.supplier_name.right"}
+	far := Candidate{Field: "supplier_name", Value: "Honeywell Group", Tier: TierGeneric, Distance: 0.02, RuleID: "t1.supplier_name.below"}
+
+	got := riFieldResult(t, Reconcile(Input{Candidates: []Candidate{far, near}}), "supplier_name")
+	if got.Value == nil || *got.Value != near.Value {
+		t.Fatalf("value = %v, want %q -- the nearer candidate decides", got.Value, near.Value)
+	}
+	if got.Reason != ReasonNone {
+		t.Errorf("reason = %q, want %q -- a Distance loser is not a second answer", got.Reason, ReasonNone)
+	}
+	if len(got.Alternatives) != 0 {
+		t.Errorf("alternatives = %v, want none -- admitting a Distance loser reverses D-4", riAltValues(got.Alternatives))
+	}
+
+	// Positive control: the same pair at one Distance does go ambiguous, so the assertions above
+	// are not passing over a pair decideField could never have grouped.
+	far.Distance = near.Distance
+	tied := riFieldResult(t, Reconcile(Input{Candidates: []Candidate{far, near}}), "supplier_name")
+	if tied.Reason != ReasonAmbiguous || !slices.Equal(riAltValues(tied.Alternatives), []string{far.Value}) {
+		t.Fatalf("at one Distance reason = %q with alternatives %v, want %q with [%q]", tied.Reason, riAltValues(tied.Alternatives), ReasonAmbiguous, far.Value)
 	}
 }

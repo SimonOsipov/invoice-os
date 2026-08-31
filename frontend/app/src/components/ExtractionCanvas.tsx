@@ -1,6 +1,7 @@
 // The document pane: the toolbar, one aspect-locked frame per page, and the highlight for
-// the selected field's region. Every appearance constant is spread from extractionReview.ts,
-// never re-declared here — extractionReview.test.ts is their only non-circular oracle.
+// the selected field's region. The frame and highlight geometry is spread from
+// extractionReview.ts, whose values extractionReview.test.ts pins; the toolbar, banner and
+// ground chrome below is declared here and pinned by ExtractionCanvas.test.tsx.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 

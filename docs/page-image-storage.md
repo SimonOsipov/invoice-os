@@ -166,7 +166,10 @@ both inside a request-scoped transaction (`internal/extraction/reader.go`);
 and it is a narrow one: the key is selected off an RLS-visible row and handed straight to object
 storage, so no caller-supplied text reaches a bucket and a refused read touches none.
 
-What stays owed is the canvas. No screen displays a page image until EXTR-11-05 draws one.
+The canvas itself now exists — `frontend/app/src/components/ExtractionCanvas.tsx` renders one
+aspect-locked frame per stored page and fetches each page's bytes into a blob URL — but nothing
+mounts it. Its only importer is its own spec file. **No screen displays a page image** until
+EXTR-11-07 renders the canvas inside the review screen and EXTR-11-08 routes to it.
 
 Both reads name `document_id` and no `tenant_id`, so **two** independent mechanisms stand between
 them and another tenant's rows: this table's own `tenant_isolation` policy, which scopes every

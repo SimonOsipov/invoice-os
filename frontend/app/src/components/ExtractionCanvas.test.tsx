@@ -347,6 +347,10 @@ function revoked(): string[] {
 // that does not fake timers, so without this shim a selection anywhere in the file throws an
 // uncaught TypeError -- landing on whichever unrelated spec happens to be running 20ms later.
 // Installed for the whole file, not just the scroll block.
+//
+// The shim only stops the throw; the stale CALL still arrives, on the earlier spec's detached
+// ground, and inflates whatever the running spec counts. `isConnected` drops exactly those --
+// every scroll the file counts is a scroll onto a mounted ground.
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
   let n = 0
@@ -355,7 +359,13 @@ beforeEach(() => {
   createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:${++n}`)
   revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   scrollToSpy = vi.fn()
-  Object.defineProperty(Element.prototype, 'scrollTo', { value: scrollToSpy, configurable: true, writable: true })
+  Object.defineProperty(Element.prototype, 'scrollTo', {
+    value: function (this: Element, ...args: unknown[]) {
+      if (this.isConnected) (scrollToSpy as unknown as (this: Element, ...a: unknown[]) => void).apply(this, args)
+    },
+    configurable: true,
+    writable: true,
+  })
   removeObserver()
   pageFetch()
 })
@@ -775,6 +785,11 @@ describe('selecting a field', () => {
       'scrollIntoView',
     )
     expect(src, 'the pane must not re-implement the centring arithmetic').not.toContain('clientHeight')
+
+    // AC-18's third clause, which had no oracle: "no per-frame `ref`". The frames are a mapped
+    // list, so a per-item ref does not attach -- the ground's is the only ref this pane holds.
+    expect(src.match(/\bref=\{/g) ?? [], 'the pane holds a ref other than the ground').toHaveLength(1)
+    expect(src, 'the one ref is not the ground').toContain('ref={groundRef}')
   })
 })
 
@@ -1218,6 +1233,369 @@ describe('the pane owns every object URL', () => {
     for (const url of new Set(urls())) {
       expect(revoked().filter((u) => u === url), `${url} was revoked more than once`).toHaveLength(1)
     }
+  })
+})
+// ==========================================================================================
+// QA (Mode B) — the jobId-change path, resolution order, and the degenerate inputs
+// ==========================================================================================
+
+/**
+ * One resolver per request, in dispatch order, so a spec can land job A's page AFTER job B's.
+ * `deferredPageFetch` holds every request on one gate and can only open them together, which
+ * cannot express an interleave.
+ */
+interface QueuedFetch {
+  /** Every request, in dispatch order, with the job it went out under. */
+  requests: () => { jobId: string; page: number }[]
+  /** Resolves request `i` and drains the microtasks its handle travels through. */
+  settle: (i: number) => Promise<void>
+}
+
+function queuedPageFetch(): QueuedFetch {
+  const gates: Array<() => void> = []
+  const requests: { jobId: string; page: number }[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      const m = /\/extractions\/([^/]+)\/pages\/(\d+)(?:\?|$)/.exec(url)
+      expect(m, `not a page-image URL: ${url}`).not.toBeNull()
+      const hit = m as RegExpExecArray
+      requests.push({ jobId: hit[1], page: Number(hit[2]) })
+      await new Promise<void>((resolve) => gates.push(resolve))
+      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => new ArrayBuffer(8) }
+    }),
+  )
+  return {
+    requests: () => [...requests],
+    settle: async (i: number) => {
+      expect(gates[i], `request ${i} was never dispatched`).toBeDefined()
+      await act(async () => {
+        gates[i]()
+        for (let k = 0; k < 8; k += 1) await Promise.resolve()
+      })
+    },
+  }
+}
+
+describe('switching to another job', () => {
+  const ONE_PAGE = [mkPage({ page: 1 })]
+
+  it("releases a page that lands after the job it belongs to was replaced", async () => {
+    const q = queuedPageFetch()
+    const { rerender } = render(canvas({ pages: ONE_PAGE, fields: [], selected: null }))
+
+    expect(q.requests(), 'job A never requested its page').toEqual([{ jobId: JOB_ID, page: 1 }])
+
+    rerender(canvas({ jobId: OTHER_JOB_ID, pages: ONE_PAGE, fields: [], selected: null }))
+    expect(q.requests()[1], 'job B never requested its page').toEqual({ jobId: OTHER_JOB_ID, page: 1 })
+
+    // B lands FIRST, so the tagged map is now B's and the frame is showing B's bytes.
+    await q.settle(1)
+    const img = () => within(frame(1)).queryByTestId('extraction-page-image-1')
+    expect(img(), "job B's page never reached the frame").not.toBeNull()
+    expect(img()!.getAttribute('src')).toBe('blob:1')
+
+    // Now A's page lands, late. The state writer's `prev.jobId !== job` arm would re-tag the
+    // map to A; the derived map for B is then `{}` and every frame blanks -- permanently,
+    // because `requested` already holds page 1 and no crossing will fetch it again.
+    await q.settle(0)
+
+    expect(urls(), 'both jobs must have produced a handle, or the row below is vacuous').toEqual(['blob:1', 'blob:2'])
+    expect(img(), "a late page from the replaced job blanked the current job's frame").not.toBeNull()
+    expect(img()!.getAttribute('src'), "the replaced job's bytes took the current job's frame").toBe('blob:1')
+    expect(revoked(), "the replaced job's late handle was kept instead of released").toEqual(['blob:2'])
+  })
+
+  it('releases three late pages from the replaced job, and keeps none of them', async () => {
+    const q = queuedPageFetch()
+    const { rerender } = render(canvas({ fields: [], selected: null }))
+
+    expect(q.requests().map((r) => r.page).sort(), 'job A never requested its three pages').toEqual([1, 2, 3])
+
+    rerender(canvas({ jobId: OTHER_JOB_ID, fields: [], selected: null }))
+    expect(q.requests(), 'job B never re-requested under its own id').toHaveLength(6)
+
+    // Job B settles one page, then all three of A's land on top of it.
+    await q.settle(3)
+    for (const i of [0, 1, 2]) await q.settle(i)
+
+    expect(urls(), 'four handles must exist, or the accounting below proves nothing').toHaveLength(4)
+    // Exactly the three A handles, and none of B's.
+    expect(revoked().sort()).toEqual(['blob:2', 'blob:3', 'blob:4'])
+    expect(within(frame(q.requests()[3].page)).queryByTestId(`extraction-page-image-${q.requests()[3].page}`), "job B's settled page lost its bytes").not.toBeNull()
+  })
+
+  it("shows no page between jobs, and never the previous document's", async () => {
+    const { rerender } = render(canvas({ fields: [], selected: null }))
+    await flush()
+    expect(images().map((el) => el.getAttribute('src')), 'job A never loaded').toEqual(['blob:1', 'blob:2', 'blob:3'])
+
+    // Job B is a NARROWER document whose bytes are held open. Two facts in one window: the
+    // frames the new job does not have are gone, and the frames it does have are BLANK --
+    // an untagged page map would render document 1's (already revoked) bytes into them.
+    const gate = deferredPageFetch()
+    rerender(canvas({ jobId: OTHER_JOB_ID, pages: ONE_PAGE, fields: [], selected: null }))
+    await flush()
+
+    expect(frameIds(), "the previous job's extra frames survived").toEqual(['extraction-page-1'])
+    expect(gate.requested(), 'job B never requested its own page').toEqual([1])
+    expect(images(), "the previous document's pages are still on screen").toHaveLength(0)
+    expect(revoked().sort(), "the previous job's handles were leaked").toEqual(['blob:1', 'blob:2', 'blob:3'])
+  })
+
+  it("a crossing after a jobId change loads the new job's page, never the old job's", () => {
+    installObserver()
+    const q = queuedPageFetch()
+
+    // The SAME `pages` array identity across both renders: only the job changed, so an
+    // observer effect keyed on the page list alone would keep the mount-time `load` and the
+    // job id that closure captured -- and fetch document 1's pixels for document 2.
+    const { rerender } = render(canvas({ pages: ONE_PAGE, fields: [], selected: null }))
+    cross(frame(1))
+    expect(q.requests(), 'the first crossing never fetched').toEqual([{ jobId: JOB_ID, page: 1 }])
+
+    rerender(canvas({ jobId: OTHER_JOB_ID, pages: ONE_PAGE, fields: [], selected: null }))
+    cross(frame(1))
+
+    expect(q.requests(), 'the crossing after the switch fetched nothing').toHaveLength(2)
+    expect(q.requests()[1], 'a stale load closure fetched the replaced job').toEqual({
+      jobId: OTHER_JOB_ID,
+      page: 1,
+    })
+  })
+
+  it('keeps the zoom the reader chose across a jobId change', () => {
+    // `## Decisions -> D-23`. The brief's reset rule ("Reset the review component's state
+    // whenever docName or variant changes, or document 2 inherits document 1's corrections")
+    // and the artboard's own componentDidUpdate (`Recognition Review.dc.html:566-573`) reset
+    // CONTENT state only -- focus, hover, selection, edits, drawn boxes. Zoom is a view
+    // preference the artboard does not have, and an accountant working a queue of documents
+    // would re-click it on every one.
+    const { rerender } = render(canvas())
+    fireEvent.click(screen.getByTestId('extraction-zoom-150'))
+    expect(frame(1).style.width, 'the zoom click did not land').toBe('150%')
+
+    rerender(canvas({ jobId: OTHER_JOB_ID }))
+
+    expect(frames(), 'no frame rendered').toHaveLength(3)
+    expect(zoomPressed(), 'the new document opened at a zoom the reader did not choose').toEqual({
+      50: 'false',
+      100: 'false',
+      150: 'true',
+    })
+    expect(frame(1).style.width).toBe('150%')
+  })
+})
+
+describe('page bytes, adversarially', () => {
+  const FIVE = [1, 2, 3, 4, 5].map((page) => mkPage({ page }))
+
+  it('never re-requests a page whose bytes failed', async () => {
+    installObserver()
+    const bytes = pageFetch({ failing: [2] })
+    render(canvas({ pages: FIVE, fields: [], selected: null }))
+
+    cross(frame(2))
+    await flush()
+    await waitFor(() => expect(within(frame(2)).getByText(PAGE_FAILED)).toBeTruthy())
+    expect(bytes.requested(), 'the first crossing never fetched').toEqual([2])
+
+    // Scrolled away and back. The shipped choice is that a refused page stays refused for the
+    // life of the pane: `requested` is added to before the fetch and never removed, and there
+    // is no retry affordance anywhere on this screen. The alternative -- deleting the key in
+    // the catch -- re-fetches on every scroll past a page whose object is genuinely gone.
+    cross(frame(2), false)
+    cross(frame(2))
+    await flush()
+
+    expect(bytes.requested(), 'a refused page re-fetched on the next crossing').toEqual([2])
+    expect(within(frame(2)).getByText(PAGE_FAILED), 'the failure panel was cleared without a retry').toBeTruthy()
+  })
+
+  it('fetches once when a selection and a crossing want the same page', async () => {
+    installObserver()
+    const bytes = pageFetch()
+    const PAGE_4 = [mkField({ name: 'invoice_number', region: mkRegion({ page: 4 }) })]
+
+    const { rerender } = render(canvas({ pages: FIVE, fields: PAGE_4, selected: null }))
+    expect(bytes.requested(), 'the fixture loaded eagerly').toEqual([])
+
+    // The selection's direct load and the observer's crossing are two different call sites
+    // for the same page. `requested` is added to synchronously, before the await, so the
+    // second caller is refused; a direct fetchPageImage on the selection path would not be.
+    rerender(canvas({ pages: FIVE, fields: PAGE_4, selected: 'invoice_number' }))
+    cross(frame(4))
+    await flush()
+
+    expect(bytes.requested(), 'the same page went out twice').toEqual([4])
+    expect(urls(), 'two blob URLs for one page, and only one of them in a frame').toEqual(['blob:1'])
+    expect(within(frame(4)).getByTestId('extraction-page-image-4').getAttribute('src')).toBe('blob:1')
+
+    // And two entries for the SAME frame inside ONE callback. `requested` is written before
+    // the await, so the second entry is refused in the same tick.
+    const obs = observerWatching(frame(5))
+    act(() => {
+      obs.cb(
+        [
+          { target: frame(5), isIntersecting: true, intersectionRatio: 1 },
+          { target: frame(5), isIntersecting: true, intersectionRatio: 1 },
+        ],
+        obs,
+      )
+    })
+    expect(bytes.requested(), 'one callback with two entries for one frame fetched it twice').toEqual([4, 5])
+    await flush() // drain the last two handles inside this spec, not into the next one
+  })
+
+  it('watches nothing and fetches nothing for a document with no pages', async () => {
+    installObserver()
+    const bytes = pageFetch()
+    expect(() => render(canvas({ pages: [], fields: [], selected: null }))).not.toThrow()
+
+    expect(screen.getByText(NO_PAGES), 'the empty panel did not render').toBeTruthy()
+    expect(frames(), 'a frame rendered for a document with no pages').toHaveLength(0)
+    expect(bytes.requested()).toEqual([])
+
+    // Control needle: the same mount WITH a page, under the same stubbed observer, does fetch
+    // on a crossing -- so the empty array above is a fact about zero pages, not a dead stub.
+    cleanup()
+    render(canvas({ pages: [mkPage({ page: 1 })], fields: [], selected: null }))
+    cross(frame(1))
+    expect(bytes.requested()).toEqual([1])
+    await flush()
+  })
+
+  it('keys every frame on its own page number, never on its position', async () => {
+    installObserver()
+    const bytes = pageFetch()
+    // Nothing on the wire guarantees a contiguous 1..n -- the rows come from a query, not a
+    // range -- and every other fixture in this file is contiguous from 1, where a position
+    // and a page number agree.
+    render(canvas({ pages: [5, 2, 9].map((page) => mkPage({ page })), fields: [], selected: null }))
+
+    expect(frameIds()).toEqual(['extraction-page-2', 'extraction-page-5', 'extraction-page-9'])
+    for (const el of frames()) {
+      const fromTestid = (el.dataset.testid ?? '').replace('extraction-page-', '')
+      // The two attributes are independent expressions of the same number. The observer reads
+      // `data-page`; every spec in this file reads the testid.
+      expect(el.dataset.page, `${el.dataset.testid} is tagged for a different page`).toBe(fromTestid)
+    }
+
+    cross(frame(9))
+    expect(bytes.requested(), 'the crossing fetched a position, not a page').toEqual([9])
+    await flush()
+  })
+
+  it('watches a frame added after the first render, and drops the observer it replaces', async () => {
+    installObserver()
+    const bytes = pageFetch()
+    const TWO = [mkPage({ page: 1 }), mkPage({ page: 2 })]
+    const { rerender } = render(canvas({ pages: TWO, fields: [], selected: null }))
+
+    const first = observerWatching(frame(1))
+    expect(first.targets.size, 'the first observer is not watching both frames').toBe(2)
+
+    // A later read of the same job carries a third page.
+    rerender(canvas({ pages: [...TWO, mkPage({ page: 3 })], fields: [], selected: null }))
+
+    expect(first.disconnected, 'the observer outlived the page set it was built for').toBeGreaterThan(0)
+    const second = observerWatching(frame(3))
+    expect(second, 'the frame added after the first render is watched by the old observer').not.toBe(first)
+    expect(second.targets.size, 'the rebuilt observer is not watching every frame').toBe(3)
+    cross(frame(3))
+    expect(bytes.requested(), 'a frame added after the first render never loads').toEqual([3])
+
+    // And a frame that goes away is not still being watched by anyone.
+    const gone = frame(3)
+    rerender(canvas({ pages: TWO, fields: [], selected: null }))
+    expect(
+      DrivingObserver.instances.some((o) => o.targets.has(gone)),
+      'an unmounted frame is still observed',
+    ).toBe(false)
+    await flush()
+  })
+
+  it('re-fetches nothing when the ctx prop churns on every render', () => {
+    installObserver()
+    const gate = deferredPageFetch()
+    const fresh = () => ({ getToken: () => 'tok' }) as unknown as PlatformCtx
+
+    const { rerender } = render(canvas({ ctx: fresh(), pages: FIVE, fields: [], selected: null }))
+    cross(frame(2))
+    expect(gate.requested(), 'the first crossing never fetched').toEqual([2])
+
+    // Every other spec in this file passes ONE ctx instance. A caller that rebuilds it per
+    // render changes `load`'s identity, which rebuilds the observer, which re-observes a frame
+    // already on screen and fires `isIntersecting` again. Only `requested` -- a ref, not the
+    // rendered page map -- keeps that from re-fetching bytes still in flight.
+    for (let i = 0; i < 3; i += 1) {
+      rerender(canvas({ ctx: fresh(), pages: FIVE, fields: [], selected: null }))
+      cross(frame(2))
+    }
+
+    expect(DrivingObserver.instances.length, 'the ctx churn rebuilt no observer, so the row below is vacuous').toBeGreaterThan(1)
+    expect(gate.requested(), 'a churning ctx re-fetched a page already in flight').toEqual([2])
+  })
+})
+
+describe('the highlight, adversarially', () => {
+  it('draws one highlight when two rows carry the same field name', () => {
+    // Nothing on the wire enforces unique field names, and the highlight is a SINGLE derived
+    // value ("Nothing else is highlighted, ever."). `fields.find` takes the first row; a
+    // filter-and-map would put one node on each of two different pages.
+    const dupes = [
+      mkField({ name: 'invoice_number', region: mkRegion({ page: 1 }) }),
+      mkField({ name: 'invoice_number', region: mkRegion({ page: 3, x0: 0.1, y0: 0.7, x1: 0.4, y1: 0.8 }) }),
+    ]
+    render(canvas({ fields: dupes, selected: 'invoice_number' }))
+
+    expect(frames(), 'no frame rendered').toHaveLength(3)
+    expect(dupes.filter((f) => f.name === 'invoice_number'), 'the fixture has no duplicate to resolve').toHaveLength(2)
+    expect(highlights(), 'a duplicated field name drew two highlights').toHaveLength(1)
+    expect(within(frame(1)).getAllByTestId('extraction-highlight')).toHaveLength(1)
+    expect(within(frame(3)).queryAllByTestId('extraction-highlight')).toHaveLength(0)
+  })
+
+  it('draws nothing, and says nothing, for a page-2 region on a one-page document', () => {
+    render(
+      canvas({
+        pages: [mkPage({ page: 1 })],
+        fields: [mkField({ name: 'invoice_number', region: mkRegion({ page: 2 }) })],
+        selected: 'invoice_number',
+      }),
+    )
+
+    expect(frames(), 'no frame rendered').toHaveLength(1)
+    expect(highlights()).toHaveLength(0)
+    // Not the no-region banner either: this field HAS a region, and the banner's sentence
+    // ("We have no region for this field") would be false.
+    expect(screen.queryByTestId('extraction-no-region'), 'a field with a region got the no-region banner').toBeNull()
+  })
+})
+
+describe('the ground scrolls once per selection', () => {
+  it("does not scroll again when a page's bytes arrive", async () => {
+    vi.useFakeTimers()
+    const q = queuedPageFetch()
+    render(canvas({ selected: 'invoice_date' }))
+
+    await act(async () => {
+      vi.advanceTimersByTime(20)
+    })
+    expect(scrollToSpy, 'the selection never scrolled').toHaveBeenCalledTimes(1)
+
+    // Every page lands, each one a re-render. The scroll effect's deps are the selection and
+    // the job -- adding the page map to them (the obvious way to silence the exhaustive-deps
+    // disable on that effect) yanks the ground out from under the reader on every byte.
+    const total = q.requests().length
+    expect(total, 'no request went out -- the re-renders below never happen').toBe(3)
+    for (let i = 0; i < total; i += 1) await q.settle(i)
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(images(), 'no bytes arrived, so the row below is vacuous').toHaveLength(3)
+    expect(scrollToSpy, 'a page arriving scrolled the ground again').toHaveBeenCalledTimes(1)
   })
 })
 

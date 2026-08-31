@@ -2646,7 +2646,9 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 // --- EXTR-11 · the review screen's document pane: the ratio oracle, the grid, the band ---
 //
 // Written in EXTR-11-05 (Mode A), red until EXTR-11-07 builds the screen and EXTR-11-08 the
-// route. They RUN at the gate, when EXTR-11-09 removes `skip-visual`.
+// route. Nothing skips them: what keeps them off the gate meanwhile is the PR staying DRAFT --
+// `dev-env.yml`'s deploy and E2E jobs are gated on `pull_request.draft == false`. The
+// `skip-visual` label the branch strategy names is a human marker; no workflow reads it.
 //
 // CONTRACT OWED BY EXTR-11-08: the entry control on SourceDocumentCard must carry
 // `data-testid="open-extraction-review"`. Its copy is that subtask's to choose; the testid is
@@ -2892,6 +2894,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
     gapRight: number
     fits: boolean
     groundScrollsX: boolean
+    groundScrollsY: boolean
     bodyScrollsX: boolean
   }
   const measured: Fit[] = []
@@ -2911,6 +2914,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
             innerPad.boundingBox(),
             ground.evaluate((el) => ({
               groundScrollsX: el.scrollWidth > el.clientWidth + 1,
+              groundScrollsY: el.scrollHeight > el.clientHeight + 1,
               bodyScrollsX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
             })),
           ])
@@ -2944,6 +2948,20 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
         //    body row is what contains the enlarged page; without it the whole app slides.
         expect(m.bodyScrollsX, `the page itself scrolls horizontally at ${width}px, zoom ${zoom}`).toBe(false)
 
+        // 5. The GROUND is what scrolls vertically. At zoom 150 a US-Letter frame is ~1090px
+        //    tall inside a 1080px viewport, so this holds for a one-page document. It is the
+        //    only oracle in the suite for the containment (`minHeight: 0` down the flex
+        //    column) that lazy loading rests on: if the ground grows to its content instead of
+        //    scrolling, every frame sits inside the observer's 800px root margin and an
+        //    800-page document fetches all 800 at mount. That fetch COUNT still has no oracle
+        //    -- the deployed corpus has no document long enough to show it.
+        if (zoom === 150) {
+          expect(
+            m.groundScrollsY,
+            `the ground does not scroll vertically at ${width}px, zoom ${zoom} -- it grew to its content instead`,
+          ).toBe(true)
+        }
+
         measured.push({
           width,
           zoom,
@@ -2953,6 +2971,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
           gapRight: g.right,
           fits,
           groundScrollsX: m.groundScrollsX,
+          groundScrollsY: m.groundScrollsY,
           bodyScrollsX: m.bodyScrollsX,
         })
       }

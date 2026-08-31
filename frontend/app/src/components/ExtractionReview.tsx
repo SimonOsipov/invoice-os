@@ -37,10 +37,12 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     { isEmpty: () => false, deps: [jobId] },
   )
 
-  // Tagged with the job it was made under, so a jobId change clears the selection without a
-  // second render. `n` bumps on every click, and ExtractionCanvas's scroll effect keys on it:
-  // re-selecting the same row re-centres it (`D-25`).
+  // Tagged with its job and dropped when that job changes: a tag that gated only the read
+  // handed document 1 its old selection back on the way to it (`does not hand document 1 its
+  // old selection back on the way to it`). `n` bumps per click, and ExtractionCanvas's scroll
+  // effect keys on it, so re-selecting the same row re-centres it (`D-25`).
   const [pick, setPick] = useState<{ jobId: string; name: string; n: number } | null>(null)
+  if (pick && pick.jobId !== jobId) setPick(null)
   const current = pick && pick.jobId === jobId ? pick : null
   const selected = current?.name ?? null
 

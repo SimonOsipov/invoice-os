@@ -175,8 +175,12 @@ export function ExtractionCanvas({
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
   selected: string | null
-  /** Bumped per click by the shell, so re-selecting the same row re-centres it (`D-25`). */
-  scrollNonce?: number
+  /**
+   * Bumped per click by the caller, so re-selecting the same row re-centres it (`D-25`).
+   * Required, not optional: nothing else the pane already receives moves on a repeat click,
+   * so a caller that omits this silently loses the re-centre.
+   */
+  scrollNonce: number
 }) {
   const base = gatewayBase()
   const [zoom, setZoom] = useState(1)

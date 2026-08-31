@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// EXTR-11-05, Mode A. Written RED against a component that does not exist, so today the
-// whole file fails to collect on `./ExtractionCanvas`. Every row was first proven to fail on
+// EXTR-11-05. Started as Mode A red specs; `ExtractionCanvas.tsx` now exists and every row
+// below is green against it. Every row was first proven to fail on
 // its OWN assertion, and to go green, against a throwaway reference build that was deleted
 // before this commit; 22 mutants of that build were each caught by the row that names them.
 //
@@ -112,6 +112,8 @@ interface CanvasProps {
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
   selected: string | null
+  /** The caller's per-click nonce. Held constant unless a row is asserting on it. */
+  scrollNonce: number
 }
 
 function canvas(over: Partial<CanvasProps> = {}) {
@@ -122,6 +124,7 @@ function canvas(over: Partial<CanvasProps> = {}) {
     pages: THREE_PAGES,
     fields: THREE_FIELDS,
     selected: null,
+    scrollNonce: 0,
     ...over,
   }
   return <ExtractionCanvas {...props} />
@@ -755,6 +758,40 @@ describe('selecting a field', () => {
       vi.advanceTimersByTime(20)
     })
     expect(scrollTo).toHaveBeenCalledTimes(2)
+  })
+
+  it('scrolls again when only scrollNonce moved, and not when it did not', () => {
+    // `D-25`'s other half, stated where the prop lives. The row above holds `scrollNonce`
+    // constant and moves `selected`; this one does the reverse. Without it the prop is
+    // declared here and pinned only from ExtractionReview.test.tsx, so a second caller has
+    // no local statement of what it is for.
+    vi.useFakeTimers()
+    const scrollTo = scrollToSpy
+    deferredPageFetch()
+
+    const { rerender } = render(canvas({ selected: 'invoice_number', scrollNonce: 1 }))
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
+    expect(scrollTo, 'the first selection never scrolled').toHaveBeenCalledTimes(1)
+
+    // The pair, first: an unmoved nonce must not scroll, or "it scrolled" below is just
+    // "it re-rendered".
+    rerender(canvas({ selected: 'invoice_number', scrollNonce: 1 }))
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
+    expect(scrollTo, 'a re-render at the same nonce scrolled again').toHaveBeenCalledTimes(1)
+
+    rerender(canvas({ selected: 'invoice_number', scrollNonce: 2 }))
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
+
+    expect(scrollTo, 'a bumped nonce did not re-centre the unchanged selection').toHaveBeenCalledTimes(2)
+    expect(scrollTo.mock.instances[1], 'the pane scrolled something other than the ground').toBe(
+      screen.getByTestId('extraction-ground'),
+    )
   })
 
   it('scrolls nothing when the selected field has no region', () => {

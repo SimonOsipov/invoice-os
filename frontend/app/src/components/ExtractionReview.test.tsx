@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// EXTR-11-07, Mode A. Written RED against a component that does not exist, so today the
-// whole file fails to collect on `./ExtractionReview`. Every row was first proven to fail
-// on its OWN assertion, and to go green, against a throwaway reference build that was
-// deleted before this commit; each mutant of that build was caught by the row that names it.
+// EXTR-11-07. Started as Mode A red specs; `ExtractionReview.tsx` now exists and every row
+// below is green against it. Each row is mutation-proved against the SHIPPED file — the
+// mutant that reds it is named in its own comment where the answer is not obvious.
 //
 // The pane GEOMETRY has no oracle here and none is attempted: jsdom computes no layout, so
 // a rendered width is `EXTR11-E2E-02`/`-10`'s claim, written in this same commit. What this
@@ -373,6 +372,24 @@ describe('the screen shell', () => {
     ).toEqual(['extraction-canvas', 'extraction-fields'])
   })
 
+  it('declares a definite height on the screen root', async () => {
+    render(review({ ctx: serving().ctx }))
+    await flush()
+
+    // AC-2 / `P-40`. A DECLARATION PIN, and nothing more: jsdom applies no CSS, so no row in
+    // this file can tell `height: '100%'` from its absence behaviourally. Both real oracles
+    // are deployed and neither has run — `EXTR11-E2E-02b`'s scroll precondition and
+    // `EXTR11-E2E-06`'s zoom-150 clause. Without this row the declaration had NO oracle at
+    // any layer that executes: deleting it left all 19 rows green (QA Mode B, mutant M2).
+    // `.pf-scroll` (App.tsx:1435) is a block container, so at `height: auto` this root grows
+    // to its content and every containment declaration below it is decorative.
+    expect(pick(root().style, ['height', 'display', 'flexDirection'])).toEqual({
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+    })
+  })
+
   it('declares the containment idiom on the body', async () => {
     render(review({ ctx: serving().ctx }))
     await flush()
@@ -394,7 +411,7 @@ describe('the screen shell', () => {
     await flush()
 
     // AC-3, on the pane element itself (`Recognition Review.dc.html:34`). `minHeight: 0` is
-    // the half `ExtractionCanvas.tsx:35-41` does not declare today: without it this pane
+    // the half this subtask added to `ExtractionCanvas.tsx`'s `PANE`: without it this pane
     // grows to its ground's content and the ground never scrolls — the relationship
     // `EXTR11-E2E-06`'s zoom-150 `groundScrollsY` clause measures on the deployed build.
     // `borderRight` has no behavioural oracle at any layer; its only check is the fidelity
@@ -412,8 +429,8 @@ describe('the screen shell', () => {
     await flush()
 
     // AC-4 (`:223`). `minWidth: 470` is the relationship `EXTR11-E2E-02a`'s spill sweep and
-    // `EXTR11-E2E-10`'s floor both protect; `minHeight: 0` is the half
-    // `ExtractionFields.tsx:19-26` does not declare today, and `EXTR11-E2E-02b`'s
+    // `EXTR11-E2E-10`'s floor both protect; `minHeight: 0` is the half this subtask added to
+    // `ExtractionFields.tsx`'s `PANE`, and `EXTR11-E2E-02b`'s
     // precondition is what would notice its absence. `background` is fidelity only —
     // `EXTR11-E2E-11`'s diff, nothing else.
     expect(pick(fieldsPane().style, ['flex', 'minWidth', 'minHeight', 'background'])).toEqual({
@@ -503,6 +520,40 @@ describe('the state ladder', () => {
     expect(screen.getByText(COULD_NOT_READ), 'the could-not-read sentence did not render').toBeTruthy()
     expect(screen.queryByText(STILL_READING), 'a dead-lettered job is not still being read').toBeNull()
     expect((root().textContent ?? '').replace(COULD_NOT_READ, '').trim()).toBe('')
+  })
+
+  it('leaves exactly one of the migration’s states to the else-branch, and it is succeeded', () => {
+    // The ladder ends in an else, so an unrecognised state renders BOTH panes over whatever
+    // `pages`/`fields` the wire sent — measured: a `cancelled` job renders the toolbar, the
+    // frames and the rows, claiming a document was read (QA Mode B, probe P10). `state` is
+    // `string` on the wire (extractionReview.ts:51), so tsc cannot notice, and the four rungs
+    // above are hand-transcribed from a CHECK constraint nothing links them to.
+    //
+    // The house idiom for a cross-language set nothing links at compile time is
+    // wireMirrors.test.ts; this is that, one level down, over an enum rather than a key set.
+    const sql = readFileSync(
+      path.join(process.cwd(), '../../migrations/20260827084025_extraction_jobs.sql'),
+      'utf8',
+    )
+    // Anchored on a symbol OTHER than the list being extracted, so a moved or renamed table
+    // fails loudly instead of yielding [] and passing on two empty sets.
+    expect(sql, 'the scan ran over a moved or renamed migration').toContain('CREATE TABLE extraction_jobs (')
+    const clause = /CHECK \(state IN \(([^)]*)\)\)/.exec(sql)
+    expect(clause, 'no state CHECK found — the comparison below is vacuous').not.toBeNull()
+    const declared = Array.from((clause as RegExpExecArray)[1].matchAll(/'([a-z_]+)'/g), (m) => m[1])
+
+    // Two floors: a non-empty population, and the one value the else-branch is FOR. Without
+    // the second, an extractor that silently returned only `['succeeded']` would pass.
+    expect(declared.length, 'the CHECK named no state').toBeGreaterThan(3)
+    expect(declared, 'the CHECK does not name succeeded — the difference below means nothing').toContain('succeeded')
+
+    // Every state the shell names, as a quoted literal. `succeeded` is deliberately absent
+    // from the component: it is what the else-branch is for.
+    const named = new Set(Array.from(source().matchAll(/'([a-z_]+)'/g), (m) => m[1]))
+    expect(
+      declared.filter((s) => !named.has(s)),
+      'the shell names no rung for one of the migration’s states, so that state falls through to both panes and claims the document was read',
+    ).toEqual(['succeeded'])
   })
 
   it('renders both panes for a settled job — the control the four rungs above are absences against', async () => {
@@ -676,6 +727,43 @@ describe('switching to another job', () => {
     // ExtractionCanvas.test.tsx, "returns the ground to the top on a jobId change" — same
     // contract, asserted on a ground proven to be the same node. `D-24`.
     expect(ground().scrollTop, 'document 2 opened at document 1’s scroll position').toBe(0)
+  })
+
+  it('does not hand document 1 its old selection back on the way to it', async () => {
+    // A -> B -> A with the pane never unmounted. The tag is what clears the selection on the
+    // A -> B leg; if it only gates the READ, the pick survives in state and `pick.jobId ===
+    // jobId` becomes true again on the way back, so document A reopens with a row selected
+    // and its region centred — against AC-10's "clears `selected`" and against §6's "nothing
+    // selected (first render) — no highlight anywhere".
+    //
+    // Unreachable from today's routing (`P-43`: the entry control is on `InvoiceDetail`, so a
+    // second document is a fresh mount). Closed rather than recorded because the branch is
+    // inside this subtask's own state and costs one line, not because the path exists.
+    silenceObserver()
+    const two = wire(async (id) => mkDetail({ id, state: 'succeeded' }))
+    const { rerender } = render(review({ ctx: two.ctx, jobId: JOB_ID }))
+    await flush()
+
+    fireEvent.click(fieldRow('invoice_number'))
+    await flush()
+    // Floor: the selection really was made, so its absence at the end is a fact.
+    expect(pressedRows(), 'the click did not select — every claim below is vacuous').toEqual([
+      'extraction-field-invoice_number',
+    ])
+    expect(highlights(), 'the click drew no highlight — the absence below is vacuous').toHaveLength(1)
+
+    rerender(review({ ctx: two.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(pressedRows(), 'document 2 opened carrying document 1’s selection').toEqual([])
+
+    rerender(review({ ctx: two.ctx, jobId: JOB_ID }))
+    await flush()
+
+    // The control: the panes really did come back, so "nothing selected" is a live screen and
+    // not an unmounted one.
+    expect(fieldRows(), 'document 1 rendered no row on the way back').toHaveLength(3)
+    expect(pressedRows(), 'document 1 reopened carrying the selection it was left with').toEqual([])
+    expect(highlights(), 'document 1 reopened carrying the highlight it was left with').toHaveLength(0)
   })
 
   it('releases every page handle on unmount', async () => {

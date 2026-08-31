@@ -2645,8 +2645,9 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 
 // --- EXTR-11 · the review screen's document pane: the ratio oracle, the grid, the band ---
 //
-// Written in EXTR-11-05 (Mode A), red until EXTR-11-07 builds the screen and EXTR-11-08 the
-// route. Nothing skips them: what keeps them off the gate meanwhile is the PR staying DRAFT --
+// Written in EXTR-11-05 (Mode A). EXTR-11-07 has built the screen; these stay red until
+// EXTR-11-08 adds the route and the entry control `openExtractionReview` clicks. Nothing skips
+// them: what keeps them off the gate meanwhile is the PR staying DRAFT --
 // `dev-env.yml`'s deploy and E2E jobs are gated on `pull_request.draft == false`. The
 // `skip-visual` label the branch strategy names is a human marker; no workflow reads it.
 //
@@ -3141,8 +3142,8 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
 
 // --- EXTR-11-07 · the shell's two-pane flex row ------------------------------------------
 //
-// Written in EXTR-11-07 (Mode A), red until that subtask builds `ExtractionReview` and
-// EXTR-11-08 the route. The PR staying DRAFT is what keeps them off the gate meanwhile.
+// Written in EXTR-11-07 (Mode A). `ExtractionReview` now exists; these stay red until
+// EXTR-11-08 adds the route. The PR staying DRAFT is what keeps them off the gate meanwhile.
 //
 // jsdom computes no layout, so nothing above this line is an oracle for the pane
 // relationships: `ExtractionReview.test.tsx` asserts the STYLE OBJECTS as a structural

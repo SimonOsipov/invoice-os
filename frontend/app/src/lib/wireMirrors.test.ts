@@ -78,6 +78,59 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getAuditLog',
     floor: 10,
   },
+  // EXTR-11-04 — the review screen's five. One Go file, five distinct anchors, so a
+  // deleted struct cannot be masked by a neighbour's still-present symbol. Each anchor
+  // ends in '(' — without it a renamed getExtractionDetailX still contains the anchor.
+  {
+    ts: 'ExtractionDetail',
+    go: 'ExtractionDetail',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func emptyDetail()',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function getExtractionDetail(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 6,
+  },
+  {
+    ts: 'ExtractionDocument',
+    go: 'ExtractionDocument',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function docMetaLine(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 4,
+  },
+  {
+    ts: 'ExtractionPage',
+    go: 'ExtractionPage',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailPagesTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function pageFrameStyle(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 3,
+  },
+  {
+    ts: 'ExtractionFieldState',
+    go: 'ExtractionFieldState',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailFieldsTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function scrollRegionIntoView(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 3,
+  },
+  {
+    ts: 'ExtractionRegion',
+    go: 'ExtractionRegion',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func (r *Reader) Detail(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function highlightStyle(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 5,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -181,7 +234,15 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     // The registry of what this file checks. A cleared table would let every loop here pass
     // on zero iterations, so each table is named — a new mirror that skips this row is a
     // mirror nothing runs.
-    expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual(['StatusChange', 'AuditEvent'])
+    expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
+      'StatusChange',
+      'AuditEvent',
+      'ExtractionDetail',
+      'ExtractionDocument',
+      'ExtractionPage',
+      'ExtractionFieldState',
+      'ExtractionRegion',
+    ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
 

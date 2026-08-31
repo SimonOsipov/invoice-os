@@ -324,9 +324,6 @@ describe('startDocumentRun — one failure does not end the run (RUN-4, AC-5, AC
 })
 
 // --- STAGE-1..6 (EXTR-10-01, task-783) --------------------------------------
-//
-// stageOf/documentRunRows are stubs that throw 'EXTR-10-01: not implemented' until the
-// executor writes their bodies. Every assertion below is expected to fail on that throw.
 
 describe('stageOf — classifies every state in the CHECK constraint, and only those (STAGE-1, Core AC 1/2)', () => {
   // migrations/20260827084025_extraction_jobs.sql:20-21's five values, literal so a
@@ -450,5 +447,96 @@ describe('documentRunRows — the widened union adds no row property (STAGE-6, C
         expect(row, `${JSON.stringify(row)} should not carry "${prop}"`).not.toHaveProperty(prop)
       }
     }
+  })
+})
+
+// --- STAGE adversarial coverage (task-783 QA pass) --------------------------
+//
+// Added during Mode B verification, past what the RED-phase STAGE-1..6 specs cover.
+
+describe('stageOf — null for inputs outside the CHECK set, including prototype-name strings (STAGE-ADV-1, AC-1)', () => {
+  it('returns null for the empty string, whitespace, wrong case, and JS prototype keys', () => {
+    const INPUTS = ['', ' ', 'EXTRACTING', 'constructor', '__proto__', 'toString']
+    expect(INPUTS).toHaveLength(6)
+    for (const state of INPUTS) {
+      expect(stageOf(job({ state })), `state ${JSON.stringify(state)}`).toBeNull()
+    }
+  })
+})
+
+describe('documentRunRows — a zero-file run (STAGE-ADV-2, AC-2)', () => {
+  it('returns an empty array, not undefined or a thrown error', () => {
+    const run: ImportRun = { files: [], cursor: 0, status: 'idle' }
+    const rows = documentRunRows(run, {})
+    expect(rows).toHaveLength(0)
+    expect(rows).toEqual([])
+  })
+})
+
+describe('documentRunRows — a stale stage entry outlives its file (STAGE-ADV-3, AC-2)', () => {
+  it('ignores a stages entry whose id is not among run.files, and does not disturb the file that is', () => {
+    const files: RunFile[] = [runFile('f1', 'a.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    // f-ghost: a leftover from an earlier run/picker session -- must produce no row of
+    // its own and must not leak onto f1's row.
+    const stages: Record<string, DocumentRowState> = {
+      f1: { kind: 'reading' },
+      'f-ghost': { kind: 'failed', reason: 'stale' },
+    }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(1)
+    expect(rows).toEqual([{ name: 'a.pdf', kind: 'reading' }])
+  })
+})
+
+describe('documentRunRows — file order wins over id order (STAGE-ADV-4, AC-2)', () => {
+  it('preserves run.files order even when ids are not sorted', () => {
+    // ids deliberately NOT sorted, so a sort-by-id bug is distinguishable from correct
+    // insertion-order behaviour -- STAGE-3's own files happen to be id-sorted already
+    // and cannot tell the two apart.
+    const files: RunFile[] = [runFile('f3', 'third.pdf'), runFile('f1', 'first.pdf'), runFile('f2', 'second.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = {
+      f1: { kind: 'reading' },
+      f2: { kind: 'retrying' },
+      f3: { kind: 'imported', count: 1 },
+    }
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(3)
+    expect(rows.map((r) => r.name)).toEqual(['third.pdf', 'first.pdf', 'second.pdf'])
+    expect(rows).toEqual([
+      { name: 'third.pdf', kind: 'imported', count: 1 },
+      { name: 'first.pdf', kind: 'reading' },
+      { name: 'second.pdf', kind: 'retrying' },
+    ])
+  })
+})
+
+describe('documentRunRows — a RunFile.id equal to a JS prototype key (STAGE-ADV-5, documented gap)', () => {
+  it('DOCUMENTED GAP: "constructor" as an id resolves through Object.prototype and drops `kind` from the row', () => {
+    // documentRunRows reads `stages[f.id]` on a plain object. Object.prototype answers
+    // 'constructor'/'__proto__'/'toString' truthily, so `?? { kind: 'queued' }` never
+    // fires (the value isn't null/undefined) and the inherited method gets spread into
+    // the row instead of a DocumentRowState. A function's own properties are all
+    // non-enumerable, so the spread contributes nothing -- the row silently loses
+    // `kind` entirely, breaking AC-2's "exactly one row, every property accounted for".
+    //
+    // NOT reachable today: the only producer of RunFile.id (importRun.ts:66,
+    // crypto.randomUUID()) can never equal a prototype key, so this is pinned as a
+    // known, non-blocking gap -- not a regression to silently reopen if a future
+    // caller ever keys `stages` by something else. See documentRun.ts:82.
+    const files: RunFile[] = [runFile('constructor', 'evil.pdf')]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const stages = {} as Record<string, DocumentRowState>
+
+    const rows = documentRunRows(run, stages)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).not.toHaveProperty('kind')
+    expect(rows[0]).toEqual({ name: 'evil.pdf' })
   })
 })

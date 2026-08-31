@@ -3353,3 +3353,70 @@ test('EXTR11-E2E-02b (AC-6): the fields pane scrolls its rows under a fixed head
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// EXTR-11-08's own layout claim. This subtask adds a second full-width control to a shipped
+// card, which changes that card's vertical rhythm -- so the two controls clearing each other,
+// and both still spanning the card's content box, is written here rather than in EXTR-11-09.
+// No review screen is opened: the card on the invoice detail is the whole subject.
+test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other on the card', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-08 card rhythm')
+
+  const card = page.getByTestId('source-document-card')
+  const control = page.getByTestId('open-extraction-review')
+  const sibling = page.getByTestId('view-source-document')
+
+  await expect(control, 'the entry control must be on the invoice detail').toBeVisible({ timeout: 60_000 })
+  await expect(sibling, 'its sibling must still be there').toBeVisible()
+
+  const measured: { width: number; control: Rect; sibling: Rect; overlap: Rect }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [c, s] = await Promise.all([control.boundingBox(), sibling.boundingBox()])
+        return { c, s }
+      }, `card control clearance at ${width}px`)
+
+      expect(m.c && m.s, `both controls must render at ${width}px`).toBeTruthy()
+      // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
+      expect(m.c!.height, `the entry control has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.s!.height, `view-source-document has no height at ${width}px`).toBeGreaterThan(0)
+
+      const overlap = overlapOf(m.c as Rect, m.s as Rect)
+      expect(
+        rectsOverlap(m.c as Rect, m.s as Rect),
+        `the two controls share ${overlap.width}x${overlap.height}px at ${width}px`,
+      ).toBe(false)
+      // Beneath, not merely elsewhere: `marginTop: 12` is what stacks them, and a control
+      // that floated above its sibling would clear it just as well.
+      expect(
+        m.c!.y,
+        `the entry control sits above view-source-document at ${width}px`,
+      ).toBeGreaterThanOrEqual(m.s!.y + m.s!.height)
+
+      measured.push({ width, control: m.c as Rect, sibling: m.s as Rect, overlap })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  // Both fill the card's content box, so neither is a half-width button that happens to
+  // clear the other. The card pads 16/18, so the expected gap is 18px a side -- comfortably
+  // inside the helper's default slack, and the attachment below records what was measured.
+  const controlFit = await assertFillsColumn(page, control, card, 'the entry control in the card content box')
+  const siblingFit = await assertFillsColumn(page, sibling, card, 'view-source-document in the card content box')
+
+  await testInfo.attach('extraction-entry-control-rhythm.json', {
+    body: JSON.stringify({ measured, controlFit, siblingFit }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

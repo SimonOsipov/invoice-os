@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SANDBOX_DEFAULT } from '../App'
 import { clampFilterText } from '../lib/invoices'
-import type { PlatformCtx } from '../types'
+import type { PlatformCtx, View } from '../types'
 import { Header } from './Header'
 
 afterEach(cleanup)
@@ -31,10 +31,12 @@ function headerCtx(over: {
   setSandbox?: () => void
   nav?: PlatformCtx['nav']
   setInvoiceQuery?: (q: string) => void
+  // EXTR-11-08: the crumb rows below need a view other than the default.
+  view?: View
 }) {
   const ctx: HeaderCtx = {
     active: { initials: 'OP' },
-    view: 'dashboard',
+    view: over.view ?? 'dashboard',
     openCreate: () => {},
     setSandbox: over.setSandbox ?? vi.fn(),
     sandbox: over.sandbox,
@@ -321,5 +323,56 @@ describe('A03-1: CRUMB_MAP cannot silently degrade at runtime for a new View mem
     for (const v of views) {
       expect(keys, `CRUMB_MAP has no entry for View member '${v}'`).toContain(v)
     }
+  })
+})
+
+// EXTR-11-08, Mode A. The extraction view's breadcrumb. Header.tsx:55's
+// `CRUMB_MAP[view] || 'Overview'` degrades silently, so "the map has a key" and "the header
+// renders it" are two facts and both are asserted -- A03-1 above proved the first alone
+// cannot see a broken render, and a render alone cannot tell a real crumb from the fallback.
+//
+// The string is not the executor's to choose. The story's `## Decisions -> Invented copy`
+// table marks every row final and already carries this one; a reword moves the table and this
+// literal together, which is what commit 5c108824 ("the copy table is the record") settled.
+const EXTRACTION_CRUMB = 'Extraction review'
+
+// Header.tsx:67 -- the third span in the header's left group, after the initials and the '/'.
+function crumbText(container: HTMLElement): string {
+  const spans = container.querySelectorAll('header > div:first-child > span')
+  expect(spans.length, 'the header no longer renders initials / separator / crumb').toBe(3)
+  return spans[2]!.textContent ?? ''
+}
+
+describe("EXTR-11-08 AC-10: the extraction view has its own breadcrumb", () => {
+  it('header_crumbMapDeclaresAnExtractionEntry', () => {
+    const keys = crumbMapKeys(readSrc('src/components/Header.tsx'))
+
+    expect(keys.length, 'the scan must find a non-empty key set').toBeGreaterThan(0)
+    // Control needle: the same scan sees a shipped key, so the miss below is a real absence.
+    expect(keys, 'known-true anchor: audit is mapped today').toContain('audit')
+    expect(keys, "CRUMB_MAP has no 'extraction' key -- Header.tsx:55's fallback would render 'Overview' instead").toContain('extraction')
+  })
+
+  it('header_theExtractionViewRendersItsCrumbAndNotTheFallback', () => {
+    // Control needle first, on the same locator: a shipped view really does render its crumb
+    // here, so a miss below is the extraction entry and not a broken selector.
+    const control = render(<Header ctx={headerCtx({ sandbox: true, view: 'audit' })} />)
+    expect(crumbText(control.container), 'control: the crumb slot does not read the map').toBe('Audit log')
+    cleanup()
+
+    const { container } = render(<Header ctx={headerCtx({ sandbox: true, view: 'extraction' as View })} />)
+    const rendered = crumbText(container)
+    expect(rendered, "the extraction view fell through to the 'Overview' fallback").not.toBe('Overview')
+    expect(rendered, 'the crumb must be the string the story\'s Invented-copy table declares final').toBe(EXTRACTION_CRUMB)
+  })
+
+  it('header_theCrumbMapEntryIsTheRenderedString', () => {
+    // Ties the declaration to the render: a map whose `extraction` value differs from what
+    // the header paints means one of the two rows above is reading a different thing.
+    const src = readSrc('src/components/Header.tsx')
+    const match = src.match(/^\s*extraction:\s*'([^']*)',?\s*$/m)
+    expect(match, "CRUMB_MAP has no `extraction: '...'` entry").not.toBeNull()
+    expect(match![1].trim().length, 'the extraction crumb is an empty string').toBeGreaterThan(0)
+    expect(match![1], 'the declared crumb must be the story table\'s string').toBe(EXTRACTION_CRUMB)
   })
 })

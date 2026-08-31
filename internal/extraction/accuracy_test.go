@@ -718,3 +718,290 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 		})
 	}
 }
+
+// --- the decision rate ------------------------------------------------------
+
+// What the pipeline DECIDES, over the same 44 pairs the rate above scores. acScoreRules reads
+// Resolve's candidate list and never asks which candidate decideField picks (its own comment
+// says so), so every field on every layout can read a bare label while that number reads 43/44.
+// Measured on e763fccd, before EXTR-16 touches any ranking.
+const (
+	tier1DecisionHits  = 30
+	tier1DecisionPairs = 44 // the recall denominator; asserted equal below, never assumed
+	tier1DecisionRate  = float64(tier1DecisionHits) / float64(tier1DecisionPairs)
+)
+
+// The decision rate with acMutilatedField's rules removed -- the pairs invoice_number decides
+// correctly, gone. M-05's acMutilatedHits is the same cut scored on recall.
+const acMutilatedDecisionHits = 25
+
+// acFalseDecided is every field decided with a value its layout never prints. corpusExpect
+// names the fields each layout carries, so a decided field it does not name is a reading
+// fabricated out of a label. Pinned by identity: "one false decision" is a different fact
+// depending on which field it is.
+var acFalseDecided = []struct{ file, field, value string }{
+	// corpus_totals_block.pdf prints "Supplier TIN: 99999999-0601" and no party name at all
+	// (fixtures_test.go:403-412); the residue after the label is decided as the name, unflagged.
+	{"corpus_totals_block.pdf", "supplier_name", "TIN: 99999999-0601"},
+}
+
+// acDecided is one field's decided reading, for a failure message. value is "" when the field
+// decided nothing.
+type acDecided struct {
+	acPair
+	value string
+}
+
+// acDecisionScore is one walk of corpusExpect scored on Reconcile's decided value.
+type acDecisionScore struct {
+	hits, total int
+	wrong       []acDecided // an expected pair whose decided value is not one corpusExpect names
+	fabricated  []acDecided // a decided field corpusExpect's layout does not name at all
+	byFile      []acRow
+}
+
+func (s acDecisionScore) rate() float64 { return float64(s.hits) / float64(s.total) }
+
+// acCorpusPages reads every layout once, so scoring a rule-set variant costs Resolve plus
+// Reconcile rather than another pdfium pass.
+func acCorpusPages(t *testing.T) map[string][]extraction.TokenPage {
+	t.Helper()
+
+	corpusRequireCommitted(t)
+	pages := make(map[string][]extraction.TokenPage, len(corpusLayouts))
+	for _, name := range corpusLayouts {
+		pages[name] = rvCorpusPages(t, name)
+	}
+	return pages
+}
+
+// acScoreDecisions runs Resolve then Reconcile over each layout and scores the DECIDED value.
+// Same denominator as acScoreRules -- one walk of corpusExpect -- so the two are comparable.
+func acScoreDecisions(t *testing.T, pages map[string][]extraction.TokenPage, what string, rules []extraction.Tier1Rule) acDecisionScore {
+	t.Helper()
+
+	if len(rules) == 0 {
+		t.Fatalf("%s holds no rule; the rate would be 0 for a reason that is not a regression", what)
+	}
+	if len(corpusExpect) == 0 {
+		t.Fatal("corpusExpect is empty; the walk below would score 0/0 and every rate assertion would read NaN")
+	}
+
+	s := acDecisionScore{}
+	for _, want := range corpusExpect {
+		page, ok := pages[want.file]
+		if !ok {
+			t.Fatalf("%s was never read; every pair on it would score as a miss for the wrong reason", want.file)
+		}
+		out := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, extraction.RuleSet{Tier1: rules})})
+		if len(out) == 0 {
+			t.Fatalf("%s produced no result at all under %s", want.file, what)
+		}
+		byName := make(map[string]extraction.FieldResult, len(out))
+		for _, r := range out {
+			byName[r.Name] = r
+		}
+
+		row := acRow{name: want.file}
+		decided := 0
+		for _, field := range extraction.HeaderFields {
+			res, ok := byName[field]
+			if !ok {
+				t.Fatalf("%s: Reconcile returned no %s result; the walk is scoring a partial vocabulary", want.file, field)
+			}
+			got := ""
+			if res.Value != nil {
+				got = *res.Value
+				decided++
+			}
+
+			values, named := want.fields[field]
+			if !named {
+				if res.Value != nil {
+					s.fabricated = append(s.fabricated, acDecided{acPair{file: want.file, field: field}, got})
+				}
+				continue
+			}
+			if len(values) == 0 {
+				t.Fatalf("%s expects %s with no value; the pair would count as a miss for the wrong reason", want.file, field)
+			}
+			s.total++
+			row.total++
+
+			if res.Value != nil && slices.Contains(values, got) {
+				s.hits++
+				row.hits++
+				continue
+			}
+			s.wrong = append(s.wrong, acDecided{acPair{file: want.file, field: field}, got})
+		}
+		// The analogue of rvFloor: a layout that decides nothing at all scores 0 for a reason
+		// that is not a ranking defect.
+		if decided == 0 {
+			t.Fatalf("%s decided no field at all under %s", want.file, what)
+		}
+		s.byFile = append(s.byFile, row)
+	}
+	return s
+}
+
+// acRenderDecisionLines is the decision block, printed under acReportMarker beside the recall
+// line so CI carries both numbers or neither.
+func acRenderDecisionLines(s acDecisionScore) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "  decision rate (what Reconcile decides): %d / %d = %s (pinned %d / %d = %s)\n",
+		s.hits, s.total, strconv.FormatFloat(s.rate(), 'f', 4, 64),
+		tier1DecisionHits, tier1DecisionPairs, strconv.FormatFloat(tier1DecisionRate, 'f', 4, 64))
+	fmt.Fprintf(&b, "  false decisions (a field the layout never prints): %d (pinned %d)\n", len(s.fabricated), len(acFalseDecided))
+
+	b.WriteString("  decided per layout:\n")
+	for _, r := range s.byFile {
+		fmt.Fprintf(&b, "    %-28s %d/%d\n", r.name, r.hits, r.total)
+	}
+	for _, d := range s.wrong {
+		fmt.Fprintf(&b, "  DECIDED %s / %s = %q, want one of %v\n", d.file, d.field, d.value, acExpectedValues(d.acPair))
+	}
+	for _, d := range s.fabricated {
+		fmt.Fprintf(&b, "  FALSE %s / %s = %q; the layout prints no such field\n", d.file, d.field, d.value)
+	}
+	return b.String()
+}
+
+// acMutilatedRuleSet is the shipped set minus every rule for acMutilatedField.
+func acMutilatedRuleSet(t *testing.T) []extraction.Tier1Rule {
+	t.Helper()
+
+	out := make([]extraction.Tier1Rule, 0, len(extraction.Tier1Rules))
+	for _, r := range extraction.Tier1Rules {
+		if r.Field == acMutilatedField {
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(out) != acMutilatedRules {
+		t.Fatalf("the mutilated set holds %d rule(s), want %d; %q lost a different number of rules than this spec assumes", len(out), acMutilatedRules, acMutilatedField)
+	}
+	return out
+}
+
+// M-11. The rank-aware measure EXTR-16 moves. The floor above is recall and is monotone in the
+// candidate list, so it reads 43/44 while every party name on every layout decides a label.
+// The mutilation subtest is what stops this becoming a second blind number.
+func TestTier1Accuracy_DecisionRateOverTheCorpus(t *testing.T) {
+	t1Floor(t)
+	pages := acCorpusPages(t)
+
+	s := acScoreDecisions(t, pages, "the shipped Tier-1 set", extraction.Tier1Rules)
+	t.Log("\n" + acRenderReport(acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)) + acRenderDecisionLines(s))
+
+	// The denominator, asserted three ways: a measure whose denominator can drift flatters
+	// itself by losing pairs (M-03's reason, and this rate shares that table).
+	if tier1DecisionPairs != tier1AccuracyPairs {
+		t.Fatalf("the decision rate is taken over %d pair(s) and the recall rate over %d; the two numbers are not comparable", tier1DecisionPairs, tier1AccuracyPairs)
+	}
+	if pairs := acCountPairs(); pairs != tier1DecisionPairs {
+		t.Fatalf("corpusExpect names %d (layout, field) pair(s), want %d", pairs, tier1DecisionPairs)
+	}
+	if s.total != tier1DecisionPairs {
+		t.Fatalf("scored %d pair(s), want %d; the rate would be taken over the wrong denominator", s.total, tier1DecisionPairs)
+	}
+	if s.hits+len(s.wrong) != s.total {
+		t.Fatalf("%d hit(s) plus %d wrong decision(s) is not the %d pair(s) scored", s.hits, len(s.wrong), s.total)
+	}
+
+	if s.hits != tier1DecisionHits {
+		for _, d := range s.wrong {
+			t.Errorf("%s: %s decided %q, want one of %v", d.file, d.field, d.value, acExpectedValues(d.acPair))
+		}
+		t.Errorf("the pipeline decides %d/%d = %v, want the pinned %d/%d = %v. This is a measurement, not a ratchet: move the pin and say which layouts moved",
+			s.hits, s.total, s.rate(), tier1DecisionHits, tier1DecisionPairs, tier1DecisionRate)
+	}
+
+	// The false decisions, compared by identity in both directions: a count alone passes when
+	// one fabrication is fixed and another appears.
+	pinned := make(map[acPair]string, len(acFalseDecided))
+	for _, f := range acFalseDecided {
+		pinned[acPair{file: f.file, field: f.field}] = f.value
+	}
+	for _, d := range s.fabricated {
+		want, ok := pinned[d.acPair]
+		if !ok {
+			t.Errorf("%s: %s is decided %q, and corpusExpect names no such field on that layout; a value the page never printed is a false decision", d.file, d.field, d.value)
+			continue
+		}
+		if want != d.value {
+			t.Errorf("%s: %s is decided %q, want the pinned %q", d.file, d.field, d.value, want)
+		}
+		delete(pinned, d.acPair)
+	}
+	for p, v := range pinned {
+		t.Errorf("%s: %s no longer decides the pinned false value %q; drop the row from acFalseDecided in the same commit as the fix", p.file, p.field, v)
+	}
+	if len(s.fabricated) != len(acFalseDecided) {
+		t.Errorf("%d false decision(s) against %d pinned", len(s.fabricated), len(acFalseDecided))
+	}
+
+	// The control. Without it "the rate is 30/44" is equally satisfied by a measure that scores
+	// something other than the decision -- the exact defect the recall rate shipped with.
+	t.Run("mutilated", func(t *testing.T) {
+		cut := acScoreDecisions(t, pages, "the shipped set minus every "+acMutilatedField+" rule", acMutilatedRuleSet(t))
+		if cut.total != tier1DecisionPairs {
+			t.Fatalf("scored %d pair(s), want %d; the two rates are not taken over one denominator", cut.total, tier1DecisionPairs)
+		}
+		t.Logf("mutilated %d/%d = %v, shipped %d/%d = %v", cut.hits, cut.total, cut.rate(), s.hits, s.total, s.rate())
+
+		if cut.hits <= 0 {
+			t.Errorf("the mutilated set decides %d pair(s); a zero means the pipeline read nothing at all, not that removing those rules is what cost the hits", cut.hits)
+		}
+		if cut.hits >= s.hits {
+			t.Errorf("dropping every %s rule leaves the decision rate at %d/%d, not below the shipped %d/%d; the measure does not read what those rules decide and would score the same over any rule set",
+				acMutilatedField, cut.hits, cut.total, s.hits, s.total)
+		}
+		if cut.hits != acMutilatedDecisionHits {
+			t.Errorf("the mutilated set decides %d pair(s), want %d; %q contributes a different number of decisions than measured", cut.hits, acMutilatedDecisionHits, acMutilatedField)
+		}
+	})
+}
+
+// M-12. The two measures are not one measure. A decision rate that quietly scored candidate
+// containment would read 43/44 and every other assertion in this file would still pass.
+func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
+	t1Floor(t)
+	pages := acCorpusPages(t)
+
+	decision := acScoreDecisions(t, pages, "the shipped Tier-1 set", extraction.Tier1Rules)
+	recall := acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules)
+
+	if decision.total != tier1DecisionPairs || recall.total != tier1AccuracyPairs || decision.total != recall.total {
+		t.Fatalf("the decision rate scored %d pair(s) and the recall rate %d, want %d each; comparing them says nothing", decision.total, recall.total, tier1DecisionPairs)
+	}
+	if recall.hits != tier1AccuracyHits {
+		t.Errorf("recall reaches %d/%d, want the pinned %d/%d", recall.hits, recall.total, tier1AccuracyHits, tier1AccuracyPairs)
+	}
+	if decision.hits != tier1DecisionHits {
+		t.Errorf("the pipeline decides %d/%d, want the pinned %d/%d", decision.hits, decision.total, tier1DecisionHits, tier1DecisionPairs)
+	}
+
+	if decision.hits == recall.hits {
+		t.Errorf("both measures read %d/%d; a decision measure that agrees with candidate containment on every pair is reading the candidate list, not the decision", decision.hits, decision.total)
+	}
+	if decision.hits > recall.hits {
+		t.Errorf("the decision rate %d/%d is above recall %d/%d; decideField picks one of the candidates, so it can never decide a value Resolve did not reach -- one of the two measures is wrong", decision.hits, decision.total, recall.hits, recall.total)
+	}
+
+	// The per-pair half of the same claim. Two sets of the same size can still disagree about
+	// which pairs they hold, and then neither number describes the other.
+	if len(recall.missed) != tier1AccuracyPairs-tier1AccuracyHits || len(recall.missed) == 0 {
+		t.Fatalf("recall missed %d pair(s), want %d; with no miss the implication below is vacuous", len(recall.missed), tier1AccuracyPairs-tier1AccuracyHits)
+	}
+	wrong := make(map[acPair]bool, len(decision.wrong))
+	for _, d := range decision.wrong {
+		wrong[d.acPair] = true
+	}
+	for _, p := range recall.missed {
+		if !wrong[p] {
+			t.Errorf("recall never reaches %s / %s, yet the decision rate counts it as decided correctly; the decision measure is scoring something Resolve did not produce", p.file, p.field)
+		}
+	}
+}

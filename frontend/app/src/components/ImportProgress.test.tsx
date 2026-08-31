@@ -269,3 +269,82 @@ describe('ImportProgress — document rows (CARD-1..8, EXTR-10-04)', () => {
     expect(container.firstChild).toBeNull()
   })
 })
+
+// task-786 QA (Mode B) -- adversarial/edge coverage the RED phase did not cover. CARD-1..8
+// pin the closed vocabulary and the per-file join; these pin the empty-map default, the
+// duplicate's un-special-cased count, and the shimmer's presence/absence across every kind.
+describe('ImportProgress — document rows, adversarial coverage (task-786 QA)', () => {
+  afterEach(() => cleanup())
+
+  it('an empty stage map reads every row QUEUED, not blank', () => {
+    const run: ImportRun = {
+      files: [runFile('f1', 'a.pdf'), runFile('f2', 'b.pdf'), runFile('f3', 'c.pdf')],
+      cursor: 0,
+      status: 'running',
+    }
+    const { container } = render(<ImportProgress ctx={progressCtx('document', run, {})} />)
+
+    const r = rows(container)
+    expect(r).toHaveLength(3)
+    for (const row of r) {
+      expect(statusText(row)).toBe('QUEUED')
+      expect(hasShimmer(row)).toBe(false)
+    }
+  })
+
+  it('a duplicate (0 IMPORTED) renders like any other imported count, no special-casing (D-14)', () => {
+    const run: ImportRun = { files: [runFile('f1', 'a.pdf')], cursor: 0, status: 'running' }
+    const stages: Record<string, DocumentRowState> = { f1: { kind: 'imported', count: 0 } }
+    const { container } = render(<ImportProgress ctx={progressCtx('document', run, stages)} />)
+
+    const r = rows(container)
+    expect(r).toHaveLength(1)
+    expect(statusText(r[0])).toBe('0 IMPORTED')
+    expect(statusColor(r[0])).toBe('var(--status-green-text)')
+    expect(hasShimmer(r[0])).toBe(false)
+  })
+
+  it('the shimmer marks every in-flight row and only those, across a mixed settled/in-flight card', () => {
+    const REASON = 'Server rejected this file: corrupt PDF'
+    const run: ImportRun = {
+      files: [
+        runFile('f1', 'a.pdf'),
+        runFile('f2', 'b.pdf'),
+        runFile('f3', 'c.pdf'),
+        runFile('f4', 'd.pdf'),
+        runFile('f5', 'e.pdf'),
+        runFile('f6', 'f.pdf'),
+      ],
+      cursor: 0,
+      status: 'running',
+    }
+    const stages: Record<string, DocumentRowState> = {
+      // f1 unmapped -> queued
+      f2: { kind: 'reading' },
+      f3: { kind: 'retrying' },
+      f4: { kind: 'processing' },
+      f5: { kind: 'imported', count: 3 },
+      f6: { kind: 'failed', reason: REASON },
+    }
+    const { container } = render(<ImportProgress ctx={progressCtx('document', run, stages)} />)
+
+    const r = rows(container)
+    expect(r).toHaveLength(6)
+    const shimmer = r.map(hasShimmer)
+    // f1 queued, f5 imported, f6 failed: settled or not-yet-started, never a shimmer.
+    // f2/f3/f4 reading/retrying/processing: the three in-flight kinds this run kind can
+    // ever carry (D-3 -- 'sending' is spreadsheet-only, covered separately below).
+    expect(shimmer).toEqual([false, true, true, true, false, false])
+  })
+
+  it('SENDING FILE (spreadsheet-only in-flight kind) still carries the shimmer', () => {
+    const files: RunFile[] = [sheetFile('s1', 'a.csv', { kind: 'uploading', phase: { kind: 'sending', loaded: 1, total: 10 } })]
+    const run: ImportRun = { files, cursor: 0, status: 'running' }
+    const { container } = render(<ImportProgress ctx={progressCtx('spreadsheet', run, {})} />)
+
+    const r = rows(container)
+    expect(r).toHaveLength(1)
+    expect(statusText(r[0])).toBe('SENDING FILE')
+    expect(hasShimmer(r[0])).toBe(true)
+  })
+})

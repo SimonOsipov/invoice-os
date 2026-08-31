@@ -17,11 +17,15 @@
 // renders again, showing the same per-file failures (runFailures) in its own footer
 // instead of here.
 //
-// Every status here names something observed -- an upload phase the transport reports, an
-// extraction_jobs.state off GET /v1/extractions (EXTR-07), a request in flight, or a settled
-// outcome carrying the server's own count or reason. Nothing is derived from elapsed time except
-// the poll-budget refusal, which says extraction CONTINUES rather than advancing a stage. That
-// is why no percentage, queue position or progress counter appears: nothing observes one.
+// Every status traces to an observation: an upload phase the transport reports, an
+// extraction_jobs.state off GET /v1/extractions (EXTR-07), a request in flight, or a count or
+// reason read back after the fact. Two carve-outs, both deliberate. QUEUED is the absence of a
+// report rather than a reading -- on the document path a row reads QUEUED while its bytes are
+// still uploading, because nothing wires onPhase there. And the poll-budget refusal is the one
+// status derived from elapsed time; it says extraction CONTINUES rather than advancing a stage.
+// A percentage and a byte counter ARE observable (xhr.upload.onprogress -> uploadPercent) and
+// still refused: bytes UPLOADED hit 100% while the server has not started, then sit there for
+// the whole wait. A queue position is the one number nothing observes at all.
 
 import { documentRunRows } from '../lib/documentRun'
 import { runFileRows } from '../lib/importRun'

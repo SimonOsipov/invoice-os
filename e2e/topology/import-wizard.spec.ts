@@ -2595,6 +2595,9 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
   let longSweep: WidthSample[]
   try {
     await expect(badRow, 'the bad document must retry before it dead-letters').toContainText('RETRYING', { timeout: 60_000 })
+    // Race-free by construction: the hold above pins this document at state:'extracting' for the
+    // whole sweep, so READING is not a sampling gamble here the way it is in EXTR10-E2E-01.
+    await expect(rows.filter({ hasText: goodName }), 'the held document must read READING').toContainText('READING')
     shortSweep = await sweepWidths('short-label (RETRYING)')
 
     // The good pipeline is held open, so nothing can route the run away underneath this

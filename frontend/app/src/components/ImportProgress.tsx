@@ -17,9 +17,11 @@
 // renders again, showing the same per-file failures (runFailures) in its own footer
 // instead of here.
 //
-// ONE WORD PER ROW, and only for a state something genuinely observes: the transport's own
-// upload phase (runFileRows), or an extraction_jobs.state off GET /v1/extractions — a
-// column, never a timer (documentRunRows, EXTR-07/EXTR-10). RunFileRow names what it forbids.
+// Every status here names something observed -- an upload phase the transport reports, an
+// extraction_jobs.state off GET /v1/extractions (EXTR-07), a request in flight, or a settled
+// outcome carrying the server's own count or reason. Nothing is derived from elapsed time except
+// the poll-budget refusal, which says extraction CONTINUES rather than advancing a stage. That
+// is why no percentage, queue position or progress counter appears: nothing observes one.
 
 import { documentRunRows } from '../lib/documentRun'
 import { runFileRows } from '../lib/importRun'
@@ -51,7 +53,7 @@ export function ImportProgress({ ctx }: { ctx: PlatformCtx }) {
       <div>
         {rows.map((row, i) => {
           // Total by exclusion, no cast: TS narrows the false branch to the four in-flight
-          // kinds, so a seventh RunFileRow kind added later fails to compile here rather than
+          // kinds, so an eighth RunFileRow kind added later fails to compile here rather than
           // rendering blank.
           const inFlight = row.kind === 'queued' || row.kind === 'imported' || row.kind === 'failed' ? null : IN_FLIGHT_LABEL[row.kind]
           return (

@@ -272,9 +272,9 @@ export function runFailures(run: ImportRun): { name: string; message: string }[]
   return failures
 }
 
-// One row's shape per honesty-preserving state (ImportProgress.tsx's own header
-// comment, AC #10) -- 'queued'/'sending'/'processing' carry NOTHING beyond the name:
-// no stage list, no row counter, no byte counter, no percentage, no rule-set version.
+// One row's shape per honesty-preserving state (AC #10) -- 'queued'/'sending'/'processing'
+// carry NOTHING beyond the name: no stage list, no row counter, no byte counter, no
+// percentage, no rule-set version.
 // 'imported' carries `count` -- the server's OWN ready_invoices, read back AFTER the
 // fact once the file has settled, never a client guess made WHILE the request is in
 // flight (that is exactly what the no-row-counter constraint forbids; this is a
@@ -292,9 +292,8 @@ export type RunFileRow =
 
 // AC #10: one row per file, TOTAL over the whole run (BULK-05-12) -- every file
 // appears regardless of its own outcome kind, in file order. An 'uploading' outcome
-// maps any UploadPhase kind other than 'sending' to 'processing' -- the same ternary
-// ImportProgress.tsx's own header comment already uses for UploadPhase, never a third
-// label invented here.
+// maps any UploadPhase kind other than 'sending' to 'processing' -- two labels for the
+// whole upload leg, never a third invented here.
 export function runFileRows(run: ImportRun): RunFileRow[] {
   return run.files.map((f): RunFileRow => {
     switch (f.outcome.kind) {

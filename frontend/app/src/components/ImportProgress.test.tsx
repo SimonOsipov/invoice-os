@@ -188,7 +188,11 @@ describe('ImportProgress — document rows (CARD-1..8, EXTR-10-04)', () => {
     const r = rows(container)
     expect(r).toHaveLength(6)
     const texts = r.map(statusText)
+    // Positive arm first: an empty status satisfies both negative arms below vacuously.
     for (const t of texts) {
+      expect(t, 'every row renders its own kind as a known, non-empty form').toMatch(
+        /^(QUEUED|READING|RETRYING|SERVER PROCESSING|\d+ IMPORTED|boom)$/,
+      )
       expect(t).not.toMatch(/\b\d+\s*(of|\/)\s*\d+\b/i)
       expect(t).not.toMatch(/^(\d+(st|nd|rd|th)\b)/i)
     }

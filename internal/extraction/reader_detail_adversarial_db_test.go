@@ -211,6 +211,77 @@ func TestRLS_ExtractionDetailChildTablesRefuseACrossTenantRow(t *testing.T) {
 	}
 }
 
+// rqaOtherDocHash is a content_hash for a SECOND document under a tenant stTenant has already
+// given one. stTenant seeds every first document with strings.Repeat("a", 64) and
+// documents_tenant_content_hash_uq is (tenant_id, content_hash), so a hash spelled from one hex
+// digit of the tenant id collides on one uuid in sixteen
+// (TestRLS_ExtractionFixtureSeedsASecondDocumentForAnALeadingTenant).
+func rqaOtherDocHash(tenantID string) string {
+	return strings.ReplaceAll(tenantID, "-", "") + strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+// The a-leading tenant seeded deliberately rather than waited for.
+func TestRLS_ExtractionFixtureSeedsASecondDocumentForAnALeadingTenant(t *testing.T) {
+	ctx := t.Context()
+	h := stRequire(t)
+
+	tenantID := "a" + uuid.NewString()[1:]
+	if _, err := uuid.Parse(tenantID); err != nil || !strings.HasPrefix(tenantID, "a") {
+		t.Fatalf("the fixture tenant id %q is not an a-leading uuid (%v), so this case reproduces nothing", tenantID, err)
+	}
+	if _, err := h.super.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`,
+		tenantID, "extr-11 "+tenantID[:8]); err != nil {
+		t.Fatalf("seed the a-leading tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := h.super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+			t.Errorf("teardown tenant %s: %v", tenantID, err)
+		}
+	})
+
+	// stTenant's own first document, spelled the way it spells it. This is the row the old
+	// derivation collided with.
+	first := uuid.NewString()
+	stTenantHash := strings.Repeat("a", 64)
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		first, tenantID, "extr-11/"+first, stTenantHash, 1024); err != nil {
+		t.Fatalf("seed the first document the way stTenant does: %v", err)
+	}
+
+	hash := rqaOtherDocHash(tenantID)
+	if hash == stTenantHash {
+		t.Fatalf("the derived hash IS stTenant's own %q; the seed below is the collision, not a test of it", stTenantHash)
+	}
+	second := rvdSeedDocumentMeta(t, ctx, tenantID, nil, nil, 2048, hash, time.Now().UTC())
+
+	// Both rows are really there: an insert that silently did nothing raises no error either.
+	var got []string
+	rows, err := h.super.Query(ctx,
+		`SELECT content_hash FROM documents WHERE tenant_id = $1 ORDER BY content_hash`, tenantID)
+	if err != nil {
+		t.Fatalf("read back tenant %s documents: %v", tenantID, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ch string
+		if err := rows.Scan(&ch); err != nil {
+			t.Fatalf("scan content_hash: %v", err)
+		}
+		got = append(got, ch)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tenant %s documents: %v", tenantID, err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("tenant %s holds %d document(s) %v, want 2 (%s and %s)", tenantID, len(got), got, first, second)
+	}
+	if got[0] == got[1] {
+		t.Errorf("both documents carry content_hash %q; documents_tenant_content_hash_uq should have refused that", got[0])
+	}
+}
+
 // The reader-level half of the same rule, in BOTH directions: the AC suite builds tenant B's
 // rows but never uses B's identity, so a refusal that happened to depend on A's data shape
 // would pass it. Each tenant holds a second document as well, so the page and field counts
@@ -244,7 +315,7 @@ func TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections(t *testing.T)
 		{tenantA, 5, []string{"issue_date", "currency", "total_amount"}},
 		{tenantB, 4, []string{"issue_date", "currency"}},
 	} {
-		other := rvdSeedDocumentMeta(t, ctx, o.tenant, nil, nil, 2048, strings.Repeat(o.tenant[:1], 64), now)
+		other := rvdSeedDocumentMeta(t, ctx, o.tenant, nil, nil, 2048, rqaOtherDocHash(o.tenant), now)
 		otherJob := rdSeedJob(t, ctx, o.tenant, other, "succeeded", now, nil)
 		for page := 1; page <= o.pages; page++ {
 			rvdSeedPage(t, ctx, o.tenant, other, page, 600, 800)

@@ -205,9 +205,9 @@ func PageImageHandler(key func(ctx context.Context, jobID string, page int) (str
 		}
 
 		// Refused before the 200, so Content-Length below can be unconditional. That header is
-		// what turns a mid-stream object failure into a broken response: net/http drops the
-		// connection on a short write, where chunked encoding would hand the browser a short,
-		// well-formed PNG instead.
+		// what turns a mid-stream object failure into a broken response rather than a short,
+		// well-formed PNG the browser accepts
+		// (TestExtractionPageImageHandler_ATruncatedObjectDoesNotArriveAsASuccessfulShortPng).
 		if size <= 0 {
 			log.ErrorContext(r.Context(), "extraction: page image object reports no length",
 				slog.String("key", storageKey), slog.Int64("size", size))

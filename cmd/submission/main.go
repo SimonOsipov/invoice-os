@@ -288,8 +288,8 @@ func newPageSink(objects document.ObjectStore) extraction.PageSink {
 func newPageObjectReader(objects document.ObjectStore) extraction.PageObject {
 	return func(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 		obj, err := objects.Get(ctx, key, "")
-		// Closed before the error branch: a Get that hands back both a body and an error still
-		// owes a close (TestNewPageObjectReader_ClosesBodyWhenGetErrors).
+		// Closed ON the error branch: a Get that hands back both a body and an error still owes
+		// a close (TestNewPageObjectReader_ClosesBodyWhenGetErrors).
 		if err != nil {
 			if obj.Body != nil {
 				_ = obj.Body.Close()

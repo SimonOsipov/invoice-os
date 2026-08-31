@@ -1883,6 +1883,22 @@ function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// Committed by EXTR-11-09. Hand-written on internal/extraction/fixtures_test.go's own recipe
+// (fxAssemble :96-118 lays the objects down and computes every xref offset from their real byte
+// positions; fxPage / fxStream / fxText) -- two US-Letter text pages sharing one font:
+// `/Kids [3 0 R 5 0 R] /Count 2`, two `/Type /Page` objects. Verified through the SAME
+// go-pdfium the worker renders with, before commit: 2 pages, both with text, each 1275x1651 at
+// 150 DPI -- identical to the one-pager's grid. NATIVE_INVOICE_PDF is `/Count 1`, so without
+// this file every gate run renders exactly one frame and AC-5's canvas half has no subject.
+const NATIVE_INVOICE_2P_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'native_invoice_2p.pdf'))
+
+// uniquePdfBytes()'s recipe, same reason, same trailing-comment trick -- and re-verified
+// through pdfium WITH the comment appended, because a byte past %%EOF that moved the xref
+// would open in some readers and fail in pdfium.
+function uniqueTwoPagePdfBytes(): Buffer {
+  return Buffer.concat([NATIVE_INVOICE_2P_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
 // upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
 // selection and upload, then fails pdfium.OpenDocument on every one of River's 3
@@ -2657,8 +2673,17 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 // Invented-copy table fixes all three strings ("Check the extraction", "This document has no
 // extraction to check.", "Extraction review"); an earlier draft of this comment said otherwise.
 
-/** The document journey EXTR09-E2E-01 proved, stopped at the real invoice detail. */
-async function extractOneDocument(page: Page, label: string): Promise<void> {
+/**
+ * The document journey EXTR09-E2E-01 proved, stopped at the real invoice detail.
+ *
+ * `file` defaults to the one-page fixture every caller before EXTR-11-09 used, so the eight
+ * specs above are byte-for-byte unchanged; only EXTR11-E2E-05 passes the two-page one.
+ */
+async function extractOneDocument(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
+): Promise<void> {
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
 
@@ -2668,7 +2693,7 @@ async function extractOneDocument(page: Page, label: string): Promise<void> {
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
     .locator('input[type="file"]#pf-import-file')
-    .setInputFiles({ name: 'native_invoice.pdf', mimeType: 'application/pdf', buffer: uniquePdfBytes() })
+    .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
   await page.getByRole('button', { name: 'Extract invoices' }).click()
 
   await expect(page.getByTestId('invoice-detail'), 'the document run must land on the real invoice detail').toBeVisible({
@@ -2680,16 +2705,24 @@ async function extractOneDocument(page: Page, label: string): Promise<void> {
 // specs assert comes off this one response -- never a literal copied out of mock.go, which
 // would assert the fixture against itself.
 async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
+  // Promise.all, not a bare waiter awaited after the click (EXTR-11-09 correction). The waiter
+  // is created first either way -- an array literal evaluates left to right, so the response
+  // listener is registered before the click starts -- but a click that fails its 30s
+  // actionability check used to leave the 120s waiter unhandled, and its rejection surfaced as
+  // worker noise ~90s AFTER the test had already reported. Promise.all attaches a handler to
+  // both, so the click's failure is the one that propagates and nothing is left dangling.
+  //
   // `$`-anchored: the LIST route has no id segment and the page route ends in /pages/{n}.
-  const settled = page.waitForResponse(
-    (r) =>
-      r.request().method() === 'GET' &&
-      /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
-    { timeout: 120_000 },
-  )
-  await page.getByTestId('open-extraction-review').click()
+  const [res] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    page.getByTestId('open-extraction-review').click(),
+  ])
 
-  const res = await settled
   expect(res.status(), 'the review screen must read its detail over a 200').toBe(200)
   await expect(page.getByTestId('extraction-review'), 'the review screen must open').toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('extraction-page-1'), 'the canvas must render at least one frame').toBeVisible({
@@ -3417,6 +3450,452 @@ test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other o
 
   await testInfo.attach('extraction-entry-control-rhythm.json', {
     body: JSON.stringify({ measured, controlFit, siblingFit }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-11-09 · the deployed proof: the journey, the two-page fixture, the fidelity diff ---
+//
+// The FINAL subtask. `Test-first: n/a` -- at order 9 of 9 every subject already exists, so these
+// specs cannot be red for the right reason; the subtask that built a thing wrote that thing's
+// deployed assertion (05-08 above). What genuinely remains is the journey end to end, the
+// two-page navigation AC-5's canvas half had no subject for, and the AC-8 fidelity diff.
+//
+// WHAT THIS SECTION CANNOT DELIVER, stated rather than faked: AC-5's second clause -- "the page
+// a field lives on is reachable in one action from that field" -- has NO deployed oracle. Every
+// mock region sits on page 1 (`grep -c 'Page: [2-9]' internal/extraction/mock.go` -> 0) and
+// every lever that would move one is outside this story's fence (`D-16`). The two-page fixture
+// below yields two FRAMES; it does not yield a field pointing at page 2, and nothing here
+// pretends otherwise. The clause is verified at component level only, in EXTR-11-05.
+
+test('EXTR11-E2E-01/09 (AC-2): the review screen opens from the invoice detail, and the journey raises no console error', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // A page image is fetched with a bare `fetch` and a bearer header, and a refusal is swallowed
+  // into an inline panel with NO console error (ExtractionCanvas.tsx's `.catch` -> 'error'
+  // slot). So the console gate alone cannot see a broken page route; this observer can.
+  //
+  // GET only, as openExtractionReview's own waiter is: the page fetch carries an Authorization
+  // header to another origin, so the browser sends a CORS preflight first, and an OPTIONS
+  // answered 204 would read as a refusal here on a perfectly correct build.
+  const pageImageResponses: { url: string; status: number }[] = []
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET') return
+    if (/\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}\/pages\/\d+$/.test(new URL(r.url()).pathname)) {
+      pageImageResponses.push({ url: new URL(r.url()).pathname, status: r.status() })
+    }
+  })
+
+  await extractOneDocument(page, 'EXTR-11-09 journey')
+
+  // -- EXTR11-E2E-01 -- the entry control is ENABLED, then opens the screen.
+  //
+  // EXTR11-E2E-07 measures this control's geometry and never asks whether it works: a deployed
+  // /v1/extractions lookup that 500s leaves it permanently disabled, and -07 would pass over
+  // the corpse. This is the row that asks. `toBeEnabled` polls, which is required rather than
+  // convenient -- the lookup is CHAINED behind the source-document read (InvoiceDetail.tsx:201-219),
+  // so the control is legitimately disabled for a beat after the detail paints.
+  const control = page.getByTestId('open-extraction-review')
+  await expect(control, 'the entry control must be on the invoice detail').toBeVisible({ timeout: 60_000 })
+  await expect(control, 'the entry control must be ENABLED after a settled extraction').toBeEnabled({ timeout: 60_000 })
+
+  const detail = await openExtractionReview(page)
+
+  // "at least one page frame", off the wire the SPA itself consumed rather than a literal.
+  // `[data-page]` inside the ground, not a testid prefix: `extraction-page-image-N` is itself
+  // prefixed by `extraction-page-`, and `data-page` is the attribute the canvas's own observer
+  // resolves frames by (ExtractionCanvas.tsx:248).
+  expect(detail.pages.length, 'a settled job with no page rows cannot prove a canvas').toBeGreaterThan(0)
+  const frames = page.getByTestId('extraction-ground').locator('[data-page]')
+  await expect(frames, 'one frame per wire page').toHaveCount(detail.pages.length)
+
+  // -- EXTR11-E2E-09 -- the journey raises no error, on two independent instruments.
+  //
+  // The floor first: the page route must actually have been exercised, or the status sweep
+  // below is a claim about an empty list.
+  await expect(page.getByTestId('extraction-page-image-1'), "page 1's bytes must load").toBeVisible({ timeout: 60_000 })
+  expect(pageImageResponses.length, 'no page image was ever requested -- the status sweep below is vacuous').toBeGreaterThan(0)
+  expect(
+    pageImageResponses.filter((r) => r.status !== 200),
+    `a page image was refused, and the screen swallows that silently:\n${JSON.stringify(pageImageResponses)}`,
+  ).toEqual([])
+
+  await testInfo.attach('extraction-review-entry.json', {
+    body: JSON.stringify(
+      { jobId: detail.id, state: detail.state, pages: detail.pages, fields: detail.fields.length, pageImageResponses },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-05 (AC-5): a two-page document is navigable', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-09 two pages', {
+    name: 'native_invoice_2p.pdf',
+    buffer: uniqueTwoPagePdfBytes(),
+  })
+  const detail = await openExtractionReview(page)
+
+  // 1. TWO page-image rows really landed. Off the wire, not off the fixture: `pages` is read
+  //    from extraction_page_images, so this is the assertion that go-pdfium rendered the second
+  //    page and the sink stored it -- not merely that the PDF this repo committed says
+  //    `/Count 2`. A one-page fixture makes every assertion below vacuous, so it is first.
+  expect(
+    detail.pages.map((p) => p.page),
+    'the two-page fixture must produce two stored page images, in page order',
+  ).toEqual([1, 2])
+
+  const frame1 = page.getByTestId('extraction-page-1')
+  const frame2 = page.getByTestId('extraction-page-2')
+  await expect(frame1, 'frame 1 must render').toBeVisible({ timeout: 60_000 })
+  await expect(frame2, 'frame 2 must render').toBeVisible({ timeout: 60_000 })
+
+  // 2. The toolbar's meta line counts them. Derived from the wire, never typed: `2 PAGES` as a
+  //    literal would still pass on a hard-coded string. The singular/plural fork is
+  //    docMetaLine's own (extractionReview.ts:131-139), and this is its only deployed reading
+  //    at a count above one.
+  const expectedPages = `${detail.pages.length} PAGES`
+  const metaText = (await page.getByTestId('extraction-doc-meta').innerText()).trim()
+  expect(metaText, `the meta line must count the pages (got "${metaText}")`).toContain(expectedPages)
+  expect(expectedPages, 'the fixture must be plural, or the assertion above proves nothing').toBe('2 PAGES')
+
+  // 3. The ground is the scroller. `D-17` dropped the page rail, so continuous scroll IS the
+  //    navigation and this is the whole of AC-5's first clause on the deployed build.
+  const ground = page.getByTestId('extraction-ground')
+  const before = await settledRead(async () => {
+    const [scroll, g, f1, f2] = await Promise.all([
+      ground.evaluate((el) => ({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight })),
+      ground.boundingBox(),
+      frame1.boundingBox(),
+      frame2.boundingBox(),
+    ])
+    return { scroll, g, f1, f2 }
+  }, 'two-page ground geometry')
+
+  expect(before.g && before.f1 && before.f2, 'the ground and both frames must render').toBeTruthy()
+  // Non-empty first: a collapsed ground and a collapsed frame overlap vacuously.
+  expect(before.f2!.height, 'frame 2 has no height').toBeGreaterThan(0)
+  expect(before.g!.height, 'the ground has no height').toBeGreaterThan(0)
+  expect(
+    before.scroll.scrollHeight,
+    `the ground holds ${before.scroll.scrollHeight}px in a ${before.scroll.clientHeight}px box -- there is nothing to scroll`,
+  ).toBeGreaterThan(before.scroll.clientHeight + 1)
+
+  const overlapBefore = overlapOf(before.f2 as Rect, before.g as Rect)
+
+  // 4. Scrolling to the bottom brings frame 2 into the ground's visible band.
+  await ground.evaluate((el) => {
+    el.scrollTop = el.scrollHeight
+  })
+  const after = await settledRead(async () => {
+    const [scrollTop, g, f2] = await Promise.all([
+      ground.evaluate((el) => el.scrollTop),
+      ground.boundingBox(),
+      frame2.boundingBox(),
+    ])
+    return { scrollTop, g, f2 }
+  }, 'two-page ground after scrolling')
+
+  expect(after.scrollTop, 'the ground did not move -- it is not the scroller').toBeGreaterThan(0)
+  const overlapAfter = overlapOf(after.f2 as Rect, after.g as Rect)
+
+  // Half the ground's height, not a single pixel: `overlapOf` clamps per axis, so `> 0` passes
+  // on a one-pixel sliver at the very bottom edge, which is not "reached".
+  expect(
+    overlapAfter.height,
+    `frame 2 covers only ${overlapAfter.height.toFixed(1)}px of the ground's ${after.g!.height.toFixed(1)}px band after scrolling to the bottom`,
+  ).toBeGreaterThanOrEqual(after.g!.height / 2)
+
+  // The control needle. Without it the assertion above would also pass on a ground that never
+  // scrolled because both frames already fit -- which is the one shape that would make "a
+  // multi-page document is navigable" unproven while reporting green.
+  expect(
+    overlapAfter.height,
+    `frame 2 was already ${overlapBefore.height.toFixed(1)}px into view before the scroll -- the scroll proved nothing`,
+  ).toBeGreaterThan(overlapBefore.height)
+
+  await testInfo.attach('extraction-two-page-navigation.json', {
+    body: JSON.stringify(
+      {
+        wirePages: detail.pages,
+        metaText,
+        scroll: before.scroll,
+        scrolledTo: after.scrollTop,
+        overlapBefore,
+        overlapAfter,
+        groundHeight: after.g!.height,
+      },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR11-E2E-11 · the AC-8 fidelity diff -----------------------------------------------
+//
+// AC-8 makes `.ralph/design/Recognition Review.dc.html` the spec, and a spec is only a spec if
+// something reads it. Every other AC-8 assertion in this repository reads a STYLE OBJECT in
+// jsdom (ExtractionCanvas.test.tsx, ExtractionFields.test.tsx, ExtractionReview.test.tsx),
+// which proves the declaration was written and nothing about what the browser resolved. This
+// row reads `getComputedStyle` off the deployed surface.
+//
+// THE ARTBOARD IS NOT IN THE REPOSITORY. `.gitignore:61` ignores `.ralph/`, so no CI checkout
+// carries the file and no spec can parse it at run time. The `artboard` column below is a
+// TRANSCRIPTION from the untruncated 62KB source, each row carrying the line it came from --
+// stated here because a transcription can be wrong in a way a parse cannot, and a later reader
+// deserves to know which of the two this is.
+type FidelityRow = {
+  element: string
+  property: string
+  /** The declaration in Recognition Review.dc.html, verbatim. */
+  artboard: string
+  source: string
+  /** What the deployed surface must resolve to. Equal to `artboard` unless `deviation` says why not. */
+  expected: string
+  deviation: string | null
+}
+
+// A placeholder rather than a literal: `var(--bg-2)` resolves to whatever the deployed theme
+// resolves it to, and the diff compares the toolbar against that token rather than against a
+// colour typed here. Filled in from the probe below.
+const BG_2_TOKEN = '<var(--bg-2)>'
+
+const FIDELITY: FidelityRow[] = [
+  // The document pane. `flex: 1 1 auto; min-width: 0`.
+  { element: 'extraction-canvas', property: 'flex-grow', artboard: '1', source: ':34', expected: '1', deviation: null },
+  { element: 'extraction-canvas', property: 'flex-shrink', artboard: '1', source: ':34', expected: '1', deviation: null },
+  { element: 'extraction-canvas', property: 'flex-basis', artboard: 'auto', source: ':34', expected: 'auto', deviation: null },
+  { element: 'extraction-canvas', property: 'min-width', artboard: '0px', source: ':34', expected: '0px', deviation: null },
+
+  // The fields pane. `width: 620px; flex: 1 1 620px; min-width: 470px`.
+  { element: 'extraction-fields', property: 'flex-grow', artboard: '1', source: ':223', expected: '1', deviation: null },
+  { element: 'extraction-fields', property: 'flex-shrink', artboard: '1', source: ':223', expected: '1', deviation: null },
+  { element: 'extraction-fields', property: 'flex-basis', artboard: '620px', source: ':223', expected: '620px', deviation: null },
+  { element: 'extraction-fields', property: 'min-width', artboard: '470px', source: ':223', expected: '470px', deviation: null },
+
+  // The page frame, read at zoom 100 (asserted below). `min-width: 560px; max-width: 640px;
+  // margin: 0 auto 18px; border: 1px solid var(--line-2); padding: 44px 42px`.
+  { element: 'extraction-page-1', property: 'min-width', artboard: '560px', source: ':72', expected: '560px', deviation: null },
+  { element: 'extraction-page-1', property: 'max-width', artboard: '640px', source: ':72', expected: '640px', deviation: null },
+  { element: 'extraction-page-1', property: 'margin-top', artboard: '0px', source: ':72', expected: '0px', deviation: null },
+  { element: 'extraction-page-1', property: 'margin-bottom', artboard: '18px', source: ':72', expected: '18px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-top-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-right-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-bottom-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-left-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  // The ONE stated deviation in this table. The artboard's page card is HTML invoice text, and
+  // `44px 42px` is that text's inset; an image page has no analogue. It is also mandatory
+  // rather than cosmetic: the highlight is positioned in percentages against the frame's
+  // PADDING box while the image fills its CONTENT box, and padding is the only thing that
+  // separates the two -- any non-zero value drifts every region (story `P-29`, :2170-2175).
+  ...(['padding-top', 'padding-right', 'padding-bottom', 'padding-left'] as const).map((property) => ({
+    element: 'extraction-page-1',
+    property,
+    artboard: property === 'padding-top' || property === 'padding-bottom' ? '44px' : '42px',
+    source: ':72',
+    expected: '0px',
+    deviation: 'the artboard pads its page card for HTML invoice text; a rendered image has no such inset, and padding on a positioned frame drifts every highlight (P-29)',
+  })),
+
+  // The ground. `flex: 1; min-height: 0; overflow: auto` -- BOTH axes, which is what a zoomed
+  // page needs and what `D-18` cites to keep the zoom control.
+  { element: 'extraction-ground', property: 'overflow-x', artboard: 'auto', source: ':65', expected: 'auto', deviation: null },
+  { element: 'extraction-ground', property: 'overflow-y', artboard: 'auto', source: ':65', expected: 'auto', deviation: null },
+
+  // The toolbar. `gap: 11px; padding: 10px 16px; background: var(--bg-2)`.
+  { element: 'extraction-toolbar', property: 'padding-top', artboard: '10px', source: ':36', expected: '10px', deviation: null },
+  { element: 'extraction-toolbar', property: 'padding-right', artboard: '16px', source: ':36', expected: '16px', deviation: null },
+  { element: 'extraction-toolbar', property: 'padding-bottom', artboard: '10px', source: ':36', expected: '10px', deviation: null },
+  { element: 'extraction-toolbar', property: 'padding-left', artboard: '16px', source: ':36', expected: '16px', deviation: null },
+  { element: 'extraction-toolbar', property: 'column-gap', artboard: '11px', source: ':36', expected: '11px', deviation: null },
+  { element: 'extraction-toolbar', property: 'row-gap', artboard: '11px', source: ':36', expected: '11px', deviation: null },
+  { element: 'extraction-toolbar', property: 'background-color', artboard: BG_2_TOKEN, source: ':36', expected: BG_2_TOKEN, deviation: null },
+
+  // The READ ONLY pill. `font-size: 9px; letter-spacing: 0.09em; border-radius: 999px`.
+  // letter-spacing is asserted separately, in ems -- see below.
+  { element: 'extraction-read-only', property: 'font-size', artboard: '9px', source: ':43', expected: '9px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-top-left-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-top-right-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-bottom-right-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-bottom-left-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+]
+
+// EXCLUDED BY NAME, with the reason, per this subtask's own AC. Both are elements this story
+// builds that the artboard does not have, and a diff against an absent element compares nothing
+// and reports all-clear:
+//   - the ZOOM CONTROL (`D-18`). The artboard's pages are HTML text at 11.5px that stays crisp
+//     at any size; ours are rendered images clamped to a 640px ceiling, and the user's task is
+//     reading a TIN's last four characters off one.
+//   - the PAGE COUNT in the toolbar's meta line (`D-17`). The artboard's toolbar carries a
+//     `{{ docMeta }}` placeholder (`:41`) whose content it never fixes, and the page rail that
+//     would have carried a `PAGE n OF m` stamp is dropped.
+// Each is asserted PRESENT on the deployed surface below: "excluded" has to exclude something
+// real, or a mistyped testid would silently exclude nothing and read as diligence.
+
+test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved values", async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-09 fidelity')
+  await openExtractionReview(page)
+
+  // The page frame's band is `560 * zoom` / `640 * zoom` (extractionReview.ts:114-118), so the
+  // artboard's 560/640 are only the right expectation at zoom 100. Asserted, not assumed.
+  await expect(
+    page.getByTestId('extraction-zoom-100'),
+    "the frame rows below are the artboard's numbers only at zoom 100",
+  ).toHaveAttribute('aria-pressed', 'true')
+
+  const elements = [...new Set(FIDELITY.map((r) => r.element))]
+  // Waited for, not assumed present: a missing element would otherwise fail the read as a hard
+  // error where it can equally be a paint this assertion arrived one frame ahead of.
+  for (const testid of elements) {
+    await expect(page.getByTestId(testid), `${testid} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
+  }
+
+  const properties: Record<string, string[]> = {}
+  for (const row of FIDELITY) (properties[row.element] ??= []).push(row.property)
+  // Read once, in one frame: two evaluates across a re-render can disagree.
+  const measured = await page.evaluate(
+    ({ elements, properties }: { elements: string[]; properties: Record<string, string[]> }) => {
+      const out: Record<string, Record<string, string> | null> = {}
+      for (const testid of elements) {
+        const el = document.querySelector(`[data-testid="${testid}"]`)
+        if (!el) {
+          out[testid] = null
+          continue
+        }
+        const cs = getComputedStyle(el)
+        const values: Record<string, string> = {}
+        for (const p of properties[testid]) values[p] = cs.getPropertyValue(p)
+        // The two read outside the row table, both recorded so the artifact is complete.
+        values['letter-spacing'] = cs.getPropertyValue('letter-spacing')
+        values['margin-left'] = cs.getPropertyValue('margin-left')
+        values['margin-right'] = cs.getPropertyValue('margin-right')
+        out[testid] = values
+      }
+      // The token, resolved in the toolbar's OWN custom-property environment rather than
+      // compared against a colour typed into this file. `--bg-2` is declared on `.asc-app`, so
+      // a probe outside that subtree would resolve to nothing.
+      const host = document.querySelector('[data-testid="extraction-toolbar"]')
+      let bg2 = ''
+      if (host) {
+        const probe = document.createElement('div')
+        probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;background:var(--bg-2)'
+        host.appendChild(probe)
+        bg2 = getComputedStyle(probe).backgroundColor
+        probe.remove()
+      }
+      return { out, bg2 }
+    },
+    { elements, properties },
+  )
+
+  for (const testid of elements) {
+    expect(measured.out[testid], `${testid} did not render -- every row below it would compare nothing`).not.toBeNull()
+  }
+  expect(measured.bg2, 'var(--bg-2) resolved to nothing -- the toolbar background row would compare two empty strings').not.toBe('')
+  expect(measured.bg2, 'var(--bg-2) resolved to transparent -- the toolbar background row would be vacuous').not.toBe('rgba(0, 0, 0, 0)')
+
+  // `declared` keeps the raw table entry -- the placeholder included -- so the artifact still
+  // shows that the toolbar row compared a TOKEN and not a colour typed into this file. Both
+  // `expected` and `artboard` resolve to the same probe reading, which is what keeps the
+  // "expected equals artboard unless it is a stated deviation" check below honest for that row.
+  const table = FIDELITY.map((row) => {
+    const expected = row.expected === BG_2_TOKEN ? measured.bg2 : row.expected
+    const artboard = row.artboard === BG_2_TOKEN ? measured.bg2 : row.artboard
+    const deployed = measured.out[row.element]![row.property] ?? ''
+    return { ...row, declared: row.artboard, artboard, expected, deployed, match: deployed === expected }
+  })
+
+  // The floor: a table that silently shrank would report all-clear on whatever it still held.
+  expect(table.length, 'the fidelity table lost rows').toBe(FIDELITY.length)
+  for (const row of table) {
+    expect(row.deployed, `${row.element} has no resolved ${row.property} -- an empty string matches nothing`).not.toBe('')
+    expect(
+      row.deployed,
+      `${row.element} · ${row.property}: deployed ${row.deployed}, expected ${row.expected} (artboard declares ${row.declared}, Recognition Review.dc.html${row.source})`,
+    ).toBe(row.expected)
+  }
+
+  // Exactly the four padding rows deviate, and each says why. A silent divergence added later
+  // fails here rather than passing as "documented".
+  const deviations = table.filter((r) => r.deviation !== null)
+  expect(
+    deviations.map((r) => `${r.element}·${r.property}`).sort(),
+    'the set of stated deviations from the artboard changed',
+  ).toEqual(['extraction-page-1·padding-bottom', 'extraction-page-1·padding-left', 'extraction-page-1·padding-right', 'extraction-page-1·padding-top'])
+  for (const row of deviations) {
+    expect(row.expected, `${row.element} · ${row.property} is listed as a deviation but matches the artboard`).not.toBe(row.artboard)
+  }
+  for (const row of table.filter((r) => r.deviation === null)) {
+    expect(row.expected, `${row.element} · ${row.property} silently expects something the artboard does not declare`).toBe(row.artboard)
+  }
+
+  // -- The two rows a string compare cannot carry ------------------------------------------
+  //
+  // 1. `margin: 0 auto 18px` (`:72`). Chrome resolves an `auto` margin to its USED value, so
+  //    there is no 'auto' string to compare -- the observable form of the pair is that the two
+  //    used values agree. The vertical halves are exact rows in the table above.
+  const frame = measured.out['extraction-page-1']!
+  expect(
+    frame['margin-left'],
+    `the frame's auto margins disagree (left ${frame['margin-left']}, right ${frame['margin-right']}) -- 'margin: 0 auto 18px' is what centres it`,
+  ).toBe(frame['margin-right'])
+
+  // 2. `letter-spacing: 0.09em` at `font-size: 9px` (`:43`). Chrome computes it to px, so a
+  //    string compare would pin a rounding rather than the artboard's ratio. 0.02px on 0.81px
+  //    is two orders finer than any real drift (the next tracking step in this file is 0.04em).
+  const pill = measured.out['extraction-read-only']!
+  const pillFontPx = parseFloat(pill['font-size'])
+  const pillTrackPx = parseFloat(pill['letter-spacing'])
+  expect(Number.isFinite(pillFontPx) && Number.isFinite(pillTrackPx), 'the pill resolved no font metrics').toBe(true)
+  expect(
+    Math.abs(pillTrackPx - 0.09 * pillFontPx),
+    `the READ ONLY pill tracks ${pillTrackPx}px on ${pillFontPx}px, and the artboard's 0.09em is ${(0.09 * pillFontPx).toFixed(3)}px`,
+  ).toBeLessThanOrEqual(0.02)
+
+  // -- The exclusions, each proved to exclude something real --------------------------------
+  for (const zoom of [50, 100, 150]) {
+    await expect(
+      page.getByTestId(`extraction-zoom-${zoom}`),
+      `the zoom control is excluded from this diff by name (D-18); a missing ${zoom}% segment would make that exclusion a claim about nothing`,
+    ).toBeVisible()
+  }
+  const meta = (await page.getByTestId('extraction-doc-meta').innerText()).trim()
+  expect(
+    meta,
+    `the meta line's page count is excluded from this diff by name (D-17); it must exist to be excluded (got "${meta}")`,
+  ).toMatch(/\b\d+ PAGES?\b/)
+
+  await testInfo.attach('extraction-fidelity-diff.json', {
+    body: JSON.stringify(
+      {
+        artboard: '.ralph/design/Recognition Review.dc.html (gitignored; the artboard column is a transcription)',
+        excludedByName: [
+          { element: 'extraction-zoom-{50,100,150}', reason: 'the artboard has no zoom control (D-18)' },
+          { element: 'extraction-doc-meta page count', reason: 'the artboard fixes no content for {{ docMeta }} and has no page stamp (D-17)' },
+        ],
+        table,
+        autoMargins: { left: frame['margin-left'], right: frame['margin-right'] },
+        readOnlyTracking: { fontSizePx: pillFontPx, letterSpacingPx: pillTrackPx, artboardEm: 0.09 },
+        metaLine: meta,
+      },
+      null,
+      2,
+    ),
     contentType: 'application/json',
   })
 

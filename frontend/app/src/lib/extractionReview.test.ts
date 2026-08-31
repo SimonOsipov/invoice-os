@@ -1,12 +1,11 @@
-// RED specs (EXTR-11-04, Mode A) — pin lib/extractionReview.ts's contract before the
-// executor implements the bodies. Every behavioural spec fails on the stub's
-// `throw new Error('not implemented')`, never on an import/compile error (the e4961bef
-// convention). The source scans and the package.json row run against the stub today.
+// lib/extractionReview.ts's contract. Written RED (EXTR-11-04, Mode A) against a stub that
+// threw, so every behavioural row failed on its own assertion rather than on an import error.
 //
 // vitest environment is 'node' (vitest.config.ts:5) — no jsdom, no DOM. scrollRegionIntoView
 // is exercised against a stub scroller for exactly that reason.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -90,6 +89,70 @@ describe('highlightStyle', () => {
     })
   })
 
+  it('every deployed mock region rounds clean, not just the one the spec above names', () => {
+    // internal/extraction/mock.go:95-99 — all five, because the tails sit on different
+    // axes: invoice_date's y0 is 14.000000000000002 and its height 4.999999999999999,
+    // total_amount's height 6.000000000000005. The row above only exercises x1 - x0.
+    const MOCK_REGIONS: ExtractionRegion[] = [
+      { page: 1, x0: 0.62, y0: 0.08, x1: 0.9, y1: 0.13 },
+      { page: 1, x0: 0.62, y0: 0.14, x1: 0.9, y1: 0.19 },
+      { page: 1, x0: 0.62, y0: 0.7, x1: 0.9, y1: 0.76 },
+      { page: 1, x0: 0.1, y0: 0.08, x1: 0.38, y1: 0.13 },
+      { page: 1, x0: 0.1, y0: 0.3, x1: 0.38, y1: 0.35 },
+    ]
+    expect(MOCK_REGIONS, 'an empty table would pass every assertion below').toHaveLength(5)
+
+    // Control: at least one axis really does carry a tail, so the property is not vacuous.
+    const raw = MOCK_REGIONS.flatMap((r) => [r.x0 * 100, r.y0 * 100, (r.x1 - r.x0) * 100, (r.y1 - r.y0) * 100])
+    expect(
+      raw.some((n) => String(n).replace(/^\d+\.?/, '').length > 4),
+      'no mock region has an IEEE-754 tail — this row proves nothing',
+    ).toBe(true)
+
+    for (const region of MOCK_REGIONS) {
+      const style = highlightStyle(region)
+      const pairs: Array<[string, number]> = [
+        [String(style.left), region.x0 * 100],
+        [String(style.top), region.y0 * 100],
+        [String(style.width), (region.x1 - region.x0) * 100],
+        [String(style.height), (region.y1 - region.y0) * 100],
+      ]
+      for (const [rendered, exact] of pairs) {
+        expect(rendered, `${rendered} is not a percentage`).toMatch(/^-?\d+(\.\d{1,4})?%$/)
+        // 1e-4 of a percent is 0.0026px on a 2560px render — three orders below a device pixel.
+        expect(Number(rendered.slice(0, -1))).toBeCloseTo(exact, 4)
+      }
+    }
+  })
+
+  // The five appearance values are System Design §3's, read off the artboard
+  // (Recognition Review.dc.html:597-598 for the fill and the ring, :76 for the radius and
+  // the transition). They live here rather than in the component, so this is their only
+  // non-circular oracle: EXTR-11-05 reads them back off highlightStyle.
+  it("carries the artboard's amber fill, ring and radius", () => {
+    expect(highlightStyle(mkRegion())).toMatchObject({
+      background: 'oklch(72% .15 65 / .32)',
+      boxShadow: '0 0 0 3px oklch(72% .15 65 / .32)',
+      borderRadius: 3,
+    })
+  })
+
+  it('is inert to the pointer, so the page image underneath stays clickable', () => {
+    expect(highlightStyle(mkRegion())).toMatchObject({ position: 'absolute', pointerEvents: 'none' })
+  })
+
+  it('transitions colour only — never a position or a size', () => {
+    // A transition on left/top/width/height makes a boundingBox() taken right after a
+    // selection measure a mid-transition rect, and EXTR11-E2E-03's ratio oracle takes
+    // exactly that measurement.
+    const transition = String(highlightStyle(mkRegion()).transition)
+    expect(transition).toContain('background')
+    expect(transition).toContain('box-shadow')
+    for (const banned of ['all', 'left', 'top', 'width', 'height', 'transform', 'inset']) {
+      expect(transition, `the transition covers ${banned}`).not.toMatch(new RegExp(`(^|[\\s,])${banned}([\\s,]|$)`))
+    }
+  })
+
   it('is zoom-free: one argument, and the same output at every zoom the screen offers', () => {
     const region = mkRegion({ x0: 0.62, y0: 0.08, x1: 0.9, y1: 0.13 })
     const baseline = highlightStyle(region)
@@ -133,6 +196,17 @@ describe('pageFrameStyle', () => {
     expect(pageFrameStyle(LETTER, 1)).toMatchObject({ width: '100%', minWidth: '560px', maxWidth: '640px' })
     expect(pageFrameStyle(LETTER, 1.5)).toMatchObject({ width: '150%', minWidth: '840px', maxWidth: '960px' })
     expect(pageFrameStyle(LETTER, 0.5)).toMatchObject({ width: '50%', minWidth: '280px', maxWidth: '320px' })
+  })
+
+  it("carries the artboard's page card, background included", () => {
+    // Recognition Review.dc.html:72. System Design §3 tabulates the same card and omits
+    // only `background`; EXTR-11-05's AC names it, so it is pinned at its source here.
+    expect(pageFrameStyle(LETTER, 1)).toMatchObject({
+      margin: '0 auto 18px',
+      background: '#fff',
+      border: '1px solid var(--line-2)',
+      boxShadow: '0 1px 3px oklch(20% .02 210 / .08)',
+    })
   })
 
   it('padding is zero, so the padding box and the content box coincide', () => {
@@ -305,6 +379,20 @@ describe('scrollRegionIntoView', () => {
     expect(asked[0]).toMatch(/^\[data-snip=["']?invoice_number["']?\]$/)
   })
 
+  it('a line-item field name goes into the selector verbatim', () => {
+    // reconcile.go names fields like line_items[0].line_total. Inside a quoted attribute
+    // value the brackets and the dot are ordinary code points, so no escaping is owed; only
+    // a double quote or a backslash would need it, and no field name carries either.
+    vi.useFakeTimers()
+    const { ground, asked } = stubGround({ clientHeight: 600, scrollTop: 0, targetOffset: 900 })
+
+    callScroll(ground, 'line_items[0].line_total')
+    vi.runAllTimers()
+
+    expect(asked).toEqual(['[data-snip="line_items[0].line_total"]'])
+    expect(ground.scrollTop, 'the bracketed name never resolved').toBe(610)
+  })
+
   it('an unknown field name is a silent no-op', () => {
     vi.useFakeTimers()
     const { ground, asked } = stubGround({ clientHeight: 600, scrollTop: 42, targetOffset: null })
@@ -407,6 +495,27 @@ describe('fetchPageImage', () => {
     expect(createObjectURL, 'a refused page pinned a blob with no release() to revoke it').not.toHaveBeenCalled()
   })
 
+  it('a body that fails mid-read leaks no object URL', async () => {
+    // arrayBuffer() is awaited inside the createObjectURL argument, so a truncated body must
+    // reject before any blob exists. A truncated response arriving as a 200 has happened on
+    // this stack before (the evidence-bundle ZIP).
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: () => Promise.reject(new TypeError('network error')),
+      }),
+    )
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:leaked')
+
+    const err = await fetchPageImage(() => 'tok', BASE, JOB_ID, 2).catch((e: unknown) => e)
+
+    expect(err, 'a truncated page resolved as a page').toBeInstanceOf(Error)
+    expect(createObjectURL).not.toHaveBeenCalled()
+  })
+
   it('a network throw propagates and leaks no object URL', async () => {
     vi.stubGlobal(
       'fetch',
@@ -461,5 +570,52 @@ describe('frontend/app/package.json', () => {
       'react',
       'react-dom',
     ])
+  })
+})
+
+// -- the lib -> components edge this module deliberately keeps ---------------------------
+
+// docMetaLine imports formatLabel from components/SourceDocumentStates.tsx rather than
+// re-implementing it, which is the only lib -> components import in the app. It costs
+// nothing (that component is already bundled via SourceDocumentCard.tsx) and closes no
+// cycle today. This row is what keeps that true: the moment anything the component reaches
+// imports extractionReview, the graph has a cycle and module init order starts to matter.
+describe('the SourceDocumentStates import closes no cycle', () => {
+  const SRC = join(dirname(MODULE_SRC), '..')
+
+  function resolveImport(from: string, spec: string): string | null {
+    if (!spec.startsWith('.')) return null
+    const base = normalize(join(dirname(from), spec))
+    for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
+      if (existsSync(base + ext)) return base + ext
+    }
+    return existsSync(base) ? base : null
+  }
+
+  function closureOf(entry: string): Set<string> {
+    const seen = new Set<string>()
+    const queue = [entry]
+    while (queue.length) {
+      const file = queue.pop() as string
+      if (seen.has(file)) continue
+      seen.add(file)
+      for (const m of readFileSync(file, 'utf8').matchAll(/from\s+'([^']+)'/g)) {
+        const next = resolveImport(file, m[1])
+        if (next) queue.push(next)
+      }
+    }
+    return seen
+  }
+
+  it('nothing SourceDocumentStates.tsx reaches imports extractionReview', () => {
+    const entry = join(SRC, 'components/SourceDocumentStates.tsx')
+    expect(existsSync(entry), 'the component moved — this scan proves nothing').toBe(true)
+
+    const closure = closureOf(entry)
+    // Floor + a known member: an empty or one-file closure would pass the absence below.
+    expect(closure.size, 'the walk followed no imports').toBeGreaterThan(3)
+    expect([...closure], 'the walk never reached lib/').toContain(join(SRC, 'lib/sourceDocument.ts'))
+
+    expect([...closure], 'lib -> components -> lib/extractionReview is a cycle').not.toContain(MODULE_SRC)
   })
 })

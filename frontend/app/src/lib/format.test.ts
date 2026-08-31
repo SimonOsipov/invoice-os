@@ -219,9 +219,8 @@ describe('fmtTime: adversarial', () => {
   })
 })
 
-// RED specs (EXTR-11-04, Mode A) — fmtTimeWAT's stub throws until the feat commit.
-// It lives here rather than in extractionReview.ts because T-4 above already records the
-// ICU hazard it exists to dodge.
+// fmtTimeWAT lives here rather than in extractionReview.ts because T-4 above already records
+// the ICU hazard it exists to dodge. Written RED (EXTR-11-04, Mode A) against a throwing stub.
 
 describe('fmtTimeWAT', () => {
   const INSTANT = '2026-08-30T10:42:07Z' // 11:42 in Lagos

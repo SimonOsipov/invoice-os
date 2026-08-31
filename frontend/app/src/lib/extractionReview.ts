@@ -10,8 +10,8 @@ import { fmtTimeWAT } from './format'
 import type { AuthedFetch } from './portfolio'
 import { formatBytes, type DocumentBytes } from './sourceDocument'
 
-// internal/extraction/reader.go:100-106. Normalised [0,1], TOP-LEFT origin, page 1-based.
-// A zero-area box (x0 === x1) is legal — the migration permits it.
+// internal/extraction/reader.go, ExtractionRegion. Normalised [0,1], TOP-LEFT origin, page
+// 1-based. A zero-area box (x0 === x1) is legal — the migration permits it.
 export interface ExtractionRegion {
   page: number
   x0: number
@@ -20,21 +20,23 @@ export interface ExtractionRegion {
   y1: number
 }
 
-// internal/extraction/reader.go:110-114. The STORED grid, never recomputed from a page size.
+// internal/extraction/reader.go, ExtractionPage. The STORED grid, never recomputed from a
+// page size.
 export interface ExtractionPage {
   page: number
   width_px: number
   height_px: number
 }
 
-// internal/extraction/reader.go:118-122. region is null when the extractor pointed at nothing.
+// internal/extraction/reader.go, ExtractionFieldState. region is null when the extractor
+// pointed at nothing.
 export interface ExtractionFieldState {
   name: string
   value: string | null
   region: ExtractionRegion | null
 }
 
-// internal/extraction/reader.go:127-132. stored_at is RFC3339 text, not a time.
+// internal/extraction/reader.go, ExtractionDocument. stored_at is RFC3339 text, not a time.
 export interface ExtractionDocument {
   filename: string | null
   content_type: string | null
@@ -42,7 +44,7 @@ export interface ExtractionDocument {
   stored_at: string
 }
 
-// internal/extraction/reader.go:137-144.
+// internal/extraction/reader.go, ExtractionDetail.
 export interface ExtractionDetail {
   id: string
   document_id: string
@@ -118,6 +120,9 @@ export function pageFrameStyle(page: ExtractionPage, zoom: number): CSSPropertie
     margin: '0 auto 18px',
     position: 'relative',
     padding: 0,
+    // The artboard's page card. Paper is white on both themes; System Design §3 tabulates
+    // the rest of this card and omits only the background.
+    background: '#fff',
     border: '1px solid var(--line-2)',
     boxShadow: '0 1px 3px oklch(20% .02 210 / .08)',
   }

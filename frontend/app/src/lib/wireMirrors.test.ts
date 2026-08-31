@@ -1,10 +1,6 @@
-// AC-5's story-level fence: this story changes no wire shape.
-//
-// `ApprovalRun`'s tri-mirror already lives in approvals.test.ts and is left where it is;
-// the two below had no cross-language mirror at all (`StatusChange`) or only a one-way
-// Go->SPA substring scan with no SPA<->e2e leg (`AuditEvent`). One file rather than three
-// per-type homes: AC-5 is a story-level fence, and lib/invoices.ts and lib/audit.ts carry
-// no pointer to it (F-AJ).
+// Go <-> SPA <-> e2e key-set mirrors for wire types nothing links at compile time. One file
+// rather than a per-type home in each consumer; `ApprovalRun`'s tri-mirror is the one
+// exception and stays in approvals.test.ts.
 //
 // The three extractors are approvals.test.ts:864-898's, verbatim.
 
@@ -57,6 +53,8 @@ const E2E_CLIENT = 'e2e/api/client.ts'
 
 // Each anchor is a symbol OTHER than the type being extracted, so a moved or emptied file
 // fails loudly instead of yielding [] and passing the equality row on {} === {} === {}.
+// Every anchor ends at '(': a bare prefix still matches getAuditLogV2, so a rename would
+// leave the control-needle row green over a symbol that no longer exists.
 const WIRE_MIRRORS = [
   {
     ts: 'StatusChange',
@@ -64,8 +62,8 @@ const WIRE_MIRRORS = [
     goPath: 'internal/invoice/invoice.go',
     goAnchor: 'func (s Status) valid() bool',
     spaPath: 'frontend/app/src/lib/invoices.ts',
-    spaAnchor: 'export async function getInvoiceHistory',
-    e2eAnchor: 'export function getInvoiceHistory',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
     floor: 6,
   },
   {
@@ -74,8 +72,8 @@ const WIRE_MIRRORS = [
     goPath: 'internal/audit/reader.go',
     goAnchor: 'func ScopeOf(',
     spaPath: 'frontend/app/src/lib/audit.ts',
-    spaAnchor: 'export async function getAuditLog',
-    e2eAnchor: 'export function getAuditLog',
+    spaAnchor: 'export async function getAuditLog(',
+    e2eAnchor: 'export function getAuditLog(',
     floor: 10,
   },
   // EXTR-11-04 — the review screen's five. One Go file, five distinct anchors, so a

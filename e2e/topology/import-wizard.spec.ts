@@ -3849,11 +3849,41 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   // 1. `margin: 0 auto 18px` (`:72`). Chrome resolves an `auto` margin to its USED value, so
   //    there is no 'auto' string to compare -- the observable form of the pair is that the two
   //    used values agree. The vertical halves are exact rows in the table above.
-  const frame = measured.out['extraction-page-1']!
+  //
+  //    That pair agrees only where the frame FITS its column. The 560px floor asserted above
+  //    exceeds the document pane's column at this file's default 1280px viewport, and CSS 2.1
+  //    10.3.3 then sets margin-left to 0 and solves for margin-right -- correct rendering, and
+  //    what EXTR11-E2E-06 measures from the other side. So this row widens the window until the
+  //    frame fits and asserts the centring where it means something. Guarding the assertion
+  //    behind a `fits` check instead would skip it at every width this test runs at.
+  const entryViewport = page.viewportSize()
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  const frame = await settledRead(
+    () =>
+      page.evaluate(() => {
+        const el = document.querySelector('[data-testid="extraction-page-1"]')
+        const pad = document.querySelector('[data-testid="extraction-ground"] > div')
+        if (!el || !pad) return null
+        const cs = getComputedStyle(el)
+        return {
+          marginLeft: cs.marginLeft,
+          marginRight: cs.marginRight,
+          frameWidth: el.getBoundingClientRect().width,
+          padWidth: pad.getBoundingClientRect().width,
+        }
+      }),
+    'the page frame margins at 1920px',
+  )
+  expect(frame, 'the frame and its column must both render at 1920px').not.toBeNull()
   expect(
-    frame['margin-left'],
-    `the frame's auto margins disagree (left ${frame['margin-left']}, right ${frame['margin-right']}) -- 'margin: 0 auto 18px' is what centres it`,
-  ).toBe(frame['margin-right'])
+    frame!.frameWidth,
+    `the frame still overflows its column at 1920px (frame ${frame!.frameWidth}, column ${frame!.padWidth}), so the centring below would pin CSS 2.1 10.3.3's overconstraint rule rather than 'margin: 0 auto'`,
+  ).toBeLessThanOrEqual(frame!.padWidth + 1)
+  expect(
+    frame!.marginLeft,
+    `the frame's auto margins disagree (left ${frame!.marginLeft}, right ${frame!.marginRight}) -- 'margin: 0 auto 18px' is what centres it`,
+  ).toBe(frame!.marginRight)
+  if (entryViewport) await page.setViewportSize(entryViewport)
 
   // 2. `letter-spacing: 0.09em` at `font-size: 9px` (`:43`). Chrome computes it to px, so a
   //    string compare would pin a rounding rather than the artboard's ratio. 0.02px on 0.81px
@@ -3889,7 +3919,13 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
           { element: 'extraction-doc-meta page count', reason: 'the artboard fixes no content for {{ docMeta }} and has no page stamp (D-17)' },
         ],
         table,
-        autoMargins: { left: frame['margin-left'], right: frame['margin-right'] },
+        autoMargins: {
+          measuredAtWidth: 1920,
+          left: frame?.marginLeft ?? null,
+          right: frame?.marginRight ?? null,
+          frameWidth: frame?.frameWidth ?? null,
+          columnWidth: frame?.padWidth ?? null,
+        },
         readOnlyTracking: { fontSizePx: pillFontPx, letterSpacingPx: pillTrackPx, artboardEm: 0.09 },
         metaLine: meta,
       },

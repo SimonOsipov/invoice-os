@@ -8,11 +8,11 @@ import type { ExtractionFieldState } from '../lib/extractionReview'
 
 const TITLE = 'The invoice as it will be filed'
 const NO_REGION = 'NO REGION'
-const NO_FIELDS = 'We read no fields from this document.'
+const NO_FIELDS = 'Nothing was extracted from this document.'
 
 // internal/invoice/store.go:205-221 overwrites both supplier fields from the signed-in entity
 // on every Store.Create, so neither value below is what gets filed.
-const SUPPLIER_NOTE = 'The supplier we file comes from your client record, not from this document.'
+const SUPPLIER_NOTE = 'The supplier filed on this invoice comes from your client record, not from this document.'
 
 const SUPPLIER_FIELDS = ['supplier_tin', 'supplier_name']
 

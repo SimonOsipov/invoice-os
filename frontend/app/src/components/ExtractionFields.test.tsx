@@ -44,7 +44,7 @@ const PILL = 'NO REGION'
 // D-15. `internal/invoice/store.go:205-221` overwrites SupplierTIN and SupplierName from the
 // signed-in entity on EVERY Store.Create, so the two values this pane renders beside the page
 // image are not what gets filed. Prose, no verdict, no comparison — a pill is EXTR-12's.
-const SENTENCE = 'The supplier we file comes from your client record, not from this document.'
+const SENTENCE = 'The supplier filed on this invoice comes from your client record, not from this document.'
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: every class here forces `border-radius`
 // with `!important`, from app-layer.css:193-197 and :275.
@@ -585,7 +585,7 @@ describe('the vocabulary EXTR-12 owns', () => {
 // ==========================================================================================
 
 // The pane's own empty-state copy.
-const NO_FIELDS = 'We read no fields from this document.'
+const NO_FIELDS = 'Nothing was extracted from this document.'
 
 describe('the row is a real button', () => {
   it('renders each cell as a <button type="button">, never a clickable div', () => {

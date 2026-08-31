@@ -20,6 +20,7 @@ const PANE: CSSProperties = {
   width: 620,
   flex: '1 1 620px',
   minWidth: 470,
+  minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
   background: 'var(--bg-1)',
@@ -123,8 +124,8 @@ export function ExtractionFields({
                     type="button"
                     data-testid={`extraction-field-${f.name}`}
                     aria-pressed={on}
-                    // Unguarded, per AC-4. A repeat click re-reports the same name and today
-                    // re-scrolls nothing: ExtractionCanvas's effect keys on [selected, jobId].
+                    // Unguarded, per AC-4: the shell bumps its nonce on a repeat click and
+                    // ExtractionCanvas re-centres the region (`D-25`).
                     onClick={() => onSelect(f.name)}
                     style={on ? SELECTED_CELL : CELL}
                   >

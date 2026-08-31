@@ -35,6 +35,7 @@ const PAGE_FAILED = 'This page could not be loaded.'
 const PANE: CSSProperties = {
   flex: '1 1 auto',
   minWidth: 0,
+  minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
   borderRight: '1px solid var(--line-1)',
@@ -165,6 +166,7 @@ export function ExtractionCanvas({
   pages,
   fields,
   selected,
+  scrollNonce,
 }: {
   ctx: PlatformCtx
   jobId: string
@@ -173,6 +175,8 @@ export function ExtractionCanvas({
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]
   selected: string | null
+  /** Bumped per click by the shell, so re-selecting the same row re-centres it (`D-25`). */
+  scrollNonce?: number
 }) {
   const base = gatewayBase()
   const [zoom, setZoom] = useState(1)
@@ -200,6 +204,8 @@ export function ExtractionCanvas({
   useEffect(() => {
     disposed.current = false
     jobRef.current = jobId
+    // The shell cannot reach the ground behind this ref, so the reset lives here (`D-24`).
+    if (groundRef.current) groundRef.current.scrollTop = 0
     return () => {
       disposed.current = true
       for (const h of created.current) h.release()
@@ -261,11 +267,12 @@ export function ExtractionCanvas({
     if (region) load(region.page)
   }, [region, load])
 
-  // Deps are the selection alone: a re-render that changed nothing must not scroll again.
+  // Deps are the selection and the shell's per-click nonce: a re-render that changed neither
+  // must not scroll again.
   useEffect(() => {
     if (selected && region) scrollRegionIntoView(groundRef.current, selected)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, jobId])
+  }, [selected, jobId, scrollNonce])
 
   const tone = fileTypeTone(doc.filename, doc.content_type)
   const banner = selectedField !== null && selectedField.region === null

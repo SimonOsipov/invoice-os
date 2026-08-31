@@ -123,8 +123,8 @@ export function ExtractionFields({
                     type="button"
                     data-testid={`extraction-field-${f.name}`}
                     aria-pressed={on}
-                    // Unguarded: re-reporting the selected name is how a reader who scrolled
-                    // the document away gets back to the region in one action.
+                    // Unguarded, per AC-4. A repeat click re-reports the same name and today
+                    // re-scrolls nothing: ExtractionCanvas's effect keys on [selected, jobId].
                     onClick={() => onSelect(f.name)}
                     style={on ? SELECTED_CELL : CELL}
                   >

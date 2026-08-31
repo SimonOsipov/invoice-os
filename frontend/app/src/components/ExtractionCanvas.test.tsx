@@ -344,13 +344,24 @@ function revoked(): string[] {
 
 // jsdom 27.4.0 implements NO `Element.prototype.scrollTo`, and `scrollRegionIntoView` calls
 // it (extractionReview.ts:151). Its `setTimeout(…, 20)` fires on the REAL clock in every spec
-// that does not fake timers, so without this shim a selection anywhere in the file throws an
-// uncaught TypeError -- landing on whichever unrelated spec happens to be running 20ms later.
-// Installed for the whole file, not just the scroll block.
+// that does not fake timers.
+//
+// Installed ONCE, for the file's whole lifetime, and never removed: the last spec's timer
+// fires after that spec's afterEach, so an install/remove pair around each spec leaves a
+// window with no shim and throws an uncaught TypeError into the run.
 //
 // The shim only stops the throw; the stale CALL still arrives, on the earlier spec's detached
-// ground, and inflates whatever the running spec counts. `isConnected` drops exactly those --
-// every scroll the file counts is a scroll onto a mounted ground.
+// ground, and would inflate whatever the running spec counts. `isConnected` drops exactly
+// those -- every scroll the file counts is a scroll onto a mounted ground. It reads
+// `scrollToSpy` at call time, so beforeEach's fresh spy is the one each spec observes.
+Object.defineProperty(Element.prototype, 'scrollTo', {
+  value: function (this: Element, ...args: unknown[]) {
+    if (this.isConnected) (scrollToSpy as unknown as (this: Element, ...a: unknown[]) => void).apply(this, args)
+  },
+  configurable: true,
+  writable: true,
+})
+
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
   let n = 0
@@ -359,13 +370,6 @@ beforeEach(() => {
   createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:${++n}`)
   revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   scrollToSpy = vi.fn()
-  Object.defineProperty(Element.prototype, 'scrollTo', {
-    value: function (this: Element, ...args: unknown[]) {
-      if (this.isConnected) (scrollToSpy as unknown as (this: Element, ...a: unknown[]) => void).apply(this, args)
-    },
-    configurable: true,
-    writable: true,
-  })
   removeObserver()
   pageFetch()
 })
@@ -376,7 +380,6 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
-  delete (Element.prototype as { scrollTo?: unknown }).scrollTo
   DrivingObserver.instances = []
 })
 

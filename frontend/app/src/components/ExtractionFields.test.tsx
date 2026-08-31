@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// EXTR-11-06, Mode A. Written RED against a component that does not exist, so today the
-// whole file fails to collect on `./ExtractionFields`. Every row was first proven to fail on
-// its OWN assertion, and to go green, against a throwaway reference build that was deleted
-// before this commit; that build was then mutated once per row and each mutant was caught by
-// the row that names it.
+// EXTR-11-06. The rows down to the AC-9 block were written RED (`6e205fb4`) against a
+// throwaway reference build and mutated once per row there; `74cf37d6` then shipped the real
+// component and they went green unchanged. The Mode B block at the foot was written against
+// the SHIPPED component and mutated against it — the two claims are different, which is why
+// the blocks are kept apart.
 //
 // MEASURED jsdom 27.4.0 serialization — read back off a rendered probe, not assumed:
 //   `flex: 'none'` reads `0 0 auto`; `flex: 1` reads `1 1 0%`
-//   `minHeight: 0` reads `0`, but `margin: 0` reads `0px`
+//   `minHeight: 0` and `minWidth: 0` read `0`, but `margin: 0` reads `0px`
+//   `minWidth: 470` reads `470px`; `flex: '1 1 620px'` and `boxShadow` with `var()` round-trip raw
 //   `fontSize: 8.5` reads `8.5px`; `borderRadius: 999` reads `999px`
 //   `gap: '14px 16px'` round-trips raw; `gap: 6` reads `6px`
 //   `gridTemplateColumns: '1fr 1fr'` round-trips raw
@@ -297,10 +298,9 @@ describe('selection', () => {
   })
 
   it('reports again when the already-selected row is clicked', () => {
-    // AC-4 makes no exception for the selected row, and the user who scrolled the document
-    // away needs one action to get back to it. EXTR-11-07 keys its scroll effect on
-    // `[selected, jobId]`, so a second report of the same name changes nothing there yet —
-    // that is -07's gap, and this row is the half of it the pane owns.
+    // AC-4 makes no exception for the selected row. `ExtractionCanvas.tsx`'s scroll effect
+    // keys on `[selected, jobId]`, so a second report of the same name re-scrolls nothing
+    // once EXTR-11-07 wires the two — that is -07's gap, and this row is the pane's half.
     const onSelect = vi.fn()
     render(fieldsPane({ selected: 'total', onSelect }))
 
@@ -526,6 +526,16 @@ describe('the client-record sentence', () => {
 
     expect(rows(), 'no row rendered — the count below would be vacuous').toHaveLength(5)
     expect(screen.getAllByText(SENTENCE), 'the sentence renders per supplier field, not per pair').toHaveLength(1)
+
+    // The position row above runs with supplier_tin alone. With BOTH present the sentence has
+    // two rows to sit under, and must still follow the later of them.
+    const note = screen.getByText(SENTENCE)
+    for (const name of ['supplier_tin', 'supplier_name']) {
+      expect(
+        row(name).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `the sentence renders above ${name}`,
+      ).toBeTruthy()
+    }
   })
 
   it('stays away when the wire carries neither supplier field', () => {
@@ -566,5 +576,157 @@ describe('the vocabulary EXTR-12 owns', () => {
     for (const leaked of ['unreadable', 'LOW_CONFIDENCE', 'SFS-2026-0418', '0.62', '62', '%']) {
       expect(text, `the pane rendered "${leaked}"`).not.toContain(leaked)
     }
+  })
+})
+
+// ==========================================================================================
+// Mode B. The rows above were proven against a throwaway reference build; every row below
+// was proven against the SHIPPED component, and each names the mutant it kills.
+// ==========================================================================================
+
+// The pane's own empty-state copy.
+const NO_FIELDS = 'We read no fields from this document.'
+
+describe('the row is a real button', () => {
+  it('renders each cell as a <button type="button">, never a clickable div', () => {
+    // `fireEvent.click` fires on a <div> too, so every selection row above passes on a cell
+    // no keyboard can reach. The tag IS the keyboard contract: Tab, Enter and Space are the
+    // UA's, and jsdom synthesises none of them, so there is nothing else here to assert.
+    render(fieldsPane())
+
+    expect(rows(), 'no row rendered — every check below is vacuous').toHaveLength(3)
+    for (const r of rows()) {
+      expect(r.tagName, `${r.dataset.testid} is not a button`).toBe('BUTTON')
+      // Without `type`, a button inside a form defaults to `submit` and a row click posts it.
+      expect((r as HTMLButtonElement).type, `${r.dataset.testid} takes the submit default`).toBe('button')
+      expect((r as HTMLButtonElement).disabled, `${r.dataset.testid} is unreachable`).toBe(false)
+    }
+  })
+
+  it('announces each row as its label and its value, not as an unnamed control', () => {
+    // The accessible name is computed from the row's own contents. A value moved outside the
+    // button still renders, still passes every row above, and leaves the control unnamed.
+    render(fieldsPane())
+
+    expect(screen.getAllByRole('button'), 'the rows carry no button role').toHaveLength(3)
+    for (const f of THREE_FIELDS) {
+      expect(
+        screen.getByRole('button', { name: `${f.name} ${f.value as string}` }),
+        `${f.name} does not announce its own value`,
+      ).toBe(row(f.name))
+    }
+  })
+})
+
+describe('a long or hostile value', () => {
+  it('declares both halves of the defence against a value widening its column', () => {
+    // A grid item's automatic minimum is CONTENT-based: without `min-width: 0` on the cell
+    // AND a wrap rule on the value, one unbroken string pushes the track past the pane.
+    // jsdom computes no layout, so this row pins the two declarations and nothing more —
+    // EXTR11-E2E-02a measures the relationship itself, on the deployed build.
+    const long = 'A'.repeat(400)
+    render(fieldsPane({ fields: [mkField({ name: 'buyer_name', value: long })] }))
+
+    const r = row('buyer_name')
+    expect(r.style.minWidth, 'the cell takes a content-based automatic minimum').toBe('0')
+
+    const value = within(r).getByText(long)
+    expect(value.style.overflowWrap, 'a 400-character unbroken value cannot wrap').toBe('anywhere')
+    expect(r.textContent, 'the value was truncated or ellipsised').toContain(long)
+  })
+
+  it('renders a value as text, never as markup', () => {
+    // The value is read out of a document someone uploaded. A `dangerouslySetInnerHTML` here
+    // passes every row above and turns that document into a script host.
+    const hostile = '<img src=x onerror="alert(1)"> & <b>bold</b>'
+    render(fieldsPane({ fields: [mkField({ name: 'buyer_name', value: hostile })] }))
+
+    const r = row('buyer_name')
+    expect(within(r).getByText(hostile), 'the value did not render verbatim').toBeTruthy()
+    expect(r.querySelectorAll('img, b'), 'the value was parsed as markup').toHaveLength(0)
+  })
+})
+
+describe('the pane and the sentence, pinned', () => {
+  it('keys the supplier sentence on the two field names, never on a prefix', () => {
+    // `f.name.includes('supplier')` passes all four supplier rows above, because THREE_FIELDS
+    // carries no supplier-shaped name at all. AC-8 names two fields; a third `supplier_*`
+    // field is not the pair the sentence explains.
+    render(fieldsPane({ fields: [mkField({ name: 'supplier_address', value: '14 Marina, Lagos' }), ...THREE_FIELDS] }))
+
+    expect(row('supplier_address'), 'the floor: the supplier-shaped field really rendered').toBeTruthy()
+    expect(screen.queryAllByText(SENTENCE), 'a prefix match leaked the sentence').toHaveLength(0)
+  })
+
+  it('paints the selected row in the app’s marked-row amber', () => {
+    // `SourceDocumentSheet.tsx:317`, in the hue the document pane paints the region with —
+    // `--accent` is `oklch(72% .15 65)` (colors.css:18), `highlightStyle` the same triple at
+    // .32 alpha. The style-inequality row above passes on ANY difference, `opacity: 0.99`
+    // included, so it pins the fact of a treatment and this row pins which one.
+    render(fieldsPane({ selected: 'issue_date' }))
+
+    const selected = row('issue_date')
+    expect(selected.style.background).toBe('var(--accent-10)')
+    expect(selected.style.boxShadow).toBe('inset 2px 0 0 var(--accent)')
+
+    const other = row('total')
+    expect(other.style.background, 'an unselected row carries the marked treatment').toBe('transparent')
+    expect(other.style.boxShadow, 'an unselected row carries the marked rail').toBe('')
+  })
+
+  it('sizes the pane the way the artboard’s right column does', () => {
+    // `:224`. EXTR-11-07 builds the flex row around this pane and sets nothing on it, so the
+    // basis and the floor live here — and `min-width: 470px` is the relationship
+    // EXTR11-E2E-02a's spill sweep exists to protect.
+    render(fieldsPane())
+
+    const p = pane()
+    expect(p.style.width).toBe('620px')
+    expect(p.style.flex).toBe('1 1 620px')
+    expect(p.style.minWidth).toBe('470px')
+    expect(p.style.display).toBe('flex')
+    expect(p.style.flexDirection).toBe('column')
+    expect(p.style.background).toBe('var(--bg-1)')
+  })
+
+  it('says why the empty panel is empty, at the sibling panel’s declarations', () => {
+    // The panel's border and ground are pinned above, its COPY is not — so a panel rendering
+    // nothing passes both empty-state rows. This is the one state where the sentence is the
+    // pane's whole content.
+    render(fieldsPane({ fields: [] }))
+
+    const panel = dashedPanel()
+    expect(panel.textContent).toBe(NO_FIELDS)
+
+    // The story's "match it": `ExtractionCanvas.tsx`'s EMPTY_PANEL, shipped on this same
+    // screen, declares these six. The two are byte-identical copies with no shared source,
+    // and only `border` and `background` were pinned on either side — so the other four
+    // could drift apart silently. Pinned by value, not by import: the panes share no edge.
+    expect(panel.style.padding).toBe('14px 16px')
+    expect(panel.style.borderRadius).toBe('var(--radius-md)')
+    expect(panel.style.fontSize).toBe('12.5px')
+    expect(panel.style.color).toBe('var(--fg-3)')
+  })
+})
+
+describe('the pane renders nothing it does not declare', () => {
+  it('leaves nothing over once the wire and its own copy are stripped', () => {
+    // AC-9's row above hunts named needles — `%`, `0.62`, a reason code. A confidence written
+    // as PROSE ("sixty two percent confident") slips past every one of them. This row inverts
+    // the test: strip the wire and the pane's three declared sentences, and what is left of
+    // the rendered text must be nothing at all.
+    const fields = [mkField({ name: 'supplier_tin', value: '20184412-0001', region: null }), ...THREE_FIELDS]
+    render(fieldsPane({ fields, selected: 'total' }))
+
+    const known = [TITLE, SENTENCE, PILL, ...fields.map((f) => f.name), ...fields.map((f) => f.value as string)]
+
+    let left = pane().textContent ?? ''
+    // The floor first: every one really rendered, so the emptiness below is a real absence.
+    for (const k of known) expect(left, `${k} did not render`).toContain(k)
+
+    // Longest first, so a value that is a substring of another cannot eat it.
+    for (const k of [...known].sort((a, b) => b.length - a.length)) left = left.replace(k, '')
+
+    expect(left.replace(/\s+/g, ''), `the pane rendered copy it does not declare: ${JSON.stringify(left)}`).toBe('')
   })
 })

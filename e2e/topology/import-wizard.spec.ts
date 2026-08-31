@@ -3048,3 +3048,93 @@ test('EXTR11-E2E-08 (AC-5): the toolbar never overlaps the ground', async ({ pag
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// EXTR-11-06's half of the pane relationship: the two panes never cover each other, and no
+// field row spills the column it is laid out in. EXTR-11-07 owns `EXTR11-E2E-02` proper (the
+// panes TILE the body) and `-10` (the right pane yields first, never below 470px); this row is
+// the overlap half plus the spill, written where the pane's own grid is written.
+test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spills its column', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-06 spill')
+  const detail = await openExtractionReview(page)
+
+  // The floor, off the wire the SPA itself consumed: with no field the spill sweep below
+  // measures nothing and passes vacuously.
+  expect(detail.fields.length, 'no field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
+
+  const canvas = page.getByTestId('extraction-canvas')
+  const fields = page.getByTestId('extraction-fields')
+  // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.
+  const rows = page.locator('[data-testid^="extraction-field-"]')
+  await expect(rows, 'the pane rendered no row for a wire that carries fields').toHaveCount(detail.fields.length)
+
+  type Spill = { testid: string; left: number; right: number }
+  const measured: { width: number; canvas: Rect; fields: Rect; overlap: Rect; worst: Spill }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a floor strands only what the window
+    // is too narrow to hold, so the narrow end is where a spill appears.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [c, f, rs] = await Promise.all([
+          canvas.boundingBox(),
+          fields.boundingBox(),
+          rows.evaluateAll((els) =>
+            els.map((el) => {
+              const r = el.getBoundingClientRect()
+              return { testid: el.getAttribute('data-testid') ?? '', left: r.left, right: r.right, width: r.width }
+            }),
+          ),
+        ])
+        return { c, f, rs }
+      }, `pane geometry at ${width}px`)
+
+      expect(m.c && m.f, `both panes must render at ${width}px`).toBeTruthy()
+      // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
+      expect(m.c!.width, `the document pane has no width at ${width}px`).toBeGreaterThan(0)
+      expect(m.c!.height, `the document pane has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.f!.width, `the fields pane has no width at ${width}px`).toBeGreaterThan(0)
+      expect(m.f!.height, `the fields pane has no height at ${width}px`).toBeGreaterThan(0)
+
+      // Both axes, never one (layout.ts's own rule). A fields pane that has stopped being a
+      // flex sibling and started overlaying the document clears neither.
+      const overlap = overlapOf(m.c as Rect, m.f as Rect)
+      expect(
+        rectsOverlap(m.c as Rect, m.f as Rect),
+        `the fields pane covers ${overlap.width}x${overlap.height}px of the document pane at ${width}px`,
+      ).toBe(false)
+
+      // Every row stays inside its own pane, on BOTH edges -- gaps()'s rule applied to a row.
+      // This is the relationship the artboard's `min-width: 470px` floor exists to protect:
+      // a `1fr 1fr` grid inside a pane squeezed below it pushes its cells' content out, and
+      // the body's `overflow-y: auto` (y ONLY) means a horizontal spill has nowhere to hide.
+      expect(m.rs.length, `no row measured at ${width}px`).toBe(detail.fields.length)
+      let worst: Spill = { testid: '', left: 0, right: 0 }
+      for (const r of m.rs) {
+        expect(r.width, `${r.testid} collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
+        const outLeft = m.f!.x - r.left
+        const outRight = r.right - (m.f!.x + m.f!.width)
+        expect(outLeft, `${r.testid} starts ${outLeft.toFixed(1)}px left of the pane at ${width}px`).toBeLessThanOrEqual(1)
+        expect(outRight, `${r.testid} ends ${outRight.toFixed(1)}px right of the pane at ${width}px`).toBeLessThanOrEqual(1)
+        if (Math.max(outLeft, outRight) > Math.max(worst.left, worst.right)) worst = { testid: r.testid, left: outLeft, right: outRight }
+      }
+
+      measured.push({ width, canvas: m.c as Rect, fields: m.f as Rect, overlap, worst })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-pane-spill.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

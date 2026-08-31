@@ -1151,7 +1151,8 @@ func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
 
 // TestSubmissionMain_RegistersTheExtractionsRoute: GET /v1/extractions must be mounted on
 // app.Mux dispatching to extraction.JobsHandler(...), GET /v1/extractions/{id} to
-// extraction.DetailHandler(...), and POST /v1/documents on the same mux
+// extraction.DetailHandler(...), GET /v1/extractions/{id}/pages/{n} to
+// extraction.PageImageHandler(...), and POST /v1/documents on the same mux
 // dispatching to extraction.UploadHandler(...). AST, not a byte scan, so
 // gofmt cannot break the anchor. The GET /v1/ping needle is a control: it proves the argument
 // matcher still finds a real, already-shipped registration before a negative result is trusted.
@@ -1162,7 +1163,7 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
 
-	var foundPing, pingOnAppMux, foundExtractions, foundDetail, foundUpload bool
+	var foundPing, pingOnAppMux, foundExtractions, foundDetail, foundPageImage, foundUpload bool
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -1216,6 +1217,34 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "extraction" {
 				t.Errorf(`GET /v1/extractions/{id}' handler is not extraction.DetailHandler(...), got %s`, wtRender(handlerCall.Fun))
 			}
+		case "GET /v1/extractions/{id}/pages/{n}":
+			foundPageImage = true
+			if got := wtRender(sel.X); got != "app.Mux" {
+				t.Errorf(`GET /v1/extractions/{id}/pages/{n} is registered on %s, want app.Mux -- only app.Mux is served, so any other mux answers nothing at /api/submission/v1/extractions/{id}/pages/{n}`, got)
+			}
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				t.Errorf(`GET /v1/extractions/{id}/pages/{n}' second argument is %T, want a call expression`, call.Args[1])
+				return true
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "PageImageHandler" {
+				t.Errorf(`GET /v1/extractions/{id}/pages/{n}' handler call is not ....PageImageHandler(...), got %s`, wtRender(handlerCall.Fun))
+				return true
+			}
+			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "extraction" {
+				t.Errorf(`GET /v1/extractions/{id}/pages/{n}' handler is not extraction.PageImageHandler(...), got %s`, wtRender(handlerCall.Fun))
+			}
+			// The object seam is unit-tested over a fake store (page_image_route_test.go), so
+			// only this scan can say the handler is built over the REAL bucket. An adapter over
+			// anything else streams from nowhere the renderer wrote.
+			if len(handlerCall.Args) != 3 {
+				t.Errorf("extraction.PageImageHandler is called with %d argument(s), want 3 (key, object, logger)", len(handlerCall.Args))
+				return true
+			}
+			if call, ok := handlerCall.Args[1].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newPageObjectReader" {
+				t.Errorf("PageImageHandler's object argument is %s, want a newPageObjectReader(...) call", wtRender(handlerCall.Args[1]))
+			}
 		case "POST /v1/documents":
 			foundUpload = true
 			if got := wtRender(sel.X); got != "app.Mux" {
@@ -1266,6 +1295,9 @@ func TestSubmissionMain_RegistersTheExtractionsRoute(t *testing.T) {
 	}
 	if !foundDetail {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/extractions/{id}", extraction.DetailHandler(...)) registration found in cmd/submission/main.go`)
+	}
+	if !foundPageImage {
+		t.Error(`no app.Mux.HandleFunc("GET /v1/extractions/{id}/pages/{n}", extraction.PageImageHandler(...)) registration found in cmd/submission/main.go`)
 	}
 	if !foundUpload {
 		t.Error(`no app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(...)) registration found in cmd/submission/main.go`)

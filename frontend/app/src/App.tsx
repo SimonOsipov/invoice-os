@@ -101,6 +101,7 @@ import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
 import { ApprovalsView } from './components/ApprovalsView'
 import { AuditView } from './components/AuditView'
+import { ExtractionReview } from './components/ExtractionReview'
 import type {
   AuditPrefilter,
   Client,
@@ -191,7 +192,7 @@ function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
 
 // A remounted workspace cannot resume a half-built draft or a selected invoice, so both
 // collapse to the list they came from.
-const carryView = (view: View): View => (view === 'create' || view === 'detail' ? 'invoices' : view)
+const carryView = (view: View): View => (view === 'create' || view === 'detail' || view === 'extraction' ? 'invoices' : view)
 
 // The busy beat's floor: resolved after ms regardless of what else is happening.
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -345,6 +346,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
   const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(null)
+  // The review screen's job. Deliberately NOT cleared on arrival like auditPrefilter above:
+  // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
+  const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery] = useState('')
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -1146,6 +1150,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setView('audit')
   }
 
+  // Same one-handler shape as openAuditForInvoice above, same reason.
+  function openExtraction(jobId: string) {
+    setExtractionJobId(jobId)
+    setView('extraction')
+  }
+
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
   }
@@ -1352,6 +1362,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     reviewBatchIds,
     importedInvoiceId: detailSel.importedInvoiceId,
     auditPrefilter,
+    extractionJobId,
     nav,
     setInvoiceQuery,
     toggleSwitcher,
@@ -1382,6 +1393,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     selectInvoice,
     openImportedInvoice,
     openAuditForInvoice,
+    openExtraction,
     setSandbox,
     setSettingsTab,
     toggleConnector,
@@ -1446,6 +1458,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           {view === 'settings' && <SettingsView ctx={ctx} />}
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
+          {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} />}
         </div>
       </main>
     </div>

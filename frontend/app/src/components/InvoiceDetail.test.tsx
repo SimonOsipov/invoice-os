@@ -268,6 +268,13 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
         opts.sourceDocumentResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) },
       )
     }
+    // The source-document card's extraction lookup (EXTR-11-08), dispatched before the
+    // detail-refetch counter like /source-document above -- the fallback would answer it
+    // with an invoice record, whose missing `jobs` array throws inside the card's reducer.
+    // Only a fixture carrying a `document` reaches it; every other test stays at zero calls.
+    if (method === 'GET' && url.includes('/v1/extractions')) {
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ jobs: [] }) })
+    }
     // The activity card's GET .../audit-log, dispatched before the detail-refetch counter
     // like /ubl and /source-document above: the fallback would answer it with an invoice
     // record and eat a detailSequence slot. `includes`, not `endsWith` -- it carries a query.
@@ -1254,7 +1261,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions')
         })
       // 1 initial mount fetch + 1 poll tick fetch.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2342,7 +2349,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions')
         })
       // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
@@ -2378,7 +2385,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
           const u = String(url)
           // /audit-log excluded like the rest: counting the activity card's fetch as a
           // detail GET satisfies the >=2 floor below before the poll tick ever lands.
-          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log')
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document') && !u.endsWith('/approval') && !u.includes('/audit-log') && !u.includes('/v1/extractions')
         })
       await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
 
@@ -4248,6 +4255,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     'view-ubl-blocked-reason',
     'violations-table',
     // SourceDocumentCard.tsx
+    'open-extraction-review',
     'source-document-card',
     'source-document-card-meta',
     'source-document-range',

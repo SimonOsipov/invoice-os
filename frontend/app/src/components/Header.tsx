@@ -24,6 +24,7 @@ const CRUMB_MAP: Record<View, string> = {
   settings: 'Settings',
   approvals: 'Approvals',
   audit: 'Audit log',
+  extraction: 'Extraction review',
 }
 
 // Segment colours mirror ops-console TopBar.tsx: the active segment is filled with

@@ -14,7 +14,11 @@ function shortHash(hash: string): string {
   return hash.length <= 17 ? hash : `${hash.slice(0, 8)}…${hash.slice(-8)}`
 }
 
-export function SourceDocumentCard({ meta, onOpen }: { meta: SourceDocumentAsync; onOpen: () => void }) {
+// Resolved by InvoiceDetail, never here. `loading` is what separates "no job exists" from
+// "we have not looked yet" — only the settled arm may claim the reason below.
+export type ExtractionEntry = { jobId: string | null; loading: boolean }
+
+export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction }: { meta: SourceDocumentAsync; onOpen: () => void; extraction: ExtractionEntry; onOpenExtraction: (jobId: string) => void }) {
   const response = meta.data
   const record = response?.document ?? null
 
@@ -46,6 +50,10 @@ export function SourceDocumentCard({ meta, onOpen }: { meta: SourceDocumentAsync
   } else {
     const kind = classifyDocument(record.filename, record.declared_content_type)
     const tone = fileTypeTone(record.filename, record.declared_content_type)
+    // An unsettled lookup has not established that there is no job, so it gets the disabled
+    // control without the sentence.
+    const noJob = extraction.loading || extraction.jobId === null
+    const noJobSettled = !extraction.loading && extraction.jobId === null
     body = (
       <>
         <div style={{ display: 'flex', gap: 11 }}>
@@ -73,6 +81,31 @@ export function SourceDocumentCard({ meta, onOpen }: { meta: SourceDocumentAsync
         >
           View source document
         </button>
+        {/* Disabled-with-a-visible-reason, never hidden and never a `title=` — a title on a
+            disabled button is invisible in Chromium (APPR-16). Inline background/border
+            because `.v2-btn-ghost:hover` (app-layer.css:215) carries no `!important` and is
+            not guarded by `:not(:disabled)`. */}
+        <button
+          type="button"
+          data-testid="open-extraction-review"
+          onClick={() => extraction.jobId !== null && onOpenExtraction(extraction.jobId)}
+          disabled={noJob}
+          className="v2-btn v2-btn-ghost pf-btn"
+          style={{
+            marginTop: 12,
+            width: '100%',
+            height: 34,
+            fontSize: 13,
+            ...(noJob ? { background: 'var(--bg-3)', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+          }}
+        >
+          Check the extraction
+        </button>
+        {noJobSettled && (
+          <p style={{ margin: '8px 0 0', fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>
+            This document has no extraction to check.
+          </p>
+        )}
         <div className="mono" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line-1)', fontSize: 10.5, letterSpacing: '0.04em', color: 'var(--fg-3)', wordBreak: 'break-all' }}>
           SHA-256 {shortHash(record.content_hash)}
         </div>

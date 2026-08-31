@@ -17,6 +17,7 @@ import { DEMO_MODE } from '../demo/flag'
 import { BlockedByRoleNote } from '../demo/BlockedByRoleNote'
 import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
+import { newestJob } from '../lib/documentRun'
 import {
   canRejectReason,
   decideInvoice,
@@ -25,6 +26,7 @@ import {
   type ApprovalRun,
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
+import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
 import { detailTarget } from '../lib/importReport'
 import { stripNodes } from '../lib/invoiceStrip'
 import {
@@ -196,6 +198,25 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     () => (base ? getSourceDocument(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
+  // The extraction behind the source document, for the review-screen entry control.
+  // `deps: [documentId]`, not [invoiceId]: LiveInvoiceDetail is keyed by invoiceId, so an
+  // invoice switch remounts and the id goes null -> this record's document exactly once.
+  // `immediate` is false until then, so a manually typed invoice makes no request at all.
+  const documentId = source.data?.document?.id ?? null
+  const extractions = useAsync<ExtractionJobsResponse>(
+    () =>
+      base && documentId
+        ? getExtractions(ctx.authedFetch, base, documentId)
+        : Promise.reject(new Error('no document to look up')),
+    { immediate: shouldFetchInvoices(base) && documentId != null, deps: [documentId] },
+  )
+  // Anything but a settled 200 reads as still looking: the card's reason sentence claims no
+  // job exists, which neither an unstarted nor a failed lookup has established.
+  const extraction = {
+    jobId: newestJob(extractions.data?.jobs ?? [])?.id ?? null,
+    loading: extractions.status !== 'ready',
+  }
+
   // Not extended to the live-refresh tick below (D-23): shouldPollInvoice only ticks
   // queued/submitted, by which point every approval run has closed.
   const approval = useAsync<ApprovalRun | null>(
@@ -1323,7 +1344,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 
             {/* Not titled "Audit trail" (the design's name): import-wizard.spec.ts:576 pins
                 zero matches. */}
-            <SourceDocumentCard meta={source} onOpen={openPreview} />
+            <SourceDocumentCard meta={source} onOpen={openPreview} extraction={extraction} onOpenExtraction={ctx.openExtraction} />
           </div>
         </div>
 

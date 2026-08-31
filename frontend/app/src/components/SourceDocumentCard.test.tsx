@@ -104,6 +104,12 @@ function mockFetch(source: SourceDocumentResponse | null) {
     if (url.endsWith('/sheet')) {
       return new Promise(() => {}) // the sheet canvas is DOC-02-06's; hold it open here
     }
+    // The card's extraction entry control (EXTR-11-08) -- its own file owns the assertions;
+    // an empty list here leaves this file's subject unchanged. Without this arm the lookup
+    // falls through to the invoice-record fallback below, whose missing `jobs` throws.
+    if (url.includes('/v1/extractions')) {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ jobs: [] }) })
+    }
     // LiveInvoiceDetail fires a fourth request for the approval card. Default 404 so
     // this file's assertions (about SourceDocumentCard) are unaffected.
     if (url.endsWith('/approval')) {

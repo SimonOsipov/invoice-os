@@ -2652,8 +2652,10 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 // `skip-visual` label the branch strategy names is a human marker; no workflow reads it.
 //
 // CONTRACT OWED BY EXTR-11-08: the entry control on SourceDocumentCard must carry
-// `data-testid="open-extraction-review"`. Its copy is that subtask's to choose; the testid is
-// the only handle these four specs have, and a role/name locator would guess the copy.
+// `data-testid="open-extraction-review"`. The testid is the only handle these specs have, and
+// a role/name locator would couple them to copy. The copy itself is NOT open -- the story's
+// Invented-copy table fixes all three strings ("Check the extraction", "This document has no
+// extraction to check.", "Extraction review"); an earlier draft of this comment said otherwise.
 
 /** The document journey EXTR09-E2E-01 proved, stopped at the real invoice detail. */
 async function extractOneDocument(page: Page, label: string): Promise<void> {

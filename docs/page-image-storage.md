@@ -158,8 +158,16 @@ EXTR-17's.
 
 ## What this does not cover
 
-No read path exists yet. `extraction_page_images` is written and never read: nothing serves a page
-image, no store method selects one, and no screen displays one. The inventory is here so that the
-story which builds the review canvas has something to enumerate; until then, the strongest true
-statement about the tenant isolation on these rows is that the schema enforces it, not that a
-request path exercises it.
+The inventory is read; the pixels are not. Since EXTR-11-01 `(*Reader).Detail` selects
+`page_number, width_px, height_px` per document inside the request-scoped transaction
+(`internal/extraction/reader.go`, `detailPagesTx`). Nothing serves a page image and no screen
+displays one: the bytes route is EXTR-11-03's and the canvas EXTR-11-05's, so `storage_key`
+still leaves this package only through `PageStore`.
+
+That read names `document_id` and no `tenant_id`, so it is not by itself a demonstration that
+the policy on this table does anything. It could reach another tenant's rows only if a
+page-image row could point at another tenant's document, and
+`extraction_page_images_tenant_document_fk` forbids that
+(`TestRLS_ExtractionDetailChildTablesRefuseACrossTenantRow`). What a request path now exercises
+is the enclosing job's own RLS (`TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections`);
+on these rows the schema is still the load-bearing part.

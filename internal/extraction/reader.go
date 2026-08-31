@@ -1,6 +1,7 @@
-// reader.go: the request seam over extraction_jobs. The tenant comes from the verified
-// Identity in ctx, never from an argument — the opposite of store.go's worker seam, which is
-// why this cannot live in store.go (TestExtractionStore_UsesTenantTxNotRequestTx).
+// reader.go: the request seam over extraction_jobs, its page-image and field-result children,
+// and the documents row they hang from. The tenant comes from the verified Identity in ctx,
+// never from an argument — the opposite of store.go's worker seam, which is why this cannot
+// live in store.go (TestExtractionStore_UsesTenantTxNotRequestTx).
 package extraction
 
 import (

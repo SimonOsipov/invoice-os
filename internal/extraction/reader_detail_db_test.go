@@ -733,7 +733,9 @@ func TestExtractionReader_DocCommentsUseStraightQuotes(t *testing.T) {
 			continue
 		}
 		comments++
-		for _, bad := range []string{"''", "‘", "’", "“", "”"} {
+		// Escapes, not literals: ci.yml's Format step greps every .go file for U+201C/U+201D,
+		// so a literal needle here fails the build this test exists to protect.
+		for _, bad := range []string{"''", "\u2018", "\u2019", "\u201c", "\u201d"} {
 			if strings.Contains(trimmed, bad) {
 				t.Errorf("%s:%d: comment carries %q; write \"\" instead", rdReaderSource, i+1, bad)
 			}

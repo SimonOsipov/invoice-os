@@ -15,9 +15,10 @@
 //   setting `overflowY` alone leaves `style.overflow` EMPTY — which is what makes the
 //   ground's "both axes" assertion a real oracle rather than a restatement
 // jsdom implements NO `IntersectionObserver`, NO `Element.prototype.scrollTo` and NO
-// `scrollIntoView`. The shipped `scrollRegionIntoView` calls `scrollTo`, so this file
-// installs one; System Design §5's claim that `scrollTop` "runs in a component spec
-// without a guard" describes code EXTR-11-04 did not ship.
+// `scrollIntoView`. `scrollRegionIntoView` calls `scrollTo`, so this file installs one.
+// That is the artboard's own call (`Recognition Review.dc.html:513`), smooth behaviour and
+// all; System Design §5 proposed `scrollTop` to avoid this shim and lost the smooth scroll
+// doing it. The reference wins, so the shim is permanent — EXTR-11-06 and -07 need it too.
 //
 // Style oracles go through `serialized()` — the shipped helper's own object, rendered and
 // read back — so a spec can never disagree with `extractionReview.ts` about a literal.
@@ -341,13 +342,11 @@ function revoked(): string[] {
   return revokeSpy.mock.calls.map((c) => c[0])
 }
 
-// jsdom 27.4.0 implements NO `Element.prototype.scrollTo`, and the shipped
-// `scrollRegionIntoView` calls it (extractionReview.ts:151). Its `setTimeout(…, 20)` fires on
-// the REAL clock in every spec that does not fake timers, so without this shim a selection
-// anywhere in the file throws an uncaught TypeError -- landing on whichever unrelated spec
-// happens to be running 20ms later. Installed for the whole file, not just the scroll block.
-// System Design §5 claimed `scrollTop` precisely so no shim would be needed; EXTR-11-04
-// shipped `scrollTo`, so this is the cost of that.
+// jsdom 27.4.0 implements NO `Element.prototype.scrollTo`, and `scrollRegionIntoView` calls
+// it (extractionReview.ts:151). Its `setTimeout(…, 20)` fires on the REAL clock in every spec
+// that does not fake timers, so without this shim a selection anywhere in the file throws an
+// uncaught TypeError -- landing on whichever unrelated spec happens to be running 20ms later.
+// Installed for the whole file, not just the scroll block.
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
   let n = 0

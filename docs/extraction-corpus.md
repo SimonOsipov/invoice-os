@@ -141,6 +141,16 @@ candidates, so the rate is monotone non-decreasing in both — it goes up as the
 sloppier. `TestTier1_DialsStayInsideTheirMeasuredWindow` is the only guard on that side, and it
 names the wrong candidate each widened dial produces.
 
+Since EXTR-16 a bare label is not a value, and both upper bounds used to rest on one. The
+`below` bound was re-measured on the same layout against the next group's *value*, 0.107212 down
+— see the `corpus_stacked_labels.pdf` row above. The `right` bound had no corpus instance left
+at all: `Buyer` was the only token ever reachable rightward from `Supplier`, and widening `right`
+to 0.9 adds no candidate on any layout for any field. It is therefore measured on `acRightColumnPage`,
+a synthetic page carrying `corpus_two_column.pdf`'s own column edges with the buyer's *name*
+where the label stood; `right_merge` re-reads both edges off the real file, so the fixture cannot
+drift into a gap nobody measured. **Adding a layout whose right column holds a party name would
+put this bound back on the corpus.**
+
 ## Tier-1 decision rate
 
 Measured 2026-08-31 on `feature/extr-16-the-ranking-defect`, over the same 44 pairs the recall

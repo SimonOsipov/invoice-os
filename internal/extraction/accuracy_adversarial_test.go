@@ -43,6 +43,25 @@ func aaByField(t *testing.T) map[string]acRow {
 	return out
 }
 
+// aaTokenBox is the box of the token whose text is exactly text. Fatal on a miss or on a
+// duplicate: either would silently measure some other token's edge.
+func aaTokenBox(t *testing.T, pages []extraction.TokenPage, text string) extraction.Region {
+	t.Helper()
+
+	var out []extraction.Region
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if tok.Text == text {
+				out = append(out, tok.Region)
+			}
+		}
+	}
+	if len(out) != 1 {
+		t.Fatalf("%d token(s) read %q, want exactly 1; the edge measured below would be some other token's", len(out), text)
+	}
+	return out[0]
+}
+
 func aaStackedPages(t *testing.T) []extraction.TokenPage {
 	t.Helper()
 	return rvCorpusPages(t, "corpus_stacked_labels.pdf")
@@ -352,4 +371,42 @@ func TestTier1_TheRecordedDistancesAreTheMeasuredDistances(t *testing.T) {
 			}
 		})
 	}
+
+	// The right dial's merge has no corpus instance left, so it is measured on a synthetic page
+	// -- and a fixture whose geometry is invented bounds the dial at a number nobody measured.
+	// The gap is therefore re-read off corpus_two_column.pdf in the same subtest.
+	t.Run("right_merge", func(t *testing.T) {
+		const want = "0.465497"
+
+		d, ok := aaDistance(t, acRightColumnPage(), "acRightColumnPage", "t1.supplier_name.right", "Honeywell Group", acWithDistance(t, extraction.RelRight, 0.9))
+		if !ok {
+			t.Fatalf("t1.supplier_name.right reaches no %q on acRightColumnPage even at 0.9; the recorded merge does not exist and the upper bound rests on nothing", "Honeywell Group")
+		}
+		if got := strconv.FormatFloat(d, 'f', 6, 64); got != want {
+			t.Errorf("t1.supplier_name.right reaches the buyer column on acRightColumnPage at %s; tier1.go records %s", got, want)
+		}
+		if !strings.Contains(src, want) {
+			t.Errorf("tier1.go records no %s, the measured distance of this merge", want)
+		}
+
+		real := rvCorpusPages(t, "corpus_two_column.pdf")
+		supplier := aaTokenBox(t, real, "Supplier")
+		buyer := aaTokenBox(t, real, "Buyer")
+		if got := strconv.FormatFloat(buyer.X0-supplier.X1, 'f', 6, 64); got != want {
+			t.Errorf("on corpus_two_column.pdf the gap from %q to the buyer column is %s; acRightColumnPage spans %s and no longer carries the corpus's own geometry", "Supplier", got, want)
+		}
+		// Each edge, not only their difference: a fixture that shifted both by the same amount
+		// would keep the gap and stop being the corpus's geometry.
+		for _, e := range []struct {
+			what       string
+			real, fixt float64
+		}{
+			{"the \"Supplier\" label's right edge", supplier.X1, acSupplierLabelX1},
+			{"the buyer column's left edge", buyer.X0, acBuyerColumnX0},
+		} {
+			if got := strconv.FormatFloat(e.real, 'f', 6, 64); got != strconv.FormatFloat(e.fixt, 'f', 6, 64) {
+				t.Errorf("corpus_two_column.pdf puts %s at %s; acRightColumnPage is built from %v", e.what, got, e.fixt)
+			}
+		}
+	})
 }

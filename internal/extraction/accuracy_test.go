@@ -56,7 +56,7 @@ const (
 // bounded on BOTH sides. Distance is the box GAP (resolve.go:177), not centre-to-centre.
 const (
 	acRightLower     = 0.2060 // 43/44 here; 42/44 at acRightTooNarrow
-	acRightUpper     = 0.4655 // t1.supplier_name.right reaches "Buyer" on corpus_two_column.pdf
+	acRightUpper     = 0.4655 // t1.supplier_name.right reaches the buyer column on acRightColumnPage
 	acRightTooNarrow = 0.2059
 	acBelowLower     = 0.0095 // 43/44 here; 41/44 at acBelowTooNarrow
 	acBelowUpper     = 0.1072 // the widest clean value; the merge sits just above, at acBelowMerges
@@ -66,6 +66,32 @@ const (
 	// so a retune cannot land between the two and pass.
 	acBelowCrossParty = 0.3220 // t1.supplier_name.below reaches the buyer's "Honeywell Group"
 )
+
+// The two coordinates the right merge spans, read off corpus_two_column.pdf: the "Supplier"
+// label's right edge and the buyer column's left edge. Their difference is 0.465497.
+const (
+	acSupplierLabelX1 = 0.189549
+	acBuyerColumnX0   = 0.655046
+)
+
+// acRightColumnPage is corpus_two_column.pdf's own geometry with one token's TEXT changed: the
+// right column's party-header row carries the buyer's NAME where the bare label "Buyer" stood.
+// "Buyer" was the only token ever reachable rightward from "Supplier" there, and since EXTR-16
+// a label is not a value, so the committed corpus offers no rightward merge at any dial width.
+// The gap is the corpus's own, not an invented one -- right_merge re-reads both edges off the
+// real file (accuracy_adversarial_test.go).
+func acRightColumnPage() []extraction.TokenPage {
+	return rvPage(
+		rvTok("Invoice No: INV-1004", 0.119431, 0.117909, 0.303353, 0.129061),
+		rvTok("Invoice Date: 2026-05-06", 0.119431, 0.140636, 0.337059, 0.151788),
+		rvTok("Supplier", 0.118608, 0.193379, acSupplierLabelX1, 0.207667),
+		rvTok("Adeyemi Trading Limited", 0.117922, 0.213869, 0.333373, 0.228066),
+		rvTok("TIN: 99999999-0401", 0.117922, 0.234071, 0.293627, 0.245222),
+		rvTok("Honeywell Group", acBuyerColumnX0, 0.193667, 0.803203, 0.207773),
+		rvTok("TIN: 99999999-0402", 0.653869, 0.234071, 0.832477, 0.245222),
+		rvTok("Total: NGN 6,450.00", 0.117922, 0.685803, 0.296725, 0.699182),
+	)
+}
 
 // --- harness ----------------------------------------------------------------
 
@@ -604,17 +630,17 @@ func TestTier1_DialsStayInsideTheirMeasuredWindow(t *testing.T) {
 	})
 
 	t.Run("right_upper_bound", func(t *testing.T) {
-		const file, field, wrong = "corpus_two_column.pdf", "supplier_name", "Buyer"
-		pages := rvCorpusPages(t, file)
+		const what, field, wrong = "acRightColumnPage", "supplier_name", "Honeywell Group"
+		pages := acRightColumnPage()
 
 		shipped := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
-		rvFloor(t, shipped, "the shipped set over "+file)
+		rvFloor(t, shipped, "the shipped set over "+what)
 		if v := rvValues(rvFor(shipped, field)); slices.Contains(v, wrong) {
-			t.Errorf("at the shipped right dial %v, %s = %v on %s and has already crossed into the buyer column; the two columns are merged", right, field, v, file)
+			t.Errorf("at the shipped right dial %v, %s = %v on %s and has already crossed into the buyer column; the two columns are merged", right, field, v, what)
 		}
 
 		wide := extraction.Resolve(pages, extraction.RuleSet{Tier1: acWithDistance(t, extraction.RelRight, acRightUpper)})
-		rvControl(t, wide, fmt.Sprintf("right widened to %v over %s", acRightUpper, file))
+		rvControl(t, wide, fmt.Sprintf("right widened to %v over %s", acRightUpper, what))
 		if v := rvValues(rvFor(wide, field)); !slices.Contains(v, wrong) {
 			t.Errorf("with right widened to %v, %s = %v and still does not contain %q; the absence asserted above holds for some other reason and bounds the dial from nowhere", acRightUpper, field, v, wrong)
 		}

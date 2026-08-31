@@ -4,12 +4,11 @@
 
 import type { FileOutcome, ImportRun, RunFileRow } from './importRun'
 import type { ExtractionJob, ImportReport } from './importApi'
+import { LIVE_POLL_MS } from './invoices'
 
 // Mirrors e2e/api/contract-document-upload.spec.ts's POLL_BUDGET_MS: above the mock
 // extractor's sub-second work, below the worker's own 10-minute River timeout.
 export const EXTRACTION_POLL_BUDGET_MS = 120_000
-
-export const EXTRACTION_POLL_INTERVAL_MS = 1_500
 
 // 'waiting' is the only non-terminal verdict; both terminal ones carry what the caller
 // needs to settle a FileOutcome without re-reading the job.
@@ -76,19 +75,27 @@ export function stageOf(job: ExtractionJob | null): DocumentRowState | null {
   return null
 }
 
-// EXTR-10-02 STUB (task-784, test-first) — throwing rather than guessing keeps every
-// spec RED on an assertion/not-implemented mismatch, never a compile error. The executor
-// writes the real body; see task-784's Implementation Plan for the exact statement order.
+// The poll loop, moved out of App.tsx (EXTR-10-02) so its per-tick reporting has an
+// oracle. Reports the stage it READ on every tick; a terminal tick reports nothing
+// because stageOf already returns null for succeeded/dead_lettered (D-8).
 export async function pollUntilSettled(
-  _documentId: string,
-  _deps: {
+  documentId: string,
+  deps: {
     getJobs: (documentId: string) => Promise<readonly ExtractionJob[]>
     onStage: (state: DocumentRowState) => void
     sleep: (ms: number) => Promise<void>
     now: () => number
   },
 ): Promise<PollVerdict> {
-  throw new Error('EXTR-10-02: not implemented — pollUntilSettled must poll at LIVE_POLL_MS, report stageOf on every non-null tick, and propagate a getJobs rejection')
+  const startedAt = deps.now()
+  for (;;) {
+    const jobs = await deps.getJobs(documentId)
+    const stage = stageOf(newestJob(jobs))
+    if (stage !== null) deps.onStage(stage)
+    const verdict = pollVerdict(jobs, deps.now() - startedAt)
+    if (verdict.kind !== 'waiting') return verdict
+    await deps.sleep(LIVE_POLL_MS)
+  }
 }
 
 // One row per run.files entry, joined by RunFile.id -- never by name (importRun.ts:77-78

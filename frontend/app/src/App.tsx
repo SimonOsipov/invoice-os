@@ -26,12 +26,7 @@ import {
   type RunFile,
   type RunRoute,
 } from './lib/importRun'
-import {
-  EXTRACTION_POLL_INTERVAL_MS,
-  pollVerdict,
-  startDocumentRun as runDocumentPipelines,
-  type PollVerdict,
-} from './lib/documentRun'
+import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
@@ -938,7 +933,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           filesSnapshot.map((pf) => ({ id: pf.id, name: pf.file.name, file: pf.file })),
           {
             upload: (file) => uploadSourceDocument(importAuth, base, file).then((r) => r.document_id),
-            poll: (documentId) => pollExtraction(base, documentId),
+            poll: (documentId) =>
+              pollUntilSettled(documentId, {
+                getJobs: (id) => getExtractions(authedFetch, base, id).then((r) => r.jobs),
+                onStage: () => {},
+                sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+                now: Date.now,
+              }),
             importDocument: (documentId) => importDocument(authedFetch, base, { entityId, documentId }),
           },
         )
@@ -954,19 +955,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         reqInFlight.current = false
       }
     })()
-  }
-
-  // One document's poll, bounded by pollVerdict's own budget so a run can never hang. A
-  // GET failure is NOT swallowed: it rejects, and the pipeline settles that one file
-  // 'failed' with the ApiError's message.
-  async function pollExtraction(base: string, documentId: string): Promise<PollVerdict> {
-    const startedAt = Date.now()
-    for (;;) {
-      const { jobs } = await getExtractions(authedFetch, base, documentId)
-      const verdict = pollVerdict(jobs, Date.now() - startedAt)
-      if (verdict.kind !== 'waiting') return verdict
-      await new Promise((resolve) => setTimeout(resolve, EXTRACTION_POLL_INTERVAL_MS))
-    }
   }
 
   function armField(k: string) {

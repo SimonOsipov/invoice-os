@@ -1953,8 +1953,8 @@ const REFUSE_SPREADSHEET_IN_DOCUMENT_RUN =
   'A run holds one kind of file: this is a document run, so the spreadsheet was not added. Remove the document files first, or start a separate spreadsheet run.'
 
 test('EXTR09-E2E-01 (AC-1/AC-5): a PDF forks to the document path, extracts, and lands on a real invoice', async ({ page }) => {
-  // Upload + extraction poll (1.5s interval, 120s budget) + import, on a fleet that may be
-  // cold. Well above the api suite's own 180s for the same three calls.
+  // Upload + extraction poll (LIVE_POLL_MS interval, 120s budget) + import, on a fleet
+  // that may be cold. Well above the api suite's own 180s for the same three calls.
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 

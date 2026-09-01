@@ -17,6 +17,7 @@ import {
   type ExtractionDocument,
   type ExtractionFieldState,
   type ExtractionPage,
+  type ExtractionRegion,
 } from '../lib/extractionReview'
 import type { DocumentBytes } from '../lib/sourceDocument'
 import type { PlatformCtx } from '../types'
@@ -170,6 +171,10 @@ export function ExtractionCanvas({
    * so a caller that omits this silently loses the re-centre.
    */
   scrollNonce: number
+  /** The one field waiting for a box, or null. EXTR-12-08 renders the drag surface from it. */
+  armed: string | null
+  /** A completed drag, already normalised against the frame it was drawn on. */
+  onPoint: (region: ExtractionRegion) => void
 }) {
   const base = gatewayBase()
   const [zoom, setZoom] = useState(1)

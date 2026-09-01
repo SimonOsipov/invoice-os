@@ -211,10 +211,16 @@ export function ExtractionFields({
   fields: ExtractionFieldState[]
   selected: string | null
   draft: DraftEntries
+  /** The one field waiting for a box, or null. */
+  armed: string | null
+  /** False on a job with no page images: the button types instead of pointing. */
+  canPoint: boolean
   onSelect: (name: string) => void
   onType: (name: string, value: string) => void
   onChoose: (name: string, candidate: ExtractionCandidate) => void
   onUndo: (name: string) => void
+  onArm: (name: string) => void
+  onDisarm: () => void
 }) {
   const supplier = fields.some((f) => SUPPLIER_FIELDS.includes(f.name))
   // Same length, same order: applyDraft maps the array (extractionReview.test.ts, "leaves a

@@ -363,6 +363,72 @@ export function pageFrameStyle(page: ExtractionPage, zoom: number): CSSPropertie
   }
 }
 
+// The frame's PADDING box, in viewport coordinates -- the box highlightStyle's percentages
+// resolve against. A plain object, never a DOMRect: it keeps the DOM out of this signature.
+export interface FrameBox {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export interface ViewportPoint {
+  x: number
+  y: number
+}
+
+// ---------------------------------------------------------------------------------------
+// STUBS (EXTR-12-08, red phase). Every value below is deliberately outside the answer space:
+// page 0 is never a 1-based page, -1 is never a normalised coordinate, and `undone` is never
+// the kind either entry builder returns. Replaced by the real bodies in the green phase.
+// ---------------------------------------------------------------------------------------
+
+const STUB_REGION: ExtractionRegion = { page: 0, x0: -1, y0: -1, x1: -1, y1: -1 }
+
+/** The inverse of highlightStyle: a drag rectangle against the frame, normalised into [0,1]. */
+export function normaliseBox(_frame: FrameBox, _a: ViewportPoint, _b: ViewportPoint, _page: number): ExtractionRegion {
+  return STUB_REGION
+}
+
+/**
+ * The artboard's gesture floor: 24x12 CSS pixels tells a drag from a click. The stub returns
+ * neither answer -- no boolean constant can be wrong on a predicate's admit AND refuse cases.
+ */
+export function isDrawnBox(_a: ViewportPoint, _b: ViewportPoint): boolean {
+  return undefined as unknown as boolean
+}
+
+/** The live box under the cursor. highlightStyle's geometry, the artboard's amber, no ring. */
+export function pointBoxStyle(_region: ExtractionRegion): CSSProperties {
+  return {
+    position: 'static',
+    pointerEvents: 'auto',
+    left: '-1%',
+    top: '-1%',
+    width: '-1%',
+    height: '-1%',
+    border: 'none',
+    background: 'none',
+    borderRadius: 0,
+    boxShadow: 'none',
+    transition: 'none',
+  }
+}
+
+/** Typing over a field: a pointed entry stays pointed and keeps its box. */
+export function typedEntry(_prev: DraftEntry | undefined, _value: string): DraftEntry {
+  return { kind: 'undone', value: '', region: STUB_REGION }
+}
+
+/** Drawing a box on a field: the value the person already has survives the gesture. */
+export function pointedEntry(
+  _prev: DraftEntry | undefined,
+  _wireValue: string | null,
+  _region: ExtractionRegion,
+): DraftEntry {
+  return { kind: 'undone', value: 'STUB', region: STUB_REGION }
+}
+
 export function docMetaLine(document: ExtractionDocument, pageCount: number): string {
   const pages = `${pageCount} ${pageCount === 1 ? 'PAGE' : 'PAGES'}`
   return [

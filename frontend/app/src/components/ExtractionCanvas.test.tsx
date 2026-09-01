@@ -122,6 +122,9 @@ interface CanvasProps {
   selected: string | null
   /** The caller's per-click nonce. Held constant unless a row is asserting on it. */
   scrollNonce: number
+  /** The field waiting for a box. Null unless a row is arming one. */
+  armed: string | null
+  onPoint: (region: ExtractionRegion) => void
 }
 
 function canvas(over: Partial<CanvasProps> = {}) {
@@ -133,6 +136,8 @@ function canvas(over: Partial<CanvasProps> = {}) {
     fields: THREE_FIELDS,
     selected: null,
     scrollNonce: 0,
+    armed: null,
+    onPoint: () => {},
     ...over,
   }
   return <ExtractionCanvas {...props} />

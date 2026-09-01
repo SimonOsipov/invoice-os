@@ -94,6 +94,13 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     setDraft((d) => ({ jobId, entries: { ...(d && d.jobId === jobId ? d.entries : {}), [name]: entry } }))
   }
 
+  // The armed slot, its two gestures and the drag's landing. Inert until EXTR-12-08's green
+  // phase; the panes take the props now so the red rows fail on behaviour, never on tsc.
+  const arming: string | null = null
+  const onArm = (_name: string) => {}
+  const onDisarm = () => {}
+  const onPoint = () => {}
+
   const data = merged && merged.jobId === jobId ? merged.detail : detail.data
   let content: ReactNode
   if (detail.status === 'error' && detail.error) {
@@ -185,11 +192,17 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
             fields={shown}
             selected={selected}
             scrollNonce={current?.n ?? 0}
+            armed={arming}
+            onPoint={onPoint}
           />
           <ExtractionFields
             fields={wire}
             draft={entries}
             selected={selected}
+            armed={arming}
+            canPoint={data.pages.length > 0}
+            onArm={onArm}
+            onDisarm={onDisarm}
             onSelect={(name) => setPick((p) => ({ jobId, name, n: (p?.n ?? 0) + 1 }))}
             onType={(name, value) => draftField(name, { kind: 'typed', value, region: null })}
             onChoose={(name, a: ExtractionCandidate) =>

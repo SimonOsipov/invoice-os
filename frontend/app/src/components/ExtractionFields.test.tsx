@@ -136,10 +136,16 @@ interface FieldsProps {
   fields: ExtractionFieldState[]
   selected: string | null
   draft: DraftEntries
+  /** The field waiting for a box. Null unless a row is arming one. */
+  armed: string | null
+  /** True unless a row is asking for the pageless cell. */
+  canPoint: boolean
   onSelect: (name: string) => void
   onType: (name: string, value: string) => void
   onChoose: (name: string, candidate: ExtractionCandidate) => void
   onUndo: (name: string) => void
+  onArm: (name: string) => void
+  onDisarm: () => void
 }
 
 function fieldsPane(over: Partial<FieldsProps> = {}) {
@@ -147,10 +153,14 @@ function fieldsPane(over: Partial<FieldsProps> = {}) {
     fields: THREE_FIELDS,
     selected: null,
     draft: {},
+    armed: null,
+    canPoint: true,
     onSelect: () => {},
     onType: () => {},
     onChoose: () => {},
     onUndo: () => {},
+    onArm: () => {},
+    onDisarm: () => {},
     ...over,
   }
   return <ExtractionFields {...props} />

@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1227,6 +1228,10 @@ func TestExtractionDetail_LatestCorrectionWins(t *testing.T) {
 // AC-1's undo half. The undone row carries UNDO-Z, a value neither the extractor nor any
 // correction ever wrote: a merge that returned the latest row's value would surface it.
 //
+// TWO corrections sit under the undo, which is what separates the rule from its neighbour: one
+// undo drops the whole stack rather than cancelling the row beneath it. With a single
+// correction the two rules agree on READ-A and neither can be told from the other.
+//
 // vat is the load-bearing control. Without it every assertion on total is also what a merge
 // that ignores corrections entirely returns, and the case would pass on a do-nothing read.
 func TestExtractionDetail_UndoneIgnoresItsOwnValueAndRestoresTheReading(t *testing.T) {
@@ -1240,6 +1245,7 @@ func TestExtractionDetail_UndoneIgnoresItsOwnValueAndRestoresTheReading(t *testi
 	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, rvdStr("ambiguous"), now)
 	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-1"), nil, 1, nil, now)
 	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-B", "typed", nil, nil)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "ALT-1", "chosen", nil, nil)
 	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "UNDO-Z", "undone", nil, nil)
 
 	rvdSeedField(t, ctx, tenantA, jobA, "vat", rvdStr("READ-V"), nil, 0, nil, now.Add(time.Millisecond))
@@ -1253,7 +1259,8 @@ func TestExtractionDetail_UndoneIgnoresItsOwnValueAndRestoresTheReading(t *testi
 	total := rvcField(t, got, "total")
 	if total.Value == nil || *total.Value != "READ-A" {
 		t.Errorf("the undone total came back %s, want \"READ-A\" — an undo resets the field to the "+
-			"extractor's reading and the undone row's own value is ignored", rvcValue(total.Value))
+			"extractor's reading: its own value is ignored, and so is the whole stack beneath it, "+
+			"never just the correction it sits on (which would give \"HUMAN-B\")", rvcValue(total.Value))
 	}
 	if raw := rvcCorrectedRaw(t, got, "total"); raw != "null" {
 		t.Errorf("the undone total marshals corrected as %s, want null — an undone field is no "+
@@ -1430,6 +1437,10 @@ func TestExtractionDetail_UncorrectedFieldHasNullCorrected(t *testing.T) {
 // AC-5: a chosen correction settles the field FROM one of the alternatives, so the highlight
 // must move to that alternative's own box. R0, R1 and R2 share no coordinate and R2 sits on
 // page 2, so a merge that keeps R0, takes the first alternative, or hardcodes the page all fail.
+//
+// invoice_number is the decoy and is read FIRST: it is ambiguous too and one of its own
+// alternatives spells "ALT-2" at a fourth box, so a merge that matches the correction's value
+// against a neighbour's alternatives rather than the corrected field's own points at rDecoy.
 func TestExtractionDetail_ChosenCorrectionTakesTheAlternativesRegion(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)
@@ -1438,27 +1449,49 @@ func TestExtractionDetail_ChosenCorrectionTakesTheAlternativesRegion(t *testing.
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
+	rDecoy := rvdBox{Page: 3, X0: 0.71, Y0: 0.72, X1: 0.83, Y1: 0.84}
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("READ-N"),
+		&rvdBox{Page: 1, X0: 0.01, Y0: 0.02, X1: 0.03, Y1: 0.04}, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-2"), &rDecoy, 1, nil, now)
+
+	later := now.Add(time.Millisecond)
 	r2 := rvdBox{Page: 2, X0: 0.51, Y0: 0.52, X1: 0.63, Y1: 0.64}
 	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"),
-		&rvdBox{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}, 0, rvdStr("ambiguous"), now)
+		&rvdBox{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}, 0, rvdStr("ambiguous"), later)
 	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-1"),
-		&rvdBox{Page: 1, X0: 0.21, Y0: 0.22, X1: 0.33, Y1: 0.34}, 1, nil, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-2"), &r2, 2, nil, now)
+		&rvdBox{Page: 1, X0: 0.21, Y0: 0.22, X1: 0.33, Y1: 0.34}, 1, nil, later)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-2"), &r2, 2, nil, later)
 	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "ALT-2", "chosen", nil, nil)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
 		t.Fatalf("Detail for job %s: %v", jobA, err)
 	}
+	if names := rvdFieldNames(got.Fields); !slices.Equal(names, []string{"invoice_number", "total"}) {
+		t.Fatalf("the detail carries fields %v, want [invoice_number total] — total must not be the "+
+			"first field, or a merge reading the wrong field's alternatives reads its own",
+			names)
+	}
 	total := rvcField(t, got, "total")
 	want := extraction.ExtractionRegion{Page: r2.Page, X0: r2.X0, Y0: r2.Y0, X1: r2.X1, Y1: r2.Y1}
 	if total.Region == nil || *total.Region != want {
 		t.Errorf("the chosen total highlights %s, want %+v — the field was settled from the second "+
-			"alternative, so the canvas must point where that alternative was read",
+			"alternative, so the canvas must point where THAT alternative was read, not where a "+
+			"neighbouring field happens to hold the same string",
 			rvcRegion(total.Region), want)
 	}
 	if total.Value == nil || *total.Value != "ALT-2" {
 		t.Errorf("the chosen total came back %s, want \"ALT-2\"", rvcValue(total.Value))
+	}
+
+	// The decoy carries no correction, so the merge must leave it exactly as read.
+	decoy := rvcField(t, got, "invoice_number")
+	if raw := rvcCorrectedRaw(t, got, "invoice_number"); raw != "null" {
+		t.Errorf("invoice_number marshals corrected as %s, want null — nothing was corrected there", raw)
+	}
+	if decoy.Reason != "ambiguous" || len(decoy.Alternatives) != 1 {
+		t.Errorf("invoice_number came back with reason %q and %d alternative(s), want \"ambiguous\" and 1 "+
+			"— a correction on total must not settle its neighbour", decoy.Reason, len(decoy.Alternatives))
 	}
 }
 
@@ -1601,25 +1634,30 @@ func TestExtractionDetail_CorrectionForAFieldTheExtractorNeverReadIsCarried(t *t
 
 	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, nil, now)
 	rvdSeedField(t, ctx, tenantA, jobA, "vat", rvdStr("READ-V"), nil, 0, nil, now.Add(time.Millisecond))
+	// Two of them, seeded newest-name-first: [buyer_name currency] is neither the seeding order
+	// nor a one-element list, so the appended run is ordered rather than incidental.
 	rvcSeedCorrection(t, ctx, tenantA, jobA, "currency", "NGN", "typed", nil, nil)
+	pointed := rvdBox{Page: 2, X0: 0.21, Y0: 0.32, X1: 0.43, Y1: 0.54}
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "buyer_name", "HUMAN-N", "pointed", &pointed, nil)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
 		t.Fatalf("Detail for job %s: %v", jobA, err)
 	}
 	names := rvdFieldNames(got.Fields)
-	if len(names) != 3 || names[0] != "total" || names[1] != "vat" || names[2] != "currency" {
-		t.Fatalf("the detail carries fields %v, want [total vat currency] — a correction on a field "+
-			"the extractor never read must still reach the screen, appended after the read fields",
-			names)
+	want := []string{"total", "vat", "buyer_name", "currency"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("the detail carries fields %v, want %v — a correction on a field the extractor never "+
+			"read must still reach the screen, appended after the read fields and in name order",
+			names, want)
 	}
 	currency := rvcField(t, got, "currency")
 	if currency.Value == nil || *currency.Value != "NGN" {
 		t.Errorf("the synthesized currency came back %s, want \"NGN\"", rvcValue(currency.Value))
 	}
 	if currency.Region != nil {
-		t.Errorf("the synthesized currency highlights %s, want none — there is no reading to point at",
-			rvcRegion(currency.Region))
+		t.Errorf("the synthesized currency highlights %s, want none — a typed value says nothing "+
+			"about where it was read", rvcRegion(currency.Region))
 	}
 	if raw := rvcCorrectedRaw(t, got, "currency"); raw != `{"method":"typed","was":null,"where":null}` {
 		t.Errorf("the synthesized currency marshals corrected as %s, want was null — nothing preceded "+
@@ -1628,6 +1666,19 @@ func TestExtractionDetail_CorrectionForAFieldTheExtractorNeverReadIsCarried(t *t
 	if currency.Reason != "" || len(currency.Alternatives) != 0 {
 		t.Errorf("the synthesized currency came back with reason %q and %d alternative(s), want \"\" and 0",
 			currency.Reason, len(currency.Alternatives))
+	}
+
+	// A pointed correction is the one way a never-read field gets a box, and subtask 08 is what
+	// sends one. Four distinct coordinates on page 2, so a transposition and a hardcoded page fail.
+	buyerName := rvcField(t, got, "buyer_name")
+	wantBox := extraction.ExtractionRegion{Page: pointed.Page, X0: pointed.X0, Y0: pointed.Y0, X1: pointed.X1, Y1: pointed.Y1}
+	if buyerName.Region == nil || *buyerName.Region != wantBox {
+		t.Errorf("the synthesized buyer_name highlights %s, want the stored box %+v — a field the "+
+			"extractor never read is exactly the field a human has to point at",
+			rvcRegion(buyerName.Region), wantBox)
+	}
+	if buyerName.Value == nil || *buyerName.Value != "HUMAN-N" {
+		t.Errorf("the synthesized buyer_name came back %s, want \"HUMAN-N\"", rvcValue(buyerName.Value))
 	}
 }
 

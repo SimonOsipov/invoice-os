@@ -6,17 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 )
 
 func mgStr(s string) *string { return &s }
 
 var (
-	mgR0      = &ExtractionRegion{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}
-	mgAlt1    = &ExtractionRegion{Page: 1, X0: 0.21, Y0: 0.22, X1: 0.33, Y1: 0.34}
-	mgAlt2    = &ExtractionRegion{Page: 2, X0: 0.41, Y0: 0.52, X1: 0.63, Y1: 0.74}
-	mgBox     = Region{Page: 3, X0: 0.15, Y0: 0.26, X1: 0.37, Y1: 0.48}
-	mgPointed = &ExtractionRegion{Page: 3, X0: 0.15, Y0: 0.26, X1: 0.37, Y1: 0.48}
+	mgR0       = &ExtractionRegion{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}
+	mgAlt1     = &ExtractionRegion{Page: 1, X0: 0.21, Y0: 0.22, X1: 0.33, Y1: 0.34}
+	mgAlt2     = &ExtractionRegion{Page: 2, X0: 0.41, Y0: 0.52, X1: 0.63, Y1: 0.74}
+	mgBox      = Region{Page: 3, X0: 0.15, Y0: 0.26, X1: 0.37, Y1: 0.48}
+	mgPointed  = &ExtractionRegion{Page: 3, X0: 0.15, Y0: 0.26, X1: 0.37, Y1: 0.48}
+	mgDecoyR0  = &ExtractionRegion{Page: 1, X0: 0.01, Y0: 0.02, X1: 0.03, Y1: 0.04}
+	mgDecoyAlt = &ExtractionRegion{Page: 4, X0: 0.71, Y0: 0.72, X1: 0.83, Y1: 0.84}
 )
 
 // mgRead is the extractor's own answer for one ambiguous field, rebuilt per case so a merge
@@ -130,6 +133,73 @@ func TestExtractionMerge_ResolvesEachMethodWithoutADatabase(t *testing.T) {
 			t.Errorf("the synthesized field is\n  %s\nwant\n  %s", mgShow(got[1]), mgShow(want))
 		}
 	})
+
+	// The corrections read hands its rows back in field_name order, so a sort fed by it can
+	// never be observed to do anything. Fed unsorted, it can: the merge owns the output order.
+	t.Run("synthesized fields are name-ordered whatever order the corrections arrive in", func(t *testing.T) {
+		got := mergeCorrections(mgRead(), []Correction{
+			{FieldName: "supplier_name", Value: "S", Method: MethodTyped, Actor: "operator"},
+			{FieldName: "buyer_name", Value: "B", Method: MethodTyped, Actor: "operator"},
+			{FieldName: "currency", Value: "NGN", Method: MethodTyped, Actor: "operator"},
+		})
+		want := []string{"total", "buyer_name", "currency", "supplier_name"}
+		if names := mgNames(got); !slices.Equal(names, want) {
+			t.Errorf("the merge returned fields %v, want %v — the read field first, then the "+
+				"synthesized ones in name order, not the order they arrived in", names, want)
+		}
+	})
+
+	// Two alternatives may legitimately hold one string — that is a shape of ambiguous — and the
+	// row records which was clicked nowhere, so the rule is first match. Pinned, not assumed.
+	t.Run("chosen takes the FIRST alternative whose value matches", func(t *testing.T) {
+		fields := mgRead()
+		fields[0].Alternatives = []ExtractionCandidate{
+			{Value: mgStr("ALT-2"), Region: mgAlt1},
+			{Value: mgStr("ALT-2"), Region: mgAlt2},
+		}
+		got := mergeCorrections(fields, []Correction{mgCorrection(MethodChosen, "ALT-2", nil)})
+		if got[0].Region != mgAlt1 {
+			t.Errorf("the chosen total highlights %s, want the first matching alternative %+v",
+				mgShow(got[0]), *mgAlt1)
+		}
+	})
+
+	// A correction's value is matched against ITS OWN field's alternatives. mgDecoy holds the
+	// same string at a different box, and is deliberately the first field.
+	t.Run("chosen matches the corrected field's alternatives, not a neighbour's", func(t *testing.T) {
+		fields := append(mgDecoy(), mgRead()...)
+		got := mergeCorrections(fields, []Correction{mgCorrection(MethodChosen, "ALT-2", nil)})
+		if len(got) != 2 || got[1].Name != "total" {
+			t.Fatalf("the merge returned %d field(s) %v, want [invoice_number total]", len(got), mgNames(got))
+		}
+		if got[1].Region != mgAlt2 {
+			t.Errorf("the chosen total highlights %s, want total's own second alternative %+v — "+
+				"invoice_number spells the same value at a different box", mgShow(got[1]), *mgAlt2)
+		}
+		if !reflect.DeepEqual(got[0], mgDecoy()[0]) {
+			t.Errorf("the untouched invoice_number came back\n  %s\nwant\n  %s — a correction on total "+
+				"settles total", mgShow(got[0]), mgShow(mgDecoy()[0]))
+		}
+	})
+}
+
+// mgDecoy is a second ambiguous field whose own alternative spells total's chosen value.
+func mgDecoy() []ExtractionFieldState {
+	return []ExtractionFieldState{{
+		Name:         "invoice_number",
+		Value:        mgStr("READ-N"),
+		Region:       mgDecoyR0,
+		Reason:       "ambiguous",
+		Alternatives: []ExtractionCandidate{{Value: mgStr("ALT-2"), Region: mgDecoyAlt}},
+	}}
+}
+
+func mgNames(fields []ExtractionFieldState) []string {
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, f.Name)
+	}
+	return out
 }
 
 // mgShow renders a field state as the wire bytes, so a failure names values, not addresses.

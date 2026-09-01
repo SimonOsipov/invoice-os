@@ -58,6 +58,7 @@ const NOTE_SUPPLIER =
   "This document's supplier doesn't match the client you picked. It is filed from your client record either way."
 const NOTE_GENERIC = 'This value disagrees with the other numbers on the document.'
 const MARKER_TYPED = 'YOU CHANGED THIS'
+const MARKER_POINTED = 'YOU POINTED THIS OUT'
 const MARKER_CHOSEN = 'YOU CHOSE THIS'
 const WAS_CHOSEN = 'We found more than one candidate'
 
@@ -885,6 +886,51 @@ describe('a corrected field', () => {
     expect(within(r).queryByText(NOTE_SUBTOTAL), 'a settled field still shouts its note').toBeNull()
   })
 
+  it('reads the pointed provenance off the field’s own region', () => {
+    // The main path, not an edge: the shipped UI sends no anchor label, so `where` is null on
+    // every pointed correction and the phrase is derived from the region. Two pages, neither
+    // of them 1 and neither shared — a cell handed `null` renders no was-line at all, and one
+    // handed its neighbour's region renders the wrong page. Both pass every other row here.
+    const pointed: ExtractionCorrected = { method: 'pointed', was: null, where: null }
+    const fields = [
+      mkField({ name: 'issue_date', value: '2026-08-12', region: mkRegion({ page: 3 }), corrected: pointed }),
+      mkField({ name: 'total', value: '2,222.00', region: mkRegion({ page: 5 }), corrected: pointed }),
+    ]
+    render(fieldsPane({ fields }))
+
+    for (const [name, page] of [
+      ['issue_date', 3],
+      ['total', 5],
+    ] as const) {
+      const r = row(name)
+      expect(within(r).queryByText(MARKER_POINTED), `${name} did not render as pointed`).toBeTruthy()
+      expect(within(r).queryByText(`Taken from page ${page}`), `${name} states no provenance`).toBeTruthy()
+    }
+    expect(
+      within(row('issue_date')).queryByText('Taken from page 5'),
+      'the cell read another field’s region',
+    ).toBeNull()
+  })
+
+  it('drops the region cue as well as the reason pill', () => {
+    // Reachable, unlike the contradictory fixture above: mock.go gives total, subtotal and
+    // buyer_tin no region, and mergeCorrections leaves the region alone on a typed correction,
+    // so all three settle with `region: null`. The artboard's pill slot is empty on a settled
+    // field (`:646` gates it on `flagged`), and NO REGION rides the same slot.
+    const fields = [
+      mkField({ name: 'total', value: '2,222.00', region: null, corrected: CORRECTED_TOTAL }),
+      mkField({ name: 'invoice_number', value: 'INV-2026-0037', region: null }),
+    ]
+    render(fieldsPane({ fields }))
+
+    const r = row('total')
+    expect(within(r).queryByText(MARKER_TYPED), 'the row did not settle — the absence below is vacuous').toBeTruthy()
+    expect(within(r).queryByText(PILL), 'a settled field still carries the region cue').toBeNull()
+
+    // Unchanged where nothing is settled.
+    expect(within(row('invoice_number')).queryByText(PILL), 'a clean region-less row lost NO REGION').toBeTruthy()
+  })
+
   it('paints the marker and the changed label in --action, never --accent', () => {
     render(fieldsPane({ fields: [mkField({ name: 'total', value: '2,222.00', corrected: CORRECTED_TOTAL })] }))
 
@@ -935,6 +981,76 @@ describe('a corrected field', () => {
       'an uncorrected cell has no value control',
     ).toBeTruthy()
     expect(screen.queryByTestId('extraction-marker-invoice_number'), 'an uncorrected cell carries a marker').toBeNull()
+  })
+})
+
+// One field per pill, one per note arm and one settled: every element EXTR-12 added to a cell
+// is on screen at once, so a walk over the cells reads all of them.
+const EVERY_CELL_PART: ExtractionFieldState[] = [
+  mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
+  mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+  mkField({ name: 'subtotal', value: '3,626,000.00', reason: 'inconsistent' }),
+  mkField({ name: 'supplier_tin', value: '20184412-0001', reason: 'inconsistent' }),
+  mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' }),
+  mkField({ name: 'invoice_number', value: 'SFS-2026-0418', region: null }),
+  mkField({ name: 'total', value: '3,897,950.00', corrected: CORRECTED_TOTAL }),
+]
+
+/** Every element in the fixture's cells: the cell itself, then its whole subtree. */
+function cellParts(): HTMLElement[] {
+  const cells = rows()
+  expect(cells.length, 'the walk read a pane with no cells').toBe(EVERY_CELL_PART.length)
+  return cells.flatMap((c) => [c, ...Array.from(c.querySelectorAll<HTMLElement>('*'))])
+}
+
+/** The floor for both rows below: every part EXTR-12 added really rendered. */
+function expectEveryPartRendered() {
+  expect(within(row('vat')).queryByText(PILL_UNREADABLE), 'no reason pill rendered').toBeTruthy()
+  expect(within(row('invoice_number')).queryByText(PILL), 'no region cue rendered').toBeTruthy()
+  expect(within(row('subtotal')).queryByText(NOTE_SUBTOTAL), 'no per-field note rendered').toBeTruthy()
+  expect(screen.queryByTestId('extraction-control-total'), 'no value control rendered').toBeTruthy()
+  expect(screen.queryByTestId('extraction-marker-total'), 'no marker rendered').toBeTruthy()
+  expect(within(row('total')).queryByText(MARKER_TYPED), 'no changed row rendered').toBeTruthy()
+  expect(within(row('total')).queryByText('We read 1,000,000.00'), 'no was-line rendered').toBeTruthy()
+}
+
+describe('the cell EXTR-12 grew', () => {
+  it('declares no width on anything it added, so the pane keeps its own floor', () => {
+    // AC-8's other half. The pane's basis and floor are pinned by the row above; this one says
+    // nothing inside a cell can override them. `min-width: 0` on the cell is what lets a grid
+    // track shrink below its content, and a `width` or `min-width` on any descendant undoes
+    // that — silently, because jsdom computes no layout and no other row reads these.
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    expectEveryPartRendered()
+
+    let checked = 0
+    for (const el of cellParts()) {
+      const id = el.dataset.testid ?? `<${el.tagName.toLowerCase()}>`
+      // Out of flow: an absolutely positioned box contributes nothing to an ancestor's
+      // intrinsic width, which is why the marker may carry one. Its geometry is pinned above.
+      if (el.style.position === 'absolute') continue
+      checked += 1
+      expect(el.style.width, `${id} declares a width`).toBe('')
+      // The cell's own `min-width: 0` is the defence, not a violation of it.
+      expect(el.style.minWidth, `${id} declares a width floor`).toMatch(/^(0(px)?)?$/)
+      // jsdom expands the `flex` shorthand, so this reads `flex: 1 1 300px` too.
+      expect(el.style.flexBasis, `${id} declares a flex basis`).toMatch(/^(auto|0(px|%)?)?$/)
+    }
+    expect(checked, 'every element claimed to be out of flow').toBeGreaterThan(EVERY_CELL_PART.length)
+  })
+
+  it('puts no new testid inside the shipped extraction-field- prefix', () => {
+    // `rows()` here, the same walk in ExtractionReview.test.tsx and EXTR11-E2E-02a on the
+    // deploy gate all count `[data-testid^="extraction-field-"]` against the wire's field
+    // count. A CHILD handle inside that prefix reads as an extra row on all three, and only
+    // the gate would say so — which is why the new handles are `extraction-control-*` and
+    // `extraction-marker-*`.
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    expectEveryPartRendered()
+
+    expect(rowIds().slice().sort(), 'a handle inside the prefix reads as an extra row').toEqual(
+      EVERY_CELL_PART.map((f) => `extraction-field-${f.name}`).sort(),
+    )
   })
 })
 

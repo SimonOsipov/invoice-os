@@ -149,12 +149,14 @@ export function ExtractionFields({
             <div style={GRID}>
               {fields.map((f) => {
                 const on = f.name === selected
-                // A settled field stops shouting: no reason pill, no note, a marker instead.
+                // A settled field stops shouting: no pill of either kind, no note, a marker
+                // instead. mock.go gives total, subtotal and buyer_tin no region and a typed
+                // correction leaves the region alone, so the cue outlives the reason otherwise.
                 const settled = correctedMarker(f.corrected, f.region)
                 const note = settled === null ? fieldNote(f.reason, f.name) : null
                 // One slot, and the reason outranks the region cue.
-                const reason = settled === null ? reasonPill(f.reason) : null
-                const pill = reason ?? (f.reason === '' && f.region === null ? NO_REGION : null)
+                const cue = f.region === null ? NO_REGION : null
+                const pill = settled === null ? (reasonPill(f.reason) ?? cue) : null
                 return (
                   <button
                     key={f.name}

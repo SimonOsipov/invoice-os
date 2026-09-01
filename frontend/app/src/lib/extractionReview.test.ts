@@ -700,6 +700,18 @@ describe('fieldNote', () => {
     expect(tin, 'the supplier check and the generic arm read the same').not.toBe(other)
   })
 
+  it('names the two supplier fields rather than matching them by prefix', () => {
+    // The pane-level client-record sentence carries the same guard, for the same reason: the
+    // entity match compares supplier_tin and supplier_name, and a third supplier_* field is
+    // not the pair it explains. `startsWith('supplier')` passes every other row in this file.
+    expect(fieldNote('inconsistent', 'supplier_address')).toBe(
+      'This value disagrees with the other numbers on the document.',
+    )
+    expect(fieldNote('inconsistent', 'supplier_address'), 'a prefix match claimed the entity sentence').not.toBe(
+      fieldNote('inconsistent', 'supplier_tin'),
+    )
+  })
+
   it('returns null for every reason that is not inconsistent', () => {
     // Keyed on the reason FIRST. A note keyed on the NAME alone renders the subtotal sentence
     // on a clean subtotal, and passes the row above.

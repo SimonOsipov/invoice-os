@@ -78,9 +78,9 @@ describe('highlightStyle', () => {
   })
 
   it("the mock fixture's own region carries no IEEE-754 tail", () => {
-    // internal/extraction/mock.go:120 is what the deployed AC-4 oracle measures, and
-    // (0.90 - 0.62) * 100 is 28.000000000000004 in doubles. An unrounded template literal
-    // ships '28.000000000000004%'.
+    // invoice_number's box in internal/extraction/mock.go is what the deployed AC-4 oracle
+    // measures, and (0.90 - 0.62) * 100 is 28.000000000000004 in doubles. An unrounded
+    // template literal ships '28.000000000000004%'.
     expect(highlightStyle({ page: 1, x0: 0.62, y0: 0.08, x1: 0.9, y1: 0.13 })).toMatchObject({
       left: '62%',
       top: '8%',
@@ -90,17 +90,22 @@ describe('highlightStyle', () => {
   })
 
   it('every deployed mock region rounds clean, not just the one the spec above names', () => {
-    // internal/extraction/mock.go:95-99 — all five, because the tails sit on different
-    // axes: invoice_date's y0 is 14.000000000000002 and its height 4.999999999999999,
-    // total_amount's height 6.000000000000005. The row above only exercises x1 - x0.
+    // Every region internal/extraction/mock.go deploys: the clean-invoice fixture's five, then
+    // mockDefaultResult's three that no fixture shares — issue_date's two alternatives and vat.
+    // The tails sit on different axes: issue_date's y0 is 14.000000000000002 and its height
+    // 4.999999999999999, total's height 6.000000000000005, vat's 4.999999999999993. The row
+    // above only exercises x1 - x0. Nothing forces this mirror to track Go's region count.
     const MOCK_REGIONS: ExtractionRegion[] = [
       { page: 1, x0: 0.62, y0: 0.08, x1: 0.9, y1: 0.13 },
       { page: 1, x0: 0.62, y0: 0.14, x1: 0.9, y1: 0.19 },
       { page: 1, x0: 0.62, y0: 0.7, x1: 0.9, y1: 0.76 },
       { page: 1, x0: 0.1, y0: 0.08, x1: 0.38, y1: 0.13 },
       { page: 1, x0: 0.1, y0: 0.3, x1: 0.38, y1: 0.35 },
+      { page: 1, x0: 0.62, y0: 0.8, x1: 0.9, y1: 0.85 },
+      { page: 1, x0: 0.1, y0: 0.5, x1: 0.38, y1: 0.55 },
+      { page: 1, x0: 0.62, y0: 0.64, x1: 0.9, y1: 0.69 },
     ]
-    expect(MOCK_REGIONS, 'an empty table would pass every assertion below').toHaveLength(5)
+    expect(MOCK_REGIONS, 'an empty table would pass every assertion below').toHaveLength(8)
 
     // Control: at least one axis really does carry a tail, so the property is not vacuous.
     const raw = MOCK_REGIONS.flatMap((r) => [r.x0 * 100, r.y0 * 100, (r.x1 - r.x0) * 100, (r.y1 - r.y0) * 100])

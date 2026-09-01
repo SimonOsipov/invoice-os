@@ -99,16 +99,16 @@ type mockFixture struct {
 func mockClean(f Field) FieldResult { return FieldResult{Field: f, Alternatives: []Field{}} }
 
 // No TIN here is in the reserved 99999999-000N block internal/submission/mock_script.go:76-91
-// treats as behavioural triggers. EXTR-04 owns the real field vocabulary; these names are
-// illustrative.
+// treats as behavioural triggers. Every name below is on HeaderFields (vocabulary.go), so
+// documentCreateInput maps it to a column instead of dropping it.
 var mockFixtures = []mockFixture{
 	{
 		name: "clean-invoice",
 		body: "MOCK-FIXTURE clean-invoice v1\n",
 		fields: []FieldResult{
 			mockClean(Field{Name: "invoice_number", Value: mockValue("MOCK-INV-0001"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.08, X1: 0.90, Y1: 0.13}, Reason: ReasonNone}),
-			mockClean(Field{Name: "invoice_date", Value: mockValue("2026-01-01"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.14, X1: 0.90, Y1: 0.19}, Reason: ReasonNone}),
-			mockClean(Field{Name: "total_amount", Value: mockValue("1000.00"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.70, X1: 0.90, Y1: 0.76}, Reason: ReasonNone}),
+			mockClean(Field{Name: "issue_date", Value: mockValue("2026-01-01"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.14, X1: 0.90, Y1: 0.19}, Reason: ReasonNone}),
+			mockClean(Field{Name: "total", Value: mockValue("1000.00"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.70, X1: 0.90, Y1: 0.76}, Reason: ReasonNone}),
 			mockClean(Field{Name: "supplier_tin", Value: mockValue("MOCK-TIN-SUPPLIER"), Region: &Region{Page: 1, X0: 0.10, Y0: 0.08, X1: 0.38, Y1: 0.13}, Reason: ReasonNone}),
 			mockClean(Field{Name: "buyer_tin", Value: mockValue("MOCK-TIN-BUYER"), Region: &Region{Page: 1, X0: 0.10, Y0: 0.30, X1: 0.38, Y1: 0.35}, Reason: ReasonNone}),
 		},
@@ -118,8 +118,8 @@ var mockFixtures = []mockFixture{
 		body: "MOCK-FIXTURE unreadable-scan v1\n",
 		fields: []FieldResult{
 			mockClean(Field{Name: "invoice_number", Reason: ReasonUnreadable}),
-			mockClean(Field{Name: "invoice_date", Reason: ReasonUnreadable}),
-			mockClean(Field{Name: "total_amount", Reason: ReasonUnreadable}),
+			mockClean(Field{Name: "issue_date", Reason: ReasonUnreadable}),
+			mockClean(Field{Name: "total", Reason: ReasonUnreadable}),
 			mockClean(Field{Name: "supplier_tin", Reason: ReasonUnreadable}),
 			mockClean(Field{Name: "buyer_tin", Reason: ReasonUnreadable}),
 		},
@@ -129,13 +129,25 @@ var mockFixtures = []mockFixture{
 // mockDefaultResult answers every unrecognised document: all five Reason values, both Region
 // states and both Value states, so a downstream story gets every branch without a fixture file.
 // buyer_tin carries a nil Value, not an empty string -- laws E08 and E10 together leave that
-// the only legal shape for a ReasonMissing field.
+// the only legal shape for a ReasonMissing field. issue_date's three readings sit at three
+// distinct boxes; TestMockExtractor_AlternativeRegionsDifferFromTheDecidedReading holds them
+// apart, because a region-swap cannot be observed against a shared box.
 var mockDefaultResult = []FieldResult{
 	mockClean(Field{Name: "invoice_number", Value: mockValue("MOCK-INV-0001"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.08, X1: 0.90, Y1: 0.13}, Reason: ReasonNone}),
-	mockClean(Field{Name: "invoice_date", Value: mockValue("2026-01-01"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.14, X1: 0.90, Y1: 0.19}, Reason: ReasonAmbiguous}),
-	mockClean(Field{Name: "total_amount", Value: mockValue("1000.00"), Reason: ReasonInconsistent}),
-	mockClean(Field{Name: "supplier_tin", Region: &Region{Page: 1, X0: 0.10, Y0: 0.08, X1: 0.38, Y1: 0.13}, Reason: ReasonUnreadable}),
+	{
+		Field: Field{Name: "issue_date", Value: mockValue("2026-01-01"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.14, X1: 0.90, Y1: 0.19}, Reason: ReasonAmbiguous},
+		// An alternative carries no Reason of its own: FieldResult puts it on the decided reading.
+		Alternatives: []Field{
+			{Name: "issue_date", Value: mockValue("2026-01-10"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.80, X1: 0.90, Y1: 0.85}},
+			{Name: "issue_date", Value: mockValue("2026-10-01"), Region: &Region{Page: 1, X0: 0.10, Y0: 0.50, X1: 0.38, Y1: 0.55}},
+		},
+	},
+	mockClean(Field{Name: "total", Value: mockValue("1000.00"), Reason: ReasonInconsistent}),
+	mockClean(Field{Name: "subtotal", Value: mockValue("950.00"), Reason: ReasonInconsistent}),
+	// Inconsistent, not unreadable, and with a value: a field needs a reading to disagree with.
+	mockClean(Field{Name: "supplier_tin", Value: mockValue("MOCK-TIN-SUPPLIER-ALT"), Region: &Region{Page: 1, X0: 0.10, Y0: 0.08, X1: 0.38, Y1: 0.13}, Reason: ReasonInconsistent}),
 	mockClean(Field{Name: "buyer_tin", Reason: ReasonMissing}),
+	mockClean(Field{Name: "vat", Region: &Region{Page: 1, X0: 0.62, Y0: 0.64, X1: 0.90, Y1: 0.69}, Reason: ReasonUnreadable}),
 }
 
 // mockResults is the SHA-256 lookup Extract reads.

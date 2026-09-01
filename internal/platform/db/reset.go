@@ -215,6 +215,11 @@ func ResetEnabled(environment, flag string) bool {
 //	                          ON DELETE CASCADE against extraction_jobs, but
 //	                          TRUNCATE does not follow a CASCADE: omitting it
 //	                          makes TRUNCATE extraction_jobs raise 0A000.
+//	extraction_field_corrections
+//	                          the append-only record of human field corrections
+//	                          (EXTR-12). Same composite FK to extraction_jobs as
+//	                          extraction_field_results above, so the same 0A000
+//	                          rule applies.
 //	extraction_page_images    the rendered-page inventory of a document (EXTR-02).
 //	                          Its composite FK (tenant_id, document_id) is ON
 //	                          DELETE CASCADE against documents, and TRUNCATE
@@ -316,8 +321,8 @@ func ResetEnabled(environment, flag string) bool {
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
-	documents, extraction_jobs, extraction_field_results, extraction_page_images,
-	extraction_anchor_rules,
+	documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
+	extraction_page_images, extraction_anchor_rules,
 	approval_runs, approval_run_steps, approval_decisions,
 	river_job, river_leader, river_queue, river_notification
 RESTART IDENTITY`

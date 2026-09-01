@@ -301,6 +301,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed extraction_field_results fixture: %v", err)
 	}
 
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_field_corrections
+		     (tenant_id, extraction_job_id, field_name, value, method, actor)
+		 VALUES ($1, $2, 'total_amount', '212.50', 'typed', $3)`,
+		tenantID, extractionJobID, marker,
+	); err != nil {
+		t.Fatalf("seed extraction_field_corrections fixture: %v", err)
+	}
+
 	// The storage_key CHECK admits only this tenant's own prefix.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO extraction_page_images

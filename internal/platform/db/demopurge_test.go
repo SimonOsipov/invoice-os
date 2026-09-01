@@ -211,6 +211,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	documentID := uuid.NewString()
 	extractionJobID := uuid.NewString()
 	fieldResultID := uuid.NewString()
+	correctionID := uuid.NewString()
 	pageImageID := uuid.NewString()
 	anchorRuleID := uuid.NewString()
 	batchID := uuid.NewString()
@@ -257,6 +258,11 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO extraction_field_results (id, tenant_id, extraction_job_id, field_name, value)
 		 VALUES ($1,$2,$3,'total_amount','100.00')`,
 		fieldResultID, tenantID, extractionJobID)
+	plant("extraction_field_corrections", "id", correctionID,
+		`INSERT INTO extraction_field_corrections
+		     (id, tenant_id, extraction_job_id, field_name, value, method, actor)
+		 VALUES ($1,$2,$3,'total_amount','212.50','typed',$4)`,
+		correctionID, tenantID, extractionJobID, userID)
 	plant("extraction_page_images", "id", pageImageID,
 		`INSERT INTO extraction_page_images
 		     (id, tenant_id, document_id, page_number, width_px, height_px, storage_key)

@@ -1228,7 +1228,7 @@ func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 	// goose unwinds newest-first, so every dependent table's own Down has already run by
 	// the time this one does. Reproduce that order rather than dropping the children by
 	// hand — a later child migration only has to be listed here.
-	for _, child := range []string{"*_extraction_field_results.sql"} {
+	for _, child := range []string{"*_extraction_field_results.sql", "*_extraction_field_corrections.sql"} {
 		for _, s := range shippedDownStatements(t, child) {
 			if _, err := tx.Exec(ctx, s); err != nil {
 				t.Fatalf("execute the shipped Down statement %q from %s: %v", s, child, err)

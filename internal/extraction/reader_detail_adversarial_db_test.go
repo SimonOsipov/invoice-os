@@ -813,3 +813,155 @@ func TestExtractionWireStructs_MirrorTheShippedExtractor(t *testing.T) {
 		t.Errorf("rvdJSONTag is %s, which %s does not contain", got, rqaWireMirrorsSource)
 	}
 }
+
+// Nothing enforces uniqueness on (extraction_job_id, field_name, candidate_rank), so two rank-0
+// rows for one name are a shape the schema admits and writeFieldResultsTx never writes. This
+// pins what the read does with it today -- both render top-level and byName keeps the LAST, so
+// the alternatives land on the second -- rather than leaving the answer free to change silently.
+func TestExtractionDetail_DuplicateRankZeroRowsBothRenderAndTheLastTakesTheAlternatives(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	ids := rvdOrderedIDs(3)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[0], "invoice_number", rvdStr("DUP-A"), nil, 0, nil, now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[1], "invoice_number", rvdStr("DUP-B"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[2], "invoice_number", rvdStr("DUP-ALT"), nil, 1, nil, now)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 2 {
+		t.Fatalf("got %d field(s) %v, want both rank-0 rows -- neither is dropped or merged",
+			len(got.Fields), rvdFieldNames(got.Fields))
+	}
+	for i, want := range []struct {
+		value string
+		alts  []string
+	}{
+		{"DUP-A", []string{}},
+		{"DUP-B", []string{"DUP-ALT"}},
+	} {
+		f := got.Fields[i]
+		if f.Name != "invoice_number" {
+			t.Errorf("field %d came back as %q, want invoice_number", i, f.Name)
+		}
+		if f.Value == nil || *f.Value != want.value {
+			t.Errorf("field %d came back with value %v, want %q -- id breaks the rank-0 tie", i, f.Value, want.value)
+		}
+		if alts := rvdAltValues(f.Alternatives); !reflect.DeepEqual(alts, want.alts) {
+			t.Errorf("field %d (%q) came back with alternatives %v, want %v", i, want.value, alts, want.alts)
+		}
+	}
+}
+
+// The AC suite stops at two alternatives, where "in rank order" and "reversed" differ by one
+// swap. One and three are the neighbours: a single alternative cannot show an order at all, and
+// three is where a comparator that only ever compares adjacent pairs parts from a sort.
+func TestExtractionDetail_NestsOneAndThreeAlternativesInRankOrder(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	// Ids ascend against candidate_rank, so an ORDER BY falling back to id returns each
+	// field's alternatives reversed.
+	ids := rvdOrderedIDs(6)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[0], "invoice_number", rvdStr("INV-DECIDED"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[1], "invoice_number", rvdStr("ALT-3"), nil, 3, nil, now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[2], "invoice_number", rvdStr("ALT-2"), nil, 2, nil, now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[3], "invoice_number", rvdStr("ALT-1"), nil, 1, nil, now)
+	tinAt := now.Add(time.Millisecond)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[4], "supplier_tin", rvdStr("TIN-DECIDED"), nil, 0, rvdStr("ambiguous"), tinAt)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[5], "supplier_tin", rvdStr("TIN-ALT-1"), nil, 1, nil, tinAt)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if names := rvdFieldNames(got.Fields); !reflect.DeepEqual(names, []string{"invoice_number", "supplier_tin"}) {
+		t.Fatalf("fields came back in order %v, want [invoice_number supplier_tin]", names)
+	}
+	for i, want := range [][]string{
+		{"ALT-1", "ALT-2", "ALT-3"},
+		{"TIN-ALT-1"},
+	} {
+		if alts := rvdAltValues(got.Fields[i].Alternatives); !reflect.DeepEqual(alts, want) {
+			t.Errorf("%s came back with alternatives %v, want %v in candidate_rank order",
+				got.Fields[i].Name, alts, want)
+		}
+	}
+}
+
+// byName is rebuilt per call, so a field name shared by two jobs of ONE tenant must not carry
+// alternatives across. RLS cannot catch this one -- both jobs are the caller's own.
+func TestExtractionDetail_AnAlternativeDoesNotAttachAcrossJobs(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+	jobOther := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-DECIDED"), nil, 0, nil, now)
+	altBox := &rvdBox{Page: 1, X0: 0.81, Y0: 0.82, X1: 0.83, Y1: 0.84}
+	rvdSeedField(t, ctx, tenantA, jobOther, "invoice_number", rvdStr("OTHER-DECIDED"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobOther, "invoice_number", rvdStr("OTHER-ALT-1"), altBox, 1, nil, now)
+
+	// Control first: the other job really does hold an alternative, so jobA's empty list is
+	// job scoping and not an empty fixture.
+	other, err := r.Detail(ctxA, jobOther)
+	if err != nil {
+		t.Fatalf("Detail for the neighbouring job %s: %v", jobOther, err)
+	}
+	if len(other.Fields) != 1 || len(other.Fields[0].Alternatives) != 1 {
+		t.Fatalf("the neighbouring job gave %d field(s) with %v alternative(s); the fixture must hold one",
+			len(other.Fields), rvdAlternativeCounts(other.Fields))
+	}
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 1 {
+		t.Fatalf("got %d field(s) %v, want only jobA's own invoice_number",
+			len(got.Fields), rvdFieldNames(got.Fields))
+	}
+	if n := len(got.Fields[0].Alternatives); n != 0 {
+		t.Errorf("invoice_number came back with %d alternative(s) %+v; they belong to job %s",
+			n, got.Fields[0].Alternatives, jobOther)
+	}
+
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	for _, needle := range []string{"OTHER-DECIDED", "OTHER-ALT-1", "0.81", "0.82", "0.83", "0.84"} {
+		if strings.Contains(string(b), needle) {
+			t.Errorf("job %s marshals to\n  %s\nwhich carries %s from job %s", jobA, b, needle, jobOther)
+		}
+	}
+	if !strings.Contains(string(b), "A-DECIDED") {
+		t.Errorf("the detail marshals to\n  %s\nwithout its own value, so the needle scan above proved nothing", b)
+	}
+}
+
+// rvdAltValues reports an alternative list's values, so an order failure names what it got.
+func rvdAltValues(alts []extraction.ExtractionCandidate) []string {
+	out := make([]string, 0, len(alts))
+	for _, a := range alts {
+		if a.Value == nil {
+			out = append(out, "<nil>")
+			continue
+		}
+		out = append(out, *a.Value)
+	}
+	return out
+}

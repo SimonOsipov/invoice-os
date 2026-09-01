@@ -36,6 +36,9 @@ type Correction struct {
 	Actor       string
 	Seq         int64
 	CreatedAt   time.Time
+	// Superseded is the value the correction before this one carried on the same field, nil when
+	// this is the field's first. Read-only: the INSERT never names it.
+	Superseded *string
 }
 
 // Both readers and writers here take a transaction: the review handler writes a correction and
@@ -70,20 +73,29 @@ func appendCorrectionTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string, 
 	return out, nil
 }
 
-// latestCorrectionsPerFieldTx takes the highest seq per field. DISTINCT ON's ORDER BY
-// matches _tenant_job_field_seq_idx column for column, so it skip-scans without a sort.
-// Never returns nil: nil marshals to a JSON null where a caller expects an array.
-func latestCorrectionsPerFieldTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]Correction, error) {
+// latestCorrectionsPerFieldTx takes the highest seq per field, with the value that row
+// superseded beside it. One window spec serves both lead() and row_number(), which is what lets
+// _tenant_job_field_seq_idx answer the order with no Sort
+// (TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort). It names no
+// tenant_id: the tenant_isolation policy is the only predicate
+// (TestRLS_ExtractionDetailDocumentJoinNamesNoTenantId). Never returns nil.
+func latestCorrectionsPerFieldTx(ctx context.Context, tx pgx.Tx, jobID string) ([]Correction, error) {
 	out := []Correction{}
 
 	rows, err := tx.Query(ctx,
-		`SELECT DISTINCT ON (field_name)
-		        id, field_name, value, method, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1,
-		        anchor_label, actor, seq, created_at
-		   FROM extraction_field_corrections
-		  WHERE tenant_id = $1 AND extraction_job_id = $2
-		  ORDER BY field_name, seq DESC`,
-		tenantID, jobID)
+		`SELECT s.id, s.field_name, s.value, s.superseded, s.method, s.page,
+		        s.bbox_x0, s.bbox_y0, s.bbox_x1, s.bbox_y1, s.anchor_label, s.actor,
+		        s.seq, s.created_at
+		   FROM (SELECT id, field_name, value, method, page, bbox_x0, bbox_y0, bbox_x1,
+		                bbox_y1, anchor_label, actor, seq, created_at,
+		                lead(value) OVER w  AS superseded,
+		                row_number() OVER w AS rn
+		           FROM extraction_field_corrections
+		          WHERE extraction_job_id = $1
+		         WINDOW w AS (PARTITION BY field_name ORDER BY seq DESC)) s
+		  WHERE s.rn = 1
+		  ORDER BY s.field_name`,
+		jobID)
 	if err != nil {
 		return out, fmt.Errorf("extraction: read corrections for job %s: %w", jobID, err)
 	}
@@ -97,8 +109,8 @@ func latestCorrectionsPerFieldTx(ctx context.Context, tx pgx.Tx, tenantID, jobID
 			x0, y0, x1, y1 *float64
 			anchor         *string
 		)
-		if err := rows.Scan(&c.ID, &c.FieldName, &c.Value, &method, &page, &x0, &y0, &x1, &y1,
-			&anchor, &c.Actor, &c.Seq, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.FieldName, &c.Value, &c.Superseded, &method, &page,
+			&x0, &y0, &x1, &y1, &anchor, &c.Actor, &c.Seq, &c.CreatedAt); err != nil {
 			return []Correction{}, fmt.Errorf("extraction: scan correction for job %s: %w", jobID, err)
 		}
 		c.Method = CorrectionMethod(method)

@@ -42,7 +42,7 @@ func csLatest(t *testing.T, ctx context.Context, tenantID, jobID string) []extra
 	out := []extraction.Correction{}
 	if err := db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
 		var err error
-		out, err = extraction.LatestCorrectionsPerFieldForTest(ctx, tx, tenantID, jobID)
+		out, err = extraction.LatestCorrectionsPerFieldForTest(ctx, tx, jobID)
 		return err
 	}); err != nil {
 		t.Fatalf("read the latest correction per field for job %s: %v", jobID, err)
@@ -263,23 +263,25 @@ func csLatestPerFieldSQL(t *testing.T) string {
 		}
 		ast.Inspect(fn, func(n ast.Node) bool {
 			bl, ok := n.(*ast.BasicLit)
-			if ok && bl.Kind == token.STRING && strings.Contains(bl.Value, "DISTINCT ON") {
+			if ok && bl.Kind == token.STRING && strings.Contains(bl.Value, "row_number()") {
 				sql = strings.Trim(bl.Value, "`")
 			}
 			return true
 		})
 	}
 	if sql == "" {
-		t.Fatalf("%s: latestCorrectionsPerFieldTx issues no DISTINCT ON query, so this test has "+
+		t.Fatalf("%s: latestCorrectionsPerFieldTx issues no row_number() query, so this test has "+
 			"lost its subject", csStoreSource)
 	}
 	return sql
 }
 
-// AC-7's index half. The read's ORDER BY must be answerable by csLatestIndex's column order
-// alone; a Sort node means it no longer is. enable_seqscan=off is the only way to ask on a
-// table this small — on cost the planner would never choose the index. The Index Scan is
-// asserted first, or "no Sort" would also pass on a plan that never reached the index.
+// AC-7's index half. The window's PARTITION BY field_name ORDER BY seq DESC must be answerable
+// by csLatestIndex's column order alone; a Sort node means it no longer is. enable_seqscan=off
+// is the only way to ask on a table this small — on cost the planner would never choose the
+// index. The Index Scan and the WindowAgg are asserted first, or "no Sort" would also pass on a
+// plan that reached neither. The absent Sort is also what proves the RLS qual still reaches the
+// Index Cond: dropping it from there is what adds one.
 func TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort(t *testing.T) {
 	ctx := t.Context()
 	h := stRequire(t)
@@ -298,7 +300,7 @@ func TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort(
 		if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, "EXPLAIN (COSTS OFF) "+csLatestPerFieldSQL(t), tenantID, jobID)
+		rows, err := tx.Query(ctx, "EXPLAIN (COSTS OFF) "+csLatestPerFieldSQL(t), jobID)
 		if err != nil {
 			return err
 		}
@@ -319,9 +321,13 @@ func TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort(
 		t.Fatalf("the plan does not scan %s, so the assertion below examines nothing:\n%s",
 			csLatestIndex, plan.String())
 	}
+	if !strings.Contains(plan.String(), "WindowAgg") {
+		t.Fatalf("the plan runs no WindowAgg, so it is not the windowed read this test is about:\n%s",
+			plan.String())
+	}
 	if strings.Contains(plan.String(), "Sort") {
-		t.Errorf("the plan sorts, so %s no longer answers ORDER BY field_name, seq DESC on its "+
-			"own:\n%s", csLatestIndex, plan.String())
+		t.Errorf("the plan sorts, so %s no longer answers PARTITION BY field_name ORDER BY seq DESC "+
+			"on its own:\n%s", csLatestIndex, plan.String())
 	}
 }
 

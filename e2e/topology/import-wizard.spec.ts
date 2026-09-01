@@ -2902,7 +2902,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   expect(Object.keys(detail.pages[0]).sort()).toEqual(['height_px', 'page', 'width_px'].sort())
   expect(detail.fields.length, 'a settled job with no fields cannot prove a field key set').toBeGreaterThan(0)
   expect(Object.keys(detail.fields[0]).sort()).toEqual(
-    ['alternatives', 'name', 'reason', 'region', 'value'].sort(),
+    ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
   )
 
   await testInfo.attach('extraction-wire.json', {

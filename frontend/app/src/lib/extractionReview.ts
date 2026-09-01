@@ -39,15 +39,25 @@ export interface ExtractionCandidate {
   region: ExtractionRegion | null
 }
 
+// internal/extraction/reader.go, ExtractionCorrected. The human layer over one field: was is
+// the reading the correction superseded and where is the anchor label it was taken from —
+// both null when there is none.
+export interface ExtractionCorrected {
+  method: CorrectionMethod
+  was: string | null
+  where: string | null
+}
+
 // internal/extraction/reader.go, ExtractionFieldState. region is null when the extractor
-// pointed at nothing. Both reason and alternatives are always present — Go has no omitempty
-// here, so neither key is optional.
+// pointed at nothing. reason, alternatives and corrected are always present — Go has no
+// omitempty here, so no key is optional; corrected is null on a field no human has touched.
 export interface ExtractionFieldState {
   name: string
   value: string | null
   region: ExtractionRegion | null
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
+  corrected: ExtractionCorrected | null
 }
 
 // internal/extraction/reader.go, ExtractionDocument. stored_at is RFC3339 text, not a time.

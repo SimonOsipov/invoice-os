@@ -268,7 +268,7 @@ func TestRLS_ExtractionDetailAuditFailureFailsTheRead(t *testing.T) {
 
 // AC 8's "on the reader's own transaction", read off the wire rather than off the recorder's
 // argument: a recorder handed a real but DIFFERENT transaction satisfies every tx assertion
-// above. One begin, three SELECTs, the audit INSERT, one commit, in that order.
+// above. One begin, four SELECTs, the audit INSERT, one commit, in that order.
 func TestRLS_ExtractionDetailAuditsInsideTheReadsOwnTransaction(t *testing.T) {
 	ctx := t.Context()
 	tr := &rdQueryTracer{}
@@ -296,13 +296,16 @@ func TestRLS_ExtractionDetailAuditsInsideTheReadsOwnTransaction(t *testing.T) {
 	}
 
 	_, seen := tr.matching(rpTable)
-	if len(seen) != 6 {
-		t.Fatalf("one audited detail read issued %d traced statement(s), want 6 (begin, three SELECTs, the audit INSERT, commit); the pool saw %v", len(seen), seen)
+	if len(seen) != 7 {
+		t.Fatalf("one audited detail read issued %d traced statement(s), want 7 (begin, four SELECTs, the audit INSERT, commit); the pool saw %v", len(seen), seen)
 	}
-	if seen[0] != "begin" || seen[5] != "commit" {
-		t.Errorf("the traced statements were %v, want one begin/commit pair around four statements", seen)
+	if seen[0] != "begin" || seen[6] != "commit" {
+		t.Errorf("the traced statements were %v, want one begin/commit pair around five statements", seen)
 	}
-	if !strings.Contains(seen[4], "audit_log") {
-		t.Errorf("statement 5 was %q, want the audit INSERT -- a row written on any other connection does not share the read's fate", seen[4])
+	if !strings.Contains(seen[4], "extraction_field_corrections") {
+		t.Errorf("statement 5 was %q, want the corrections read -- it is issued fourth, after the field results", seen[4])
+	}
+	if !strings.Contains(seen[5], "audit_log") {
+		t.Errorf("statement 6 was %q, want the audit INSERT -- a row written on any other connection does not share the read's fate", seen[5])
 	}
 }

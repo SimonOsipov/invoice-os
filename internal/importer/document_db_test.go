@@ -132,6 +132,20 @@ func seedExtractionField(t *testing.T, super *pgxpool.Pool, tenantID, jobID, nam
 	return id
 }
 
+// seedFieldCorrection inserts one extraction_field_corrections row as the superuser -- the
+// human layer SettledExtraction must not read.
+func seedFieldCorrection(t *testing.T, super *pgxpool.Pool, tenantID, jobID, name, value, method string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO extraction_field_corrections
+		     (tenant_id, extraction_job_id, field_name, value, method, actor)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		tenantID, jobID, name, value, method, "extr-12-05-fixture-actor",
+	); err != nil {
+		t.Fatalf("seed extraction_field_corrections (%s, %s): %v", name, method, err)
+	}
+}
+
 // sxIdentity is the memberSubject caller scoped to tenantID -- store_test.go's seedTenant
 // already gives memberSubject an active membership in every tenant it seeds.
 func sxIdentity(ctx context.Context, tenantID string) context.Context {
@@ -516,4 +530,36 @@ func TestSettledExtraction_NoDocumentAndDocumentWithNoJobBothReturnErrNotFound(t
 			t.Error("Fields is nil, want a non-nil empty slice")
 		}
 	})
+}
+
+// AC-7's behavioural half, and CONFIRMATORY rather than red-first: this subtask leaves
+// SettledExtraction alone. A source parse cannot see a merge done inside documentCreateInput,
+// so the value is read back through the real query with a correction sitting on the row.
+func TestSettledExtraction_IgnoresCorrectionsAndReadsRankZero(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "EXTR-12-05 tenant")
+	documentID := seedDocument(t, super, tenantID)
+
+	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", time.Now().UTC())
+	seedExtractionField(t, super, tenantID, job, "total", sxPtr("READ-A"), nil, 0, time.Now().UTC())
+	seedFieldCorrection(t, super, tenantID, job, "total", "HUMAN-B", "typed")
+
+	store := NewStore(app)
+	ex, err := store.SettledExtraction(sxIdentity(ctx, tenantID), documentID)
+	if err != nil {
+		t.Fatalf("SettledExtraction: %v", err)
+	}
+	if len(ex.Fields) != 1 {
+		t.Fatalf("len(Fields) = %d, want 1; got %+v", len(ex.Fields), ex.Fields)
+	}
+	if ex.Fields[0].Value == nil {
+		t.Fatalf("Fields[0].Value came back nil, want %q", "READ-A")
+	}
+	if *ex.Fields[0].Value != "READ-A" {
+		t.Errorf("Fields[0].Value = %q, want %q -- the correction already reached the invoice when it "+
+			"was written, so reading it here would file the same value twice",
+			*ex.Fields[0].Value, "READ-A")
+	}
 }

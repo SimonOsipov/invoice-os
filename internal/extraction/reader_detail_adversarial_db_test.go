@@ -128,7 +128,7 @@ func TestRLS_ExtractionDetailDiscardsRowsWhenTheCommitFails(t *testing.T) {
 	}
 }
 
-// AC 3's wire proof: one transaction, three statements, nothing else.
+// AC 3's wire proof: one transaction, four statements, nothing else.
 // TestRLS_ExtractionReaderIssuesNoStatementBeyondBeginSelectCommit holds this for
 // JobsForDocument and stops at its single SELECT, so it says nothing about the three helpers.
 // A per-helper WithinRequestTenantTx would show up here as three begins.
@@ -152,20 +152,20 @@ func TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit(t *testing
 		t.Fatalf("Detail for job %s: %v", jobA, err)
 	}
 	// The rows make the count mean something: an N+1 over an empty page set issues the same
-	// five statements.
+	// six statements.
 	if len(got.Pages) != 3 || len(got.Fields) != 2 {
 		t.Fatalf("got %d page(s) and %d field(s), want 3 and 2", len(got.Pages), len(got.Fields))
 	}
 
 	_, seen := tr.matching(rpTable)
-	if len(seen) != 5 {
-		t.Fatalf("one detail read issued %d traced statement(s), want 5 (begin, three SELECTs, commit); the pool saw %v",
+	if len(seen) != 6 {
+		t.Fatalf("one detail read issued %d traced statement(s), want 6 (begin, four SELECTs, commit); the pool saw %v",
 			len(seen), seen)
 	}
-	if seen[0] != "begin" || seen[4] != "commit" {
-		t.Errorf("the traced statements were %v, want one begin/commit pair around three SELECTs", seen)
+	if seen[0] != "begin" || seen[5] != "commit" {
+		t.Errorf("the traced statements were %v, want one begin/commit pair around four SELECTs", seen)
 	}
-	for i, table := range []string{"extraction_jobs", "extraction_page_images", "extraction_field_results"} {
+	for i, table := range []string{"extraction_jobs", "extraction_page_images", "extraction_field_results", "extraction_field_corrections"} {
 		if !strings.Contains(seen[i+1], table) {
 			t.Errorf("statement %d was %q, want the read of %s", i+1, seen[i+1], table)
 		}

@@ -19,8 +19,8 @@ func AppendCorrectionForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID str
 	return appendCorrectionTx(ctx, tx, tenantID, jobID, c)
 }
 
-func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]Correction, error) {
-	return latestCorrectionsPerFieldTx(ctx, tx, tenantID, jobID)
+func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, jobID string) ([]Correction, error) {
+	return latestCorrectionsPerFieldTx(ctx, tx, jobID)
 }
 
 // NewExtractArgsForTest builds the args EnqueueTx takes. The return type is river.JobArgs, so

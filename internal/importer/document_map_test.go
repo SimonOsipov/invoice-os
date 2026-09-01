@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -695,5 +696,64 @@ func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
 	}
 	if got.BuyerTIN != nil {
 		t.Errorf("BuyerTIN = %q, want nil -- the mock's buyer_tin is missing", *got.BuyerTIN)
+	}
+}
+
+// AC-7's source half. The correction already reached the invoice when it was written, so a
+// correction-aware SettledExtraction would file the same value twice through two paths. The
+// method must stay correction-blind AND say why on itself, not only in a story.
+func TestSettledExtraction_SaysWhyItIsNotCorrectionAware(t *testing.T) {
+	root := sxDepsRepoRoot(t)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filepath.Join(root, "internal/importer/document.go"), nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse document.go: %v", err)
+	}
+
+	var fn *ast.FuncDecl
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if ok && fd.Recv != nil && fd.Name.Name == "SettledExtraction" {
+			fn = fd
+		}
+	}
+	if fn == nil {
+		t.Fatal("document.go declares no method SettledExtraction, so both halves below examine nothing")
+	}
+
+	var sqlLits int
+	var sawResults bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		bl, ok := n.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return true
+		}
+		unq, uerr := strconv.Unquote(bl.Value)
+		if uerr != nil || !strings.Contains(unq, "SELECT") {
+			return true
+		}
+		sqlLits++
+		if strings.Contains(unq, "extraction_field_results") {
+			sawResults = true
+		}
+		if strings.Contains(unq, "extraction_field_corrections") {
+			t.Errorf("%s: SettledExtraction reads extraction_field_corrections -- the correction was "+
+				"applied to the invoice when it was written, so reading it here files the same value twice",
+				fset.Position(bl.Pos()))
+		}
+		return true
+	})
+	// Control needle: an absence proved over a method that reads nothing proves nothing.
+	if sqlLits == 0 || !sawResults {
+		t.Fatalf("SettledExtraction holds %d SELECT literal(s) and names extraction_field_results: %v -- "+
+			"the absence above examined nothing", sqlLits, sawResults)
+	}
+
+	doc := strings.ToLower(fn.Doc.Text())
+	for _, needle := range []string{"correction", "twice"} {
+		if !strings.Contains(doc, needle) {
+			t.Errorf("SettledExtraction's doc comment does not say %q; AC-7 wants the one-write rule "+
+				"stated on the method, so the next reader does not make it correction-aware", needle)
+		}
 	}
 }

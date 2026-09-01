@@ -76,9 +76,9 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getAuditLog(',
     floor: 10,
   },
-  // EXTR-11-04, plus EXTR-12-02's ExtractionCandidate — the review screen's six. One Go
-  // file, six distinct anchors, so a deleted struct cannot be masked by a neighbour's
-  // still-present symbol. Each anchor ends in '(' — without it a renamed
+  // EXTR-11-04, plus EXTR-12-02's ExtractionCandidate and EXTR-12-05's ExtractionCorrected —
+  // the review screen's seven. One Go file, distinct anchors, so a deleted struct cannot be
+  // masked by a neighbour's still-present symbol. Each anchor ends in '(' — without it a renamed
   // getExtractionDetailX still contains the anchor.
   {
     ts: 'ExtractionCandidate',
@@ -89,6 +89,16 @@ const WIRE_MIRRORS = [
     spaAnchor: 'export async function fetchPageImage(',
     e2eAnchor: 'export function getExtractionDetail(',
     floor: 2,
+  },
+  {
+    ts: 'ExtractionCorrected',
+    go: 'ExtractionCorrected',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func mergeCorrections(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function highlightStyle(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 3,
   },
   {
     ts: 'ExtractionDetail',
@@ -128,7 +138,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export function scrollRegionIntoView(',
     e2eAnchor: 'export function getExtractionDetail(',
-    floor: 3,
+    floor: 6,
   },
   {
     ts: 'ExtractionRegion',
@@ -257,6 +267,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'StatusChange',
       'AuditEvent',
       'ExtractionCandidate',
+      'ExtractionCorrected',
       'ExtractionDetail',
       'ExtractionDocument',
       'ExtractionPage',

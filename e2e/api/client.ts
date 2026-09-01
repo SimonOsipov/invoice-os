@@ -1077,12 +1077,19 @@ export interface ExtractionCandidate {
   region: ExtractionRegion | null
 }
 
+export interface ExtractionCorrected {
+  method: CorrectionMethod
+  was: string | null
+  where: string | null
+}
+
 export interface ExtractionFieldState {
   name: string
   value: string | null
   region: ExtractionRegion | null
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
+  corrected: ExtractionCorrected | null
 }
 
 export interface ExtractionDocument {

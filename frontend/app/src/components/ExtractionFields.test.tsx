@@ -60,7 +60,15 @@ function mkRegion(o: Partial<ExtractionRegion> = {}): ExtractionRegion {
 }
 
 function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
-  return { name: 'invoice_number', value: 'INV-2026-0037', region: mkRegion(), reason: '', alternatives: [], ...o }
+  return {
+    name: 'invoice_number',
+    value: 'INV-2026-0037',
+    region: mkRegion(),
+    reason: '',
+    alternatives: [],
+    corrected: null,
+    ...o,
+  }
 }
 
 // Wire order is neither the vocabulary's (internal/extraction/vocabulary.go:6-9 puts

@@ -36,7 +36,8 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionRegion", []string{"page", "x0", "y0", "x1", "y1"}},
 	{rdReaderSource, "ExtractionPage", []string{"page", "width_px", "height_px"}},
 	{rdReaderSource, "ExtractionCandidate", []string{"value", "region"}},
-	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives"}},
+	{rdReaderSource, "ExtractionCorrected", []string{"method", "was", "where"}},
+	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives", "corrected"}},
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "document", "pages", "fields"}},
 	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
@@ -836,46 +837,53 @@ func TestExtractionDetail_CarriesTheDocumentMetadata(t *testing.T) {
 // Three positive needles before the absence: a scan that finds nothing reads exactly like a
 // clean file.
 func TestRLS_ExtractionDetailDocumentJoinNamesNoTenantId(t *testing.T) {
-	f, fset := mxParse(t, rdReaderSource)
-
 	var (
-		sqlLits             int
-		joins               int
-		sawPages, sawFields bool
+		sqlLits                             int
+		joins                               int
+		sawPages, sawFields, sawCorrections bool
 	)
-	ast.Inspect(f, func(n ast.Node) bool {
-		bl, ok := n.(*ast.BasicLit)
-		if !ok || bl.Kind != token.STRING {
-			return true
-		}
-		unq, err := strconv.Unquote(bl.Value)
-		if err != nil || !strings.Contains(unq, "SELECT") {
-			return true
-		}
-		sqlLits++
-
-		if strings.Contains(unq, "extraction_jobs") && strings.Contains(unq, "documents") {
-			joins++
-			if !strings.Contains(unq, "JOIN") {
-				t.Errorf("%s: the job query reads documents without a JOIN; the meta line must come from one statement",
-					fset.Position(bl.Pos()))
+	// Both sources the detail read issues SQL from: correction_store.go's INSERT names tenant_id
+	// legitimately and holds no SELECT, so the filter below never reaches it.
+	sources := []string{rdReaderSource, csStoreSource}
+	for _, src := range sources {
+		f, fset := mxParse(t, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			bl, ok := n.(*ast.BasicLit)
+			if !ok || bl.Kind != token.STRING {
+				return true
 			}
-		}
-		if strings.Contains(unq, "extraction_page_images") {
-			sawPages = true
-		}
-		if strings.Contains(unq, "extraction_field_results") {
-			sawFields = true
-		}
-		if strings.Contains(unq, "tenant_id") {
-			t.Errorf("%s: a reader.go query names tenant_id; the tenant_isolation policy is the only predicate",
-				fset.Position(bl.Pos()))
-		}
-		return true
-	})
+			unq, err := strconv.Unquote(bl.Value)
+			if err != nil || !strings.Contains(unq, "SELECT") {
+				return true
+			}
+			sqlLits++
+
+			if strings.Contains(unq, "extraction_jobs") && strings.Contains(unq, "documents") {
+				joins++
+				if !strings.Contains(unq, "JOIN") {
+					t.Errorf("%s: the job query reads documents without a JOIN; the meta line must come from one statement",
+						fset.Position(bl.Pos()))
+				}
+			}
+			if strings.Contains(unq, "extraction_page_images") {
+				sawPages = true
+			}
+			if strings.Contains(unq, "extraction_field_results") {
+				sawFields = true
+			}
+			if strings.Contains(unq, "extraction_field_corrections") {
+				sawCorrections = true
+			}
+			if strings.Contains(unq, "tenant_id") {
+				t.Errorf("%s: a %s query names tenant_id; the tenant_isolation policy is the only predicate",
+					fset.Position(bl.Pos()), src)
+			}
+			return true
+		})
+	}
 
 	if sqlLits == 0 {
-		t.Fatalf("%s holds no SQL string literal, so the tenant_id absence above proved nothing", rdReaderSource)
+		t.Fatalf("%v hold no SQL string literal, so the tenant_id absence above proved nothing", sources)
 	}
 	if joins == 0 {
 		t.Errorf("%s holds no query naming both extraction_jobs and documents; the toolbar meta line has no source", rdReaderSource)
@@ -885,6 +893,9 @@ func TestRLS_ExtractionDetailDocumentJoinNamesNoTenantId(t *testing.T) {
 	}
 	if !sawFields {
 		t.Errorf("%s holds no query naming extraction_field_results", rdReaderSource)
+	}
+	if !sawCorrections {
+		t.Errorf("%s holds no SELECT naming extraction_field_corrections, so widening this scan to it proved nothing", csStoreSource)
 	}
 }
 
@@ -1093,5 +1104,569 @@ func TestExtractionReader_DocCommentsUseStraightQuotes(t *testing.T) {
 	}
 	if comments == 0 {
 		t.Fatalf("%s holds no // comment, so the scan above examined nothing", rdReaderSource)
+	}
+}
+
+// --- EXTR-12-05: the human layer laid over the decided readings ---------------------------
+
+// The actor every correction seeded below is written by: a raw GoTrue subject, the convention
+// audit_log.actor follows.
+const rvcActor = "3c9f2a10-7b4d-4e6a-9c21-0f5a8d3b6e47"
+
+// rvcSeedCorrection writes one extraction_field_corrections row as the SUPERUSER, never through
+// the write path the merge reads back — a fixture built by the code under test cannot fail.
+// Each call is its own statement, so seq ascends in call order.
+//
+// anchor is nil for "no label": anchor_label carries no char_length CHECK, so an empty-string
+// fixture would reach the wire as "where":"" and pass the case the nullable key exists to catch.
+func rvcSeedCorrection(t *testing.T, ctx context.Context, tenantID, jobID, name, value, method string, box *rvdBox, anchor *string) {
+	t.Helper()
+
+	var (
+		page           *int
+		x0, y0, x1, y1 *float64
+	)
+	if box != nil {
+		page, x0, y0, x1, y1 = &box.Page, &box.X0, &box.Y0, &box.X1, &box.Y1
+	}
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO extraction_field_corrections
+		     (tenant_id, extraction_job_id, field_name, value, method, page,
+		      bbox_x0, bbox_y0, bbox_x1, bbox_y1, anchor_label, actor)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		tenantID, jobID, name, value, method, page, x0, y0, x1, y1, anchor, rvcActor,
+	); err != nil {
+		t.Fatalf("seed the %s correction %q on %s: %v", method, value, name, err)
+	}
+}
+
+// rvcField returns one merged field by name.
+func rvcField(t *testing.T, d extraction.ExtractionDetail, name string) extraction.ExtractionFieldState {
+	t.Helper()
+	for _, f := range d.Fields {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("the detail carries no field %q, only %v", name, rvdFieldNames(d.Fields))
+	return extraction.ExtractionFieldState{}
+}
+
+// rvcValue renders a *string for a failure message without dereferencing a nil.
+func rvcValue(v *string) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return strconv.Quote(*v)
+}
+
+// rvcRegion renders a *ExtractionRegion the same way.
+func rvcRegion(r *extraction.ExtractionRegion) string {
+	if r == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%+v", *r)
+}
+
+// rvcCorrectedRaw returns the raw JSON of one field's "corrected" key, so an assertion reads
+// the bytes the SPA parses rather than the Go value behind them. "" means the key is absent.
+func rvcCorrectedRaw(t *testing.T, d extraction.ExtractionDetail, name string) string {
+	t.Helper()
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	var wire struct {
+		Fields []struct {
+			Name      string          `json:"name"`
+			Corrected json.RawMessage `json:"corrected"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("unmarshal the detail %s: %v", b, err)
+	}
+	for _, f := range wire.Fields {
+		if f.Name == name {
+			return string(f.Corrected)
+		}
+	}
+	t.Fatalf("the marshalled detail %s carries no field %q", b, name)
+	return ""
+}
+
+// AC-1: three corrections on one field and the newest wins. Four distinct strings, so a merge
+// picking the reading or either superseded correction fails on the value it returns.
+func TestExtractionDetail_LatestCorrectionWins(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, nil, now)
+	for _, v := range []string{"HUMAN-B", "HUMAN-C", "HUMAN-D"} {
+		rvcSeedCorrection(t, ctx, tenantA, jobA, "total", v, "typed", nil, nil)
+	}
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	if total.Value == nil || *total.Value != "HUMAN-D" {
+		t.Errorf("total came back %s, want \"HUMAN-D\" — the newest correction, not the reading "+
+			"READ-A and not the superseded HUMAN-B/HUMAN-C", rvcValue(total.Value))
+	}
+	if total.Corrected == nil || total.Corrected.Method != "typed" {
+		t.Errorf("total's corrected block is %+v, want method typed — a settled field carries one",
+			total.Corrected)
+	}
+}
+
+// AC-1's undo half. The undone row carries UNDO-Z, a value neither the extractor nor any
+// correction ever wrote: a merge that returned the latest row's value would surface it.
+//
+// vat is the load-bearing control. Without it every assertion on total is also what a merge
+// that ignores corrections entirely returns, and the case would pass on a do-nothing read.
+func TestExtractionDetail_UndoneIgnoresItsOwnValueAndRestoresTheReading(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-1"), nil, 1, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-B", "typed", nil, nil)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "UNDO-Z", "undone", nil, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "vat", rvdStr("READ-V"), nil, 0, nil, now.Add(time.Millisecond))
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "vat", "HUMAN-W", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+
+	total := rvcField(t, got, "total")
+	if total.Value == nil || *total.Value != "READ-A" {
+		t.Errorf("the undone total came back %s, want \"READ-A\" — an undo resets the field to the "+
+			"extractor's reading and the undone row's own value is ignored", rvcValue(total.Value))
+	}
+	if raw := rvcCorrectedRaw(t, got, "total"); raw != "null" {
+		t.Errorf("the undone total marshals corrected as %s, want null — an undone field is no "+
+			"longer a corrected one", raw)
+	}
+	if total.Reason != "ambiguous" {
+		t.Errorf("the undone total came back with reason %q, want \"ambiguous\" — the reset restores "+
+			"the reading's own flag", total.Reason)
+	}
+	if len(total.Alternatives) != 1 {
+		t.Errorf("the undone total came back with %d alternative(s), want 1 — the reset restores them too",
+			len(total.Alternatives))
+	}
+
+	// The control: without a field the merge must actually change, every assertion above is
+	// satisfied by a read that never looks at a correction at all.
+	vat := rvcField(t, got, "vat")
+	if vat.Value == nil || *vat.Value != "HUMAN-W" {
+		t.Errorf("the corrected vat came back %s, want \"HUMAN-W\" — this control is what stops the "+
+			"undo assertions above passing on a read that ignores corrections", rvcValue(vat.Value))
+	}
+}
+
+// AC-2: a settled field is no longer flagged. Asserted on the marshalled bytes, which is what
+// the SPA branches on.
+func TestExtractionDetail_CorrectedFieldIsNoLongerFlagged(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"),
+		&rvdBox{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-1"),
+		&rvdBox{Page: 1, X0: 0.21, Y0: 0.22, X1: 0.23, Y1: 0.24}, 1, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-2"),
+		&rvdBox{Page: 2, X0: 0.31, Y0: 0.32, X1: 0.33, Y1: 0.34}, 2, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "ALT-2", "chosen", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	b, err := json.Marshal(rvcField(t, got, "total"))
+	if err != nil {
+		t.Fatalf("marshal the total field: %v", err)
+	}
+	for _, want := range []string{`"reason":""`, `"alternatives":[]`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the settled total marshals to %s, which does not carry %s — a corrected field "+
+				"must not render as flagged", b, want)
+		}
+	}
+}
+
+// AC-3: was is the value the correction superseded, not the current one and not the reading.
+// Four distinct strings, so returning READ-A, ALT-X or HUMAN-C all fail.
+func TestExtractionDetail_WasIsTheSupersededReading(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-X"), nil, 1, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-B", "typed", nil, nil)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-C", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	if total.Value == nil || *total.Value != "HUMAN-C" {
+		t.Errorf("total came back %s, want \"HUMAN-C\"", rvcValue(total.Value))
+	}
+	if raw := rvcCorrectedRaw(t, got, "total"); raw != `{"method":"typed","was":"HUMAN-B","where":null}` {
+		t.Errorf("total marshals corrected as %s, want {\"method\":\"typed\",\"was\":\"HUMAN-B\","+
+			"\"where\":null} — was is the reading the newest correction superseded, which is the "+
+			"correction beneath it", raw)
+	}
+}
+
+// AC-3's other half: when the correction is a field's first there is no earlier correction, so
+// was falls back to the decided reading — and that reading may itself carry no value at all,
+// which is why was is nullable.
+func TestExtractionDetail_WasIsTheReadingWhenTheCorrectionIsTheFirst(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-B", "typed", nil, nil)
+
+	// The mock's own shape: a missing field carries a nil Value (mock.go, laws E08/E10).
+	rvdSeedField(t, ctx, tenantA, jobA, "buyer_tin", nil, nil, 0, rvdStr("missing"), now.Add(time.Millisecond))
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "buyer_tin", "HUMAN-T", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if raw := rvcCorrectedRaw(t, got, "total"); raw != `{"method":"typed","was":"READ-A","where":null}` {
+		t.Errorf("total marshals corrected as %s, want was \"READ-A\" — the first correction on a "+
+			"field supersedes the extractor's reading", raw)
+	}
+	if raw := rvcCorrectedRaw(t, got, "buyer_tin"); raw != `{"method":"typed","was":null,"where":null}` {
+		t.Errorf("buyer_tin marshals corrected as %s, want was null — the extractor read nothing "+
+			"there, and \"\" would claim it read an empty value", raw)
+	}
+}
+
+// AC-4: corrected is null, never an empty object, on a field no human has touched.
+//
+// The second job is the load-bearing control: "corrected is null everywhere" is also what a
+// build where corrected is ALWAYS null returns, and that build is wrong.
+func TestExtractionDetail_UncorrectedFieldHasNullCorrected(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "vat", rvdStr("READ-V"), nil, 0, nil, now.Add(time.Millisecond))
+
+	docB := rdSeedDocument(t, ctx, tenantA)
+	jobB := rdSeedJob(t, ctx, tenantA, docB, "succeeded", now, nil)
+	rvdSeedField(t, ctx, tenantA, jobB, "total", rvdStr("READ-B"), nil, 0, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobB, "total", "HUMAN-B", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for the uncorrected job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 2 {
+		t.Fatalf("the uncorrected job carried %d field(s) %v, want 2 — the assertions below need both",
+			len(got.Fields), rvdFieldNames(got.Fields))
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the uncorrected detail: %v", err)
+	}
+	if n := strings.Count(string(b), `"corrected":null`); n != 2 {
+		t.Errorf("the uncorrected detail %s carries %d \"corrected\":null key(s), want 2 — one per field", b, n)
+	}
+	if strings.Contains(string(b), `"corrected":{`) {
+		t.Errorf("the uncorrected detail %s carries a corrected object; a field no human touched "+
+			"carries null, never an empty object", b)
+	}
+
+	// The control: a build that never emits a corrected object passes everything above.
+	gotB, err := r.Detail(ctxA, jobB)
+	if err != nil {
+		t.Fatalf("Detail for the corrected job %s: %v", jobB, err)
+	}
+	bB, err := json.Marshal(gotB)
+	if err != nil {
+		t.Fatalf("marshal the corrected detail: %v", err)
+	}
+	if !strings.Contains(string(bB), `"corrected":{`) {
+		t.Errorf("the corrected detail %s carries no corrected object at all, so the null assertions "+
+			"above pass for the wrong reason", bB)
+	}
+}
+
+// AC-5: a chosen correction settles the field FROM one of the alternatives, so the highlight
+// must move to that alternative's own box. R0, R1 and R2 share no coordinate and R2 sits on
+// page 2, so a merge that keeps R0, takes the first alternative, or hardcodes the page all fail.
+func TestExtractionDetail_ChosenCorrectionTakesTheAlternativesRegion(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	r2 := rvdBox{Page: 2, X0: 0.51, Y0: 0.52, X1: 0.63, Y1: 0.64}
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"),
+		&rvdBox{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-1"),
+		&rvdBox{Page: 1, X0: 0.21, Y0: 0.22, X1: 0.33, Y1: 0.34}, 1, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-2"), &r2, 2, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "ALT-2", "chosen", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	want := extraction.ExtractionRegion{Page: r2.Page, X0: r2.X0, Y0: r2.Y0, X1: r2.X1, Y1: r2.Y1}
+	if total.Region == nil || *total.Region != want {
+		t.Errorf("the chosen total highlights %s, want %+v — the field was settled from the second "+
+			"alternative, so the canvas must point where that alternative was read",
+			rvcRegion(total.Region), want)
+	}
+	if total.Value == nil || *total.Value != "ALT-2" {
+		t.Errorf("the chosen total came back %s, want \"ALT-2\"", rvcValue(total.Value))
+	}
+}
+
+// AC-5's fallback: a chosen value matching no alternative keeps the reading's own region rather
+// than emitting none. The value assertion is what reds — the region assertion alone is also
+// what a merge that ignores corrections returns.
+func TestExtractionDetail_ChosenValueMatchingNoAlternativeKeepsTheReadingsRegion(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	r0 := rvdBox{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), &r0, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("ALT-1"),
+		&rvdBox{Page: 2, X0: 0.21, Y0: 0.22, X1: 0.33, Y1: 0.34}, 1, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-NOMATCH", "chosen", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	if total.Value == nil || *total.Value != "HUMAN-NOMATCH" {
+		t.Errorf("the chosen total came back %s, want \"HUMAN-NOMATCH\" — a chosen value matching no "+
+			"alternative still settles the field", rvcValue(total.Value))
+	}
+	want := extraction.ExtractionRegion{Page: r0.Page, X0: r0.X0, Y0: r0.Y0, X1: r0.X1, Y1: r0.Y1}
+	if total.Region == nil || *total.Region != want {
+		t.Errorf("the chosen total highlights %s, want the reading's own %+v — with nothing to match, "+
+			"the region is left alone rather than dropped", rvcRegion(total.Region), want)
+	}
+}
+
+// AC-5's other half, and what subtask 08 reads back: a pointed correction carries its own
+// stored box and the field must highlight there. Four distinct coordinates on page 2, so an
+// x/y transposition and a hardcoded page each fail here rather than on a deployed screen.
+func TestExtractionDetail_PointedCorrectionTakesItsOwnStoredBox(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	pointed := rvdBox{Page: 2, X0: 0.21, Y0: 0.32, X1: 0.43, Y1: 0.54}
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"),
+		&rvdBox{Page: 1, X0: 0.11, Y0: 0.12, X1: 0.13, Y1: 0.14}, 0, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-P", "pointed", &pointed, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	want := extraction.ExtractionRegion{Page: pointed.Page, X0: pointed.X0, Y0: pointed.Y0, X1: pointed.X1, Y1: pointed.Y1}
+	if total.Region == nil || *total.Region != want {
+		t.Errorf("the pointed total highlights %s, want the stored box %+v — the human dragged that "+
+			"box and the read is the only thing that gives it back", rvcRegion(total.Region), want)
+	}
+	if total.Value == nil || *total.Value != "HUMAN-P" {
+		t.Errorf("the pointed total came back %s, want \"HUMAN-P\"", rvcValue(total.Value))
+	}
+}
+
+// AC-6: a typed correction changed the value, not where it was read from. The value assertion
+// is what reds — the region assertion alone passes on a read that ignores corrections.
+func TestExtractionDetail_TypedCorrectionKeepsTheOriginalRegion(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	r0 := rvdBox{Page: 2, X0: 0.11, Y0: 0.22, X1: 0.33, Y1: 0.44}
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), &r0, 0, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-B", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	if total.Value == nil || *total.Value != "HUMAN-B" {
+		t.Errorf("the typed total came back %s, want \"HUMAN-B\"", rvcValue(total.Value))
+	}
+	want := extraction.ExtractionRegion{Page: r0.Page, X0: r0.X0, Y0: r0.Y0, X1: r0.X1, Y1: r0.Y1}
+	if total.Region == nil || *total.Region != want {
+		t.Errorf("the typed total highlights %s, want the reading's own %+v — typing a value says "+
+			"nothing about where it was read", rvcRegion(total.Region), want)
+	}
+}
+
+// The wire key corrected.where carries the correction's anchor label, and is null — never "" —
+// when the row has none. anchor_label has no char_length CHECK, so "" is a value the column
+// admits and a merge that coerced nil to "" would render a dangling "Taken from ".
+func TestExtractionDetail_WhereCarriesTheAnchorLabelAndIsNullWithoutOne(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	label := "Total due"
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "HUMAN-P", "pointed",
+		&rvdBox{Page: 2, X0: 0.21, Y0: 0.32, X1: 0.43, Y1: 0.54}, &label)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "vat", rvdStr("READ-V"), nil, 0, nil, now.Add(time.Millisecond))
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "vat", "HUMAN-W", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if raw := rvcCorrectedRaw(t, got, "total"); raw != `{"method":"pointed","was":"READ-A","where":"Total due"}` {
+		t.Errorf("total marshals corrected as %s, want where \"Total due\" — the stored anchor label "+
+			"is the one member of the block not derivable from the rest of the field", raw)
+	}
+	if raw := rvcCorrectedRaw(t, got, "vat"); raw != `{"method":"typed","was":"READ-V","where":null}` {
+		t.Errorf("vat marshals corrected as %s, want where null — a correction with no anchor label "+
+			"says so explicitly; \"\" would read as a label the row does not carry", raw)
+	}
+}
+
+// A correction may name a field the extractor produced no reading for: refuseField admits
+// buyer_name and currency, which mockDefaultResult never emits, so the row already reaches the
+// invoice while the screen shows nothing. The entry is appended after the read fields.
+func TestExtractionDetail_CorrectionForAFieldTheExtractorNeverReadIsCarried(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("READ-A"), nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "vat", rvdStr("READ-V"), nil, 0, nil, now.Add(time.Millisecond))
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "currency", "NGN", "typed", nil, nil)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	names := rvdFieldNames(got.Fields)
+	if len(names) != 3 || names[0] != "total" || names[1] != "vat" || names[2] != "currency" {
+		t.Fatalf("the detail carries fields %v, want [total vat currency] — a correction on a field "+
+			"the extractor never read must still reach the screen, appended after the read fields",
+			names)
+	}
+	currency := rvcField(t, got, "currency")
+	if currency.Value == nil || *currency.Value != "NGN" {
+		t.Errorf("the synthesized currency came back %s, want \"NGN\"", rvcValue(currency.Value))
+	}
+	if currency.Region != nil {
+		t.Errorf("the synthesized currency highlights %s, want none — there is no reading to point at",
+			rvcRegion(currency.Region))
+	}
+	if raw := rvcCorrectedRaw(t, got, "currency"); raw != `{"method":"typed","was":null,"where":null}` {
+		t.Errorf("the synthesized currency marshals corrected as %s, want was null — nothing preceded "+
+			"the human's value", raw)
+	}
+	if currency.Reason != "" || len(currency.Alternatives) != 0 {
+		t.Errorf("the synthesized currency came back with reason %q and %d alternative(s), want \"\" and 0",
+			currency.Reason, len(currency.Alternatives))
+	}
+}
+
+// The corrections read names no tenant_id, so tenant_isolation is the only thing scoping it.
+// B holds a correction on the same field name, so A reading its own value means something.
+func TestRLS_ExtractionDetailCorrectionsAreScopedByThePolicyAlone(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	_, tenantB, docB := rdTenant(t, ctx, "active")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+	jobB := rdSeedJob(t, ctx, tenantB, docB, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "total", rvdStr("A-READ"), nil, 0, nil, now)
+	rvcSeedCorrection(t, ctx, tenantA, jobA, "total", "A-HUMAN", "typed", nil, nil)
+
+	rvdSeedField(t, ctx, tenantB, jobB, "total", rvdStr("B-READ"), nil, 0, nil, now)
+	for _, v := range []string{"B-HUMAN-1", "B-HUMAN-2"} {
+		rvcSeedCorrection(t, ctx, tenantB, jobB, "total", v, "typed", nil, nil)
+	}
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("A reading its own job %s: %v", jobA, err)
+	}
+	total := rvcField(t, got, "total")
+	if total.Value == nil || *total.Value != "A-HUMAN" {
+		t.Errorf("A's total came back %s, want \"A-HUMAN\" — its own correction, never B's",
+			rvcValue(total.Value))
+	}
+	if raw := rvcCorrectedRaw(t, got, "total"); raw != `{"method":"typed","was":"A-READ","where":null}` {
+		t.Errorf("A's total marshals corrected as %s, want was \"A-READ\" — B's two corrections must "+
+			"not reach A's window at all", raw)
+	}
+
+	if _, err := r.Detail(ctxA, jobB); !errors.Is(err, extraction.ErrNotFound) {
+		t.Errorf("A reading B's job %s returned %v, want %v", jobB, err, extraction.ErrNotFound)
 	}
 }

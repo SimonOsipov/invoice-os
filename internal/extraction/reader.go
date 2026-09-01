@@ -131,15 +131,29 @@ type ExtractionCandidate struct {
 	Region *ExtractionRegion `json:"region"`
 }
 
-// ExtractionFieldState is one decided reading plus the alternatives an ambiguous field kept.
-// Region is nil when the extractor could point at nothing. Reason is "" for a clean field and
-// Alternatives is never nil (TestExtractionDetail_AlternativesAreNeverNil).
+// ExtractionCorrected is the human layer over one field: how it was settled, the reading the
+// correction superseded, and the anchor label it was taken from. Named, never inline:
+// wireMirrors' goStructKeys reads a brace-free body only. Was and Where are both pointers --
+// the superseded reading may be a field the extractor never read, and most corrections carry
+// no anchor label.
+type ExtractionCorrected struct {
+	Method string  `json:"method"`
+	Was    *string `json:"was"`
+	Where  *string `json:"where"`
+}
+
+// ExtractionFieldState is one decided reading plus the alternatives an ambiguous field kept,
+// with the human layer over both. Region is nil when the extractor could point at nothing.
+// Reason is "" for a clean field and Alternatives is never nil
+// (TestExtractionDetail_AlternativesAreNeverNil). Corrected is nil, never an empty object, for
+// a field no human has touched (TestExtractionDetail_UncorrectedFieldHasNullCorrected).
 type ExtractionFieldState struct {
 	Name         string                `json:"name"`
 	Value        *string               `json:"value"`
 	Region       *ExtractionRegion     `json:"region"`
 	Reason       string                `json:"reason"`
 	Alternatives []ExtractionCandidate `json:"alternatives"`
+	Corrected    *ExtractionCorrected  `json:"corrected"`
 }
 
 // ExtractionDocument is what the document toolbar renders. Filename and ContentType are
@@ -170,7 +184,7 @@ func emptyDetail() ExtractionDetail {
 	return ExtractionDetail{Pages: []ExtractionPage{}, Fields: []ExtractionFieldState{}}
 }
 
-// Detail returns one job with its document, pages and decided fields. All three statements
+// Detail returns one job with its document, pages and merged fields. All four statements
 // share one transaction (TestRLS_ExtractionDetailUsesRequestTxNotTenantTx), and a successful
 // read audits on that same transaction (TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow).
 func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, error) {
@@ -180,7 +194,7 @@ func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, er
 		if out, err = detailTx(ctx, tx, jobID); err != nil {
 			return err
 		}
-		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at three
+		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at four
 		// statements (TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit).
 		// TestSubmissionMain_WiresTheDocumentReadAuditorOntoAReader is what keeps production
 		// from being one.
@@ -228,7 +242,19 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 	if out.Fields, err = detailFieldsTx(ctx, tx, jobID); err != nil {
 		return emptyDetail(), err
 	}
+	// Fourth and last, on the same transaction: the human layer laid over the readings above.
+	corrections, err := latestCorrectionsPerFieldTx(ctx, tx, jobID)
+	if err != nil {
+		return emptyDetail(), err
+	}
+	out.Fields = mergeCorrections(out.Fields, corrections)
 	return out, nil
+}
+
+// mergeCorrections lays the correction record over the decided readings. Not implemented yet:
+// the precedence per method is spelled out by TestExtractionMerge_ResolvesEachMethodWithoutADatabase.
+func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) []ExtractionFieldState {
+	return fields
 }
 
 // detailPagesTx returns the page inventory in page order. The stored grid is read, never

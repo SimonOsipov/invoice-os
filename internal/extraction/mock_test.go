@@ -1,7 +1,9 @@
-// mock_test.go: MockExtractor's ten specs -- the twelve-law contract run, pointer-only interface
+// mock_test.go: MockExtractor's specs -- the twelve-law contract run, pointer-only interface
 // satisfaction, determinism in three shapes, distinct inputs, AC-3's reason matrix, the
 // ambient-dependency scan, non-mutation, fresh memory per call on BOTH arms, the pinned
-// Name/Version literals, and MockFixtures handing back a copy.
+// Name/Version literals, and MockFixtures handing back a copy. EXTR-12-01 added the default
+// result's field states; QA added the fixture arms' vocabulary, alternative memory and the
+// marshalled Alternatives.
 //
 // HONEST FRAMING (do not relabel a spec without re-reading this):
 //   - Before mock.go exists NOTHING here is red. The package does not compile, which is a BUILD
@@ -18,8 +20,10 @@
 //   - TestMockExtractor_OnlyThePointerSatisfiesExtractor is a REGRESSION GUARD added in QA:
 //     moving all four methods to value receivers left every other spec green, so the var _
 //     Extractor line documented the aliasing hazard without defending it.
-//   - TestMockExtractor_ReturnsFreshMemoryPerCall probes BOTH arms. Dropping cloneFields from
-//     the FIXTURE arm alone left all thirty-one specs green until it did.
+//   - TestMockExtractor_ReturnsFreshMemoryPerCall probes BOTH arms, but the DECIDED reading
+//     only. Dropping cloneFields from the FIXTURE arm alone left every other spec green until
+//     it did; shallow-copying Alternatives still did until
+//     TestMockExtractor_ReturnsFreshAlternativeMemoryPerCall.
 //   - TestMockExtractor_PinsNameAndVersion and TestMockFixtures_HandsBackACopy arrived with the
 //     real mock.go and are GREEN from their first run. Neither is a transition. The pin closes
 //     laws E01/E02, which require only a non-empty value that is stable within one run and so
@@ -43,6 +47,7 @@ package extraction_test
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -762,8 +767,10 @@ func TestMockExtractor_InvoiceNumberIsUnchangedAndClean(t *testing.T) {
 			t.Errorf("%s carries no invoice_number field", c.label)
 			continue
 		}
-		if f.Value == nil || *f.Value != "MOCK-INV-0001" {
-			t.Errorf("%s: invoice_number = %v, want %q; two deployed e2e specs key on the collision", c.label, f.Value, "MOCK-INV-0001")
+		if f.Value == nil {
+			t.Errorf("%s: invoice_number carries no value, want %q; two deployed e2e specs key on the collision", c.label, "MOCK-INV-0001")
+		} else if *f.Value != "MOCK-INV-0001" {
+			t.Errorf("%s: invoice_number = %q, want %q; two deployed e2e specs key on the collision", c.label, *f.Value, "MOCK-INV-0001")
 		}
 		if f.Reason != extraction.ReasonNone {
 			t.Errorf("%s: invoice_number is at reason %q, want clean (%q)", c.label, f.Reason, extraction.ReasonNone)
@@ -802,5 +809,142 @@ func TestMockExtractor_DefaultResultNamesAreOnTheVocabulary(t *testing.T) {
 				t.Errorf("%q alternative %d is named %q; an alternative is another reading of the SAME field", r.Name, i, alt.Name)
 			}
 		}
+	}
+}
+
+// --- QA (Mode B): the arms and the shapes the AC specs above leave open ----------------
+
+// TestMockExtractor_FixtureNamesAreOnTheVocabularyToo: the AC-4 spec above reads the DEFAULT arm
+// only, so reverting either named fixture to invoice_date/total_amount leaves the whole Go suite
+// green -- measured. Both fixtures feed documentCreateInput the same way the default arm does.
+func TestMockExtractor_FixtureNamesAreOnTheVocabularyToo(t *testing.T) {
+	vocabulary := map[string]bool{}
+	for _, n := range extraction.HeaderFields {
+		vocabulary[n] = true
+	}
+	if len(vocabulary) < 10 {
+		t.Fatalf("HeaderFields carries %d name(s), want at least 10; the check below would be vacuous", len(vocabulary))
+	}
+
+	ext := extraction.NewMockExtractor()
+	fixtures := extraction.MockFixtures()
+	if len(fixtures) < 2 {
+		t.Fatalf("MockFixtures returned %d fixture(s), want at least 2", len(fixtures))
+	}
+
+	var examined int
+	for _, fx := range fixtures {
+		results := mxExtract(t, ext, extraction.Document{Bytes: fx.Bytes, ContentType: "application/pdf"})
+		if len(results) == 0 {
+			t.Errorf("the %q fixture returned no field; its arm is unexamined", fx.Name)
+			continue
+		}
+		for _, r := range results {
+			examined++
+			if !vocabulary[r.Name] {
+				t.Errorf("the %q fixture emits %q, which is not in HeaderFields; documentCreateInput drops it, so it reaches no invoices column", fx.Name, r.Name)
+			}
+		}
+	}
+	if examined < 10 {
+		t.Fatalf("examined %d field(s) across %d fixture(s), want at least 10", examined, len(fixtures))
+	}
+}
+
+// TestMockExtractor_ReturnsFreshAlternativeMemoryPerCall: mxAssertFreshMemory clobbers the
+// DECIDED reading only, so shallow-copying Alternatives in cloneFields leaves the whole package
+// green -- measured. A caller mutating a returned alternative would then poison
+// mockDefaultResult for every later call in the process.
+func TestMockExtractor_ReturnsFreshAlternativeMemoryPerCall(t *testing.T) {
+	doc := mxUnknown("fresh-alternative probe: an unrecognised document")
+	ext := extraction.NewMockExtractor()
+
+	first := mxExtract(t, ext, doc)
+	var values, regions int
+	for _, r := range first {
+		for _, alt := range r.Alternatives {
+			if alt.Value != nil {
+				*alt.Value = "CLOBBERED"
+				values++
+			}
+			if alt.Region != nil {
+				alt.Region.Page = 9999
+				regions++
+			}
+		}
+	}
+	if values == 0 || regions == 0 {
+		t.Fatalf("clobbered %d alternative Value(s) and %d Region(s); the re-read below would prove nothing", values, regions)
+	}
+
+	second := mxExtract(t, ext, doc)
+	if len(second) != len(first) {
+		t.Fatalf("two calls returned %d and %d result(s)", len(first), len(second))
+	}
+	for _, r := range second {
+		for i, alt := range r.Alternatives {
+			if alt.Value != nil && *alt.Value == "CLOBBERED" {
+				t.Errorf("%q alternative %d: mutating a returned *string reached the fixture table", r.Name, i)
+			}
+			if alt.Region != nil && alt.Region.Page == 9999 {
+				t.Errorf("%q alternative %d: mutating a returned *Region reached the fixture table", r.Name, i)
+			}
+		}
+	}
+
+	// Pointer identity, the other half: two calls must not hand back ONE alternative pointer.
+	for i := range first {
+		for j := range first[i].Alternatives {
+			a, b := first[i].Alternatives[j], second[i].Alternatives[j]
+			if a.Value != nil && a.Value == b.Value {
+				t.Errorf("%q alternative %d: two calls returned ONE *string at %p", first[i].Name, j, a.Value)
+			}
+			if a.Region != nil && a.Region == b.Region {
+				t.Errorf("%q alternative %d: two calls returned ONE *Region at %p", first[i].Name, j, a.Region)
+			}
+		}
+	}
+}
+
+// TestFieldResult_AlternativesMarshalAsAnArrayNeverNull: every "non-nil, never nil" clause in
+// this package cites JSON, and nothing asserted the bytes. FieldResult carries no omitempty, so
+// a nil slice ships `"alternatives":null` to a consumer that loops over it.
+func TestFieldResult_AlternativesMarshalAsAnArrayNeverNull(t *testing.T) {
+	// Control needle: the shape this guard exists to reject really does marshal to null.
+	nilled, err := json.Marshal(extraction.FieldResult{Field: extraction.Field{Name: "vat"}})
+	if err != nil {
+		t.Fatalf("marshal the control: %v", err)
+	}
+	if !strings.Contains(string(nilled), `"alternatives":null`) {
+		t.Fatalf("a nil Alternatives marshalled to %s; this guard is no longer reading the field it names", nilled)
+	}
+
+	results := mxDefault(t)
+	if len(results) == 0 {
+		t.Fatal("the default result is empty; the loop below would examine nothing")
+	}
+	var empty, populated int
+	for _, r := range results {
+		body, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal %q: %v", r.Name, err)
+		}
+		if strings.Contains(string(body), `"alternatives":null`) {
+			t.Errorf("%q marshalled to %s; a consumer looping over alternatives gets null", r.Name, body)
+		}
+		if len(r.Alternatives) == 0 {
+			empty++
+			if !strings.Contains(string(body), `"alternatives":[]`) {
+				t.Errorf("%q has no alternative yet marshalled to %s, want an empty array", r.Name, body)
+			}
+			continue
+		}
+		populated++
+		if !strings.Contains(string(body), `"alternatives":[{`) {
+			t.Errorf("%q carries %d alternative(s) yet marshalled to %s", r.Name, len(r.Alternatives), body)
+		}
+	}
+	if empty == 0 || populated == 0 {
+		t.Fatalf("marshalled %d empty and %d populated Alternatives; both arms must be exercised", empty, populated)
 	}
 }

@@ -1857,8 +1857,10 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
 // EXTR09-E2E-03 is the load-bearing one — with no run kind there is nothing for an
 // incoming file to contradict, so the refusal never fires.
 //
-// Outcomes are NOT asserted here. internal/extraction/mock.go:92-98 stamps MOCK-INV-0001
-// on every fixture, so two documents in one run collide by design;
+// Outcomes are NOT asserted here. internal/extraction/mock.go stamps MOCK-INV-0001 on every
+// fixture -- `clean-invoice` and `mockDefaultResult` alike, held there by
+// TestMockExtractor_InvoiceNumberIsUnchangedAndClean -- so two documents in one run collide
+// by design;
 // e2e/api/contract-document-upload.spec.ts owns the outcome assertions and handles that
 // collision. QA disposition A-2: Core AC #9's deploy-gate evidence is collision-recovery
 // only — independent parallel success awaits a non-mock extractor (EXTR-17).
@@ -2458,7 +2460,8 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
     }
   }
 
-  // Both fixtures stamp MOCK-INV-0001 (mock.go:92-98) and collide by design -- with
+  // Both arms stamp MOCK-INV-0001 (mock.go's `clean-invoice` fixture and `mockDefaultResult`)
+  // and collide by design -- with
   // run.files.length===2, routeAfterRun can never take the single-file branch, so the
   // landing is always the review surface (Stage 1 Q5), never the real invoice detail.
   await expect

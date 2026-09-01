@@ -9,9 +9,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // CorrectionMethod is how a field was settled, persisted as
@@ -41,36 +38,9 @@ type Correction struct {
 	CreatedAt   time.Time
 }
 
-// CorrectionStore holds the invoice_app pool. Every method opens its own tenant-scoped
-// transaction, the same posture as Store.
-type CorrectionStore struct{ Pool *pgxpool.Pool }
-
-// Append appends one correction and returns it with its database-assigned id, seq and
-// created_at.
-func (s *CorrectionStore) Append(ctx context.Context, tenantID, jobID string, c Correction) (Correction, error) {
-	var out Correction
-	err := db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
-		var err error
-		out, err = appendCorrectionTx(ctx, tx, tenantID, jobID, c)
-		return err
-	})
-	return out, err
-}
-
-// LatestPerField returns the newest correction per field_name for jobID, ordered by
-// field_name. Never nil.
-func (s *CorrectionStore) LatestPerField(ctx context.Context, tenantID, jobID string) ([]Correction, error) {
-	out := []Correction{}
-	err := db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
-		var err error
-		out, err = latestCorrectionsPerFieldTx(ctx, tx, tenantID, jobID)
-		return err
-	})
-	return out, err
-}
-
-// The tx-taking halves exist so the review handler can write a correction and the invoice
-// field it settles inside ONE transaction.
+// Both readers and writers here take a transaction: the review handler writes a correction and
+// the invoice field it settles inside ONE transaction, and the detail read composes the
+// latest-per-field read into its own request transaction.
 //
 // appendCorrectionTx binds an empty AnchorLabel and a nil Region as SQL NULL, the same
 // no-sentinels rule advanceJobTx follows. The CHECK set is the only validation: duplicating

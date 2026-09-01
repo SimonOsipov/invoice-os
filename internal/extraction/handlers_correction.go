@@ -244,8 +244,7 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
-		// appendCorrectionTx, not CorrectionStore.Append: the wrapper opens a transaction of
-		// its own, which is the one thing this route cannot have.
+		// The tx-taking half: this route cannot afford a second transaction of its own.
 		appended, err := appendCorrectionTx(ctx, tx, in.caller.TenantID, in.jobID, Correction{
 			FieldName:   in.field,
 			Value:       in.value,

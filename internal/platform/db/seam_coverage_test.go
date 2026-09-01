@@ -696,18 +696,16 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 
 // scCoreAllowlist is every caller allowed to reach the identity-free core.
 var scCoreAllowlist = []scCoreExemption{
-	{pkg: "internal/submission"},                                            // River job workers; the job row carries its tenant and there is no request identity to gate
-	{pkg: "internal/reconciliation"},                                        // the sweep worker, same shape: a schedule opened it, not a caller
-	{pkg: "internal/demodocs"},                                              // boot-time document seeder; it runs to completion before the first request is served
-	{pkg: "internal/demopolicy"},                                            // boot-time approval-policy seeder, on the same pre-request boot phase
-	{file: "internal/extraction/store.go"},                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
-	{file: "internal/extraction/worker.go"},                                 // the extraction River worker itself, same shape: the job row carries the tenant
-	{file: "internal/extraction/anchor_store.go"},                           // the learned-rule read, same shape as store.go: no request path reaches it
-	{file: "internal/extraction/correction_store.go", fn: "Append"},         // no production caller anywhere: exported only so the external test package can reach appendCorrectionTx, which a request path composes into its own gated tx — pinned by TestRLS_CorrectionStoreWrappersHaveNoProductionCaller
-	{file: "internal/extraction/correction_store.go", fn: "LatestPerField"}, // same shape and the same pin as Append above; func-scoped, not file-scoped, so a later func in this file cannot inherit a reason written for these two
-	{file: "internal/importer/backfill.go"},                                 // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                                // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
-	{file: "internal/tenancy/store.go", fn: "Me"},                           // the one deliberate HTTP-path exemption; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
+	{pkg: "internal/submission"},                  // River job workers; the job row carries its tenant and there is no request identity to gate
+	{pkg: "internal/reconciliation"},              // the sweep worker, same shape: a schedule opened it, not a caller
+	{pkg: "internal/demodocs"},                    // boot-time document seeder; it runs to completion before the first request is served
+	{pkg: "internal/demopolicy"},                  // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/extraction/store.go"},        // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
+	{file: "internal/extraction/worker.go"},       // the extraction River worker itself, same shape: the job row carries the tenant
+	{file: "internal/extraction/anchor_store.go"}, // the learned-rule read, same shape as store.go: no request path reaches it
+	{file: "internal/importer/backfill.go"},       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
+	{file: "internal/invoice/revalidate.go"},      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/tenancy/store.go", fn: "Me"}, // the one deliberate HTTP-path exemption; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -3492,74 +3490,5 @@ func TestRLS_EveryAllowlistEntryNamesItsReason(t *testing.T) {
 	}
 	if found != want {
 		t.Fatalf("read %d allowlist entr(ies) from %s, want %d — the source read and the compiled lists disagree, so a missing reason could pass unread", found, scSelfPath, want)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Scan 5 — the correction-store wrappers have no production caller
-// ---------------------------------------------------------------------------
-
-// The two scCoreAllowlist entries for correction_store.go are written on the fact that
-// CorrectionStore.Append and LatestPerField are called by nothing but the external test
-// package. Scan 2 cannot enforce that: a handler calling Append leaves the WithinTenantTx
-// call site inside Append, so the exemption still matches and the scan stays quiet while the
-// membership gate is off a real request path. This is where that goes loud — and it is what
-// turns deleting the wrappers, once the tx-taking halves have real callers, into a red test
-// rather than a note in a handoff.
-const (
-	scCorrectionFile = "internal/extraction/correction_store.go"
-	scCorrectionType = "CorrectionStore"
-)
-
-var scCorrectionWrappers = []string{"Append", "LatestPerField"}
-
-// scCorrectionRefs reports every mention of the type and every call of a wrapper in f.
-func scCorrectionRefs(fset *token.FileSet, f *ast.File) []string {
-	var out []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.SelectorExpr:
-			for _, w := range scCorrectionWrappers {
-				if x.Sel.Name == w {
-					out = append(out, fset.Position(x.Sel.Pos()).String()+" calls ."+w+"()")
-				}
-			}
-		case *ast.Ident:
-			if x.Name == scCorrectionType {
-				out = append(out, fset.Position(x.Pos()).String()+" names "+scCorrectionType)
-			}
-		}
-		return true
-	})
-	return out
-}
-
-func TestRLS_CorrectionStoreWrappersHaveNoProductionCaller(t *testing.T) {
-	root := repoRootDir(t)
-	files := scSeamFiles(t, root)
-	fset := token.NewFileSet()
-
-	// Control: the matcher must find the declaring file's own mentions, or a clean report
-	// below would only mean the scan sees nothing anywhere.
-	if n := len(scCorrectionRefs(fset, scParse(t, fset, root, scCorrectionFile))); n < 3 {
-		t.Fatalf("the matcher found %d mention(s) in %s, want at least 3 (the type and its two methods) — it is not looking for the right thing", n, scCorrectionFile)
-	}
-
-	var found, scanned int
-	for _, rel := range files {
-		if rel == scCorrectionFile {
-			continue
-		}
-		scanned++
-		for _, ref := range scCorrectionRefs(fset, scParse(t, fset, root, rel)) {
-			found++
-			t.Errorf("%s — %s has acquired a production caller, so the two scCoreAllowlist entries for it no longer state a fact. Either the request path must compose appendCorrectionTx / latestCorrectionsPerFieldTx into its own db.WithinRequestTenantTx (handlers.go is in the same package, so no export is needed), or the wrappers are now gated code and their exemptions must go", ref, scCorrectionType)
-		}
-	}
-	if scanned < 130 {
-		t.Fatalf("scanned %d file(s) beside %s, want at least 130 — a clean report over a short walk means nothing", scanned, scCorrectionFile)
-	}
-	if found == 0 {
-		t.Logf("%s is reached by no non-test code across %d files; the wrappers are test-only surface and become deletable once the tx-taking halves have production callers", scCorrectionType, scanned)
 	}
 }

@@ -22,9 +22,32 @@ import (
 // audit_log.actor already follows.
 const csActor = "8f1c0d64-4c2e-4a1b-9d33-6f5f0f2c7a01"
 
-func csStore(t *testing.T) *extraction.CorrectionStore {
+// csAppend and csLatest open the tenant transaction the deleted CorrectionStore wrappers used
+// to open. Each spec composes the tx-taking half itself, the way the production callers do.
+func csAppend(t *testing.T, ctx context.Context, tenantID, jobID string, c extraction.Correction) extraction.Correction {
 	t.Helper()
-	return &extraction.CorrectionStore{Pool: stRequire(t).app}
+	var out extraction.Correction
+	if err := db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		out, err = extraction.AppendCorrectionForTest(ctx, tx, tenantID, jobID, c)
+		return err
+	}); err != nil {
+		t.Fatalf("append %s=%s: %v", c.FieldName, c.Value, err)
+	}
+	return out
+}
+
+func csLatest(t *testing.T, ctx context.Context, tenantID, jobID string) []extraction.Correction {
+	t.Helper()
+	out := []extraction.Correction{}
+	if err := db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		out, err = extraction.LatestCorrectionsPerFieldForTest(ctx, tx, tenantID, jobID)
+		return err
+	}); err != nil {
+		t.Fatalf("read the latest correction per field for job %s: %v", jobID, err)
+	}
+	return out
 }
 
 // csJob seeds a tenant, a document and one extraction job as the superuser. stTenant's own
@@ -52,13 +75,12 @@ func csByField(cs []extraction.Correction) map[string]extraction.Correction {
 
 // AC-6: created_at defaults to now(), which is transaction-constant, so two corrections
 // written in one transaction tie on it exactly and only seq still separates them. Written
-// through raw SQL because Append opens its own transaction, so two calls could never tie.
+// through raw SQL because csAppend opens its own transaction, so two calls could never tie.
 // Twenty independent fields: an order that came out right by luck comes out right about half
 // the time, and one repetition cannot tell that from a guarantee.
 func TestExtractionCorrectionStore_TiedCreatedAtStillOrdersTotally(t *testing.T) {
 	ctx := t.Context()
 	h := stRequire(t)
-	s := csStore(t)
 	tenantID, jobID := csJob(t, ctx)
 
 	for i := range 20 {
@@ -99,16 +121,13 @@ func TestExtractionCorrectionStore_TiedCreatedAtStillOrdersTotally(t *testing.T)
 				"insert, not per transaction", field, seqs)
 		}
 
-		got, err := s.LatestPerField(ctx, tenantID, jobID)
-		if err != nil {
-			t.Fatalf("LatestPerField after writing %s: %v", field, err)
-		}
+		got := csLatest(t, ctx, tenantID, jobID)
 		c, ok := csByField(got)[field]
 		if !ok {
-			t.Fatalf("LatestPerField returned no row for %s (%d row(s) for the job)", field, len(got))
+			t.Fatalf("the latest-per-field read returned no row for %s (%d row(s) for the job)", field, len(got))
 		}
 		if c.Value != second {
-			t.Errorf("LatestPerField(%s).Value = %q, want %q — the later row of a created_at tie",
+			t.Errorf("the latest row for %s carries Value %q, want %q — the later row of a created_at tie",
 				field, c.Value, second)
 		}
 	}
@@ -118,7 +137,6 @@ func TestExtractionCorrectionStore_TiedCreatedAtStillOrdersTotally(t *testing.T)
 // same field, so a read that returned every row would come back with three.
 func TestExtractionCorrectionStore_LatestPerFieldReturnsOneRowPerField(t *testing.T) {
 	ctx := t.Context()
-	s := csStore(t)
 	tenantID, jobID := csJob(t, ctx)
 
 	pointedBox := extraction.Region{Page: 1, X0: 0.1, Y0: 0.2, X1: 0.3, Y1: 0.4}
@@ -128,25 +146,19 @@ func TestExtractionCorrectionStore_LatestPerFieldReturnsOneRowPerField(t *testin
 		{FieldName: "total_amount", Value: "212.50", Method: extraction.MethodPointed, Actor: csActor,
 			Region: &pointedBox, AnchorLabel: "Total"},
 	} {
-		appended, err := s.Append(ctx, tenantID, jobID, c)
-		if err != nil {
-			t.Fatalf("Append %s=%s: %v", c.FieldName, c.Value, err)
-		}
+		appended := csAppend(t, ctx, tenantID, jobID, c)
 		if appended.ID == "" || appended.Seq == 0 || appended.CreatedAt.IsZero() {
-			t.Errorf("Append %s returned {ID %q, Seq %d, CreatedAt %v}; the database assigns all three",
+			t.Errorf("appending %s returned {ID %q, Seq %d, CreatedAt %v}; the database assigns all three",
 				c.FieldName, appended.ID, appended.Seq, appended.CreatedAt)
 		}
 	}
 
-	got, err := s.LatestPerField(ctx, tenantID, jobID)
-	if err != nil {
-		t.Fatalf("LatestPerField: %v", err)
-	}
+	got := csLatest(t, ctx, tenantID, jobID)
 	if len(got) != 2 {
-		t.Fatalf("LatestPerField returned %d row(s) (%+v), want 2 — one per field", len(got), got)
+		t.Fatalf("the latest-per-field read returned %d row(s) (%+v), want 2 — one per field", len(got), got)
 	}
 	if got[0].FieldName != "invoice_number" || got[1].FieldName != "total_amount" {
-		t.Fatalf("LatestPerField field order = [%s %s], want [invoice_number total_amount]",
+		t.Fatalf("the latest-per-field order = [%s %s], want [invoice_number total_amount]",
 			got[0].FieldName, got[1].FieldName)
 	}
 
@@ -189,7 +201,6 @@ const (
 func TestExtractionCorrectionStore_HigherSeqWinsAnEarlierCreatedAt(t *testing.T) {
 	ctx := t.Context()
 	h := stRequire(t)
-	s := csStore(t)
 	tenantID, jobID := csJob(t, ctx)
 
 	if err := db.WithinTenantTx(ctx, h.app, tenantID, func(tx pgx.Tx) error {
@@ -228,15 +239,12 @@ func TestExtractionCorrectionStore_HigherSeqWinsAnEarlierCreatedAt(t *testing.T)
 			"not disagree, so this test proves nothing", bySeq, byCreatedAt, "current", "superseded")
 	}
 
-	got, err := s.LatestPerField(ctx, tenantID, jobID)
-	if err != nil {
-		t.Fatalf("LatestPerField: %v", err)
-	}
+	got := csLatest(t, ctx, tenantID, jobID)
 	if len(got) != 1 {
-		t.Fatalf("LatestPerField returned %d row(s) (%+v), want 1", len(got), got)
+		t.Fatalf("the latest-per-field read returned %d row(s) (%+v), want 1", len(got), got)
 	}
 	if got[0].Value != "current" {
-		t.Errorf("LatestPerField picked %q, want %q — the highest seq, never the latest created_at",
+		t.Errorf("the latest-per-field read picked %q, want %q — the highest seq, never the latest created_at",
 			got[0].Value, "current")
 	}
 }
@@ -275,7 +283,6 @@ func csLatestPerFieldSQL(t *testing.T) string {
 func TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort(t *testing.T) {
 	ctx := t.Context()
 	h := stRequire(t)
-	s := csStore(t)
 	tenantID, jobID := csJob(t, ctx)
 
 	for _, c := range []extraction.Correction{
@@ -283,9 +290,7 @@ func TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort(
 		{FieldName: "invoice_number", Value: "INV-1", Method: extraction.MethodChosen, Actor: csActor},
 		{FieldName: "total_amount", Value: "212.50", Method: extraction.MethodTyped, Actor: csActor},
 	} {
-		if _, err := s.Append(ctx, tenantID, jobID, c); err != nil {
-			t.Fatalf("Append %s=%s: %v", c.FieldName, c.Value, err)
-		}
+		csAppend(t, ctx, tenantID, jobID, c)
 	}
 
 	var plan strings.Builder
@@ -336,7 +341,7 @@ func TestExtractionCorrectionStore_TheInsertNeverNamesSeq(t *testing.T) {
 		cols, _, _ := strings.Cut(bl.Value, "VALUES")
 		if strings.Contains(cols, "seq") {
 			t.Errorf("%s: the INSERT names seq in its column list; a hand-supplied seq breaks the "+
-				"total order LatestPerField reads", fset.Position(bl.Pos()))
+				"total order latestCorrectionsPerFieldTx reads", fset.Position(bl.Pos()))
 		}
 		return true
 	})

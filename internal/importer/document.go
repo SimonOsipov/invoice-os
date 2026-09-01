@@ -45,6 +45,10 @@ type SettledExtraction struct {
 // created_at (TestSettledExtraction_TiedCreatedAtResolvesStablyAcross20Calls). No import of
 // internal/extraction (TestImporterPackage_DoesNotImportExtractionPackage) -- that edge would
 // drag go-pdfium into cmd/invoice.
+//
+// Correction-blind on purpose: a human correction is written to the invoice in the same
+// transaction as the extraction_field_corrections row, so reading that table here would apply
+// the same value twice through two paths (TestSettledExtraction_IgnoresCorrectionsAndReadsRankZero).
 func (s *Store) SettledExtraction(ctx context.Context, documentID string) (SettledExtraction, error) {
 	ex := SettledExtraction{Fields: []extractedField{}}
 

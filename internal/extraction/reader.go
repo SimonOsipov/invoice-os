@@ -5,9 +5,11 @@
 package extraction
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -251,10 +253,83 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 	return out, nil
 }
 
-// mergeCorrections lays the correction record over the decided readings. Not implemented yet:
-// the precedence per method is spelled out by TestExtractionMerge_ResolvesEachMethodWithoutADatabase.
+// mergeCorrections lays the latest correction per field over the decided readings, one entry per
+// field name (TestExtractionMerge_ResolvesEachMethodWithoutADatabase). A settled field is no
+// longer flagged, so its reason goes to "" and its alternatives to empty.
 func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) []ExtractionFieldState {
-	return fields
+	byName := map[string]int{}
+	for i, f := range fields {
+		byName[f.Name] = i
+	}
+	out := make([]ExtractionFieldState, len(fields))
+	copy(out, fields)
+
+	// A correction may name a field the extractor never read: refuseField admits names
+	// mockDefaultResult never emits, and the value already reached the invoice.
+	added := []ExtractionFieldState{}
+	for _, c := range corrections {
+		// An undo is a full reset to the extractor's reading, its own value ignored
+		// (TestExtractionDetail_UndoneIgnoresItsOwnValueAndRestoresTheReading).
+		if c.Method == MethodUndone {
+			continue
+		}
+
+		f := ExtractionFieldState{Name: c.FieldName, Alternatives: []ExtractionCandidate{}}
+		idx, read := byName[c.FieldName]
+		if read {
+			f = out[idx]
+		}
+
+		// Read before Value is overwritten: the first correction on a field supersedes the
+		// reading, which may itself be a missing field with no value.
+		was := c.Superseded
+		if was == nil {
+			was = f.Value
+		}
+
+		value := c.Value
+		f.Value = &value
+		switch c.Method {
+		case MethodChosen:
+			// _pointed_has_region forbids a box on a chosen row, so the alternative is re-derived by
+			// value — before the alternatives are emptied below, or it is unrecoverable
+			// (TestExtractionDetail_ChosenCorrectionTakesTheAlternativesRegion).
+			for _, a := range f.Alternatives {
+				if a.Value != nil && *a.Value == c.Value {
+					f.Region = a.Region
+					break
+				}
+			}
+		case MethodPointed:
+			if c.Region != nil { // _pointed_has_region ties the stored box to this method exactly
+				f.Region = &ExtractionRegion{
+					Page: c.Region.Page, X0: c.Region.X0, Y0: c.Region.Y0, X1: c.Region.X1, Y1: c.Region.Y1,
+				}
+			}
+		}
+		f.Reason = ""
+		f.Alternatives = []ExtractionCandidate{}
+
+		// "" is no label, not an empty one: the wire key is nullable so subtask 06 never renders a
+		// dangling "Taken from " (TestExtractionDetail_WhereCarriesTheAnchorLabelAndIsNullWithoutOne).
+		var where *string
+		if c.AnchorLabel != "" {
+			label := c.AnchorLabel
+			where = &label
+		}
+		f.Corrected = &ExtractionCorrected{Method: string(c.Method), Was: was, Where: where}
+
+		if read {
+			out[idx] = f
+			continue
+		}
+		added = append(added, f)
+	}
+
+	// Appended after the read fields and ordered here, not by the query's ORDER BY, so the output
+	// order does not rest on the caller. The corrections read is one row per field name, so no tie.
+	slices.SortFunc(added, func(a, b ExtractionFieldState) int { return cmp.Compare(a.Name, b.Name) })
+	return append(out, added...)
 }
 
 // detailPagesTx returns the page inventory in page order. The stored grid is read, never

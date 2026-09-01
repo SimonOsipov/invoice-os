@@ -19,11 +19,16 @@ import {
   fieldNote,
   getExtractionDetail,
   highlightStyle,
+  isDrawnBox,
+  normaliseBox,
   pageFrameStyle,
+  pointBoxStyle,
+  pointedEntry,
   reasonPill,
   regionPhrase,
   savableCorrections,
   scrollRegionIntoView,
+  typedEntry,
 } from './extractionReview'
 import type {
   DraftEntries,
@@ -32,6 +37,8 @@ import type {
   ExtractionFieldState,
   ExtractionPage,
   ExtractionRegion,
+  FrameBox,
+  ViewportPoint,
 } from './extractionReview'
 
 afterEach(() => {
@@ -1030,5 +1037,281 @@ describe('savableCorrections', () => {
     expect(out.map((p) => p.field), 'the undo was dropped as a no-op').toEqual(['total'])
     expect(out[0].body.method).toBe('undone')
     expect(out[0].body.value, 'an undo posts a blank value and the boundary 400s it').not.toBe('')
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08 — pointing at a region. Written RED against the five stubs `c994ecee` landed
+// (page 0, -1 coordinates, `undone`, `undefined`), so every row below fails on its own
+// assertion and none can pass on a constant.
+//
+// The `/72/` and `/dpi/i` source guards read MODULE_SRC (`extractionReview.ts`), never this
+// file, so the arithmetic and the colour literal below are unscanned here and scrubbed there.
+// ==========================================================================================
+
+// highlightStyle emits its percentages through round4 (`Number(v.toFixed(4))`), so the
+// browser can only place a corner on a 4-decimal percentage. The fixtures below reproduce
+// that quantization rather than idealising it.
+function r4(n: number): number {
+  return Number(n.toFixed(4))
+}
+
+// x0 carries SEVEN decimals on purpose. At six (`.123456`) round4 is the identity — measured,
+// `Number((12.3456).toFixed(4)) === 12.3456` — so the tolerance would absorb nothing. At seven
+// the round trip loses 3.0e-7: inside 1e-6, outside 1e-7.
+// The four coordinates are pairwise distinct and the box is wider (.4465) than it is tall
+// (.21), so an axis swap or a transposed divisor cannot agree with it.
+const DRAWN: ExtractionRegion = { page: 2, x0: 0.1234567, y0: 0.41, x1: 0.57, y1: 0.62 }
+
+// One origin, three sizes. Non-zero `left`/`top`, so a missing translate is visible; three
+// DISTINCT widths and heights, so this is three geometries and not one measured three times.
+const FRAMES: FrameBox[] = [
+  { left: 37, top: 91, width: 560, height: 725 },
+  { left: 37, top: 91, width: 620, height: 803 },
+  { left: 37, top: 91, width: 960, height: 1243 },
+]
+
+/** Where the browser puts a normalised coordinate on one axis of one frame. */
+function atX(f: FrameBox, v: number): number {
+  return f.left + (r4(v * 100) / 100) * f.width
+}
+
+function atY(f: FrameBox, v: number): number {
+  return f.top + (r4(v * 100) / 100) * f.height
+}
+
+const AXES = ['x0', 'y0', 'x1', 'y1'] as const
+
+describe('normaliseBox', () => {
+  it('turns a drag into the box highlightStyle would draw, at three frame sizes', () => {
+    // Floor: three different frames, or "at every zoom" is one geometry measured three times.
+    expect(new Set(FRAMES.map((f) => f.width)).size, 'the three frames are not three sizes').toBe(3)
+    expect(new Set(FRAMES.map((f) => f.height)).size, 'the three frames share a height').toBe(3)
+
+    for (const f of FRAMES) {
+      const a: ViewportPoint = { x: atX(f, DRAWN.x0), y: atY(f, DRAWN.y0) }
+      const b: ViewportPoint = { x: atX(f, DRAWN.x1), y: atY(f, DRAWN.y1) }
+
+      const got = normaliseBox(f, a, b, 2)
+
+      expect(got.page, `frame ${f.width}: the box claims page ${got.page}, and the drag was on page 2`).toBe(2)
+
+      // Clause 1 — the tolerance bounds the ROUND-TRIP ERROR. 1e-6 is AC-2's own claim and
+      // 3.0e-7 of it is spent by the rendering's own 4-decimal grid.
+      for (const axis of AXES) {
+        expect(
+          Math.abs(got[axis] - DRAWN[axis]),
+          `frame ${f.width}: ${axis} came back ${got[axis]}, and the drag was drawn at ${DRAWN[axis]}`,
+        ).toBeLessThan(1e-6)
+      }
+
+      // Clause 2 — the quantization proves ROUND4 RAN. The clause above is satisfied by an
+      // identity that never renders at all, because the input is within 1e-6 of itself; this
+      // one asks whether the value landed on the grid round4 produces. A correct build sits
+      // ~3e-11 off the integer; an unrendered .1234567 sits 0.3 off it.
+      expect(
+        Math.abs(got.x0 * 1e6 - Math.round(got.x0 * 1e6)),
+        `frame ${f.width}: x0 is ${got.x0}, which is not on the 4-decimal grid the browser renders`,
+      ).toBeLessThan(1e-3)
+    }
+  })
+
+  it('orders the corners, so a drag up and to the left is still a legal box', () => {
+    // An ordinary gesture: the hand starts bottom-right. `bbox_normalised` (the migration's
+    // CHECK) and normalisedBox (handlers_correction.go) both refuse x0 > x1.
+    const f = FRAMES[0]
+    const bottomRight: ViewportPoint = { x: atX(f, DRAWN.x1), y: atY(f, DRAWN.y1) }
+    const topLeft: ViewportPoint = { x: atX(f, DRAWN.x0), y: atY(f, DRAWN.y0) }
+
+    const got = normaliseBox(f, bottomRight, topLeft, 2)
+
+    expect(got.x0, `x0 came back ${got.x0} and x1 ${got.x1} — the boundary refuses that box`).toBeLessThan(got.x1)
+    expect(got.y0, `y0 came back ${got.y0} and y1 ${got.y1} — the boundary refuses that box`).toBeLessThan(got.y1)
+    for (const axis of AXES) {
+      expect(
+        Math.abs(got[axis] - DRAWN[axis]),
+        `dragged the other way, ${axis} came back ${got[axis]} instead of ${DRAWN[axis]}`,
+      ).toBeLessThan(1e-6)
+    }
+  })
+
+  it('clamps a release outside the frame into [0,1]', () => {
+    // A fast exit delivers a mouseup at a fractionally out-of-frame coordinate before
+    // mouseleave. Un-clamped this posts -0.0645 and 1.0967, the two values the boundary 400s.
+    const f = FRAMES[1]
+    const a: ViewportPoint = { x: f.left - 40, y: f.top - 25 }
+    const b: ViewportPoint = { x: f.left + f.width + 60, y: f.top + f.height + 30 }
+
+    const got = normaliseBox(f, a, b, 3)
+
+    // Four separate assertions, so a clamp on one axis only still reds.
+    expect(got.page, `the box claims page ${got.page}`).toBe(3)
+    expect(got.x0, `x0 escaped the page at ${got.x0}`).toBe(0)
+    expect(got.y0, `y0 escaped the page at ${got.y0}`).toBe(0)
+    expect(got.x1, `x1 escaped the page at ${got.x1}`).toBe(1)
+    expect(got.y1, `y1 escaped the page at ${got.y1}`).toBe(1)
+  })
+})
+
+describe('isDrawnBox', () => {
+  it("admits the artboard's floor and refuses everything under it", () => {
+    // The artboard refuses `b.w < 24 || b.h < 12`, so 24x12 itself passes. The last row is an
+    // ordinary up-and-left drag: without Math.abs it reads as a negative box and is refused.
+    const from: ViewportPoint = { x: 100, y: 200 }
+    const by = (w: number, h: number): ViewportPoint => ({ x: from.x + w, y: from.y + h })
+
+    for (const [w, h, want] of [
+      [24, 12, true],
+      [23, 12, false],
+      [24, 11, false],
+      [0, 0, false],
+      [300, 300, true],
+      [-40, -20, true],
+    ] as const) {
+      expect(isDrawnBox(from, by(w, h)), `a ${w}x${h} gesture`).toBe(want)
+    }
+  })
+})
+
+describe('pointBoxStyle', () => {
+  it("draws the region highlightStyle would, in the artboard's own amber", () => {
+    // Asymmetric on both axes and on page 4, so a swapped axis or a hardcoded page cannot agree.
+    const region = mkRegion({ page: 4, x0: 0.13, y0: 0.41, x1: 0.57, y1: 0.62 })
+
+    const box = pointBoxStyle(region)
+    const highlight = highlightStyle(region)
+
+    // The geometry is highlightStyle's, read off highlightStyle rather than retyped: the live
+    // box and the settled highlight must resolve against the same padding box.
+    for (const key of ['left', 'top', 'width', 'height'] as const) {
+      expect(box[key], `the live box's ${key} is ${String(box[key])}, the highlight's is ${String(highlight[key])}`).toBe(
+        highlight[key],
+      )
+    }
+
+    expect(box.position).toBe('absolute')
+    expect(box.pointerEvents, 'the live box swallows the drag it is drawn by').toBe('none')
+    expect(box.border, "the artboard's drag box is a 2px amber outline").toBe('2px solid var(--accent)')
+    expect(box.background).toBe('oklch(72% .15 65 / .18)')
+    expect(box.borderRadius).toBe(2)
+
+    // The likely mutant is a SPREAD of highlightStyle, which passes every clause above while
+    // inheriting the settled highlight's 3px ring and its transition — a treatment the
+    // artboard's own drag box does not have. Presence-only assertions cannot see what rides
+    // along, so both are asserted absent.
+    expect(box.boxShadow, 'the live box inherited the settled highlight ring').toBeUndefined()
+    expect(box.transition, 'the live box inherited the settled highlight transition').toBeUndefined()
+  })
+})
+
+const POINTED_BOX = mkRegion({ page: 4, x0: 0.11, y0: 0.22, x1: 0.33, y1: 0.44 })
+const CHOSEN_BOX = mkRegion({ page: 3 })
+
+describe('typedEntry', () => {
+  it('keeps a pointed entry pointed and its box', () => {
+    // Three arms, three different answers: no constant survives. Typing beside a box you drew
+    // does not unsay the box; typing over a chip's value does drop the chip's provenance.
+    expect(
+      typedEntry({ kind: 'pointed', value: '31775208-0000', region: POINTED_BOX }, '31775208-0003'),
+      'typing beside a drawn box threw the box away',
+    ).toEqual({ kind: 'pointed', value: '31775208-0003', region: POINTED_BOX })
+
+    expect(
+      typedEntry({ kind: 'chosen', value: '2026-01-10', region: CHOSEN_BOX }, '2026-02-11'),
+      "typing over a chosen chip kept the chip's box as the provenance",
+    ).toEqual({ kind: 'typed', value: '2026-02-11', region: null })
+
+    expect(typedEntry(undefined, '1,500.00'), 'typing into an untouched field').toEqual({
+      kind: 'typed',
+      value: '1,500.00',
+      region: null,
+    })
+  })
+})
+
+describe('pointedEntry', () => {
+  it('keeps the value the person already has', () => {
+    // The box records WHERE and the person types WHAT: nothing in this build reads text out of
+    // a region, so drawing on an untouched field yields a blank-valued waypoint.
+    expect(pointedEntry(undefined, null, POINTED_BOX), 'a box on a field the extractor read nothing for').toEqual({
+      kind: 'pointed',
+      value: '',
+      region: POINTED_BOX,
+    })
+
+    expect(pointedEntry(undefined, 'MOCK-INV-0001', POINTED_BOX), "a box on a field the extractor did read").toEqual({
+      kind: 'pointed',
+      value: 'MOCK-INV-0001',
+      region: POINTED_BOX,
+    })
+
+    expect(
+      pointedEntry({ kind: 'typed', value: '31775208-0003', region: null }, 'ignored', POINTED_BOX),
+      'drawing a box discarded the value the person had already typed',
+    ).toEqual({ kind: 'pointed', value: '31775208-0003', region: POINTED_BOX })
+  })
+})
+
+describe('applyDraft, pointed', () => {
+  it("moves a pointed field's highlight to the box that was drawn", () => {
+    // `region: null` on the wire is what makes this discriminating: no existing box can be
+    // mistaken for the drawn one, so a build with no pointed arm renders no highlight at all.
+    const fields = [mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' })]
+    const entries: DraftEntries = {
+      buyer_tin: { kind: 'pointed', value: '31775208-0003', region: POINTED_BOX },
+    }
+
+    const out = applyDraft(fields, entries)
+
+    expect(out, 'the draft dropped or duplicated a field').toHaveLength(1)
+    expect(out[0].value, 'the pointed value never reached the field').toBe('31775208-0003')
+    expect(out[0].region, 'the drawn box never reached the field, so nothing can highlight it').toEqual(POINTED_BOX)
+    // The two lies a drafted point must not tell: nothing is recorded until Save, and the
+    // field is still the one the extractor could not find.
+    expect(out[0].corrected, 'a drafted point claimed a correction nobody has recorded').toBeNull()
+    expect(out[0].reason, 'a drafted point cleared the reason the server still holds').toBe('missing')
+  })
+})
+
+describe('savableCorrections, pointed', () => {
+  it("sends a pointed correction's box, and keeps it when the value has not moved", () => {
+    // A pointed entry is never a no-op: its region is always new, and it is the anchor context
+    // a correction is required to store. The `total` neighbour closes the other direction —
+    // a mutant dropping every no-op regardless of kind returns [].
+    const fields = [mkField({ name: 'buyer_tin', value: '31775208-0003' }), mkField({ name: 'total', value: '1000.00' })]
+    const entries: DraftEntries = {
+      buyer_tin: { kind: 'pointed', value: '31775208-0003', region: POINTED_BOX },
+      total: { kind: 'typed', value: '1000.00', region: null },
+    }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(
+      out.map((p) => p.field),
+      'pointing at the right place for an already-right value recorded nothing, so the box is lost',
+    ).toEqual(['buyer_tin'])
+    expect(out[0].body, 'the drawn box never reached the wire').toEqual({
+      value: '31775208-0003',
+      method: 'pointed',
+      region: POINTED_BOX,
+      anchor_label: '',
+    })
+  })
+
+  it('drops a point nobody typed a value into', () => {
+    // msgBlankValue 400s it, so the round trip and its message buy nothing. The neighbour is
+    // what makes the absence real: an implementation returning [] passes the first clause alone.
+    const fields = [mkField({ name: 'buyer_tin', value: null }), mkField({ name: 'total', value: '1000.00' })]
+    const entries: DraftEntries = {
+      buyer_tin: { kind: 'pointed', value: '   ', region: POINTED_BOX },
+      total: { kind: 'typed', value: '1,500.00', region: null },
+    }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(
+      out.map((p) => p.field),
+      'a valueless point was posted, and the boundary refuses a blank value',
+    ).toEqual(['total'])
   })
 })

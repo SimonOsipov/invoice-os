@@ -76,6 +76,7 @@ import {
   type ExtractionDetail,
   type ExtractionJobsResponse,
   type ExtractionReason,
+  type ExtractionRegion,
 } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
@@ -3766,6 +3767,231 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
 
   await testInfo.attach('extraction-chip-row.json', {
     body: JSON.stringify({ field: ambiguous!.name, candidates: ambiguous!.alternatives.length + 1, measured }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR-12's Invented-copy table, with the lead's Stage-1 corrections. `POINT_ARMED` replaces
+// the artboard's click-arm string: this build's gesture is a DRAG, and under the 24x12 floor a
+// user who obeys "click the words" gets nothing. Both are clear of the reason-code sweep above.
+const POINT_IDLE = 'Not found — point at it on the document'
+const POINT_ARMED = 'Waiting — drag a box around it on the document'
+
+type Ratio = { x: number; y: number; width: number; height: number }
+
+/** A rectangle expressed against a frame, which is the only zoom-invariant form it has. */
+function ratioOf(box: Rect, frame: Rect): Ratio {
+  return {
+    x: (box.x - frame.x) / frame.width,
+    y: (box.y - frame.y) / frame.height,
+    width: box.width / frame.width,
+    height: box.height / frame.height,
+  }
+}
+
+test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the screen reads back, at every zoom', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // The two-page fixture, and the ONLY deployed source of a second page: every mock region is
+  // on page 1, so page 2 is where a page-indexing defect becomes visible at all.
+  await extractOneDocument(page, 'EXTR-12-08 point', {
+    name: 'native_invoice_2p.pdf',
+    buffer: uniqueTwoPagePdfBytes(),
+  })
+  const detail = await openExtractionReview(page)
+
+  // Off the wire the SPA itself consumed, never a literal out of mock.go.
+  expect(detail.pages.map((p) => p.page), 'the two-page fixture must produce two stored pages').toEqual([1, 2])
+  const missing = detail.fields.find((f) => f.reason === 'missing')
+  expect(missing, 'no field on this document is missing -- there is nothing to point at').toBeTruthy()
+  const name = missing!.name
+  expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
+
+  const button = page.getByTestId(`extraction-point-${name}`)
+  await expect(button, `${name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
+
+  // -- CLAIM 1 (AC-6) -- the armed state is visible on the DEPLOYED build.
+  //
+  // The RESOLVED value, not the declaration: the jsdom row reads `el.style.*` and would pass
+  // under an app-layer.css rule overriding the inline colour. This is the row that catches it.
+  const paint = async () =>
+    button.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return { border: cs.borderTopColor, background: cs.backgroundColor, colour: cs.color }
+    })
+
+  const idlePaint = await paint()
+  expect((await button.innerText()).trim(), 'the idle label is not the copy table’s').toBe(POINT_IDLE)
+
+  await button.click()
+  await expect(button, 'clicking the point button changed nothing the reader can see').toHaveText(POINT_ARMED, {
+    timeout: 15_000,
+  })
+  const armedPaint = await paint()
+
+  for (const key of ['border', 'background', 'colour'] as const) {
+    expect(
+      armedPaint[key],
+      `arming left ${key} at ${idlePaint[key]} -- the armed state is invisible without hover`,
+    ).not.toBe(idlePaint[key])
+  }
+
+  const surface = page.getByTestId('extraction-point-surface-2')
+  await expect(surface, 'the armed field takes no drag on page 2').toBeVisible({ timeout: 15_000 })
+  const save = page.getByTestId('extraction-save')
+
+  // -- CLAIM 2 (AC-3) -- a gesture under the artboard's floor is a click, not a box.
+  //
+  // A build that discards EVERYTHING also passes this claim; claim 3 is its pair.
+  const s0 = await boxOf(page, 'extraction-point-surface-2')
+  await page.mouse.move(s0.x + 0.2 * s0.width, s0.y + 0.2 * s0.height)
+  await page.mouse.down()
+  await page.mouse.move(s0.x + 0.2 * s0.width + 10, s0.y + 0.2 * s0.height + 6)
+  await page.mouse.up()
+
+  await expect(page.getByTestId('extraction-point-box'), 'a 10x6 twitch was drafted as a region').toHaveCount(0)
+  expect(await save.isDisabled(), 'a 10x6 twitch armed Save, so the boundary will be asked to store it').toBe(true)
+
+  // -- CLAIM 3 (AC-2) -- the drawn box IS the rendered box, at every zoom.
+  //
+  // The oracle is the SCREEN RECTANGLE OF THE DRAG, never the region read back off the wire:
+  // deriving `expected` from the wire holds under ANY normalisation, right or wrong, because a
+  // transform that posts a shifted region renders a shifted highlight and the two agree
+  // perfectly. That comparison is right for EXTR-11, where the region is the INPUT; it is
+  // worthless here, where the region is the OUTPUT and the gesture is the input.
+  //
+  // Absolute pixels cannot work: the frame halves at zoom 50, so the drag rectangle is
+  // converted to frame-relative RATIOS against the frame measured AT DRAG TIME.
+  const frameAtDrag = await boxOf(page, 'extraction-page-2')
+  const from = { x: frameAtDrag.x + 0.3 * frameAtDrag.width, y: frameAtDrag.y + 0.22 * frameAtDrag.height }
+  const to = { x: frameAtDrag.x + 0.62 * frameAtDrag.width, y: frameAtDrag.y + 0.55 * frameAtDrag.height }
+
+  await page.mouse.move(from.x, from.y)
+  await page.mouse.down()
+  await page.mouse.move(to.x, to.y, { steps: 8 })
+  await page.mouse.up()
+
+  const want = ratioOf(
+    { x: from.x, y: from.y, width: to.x - from.x, height: to.y - from.y },
+    frameAtDrag,
+  )
+
+  await expect(page.getByTestId('extraction-highlight'), 'the drawn box highlights nothing').toHaveCount(1)
+
+  const measured: { zoom: number; frame: Rect; highlight: Rect; got: Ratio }[] = []
+  for (const zoom of [100, 50, 150]) {
+    await page.getByTestId(`extraction-zoom-${zoom}`).click()
+
+    // settledRead, not a bare read: both boxes move together under a smooth scroll, so the
+    // RATIO is scroll-invariant only if the pair is read from one settled frame.
+    const m = await settledRead(async () => {
+      const [frame, highlight] = await Promise.all([
+        boxOf(page, 'extraction-page-2'),
+        boxOf(page, 'extraction-highlight'),
+      ])
+      return { frame, highlight }
+    }, `drawn-box ratio at zoom ${zoom}`)
+
+    expect(m.frame.width, `the page frame has no width at zoom ${zoom}`).toBeGreaterThan(0)
+    expect(m.highlight.width, `zoom ${zoom}: a zero-width highlight satisfies every ratio vacuously`).toBeGreaterThan(0)
+    expect(m.highlight.height, `zoom ${zoom}: a zero-height highlight satisfies every ratio vacuously`).toBeGreaterThan(
+      0,
+    )
+
+    const got = ratioOf(m.highlight, m.frame)
+    // Per-axis, so 1.5 CSS px means 1.5 px on the axis it is measured on -- and the allowance
+    // widens as the frame shrinks, which is what makes zoom 50 comparable to zoom 100.
+    for (const axis of ['x', 'width'] as const) {
+      expect(
+        Math.abs(got[axis] - want[axis]) * m.frame.width,
+        `zoom ${zoom}: the highlight's ${axis} sits ${(got[axis] * m.frame.width).toFixed(1)}px into the frame, the drag drew it at ${(want[axis] * m.frame.width).toFixed(1)}px`,
+      ).toBeLessThanOrEqual(RATIO_TOL_PX)
+    }
+    for (const axis of ['y', 'height'] as const) {
+      expect(
+        Math.abs(got[axis] - want[axis]) * m.frame.height,
+        `zoom ${zoom}: the highlight's ${axis} sits ${(got[axis] * m.frame.height).toFixed(1)}px into the frame, the drag drew it at ${(want[axis] * m.frame.height).toFixed(1)}px`,
+      ).toBeLessThanOrEqual(RATIO_TOL_PX)
+    }
+
+    measured.push({ zoom, frame: m.frame, highlight: m.highlight, got })
+  }
+
+  expect(measured.map((m) => m.zoom), 'every zoom must be measured').toEqual([100, 50, 150])
+  expect(
+    new Set(measured.map((m) => Math.round(m.frame.width))).size,
+    'zoom moved nothing -- these are one rendering measured three times',
+  ).toBeGreaterThan(1)
+
+  // NOT COVERED, and stated rather than papered over: a transform reading the frame's BORDER
+  // box instead of its padding box. Worked through, the error is (2u - W)/(W+2) -- zero at the
+  // centre of the page and under one pixel at either edge, at every zoom and every frame size.
+  // It therefore satisfies AC-2's one-pixel claim as written, and NO row in this story catches
+  // it. The padding-box overlay stands because it is exact and needs no border arithmetic.
+
+  // -- CLAIM 4 -- the round trip, WITHOUT a reload.
+  //
+  // This SPA has no route back to the review screen, so a reload cannot bring the reader here.
+  // The shell re-reads the detail after every Save, and that GET is the read-back.
+  await page.getByTestId('extraction-zoom-100').click()
+  await page.getByTestId(`extraction-input-${name}`).fill('31775208-0003')
+
+  const [postRes, getRes] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/fields/${name}/corrections`),
+      { timeout: 60_000 },
+    ),
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 60_000 },
+    ),
+    save.click(),
+  ])
+
+  expect(postRes.status(), 'the correction was refused').toBe(201)
+  const sent = postRes.request().postDataJSON() as { method?: string; region?: ExtractionRegion | null }
+  expect(sent.method, 'the box was recorded as some other method').toBe('pointed')
+  expect(sent.region, 'the POST carried no region, so the box was never recorded').not.toBeNull()
+  expect(sent.region!.page, 'the box was posted against page 1').toBe(2)
+
+  expect(getRes.status(), 'the post-save re-read failed').toBe(200)
+  const fresh = (await getRes.json()) as ExtractionDetail
+  const stored = fresh.fields.find((f) => f.name === name)?.region
+  // EXACT equality, never a tolerance: double precision in and JSON out is byte-exact, so a
+  // tolerance here would hide a rounding defect.
+  expect(stored, 'the register did not return the box it was given').toEqual(sent.region)
+
+  const after = await settledRead(async () => {
+    const [frame, highlight] = await Promise.all([
+      boxOf(page, 'extraction-page-2'),
+      boxOf(page, 'extraction-highlight'),
+    ])
+    return { frame, highlight }
+  }, 'drawn-box ratio after the round trip')
+
+  const back = ratioOf(after.highlight, after.frame)
+  for (const axis of ['x', 'width'] as const) {
+    expect(
+      Math.abs(back[axis] - want[axis]) * after.frame.width,
+      `after the round trip the highlight's ${axis} moved off the box that was drawn`,
+    ).toBeLessThanOrEqual(RATIO_TOL_PX)
+  }
+  for (const axis of ['y', 'height'] as const) {
+    expect(
+      Math.abs(back[axis] - want[axis]) * after.frame.height,
+      `after the round trip the highlight's ${axis} moved off the box that was drawn`,
+    ).toBeLessThanOrEqual(RATIO_TOL_PX)
+  }
+
+  await testInfo.attach('extraction-point-round-trip.json', {
+    body: JSON.stringify({ field: name, want, measured, posted: sent.region, stored, back }, null, 2),
     contentType: 'application/json',
   })
 

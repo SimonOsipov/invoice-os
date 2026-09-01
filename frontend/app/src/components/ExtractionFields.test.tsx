@@ -70,6 +70,15 @@ const WAS_CHOSEN = 'We found more than one candidate'
 const UNDO = 'Undo'
 const INVOICE_NUMBER_LOCKED = "The invoice number is this invoice's identity and cannot be changed here."
 
+// EXTR-12's Invented-copy table again, with the lead's two Stage-1 corrections:
+// `POINT_PAGELESS` is the artboard's isDocx branch (`:663`), transcribed into a row the table
+// omitted; `POINT_ARMED` replaces the artboard's click-arm string, which names a gesture this
+// build refuses under the 24x12 floor.
+const POINT_IDLE = 'Not found — point at it on the document'
+const POINT_ARMED = 'Waiting — drag a box around it on the document'
+const POINT_CANCEL = 'Stop pointing'
+const POINT_PAGELESS = 'Not found — type it in'
+
 // internal/extraction/handlers_correction.go, lockedFields. invoice_number is what the invoice
 // is filed under; updateContentTx re-derives the two supplier fields from the client entity and
 // never reads the input, so a correction on any of the three is a 422.
@@ -232,6 +241,15 @@ function chipsOf(name: string): HTMLElement[] {
 
 function undoOf(name: string): HTMLElement | null {
   return screen.queryByTestId(`extraction-undo-${name}`)
+}
+
+// Both OUTSIDE the `extraction-field-` prefix: three row counts key on it.
+function pointOf(name: string): HTMLElement | null {
+  return screen.queryByTestId(`extraction-point-${name}`)
+}
+
+function cancelOf(name: string): HTMLElement | null {
+  return screen.queryByTestId(`extraction-point-cancel-${name}`)
 }
 
 /** Every natively focusable control inside one cell. */
@@ -479,7 +497,7 @@ describe('selection', () => {
     // corrected one, so the walk never saw a chip row or an Undo button — the two elements the
     // artboard writes as `.pf-chip` and `.pf-btn`, which is the most likely thing to be copied
     // in. A guard whose fixture cannot produce the thing it forbids reports clear either way.
-    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }))
     expectEveryPartRendered()
 
     const all = [pane(), ...Array.from(pane().querySelectorAll<HTMLElement>('*'))]
@@ -741,7 +759,7 @@ describe('the cell is reachable by keyboard', () => {
     // A <button> may not contain interactive content, so the chip row and Undo would be invalid
     // markup inside one — and `aria-pressed` is only valid on a button role, which is why the
     // selection moved to `aria-current`.
-    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }))
     expectEveryPartRendered()
 
     for (const r of rows()) {
@@ -1146,6 +1164,12 @@ function expectEveryPartRendered() {
   expect(inputOf('invoice_number'), 'no locked input rendered').toBeTruthy()
   expect(undoOf('total'), 'no Undo button rendered').toBeTruthy()
   expect(within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED), 'no lock reason rendered').toBeTruthy()
+
+  // EXTR-12-08's two. Without them every walk below iterates a pane that never rendered the
+  // point button at all and reports clear — the same vacuity, on the one element 07 did not
+  // build. The fixture is armed on `buyer_tin` for exactly this reason.
+  expect(pointOf('buyer_tin'), 'no point button rendered').toBeTruthy()
+  expect(cancelOf('buyer_tin'), 'no Stop pointing button rendered').toBeTruthy()
 }
 
 describe('the cell EXTR-12 grew', () => {
@@ -1154,7 +1178,7 @@ describe('the cell EXTR-12 grew', () => {
     // nothing inside a cell can override them. `min-width: 0` on the cell is what lets a grid
     // track shrink below its content, and a `width` or `min-width` on any descendant undoes
     // that — silently, because jsdom computes no layout and no other row reads these.
-    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }))
     expectEveryPartRendered()
 
     let checked = 0
@@ -1178,7 +1202,7 @@ describe('the cell EXTR-12 grew', () => {
     // ambiguous field and no corrected one, the other neither. A `title` on the Undo button --
     // the control most likely to attract one -- was covered by nothing. A `title` never fires
     // for a keyboard or screen-reader user and is invisible to Chromium's accessibility tree.
-    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }))
     expectEveryPartRendered()
 
     expect(pane().querySelectorAll('[title]'), 'a control in the pane hides its reason in a tooltip').toHaveLength(0)
@@ -1198,7 +1222,7 @@ describe('the cell EXTR-12 grew', () => {
     // count. A CHILD handle inside that prefix reads as an extra row on all three, and only
     // the gate would say so — which is why the new handles are `extraction-control-*` and
     // `extraction-marker-*`.
-    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }))
     expectEveryPartRendered()
 
     expect(rowIds().slice().sort(), 'a handle inside the prefix reads as an extra row').toEqual(
@@ -1525,7 +1549,7 @@ describe('selection after the restructure', () => {
     // `aria-pressed` is valid only on a button role, and the cell now holds an input and
     // buttons. Scoped to this pane on purpose: screen-wide the negative would red
     // `extraction-zoom-100`, which is EXTR-11's shipped contract.
-    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }))
     expectEveryPartRendered()
 
     expect(row('total').getAttribute('aria-current')).toBe('true')
@@ -1584,5 +1608,124 @@ describe('selection after the restructure', () => {
     expect(onSelect.mock.calls.length, 'the chip click reported nothing upward').toBeGreaterThan(0)
     expect(named(), 'the chip selected another field, or the cell it sits in swallowed it').toEqual(['issue_date'])
     expect(onChoose.mock.calls, 'the chip click produced no draft write').toHaveLength(1)
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08. The point button, its two states and its cancel. Written RED against the
+// SHIPPED cell, which renders no button at all — so every row fails on the control it is
+// about. The four walks above were armed in the same commit and grew a floor for it.
+// ==========================================================================================
+
+// `buyer_tin` is the deployed mock's one `missing` field: a nil value and a nil region.
+const TWO_MISSING: ExtractionFieldState[] = [
+  mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' }),
+  mkField({ name: 'buyer_name', value: null, region: null, reason: 'missing' }),
+]
+
+/** The button's own three inline declarations — the ones AC-6 says all move together. */
+function tripleOf(el: HTMLElement): { border: string; background: string; color: string } {
+  return { border: el.style.border, background: el.style.background, color: el.style.color }
+}
+
+describe('a missing field', () => {
+  it('offers both an input and the point button', () => {
+    // A build following the artboard literally reds the FIRST clause: its `isInput` is
+    // `st !== 'missing' && st !== 'ambiguous'`, so it renders no input on a missing field —
+    // which EXTR-12-07 overruled. This row is what stops 08 undoing it, and the pane's own
+    // per-row value floor reds beside it.
+    render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: null }))
+
+    expect(inputOf('buyer_tin'), 'a missing field can no longer be typed into').toBeTruthy()
+    const button = pointOf('buyer_tin')
+    expect(button, 'a missing field offers no way to point at it').toBeTruthy()
+    expect(button!.textContent, 'the point button is unlabelled or paraphrased').toBe(POINT_IDLE)
+    expect(row('buyer_tin').contains(button), 'the point button rendered outside the cell it arms').toBe(true)
+  })
+
+  it('moves the border, the ground and the label together when it arms', () => {
+    // The DIFF is the oracle, not a snapshot: a single-state assertion passes on a build that
+    // never changes. "Without hover" has its oracle in the READING — every value comes off
+    // `el.style.*`, the inline declaration, and the button carries no class, so no stylesheet
+    // rule could supply it.
+    const { rerender } = render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: null }))
+    const idleButton = pointOf('buyer_tin')
+    expect(idleButton, 'no point button — the diff below is vacuous').toBeTruthy()
+    const idle = tripleOf(idleButton!)
+    const idleLabel = idleButton!.textContent
+
+    rerender(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: 'buyer_tin' }))
+    const armedButton = pointOf('buyer_tin')
+    expect(armedButton, 'the armed cell lost its point button').toBeTruthy()
+    const on = tripleOf(armedButton!)
+
+    // `--ds-amber` does not exist in this repository; the DS amber IS `--accent`.
+    expect(on.border, 'the armed border is not the amber dash').toBe('1.5px dashed var(--accent)')
+    expect(on.background, 'the armed ground is not the amber fill').toBe('var(--status-amber-bg)')
+    expect(on.color, 'the armed label is not the amber text').toBe('var(--status-amber-text)')
+    expect(idle.border, 'the idle border is not the artboard dash').toBe('1.5px dashed var(--line-3)')
+    expect(idle.background, 'the idle button paints a ground').toBe('transparent')
+    expect(idle.color, 'the idle label is not the muted foreground').toBe('var(--fg-2)')
+
+    for (const key of ['border', 'background', 'color'] as const) {
+      expect(on[key], `arming left ${key} exactly where it was, so the state is invisible`).not.toBe(idle[key])
+    }
+    expect(idleLabel, 'the idle label is not the copy table’s').toBe(POINT_IDLE)
+    expect(armedButton!.textContent, 'arming did not change what the button says').toBe(POINT_ARMED)
+  })
+
+  it('offers Stop pointing only while armed, and cancels with it', () => {
+    // Always-absent reds the second half, always-present the first. The `onArm` clause catches
+    // a cancel wired to the wrong callback.
+    const onArm = vi.fn()
+    const onDisarm = vi.fn()
+    const { rerender } = render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: null, onArm, onDisarm }))
+    expect(cancelOf('buyer_tin'), 'an unarmed cell offers a way to stop pointing').toBeNull()
+
+    rerender(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: 'buyer_tin', onArm, onDisarm }))
+    const cancel = cancelOf('buyer_tin')
+    expect(cancel, 'the armed cell offers no way out').toBeTruthy()
+    expect(cancel!.textContent, 'the cancel control is unlabelled').toBe(POINT_CANCEL)
+
+    fireEvent.click(cancel as HTMLElement)
+    expect(onDisarm.mock.calls, 'Stop pointing disarmed nothing').toHaveLength(1)
+    expect(onArm.mock.calls, 'Stop pointing armed the field it was meant to release').toEqual([])
+  })
+
+  it('offers typing, not pointing, on a job with no pages', () => {
+    // BOTH clauses are needed: a build with the right label that still arms passes the first
+    // alone. The `onSelect` clause pins the artboard's own docx fallback — the button still
+    // selects — and the input clause is what makes "type it in" true.
+    const onArm = vi.fn()
+    const onSelect = vi.fn()
+    render(fieldsPane({ fields: TWO_MISSING, canPoint: false, armed: null, onArm, onSelect }))
+
+    const button = pointOf('buyer_tin')
+    expect(button, 'the pageless cell renders no control at all').toBeTruthy()
+    expect(button!.textContent, 'a document with no pages still asks to be pointed at').toBe(POINT_PAGELESS)
+    expect(button!.textContent, 'the pageless label is the pointing one').not.toBe(POINT_IDLE)
+    expect(inputOf('buyer_tin'), '"type it in" and there is nothing to type into').toBeTruthy()
+
+    fireEvent.click(button as HTMLElement)
+    expect(onArm.mock.calls, 'a document with no pages armed a gesture nothing can complete').toEqual([])
+    expect(onSelect.mock.calls, 'the pageless button stopped selecting its own field').toEqual([['buyer_tin']])
+  })
+
+  it('says nothing the copy table does not carry while it is armed', () => {
+    // The ONLY sweep that ever sees POINT_ARMED and POINT_CANCEL: the pane-wide residue sweep
+    // renders unarmed, so it can only reach the idle label. Scoped to ONE cell so the shipped
+    // fixture is untouched and no second NOT FOUND pill can defeat the one-occurrence strip.
+    render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: 'buyer_tin' }))
+
+    const known = [fieldLabel('buyer_tin'), PILL_MISSING, POINT_ARMED, POINT_CANCEL]
+    let left = row('buyer_tin').textContent ?? ''
+
+    // The floor first, so the emptiness below is a real absence.
+    for (const k of known) expect(left, `${k} did not render`).toContain(k)
+
+    for (const k of [...known].sort((a, b) => b.length - a.length)) left = left.replace(k, '')
+    expect(left.replace(/\s+/g, ''), `the armed cell rendered copy it does not declare: ${JSON.stringify(left)}`).toBe(
+      '',
+    )
   })
 })

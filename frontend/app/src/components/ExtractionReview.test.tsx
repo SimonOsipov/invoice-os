@@ -1398,3 +1398,242 @@ describe('one shared draft, one Save', () => {
     ).not.toContain('DELETE')
   })
 })
+
+// ==========================================================================================
+// EXTR-12-08. Arming, the four disarm paths, and what a completed point does before Save.
+// Written RED against `c994ecee`: the shell holds an inert arming slot and the panes render
+// nothing from it.
+// ==========================================================================================
+
+// EXTR-12's Invented-copy table, with the lead's Stage-1 corrections. Literals, never an
+// import of the constant under test.
+const POINT_IDLE = 'Not found — point at it on the document'
+const POINT_ARMED = 'Waiting — drag a box around it on the document'
+const MARKER_POINTED = 'YOU POINTED THIS OUT'
+const WAS_POINTED = 'Taken from page 2'
+
+/** Two missing fields to arm against each other, and one ordinary field to select and type. */
+const POINT_JOB: ExtractionDetail = mkDetail({
+  fields: [
+    mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' }),
+    mkField({ name: 'buyer_name', value: null, region: null, reason: 'missing' }),
+    mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 1 }) }),
+  ],
+})
+
+function pointOf(name: string): HTMLElement | null {
+  return screen.queryByTestId(`extraction-point-${name}`)
+}
+
+function armedLabels(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="extraction-point-"]'))
+    .filter((el) => el.textContent === POINT_ARMED)
+    .map((el) => el.dataset.testid ?? '')
+}
+
+function arm(name: string): void {
+  const button = pointOf(name)
+  expect(button, `${name} offers no point button — every claim below is vacuous`).toBeTruthy()
+  fireEvent.click(button as HTMLElement)
+}
+
+// The drag surface's stub, and the box the gesture below describes on it. Two axes, both
+// non-zero: `left` carries the translate and `width` the scale.
+const SURFACE_RECT = { left: 40, top: 90, width: 600, height: 800 }
+const DRAG_FROM = { clientX: 100, clientY: 200 }
+const DRAG_TO = { clientX: 400, clientY: 500 }
+const DRAWN_REGION = { page: 2, x0: 0.1, y0: 0.1375, x1: 0.6, y1: 0.5125 }
+// highlightStyle's own round4 percentages for that box. Literals, so this file cannot agree
+// with a wrong transform by computing it the same wrong way.
+const DRAWN_PERCENT = { left: '10%', top: '13.75%', width: '50%', height: '37.5%' }
+
+function measureRect(el: HTMLElement, rect: { left: number; top: number; width: number; height: number }): void {
+  Object.defineProperty(el, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      right: rect.left + rect.width,
+      bottom: rect.top + rect.height,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => ({}),
+    }),
+  })
+}
+
+/** Arms `buyer_tin` and drags a box across page 2's surface. */
+function drawBoxOnPageTwo(): void {
+  arm('buyer_tin')
+  const s = screen.queryByTestId('extraction-point-surface-2')
+  expect(s, 'the armed field renders no drag surface on page 2 — the gesture below is vacuous').not.toBeNull()
+  measureRect(s as HTMLElement, SURFACE_RECT)
+  fireEvent.mouseDown(s as HTMLElement, DRAG_FROM)
+  fireEvent.mouseMove(s as HTMLElement, DRAG_TO)
+  fireEvent.mouseUp(s as HTMLElement, DRAG_TO)
+}
+
+describe('arming one field at a time', () => {
+  it('disarms the first when a second arms', async () => {
+    // One nullable slot cannot hold two, so this is testing an OVERWRITE, not a guard. Both
+    // fields are asserted in BOTH directions: an implementation holding a SET of armed fields
+    // reds only on "A is idle again".
+    const w = writing(POINT_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    arm('buyer_tin')
+    expect(pointOf('buyer_tin')!.textContent, 'clicking the point button armed nothing').toBe(POINT_ARMED)
+    expect(pointOf('buyer_name')!.textContent, 'arming one field armed its neighbour too').toBe(POINT_IDLE)
+
+    arm('buyer_name')
+    expect(pointOf('buyer_name')!.textContent, 'the second field never armed').toBe(POINT_ARMED)
+    expect(pointOf('buyer_tin')!.textContent, 'two fields are armed at once, and a drag can only settle one').toBe(
+      POINT_IDLE,
+    )
+  })
+
+  it('disarms on selecting another field and on cancelling, and neither writes', async () => {
+    // The `writes` clause is what stops a disarm implemented by posting something. The arming
+    // step is also where the functional updater earns its place: an unconditional
+    // `setArmed(null)` inside onSelect never lets the field arm at all, because the cell's own
+    // bubbled onClick runs after the button's.
+    const w = writing(POINT_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    arm('buyer_tin')
+    expect(armedLabels(), 'the field never armed — the disarm below proves nothing').toEqual([
+      'extraction-point-buyer_tin',
+    ])
+    fireEvent.click(fieldRow('total'))
+    expect(armedLabels(), 'selecting another field left the first one armed').toEqual([])
+
+    arm('buyer_tin')
+    expect(armedLabels(), 'the field never re-armed').toEqual(['extraction-point-buyer_tin'])
+    const cancel = screen.queryByTestId('extraction-point-cancel-buyer_tin')
+    expect(cancel, 'the armed cell offers no way out').toBeTruthy()
+    fireEvent.click(cancel as HTMLElement)
+    expect(armedLabels(), 'Stop pointing left the field armed').toEqual([])
+
+    expect(writes(w), 'a disarm reached the register').toEqual([])
+  })
+
+  it('disarms on Save', async () => {
+    // The POST-count clause stops the opposite mutant — a "disarm" that works by refusing to save.
+    const w = writing(POINT_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    arm('buyer_tin')
+    expect(armedLabels(), 'the field never armed').toEqual(['extraction-point-buyer_tin'])
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '1,500.00' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(armedLabels(), 'Save left a field armed over a screen that has moved on').toEqual([])
+    expect(postedFields(w), 'Save wrote the wrong set of fields').toEqual(['total'])
+  })
+})
+
+describe('a completed point', () => {
+  it('drafts the box and moves the highlight, without writing', async () => {
+    // The selection clause is NOT asserted here: arming already selects, so it is green before
+    // the drag. What discriminates is the highlight's NAME and its four percentages — with
+    // `region: null` on the wire, a build with no pointed arm in applyDraft renders no
+    // highlight at all.
+    const w = writing(POINT_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    drawBoxOnPageTwo()
+
+    const drawn = highlights()
+    expect(drawn, 'the drawn box highlights nothing on the document').toHaveLength(1)
+    expect(drawn[0].dataset.snip, 'the highlight belongs to another field').toBe('buyer_tin')
+    expect(
+      pick(drawn[0].style, ['left', 'top', 'width', 'height'] as const),
+      'the highlight is not the box that was drawn',
+    ).toEqual(DRAWN_PERCENT)
+    expect(pressedRows(), 'the pointed field is not the selected one').toEqual(['extraction-field-buyer_tin'])
+    expect(writes(w), 'a drafted point reached the register before anyone pressed Save').toEqual([])
+  })
+
+  it('leaves the document where the person left it', async () => {
+    // INVERTED on purpose. The user has just drawn a box and is looking at it; re-centring it
+    // scrolls the page under their cursor to show them what is already in front of them.
+    // `scrollNonce`'s whole contract is that a re-render changing neither selection nor nonce
+    // must not scroll, so leaving it alone is the shipped design.
+    //
+    // The floor is what stops this passing on a do-nothing: the box must actually have landed.
+    const w = writing(POINT_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    arm('buyer_tin')
+    const before = scrollToSpy.mock.calls.length
+
+    drawBoxOnPageTwo()
+
+    expect(highlights(), 'no box landed — a flat scroll count proves nothing').toHaveLength(1)
+    expect(
+      scrollToSpy.mock.calls.length,
+      'completing a point scrolled the document out from under the box the person just drew',
+    ).toBe(before)
+  })
+
+  it('posts the drawn box on Save, and the settled cell says where it came from', async () => {
+    // `reader.go` clears the reason on a corrected field, so the point button is GONE from this
+    // cell afterwards — the two strings below come from correctedMarker's shipped pointed arm
+    // and regionPhrase, which is what proves 08's wire reaches 07's marker.
+    const settled = mkDetail({
+      fields: [
+        mkField({
+          name: 'buyer_tin',
+          value: '31775208-0003',
+          region: mkRegion(DRAWN_REGION),
+          reason: '',
+          corrected: { method: 'pointed', was: null, where: null },
+        }),
+        POINT_JOB.fields[1],
+        POINT_JOB.fields[2],
+      ],
+    })
+    let posted = false
+    const w = wire(async (_last, _url, opts) => {
+      if ((opts?.method ?? 'GET') === 'GET') return posted ? settled : POINT_JOB
+      posted = true
+      return mkCorrectionResponse('buyer_tin', String((opts?.body as { value?: string }).value ?? ''), 'pointed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    drawBoxOnPageTwo()
+    fireEvent.change(inputOf('buyer_tin') as HTMLInputElement, { target: { value: '31775208-0003' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const sent = writes(w)
+    expect(sent, 'Save sent no correction for the field that was pointed at').toHaveLength(1)
+    expect(sent[0].url, 'the box was posted against another field').toContain('/fields/buyer_tin/corrections')
+    expect(sent[0].body, 'the drawn box never reached the wire').toEqual({
+      value: '31775208-0003',
+      method: 'pointed',
+      region: DRAWN_REGION,
+      anchor_label: '',
+    })
+
+    const cell = fieldRow('buyer_tin')
+    expect(within(cell).queryByText(MARKER_POINTED), 'the settled cell does not say the person pointed it out').toBeTruthy()
+    expect(within(cell).queryByText(WAS_POINTED), 'the settled cell does not say which page the box is on').toBeTruthy()
+  })
+})

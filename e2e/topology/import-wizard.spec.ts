@@ -71,8 +71,10 @@ import {
   listInvoices,
   approveUntilClosed,
   firmApproverTokens,
+  getAuditLog,
   postFieldCorrection,
   PERSONAS,
+  type CorrectionResponse,
   type ExtractionDetail,
   type ExtractionJobsResponse,
   type ExtractionReason,
@@ -4207,12 +4209,24 @@ type FidelityRow = {
   /** What the deployed surface must resolve to. Equal to `artboard` unless `deviation` says why not. */
   expected: string
   deviation: string | null
+  /**
+   * How to find the element when it carries no testid. Defaults to `[data-testid="${element}"]`,
+   * so no row written before EXTR-12-09 changes; `element` stays the map key and the name the
+   * failure message uses. A row that sets this asserts a match count of 1 as well.
+   */
+  selector?: string
 }
 
-// A placeholder rather than a literal: `var(--bg-2)` resolves to whatever the deployed theme
-// resolves it to, and the diff compares the toolbar against that token rather than against a
-// colour typed here. Filled in from the probe below.
+// Placeholders rather than literals: each resolves to whatever the deployed theme resolves it
+// to, and the diff compares against that token rather than against a colour typed here. Filled
+// in from the probes below.
 const BG_2_TOKEN = '<var(--bg-2)>'
+const ACTION_TOKEN = '<var(--action)>'
+const ACCENT_TOKEN = '<var(--accent)>'
+
+// AC-2's rule, once, shared by the two rows it governs.
+const TEAL_IS_ACTION =
+  "the artboard's `var(--accent)` here means TEAL; in this repo `--accent` IS the design system's amber and is deliberately not aliased, so every teal transcribes to `--action` (app-layer.css:37-47, WorkflowParts.tsx:7-9)"
 
 const FIDELITY: FidelityRow[] = [
   // The document pane. `flex: 1 1 auto; min-width: 0`.
@@ -4282,6 +4296,155 @@ const FIDELITY: FidelityRow[] = [
   // The chip's mono `where` sub-label. `font-size: 8.5px; letter-spacing: 0.05em`.
   // letter-spacing is asserted separately, in ems -- see below.
   { element: 'extraction-chip-where-issue_date-0', property: 'font-size', artboard: '8.5px', source: ':317', expected: '8.5px', deviation: null },
+
+  // -- EXTR-12's four elements ---------------------------------------------------------------
+  //
+  // Chrome's resolved forms were READ off synthetic nodes rather than assumed: `1.5px dashed`
+  // stays `1.5px` (no rounding), `border-radius: 999px` stays `999px`, `flex: 1` resolves
+  // `1 / 1 / 0%`, `min-height: 38px` stays `38px`, `padding: 0 12px` gives `0px` / `12px`. A row
+  // that reds on a correct build for an unchecked rounding is the one real hazard here.
+  //
+  // Two elements below carry no testid and are reached by a `selector`; their `element` is a
+  // NAME for the failure message, not a handle.
+
+  // The candidate chip. `flex: 1; min-width: 0; text-align: left; border: 1px solid …`, per
+  // longhand -- the table's own precedent (extraction-canvas's `flex: 1 1 auto`, above).
+  // These four are what EXTR12-E2E-04's evenness clause cannot decide: 2026-01-01, 2026-01-10
+  // and 2026-10-01 are anagrams, so `flex: none` chips are even too, and all three sub-labels
+  // read `page 1`. A `flex: none` chip resolves `0 / 0 / auto` and reds three of them on ANY
+  // fixture. Chip 0 renders CHIP_PICKED, which changes only border COLOUR, so every property
+  // here is state-independent.
+  { element: 'extraction-chip-issue_date-0', property: 'flex-grow', artboard: '1', source: ':315', expected: '1', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'flex-shrink', artboard: '1', source: ':315', expected: '1', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'flex-basis', artboard: '0%', source: ':315', expected: '0%', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'min-width', artboard: '0px', source: ':315', expected: '0px', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'text-align', artboard: 'left', source: ':315', expected: 'left', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'border-top-width', artboard: '1px', source: ':315', expected: '1px', deviation: null },
+
+  // The reason pill, `:296`. `vat` is `unreadable` WITH a region and no correction, so the
+  // NO REGION cue does not fire, there is no chip row and no changed row: exactly one `.mono`
+  // in that cell. `letter-spacing: 0.07em` goes to the em-ratio block below, never a string.
+  // A build reusing RulePills.tsx instead of the artboard's own slot reds on the two font rows.
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'font-size', artboard: '8.5px', source: ':296', expected: '8.5px', deviation: null },
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'font-weight', artboard: '700', source: ':296', expected: '700', deviation: null },
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'border-top-left-radius', artboard: '999px', source: ':296', expected: '999px', deviation: null },
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'padding-top', artboard: '2px', source: ':296', expected: '2px', deviation: null },
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'padding-left', artboard: '8px', source: ':296', expected: '8px', deviation: null },
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'border-top-width', artboard: '1px', source: ':296', expected: '1px', deviation: null },
+  // Also what keeps the floor walk in EXTR12-E2E-07 meaningful: a pill that dropped `nowrap`
+  // would wrap its own text and hide the overflow W-6 measured.
+  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'white-space', artboard: 'nowrap', source: ':296', expected: 'nowrap', deviation: null },
+
+  // The point-at-it button, `:324`, idle: `buyer_tin` stays missing here and the document has
+  // one page. `border-top-left-radius: 10px` is the deployed half of the class ban -- a build
+  // carrying the artboard's own `class="pf-btn"` resolves 9999px (app-layer.css:193-197).
+  // The artboard's `width: 100%` cannot be a string row; it is asserted as a relationship below.
+  { element: 'extraction-point-buyer_tin', property: 'min-height', artboard: '38px', source: ':324', expected: '38px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'padding-top', artboard: '0px', source: ':324', expected: '0px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'padding-left', artboard: '12px', source: ':324', expected: '12px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'padding-right', artboard: '12px', source: ':324', expected: '12px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'border-top-style', artboard: 'dashed', source: ':324', expected: 'dashed', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'border-top-width', artboard: '1.5px', source: ':324', expected: '1.5px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'border-top-left-radius', artboard: '10px', source: ':324', expected: '10px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'font-size', artboard: '12.5px', source: ':324', expected: '12.5px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'font-weight', artboard: '500', source: ':324', expected: '500', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'column-gap', artboard: '9px', source: ':324', expected: '9px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'text-align', artboard: 'left', source: ':324', expected: 'left', deviation: null },
+
+  // The corrected marker, `:307`. The test posts one correction on `total` before it opens the
+  // screen, because the marker renders only where a correction exists. A marker moved to
+  // `left: 11px` reds nothing HERE -- EXTR12-E2E-02's right-of-centre clause is what catches it.
+  { element: 'extraction-marker-total', property: 'position', artboard: 'absolute', source: ':307', expected: 'absolute', deviation: null },
+  { element: 'extraction-marker-total', property: 'right', artboard: '11px', source: ':307', expected: '11px', deviation: null },
+  { element: 'extraction-marker-total', property: 'width', artboard: '7px', source: ':307', expected: '7px', deviation: null },
+  { element: 'extraction-marker-total', property: 'height', artboard: '7px', source: ':307', expected: '7px', deviation: null },
+  { element: 'extraction-marker-total', property: 'border-top-left-radius', artboard: '2px', source: ':307', expected: '2px', deviation: null },
+  // AC-2, and an assertion rather than a comment: both tokens are probed in the pane's own
+  // environment, so `expected !== artboard` fires on the fact that this repo does not resolve
+  // `--accent` to teal. A literal transcription resolves the AMBER here and reds.
+  { element: 'extraction-marker-total', property: 'background-color', artboard: ACCENT_TOKEN, source: ':307', expected: ACTION_TOKEN, deviation: TEAL_IS_ACTION },
+
+  // The changed label, `:335`. After the correction `settled !== null` forces the pill to null
+  // and neither the was-line nor Undo is `.mono`: exactly one in that cell.
+  { element: 'extraction-changed-label-total', selector: '[data-testid="extraction-field-total"] span.mono', property: 'font-size', artboard: '8.5px', source: ':335', expected: '8.5px', deviation: null },
+  { element: 'extraction-changed-label-total', selector: '[data-testid="extraction-field-total"] span.mono', property: 'font-weight', artboard: '700', source: ':335', expected: '700', deviation: null },
+  { element: 'extraction-changed-label-total', selector: '[data-testid="extraction-field-total"] span.mono', property: 'color', artboard: ACCENT_TOKEN, source: ':335', expected: ACTION_TOKEN, deviation: TEAL_IS_ACTION },
+]
+
+// The row set, as a literal beside the table (AA-24 / Z-5). It reds on a deleted row, an added
+// row AND a row silently retargeted at another element or property -- none of which the
+// `table.length === FIDELITY.length` check it replaces could see, because `table` is
+// `FIDELITY.map(...)` and the two lengths were equal by construction.
+const FIDELITY_ROW_IDS: string[] = [
+  'extraction-canvas·flex-basis',
+  'extraction-canvas·flex-grow',
+  'extraction-canvas·flex-shrink',
+  'extraction-canvas·min-width',
+  'extraction-changed-label-total·color',
+  'extraction-changed-label-total·font-size',
+  'extraction-changed-label-total·font-weight',
+  'extraction-chip-issue_date-0·border-bottom-left-radius',
+  'extraction-chip-issue_date-0·border-bottom-right-radius',
+  'extraction-chip-issue_date-0·border-top-left-radius',
+  'extraction-chip-issue_date-0·border-top-right-radius',
+  'extraction-chip-issue_date-0·border-top-width',
+  'extraction-chip-issue_date-0·flex-basis',
+  'extraction-chip-issue_date-0·flex-grow',
+  'extraction-chip-issue_date-0·flex-shrink',
+  'extraction-chip-issue_date-0·min-width',
+  'extraction-chip-issue_date-0·padding-left',
+  'extraction-chip-issue_date-0·padding-top',
+  'extraction-chip-issue_date-0·text-align',
+  'extraction-chip-where-issue_date-0·font-size',
+  'extraction-fields·flex-basis',
+  'extraction-fields·flex-grow',
+  'extraction-fields·flex-shrink',
+  'extraction-fields·min-width',
+  'extraction-ground·overflow-x',
+  'extraction-ground·overflow-y',
+  'extraction-marker-total·background-color',
+  'extraction-marker-total·border-top-left-radius',
+  'extraction-marker-total·height',
+  'extraction-marker-total·position',
+  'extraction-marker-total·right',
+  'extraction-marker-total·width',
+  'extraction-page-1·border-bottom-width',
+  'extraction-page-1·border-left-width',
+  'extraction-page-1·border-right-width',
+  'extraction-page-1·border-top-width',
+  'extraction-page-1·margin-bottom',
+  'extraction-page-1·margin-top',
+  'extraction-page-1·max-width',
+  'extraction-page-1·min-width',
+  'extraction-page-1·padding-bottom',
+  'extraction-page-1·padding-left',
+  'extraction-page-1·padding-right',
+  'extraction-page-1·padding-top',
+  'extraction-pill-vat·border-top-left-radius',
+  'extraction-pill-vat·border-top-width',
+  'extraction-pill-vat·font-size',
+  'extraction-pill-vat·font-weight',
+  'extraction-pill-vat·padding-left',
+  'extraction-pill-vat·padding-top',
+  'extraction-pill-vat·white-space',
+  'extraction-point-buyer_tin·border-top-left-radius',
+  'extraction-point-buyer_tin·border-top-style',
+  'extraction-point-buyer_tin·border-top-width',
+  'extraction-point-buyer_tin·column-gap',
+  'extraction-point-buyer_tin·font-size',
+  'extraction-point-buyer_tin·font-weight',
+  'extraction-point-buyer_tin·min-height',
+  'extraction-point-buyer_tin·padding-left',
+  'extraction-point-buyer_tin·padding-right',
+  'extraction-point-buyer_tin·padding-top',
+  'extraction-point-buyer_tin·text-align',
+  'extraction-toolbar·background-color',
+  'extraction-toolbar·column-gap',
+  'extraction-toolbar·padding-bottom',
+  'extraction-toolbar·padding-left',
+  'extraction-toolbar·padding-right',
+  'extraction-toolbar·padding-top',
+  'extraction-toolbar·row-gap',
 ]
 
 // EXCLUDED BY NAME, with the reason, per this subtask's own AC. Both are elements this story
@@ -4296,12 +4459,85 @@ const FIDELITY: FidelityRow[] = [
 // Each is asserted PRESENT on the deployed surface below: "excluded" has to exclude something
 // real, or a mistyped testid would silently exclude nothing and read as diligence.
 
+// The two declarations no string row can hold, recorded beside the table they are not in. Each
+// is asserted below as a RELATIONSHIP; this array is what puts them in the run's own artifact.
+const DEVIATIONS_OUTSIDE_THE_TABLE = [
+  {
+    element: 'extraction-point-buyer_tin',
+    property: 'width',
+    artboard: '100%',
+    source: ':324',
+    reason:
+      'getComputedStyle returns a used px value, so a string compare cannot express 100%. The repo declares no width at all -- an inline one would override the cell\'s min-width: 0 and let a long value widen the grid track -- and the cell\'s flex column stretches the button instead. Asserted as: the button fills the cell\'s content box.',
+  },
+  {
+    element: 'extraction-page-1',
+    property: 'margin-left / margin-right',
+    artboard: 'auto',
+    source: ':72',
+    reason:
+      "Chrome resolves an auto margin to its used value, so there is no 'auto' to compare. Asserted as: the two used values agree, at a width where the frame fits its column.",
+  },
+]
+
+// EXTR-12's carried deviations, printed into this run's artifact so the record is not only prose
+// in a task file. NONE is a defect to fix here.
+const CARRIED_DEVIATIONS = [
+  'AA-21: AC-5\'s "rendered reason" on a disabled Save is UNMET by decision. `disabled` and `filter: none` are met (ExtractionReview.tsx:261-263); the reason clause is not, because the only disabling condition is "nothing settled yet" and both shipped precedents disable without one.',
+  'AA-24 / Z-5: NOT met. The retired READ ONLY badge\'s five rows were replaced by rows measuring a CHIP in the fields pane; the document toolbar slot has no fidelity coverage at all. The chip supersedes the read-only CLAIM, not the toolbar ELEMENT.',
+  'CC-2: POINT_ARMED is corrected copy, not the artboard\'s. "Waiting — drag a box around it on the document" replaces `:662`\'s "Waiting — click the words on the document", because this build\'s gesture is a drag and under the 24x12 floor a click returns nothing.',
+  'CC-3 / BB-3: Core AC-3\'s "the value is read from there" is UNMET and unbuildable. No migration persists token text or geometry, so no seam can read a value out of a box. The box records WHERE and the person types WHAT.',
+  'W-1: Save batches everything -- chips, typing and undos -- through one shared draft, where the artboard drafts picks in `S.picked` and this subtask\'s own Test Specs said one POST per click.',
+  "AA-17: the artboard's `f.was || value` fallback (`:634`) is deliberately not copied. A null reading would leave the typed value on screen while the server writes SQL NULL. A drafted undo resets to `corrected.was`, and to '' where that is null.",
+  'DD-1: a transform reading the frame\'s BORDER box instead of its padding box is unfalsifiable -- the error is (2u − W)/(W+2), under one pixel everywhere at every zoom -- so it satisfies AC-2 as written and no row in this story catches it. Also stated in-file at EXTR12-E2E-05.',
+  "§6's standing three: the chip's `where` sub-label is DERIVED (regionPhrase), not the artboard's anchor text; `invoice_number` is LOCKED though the artboard edits it (`:476`); the label is `VAT`, not `VAT at 7.5%`.",
+  'POINT_CANCEL sits in the CELL, not in the artboard\'s banner over the document pane (`:46-56`), which would need `selTitle` and `selMode` -- two strings the copy table does not carry.',
+]
+
+// Leftovers -- for the story's list, not for building here.
+const LEFTOVERS = [
+  'L-1: the fidelity tautology cited as `:4134` in two documents was really the `table.length === FIDELITY.length` check; it is replaced above by the row-set pin.',
+  'L-2: the `write` generation guard is unreachable and untested. `write.current !== mine` can only be true if a second Save starts while the first is in flight, and Save is disabled while writing (ExtractionReview.tsx:98, :160-161, :189).',
+  'L-3: four redundant derivation slots, unkillable by construction -- `current`, `entries`, `arming` and `data` each re-test `x.jobId === jobId` after the render-phase `setX(null)` above has already discarded this pass (ExtractionReview.tsx:78-79, 86-87, 115-116, 117-118).',
+  'L-4: an unenforced invariant -- "a `missing` field carries no value" is what makes `pointedEntry`\'s middle arm unreachable from the shell, and nothing enforces it (extractionReview.ts:452-456).',
+  'L-5: R13 / R14 / R9\'s keep-clause / R26\'s selection clause stay flagged as PAIRS, never counted as coverage: each is satisfied by a build that never calls the thing under test.',
+  'L-6: you cannot clear a field by emptying it, and nothing says so. `savableCorrections` drops a blank typed entry (extractionReview.ts:276) and the blank visibly bounces back with no explanation.',
+  'L-7: a blank point survives on screen but not through a Save of another field -- the box disappears at the next Save because the entry was never posted.',
+  'L-8: AA-16 -- ReviewRow.tsx:468\'s Save is `v2-btn v2-btn-primary pf-btn` with no disabled spread and no `filter: none`: a shipped instance of the defect AC-5 exists to prevent, on another screen.',
+  'L-9: the pageless point label has no deployed oracle -- no fixture produces a job with zero page images, so AC-5 of subtask 08 is proved in jsdom only.',
+  'L-10: DD-17 -- R27 is a negative that has never been shown to fail. Until a mutated handler is shown to red it, R27 is unproven rather than passing.',
+  'L-11: `extraction.field_corrected` is NOT in the audit_log.invoice_id generated column\'s event list (migrations/20260822080722_audit_log_invoice_id_column_and_index.sql), so an invoice-scoped audit read of a correction returns zero rows by construction. EXTR12-E2E-06 filters on the event and matches the invoice in the payload instead, and asserts the empty invoice-scoped read as the reason.',
+]
+
 test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved values", async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  // EXTR-12's marker and changed label render only over a correction (ExtractionFields.tsx:
+  // 351-353, :413-417), so their nine rows need one first. EXTR12-E2E-02's recipe: the job id
+  // comes off the invoice detail's own lookup, because this SPA has no route back to the review
+  // screen and a reload cannot bring the reader to it. Every row written before EXTR-12-09 is
+  // unchanged -- this is an arrange step, not an edit to a claim.
+  const jobLookups: Promise<ExtractionJobsResponse>[] = []
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET') return
+    if (!new URL(r.url()).pathname.endsWith('/api/submission/v1/extractions')) return
+    jobLookups.push((r.json() as Promise<ExtractionJobsResponse>).catch(() => ({ jobs: [] })))
+  })
 
   await extractOneDocument(page, 'EXTR-11-09 fidelity')
-  await openExtractionReview(page)
+
+  const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
+  expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
+  // `total` is admitted: refuseField locks only invoice_number, supplier_tin and supplier_name.
+  await postFieldCorrection(token, jobId as string, 'total', { value: '2222.00', method: 'typed' })
+
+  const detail = await openExtractionReview(page)
+  expect(
+    detail.fields.find((f) => f.name === 'total')?.corrected,
+    'the wire the screen read carries no correction on total -- the marker and changed-label rows would compare nothing',
+  ).toBeTruthy()
 
   // The page frame's band is `560 * zoom` / `640 * zoom` (extractionReview.ts:114-118), so the
   // artboard's 560/640 are only the right expectation at zoom 100. Asserted, not assumed.
@@ -4310,70 +4546,132 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     "the frame rows below are the artboard's numbers only at zoom 100",
   ).toHaveAttribute('aria-pressed', 'true')
 
-  const elements = [...new Set(FIDELITY.map((r) => r.element))]
-  // Waited for, not assumed present: a missing element would otherwise fail the read as a hard
-  // error where it can equally be a paint this assertion arrived one frame ahead of.
-  for (const testid of elements) {
-    await expect(page.getByTestId(testid), `${testid} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
+  // One subject per element, in table order, each with the selector its rows resolve through.
+  const subjects: { element: string; selector: string; scoped: boolean }[] = []
+  const properties: Record<string, string[]> = {}
+  for (const row of FIDELITY) {
+    if (properties[row.element] === undefined) {
+      properties[row.element] = []
+      subjects.push({
+        element: row.element,
+        selector: row.selector ?? `[data-testid="${row.element}"]`,
+        scoped: row.selector !== undefined,
+      })
+    }
+    properties[row.element].push(row.property)
   }
 
-  const properties: Record<string, string[]> = {}
-  for (const row of FIDELITY) (properties[row.element] ??= []).push(row.property)
+  // Waited for, not assumed present: a missing element would otherwise fail the read as a hard
+  // error where it can equally be a paint this assertion arrived one frame ahead of. A scoped
+  // selector matching two nodes raises Playwright's strict-mode violation here, which is the
+  // loud failure a silent retarget deserves; the count below says so in numbers.
+  for (const s of subjects) {
+    await expect(page.locator(s.selector), `${s.element} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
+  }
+
   // Read once, in one frame: two evaluates across a re-render can disagree.
   const measured = await page.evaluate(
-    ({ elements, properties }: { elements: string[]; properties: Record<string, string[]> }) => {
+    ({ subjects, properties }: { subjects: { element: string; selector: string }[]; properties: Record<string, string[]> }) => {
       const out: Record<string, Record<string, string> | null> = {}
-      for (const testid of elements) {
-        const el = document.querySelector(`[data-testid="${testid}"]`)
+      const counts: Record<string, number> = {}
+      for (const s of subjects) {
+        counts[s.element] = document.querySelectorAll(s.selector).length
+        const el = document.querySelector(s.selector)
         if (!el) {
-          out[testid] = null
+          out[s.element] = null
           continue
         }
         const cs = getComputedStyle(el)
         const values: Record<string, string> = {}
-        for (const p of properties[testid]) values[p] = cs.getPropertyValue(p)
-        // The two read outside the row table, both recorded so the artifact is complete.
+        for (const p of properties[s.element]) values[p] = cs.getPropertyValue(p)
+        // The three read outside the row table, all recorded so the artifact is complete.
         values['letter-spacing'] = cs.getPropertyValue('letter-spacing')
         values['margin-left'] = cs.getPropertyValue('margin-left')
         values['margin-right'] = cs.getPropertyValue('margin-right')
-        out[testid] = values
+        out[s.element] = values
       }
-      // The token, resolved in the toolbar's OWN custom-property environment rather than
-      // compared against a colour typed into this file. `--bg-2` is declared on `.asc-app`, so
-      // a probe outside that subtree would resolve to nothing.
-      const host = document.querySelector('[data-testid="extraction-toolbar"]')
-      let bg2 = ''
-      if (host) {
+      // Each token resolved inside the subtree that DECLARES it, never compared against a colour
+      // typed into this file. All three are declared on `.asc-app`, so a probe outside that
+      // subtree would resolve to nothing.
+      const probeIn = (host: Element | null, declaration: string): string => {
+        if (!host) return ''
         const probe = document.createElement('div')
-        probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;background:var(--bg-2)'
+        probe.style.cssText = `position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;background:${declaration}`
         host.appendChild(probe)
-        bg2 = getComputedStyle(probe).backgroundColor
+        const read = getComputedStyle(probe).backgroundColor
         probe.remove()
+        return read
       }
-      return { out, bg2 }
+      const toolbar = document.querySelector('[data-testid="extraction-toolbar"]')
+      const fields = document.querySelector('[data-testid="extraction-fields"]')
+      const bg2 = probeIn(toolbar, 'var(--bg-2)')
+      const action = probeIn(fields, 'var(--action)')
+      const accent = probeIn(fields, 'var(--accent)')
+
+      // The artboard's `width: 100%` on the point button (`:324`). getComputedStyle returns a
+      // USED px value, so no string can express it; the observable form is that the button fills
+      // its cell's content box. The repo declares no width and lets the cell's flex column
+      // stretch it -- a deviation in the declaration and none in the result.
+      const button = document.querySelector('[data-testid="extraction-point-buyer_tin"]')
+      const cell = document.querySelector('[data-testid="extraction-field-buyer_tin"]')
+      let point: { buttonWidth: number; cellContentWidth: number } | null = null
+      if (button && cell) {
+        const cs = getComputedStyle(cell)
+        point = {
+          buttonWidth: button.getBoundingClientRect().width,
+          cellContentWidth: (cell as HTMLElement).clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        }
+      }
+      return { out, counts, bg2, action, accent, point }
     },
-    { elements, properties },
+    { subjects: subjects.map((s) => ({ element: s.element, selector: s.selector })), properties },
   )
 
-  for (const testid of elements) {
-    expect(measured.out[testid], `${testid} did not render -- every row below it would compare nothing`).not.toBeNull()
+  for (const s of subjects) {
+    expect(measured.out[s.element], `${s.element} did not render -- every row below it would compare nothing`).not.toBeNull()
+    // Only where the row named its own selector: a testid is unique by construction, and the
+    // pane's own walk (ExtractionFields.test.tsx, "puts no new testid inside the shipped
+    // extraction-field- prefix") is what keeps it so.
+    if (s.scoped) {
+      expect(
+        measured.counts[s.element],
+        `${s.selector} matches ${measured.counts[s.element]} nodes -- a class-scoped read must land on exactly one, or the rows below measure some other element diligently`,
+      ).toBe(1)
+    }
   }
   expect(measured.bg2, 'var(--bg-2) resolved to nothing -- the toolbar background row would compare two empty strings').not.toBe('')
   expect(measured.bg2, 'var(--bg-2) resolved to transparent -- the toolbar background row would be vacuous').not.toBe('rgba(0, 0, 0, 0)')
+  for (const [name, value] of [['--action', measured.action], ['--accent', measured.accent]] as const) {
+    expect(value, `var(${name}) resolved to nothing -- the two teal deviation rows would compare two empty strings`).not.toBe('')
+    expect(value, `var(${name}) resolved to transparent -- the two teal deviation rows would be vacuous`).not.toBe('rgba(0, 0, 0, 0)')
+  }
+  // Without this AC-2 collapses into comparing a value with itself: a repo that aliased
+  // `--accent` to `--action` would make both deviation rows vacuous, and this floor reds first.
+  expect(
+    measured.accent,
+    `--accent and --action both resolve to ${measured.accent} -- this repo aliased them, and the two deviation rows claim nothing`,
+  ).not.toBe(measured.action)
 
   // `declared` keeps the raw table entry -- the placeholder included -- so the artifact still
   // shows that the toolbar row compared a TOKEN and not a colour typed into this file. Both
   // `expected` and `artboard` resolve to the same probe reading, which is what keeps the
   // "expected equals artboard unless it is a stated deviation" check below honest for that row.
+  const resolveToken = (value: string): string =>
+    value === BG_2_TOKEN ? measured.bg2 : value === ACTION_TOKEN ? measured.action : value === ACCENT_TOKEN ? measured.accent : value
   const table = FIDELITY.map((row) => {
-    const expected = row.expected === BG_2_TOKEN ? measured.bg2 : row.expected
-    const artboard = row.artboard === BG_2_TOKEN ? measured.bg2 : row.artboard
+    const expected = resolveToken(row.expected)
+    const artboard = resolveToken(row.artboard)
     const deployed = measured.out[row.element]![row.property] ?? ''
     return { ...row, declared: row.artboard, artboard, expected, deployed, match: deployed === expected }
   })
 
-  // The floor: a table that silently shrank would report all-clear on whatever it still held.
-  expect(table.length, 'the fidelity table lost rows').toBe(FIDELITY.length)
+  // The floor, and it is the row SET, not the row count: `table` is `FIDELITY.map(...)`, so a
+  // length compare was equal by construction and saw neither a deletion, an addition, nor a row
+  // silently retargeted at another element or property. This sees all three.
+  expect(
+    table.map((r) => `${r.element}·${r.property}`).sort(),
+    'the fidelity row set changed',
+  ).toEqual(FIDELITY_ROW_IDS)
   for (const row of table) {
     expect(row.deployed, `${row.element} has no resolved ${row.property} -- an empty string matches nothing`).not.toBe('')
     expect(
@@ -4382,13 +4680,22 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     ).toBe(row.expected)
   }
 
-  // Exactly the four padding rows deviate, and each says why. A silent divergence added later
-  // fails here rather than passing as "documented".
+  // Exactly six rows deviate, and each says why. A silent divergence added later fails here
+  // rather than passing as "documented". The two teal rows are AC-2: with both tokens probed in
+  // the pane's own environment, this loop's `expected !== artboard` fires on the fact that this
+  // repo does not resolve `--accent` to teal.
   const deviations = table.filter((r) => r.deviation !== null)
   expect(
     deviations.map((r) => `${r.element}·${r.property}`).sort(),
     'the set of stated deviations from the artboard changed',
-  ).toEqual(['extraction-page-1·padding-bottom', 'extraction-page-1·padding-left', 'extraction-page-1·padding-right', 'extraction-page-1·padding-top'])
+  ).toEqual([
+    'extraction-changed-label-total·color',
+    'extraction-marker-total·background-color',
+    'extraction-page-1·padding-bottom',
+    'extraction-page-1·padding-left',
+    'extraction-page-1·padding-right',
+    'extraction-page-1·padding-top',
+  ])
   for (const row of deviations) {
     expect(row.expected, `${row.element} · ${row.property} is listed as a deviation but matches the artboard`).not.toBe(row.artboard)
   }
@@ -4450,6 +4757,34 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     `the chip sub-label tracks ${whereTrackPx}px on ${whereFontPx}px, and the artboard's 0.05em is ${(0.05 * whereFontPx).toFixed(3)}px`,
   ).toBeLessThanOrEqual(0.02)
 
+  // 3. `letter-spacing: 0.07em` on the reason pill (`:296`) and the changed label (`:335`), both
+  //    at 8.5px. Same reason as the chip sub-label, and `.asc-app .mono` declares
+  //    `letter-spacing: -0.015em` (app-layer.css:150), so this is also the only deployed proof
+  //    that the inline value overrides the class.
+  const tracking = [
+    { element: 'extraction-pill-vat', source: ':296' },
+    { element: 'extraction-changed-label-total', source: ':335' },
+  ].map(({ element, source }) => {
+    const read = measured.out[element]!
+    const fontPx = parseFloat(read['font-size'])
+    const trackPx = parseFloat(read['letter-spacing'])
+    expect(Number.isFinite(fontPx) && Number.isFinite(trackPx), `${element} resolved no font metrics`).toBe(true)
+    expect(
+      Math.abs(trackPx - 0.07 * fontPx),
+      `${element} tracks ${trackPx}px on ${fontPx}px, and the artboard's 0.07em (${source}) is ${(0.07 * fontPx).toFixed(3)}px`,
+    ).toBeLessThanOrEqual(0.02)
+    return { element, source, fontSizePx: fontPx, letterSpacingPx: trackPx, artboardEm: 0.07 }
+  })
+
+  // 4. `width: 100%` on the point button (`:324`) -- a used px value here, so the relationship
+  //    is the claim: the button fills its cell's content box.
+  expect(measured.point, 'the point button and its cell must both render, or the width claim compares nothing').not.toBeNull()
+  expect(measured.point!.cellContentWidth, "the buyer_tin cell has no content width").toBeGreaterThan(0)
+  expect(
+    Math.abs(measured.point!.buttonWidth - measured.point!.cellContentWidth),
+    `the point button is ${measured.point!.buttonWidth}px inside a ${measured.point!.cellContentWidth}px cell content box -- the artboard's width: 100% is not what renders`,
+  ).toBeLessThanOrEqual(1)
+
   // -- The exclusions, each proved to exclude something real --------------------------------
   for (const zoom of [50, 100, 150]) {
     await expect(
@@ -4472,6 +4807,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
           { element: 'extraction-doc-meta page count', reason: 'the artboard fixes no content for {{ docMeta }} and has no page stamp (D-17)' },
         ],
         table,
+        tokens: { '--bg-2': measured.bg2, '--action': measured.action, '--accent': measured.accent },
         autoMargins: {
           measuredAtWidth: 1920,
           left: frame?.marginLeft ?? null,
@@ -4480,6 +4816,12 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
           columnWidth: frame?.padWidth ?? null,
         },
         chipWhereTracking: { fontSizePx: whereFontPx, letterSpacingPx: whereTrackPx, artboardEm: 0.05 },
+        tracking,
+        deviationsOutsideTheTable: DEVIATIONS_OUTSIDE_THE_TABLE.map((d) =>
+          d.element === 'extraction-point-buyer_tin' ? { ...d, measured: measured.point } : d,
+        ),
+        carriedDeviations: CARRIED_DEVIATIONS,
+        leftovers: LEFTOVERS,
         metaLine: meta,
       },
       null,
@@ -4487,6 +4829,492 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     ),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-12-09 · the settle-every-field journey, and the pane's floor --------------------
+//
+// Neither row can execute before this subtask marks the PR ready: `dev-env.yml` gates deploy and
+// E2E on `pull_request.draft == false`. The local oracle is `pnpm -r typecheck` plus
+// `playwright test --list`.
+
+// internal/extraction/vocabulary.go, HeaderFields -- the order one Save writes in. A
+// transcription, deliberately not an import: the SPA is a different package, and reading the
+// order out of the module under test would assert it against itself.
+const VOCABULARY = [
+  'invoice_number',
+  'issue_date',
+  'supplier_tin',
+  'supplier_name',
+  'buyer_tin',
+  'buyer_name',
+  'currency',
+  'subtotal',
+  'vat',
+  'total',
+]
+
+// internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
+// a 422, so none of them is what this journey types over.
+const LOCKED_FIELDS = ['invoice_number', 'supplier_tin', 'supplier_name']
+
+// The story's Invented-copy table, per method (artboard `:639-641`).
+const CHANGED_LABEL: Record<string, string> = {
+  typed: 'YOU CHANGED THIS',
+  pointed: 'YOU POINTED THIS OUT',
+  chosen: 'YOU CHOSE THIS',
+}
+
+test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and the register and the audit log agree', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  // The ONE-page fixture: the point surface only needs a page, and EXTR12-E2E-05 already owns
+  // the page-2 indexing claim.
+  await extractOneDocument(page, 'EXTR-12-09 journey')
+  const detail = await openExtractionReview(page)
+
+  // Every subject off the wire the SPA itself consumed, never mock.go, and every floor first: a
+  // fixture change that flattened the mock would otherwise leave this journey settling nothing
+  // and calling it three corrections.
+  const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
+  expect(ambiguous, 'this document reported no ambiguous field -- there is no candidate to choose').toBeTruthy()
+  expect(
+    ambiguous!.alternatives.length,
+    `${ambiguous!.name} carries no alternative -- the chip this journey clicks does not exist`,
+  ).toBeGreaterThanOrEqual(1)
+  const chosenValue = ambiguous!.alternatives[0].value
+  expect(chosenValue, `${ambiguous!.name}'s first alternative carries no value`).toBeTruthy()
+  // Chip 1, never chip 0: chip 0 is the decided reading, whose value equals the wire, so
+  // choosing it exercises the keep-a-no-op arm and leaves the value unmoved. This journey needs
+  // the value to MOVE.
+  expect(
+    chosenValue,
+    'the first alternative reads the same as the decided one, so choosing it would move nothing',
+  ).not.toBe(ambiguous!.value)
+
+  const missing = detail.fields.find((f) => f.reason === 'missing')
+  expect(missing, 'this document reported no missing field -- there is nothing to point at').toBeTruthy()
+  expect(missing!.value, 'the missing field already carries a value').toBeNull()
+  expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
+
+  const typed = detail.fields.find((f) => f.reason === 'inconsistent' && !LOCKED_FIELDS.includes(f.name))
+  expect(typed, 'this document reported no writable inconsistent field -- there is nothing to type over').toBeTruthy()
+
+  const names = [ambiguous!.name, missing!.name, typed!.name]
+  expect(new Set(names).size, `two of the three subjects are the same field: ${names.join(', ')}`).toBe(3)
+  for (const name of names) expect(VOCABULARY, `${name} is outside the header vocabulary`).toContain(name)
+
+  // What one Save owes, in the vocabulary's own order -- the order savableCorrections sorts into
+  // so the append-only table's seq follows the order the person reads.
+  const plan = [
+    { field: ambiguous!.name, method: 'chosen' },
+    { field: missing!.name, method: 'pointed' },
+    { field: typed!.name, method: 'typed' },
+  ].sort((a, b) => VOCABULARY.indexOf(a.field) - VOCABULARY.indexOf(b.field))
+
+  const save = page.getByTestId('extraction-save')
+
+  // -- 1. CHOOSE ----------------------------------------------------------------------------
+  const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
+  // W-3: the decided reading is itself a chip, so the row carries N + 1.
+  await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
+  await page.getByTestId(`extraction-chip-${ambiguous!.name}-1`).click()
+  await expect(
+    page.getByTestId(`extraction-chip-${ambiguous!.name}-1`),
+    'the clicked chip is not the current one',
+  ).toHaveAttribute('aria-current', 'true')
+  await expect(
+    page.getByTestId(`extraction-chip-${ambiguous!.name}-0`),
+    'the decided reading is still current after another candidate was chosen',
+  ).toHaveAttribute('aria-current', 'false')
+
+  // -- 2. TYPE ------------------------------------------------------------------------------
+  // Plain digits, no thousands separator: invoiceEditFor writes `$n::text::numeric` and
+  // '2,468.00'::numeric raises 22P02 -> ErrValueRefused -> 400.
+  const TYPED_VALUE = '2468.00'
+  await page.getByTestId(`extraction-input-${typed!.name}`).fill(TYPED_VALUE)
+  await expect(save, 'a chosen candidate and a typed value left Save disabled').toBeEnabled()
+
+  // -- 3. POINT -----------------------------------------------------------------------------
+  const pointButton = page.getByTestId(`extraction-point-${missing!.name}`)
+  await expect(pointButton, `${missing!.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
+  await pointButton.click()
+  await expect(pointButton, 'clicking the point button changed nothing the reader can see').toHaveText(POINT_ARMED, {
+    timeout: 15_000,
+  })
+
+  await expect(page.getByTestId('extraction-point-surface-1'), 'the armed field takes no drag').toBeVisible({
+    timeout: 15_000,
+  })
+  const s = await boxOf(page, 'extraction-point-surface-1')
+  // Comfortably over the 24x12 floor at every frame size in the band.
+  await page.mouse.move(s.x + 0.3 * s.width, s.y + 0.25 * s.height)
+  await page.mouse.down()
+  await page.mouse.move(s.x + 0.62 * s.width, s.y + 0.55 * s.height, { steps: 8 })
+  await page.mouse.up()
+
+  const highlight = page.getByTestId('extraction-highlight')
+  // applyDraft without its `pointed` arm renders NO highlight, because the missing field's wire
+  // region is null. That build reds here.
+  await expect(highlight, 'the drawn box highlights nothing').toHaveCount(1)
+  await expect(highlight, 'the highlight is not the box drawn on the missing field').toHaveAttribute(
+    'data-snip',
+    missing!.name,
+  )
+
+  // -- 4. FILL THE POINT --------------------------------------------------------------------
+  // Required, not decorative: savableCorrections drops a blank pointed entry
+  // (extractionReview.ts:267), so without this the box never reaches the wire.
+  const POINTED_VALUE = '31775208-0003'
+  await page.getByTestId(`extraction-input-${missing!.name}`).fill(POINTED_VALUE)
+
+  // -- 5. SAVE ------------------------------------------------------------------------------
+  // Registered BEFORE the click, and .json() called inside the handler so no body is read after
+  // the fact.
+  const corrections: {
+    field: string
+    method: string
+    hasRegion: boolean
+    status: number
+    body: Promise<CorrectionResponse | null>
+  }[] = []
+  page.on('response', (r) => {
+    const req = r.request()
+    // POST, not merely non-GET: the SPA and the gateway are separate origins, so every one of
+    // these is preceded by a CORS preflight OPTIONS carrying no body at all.
+    if (req.method() !== 'POST') return
+    const path = new URL(r.url()).pathname
+    if (!path.endsWith('/corrections')) return
+    const sent = (req.postDataJSON() ?? {}) as { method?: string; region?: ExtractionRegion | null }
+    corrections.push({
+      field: decodeURIComponent(path.split('/fields/')[1]?.split('/')[0] ?? ''),
+      method: sent.method ?? '',
+      hasRegion: sent.region !== null && sent.region !== undefined,
+      status: r.status(),
+      body: (r.json() as Promise<CorrectionResponse>).catch(() => null),
+    })
+  })
+
+  const [reread] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    save.click(),
+  ])
+  expect(reread.status(), 'the post-save re-read failed').toBe(200)
+
+  // Settled before it is read: the re-read is the LAST request the Save makes, but a response
+  // event and the promise that resolves on it are dispatched independently. A fourth POST
+  // arriving after this poll is still caught by the equality below.
+  await expect
+    .poll(() => corrections.length, { message: 'the Save did not post three corrections', timeout: 15_000 })
+    .toBe(3)
+
+  // Exactly three POSTs, in vocabulary order, each 201. Firing them in parallel reds the order;
+  // two POSTs reds the count.
+  expect(
+    corrections.map((c) => c.field),
+    'the Save did not post the three settled fields in vocabulary order',
+  ).toEqual(plan.map((p) => p.field))
+  expect(
+    corrections.map((c) => c.method),
+    'the methods did not follow the fields they were posted for',
+  ).toEqual(plan.map((p) => p.method))
+  expect(corrections.map((c) => c.status), 'a correction was refused').toEqual([201, 201, 201])
+
+  // Only the pointed body carries a region: a chosen request with one is a 400
+  // (msgRegionDisagrees), so this is the deployed half of that rule.
+  expect(
+    corrections.filter((c) => c.hasRegion).map((c) => c.field),
+    'a correction other than the pointed one carried a region',
+  ).toEqual([missing!.name])
+
+  // The invoice comes off the 201 bodies (CorrectionResponse.invoice_id), never guessed.
+  const bodies = await Promise.all(corrections.map((c) => c.body))
+  const invoiceIds = new Set(bodies.map((b) => b?.invoice_id ?? ''))
+  expect(invoiceIds.size, 'the three corrections named different invoices').toBe(1)
+  const invoiceId = [...invoiceIds][0]
+  expect(invoiceId, 'no correction body named an invoice, so the audit read below scopes to nothing').toMatch(
+    /^[0-9a-fA-F-]{36}$/,
+  )
+
+  // -- What the screen says afterwards ------------------------------------------------------
+  //
+  // Count AND identity: a build that marked every field reds the count, and a build whose
+  // correctedMarker picks one arm for all three reds two labels.
+  await expect(
+    page.locator('[data-testid^="extraction-marker-"]'),
+    'the settled fields did not each take exactly one marker',
+  ).toHaveCount(3)
+  for (const p of plan) {
+    await expect(page.getByTestId(`extraction-marker-${p.field}`), `${p.field} settled and shows no marker`).toBeVisible()
+    await expect(
+      page.getByTestId(`extraction-field-${p.field}`).getByText(CHANGED_LABEL[p.method], { exact: true }),
+      `${p.field} was ${p.method} and does not say "${CHANGED_LABEL[p.method]}"`,
+    ).toBeVisible()
+  }
+
+  // A settled field stops shouting: reader.go clears Reason and empties Alternatives on a
+  // corrected field, so the chip row goes and the input takes its place.
+  await expect(
+    page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`),
+    'the settled ambiguous field still offers its chips',
+  ).toHaveCount(0)
+  await expect(
+    page.getByTestId(`extraction-input-${ambiguous!.name}`),
+    'the settled field holds a value other than the candidate that was chosen',
+  ).toHaveValue(chosenValue as string)
+  await expect(page.getByTestId(`extraction-input-${missing!.name}`)).toHaveValue(POINTED_VALUE)
+  await expect(page.getByTestId(`extraction-input-${typed!.name}`)).toHaveValue(TYPED_VALUE)
+
+  // -- The audit rows -----------------------------------------------------------------------
+  //
+  // Filtered on the EVENT and matched on the payload, never `invoice_id`: audit_log.invoice_id
+  // is a GENERATED column whose CASE lists no extraction event
+  // (migrations/20260822080722_audit_log_invoice_id_column_and_index.sql), so an invoice-scoped
+  // read of these rows is empty by construction. The control read below asserts exactly that.
+  const scoped = await getAuditLog(token, { event: ['extraction.field_corrected'], limit: 100 })
+  const mine = scoped.events.filter((e) => (e.payload as { invoice_id?: string }).invoice_id === invoiceId)
+  expect(
+    mine.length,
+    `this invoice recorded ${mine.length} extraction.field_corrected events, not the three the Save posted`,
+  ).toBe(3)
+  expect(
+    mine.map((e) => (e.payload as { field?: string }).field).sort(),
+    'the audit payloads name other fields than the three that were settled',
+  ).toEqual(plan.map((p) => p.field).sort())
+  expect(
+    mine.map((e) => (e.payload as { method?: string }).method).sort(),
+    'the audit payloads record other methods than the three that were used',
+  ).toEqual(plan.map((p) => p.method).sort())
+  // migrations/20260829195203_audit_log_entity_for_extraction.sql resolves these rows to a
+  // company THROUGH the invoice they correct; a NULL entity_id is the workspace-level spelling
+  // and would misfile a client action as firm-wide.
+  for (const e of mine) {
+    expect(e.entity_id, `an extraction.field_corrected row was filed workspace-wide (${e.id})`).not.toBeNull()
+  }
+
+  // The event filter's own non-vacuity control: the tenant-wide log must be strictly larger, or
+  // "exactly three" would also be true of a reader that returned everything it had.
+  const wholeLog = await getAuditLog(token, { limit: 1 })
+  expect(
+    wholeLog.total,
+    `the workspace log holds ${wholeLog.total} events and the extraction filter ${scoped.total} -- the filter narrowed nothing`,
+  ).toBeGreaterThan(scoped.total)
+
+  // The reason the filter is on the event. invoice-surfaces.spec.ts pins the same fact from the
+  // UI side ("Document and extraction events are recorded against the workspace, not against a
+  // single invoice"), and a build that added the event to the generated column reds both.
+  const byInvoice = await getAuditLog(token, {
+    invoice_id: invoiceId,
+    event: ['extraction.field_corrected'],
+    limit: 100,
+  })
+  expect(
+    byInvoice.events.length,
+    'audit_log.invoice_id now resolves an extraction correction -- invoice-surfaces.spec.ts still claims it cannot',
+  ).toBe(0)
+
+  await testInfo.attach('extraction-settle-every-field.json', {
+    body: JSON.stringify(
+      {
+        plan,
+        chosenValue,
+        typedValue: TYPED_VALUE,
+        pointedValue: POINTED_VALUE,
+        invoiceId,
+        posted: corrections.map((c) => ({ field: c.field, method: c.method, hasRegion: c.hasRegion, status: c.status })),
+        audit: mine.map((e) => ({ id: e.id, event: e.event, entityId: e.entity_id, payload: e.payload })),
+        auditTotals: { extractionEvents: scoped.total, wholeLog: wholeLog.total, invoiceScoped: byInvoice.events.length },
+        notCovered: ['Undo (method=undone)', 'a partial-failure Save', "AA-22b's chosen-no-op arm"],
+      },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two columns, and no cell spills at the floor', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-09 floor')
+  const detail = await openExtractionReview(page)
+  expect(detail.fields.length, 'no field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
+
+  const pane = page.getByTestId('extraction-fields')
+  const shellBody = page.getByTestId('extraction-review-body')
+  // The pane's two children, in the artboard's order (`:225` header over `:230` body) --
+  // EXTR11-E2E-02b resolves the scroller the same way, and the body is the only scroller.
+  const paneBody = pane.locator('> div').nth(1)
+  const cells = page.locator('[data-testid^="extraction-field-"]')
+
+  type Wide = {
+    width: number
+    pane: Rect
+    body: Rect
+    paneGaps: { left: number; right: number }
+    columns: number[]
+    cells: number
+    scrollWidth: number
+    clientWidth: number
+  }
+  const measured: Wide[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts).
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [p, b] = await Promise.all([pane.boundingBox(), shellBody.boundingBox()])
+        const scroller = await paneBody.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        // The track count read from GEOMETRY, not from a stylesheet: the grid div carries no
+        // testid, and a structural selector into it would silently retarget.
+        const xs = await cells.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().x)))
+        return { p, b, scroller, xs }
+      }, `fields pane geometry at ${width}px`)
+
+      expect(m.p && m.b, `the fields pane and the shell body must both render at ${width}px`).toBeTruthy()
+      expect(m.p!.width, `the fields pane has no width at ${width}px`).toBeGreaterThan(0)
+
+      // 1. The artboard's floor (`:223`). A PRECONDITION here, and the same claim
+      //    EXTR11-E2E-10 makes -- stated so it is not counted twice.
+      expect(m.p!.width, `the fields pane is below its 470px floor at ${width}px`).toBeGreaterThanOrEqual(469)
+
+      // 2. Inside the shell body on BOTH edges -- gaps()'s rule.
+      const g = gaps(m.p as Rect, m.b as Rect)
+      expect(g.left, `the fields pane passes the body's left edge by ${-g.left}px at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the fields pane passes the body's right edge by ${-g.right}px at ${width}px`).toBeGreaterThanOrEqual(-1)
+
+      // 3. Two columns, exactly. A collapsed one-column grid reports 1, a three-track grid 3,
+      //    and nothing else in this suite asserts the track count.
+      expect(m.xs.length, `no field cell measured at ${width}px`).toBe(detail.fields.length)
+      const columns = [...new Set(m.xs)].sort((a, b) => a - b)
+      expect(columns.length, `the grid reports ${columns.length} column(s) at ${width}px, not two`).toBe(2)
+
+      // 4. The pane's own scroller has nothing to scroll sideways. `overflow-y: auto` with
+      //    `overflow-x: visible` computes to `overflow-x: auto`, so the body IS a scroll
+      //    container on both axes and its scrollWidth is well defined.
+      expect(m.scroller.clientWidth, `the pane body has no width at ${width}px`).toBeGreaterThan(0)
+      expect(
+        m.scroller.scrollWidth,
+        `the pane body scrolls ${m.scroller.scrollWidth - m.scroller.clientWidth}px sideways at ${width}px`,
+      ).toBeLessThanOrEqual(m.scroller.clientWidth + 1)
+
+      measured.push({
+        width,
+        pane: m.p as Rect,
+        body: m.b as Rect,
+        paneGaps: g,
+        columns,
+        cells: m.xs.length,
+        scrollWidth: m.scroller.scrollWidth,
+        clientWidth: m.scroller.clientWidth,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  // -- W-6: the label strip AT the pane's floor ---------------------------------------------
+  //
+  // NO LOCAL ORACLE. The overflow is a text-measurement fact, so it needs the deployed build's
+  // real IBM Plex Mono and Inter; this row first executes on the deploy gate. The declaration
+  // half is ExtractionFields.test.tsx, "wraps the label strip".
+  //
+  // Measured before the fix, in Chromium at the floor's own geometry (470 - 40 body padding -
+  // 16 grid gap, halved, - 16 cell padding = 191px of cell content): the pill overhung
+  // `issue_date` by 7.84px and `vat` by 6.02px, and by 15.34 / 13.52 with CI's classic
+  // scrollbar in the pane body. `flexWrap: 'wrap'` on LABEL_STRIP is what closed it.
+  //
+  // The pane is NOT at its floor at any WIDE_WIDTHS -- both panes are flex siblings and the
+  // shrink is proportional -- so this descends until it is.
+  let floorWidth: number | null = null
+  try {
+    for (let width = 1280; width >= 1000; width -= 40) {
+      await page.setViewportSize({ width, height: 1080 })
+      const paneWidth = await settledRead(async () => (await pane.boundingBox())?.width ?? 0, `pane width at ${width}px`)
+      if (paneWidth > 0 && paneWidth <= 471) {
+        floorWidth = width
+        break
+      }
+    }
+
+    expect(
+      floorWidth,
+      'the 470px floor is unreachable at or above 1000px -- W-6 cannot be measured from this side, and that is itself a finding',
+    ).not.toBeNull()
+
+    // Every cell, not only the two predicted offenders: the walk is cheap and a wrong build
+    // spills wherever its copy is longest.
+    const spill = await page.evaluate(() => {
+      const out: {
+        testid: string
+        scrollWidth: number
+        clientWidth: number
+        worst: { node: string; outLeft: number; outRight: number }
+      }[] = []
+      for (const cell of Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="extraction-field-"]'))) {
+        const c = cell.getBoundingClientRect()
+        let worst = { node: '', outLeft: 0, outRight: 0 }
+        for (const el of Array.from(cell.querySelectorAll<HTMLElement>('*'))) {
+          const r = el.getBoundingClientRect()
+          // A rect collapsed on both axes is inside anything and would pass vacuously.
+          if (r.width === 0 && r.height === 0) continue
+          const outLeft = c.left - r.left
+          const outRight = r.right - c.right
+          if (Math.max(outLeft, outRight) > Math.max(worst.outLeft, worst.outRight)) {
+            worst = { node: el.dataset.testid ?? el.tagName.toLowerCase(), outLeft, outRight }
+          }
+        }
+        out.push({ testid: cell.dataset.testid ?? '', scrollWidth: cell.scrollWidth, clientWidth: cell.clientWidth, worst })
+      }
+      return out
+    })
+
+    expect(spill.length, `no field cell measured at the ${floorWidth}px floor`).toBe(detail.fields.length)
+    for (const cell of spill) {
+      expect(cell.clientWidth, `${cell.testid} has no width at the floor -- its edges are vacuous`).toBeGreaterThan(0)
+      expect(
+        cell.worst.outLeft,
+        `${cell.testid}: ${cell.worst.node} starts ${cell.worst.outLeft.toFixed(2)}px left of its cell at ${floorWidth}px`,
+      ).toBeLessThanOrEqual(1)
+      expect(
+        cell.worst.outRight,
+        `${cell.testid}: ${cell.worst.node} ends ${cell.worst.outRight.toFixed(2)}px right of its cell at ${floorWidth}px`,
+      ).toBeLessThanOrEqual(1)
+      // A second and independent instrument. Verified in Chromium that scrollWidth DOES report
+      // inline-end overflow on an `overflow: visible` box, which CSSOM's step 3 would not
+      // predict -- so this is measured behaviour, not a spec reading.
+      expect(
+        cell.scrollWidth,
+        `${cell.testid} holds ${cell.scrollWidth}px of content in a ${cell.clientWidth}px box at ${floorWidth}px`,
+      ).toBeLessThanOrEqual(cell.clientWidth + 1)
+    }
+
+    await testInfo.attach('extraction-fields-pane-floor.json', {
+      body: JSON.stringify({ wide: measured, floorWidth, spill }, null, 2),
+      contentType: 'application/json',
+    })
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

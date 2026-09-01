@@ -1572,14 +1572,28 @@ describe('a completed point', () => {
     // must not scroll, so leaving it alone is the shipped design.
     //
     // The floor is what stops this passing on a do-nothing: the box must actually have landed.
+    //
+    // FAKE TIMERS, and the advance after each gesture, are the other half of the oracle:
+    // `scrollRegionIntoView` defers its scroll through a 20ms timeout, so a count read in the
+    // same tick as the drag is flat under EVERY implementation — measured, on a build whose
+    // handler bumps the nonce. Without the advance this row cannot see the thing it forbids.
+    vi.useFakeTimers()
     const w = writing(POINT_JOB)
     render(review({ ctx: w.ctx }))
     await flush()
 
     arm('buyer_tin')
+    await flush()
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
     const before = scrollToSpy.mock.calls.length
 
     drawBoxOnPageTwo()
+    await flush()
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
 
     expect(highlights(), 'no box landed — a flat scroll count proves nothing').toHaveLength(1)
     expect(

@@ -1280,6 +1280,9 @@ describe('the pane renders nothing it does not declare', () => {
       'We read 3,879,950.00',
       UNDO,
       INVOICE_NUMBER_LOCKED,
+      // This fixture is UNARMED, so the missing cell can only ever reach the idle label. The
+      // armed and cancel strings are swept one cell at a time, in the armed row below.
+      POINT_IDLE,
       ...chipText,
       ...fields.map((f) => fieldLabel(f.name)),
     ]

@@ -5,6 +5,7 @@
 
 import type { CSSProperties } from 'react'
 
+import { crosshairGlyph } from '../glyphs'
 import { applyDraft, correctedMarker, fieldLabel, fieldNote, reasonPill, regionPhrase } from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
 
@@ -13,6 +14,13 @@ const NO_REGION = 'NO REGION'
 const NO_FIELDS = 'Nothing was extracted from this document.'
 const UNDO = 'Undo'
 const INVOICE_NUMBER_LOCKED = "The invoice number is this invoice's identity and cannot be changed here."
+
+// The artboard's missing-field labels (`:661-663`). POINT_ARMED replaces its click-arm string:
+// our one gesture is a drag, and under the 24x12 floor a click returns nothing.
+const POINT_IDLE = 'Not found — point at it on the document'
+const POINT_ARMED = 'Waiting — drag a box around it on the document'
+const POINT_PAGELESS = 'Not found — type it in'
+const POINT_CANCEL = 'Stop pointing'
 
 // internal/invoice/store.go:205-221 overwrites both supplier fields from the signed-in entity
 // on every Store.Create, so neither value below is what gets filed.
@@ -172,6 +180,38 @@ const UNDO_BUTTON: CSSProperties = {
   transition: 'background 120ms ease-out',
 }
 
+// `:324`, without `.pf-btn` (it forces a pill radius over the artboard's 10px card) and without
+// its `width: 100%` (the cell is a flex column, so the button already stretches).
+// The 1.5px is the artboard's, and load-bearing: `dashedPanel()` counts inline `1px dashed `
+// borders and requires exactly one, so rounding this to 1px reds a row about the empty panel.
+const POINT_BUTTON: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 9,
+  minHeight: 38,
+  padding: '0 12px',
+  border: '1.5px dashed var(--line-3)',
+  background: 'transparent',
+  borderRadius: 10,
+  color: 'var(--fg-2)',
+  fontFamily: 'var(--font-sans)',
+  fontSize: 12.5,
+  fontWeight: 500,
+  textAlign: 'left',
+  cursor: 'pointer',
+}
+
+// `--ds-amber` in the artboard (`:658`) does not exist here; the DS amber IS `--accent`. All
+// three declarations move together, so the armed state is legible without hover.
+const POINT_ARMED_BUTTON: CSSProperties = {
+  ...POINT_BUTTON,
+  border: '1.5px dashed var(--accent)',
+  background: 'var(--status-amber-bg)',
+  color: 'var(--status-amber-text)',
+}
+
+const POINT_GLYPH: CSSProperties = { flex: 'none', display: 'inline-flex' }
+
 // `:330` as a block <span>: <p> is flow content and invalid inside the cell's <button>.
 const FIELD_NOTE: CSSProperties = {
   display: 'block',
@@ -203,10 +243,14 @@ export function ExtractionFields({
   fields,
   selected,
   draft,
+  armed,
+  canPoint,
   onSelect,
   onType,
   onChoose,
   onUndo,
+  onArm,
+  onDisarm,
 }: {
   fields: ExtractionFieldState[]
   selected: string | null
@@ -330,6 +374,33 @@ export function ExtractionFields({
                         ))}
                       </span>
                     )}
+                    {wire.reason !== 'missing' ? null : (
+                      <button
+                        type="button"
+                        data-testid={`extraction-point-${f.name}`}
+                        // `aria-current`, never `aria-pressed`: the pane's own negative forbids
+                        // the latter, and the armed field is the current one in a set of cells.
+                        aria-current={armed === f.name}
+                        // No pages, nothing to point at: the button types instead, and the
+                        // cell's own bubbled onClick still selects. Never `disabled` -- the
+                        // pane's keyboard walk requires every control to stay in the tab order.
+                        onClick={canPoint ? () => onArm(f.name) : undefined}
+                        style={armed === f.name ? POINT_ARMED_BUTTON : POINT_BUTTON}
+                      >
+                        <span style={POINT_GLYPH}>{crosshairGlyph}</span>
+                        {!canPoint ? POINT_PAGELESS : armed === f.name ? POINT_ARMED : POINT_IDLE}
+                      </button>
+                    )}
+                    {armed === f.name ? (
+                      <button
+                        type="button"
+                        data-testid={`extraction-point-cancel-${f.name}`}
+                        onClick={onDisarm}
+                        style={UNDO_BUTTON}
+                      >
+                        {POINT_CANCEL}
+                      </button>
+                    ) : null}
                     {lock === null ? null : (
                       <span data-testid={`extraction-lock-${f.name}`} style={FIELD_NOTE}>
                         {lock}

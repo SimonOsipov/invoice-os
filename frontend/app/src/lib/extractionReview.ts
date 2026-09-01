@@ -231,9 +231,11 @@ export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries
     if (entry.kind === 'undone') {
       return { ...f, value: f.corrected?.was ?? '', corrected: null }
     }
-    // Only `chosen` moves the highlight: it names the alternative's own box, which is the
-    // both-ways binding between the chip and the document.
-    return { ...f, value: entry.value, region: entry.kind === 'chosen' ? entry.region : f.region }
+    // `chosen` names the alternative's own box and `pointed` the box a person drew: both move
+    // the highlight before Save, which is the both-ways binding between the cell and the
+    // document. `corrected` stays as it is -- a drafted point has recorded nothing.
+    const moves = entry.kind === 'chosen' || entry.kind === 'pointed'
+    return { ...f, value: entry.value, region: moves ? entry.region : f.region }
   })
 }
 
@@ -259,6 +261,10 @@ export function savableCorrections(fields: ExtractionFieldState[], entries: Draf
   return Object.keys(entries)
     .filter((name) => {
       const entry = entries[name]
+      // A POINTED entry is never a no-op -- its region is always new, and it is the anchor
+      // context a correction is required to store -- so it survives a value that did not move.
+      // Blank is the one thing it cannot survive: msgBlankValue 400s it.
+      if (entry.kind === 'pointed') return entry.value.trim() !== ''
       // The no-op guard is about the VALUE, and only a TYPED entry is only about the value:
       // retyping the same characters decides nothing. A chosen entry settles an ambiguous
       // field and an undone one withdraws a correction, and both are real decisions when the
@@ -273,9 +279,15 @@ export function savableCorrections(fields: ExtractionFieldState[], entries: Draf
     .sort((a, b) => vocabularyRank(a) - vocabularyRank(b))
     .map((name) => ({
       field: name,
-      // region stays null: only a pointed correction may carry one, and the server re-derives
-      // a chosen candidate's box by matching its value.
-      body: { value: entries[name].value, method: entries[name].kind, region: null, anchor_label: '' },
+      body: {
+        value: entries[name].value,
+        method: entries[name].kind,
+        // Only a pointed correction may carry a region: the server re-derives a chosen
+        // candidate's box by matching its value. anchor_label stays '' -- this build holds no
+        // anchor data, and reader.go turns '' into a null `where`.
+        region: entries[name].kind === 'pointed' ? entries[name].region : null,
+        anchor_label: '',
+      },
     }))
 }
 
@@ -377,56 +389,72 @@ export interface ViewportPoint {
   y: number
 }
 
-// ---------------------------------------------------------------------------------------
-// STUBS (EXTR-12-08, red phase). Every value below is deliberately outside the answer space:
-// page 0 is never a 1-based page, -1 is never a normalised coordinate, and `undone` is never
-// the kind either entry builder returns. Replaced by the real bodies in the green phase.
-// ---------------------------------------------------------------------------------------
+// The artboard's gesture floor (`onUp`), in CSS pixels of the drag itself: the floor exists to
+// tell a drag from a click, and a hand moves in the units it moves in, not in normalised ones.
+export const POINT_MIN_W = 24
+export const POINT_MIN_H = 12
 
-const STUB_REGION: ExtractionRegion = { page: 0, x0: -1, y0: -1, x1: -1, y1: -1 }
-
-/** The inverse of highlightStyle: a drag rectangle against the frame, normalised into [0,1]. */
-export function normaliseBox(_frame: FrameBox, _a: ViewportPoint, _b: ViewportPoint, _page: number): ExtractionRegion {
-  return STUB_REGION
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v))
 }
 
 /**
- * The artboard's gesture floor: 24x12 CSS pixels tells a drag from a click. The stub returns
- * neither answer -- no boolean constant can be wrong on a predicate's admit AND refuse cases.
+ * The inverse of highlightStyle: translate, scale, order the corners -- a drag up and to the
+ * left is ordinary and the boundary refuses x0 > x1 -- then clamp, for a mouseup delivered
+ * fractionally outside the surface before mouseleave arrives. No round4 on the way out: the
+ * columns are double precision, so the box comes back byte-identical.
  */
-export function isDrawnBox(_a: ViewportPoint, _b: ViewportPoint): boolean {
-  return undefined as unknown as boolean
+export function normaliseBox(frame: FrameBox, a: ViewportPoint, b: ViewportPoint, page: number): ExtractionRegion {
+  const [ax, bx] = [a.x, b.x].map((v) => clamp01((v - frame.left) / frame.width))
+  const [ay, by] = [a.y, b.y].map((v) => clamp01((v - frame.top) / frame.height))
+  return { page, x0: Math.min(ax, bx), y0: Math.min(ay, by), x1: Math.max(ax, bx), y1: Math.max(ay, by) }
 }
 
-/** The live box under the cursor. highlightStyle's geometry, the artboard's amber, no ring. */
-export function pointBoxStyle(_region: ExtractionRegion): CSSProperties {
+/** Both axes must clear the floor; the artboard refuses `w < 24 || h < 12`, so 24x12 passes. */
+export function isDrawnBox(a: ViewportPoint, b: ViewportPoint): boolean {
+  return Math.abs(b.x - a.x) >= POINT_MIN_W && Math.abs(b.y - a.y) >= POINT_MIN_H
+}
+
+/**
+ * The live box under the cursor: highlightStyle's geometry in the artboard's amber, and NONE of
+ * the settled highlight's ring or transition -- which is why it is written out rather than
+ * spread from highlightStyle, where both would ride along.
+ */
+export function pointBoxStyle(region: ExtractionRegion): CSSProperties {
   return {
-    position: 'static',
-    pointerEvents: 'auto',
-    left: '-1%',
-    top: '-1%',
-    width: '-1%',
-    height: '-1%',
-    border: 'none',
-    background: 'none',
-    borderRadius: 0,
-    boxShadow: 'none',
-    transition: 'none',
+    position: 'absolute',
+    pointerEvents: 'none',
+    left: `${round4(region.x0 * 100)}%`,
+    top: `${round4(region.y0 * 100)}%`,
+    width: `${round4((region.x1 - region.x0) * 100)}%`,
+    height: `${round4((region.y1 - region.y0) * 100)}%`,
+    border: '2px solid var(--accent)',
+    background: 'oklch(72% .15 65 / .18)',
+    borderRadius: 2,
   }
 }
 
-/** Typing over a field: a pointed entry stays pointed and keeps its box. */
-export function typedEntry(_prev: DraftEntry | undefined, _value: string): DraftEntry {
-  return { kind: 'undone', value: '', region: STUB_REGION }
+/**
+ * Typing into a field. A pointed entry stays pointed and keeps its box -- the box says where the
+ * value came from and re-typing does not unsay it. Every other kind becomes plainly typed:
+ * typing over a chosen chip means that chip's box is no longer the source.
+ */
+export function typedEntry(prev: DraftEntry | undefined, value: string): DraftEntry {
+  if (prev?.kind === 'pointed') return { kind: 'pointed', value, region: prev.region }
+  return { kind: 'typed', value, region: null }
 }
 
-/** Drawing a box on a field: the value the person already has survives the gesture. */
+/**
+ * Drawing a box on a field. The box records WHERE and the person types WHAT -- nothing in this
+ * build can read text out of a region -- so the value the draft already holds survives, falling
+ * back to the extractor's own reading and then to blank.
+ */
 export function pointedEntry(
-  _prev: DraftEntry | undefined,
-  _wireValue: string | null,
-  _region: ExtractionRegion,
+  prev: DraftEntry | undefined,
+  wireValue: string | null,
+  region: ExtractionRegion,
 ): DraftEntry {
-  return { kind: 'undone', value: 'STUB', region: STUB_REGION }
+  return { kind: 'pointed', value: prev?.value ?? wireValue ?? '', region }
 }
 
 export function docMetaLine(document: ExtractionDocument, pageCount: number): string {

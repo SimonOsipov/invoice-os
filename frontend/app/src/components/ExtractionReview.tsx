@@ -6,8 +6,15 @@ import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { ErrorState, Loading, gatewayBase, useAsync } from '@invoice-os/api-client'
 
-import { applyDraft, getExtractionDetail, postFieldCorrection, savableCorrections } from '../lib/extractionReview'
-import type { DraftEntries, ExtractionCandidate, ExtractionDetail } from '../lib/extractionReview'
+import {
+  applyDraft,
+  getExtractionDetail,
+  pointedEntry,
+  postFieldCorrection,
+  savableCorrections,
+  typedEntry,
+} from '../lib/extractionReview'
+import type { DraftEntries, ExtractionCandidate, ExtractionDetail, ExtractionRegion } from '../lib/extractionReview'
 import type { PlatformCtx } from '../types'
 import { ExtractionCanvas } from './ExtractionCanvas'
 import { ExtractionFields } from './ExtractionFields'
@@ -94,12 +101,19 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     setDraft((d) => ({ jobId, entries: { ...(d && d.jobId === jobId ? d.entries : {}), [name]: entry } }))
   }
 
-  // The armed slot, its two gestures and the drag's landing. Inert until EXTR-12-08's green
-  // phase; the panes take the props now so the red rows fail on behaviour, never on tsc.
-  const arming: string | null = null
-  const onArm = (_name: string) => {}
-  const onDisarm = () => {}
-  const onPoint = () => {}
+  /** The same write, for the two rules that need the entry the draft already holds. */
+  const draftFrom = (name: string, next: (prev: DraftEntries[string] | undefined) => DraftEntries[string]) => {
+    setDraft((d) => {
+      const held = d && d.jobId === jobId ? d.entries : {}
+      return { jobId, entries: { ...held, [name]: next(held[name]) } }
+    })
+  }
+
+  // The armed slot: ONE field waits for a box, and one nullable slot cannot hold two, so
+  // "exactly one at a time" is structural. Job-tagged, the same render-time guard `pick` uses.
+  const [armed, setArmed] = useState<{ jobId: string; name: string } | null>(null)
+  if (armed && armed.jobId !== jobId) setArmed(null)
+  const arming = armed && armed.jobId === jobId ? armed.name : null
 
   const data = merged && merged.jobId === jobId ? merged.detail : detail.data
   let content: ReactNode
@@ -127,6 +141,16 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     const shown = applyDraft(wire, entries)
     const posts = savableCorrections(wire, entries)
 
+    // The drag landed: the box goes into the draft, applyDraft moves the highlight onto it, and
+    // the arm's work is done. Nothing bumps the scroll nonce -- centring a box the person is
+    // already looking at would scroll the page out from under their cursor.
+    const pointAt = (region: ExtractionRegion) => {
+      const name = arming
+      if (name === null) return
+      draftFrom(name, (prev) => pointedEntry(prev, wire.find((f) => f.name === name)?.value ?? null, region))
+      setArmed(null)
+    }
+
     // N POSTs, awaited ONE AT A TIME in vocabulary order: each opens its own transaction over
     // the same invoice, and the append-only table's seq should follow the order the person
     // reads. The run stops at the first refusal and keeps every entry that did not commit --
@@ -137,6 +161,8 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
       write.current = mine
       setWriting(true)
       setWriteError(null)
+      // A screen that is writing is no longer waiting for a box.
+      setArmed(null)
 
       const committed: string[] = []
       let refusal: string | null = null
@@ -193,7 +219,7 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
             selected={selected}
             scrollNonce={current?.n ?? 0}
             armed={arming}
-            onPoint={onPoint}
+            onPoint={pointAt}
           />
           <ExtractionFields
             fields={wire}
@@ -201,10 +227,17 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
             selected={selected}
             armed={arming}
             canPoint={data.pages.length > 0}
-            onArm={onArm}
-            onDisarm={onDisarm}
-            onSelect={(name) => setPick((p) => ({ jobId, name, n: (p?.n ?? 0) + 1 }))}
-            onType={(name, value) => draftField(name, { kind: 'typed', value, region: null })}
+            onArm={(name) => setArmed({ jobId, name })}
+            onDisarm={() => setArmed(null)}
+            // A FUNCTIONAL updater, because the point button's own click bubbles to the cell:
+            // onArm runs, then onSelect for the same field, and an unconditional clear here
+            // would drop the arm it just took. Selecting anything else still disarms.
+            onSelect={(name) => {
+              setPick((p) => ({ jobId, name, n: (p?.n ?? 0) + 1 }))
+              setArmed((a) => (a && a.jobId === jobId && a.name === name ? a : null))
+            }}
+            // typedEntry, not a literal: typing beside a box that was drawn keeps the box.
+            onType={(name, value) => draftFrom(name, (prev) => typedEntry(prev, value))}
             onChoose={(name, a: ExtractionCandidate) =>
               draftField(name, { kind: 'chosen', value: a.value ?? '', region: a.region })
             }

@@ -970,6 +970,26 @@ describe('savableCorrections', () => {
     expect(out.map((p) => p.field), 'a no-op correction was recorded as a human decision').toEqual(['total'])
   })
 
+  it('drops a typed entry the person emptied, whitespace included', () => {
+    // The boundary 400s a blank value (msgBlankValue), so the round trip and its message buy
+    // nothing. The neighbour is what makes the absence real: an implementation that emits
+    // nothing at all passes the first clause on its own.
+    const fields = [
+      mkField({ name: 'subtotal', value: '950.00' }),
+      mkField({ name: 'vat', value: '75.00' }),
+      mkField({ name: 'total', value: '1000.00' }),
+    ]
+    const entries: DraftEntries = {
+      subtotal: { kind: 'typed', value: '', region: null },
+      vat: { kind: 'typed', value: '   ', region: null },
+      total: { kind: 'typed', value: '1,500.00', region: null },
+    }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(out.map((p) => p.field), 'a blank the boundary refuses was posted anyway').toEqual(['total'])
+  })
+
   it('keeps an undone entry even when its value equals the wire', () => {
     // The no-op guard is about the VALUE; an undo is a decision about the CORRECTION, and the
     // server ignores the value it carries. A guard keyed on the value alone swallows it.

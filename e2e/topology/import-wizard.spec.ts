@@ -3688,11 +3688,17 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
 
   const cell = page.getByTestId(`extraction-field-${ambiguous!.name}`)
   const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
+  // The row's own container: a stretched flex item, so its width IS the cell's content width.
+  // The chips must fill it, and on this document they cannot be told apart any other way --
+  // 2026-01-01, 2026-01-10 and 2026-10-01 are anagrams and all three sub-labels read `page 1`,
+  // so three content-sized chips are ALSO within 1px of each other and clear the evenness
+  // clause below. Filling the row is what `flex: 1` buys and content sizing does not.
+  const chipRow = chips.first().locator('xpath=..')
   await expect(cell, 'the ambiguous field rendered no cell').toBeVisible()
   // W-3: the decided reading is itself a chip, so the row carries N + 1.
   await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
 
-  type Measured = { width: number; cell: Rect; chips: Rect[]; rowGaps: { left: number; right: number } }
+  type Measured = { width: number; cell: Rect; row: Rect; chips: Rect[]; rowGaps: { left: number; right: number } }
   const measured: Measured[] = []
   const entryViewport = page.viewportSize()
   try {
@@ -3703,12 +3709,14 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
 
       const m = await settledRead(async () => {
         const c = await cell.boundingBox()
+        const r = await chipRow.boundingBox()
         const boxes = await chips.all()
         const rects = await Promise.all(boxes.map((b) => b.boundingBox()))
-        return { c, rects }
+        return { c, r, rects }
       }, `chip row geometry at ${width}px`)
 
       expect(m.c, `the cell must render at ${width}px`).toBeTruthy()
+      expect(m.r, `the chip row's own container must render at ${width}px`).toBeTruthy()
       expect(m.rects.every(Boolean), `every chip must render at ${width}px`).toBe(true)
       const rects = m.rects as Rect[]
       for (const [i, r] of rects.entries()) {
@@ -3736,7 +3744,15 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
       expect(g.left, `the chip row passes its column's left edge by ${-g.left}px at ${width}px`).toBeGreaterThanOrEqual(-1)
       expect(g.right, `the chip row passes its column's right edge by ${-g.right}px at ${width}px`).toBeGreaterThanOrEqual(-1)
 
-      measured.push({ width, cell: m.c as Rect, chips: rects, rowGaps: g })
+      // Filling it, not merely fitting inside it: `flex: none` chips are content-sized, even
+      // with each other and well inside the column, and clear every clause above.
+      const row = m.r as Rect
+      expect(
+        row.width - rowRect.width,
+        `the chips take ${rowRect.width}px of their ${row.width}px row at ${width}px -- they do not share the column, they sit in it`,
+      ).toBeLessThanOrEqual(1)
+
+      measured.push({ width, cell: m.c as Rect, row, chips: rects, rowGaps: g })
     }
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)

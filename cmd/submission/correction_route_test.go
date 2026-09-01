@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -346,6 +347,61 @@ func TestInvoiceEditFor_ANilValueClearsEveryWritableColumn(t *testing.T) {
 	if _, err := invoiceEditFor("invoice_number", nil); !errors.Is(err, extraction.ErrValueRefused) {
 		t.Errorf("clearing invoice_number: err = %v, want ErrValueRefused", err)
 	}
+}
+
+// The clear is matched by POINTER identity, and a request body can only produce a string. So a
+// posted value spelling the sentinel's own contents reaches the write layer as ORDINARY DATA;
+// updateContentTx then names it a copy and refuses it (TestUpdateContentTx_RefusesACopiedClearSentinel),
+// which newInvoiceFieldApplier maps to ErrValueRefused and the boundary renders as a 400.
+func TestInvoiceEditFor_AJSONBodyCannotForgeTheClearSentinel(t *testing.T) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(`{"value":"\u0000invoice.clear"}`), &body); err != nil {
+		t.Fatalf("decoding the forged body: %v", err)
+	}
+	// The floor: the decoded string really is the sentinel's own contents, so a pointer
+	// comparison below is the only thing that can tell it from the sentinel.
+	if body.Value != *invoice.ClearText {
+		t.Fatalf("the forged body decoded to %q, not the sentinel's contents -- every claim below is vacuous", body.Value)
+	}
+
+	for _, field := range []string{"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"} {
+		t.Run(field, func(t *testing.T) {
+			in, err := invoiceEditFor(field, &body.Value)
+			if err != nil {
+				t.Fatalf("%s: %v", field, err)
+			}
+			got := fcHeaderPtr(t, in.UpdateInput, field)
+			if got == invoice.ClearText {
+				t.Fatalf("%s reached the write layer AS the clear sentinel; a posted value would clear the column", field)
+			}
+			if got == nil || *got != body.Value {
+				t.Errorf("%s reached the write layer as %s, want the posted text", field, fcShow(got))
+			}
+		})
+	}
+}
+
+// fcHeaderPtr reads one writable text member off an UpdateInput by its column name.
+func fcHeaderPtr(t *testing.T, in invoice.UpdateInput, field string) *string {
+	t.Helper()
+	switch field {
+	case "buyer_tin":
+		return in.BuyerTIN
+	case "buyer_name":
+		return in.BuyerName
+	case "currency":
+		return in.Currency
+	case "subtotal":
+		return in.Subtotal
+	case "vat":
+		return in.VAT
+	case "total":
+		return in.Total
+	}
+	t.Fatalf("%s is not a writable text column", field)
+	return nil
 }
 
 func fcStr(s string) *string { return &s }

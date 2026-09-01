@@ -931,6 +931,24 @@ function mkCorrectionResponse(field: string, value: string, method: string): Rec
   }
 }
 
+/**
+ * Three typable fields whose WIRE order (total, vat, subtotal) is the reverse of the
+ * vocabulary's. The order rows below type them in a third order again, so neither the render
+ * order nor the insertion order agrees with the answer — a tie cannot tell two orderings apart.
+ */
+const THREE_TYPABLE: ExtractionDetail = mkDetail({
+  fields: [
+    mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 1 }) }),
+    mkField({ name: 'vat', value: '75.00', region: mkRegion({ page: 1 }) }),
+    mkField({ name: 'subtotal', value: '950.00', region: mkRegion({ page: 1 }) }),
+  ],
+})
+
+/** The field each recorded write settled, off its own URL. */
+function postedFields(w: Wire): string[] {
+  return writes(w).map((c) => c.url.split('/fields/')[1]?.split('/')[0] ?? '')
+}
+
 /** Answers the detail GET with `detail` and every POST with a 201-shaped correction body. */
 function writing(detail: ExtractionDetail, onPost?: (url: string, body: unknown) => Promise<unknown>): Wire {
   return wire(async (_last, url, opts) => {
@@ -1017,6 +1035,208 @@ describe('one shared draft, one Save', () => {
       screen.queryByTestId('extraction-write-error')?.textContent,
       "the server's own sentence was not rendered verbatim",
     ).toBe(REFUSAL)
+  })
+
+  it("posts the chosen chip's own value as a chosen correction", async () => {
+    // The shell's mapping from the chip click to the draft is what makes the correction
+    // `chosen`, and that is the whole of AC-2: `chosen` is the method the server re-derives the
+    // alternative's own region from, and the only one that renders YOU CHOSE THIS afterwards.
+    // A shell drafting `typed` here writes a correction that keeps the decided reading's box and
+    // claims the person typed the value — and it passed every other row in this file.
+    const w = writing(AMBIGUOUS_JOB, async (_url, body) =>
+      mkCorrectionResponse('issue_date', String((body as { value?: string }).value ?? ''), 'chosen'),
+    )
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip — every claim below is vacuous').toBe(3)
+
+    // The LAST chip: neither the decided reading nor the first alternative, so a shell that
+    // posts either one reds on the value.
+    fireEvent.click(chips[2])
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const posted = writes(w)
+    expect(posted, 'Save sent no correction for the drafted chip').toHaveLength(1)
+    expect(posted[0].url, 'the chip was posted to another field').toContain('/fields/issue_date/corrections')
+    expect(posted[0].body, 'the chip did not reach the register as the candidate the person chose').toEqual({
+      value: '2026-10-01',
+      method: 'chosen',
+      region: null,
+      anchor_label: '',
+    })
+  })
+
+  it('moves the document highlight to the chip the person chose, before any Save', async () => {
+    // Core AC 7's binding, read the other way round: the chip names its own box and the canvas
+    // follows the DRAFT, not the wire. The page-bytes recorder is the oracle — a shell handing
+    // the canvas the wire fields still renders a highlight, just over the reading the chip
+    // replaced, and no assertion on the highlight's own presence can tell the two apart.
+    vi.useFakeTimers()
+    silenceObserver()
+    const bytes = pageFetch()
+    const w = writing(AMBIGUOUS_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(bytes.requested(), 'the mount loaded a page before anything was selected').toEqual([])
+
+    fireEvent.click(fieldRow('issue_date'))
+    await flush()
+    expect(bytes.requested(), "the selection did not request the decided reading's own page").toEqual([1])
+
+    // The last chip's alternative sits on page 3 — neither the decided reading's page nor the
+    // first alternative's, so no shortcut answers 3.
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip — the click below is vacuous').toBe(3)
+    fireEvent.click(chips[2])
+    await flush()
+
+    expect(writes(w), 'the chip wrote to the register before anyone pressed Save').toEqual([])
+    expect(
+      bytes.requested(),
+      'the document pane is reading the wire, so the highlight stayed on the reading the chip replaced',
+    ).toEqual([1, 3])
+    expect(
+      highlights().map((h) => h.dataset.snip),
+      'the highlight left the field it belongs to',
+    ).toEqual(['issue_date'])
+  })
+
+  it('holds both panes on screen while the post-write re-read is in flight', async () => {
+    // The window a `detail.run()` re-read opens is INVISIBLE to a synchronous wire: `start` and
+    // `success` land inside one act(), and a sample taken between two act()s never sees
+    // `data: null`. The re-read is held open here, so the pane is observed WHILE it is in
+    // flight — which is the only state that tells a direct re-read from a run().
+    let release: (() => void) | null = null
+    let gets = 0
+    const w = wire(async (_last, _url, opts) => {
+      if ((opts?.method ?? 'GET') !== 'GET') return mkCorrectionResponse('issue_date', '2026-10-01', 'chosen')
+      gets += 1
+      if (gets > 1) await new Promise<void>((r) => (release = r))
+      return AMBIGUOUS_JOB
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip — the save below is vacuous').toBe(3)
+    fireEvent.click(chips[1])
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    // The floor: the re-read really is open, so the three absences below are observed inside
+    // the window rather than after it closed.
+    expect(gets, 'the screen never re-read the detail — the claims below are vacuous').toBe(2)
+    expect(release, 'the second read answered already — the window this row measures never existed').toBeTruthy()
+
+    expect(screen.queryByTestId('extraction-fields'), 'the re-read unmounted the fields pane').toBeTruthy()
+    expect(screen.queryByTestId('extraction-review-body'), 'the re-read unmounted the document pane').toBeTruthy()
+    expect(
+      document.querySelector(LOADING_SPINNER),
+      'the re-read replaced the whole screen with the shared spinner and dropped the canvas scroll',
+    ).toBeNull()
+
+    await act(async () => {
+      ;(release as unknown as () => void)()
+    })
+    await flush()
+    expect(screen.queryByTestId('extraction-fields'), 'the pane never came back after the re-read').toBeTruthy()
+  })
+
+  it('sends its POSTs one at a time, waiting for each answer before the next', async () => {
+    // Each POST opens its own transaction over the same invoice, so two in flight contend and
+    // the append-only table's seq stops following the order the person reads. `Promise.all` over
+    // the same list records the same URLs in the same order — only holding one answer open
+    // tells the two apart.
+    let release: ((v: unknown) => void) | null = null
+    const w = writing(THREE_TYPABLE, async (url) => {
+      if (url.includes('/fields/subtotal/')) return new Promise((r) => (release = r))
+      return mkCorrectionResponse('x', 'x', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    for (const [name, value] of [
+      ['total', '2,222.00'],
+      ['subtotal', '1,111.00'],
+      ['vat', '3,333.00'],
+    ] as const) {
+      const input = inputOf(name)
+      expect(input, `the pane renders no input for ${name} — every claim below is vacuous`).toBeTruthy()
+      fireEvent.change(input as HTMLInputElement, { target: { value } })
+    }
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(
+      postedFields(w),
+      'the run fired more than one POST before the first was answered, and in vocabulary order that is subtotal first',
+    ).toEqual(['subtotal'])
+
+    await act(async () => {
+      ;(release as unknown as (v: unknown) => void)(mkCorrectionResponse('subtotal', '1,111.00', 'typed'))
+    })
+    await flush()
+
+    expect(postedFields(w), 'the run did not resume once the first POST was answered').toEqual([
+      'subtotal',
+      'vat',
+      'total',
+    ])
+  })
+
+  it('stops at the first refusal and sends nothing after it', async () => {
+    // The middle field is refused, so a run that carries on has a THIRD POST to show for it.
+    // Without a field after the refusal this claim cannot be made at all: the shipped row
+    // refuses the last of two and reads the same either way.
+    const REFUSAL = 'issue_date must be a date this system can read'
+    const w = writing(THREE_TYPABLE, async (url) => {
+      if (url.includes('/fields/vat/')) throw new ApiError('http', REFUSAL, 400)
+      return mkCorrectionResponse('subtotal', '1,111.00', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    for (const [name, value] of [
+      ['total', '2,222.00'],
+      ['subtotal', '1,111.00'],
+      ['vat', '3,333.00'],
+    ] as const) {
+      fireEvent.change(inputOf(name) as HTMLInputElement, { target: { value } })
+    }
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(postedFields(w), 'the run wrote past a refusal the person has not seen yet').toEqual(['subtotal', 'vat'])
+    expect(
+      screen.queryByTestId('extraction-write-error')?.textContent,
+      "the server's own sentence was not rendered verbatim",
+    ).toBe(REFUSAL)
+
+    // The refused field and the one the run never reached both keep the person's typing; the
+    // committed one comes back from the server.
+    expect(inputOf('vat')!.value, 'the refused field lost the typing nobody accepted').toBe('3,333.00')
+    expect(inputOf('total')!.value, 'the field the run never reached lost its typing').toBe('2,222.00')
+    expect(saveButton()!.disabled, 'nothing is left to press Save for, so the refusal cannot be retried').toBe(false)
   })
 
   it('discards a blank typed entry when the save that dropped it commits another field', async () => {

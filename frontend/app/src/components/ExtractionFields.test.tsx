@@ -1163,6 +1163,25 @@ describe('the cell EXTR-12 grew', () => {
     expect(checked, 'every element claimed to be out of flow').toBeGreaterThan(EVERY_CELL_PART.length)
   })
 
+  it('hides no reason in a tooltip on any control it added', () => {
+    // The two shipped [title] walks render neither a chip nor an Undo: one fixture carries no
+    // ambiguous field and no corrected one, the other neither. A `title` on the Undo button --
+    // the control most likely to attract one -- was covered by nothing. A `title` never fires
+    // for a keyboard or screen-reader user and is invisible to Chromium's accessibility tree.
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    expectEveryPartRendered()
+
+    expect(pane().querySelectorAll('[title]'), 'a control in the pane hides its reason in a tooltip').toHaveLength(0)
+
+    // The control needle: the same query finds a planted node, so the zero above is a real
+    // absence and not a selector that matches nothing.
+    const probe = document.createElement('span')
+    probe.setAttribute('title', 'probe')
+    row('total').appendChild(probe)
+    expect(pane().querySelectorAll('[title]'), 'the [title] selector is inert').toHaveLength(1)
+    probe.remove()
+  })
+
   it('puts no new testid inside the shipped extraction-field- prefix', () => {
     // `rows()` here, the same walk in ExtractionReview.test.tsx and EXTR11-E2E-02a on the
     // deploy gate all count `[data-testid^="extraction-field-"]` against the wire's field
@@ -1310,6 +1329,44 @@ describe('an ambiguous field', () => {
     expect(inputOf('subtotal'), 'the floor: an inconsistent field still takes an input').toBeTruthy()
     expect(chipsOf('subtotal'), 'the chip row is gated on the array, not on the reason').toHaveLength(0)
     expect(pane().textContent, 'a lower-ranked candidate reached the screen').not.toContain('3,726,000.00')
+  })
+
+  it('marks the chip the draft holds, and only when the draft chose it', () => {
+    // An ambiguous cell renders NO input, so the chip's own mark is the only thing on screen
+    // that says a candidate was picked — the value does not move, and Save's enabled state is
+    // outside the pane. A chip that never marks itself leaves the whole gesture invisible until
+    // the write lands, which is the claim W-1 was reversed on.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-01-10', 3), mkCandidate('2026-10-01', 5)],
+      }),
+    ]
+    const chosen: DraftEntries = { issue_date: { kind: 'chosen', value: '2026-10-01', region: null } }
+    render(fieldsPane({ fields, draft: chosen }))
+
+    const chips = chipsOf('issue_date')
+    expect(chips, 'no chip rendered — every claim below is vacuous').toHaveLength(3)
+    expect(
+      chips.map((c) => c.getAttribute('aria-current')),
+      'the mark is on a chip the draft did not choose, or on all of them',
+    ).toEqual(['false', 'false', 'true'])
+
+    // Not merely semantic: the artboard's `a.border` hook, in the app layer's own teal.
+    expect(chips[2].style.border, 'the picked chip renders exactly like an unpicked one').toBe('1px solid var(--action)')
+    expect(chips[0].style.border, 'every chip renders as picked').toBe('1px solid var(--line-2)')
+
+    // The gate is the KIND, not the value: a typed draft that happens to carry a candidate's
+    // text has chosen nothing, and a chip claiming otherwise would say the person picked it.
+    cleanup()
+    const typed: DraftEntries = { issue_date: { kind: 'typed', value: '2026-10-01', region: null } }
+    render(fieldsPane({ fields, draft: typed }))
+    expect(
+      chipsOf('issue_date').map((c) => c.getAttribute('aria-current')),
+      'a typed draft marked a chip nobody chose',
+    ).toEqual(['false', 'false', 'false'])
   })
 
   it('reports the chosen candidate upward, and writes no correction of its own', () => {

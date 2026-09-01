@@ -1430,8 +1430,34 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 // EditBySourceDocumentTx applies one edit to the invoice filed from documentID, on the
 // caller's transaction. Same gate, demotion and audit as Edit -- one owner, not a second
 // copy of the fix-loop rules.
+//
+// Two invoices on one document is an AMBIGUOUS target and answers ErrNotFound rather than
+// picking a row: the corrected value landing on the wrong invoice is the silent-wrong
+// outcome this entry exists to prevent.
 func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentID string, in EditInput) (Invoice, error) {
-	return Invoice{}, errors.New("invoice: EditBySourceDocumentTx not implemented")
+	// editTx does not carry Edit's step-1 guard: handed an all-nil EditInput it falls
+	// through to the fingerprint check and returns `before` with no audit row and no
+	// demotion (TestRLS_EditBySourceDocumentTxRefusesAnEmptyEdit).
+	if !headerFieldsPresent(in.UpdateInput) && in.LineItems == nil {
+		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+
+	// LIMIT 2 is all the resolution needs: none, one, or more than one.
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 2`,
+		documentID)
+	if err != nil {
+		return Invoice{}, err
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return Invoice{}, err
+	}
+	if len(ids) != 1 {
+		return Invoice{}, ErrNotFound
+	}
+
+	return editTx(ctx, tx, ids[0], in)
 }
 
 // legalTransitions is the SINGLE source of truth for the invoice lifecycle

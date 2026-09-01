@@ -7,13 +7,13 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 38 identifiers this app claims to label, measured against the Go tree. Five families
+// The 39 identifiers this app claims to label, measured against the Go tree. Five families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, validation/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
 //
-// The two extraction events are the opposite case: cmd/submission/main.go spells each one
-// literally, so the source scan below can demand a label for both.
+// The three extraction events are the opposite case: cmd/submission/main.go spells each one
+// literally, so the source scan below can demand a label for all three.
 const EXPECTED: Record<AuditDomain, string[]> = {
   invoices: [
     'invoice.created',
@@ -50,6 +50,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'document.reused',
     'extraction.succeeded',
     'extraction.failed',
+    'extraction.field_corrected',
   ],
   memberships: ['membership.suspended', 'membership.reactivated'],
   validation: ['validation.rule.enabled', 'validation.rule.disabled'],
@@ -60,12 +61,12 @@ const EXPECTED: Record<AuditDomain, string[]> = {
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllThirtyEightTypes', () => {
+  it('auditVocabulary_hasAllThirtyNineTypes', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(38)
-    expect(ALL.length).toBe(38)
+    expect(shipped.length).toBe(39)
+    expect(ALL.length).toBe(39)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
@@ -122,8 +123,8 @@ describe('audit vocabulary', () => {
 
     // The other direction: a label with no writer is drift too. cmd/** sits outside the
     // `frontend` CI path filter, so this is the assertion that makes the Go adapter and these
-    // two labels one push rather than two.
-    for (const id of ['extraction.succeeded', 'extraction.failed']) {
+    // three labels one push rather than two.
+    for (const id of ['extraction.succeeded', 'extraction.failed', 'extraction.field_corrected']) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }
   })

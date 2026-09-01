@@ -24,18 +24,35 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-// rvdWireStructs is the wire contract EXTR-11-02's handler and the SPA/e2e TypeScript mirrors
-// are written against. Key sets are pinned, not counted: a renamed key is the defect.
+// rvdWireStructs is the wire contract this package's handlers and the SPA/e2e TypeScript
+// mirrors are written against. Key sets are pinned, not counted: a renamed key is the defect.
+// src is per row, so a wire struct living outside reader.go is scanned rather than silently
+// uncovered.
 var rvdWireStructs = []struct {
+	src  string
 	name string
 	keys []string
 }{
-	{"ExtractionRegion", []string{"page", "x0", "y0", "x1", "y1"}},
-	{"ExtractionPage", []string{"page", "width_px", "height_px"}},
-	{"ExtractionCandidate", []string{"value", "region"}},
-	{"ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives"}},
-	{"ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
-	{"ExtractionDetail", []string{"id", "document_id", "state", "document", "pages", "fields"}},
+	{rdReaderSource, "ExtractionRegion", []string{"page", "x0", "y0", "x1", "y1"}},
+	{rdReaderSource, "ExtractionPage", []string{"page", "width_px", "height_px"}},
+	{rdReaderSource, "ExtractionCandidate", []string{"value", "region"}},
+	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives"}},
+	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
+	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "document", "pages", "fields"}},
+	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
+}
+
+// rvdSources is every file rvdWireStructs names, in first-seen order.
+func rvdSources() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, w := range rvdWireStructs {
+		if !seen[w.src] {
+			seen[w.src] = true
+			out = append(out, w.src)
+		}
+	}
+	return out
 }
 
 // rvdSnakeCase is the tag shape every other wire struct in this repo uses.
@@ -968,25 +985,27 @@ func TestExtractionJobsForDocument_NeverReturnsErrNotFound(t *testing.T) {
 // catches -- the AST sees tags a brace-bearing body would hide from wireMirrors.test.ts, and
 // the regex is the extractor that actually runs in CI (wireMirrors.test.ts:24-32).
 func TestExtractionWireStructs_CarryJsonTags(t *testing.T) {
-	f, _ := mxParse(t, rdReaderSource)
-
-	structs := map[string]*ast.StructType{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok {
+	structs := map[string]map[string]*ast.StructType{}
+	for _, name := range rvdSources() {
+		f, _ := mxParse(t, name)
+		structs[name] = map[string]*ast.StructType{}
+		ast.Inspect(f, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			if st, ok := ts.Type.(*ast.StructType); ok {
+				structs[name][ts.Name.Name] = st
+			}
 			return true
-		}
-		if st, ok := ts.Type.(*ast.StructType); ok {
-			structs[ts.Name.Name] = st
-		}
-		return true
-	})
+		})
+	}
 
 	var scanned int
 	for _, want := range rvdWireStructs {
-		st, ok := structs[want.name]
+		st, ok := structs[want.src][want.name]
 		if !ok {
-			t.Errorf("%s declares no struct %s", rdReaderSource, want.name)
+			t.Errorf("%s declares no struct %s", want.src, want.name)
 			continue
 		}
 		if st.Fields == nil || len(st.Fields.List) == 0 {
@@ -1021,12 +1040,16 @@ func TestExtractionWireStructs_CarryJsonTags(t *testing.T) {
 	// The second oracle: goStructKeys, verbatim. Its body group is [^{}]*, so a struct body
 	// that is not brace-free yields no match and every downstream mirror silently compares
 	// [] to [].
-	src, err := os.ReadFile(rdReaderSource)
-	if err != nil {
-		t.Fatalf("read %s: %v", rdReaderSource, err)
+	sources := map[string]string{}
+	for _, name := range rvdSources() {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		sources[name] = string(raw)
 	}
 	for _, want := range rvdWireStructs {
-		body := regexp.MustCompile(`type\s+` + want.name + `\s+struct\s*\{([^{}]*)\}`).FindStringSubmatch(string(src))
+		body := regexp.MustCompile(`type\s+` + want.name + `\s+struct\s*\{([^{}]*)\}`).FindStringSubmatch(sources[want.src])
 		if body == nil {
 			t.Errorf("wireMirrors.test.ts's goStructKeys extracts nothing for %s: the struct must exist and its body must be brace-free", want.name)
 			continue

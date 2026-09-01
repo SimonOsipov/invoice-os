@@ -4,6 +4,10 @@
 // because scripts/ci/rls-test-gate.sh fails a step on any skip. The DB-backed half lives in
 // handlers_correction_db_test.go.
 //
+// Every REFUSAL here is answered before the handler opens a transaction. The three positive
+// controls are not: a valid request has to resolve the job document, which is a query. They get
+// corDeadPool, so reaching the database is a loud 500 rather than a nil-pointer panic.
+//
 // The status scheme these cases pin: 400 malformed input, 422 well-formed but semantically
 // refused, 409 state conflict.
 //
@@ -21,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -82,12 +87,20 @@ func (s *corSpy) record(_ context.Context, _ pgx.Tx, subject string, c extractio
 	return s.recordErr
 }
 
+// corDeadPool is a lazily-configured pool at a closed port: it never connects, so the first
+// BeginTx fails with a dial error. A nil *pgxpool.Pool panics inside BeginTx instead, which
+// takes the whole package down rather than failing one case.
+var corDeadPool = func() *pgxpool.Pool {
+	p, err := pgxpool.New(context.Background(), "postgres://nobody:nobody@127.0.0.1:1/nothing?sslmode=disable")
+	if err != nil {
+		panic("cor: build the dead pool: " + err.Error())
+	}
+	return p
+}()
+
 // corServe drives the handler once. rawID and rawName are what the mux would have bound; body
 // is sent verbatim, so a case can send text that is not JSON at all. A nil identity means the
 // request carries none.
-//
-// The pool is nil on purpose: every case in this file must be answered before the handler opens
-// a transaction, so a case that reached the pool would panic rather than pass quietly.
 func corServe(t *testing.T, spy *corSpy, rawID, rawName, body string, id *auth.Identity, log *slog.Logger) *httptest.ResponseRecorder {
 	t.Helper()
 	target := "/v1/extractions/" + rawID + "/fields/" + rawName + "/corrections"
@@ -98,7 +111,7 @@ func corServe(t *testing.T, spy *corSpy, rawID, rawName, body string, id *auth.I
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	w := httptest.NewRecorder()
-	extraction.CorrectionHandler(nil, spy.apply, spy.record, log)(w, r)
+	extraction.CorrectionHandler(corDeadPool, spy.apply, spy.record, log)(w, r)
 	return w
 }
 
@@ -236,16 +249,15 @@ func TestCorrectionHandler_UnparseableIssueDateIsRefused(t *testing.T) {
 		})
 	}
 
-	// The control: an ISO date reaches the seam unchanged, so the arms above refuse an
-	// unreadable date rather than refusing issue_date altogether.
+	// The control: an ISO date is not refused, so the arms above refuse an unreadable date
+	// rather than refusing issue_date altogether. What the seam is HANDED cannot be observed
+	// here -- resolving the job document is a query, so a valid request reaches corDeadPool --
+	// and is asserted against a real transaction by
+	// TestRLS_CorrectionNormalisesIssueDateToOneSpelling.
 	spy := newCorSpy()
-	corPost(t, spy, "issue_date", corBody("2026-03-01", "typed", ""))
-	if spy.applies != 1 {
-		t.Fatalf("an ISO issue_date reached the invoice seam %d time(s), want 1 -- the arms above refuse the field, not the value", spy.applies)
-	}
-	if spy.gotField != "issue_date" || spy.gotValue != "2026-03-01" {
-		t.Errorf("the seam was handed (%q, %q), want (%q, %q) -- the correction row and the invoice must carry one spelling",
-			spy.gotField, spy.gotValue, "issue_date", "2026-03-01")
+	w := corPost(t, spy, "issue_date", corBody("2026-03-01", "typed", ""))
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("an ISO issue_date was refused with 400 %q; the arms above then prove nothing about the value", w.Body.String())
 	}
 }
 

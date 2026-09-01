@@ -146,11 +146,11 @@ func TestExtraction_GeneratedInvoiceIDColumnIsNotRewritten(t *testing.T) {
 	}
 }
 
-// T6-5, the fence. extraction.field_corrected is attributable but not yet emitted and
-// carries no frontend label, so it is NOT in the shipped rule-A/B/C/D vocabulary; EXTR-14
-// adds it when it emits it. EXTR-08-04 adds extraction.succeeded and .failed to rule D and
-// must not add this one by reflex — doing so would assert the opposite of what the
-// migration ships and would break the disjoint-and-sum arithmetic.
+// T6-5, the fence. EXTR-12-04 emits extraction.field_corrected and gives it a frontend
+// label, and it still is NOT in the rule-A/B/C/D vocabulary: the insert trigger resolves
+// its entity from payload->>'invoice_id' on an arm of its own, so putting it in a rule set
+// would assert the opposite of what the migration ships and break the disjoint-and-sum
+// arithmetic.
 func TestExtraction_FieldCorrectedIsNotInTheWorkspaceVocabulary(t *testing.T) {
 	const event = "extraction.field_corrected"
 	ruleD := triggerRuleDPayloads(uuid.NewString())

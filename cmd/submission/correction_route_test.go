@@ -11,6 +11,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ const (
 	fcDocumentID  = "3f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60"
 	fcInvoiceID   = "5d2f7a10-6b3c-4e8d-9f01-2a3b4c5d6e7f"
 	fcCorrectedTo = "1500.00"
+	fcActor       = "e5b10007-0000-4000-8000-000000000001"
 )
 
 // The route must be mounted on app.Mux -- a route on a locally built mux is registered and
@@ -133,6 +135,36 @@ func TestNewFieldCorrectedAuditor_SpellsTheEventInCmd(t *testing.T) {
 	if got := eaLiteralSites(t, root, extractionFiles, fcEvent); len(got) != 0 {
 		t.Errorf("%q is spelled as a production literal under %s at %v -- a literal there drops the call site out of the repo-wide audit.Record partition",
 			fcEvent, drExtractionD, got)
+	}
+}
+
+// The payload the resolver dispatches on. Driving the REAL adapter is the only oracle for the
+// key spelling: internal/extraction's DB suite injects a recorder of its own, so a production
+// adapter writing "id" instead passes every test in it while every row resolves entity_id NULL.
+func TestNewFieldCorrectedAuditor_WritesTheInvoiceIdPayload(t *testing.T) {
+	tx := &eaTx{}
+	c := extraction.FieldCorrection{
+		InvoiceID: fcInvoiceID, FieldName: "total", Method: extraction.MethodPointed,
+	}
+
+	if err := newFieldCorrectedAuditor()(context.Background(), tx, fcActor, c); err != nil {
+		t.Fatalf("the recorder returned %v, want nil", err)
+	}
+	row := eaDecodeOne(t, tx)
+
+	if row.actor != fcActor {
+		t.Errorf("the row names actor %q, want the caller's own subject %q", row.actor, fcActor)
+	}
+	if row.event != fcEvent {
+		t.Errorf("the row carries event %q, want %q", row.event, fcEvent)
+	}
+	want := map[string]any{"invoice_id": fcInvoiceID, "field": "total", "method": "pointed"}
+	if !reflect.DeepEqual(row.payload, want) {
+		t.Errorf("the row carries payload %v, want exactly %v -- audit_log_set_entity dispatches this event on payload->>'invoice_id', and any other spelling resolves entity_id NULL, which claims the correction was firm-wide",
+			row.payload, want)
+	}
+	if _, ok := row.payload["value"]; ok {
+		t.Errorf("the row carries the corrected value %v; audit_log is append-only and business content does not belong in it", row.payload["value"])
 	}
 }
 

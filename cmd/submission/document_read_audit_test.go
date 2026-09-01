@@ -203,7 +203,7 @@ func TestNewDocumentReadAuditor_WritesTheCallersSubjectAsActor(t *testing.T) {
 
 // drWantAuditWriters is cmd/submission/main.go's COMPLETE audit.Record population, keyed on the
 // enclosing func.
-var drWantAuditWriters = map[string]int{eaAdapterFn: 2, drAdapterFn: 1}
+var drWantAuditWriters = map[string]int{eaAdapterFn: 2, drAdapterFn: 1, fcAdapterFn: 1}
 
 // eaMainSites floors main.go's site count and then narrows to newExtractionAuditor, so every
 // assertion in extraction_audit_test.go is blind to a writer added elsewhere in the file --

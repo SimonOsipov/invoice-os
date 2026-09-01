@@ -140,6 +140,16 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getExtractionDetail(',
     floor: 5,
   },
+  {
+    ts: 'CorrectionResponse',
+    go: 'CorrectionResponse',
+    goPath: 'internal/extraction/handlers_correction.go',
+    goAnchor: 'func CorrectionHandler(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function scrollRegionIntoView(',
+    e2eAnchor: 'export function postFieldCorrection(',
+    floor: 7,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -252,6 +262,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionPage',
       'ExtractionFieldState',
       'ExtractionRegion',
+      'CorrectionResponse',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })

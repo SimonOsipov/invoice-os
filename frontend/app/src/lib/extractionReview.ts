@@ -68,6 +68,23 @@ export interface ExtractionDetail {
   fields: ExtractionFieldState[]
 }
 
+// internal/extraction/handlers_correction.go, CorrectionMethod. The four values the method
+// CHECK admits.
+export type CorrectionMethod = 'typed' | 'chosen' | 'pointed' | 'undone'
+
+// internal/extraction/handlers_correction.go, CorrectionResponse -- the 201 body of the
+// correction POST: what was appended plus the invoice it reached. A demotion is only visible on
+// the next detail read.
+export interface CorrectionResponse {
+  id: string
+  field_name: string
+  value: string
+  method: CorrectionMethod
+  region: ExtractionRegion | null
+  invoice_id: string
+  created_at: string
+}
+
 export async function getExtractionDetail(authedFetch: AuthedFetch, base: string, jobId: string): Promise<ExtractionDetail> {
   return authedFetch<ExtractionDetail>(`${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}`)
 }

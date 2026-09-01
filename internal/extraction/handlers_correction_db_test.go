@@ -165,6 +165,17 @@ func cxCorrectionRows(t *testing.T, ctx context.Context, jobID string) int {
 	return n
 }
 
+// cxCorrectionValue reads the one correction row a job holds, as the superuser.
+func cxCorrectionValue(t *testing.T, ctx context.Context, jobID string) string {
+	t.Helper()
+	var out string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT value FROM extraction_field_corrections WHERE extraction_job_id = $1`, jobID).Scan(&out); err != nil {
+		t.Fatalf("read the correction value for job %s: %v", jobID, err)
+	}
+	return out
+}
+
 func cxTotal(t *testing.T, ctx context.Context, invoiceID string) string {
 	t.Helper()
 	var out *string
@@ -434,6 +445,66 @@ func TestRLS_CorrectionWithNoInvoiceFiledFromTheDocumentIsRefused(t *testing.T) 
 	}
 	if rows := cxCorrectionAudit(t, ctx, tenantID); len(rows) != 0 {
 		t.Errorf("%d %s audit row(s) were written with no invoice, want 0", len(rows), cxEvent)
+	}
+}
+
+// --- issue_date, one spelling -----------------------------------------------------------
+
+// The handler normalises issue_date before either write: UpdateInput.IssueDate is a *time.Time,
+// so an unreadable date cannot reach the invoice as text. Both writes take the NORMALISED
+// reading, so the correction row and the register cannot disagree about which day it was.
+// handlers_correction_test.go proves an ISO date is not refused; only a real transaction can
+// show what the seam was handed.
+func TestRLS_CorrectionNormalisesIssueDateToOneSpelling(t *testing.T) {
+	for _, tc := range []struct {
+		sent string
+		want string
+	}{
+		{"2026-03-01", "2026-03-01"},
+		{"01 Mar 2026", "2026-03-01"},
+		{"Mar 01, 2026", "2026-03-01"},
+	} {
+		t.Run(tc.sent, func(t *testing.T) {
+			ctx := t.Context()
+			reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+			t.Cleanup(func() { rdaPurge(t, tenantID) })
+			entityID := cxEntity(t, ctx, tenantID)
+			cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-04-DATE-"+jobID[:8], "draft")
+
+			var gotField, gotValue string
+			apply := func(ctx context.Context, tx pgx.Tx, documentID, field, value string) (string, error) {
+				gotField, gotValue = field, value
+				return cxApplier(false, nil)(ctx, tx, documentID, field, value)
+			}
+
+			w := cxServe(t, reqCtx, jobID, "issue_date", cxBody(tc.sent), apply, cxAuditor(nil))
+
+			if w.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+			}
+			if gotField != "issue_date" || gotValue != tc.want {
+				t.Errorf("the seam was handed (%q, %q), want (%q, %q)", gotField, gotValue, "issue_date", tc.want)
+			}
+			if stored := cxCorrectionValue(t, ctx, jobID); stored != tc.want {
+				t.Errorf("the correction row carries value %q, want %q -- the row and the register must carry one spelling", stored, tc.want)
+			}
+		})
+	}
+
+	// An ambiguous numeric date has two readings and is refused rather than guessed at: the
+	// issue date drives the tax period.
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-04-DATE-AMB", "draft")
+
+	w := cxServe(t, reqCtx, jobID, "issue_date", cxBody("03/04/2026"), cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d for a date that reads two ways (body=%q)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 0 {
+		t.Errorf("%d correction row(s) landed for an ambiguous date, want 0", n)
 	}
 }
 

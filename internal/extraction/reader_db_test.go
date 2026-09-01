@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	rdReaderSource = "reader.go"
-	rdCapName      = "maxJobsPerDocument"
+	rdReaderSource     = "reader.go"
+	rdCorrectionSource = "handlers_correction.go"
+	rdCapName          = "maxJobsPerDocument"
 
 	// A real uuid on purpose: WithinRequestTenantTxOpts (tenant.go:61-63) delegates past the
 	// membership gate entirely when Subject does not parse as one, which would make

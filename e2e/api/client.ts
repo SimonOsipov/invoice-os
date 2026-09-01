@@ -1107,3 +1107,37 @@ export function getExtractionDetail(token: string, jobId: string): Promise<Extra
     { token },
   )
 }
+
+// EXTR-12: POST /v1/extractions/{id}/fields/{name}/corrections -- one human correction.
+// Mirrored key-for-key from internal/extraction/handlers_correction.go; wireMirrors.test.ts
+// fails if this side or frontend/app/src/lib/extractionReview.ts gains or loses a key.
+export type CorrectionMethod = 'typed' | 'chosen' | 'pointed' | 'undone'
+
+export interface CorrectionResponse {
+  id: string
+  field_name: string
+  value: string
+  method: CorrectionMethod
+  region: ExtractionRegion | null
+  invoice_id: string
+  created_at: string
+}
+
+export interface CorrectionBody {
+  value: string
+  method: CorrectionMethod
+  region?: ExtractionRegion | null
+  anchor_label?: string
+}
+
+export function postFieldCorrection(
+  token: string,
+  jobId: string,
+  field: string,
+  body: CorrectionBody,
+): Promise<CorrectionResponse> {
+  return apiFetch<CorrectionResponse>(
+    `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/fields/${encodeURIComponent(field)}/corrections`,
+    { token, method: 'POST', body },
+  )
+}

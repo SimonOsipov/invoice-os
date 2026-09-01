@@ -1073,6 +1073,49 @@ describe('one shared draft, one Save', () => {
     })
   })
 
+  it('settles an ambiguous field for the person who agrees with the extractor', async () => {
+    // The functional hole W-3 left open. Choosing the DECIDED reading drafts a value equal to
+    // the wire's, so a no-op guard that does not exempt `chosen` drops it: Save never arms,
+    // nothing is recorded, and the field stays flagged forever. The person's only routes were
+    // to pick a reading they believe is wrong, or leave it unsettled.
+    const w = writing(AMBIGUOUS_JOB, async (_url, body) =>
+      mkCorrectionResponse('issue_date', String((body as { value?: string }).value ?? ''), 'chosen'),
+    )
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled, 'Save was armed before anything was drafted').toBe(true)
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip -- every claim below is vacuous').toBe(3)
+    expect(chips[0].textContent, "chip 0 is not the extractor's own reading").toContain('2026-01-01')
+
+    fireEvent.click(chips[0])
+    await flush()
+
+    expect(saveButton()!.disabled, 'agreeing with the extractor armed nothing, so the field can never settle').toBe(
+      false,
+    )
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const posted = writes(w)
+    expect(posted, 'Save sent nothing for the reading the person agreed with').toHaveLength(1)
+    expect(posted[0].url, 'the settle was posted to another field').toContain('/fields/issue_date/corrections')
+    // The server keeps the decided region for a chosen value matching no alternative
+    // (TestExtractionDetail_ChosenValueMatchingNoAlternativeKeepsTheReadingsRegion) and clears
+    // the reason, so the field comes back settled and says YOU CHOSE THIS -- which is true.
+    expect(posted[0].body, "the settle did not carry the extractor's own reading as a chosen correction").toEqual({
+      value: '2026-01-01',
+      method: 'chosen',
+      region: null,
+      anchor_label: '',
+    })
+  })
+
   it('moves the document highlight to the chip the person chose, before any Save', async () => {
     // Core AC 7's binding, read the other way round: the chip names its own box and the canvas
     // follows the DRAFT, not the wire. The page-bytes recorder is the oracle — a shell handing

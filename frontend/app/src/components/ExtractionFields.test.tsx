@@ -1331,6 +1331,37 @@ describe('an ambiguous field', () => {
     expect(pane().textContent, 'a lower-ranked candidate reached the screen').not.toContain('3,726,000.00')
   })
 
+  it('marks the reading the invoice already holds when nothing is drafted', () => {
+    // W-3 put the decided reading on the row as chip 0, and a chip's POSITION is not a signal a
+    // reader can see. With nothing drafted the pane rendered three unmarked chips and withheld
+    // which of them the invoice actually holds -- and an ambiguous cell renders no input, so
+    // there is nowhere else to read it from.
+    //
+    // Index 0 and the value match cannot be told apart HERE, because chip 0 is built from the
+    // wire's own value. The row below is the other half: a chosen draft moves the mark off
+    // chip 0, so the mark is not pinned to a position.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-01-10', 3), mkCandidate('2026-10-01', 5)],
+      }),
+    ]
+    render(fieldsPane({ fields }))
+
+    const chips = chipsOf('issue_date')
+    expect(chips, 'no chip rendered -- every claim below is vacuous').toHaveLength(3)
+    expect(
+      chips.map((c) => c.getAttribute('aria-current')),
+      'the pane will not say which of the three readings the invoice holds',
+    ).toEqual(['true', 'false', 'false'])
+    expect(
+      chips[0].style.border,
+      'the reading the invoice holds renders exactly like the two it was ranked above',
+    ).toBe('1px solid var(--action)')
+  })
+
   it('marks the chip the draft holds, and only when the draft chose it', () => {
     // An ambiguous cell renders NO input, so the chip's own mark is the only thing on screen
     // that says a candidate was picked — the value does not move, and Save's enabled state is
@@ -1360,13 +1391,15 @@ describe('an ambiguous field', () => {
 
     // The gate is the KIND, not the value: a typed draft that happens to carry a candidate's
     // text has chosen nothing, and a chip claiming otherwise would say the person picked it.
+    // The mark falls back to the wire's own reading rather than disappearing -- the pane always
+    // says which value is filed.
     cleanup()
     const typed: DraftEntries = { issue_date: { kind: 'typed', value: '2026-10-01', region: null } }
     render(fieldsPane({ fields, draft: typed }))
     expect(
       chipsOf('issue_date').map((c) => c.getAttribute('aria-current')),
-      'a typed draft marked a chip nobody chose',
-    ).toEqual(['false', 'false', 'false'])
+      'a typed draft marked the chip carrying its text as though the person had chosen it',
+    ).toEqual(['true', 'false', 'false'])
   })
 
   it('reports the chosen candidate upward, and writes no correction of its own', () => {

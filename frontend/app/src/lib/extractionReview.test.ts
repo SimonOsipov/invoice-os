@@ -990,6 +990,35 @@ describe('savableCorrections', () => {
     expect(out.map((p) => p.field), 'a blank the boundary refuses was posted anyway').toEqual(['total'])
   })
 
+  it('keeps a chosen entry even when its value equals the wire', () => {
+    // The sibling of the undone row below, and for the same reason: the no-op guard is about
+    // the VALUE, and a chosen entry is a decision about the FIELD. Agreeing with the extractor
+    // is what clears the reason and the chip row, so dropping it leaves an ambiguous field the
+    // only one a person cannot settle -- their routes would be to pick a reading they believe
+    // is wrong, or leave it flagged forever.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        region: mkRegion({ page: 1 }),
+        alternatives: [{ value: '2026-01-10', region: mkRegion({ page: 3 }) }],
+      }),
+    ]
+    const entries: DraftEntries = {
+      issue_date: { kind: 'chosen', value: '2026-01-01', region: mkRegion({ page: 1 }) },
+    }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(
+      out.map((p) => p.field),
+      'agreeing with the extractor recorded nothing, so the field can never settle',
+    ).toEqual(['issue_date'])
+    expect(out[0].body.method, 'the settle was recorded as some other method').toBe('chosen')
+    expect(out[0].body.value).toBe('2026-01-01')
+  })
+
   it('keeps an undone entry even when its value equals the wire', () => {
     // The no-op guard is about the VALUE; an undo is a decision about the CORRECTION, and the
     // server ignores the value it carries. A guard keyed on the value alone swallows it.

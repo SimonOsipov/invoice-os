@@ -11,11 +11,15 @@ import { fileURLToPath } from 'node:url'
 import { ApiError } from '@invoice-os/api-client'
 
 import {
+  correctedMarker,
   docMetaLine,
   fetchPageImage,
+  fieldLabel,
+  fieldNote,
   getExtractionDetail,
   highlightStyle,
   pageFrameStyle,
+  reasonPill,
   scrollRegionIntoView,
 } from './extractionReview'
 import type { ExtractionDetail, ExtractionDocument, ExtractionPage, ExtractionRegion } from './extractionReview'
@@ -622,5 +626,130 @@ describe('the SourceDocumentStates import closes no cycle', () => {
     expect([...closure], 'the walk never reached lib/').toContain(join(SRC, 'lib/sourceDocument.ts'))
 
     expect([...closure], 'lib -> components -> lib/extractionReview is a cycle').not.toContain(MODULE_SRC)
+  })
+})
+
+// -- the four field-cell mappings (EXTR-12-06, AC-2/AC-3/AC-4/AC-5) ----------------------
+//
+// Every string below is a literal from the story's Invented-copy table, never an import of
+// the constant under test: a test that imports the string it asserts asserts the module
+// against itself.
+
+describe('fieldLabel', () => {
+  it('maps the ten header names and falls back to the wire name', () => {
+    // The nine editable ones come from EDIT_FIELD_LABELS (reviewBatch.ts); invoice_number is
+    // not editable (EDIT_FIELD_KEYS is nine wide by [D9]), so this module carries the tenth.
+    expect(fieldLabel('invoice_number')).toBe('Invoice number')
+    expect(fieldLabel('issue_date')).toBe('Issue date')
+    expect(fieldLabel('supplier_tin')).toBe('Supplier TIN')
+    expect(fieldLabel('supplier_name')).toBe('Supplier name')
+    expect(fieldLabel('buyer_tin')).toBe('Buyer TIN')
+    expect(fieldLabel('buyer_name')).toBe('Buyer name')
+    expect(fieldLabel('currency')).toBe('Currency')
+    expect(fieldLabel('subtotal')).toBe('Subtotal')
+    // The artboard says "VAT at 7.5%"; that label carries a hard-coded rate, which is data,
+    // and a per cent sign on this pane reds AC-1's own residue sweep.
+    expect(fieldLabel('vat')).toBe('VAT')
+    expect(fieldLabel('total')).toBe('Total')
+
+    // Off the vocabulary: both real extractors emit document_text_layer, and reconcileLines
+    // emits a per-row line_items[N].line_total. Neither has a curated label.
+    expect(fieldLabel('document_text_layer')).toBe('document_text_layer')
+    expect(fieldLabel('line_items[0].line_total')).toBe('line_items[0].line_total')
+  })
+
+  it('does not humanise an unmapped name', () => {
+    // AuditRow.tsx:52 is a second, private fieldLabel that snake-cases a key into prose. It
+    // is the rejected convention: this row is where the two disagree by construction, and the
+    // curated row above catches it too (it would answer 'Supplier tin', not 'Supplier TIN').
+    expect(fieldLabel('document_text_layer')).toBe('document_text_layer')
+    expect(fieldLabel('document_text_layer'), 'the mechanical humaniser won').not.toBe('Document text layer')
+  })
+})
+
+describe('reasonPill', () => {
+  it('maps each reason code to its copy-table string', () => {
+    expect(reasonPill('unreadable')).toBe("COULDN'T READ THIS CLEARLY")
+    expect(reasonPill('ambiguous')).toBe('FOUND TWO POSSIBLE VALUES')
+    expect(reasonPill('inconsistent')).toBe("DOESN'T ADD UP")
+    expect(reasonPill('missing')).toBe('NOT FOUND')
+
+    // A clean field has nothing to say, and the cell's one pill slot then falls back to the
+    // shipped NO REGION cue.
+    expect(reasonPill(''), 'a clean field claimed the pill slot').toBeNull()
+  })
+})
+
+describe('fieldNote', () => {
+  it('splits the one inconsistent code three ways', () => {
+    const sum = fieldNote('inconsistent', 'subtotal')
+    const tin = fieldNote('inconsistent', 'supplier_tin')
+    const name = fieldNote('inconsistent', 'supplier_name')
+    const other = fieldNote('inconsistent', 'total')
+
+    expect(sum).toBe('The line items we read do not add up to this subtotal.')
+    expect(tin).toBe(
+      "This document's supplier doesn't match the client you picked. It is filed from your client record either way.",
+    )
+    expect(name, 'supplier_name reads differently from supplier_tin').toBe(tin)
+    expect(other).toBe('This value disagrees with the other numbers on the document.')
+
+    // Pairwise, so a later copy edit cannot collapse two arms into one and stay green.
+    expect(sum, 'the sum check and the supplier check read the same').not.toBe(tin)
+    expect(sum, 'the sum check and the generic arm read the same').not.toBe(other)
+    expect(tin, 'the supplier check and the generic arm read the same').not.toBe(other)
+  })
+
+  it('returns null for every reason that is not inconsistent', () => {
+    // Keyed on the reason FIRST. A note keyed on the NAME alone renders the subtotal sentence
+    // on a clean subtotal, and passes the row above.
+    for (const reason of ['', 'unreadable', 'ambiguous', 'missing'] as const) {
+      expect(fieldNote(reason, 'subtotal'), `a "${reason}" subtotal carried a note`).toBeNull()
+    }
+  })
+})
+
+describe('correctedMarker', () => {
+  it('maps each method to its label and its was-line', () => {
+    expect(correctedMarker({ method: 'typed', was: 'SFS-2026-O418', where: null }, mkRegion({ page: 5 }))).toEqual({
+      label: 'YOU CHANGED THIS',
+      was: 'We read SFS-2026-O418',
+    })
+
+    // A minimal pair: these two differ ONLY in `where`, and they fail in opposite directions.
+    // Reading `where` alone yields 'Taken from ' on the first; ignoring it yields
+    // 'Taken from page 3' on the second. The page is never 1, so a hard-coded page reds too.
+    expect(correctedMarker({ method: 'pointed', was: null, where: null }, mkRegion({ page: 3 }))).toEqual({
+      label: 'YOU POINTED THIS OUT',
+      was: 'Taken from page 3',
+    })
+    expect(
+      correctedMarker({ method: 'pointed', was: null, where: 'a box you drew' }, mkRegion({ page: 3 })),
+    ).toEqual({ label: 'YOU POINTED THIS OUT', was: 'Taken from a box you drew' })
+
+    expect(correctedMarker({ method: 'chosen', was: '2026-01-10', where: null }, mkRegion({ page: 2 }))).toEqual({
+      label: 'YOU CHOSE THIS',
+      was: 'We found more than one candidate',
+    })
+  })
+
+  it('omits the was-line when the correction has no provenance to state', () => {
+    // `'We read ' + was` renders "We read null" on the deployed mock's own buyer_tin, whose
+    // Value is nil; a template literal renders the dangling "We read ". Omitting the sentence
+    // invents no copy, and the label still says the field was settled.
+    expect(correctedMarker({ method: 'typed', was: null, where: null }, null)).toEqual({
+      label: 'YOU CHANGED THIS',
+      was: null,
+    })
+    // A pointed correction naming a field the extractor never read carries no region either.
+    expect(correctedMarker({ method: 'pointed', was: null, where: null }, null)).toEqual({
+      label: 'YOU POINTED THIS OUT',
+      was: null,
+    })
+  })
+
+  it('returns null for an uncorrected field', () => {
+    // What lets the cell branch on the return value alone rather than re-testing `corrected`.
+    expect(correctedMarker(null, mkRegion({ page: 4 }))).toBeNull()
   })
 })

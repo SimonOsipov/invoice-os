@@ -30,7 +30,8 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { ExtractionFieldState, ExtractionRegion } from '../lib/extractionReview'
+import { fieldLabel } from '../lib/extractionReview'
+import type { ExtractionCorrected, ExtractionFieldState, ExtractionRegion } from '../lib/extractionReview'
 import { ExtractionFields } from './ExtractionFields'
 
 // The artboard's final title (`Recognition Review.dc.html:226`). A literal, never a regex:
@@ -45,6 +46,20 @@ const PILL = 'NO REGION'
 // signed-in entity on EVERY Store.Create, so the two values this pane renders beside the page
 // image are not what gets filed. Prose, no verdict, no comparison — a pill is EXTR-12's.
 const SENTENCE = 'The supplier filed on this invoice comes from your client record, not from this document.'
+
+// EXTR-12's Invented-copy table, verbatim. Literals, never an import of the constant under
+// test: a test that imports the string it asserts asserts the component against itself.
+const PILL_UNREADABLE = "COULDN'T READ THIS CLEARLY"
+const PILL_AMBIGUOUS = 'FOUND TWO POSSIBLE VALUES'
+const PILL_INCONSISTENT = "DOESN'T ADD UP"
+const PILL_MISSING = 'NOT FOUND'
+const NOTE_SUBTOTAL = 'The line items we read do not add up to this subtotal.'
+const NOTE_SUPPLIER =
+  "This document's supplier doesn't match the client you picked. It is filed from your client record either way."
+const NOTE_GENERIC = 'This value disagrees with the other numbers on the document.'
+const MARKER_TYPED = 'YOU CHANGED THIS'
+const MARKER_CHOSEN = 'YOU CHOSE THIS'
+const WAS_CHOSEN = 'We found more than one candidate'
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: every class here forces `border-radius`
 // with `!important`, from app-layer.css:193-197 and :275.
@@ -250,17 +265,21 @@ describe('the field cells', () => {
   it('gives the label the artboard metrics, in a row that reserves height for the pill', () => {
     render(fieldsPane())
 
-    // `:294`. The label IS the wire's field name: this story does not own the field
-    // vocabulary (internal/extraction/vocabulary.go), and a display-name map would be the
-    // same invented lookup the span map was rejected for.
-    const label = within(row('invoice_number')).getByText('invoice_number')
-    expect(label.style.fontSize).toBe('12px')
-    expect(label.style.fontWeight).toBe('500')
-    expect(label.style.color).toBe('var(--fg-2)')
+    // `:294`. The label is `fieldLabel(f.name)` — the shipped EDIT_FIELD_LABELS plus this
+    // module's one overlay entry, not the raw wire name and not a mechanical humaniser.
+    const label = within(row('invoice_number')).queryByText(fieldLabel('invoice_number'))
+    expect(label, 'the cell renders something other than the curated label').toBeTruthy()
+    expect(
+      within(row('invoice_number')).queryByText('invoice_number'),
+      'the raw wire name still renders beside its label',
+    ).toBeNull()
+    expect(label!.style.fontSize).toBe('12px')
+    expect(label!.style.fontWeight).toBe('500')
+    expect(label!.style.color).toBe('var(--fg-2)')
 
     // The `min-height` is what stops a row without a pill sitting 18px shorter than its
     // neighbour with one — the reason the artboard declares it at all.
-    const strip = label.parentElement as HTMLElement
+    const strip = label!.parentElement as HTMLElement
     expect(strip.style.gap).toBe('8px')
     expect(strip.style.minHeight).toBe('18px')
   })
@@ -575,9 +594,14 @@ describe('the vocabulary EXTR-12 owns', () => {
     render(fieldsPane({ fields: leaky }))
 
     // The positive floor FIRST: without it this row passes on a render that produced nothing.
+    // Read through `fieldLabel` — the raw name stops rendering once the cell is relabelled,
+    // and this floor, not the needle list below, is what a relabelling breaks.
     for (const f of THREE_FIELDS) {
-      expect(screen.getByText(f.name), `${f.name} did not render — every absence below is vacuous`).toBeTruthy()
-      expect(screen.getByText(f.value as string), `${f.name}'s value did not render`).toBeTruthy()
+      expect(
+        screen.queryByText(fieldLabel(f.name)),
+        `${f.name} did not render its label — every absence below is vacuous`,
+      ).toBeTruthy()
+      expect(screen.queryByText(f.value as string), `${f.name}'s value did not render`).toBeTruthy()
     }
 
     const text = pane().textContent ?? ''
@@ -618,10 +642,15 @@ describe('the row is a real button', () => {
 
     expect(screen.getAllByRole('button'), 'the rows carry no button role').toHaveLength(3)
     for (const f of THREE_FIELDS) {
+      // CONTAINS, not equals: the pill, the note and the was-line all join the accessible
+      // name of a flagged or corrected cell (`Y-2` keeps the cell a <button> until 07).
+      const label = fieldLabel(f.name)
+      const value = f.value as string
+      expect((row(f.name).textContent ?? '').trim(), `${f.name} announces nothing at all`).not.toBe('')
       expect(
-        screen.getByRole('button', { name: `${f.name} ${f.value as string}` }),
-        `${f.name} does not announce its own value`,
-      ).toBe(row(f.name))
+        screen.queryAllByRole('button', { name: (n: string) => n.includes(label) && n.includes(value) }),
+        `${f.name} does not announce its own label and value`,
+      ).toEqual([row(f.name)])
     }
   })
 })
@@ -717,16 +746,237 @@ describe('the pane and the sentence, pinned', () => {
   })
 })
 
+// ==========================================================================================
+// EXTR-12-06. The reason pill, the per-field note and the corrected marker. Written RED
+// against stubs that return a fixed wrong value, so every row below fails on its own
+// assertion rather than on a missing export.
+// ==========================================================================================
+
+const CORRECTED_TOTAL: ExtractionCorrected = { method: 'typed', was: '1,000,000.00', where: null }
+
+describe('the reason pill', () => {
+  it('renders each reason code as its own copy-table string, in its own cell', () => {
+    // Every field here carries a region (mkField's default), so NO REGION cannot supply a
+    // false positive in the one slot both pills compete for.
+    const fields = [
+      mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
+      mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+      mkField({ name: 'subtotal', value: '3,626,000.00', reason: 'inconsistent' }),
+      mkField({ name: 'buyer_tin', value: '31775208-0003', reason: 'missing' }),
+    ]
+    const pills: Record<string, string> = {
+      vat: PILL_UNREADABLE,
+      issue_date: PILL_AMBIGUOUS,
+      subtotal: PILL_INCONSISTENT,
+      buyer_tin: PILL_MISSING,
+    }
+    render(fieldsPane({ fields }))
+
+    for (const f of fields) {
+      const r = row(f.name)
+      expect(within(r).queryByText(f.value as string), `${f.name} did not render — its pill row is vacuous`).toBeTruthy()
+      expect(within(r).queryByText(pills[f.name]), `${f.name} renders no "${pills[f.name]}" pill`).toBeTruthy()
+
+      // within(row) is load-bearing: a pane that renders all four pills once, anywhere, passes
+      // a bare getByText and fails here.
+      for (const other of Object.values(pills)) {
+        if (other === pills[f.name]) continue
+        expect(within(r).queryByText(other), `${f.name} also renders "${other}"`).toBeNull()
+      }
+    }
+
+    const text = pane().textContent ?? ''
+    for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing']) {
+      expect(text, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
+    }
+  })
+
+  it('gives the slot to the reason, and keeps NO REGION for a field with no reason', () => {
+    // `Y-1`. Both pills declare `white-space: nowrap`; two of them in a strip inside a 470px
+    // pane is how that floor gets broken, so the reason wins and NO REGION is the fallback.
+    const fields = [
+      mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' }),
+      mkField({ name: 'invoice_number', value: 'INV-2026-0037', region: null }),
+    ]
+    render(fieldsPane({ fields }))
+
+    const flagged = row('buyer_tin')
+    expect(within(flagged).queryByText(PILL_MISSING), 'a region-less flagged row renders no reason pill').toBeTruthy()
+    expect(within(flagged).queryByText(PILL), 'the label strip carries both pills at once').toBeNull()
+
+    // The fallback survives where it is the only thing the slot can carry — the shipped
+    // EXTR-11 cue, kept rather than removed.
+    expect(within(row('invoice_number')).queryByText(PILL), 'a clean region-less row lost NO REGION').toBeTruthy()
+  })
+})
+
+describe('the per-field note', () => {
+  it('renders three different notes for three inconsistent fields, each in its own cell', () => {
+    // `Reconcile` reuses one `inconsistent` code for the line-sum check and the entity match,
+    // so the NOTE is what tells AC-4 and AC-8 apart.
+    const fields = [
+      mkField({ name: 'subtotal', value: '3,726,000.00', reason: 'inconsistent' }),
+      mkField({ name: 'supplier_tin', value: '20184412-0001', reason: 'inconsistent' }),
+      mkField({ name: 'total', value: '4,005,450.00', reason: 'inconsistent' }),
+    ]
+    const notes: [string, string][] = [
+      ['subtotal', NOTE_SUBTOTAL],
+      ['supplier_tin', NOTE_SUPPLIER],
+      ['total', NOTE_GENERIC],
+    ]
+    render(fieldsPane({ fields }))
+
+    for (const [name, note] of notes) {
+      const r = row(name)
+      const value = fields.find((f) => f.name === name)!.value as string
+      expect(within(r).queryByText(value), `${name} did not render — its note row is vacuous`).toBeTruthy()
+      expect(within(r).queryByText(note), `${name} renders no note of its own`).toBeTruthy()
+
+      // A pane that renders one note below the grid — the shipped SUPPLIER_NOTE shape — puts
+      // all three outside the rows and fails here.
+      for (const [, other] of notes) {
+        if (other === note) continue
+        expect(within(r).queryByText(other), `${name} also renders another field's note`).toBeNull()
+      }
+    }
+
+    const note = within(row('subtotal')).queryByText(NOTE_SUBTOTAL)!
+    // A block <span>, not the artboard's <p>: flow content is invalid inside a <button>.
+    expect(note.style.display, 'the note is not block-level phrasing content').toBe('block')
+    expect(note.style.fontSize).toBe('11.5px')
+    expect(note.style.color).toBe('var(--fg-2)')
+
+    // The copy table's "both may show at once", asserted rather than assumed.
+    const sentence = screen.queryAllByText(SENTENCE)
+    expect(sentence, 'the unconditional client-record sentence stopped rendering').toHaveLength(1)
+    expect(
+      sentence[0],
+      "supplier_tin's own note resolved to the pane-level sentence",
+    ).not.toBe(within(row('supplier_tin')).queryByText(NOTE_SUPPLIER))
+  })
+})
+
+describe('a corrected field', () => {
+  it('renders the marker, its label and its was-line — and drops the pill and the note', () => {
+    // DELIBERATELY IMPOSSIBLE FIXTURE. The server empties `reason` on a corrected field, so a
+    // realistic fixture carries `reason: ''` and both absence clauses below would pass against
+    // a component that suppresses nothing. The contradiction IS the oracle — do not "fix" it.
+    const fields = [
+      mkField({
+        name: 'subtotal',
+        value: '3,726,000.00',
+        reason: 'inconsistent',
+        corrected: { method: 'chosen', was: '3,626,000.00', where: null },
+      }),
+    ]
+    render(fieldsPane({ fields }))
+
+    const r = row('subtotal')
+    expect(within(r).queryByText('3,726,000.00'), 'the row did not render — every clause below is vacuous').toBeTruthy()
+
+    const marker = screen.queryByTestId('extraction-marker-subtotal')
+    expect(marker, 'the corrected field renders no marker').toBeTruthy()
+    expect(r.contains(marker), 'the marker sits outside the cell it settles').toBe(true)
+
+    expect(within(r).queryByText(MARKER_CHOSEN), `the corrected field does not say "${MARKER_CHOSEN}"`).toBeTruthy()
+    expect(within(r).queryByText(WAS_CHOSEN), 'the corrected field states no provenance').toBeTruthy()
+
+    expect(within(r).queryByText(PILL_INCONSISTENT), 'a settled field still shouts its reason pill').toBeNull()
+    expect(within(r).queryByText(NOTE_SUBTOTAL), 'a settled field still shouts its note').toBeNull()
+  })
+
+  it('paints the marker and the changed label in --action, never --accent', () => {
+    render(fieldsPane({ fields: [mkField({ name: 'total', value: '2,222.00', corrected: CORRECTED_TOTAL })] }))
+
+    const marker = screen.queryByTestId('extraction-marker-total')
+    expect(marker, 'the corrected field renders no marker').toBeTruthy()
+    const label = within(row('total')).queryByText(MARKER_TYPED)
+    expect(label, `the corrected field does not say "${MARKER_TYPED}"`).toBeTruthy()
+
+    // The positive equality FIRST: a bare not.toBe('var(--accent)') is green on 'red', on ''
+    // and on an element that never rendered. app-layer.css:38-43 states the translation the
+    // artboard's `var(--accent)` at :307 and :335 takes here.
+    expect(marker!.style.background).toBe('var(--action)')
+    expect(label!.style.color).toBe('var(--action)')
+    expect(marker!.style.background, 'the marker transcribed the artboard token literally').not.toBe('var(--accent)')
+    expect(label!.style.color, 'the changed label transcribed the artboard token literally').not.toBe('var(--accent)')
+  })
+
+  it('seats the marker on a positioned value control, inset from its right edge', () => {
+    // jsdom computes no layout, so this row pins the declarations and EXTR12-E2E-02 measures
+    // the relationship on the deployed build. The wrapper is the contract with subtask 07:
+    // 07 swaps the value span inside it for a full-width .pf-input and the marker's box is
+    // unchanged, so AC-7's e2e never has to be retargeted.
+    const fields = [mkField({ name: 'total', value: '2,222.00', corrected: CORRECTED_TOTAL }), THREE_FIELDS[1]]
+    render(fieldsPane({ fields }))
+
+    const control = screen.queryByTestId('extraction-control-total')
+    expect(control, 'the cell renders no value control for the marker to sit in').toBeTruthy()
+    expect(control!.style.position, 'an absolutely-positioned marker escapes an unpositioned wrapper').toBe('relative')
+    expect(control!.style.display).toBe('flex')
+    expect(control!.style.alignItems).toBe('center')
+    expect(within(control!).queryByText('2,222.00'), 'the value moved out of the control').toBeTruthy()
+
+    const marker = screen.queryByTestId('extraction-marker-total')
+    expect(marker, 'the corrected field renders no marker').toBeTruthy()
+    expect(control!.contains(marker), 'the marker is not inside the control the e2e measures it against').toBe(true)
+    expect(marker!.style.position).toBe('absolute')
+    expect(marker!.style.right).toBe('11px')
+    expect(marker!.style.left, 'a left inset puts the marker on the selection rule').toBe('')
+    expect(marker!.style.width).toBe('7px')
+    expect(marker!.style.height).toBe('7px')
+    expect(marker!.style.borderRadius).toBe('2px')
+    expect(marker!.style.pointerEvents).toBe('none')
+
+    // Unconditional: every cell gets the wrapper, so subtask 07's input has one to fill and
+    // this testid does not appear and disappear with a correction.
+    expect(
+      screen.queryByTestId('extraction-control-invoice_number'),
+      'an uncorrected cell has no value control',
+    ).toBeTruthy()
+    expect(screen.queryByTestId('extraction-marker-invoice_number'), 'an uncorrected cell carries a marker').toBeNull()
+  })
+})
+
 describe('the pane renders nothing it does not declare', () => {
   it('leaves nothing over once the wire and its own copy are stripped', () => {
     // AC-9's row above hunts named needles — `%`, `0.62`, a reason code. A confidence written
     // as PROSE ("sixty two percent confident") slips past every one of them. This row inverts
     // the test: strip the wire and the pane's three declared sentences, and what is left of
     // the rendered text must be nothing at all.
-    const fields = [mkField({ name: 'supplier_tin', value: '20184412-0001', region: null }), ...THREE_FIELDS]
+    // AC-1's oracle, and the reason no `\d+%` / `0.\d\d` needle is added beside it: a needle
+    // regex is weaker AND false-positives on a legitimate money value like 0.75. The fixture
+    // carries one field per reason code, one region-less clean field and one corrected field,
+    // so every string EXTR-12 taught this pane to say is on screen at once.
+    const fields = [
+      mkField({ name: 'invoice_number', value: 'SFS-2026-0418', region: null }),
+      mkField({ name: 'supplier_tin', value: '20184412-0001', reason: 'inconsistent' }),
+      mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
+      mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+      mkField({ name: 'buyer_tin', value: null, reason: 'missing' }),
+      mkField({
+        name: 'total',
+        value: '3,897,950.00',
+        corrected: { method: 'typed', was: '3,879,950.00', where: null },
+      }),
+    ]
     render(fieldsPane({ fields, selected: 'total' }))
 
-    const known = [TITLE, SENTENCE, PILL, ...fields.map((f) => f.name), ...fields.map((f) => f.value as string)]
+    const known = [
+      TITLE,
+      SENTENCE,
+      PILL,
+      '—',
+      PILL_UNREADABLE,
+      PILL_AMBIGUOUS,
+      PILL_INCONSISTENT,
+      PILL_MISSING,
+      NOTE_SUPPLIER,
+      MARKER_TYPED,
+      'We read 3,879,950.00',
+      ...fields.map((f) => fieldLabel(f.name)),
+      ...fields.map((f) => f.value).filter((v): v is string => v !== null),
+    ]
 
     let left = pane().textContent ?? ''
     // The floor first: every one really rendered, so the emptiness below is a real absence.

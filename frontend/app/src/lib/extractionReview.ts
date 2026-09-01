@@ -95,6 +95,35 @@ export interface CorrectionResponse {
   created_at: string
 }
 
+// What the marker row over a settled field says: the method's uppercase label, and the
+// provenance clause, which is null when the correction has none to state.
+export interface CorrectedMarker {
+  label: string
+  was: string | null
+}
+
+// The four pure mappings the field cell renders through. STUBS: each returns a fixed
+// wrong-but-typed value so the red phase fails on its own assertions, never on a missing
+// export. Pinned by extractionReview.test.ts.
+export function fieldLabel(_name: string): string {
+  return 'UNIMPLEMENTED'
+}
+
+export function reasonPill(_reason: ExtractionReason): string | null {
+  return null
+}
+
+export function fieldNote(_reason: ExtractionReason, _name: string): string | null {
+  return ''
+}
+
+export function correctedMarker(
+  _corrected: ExtractionCorrected | null,
+  _region: ExtractionRegion | null,
+): CorrectedMarker | null {
+  return { label: '', was: null }
+}
+
 export async function getExtractionDetail(authedFetch: AuthedFetch, base: string, jobId: string): Promise<ExtractionDetail> {
   return authedFetch<ExtractionDetail>(`${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}`)
 }

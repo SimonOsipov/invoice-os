@@ -65,7 +65,18 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
-import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS, type ExtractionDetail } from '../api/client'
+import {
+  login,
+  createEntity,
+  listInvoices,
+  approveUntilClosed,
+  firmApproverTokens,
+  postFieldCorrection,
+  PERSONAS,
+  type ExtractionDetail,
+  type ExtractionJobsResponse,
+  type ExtractionReason,
+} from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
@@ -3455,6 +3466,161 @@ test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other o
 
   await testInfo.attach('extraction-entry-control-rhythm.json', {
     body: JSON.stringify({ measured, controlFit, siblingFit }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-12-06 · the reason pills and the corrected marker, on the deployed build ---
+//
+// Neither row can execute before EXTR-12-09 marks the PR ready: `dev-env.yml` gates deploy and
+// E2E on `pull_request.draft == false`. The local oracle is `pnpm -r typecheck` plus
+// `playwright test --list`, exactly as the EXTR-11 block above was authored under.
+
+// The story's Invented-copy table. A transcription, deliberately not an import: the SPA is a
+// different package, and reading the mapping out of the module under test would assert it
+// against itself.
+const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
+  unreadable: "COULDN'T READ THIS CLEARLY",
+  ambiguous: 'FOUND TWO POSSIBLE VALUES',
+  inconsistent: "DOESN'T ADD UP",
+  missing: 'NOT FOUND',
+}
+
+test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-06 pills')
+  const detail = await openExtractionReview(page)
+
+  // Off the wire the SPA itself consumed, never a literal copied out of mock.go. The distinct
+  // count is the non-vacuity floor: mockDefaultResult carries all four codes on one document,
+  // so anything less means the loop below is testing a narrower surface than it claims.
+  const flagged = detail.fields.filter((f) => f.reason !== '')
+  const codes = new Set(flagged.map((f) => f.reason))
+  expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the four codes`).toBe(4)
+
+  for (const f of flagged) {
+    const cell = page.getByTestId(`extraction-field-${f.name}`)
+    await expect(cell, `${f.name} rendered no cell`).toBeVisible()
+    const pill = REASON_PILL[f.reason as Exclude<ExtractionReason, ''>]
+    await expect(
+      cell.getByText(pill, { exact: true }),
+      `${f.name} reported "${f.reason}" and renders no "${pill}" pill`,
+    ).toBeVisible()
+  }
+
+  // The code itself is machine vocabulary and never reaches the screen.
+  const paneText = await page.getByTestId('extraction-fields').innerText()
+  expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
+  for (const code of Object.keys(REASON_PILL)) {
+    expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
+  }
+
+  await testInfo.attach('extraction-reason-pills.json', {
+    body: JSON.stringify(flagged.map((f) => ({ name: f.name, reason: f.reason })), null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-02 (AC-7): the corrected marker sits inside the value control, on its right, clear of the selection rule', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  // The correction must land BEFORE the screen reads its detail. ExtractionReview holds the
+  // detail in a useAsync keyed on jobId and this SPA has no route to the review screen, so a
+  // reload cannot bring the reader back to it -- the job id is taken off the invoice detail's
+  // own lookup instead, and .json() is called inside the handler so no body is read after the
+  // fact.
+  const jobLookups: Promise<ExtractionJobsResponse>[] = []
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET') return
+    if (!new URL(r.url()).pathname.endsWith('/api/submission/v1/extractions')) return
+    jobLookups.push((r.json() as Promise<ExtractionJobsResponse>).catch(() => ({ jobs: [] })))
+  })
+
+  await extractOneDocument(page, 'EXTR-12-06 marker')
+
+  const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
+  expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
+
+  // `total` is admitted: refuseField locks only invoice_number, supplier_tin and supplier_name.
+  await postFieldCorrection(token, jobId as string, 'total', { value: '2222.00', method: 'typed' })
+
+  const detail = await openExtractionReview(page)
+  const corrected = detail.fields.find((f) => f.name === 'total')
+  expect(
+    corrected?.corrected,
+    'the wire the screen read carries no correction on total -- every measurement below is vacuous',
+  ).toBeTruthy()
+
+  const cell = page.getByTestId('extraction-field-total')
+  await cell.click()
+  await expect(cell, 'the corrected cell did not take the selection').toHaveAttribute('aria-pressed', 'true')
+
+  const control = page.getByTestId('extraction-control-total')
+  const marker = page.getByTestId('extraction-marker-total')
+  await expect(marker, 'the corrected field renders no marker on the deployed build').toBeVisible()
+
+  type Measured = { width: number; cell: Rect; control: Rect; marker: Rect; leftRule: Rect; contained: Rect }
+  const measured: Measured[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts).
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [c, ct, mk] = await Promise.all([cell.boundingBox(), control.boundingBox(), marker.boundingBox()])
+        return { c, ct, mk }
+      }, `marker geometry at ${width}px`)
+
+      expect(m.c && m.ct && m.mk, `the cell, its control and its marker must all render at ${width}px`).toBeTruthy()
+      // Non-empty first: a rect collapsed on either axis is contained by anything and clears
+      // everything, so both claims below pass vacuously on it.
+      expect(m.mk!.width, `the marker has no width at ${width}px`).toBeGreaterThan(0)
+      expect(m.mk!.height, `the marker has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.ct!.width, `the value control has no width at ${width}px`).toBeGreaterThan(0)
+
+      // Containment: overlapOf clamps per axis, so the intersection collapses to the marker's
+      // own rect exactly when the marker is inside the control.
+      const contained = overlapOf(m.mk as Rect, m.ct as Rect)
+      expect(contained, `the marker escapes its value control at ${width}px`).toEqual(m.mk)
+
+      // The RIGHT half. `left: 11px` passes containment and fails here.
+      expect(
+        m.mk!.x + m.mk!.width / 2,
+        `the marker sits left of the control's centre at ${width}px`,
+      ).toBeGreaterThan(m.ct!.x + m.ct!.width / 2)
+
+      // DERIVED, not measured: the selection rule is an `inset 2px 0 0` box-shadow on the
+      // cell, which has no element and no box of its own. Stated because a derived oracle that
+      // reads as measured is its own trap.
+      const leftRule: Rect = { x: m.c!.x, y: m.c!.y, width: 2, height: m.c!.height }
+      expect(
+        rectsOverlap(m.mk as Rect, leftRule),
+        `the marker covers the selected cell's left rule at ${width}px`,
+      ).toBe(false)
+
+      measured.push({ width, cell: m.c as Rect, control: m.ct as Rect, marker: m.mk as Rect, leftRule, contained })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([
+    ...WIDE_WIDTHS,
+  ])
+
+  await testInfo.attach('extraction-corrected-marker.json', {
+    body: JSON.stringify(measured, null, 2),
     contentType: 'application/json',
   })
 

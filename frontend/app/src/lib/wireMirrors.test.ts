@@ -151,12 +151,22 @@ const WIRE_MIRRORS = [
     floor: 5,
   },
   {
+    ts: 'CorrectionRequest',
+    go: 'CorrectionRequest',
+    goPath: 'internal/extraction/handlers_correction.go',
+    goAnchor: 'func CorrectionHandler(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postFieldCorrection(',
+    e2eAnchor: 'export function postFieldCorrection(',
+    floor: 4,
+  },
+  {
     ts: 'CorrectionResponse',
     go: 'CorrectionResponse',
     goPath: 'internal/extraction/handlers_correction.go',
     goAnchor: 'func CorrectionHandler(',
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
-    spaAnchor: 'export function scrollRegionIntoView(',
+    spaAnchor: 'export async function postFieldCorrection(',
     e2eAnchor: 'export function postFieldCorrection(',
     floor: 7,
   },
@@ -273,6 +283,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionPage',
       'ExtractionFieldState',
       'ExtractionRegion',
+      'CorrectionRequest',
       'CorrectionResponse',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])

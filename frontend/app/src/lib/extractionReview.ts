@@ -170,6 +170,87 @@ export async function getExtractionDetail(authedFetch: AuthedFetch, base: string
   return authedFetch<ExtractionDetail>(`${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}`)
 }
 
+// internal/extraction/handlers_correction.go, CorrectionRequest -- the POST body. Every key is
+// always sent; region and anchor_label are null/'' for a correction nobody pointed at.
+export interface CorrectionRequest {
+  value: string
+  method: CorrectionMethod
+  region: ExtractionRegion | null
+  anchor_label: string
+}
+
+// One POST the pane's Save owes, and the field it settles.
+export interface CorrectionPost {
+  field: string
+  body: CorrectionRequest
+}
+
+// What one field carries in the shared draft. `chosen` also names the candidate, so the pane
+// can move the highlight to that alternative's own box before anything is saved.
+export interface DraftEntry {
+  kind: CorrectionMethod
+  value: string
+  region: ExtractionRegion | null
+}
+
+export type DraftEntries = Record<string, DraftEntry>
+
+// internal/extraction/vocabulary.go, HeaderFields -- the order one Save writes in, so the
+// append-only table's seq follows the order the person reads.
+export const HEADER_FIELDS: readonly string[] = [
+  'invoice_number',
+  'issue_date',
+  'supplier_tin',
+  'supplier_name',
+  'buyer_tin',
+  'buyer_name',
+  'currency',
+  'subtotal',
+  'vat',
+  'total',
+]
+
+// EXTR-12-07 red-phase stubs. Each answers one value that is wrong for EVERY row asserting on
+// it, so a row fails on its own assertion rather than on a missing export.
+const RED_PHRASE = 'page 0'
+const RED_VALUE = 'no answer yet'
+const RED_FIELD = 'no field yet'
+
+/** The chip sub-label and the pointed was-line read the same phrase, so the two cannot drift. */
+export function regionPhrase(_region: ExtractionRegion | null): string | null {
+  return RED_PHRASE
+}
+
+/** The pane's own view of the wire: the shared draft laid over it, claiming no correction. */
+export function applyDraft(fields: ExtractionFieldState[], _entries: DraftEntries): ExtractionFieldState[] {
+  return fields.map((f) => ({
+    ...f,
+    value: RED_VALUE,
+    region: null,
+    reason: '',
+    corrected: { method: 'typed', was: RED_VALUE, where: null },
+  }))
+}
+
+/** The draft turned into the POSTs one Save owes, in vocabulary order. */
+export function savableCorrections(_fields: ExtractionFieldState[], _entries: DraftEntries): CorrectionPost[] {
+  return [{ field: RED_FIELD, body: { value: RED_VALUE, method: 'typed', region: null, anchor_label: '' } }]
+}
+
+// authedFetch, never bare fetch: it is the seam that fires onUnauthorized/onSuspended.
+export async function postFieldCorrection(
+  authedFetch: AuthedFetch,
+  base: string,
+  jobId: string,
+  field: string,
+  body: CorrectionRequest,
+): Promise<CorrectionResponse> {
+  return authedFetch<CorrectionResponse>(
+    `${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/fields/${encodeURIComponent(field)}/corrections`,
+    { method: 'POST', body },
+  )
+}
+
 // Bare fetch, not authedFetch: the response is bytes and apiFetch always res.json()s. Auth is
 // a bearer header, so a bare <img src> cannot authenticate — the caller owns release().
 export async function fetchPageImage(

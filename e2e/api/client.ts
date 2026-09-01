@@ -1130,7 +1130,7 @@ export interface CorrectionResponse {
   created_at: string
 }
 
-export interface CorrectionBody {
+export interface CorrectionRequest {
   value: string
   method: CorrectionMethod
   region?: ExtractionRegion | null
@@ -1141,7 +1141,7 @@ export function postFieldCorrection(
   token: string,
   jobId: string,
   field: string,
-  body: CorrectionBody,
+  body: CorrectionRequest,
 ): Promise<CorrectionResponse> {
   return apiFetch<CorrectionResponse>(
     `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/fields/${encodeURIComponent(field)}/corrections`,

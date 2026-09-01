@@ -31,7 +31,13 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fieldLabel } from '../lib/extractionReview'
-import type { ExtractionCorrected, ExtractionFieldState, ExtractionRegion } from '../lib/extractionReview'
+import type {
+  DraftEntries,
+  ExtractionCandidate,
+  ExtractionCorrected,
+  ExtractionFieldState,
+  ExtractionRegion,
+} from '../lib/extractionReview'
 import { ExtractionFields } from './ExtractionFields'
 
 // The artboard's final title (`Recognition Review.dc.html:226`). A literal, never a regex:
@@ -61,6 +67,27 @@ const MARKER_TYPED = 'YOU CHANGED THIS'
 const MARKER_POINTED = 'YOU POINTED THIS OUT'
 const MARKER_CHOSEN = 'YOU CHOSE THIS'
 const WAS_CHOSEN = 'We found more than one candidate'
+const UNDO = 'Undo'
+const INVOICE_NUMBER_LOCKED = "The invoice number is this invoice's identity and cannot be changed here."
+
+// internal/extraction/handlers_correction.go, lockedFields. invoice_number is what the invoice
+// is filed under; updateContentTx re-derives the two supplier fields from the client entity and
+// never reads the input, so a correction on any of the three is a 422.
+const LOCKED_FIELDS = ['invoice_number', 'supplier_tin', 'supplier_name']
+
+// internal/extraction/vocabulary.go, HeaderFields.
+const HEADER_FIELDS = [
+  'invoice_number',
+  'issue_date',
+  'supplier_tin',
+  'supplier_name',
+  'buyer_tin',
+  'buyer_name',
+  'currency',
+  'subtotal',
+  'vat',
+  'total',
+]
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: every class here forces `border-radius`
 // with `!important`, from app-layer.css:193-197 and :275.
@@ -108,17 +135,30 @@ const ONE_REGIONLESS: ExtractionFieldState[] = [
 interface FieldsProps {
   fields: ExtractionFieldState[]
   selected: string | null
+  draft: DraftEntries
   onSelect: (name: string) => void
+  onType: (name: string, value: string) => void
+  onChoose: (name: string, candidate: ExtractionCandidate) => void
+  onUndo: (name: string) => void
 }
 
 function fieldsPane(over: Partial<FieldsProps> = {}) {
   const props: FieldsProps = {
     fields: THREE_FIELDS,
     selected: null,
+    draft: {},
     onSelect: () => {},
+    onType: () => {},
+    onChoose: () => {},
+    onUndo: () => {},
     ...over,
   }
   return <ExtractionFields {...props} />
+}
+
+/** Every field the vocabulary names, so the editable/locked split has all ten to sort. */
+function tenFields(): ExtractionFieldState[] {
+  return HEADER_FIELDS.map((name, i) => mkField({ name, value: `v-${i}` }))
 }
 
 // -- DOM readers -------------------------------------------------------------------------
@@ -159,10 +199,38 @@ function row(name: string): HTMLElement {
   return screen.getByTestId(`extraction-field-${name}`)
 }
 
+// `aria-current`, not `aria-pressed`: the cell holds an input and buttons, so it can no longer
+// take a button role, and `aria-pressed` is only valid on one.
 function selectedIds(): string[] {
   return rows()
-    .filter((el) => el.getAttribute('aria-pressed') === 'true')
+    .filter((el) => el.getAttribute('aria-current') === 'true')
     .map((el) => el.dataset.testid ?? '')
+}
+
+function inputOf(name: string): HTMLInputElement | null {
+  return screen.queryByTestId(`extraction-input-${name}`) as HTMLInputElement | null
+}
+
+/** The value the cell shows for a field. `null` when the cell renders no input at all. */
+function valueOf(name: string): string | null {
+  return inputOf(name)?.value ?? null
+}
+
+function chipsOf(name: string): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[data-testid^="extraction-chip-${name}-"]`))
+}
+
+function undoOf(name: string): HTMLElement | null {
+  return screen.queryByTestId(`extraction-undo-${name}`)
+}
+
+/** Every natively focusable control inside one cell. */
+function controlsOf(name: string): HTMLElement[] {
+  return Array.from(row(name).querySelectorAll<HTMLElement>('input, button'))
+}
+
+function mkCandidate(value: string, page: number): ExtractionCandidate {
+  return { value, region: mkRegion({ page }) }
 }
 
 /** The one dashed panel in the pane. The app's empty idiom, MemberParts.tsx:55-57's rule. */
@@ -285,29 +353,35 @@ describe('the field cells', () => {
     expect(strip.style.minHeight).toBe('18px')
   })
 
-  it('renders an em-dash for a null value, never an empty cell', () => {
+  it('renders an empty input for a null value, and no em-dash placeholder', () => {
+    // The em-dash was the read-only cell's stand-in for "nothing here". An editable field says
+    // it by being empty, and a typed em-dash would be a value the person has to delete first.
     render(fieldsPane({ fields: [mkField({ name: 'buyer_tin', value: null })] }))
 
     const r = row('buyer_tin')
-    expect(within(r).getByText('—'), 'a null value rendered no em-dash').toBeTruthy()
+    expect(inputOf('buyer_tin'), 'the missing field renders no input to type into').toBeTruthy()
+    expect(valueOf('buyer_tin'), 'a null value reached the input as text').toBe('')
     expect(r.textContent, 'a null value leaked a guess').not.toContain('null')
+    expect(within(r).queryByText('—'), 'the input carries an em-dash the person must delete').toBeNull()
   })
 
-  it('renders an em-dash for an empty string too', () => {
-    // `value` is `string | null` on the wire, and `''` is a legal string. `{value ?? '—'}`
-    // renders the em-dash for null and an EMPTY CELL for '' — which AC-3 forbids by name.
+  it('renders an empty input for an empty string too', () => {
+    // `value` is `string | null` on the wire and `''` is a legal string; both are "no value".
     render(fieldsPane({ fields: [mkField({ name: 'buyer_tin', value: '' })] }))
 
-    expect(within(row('buyer_tin')).getByText('—'), 'an empty string rendered an empty cell').toBeTruthy()
+    expect(inputOf('buyer_tin'), 'the empty field renders no input').toBeTruthy()
+    expect(valueOf('buyer_tin')).toBe('')
   })
 
-  it('renders a present value verbatim, with no em-dash riding along', () => {
-    // The control needle for the two rows above: an unconditional em-dash passes both.
+  it('renders a present value verbatim in the input, never as text beside it', () => {
+    // The control needle for the two rows above: an input that always reads '' passes both.
     render(fieldsPane())
 
-    const r = row('total')
-    expect(within(r).getByText('1,250,000.00'), 'the wire value did not render').toBeTruthy()
-    expect(within(r).queryByText('—'), 'the em-dash is unconditional').toBeNull()
+    expect(valueOf('total'), 'the wire value did not reach the input').toBe('1,250,000.00')
+    expect(
+      within(row('total')).queryByText('1,250,000.00'),
+      'the value renders as TEXT beside the input, so the cell shows it twice',
+    ).toBeNull()
   })
 })
 
@@ -372,8 +446,8 @@ describe('selection', () => {
 
     const selected = row('issue_date')
     const other = row('total')
-    expect(selected.getAttribute('aria-pressed')).toBe('true')
-    expect(other.getAttribute('aria-pressed')).toBe('false')
+    expect(selected.getAttribute('aria-current')).toBe('true')
+    expect(other.getAttribute('aria-current')).toBe('false')
     expect(
       selected.getAttribute('style'),
       'the selected row renders exactly like an unselected one — aria-pressed alone is not a treatment',
@@ -391,7 +465,12 @@ describe('selection', () => {
   })
 
   it('carries no radius-forcing class on any element in the pane', () => {
-    render(fieldsPane({ selected: 'total' }))
+    // EVERY_CELL_PART, not THREE_FIELDS: the old fixture carried no ambiguous field and no
+    // corrected one, so the walk never saw a chip row or an Undo button — the two elements the
+    // artboard writes as `.pf-chip` and `.pf-btn`, which is the most likely thing to be copied
+    // in. A guard whose fixture cannot produce the thing it forbids reports clear either way.
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    expectEveryPartRendered()
 
     const all = [pane(), ...Array.from(pane().querySelectorAll<HTMLElement>('*'))]
     expect(all.length, 'the walk read an empty tree').toBeGreaterThan(10)
@@ -584,11 +663,16 @@ describe('the vocabulary EXTR-12 owns', () => {
   it('renders no reason, no alternative and no percentage', () => {
     // The wire object carries the keys EXTR-12 will add. A pane that spreads its field onto
     // the DOM, or renders a confidence, fails here; nothing else can.
+    // The alternatives are REAL ExtractionCandidate objects, not bare strings behind a cast: a
+    // chip rendering `{a.value}` renders nothing for a string, so the absence below would have
+    // passed whatever the pane did with them. The reason is `unreadable`, NOT `ambiguous`, so a
+    // gate keyed on the reason renders no chip here and the candidate value must stay off the
+    // screen — which makes this sweep a second oracle for that gate.
     const leaky = THREE_FIELDS.map((f) => ({
       ...f,
       reason: 'unreadable',
       reason_code: 'LOW_CONFIDENCE',
-      alternatives: ['SFS-2026-0418'],
+      alternatives: [mkCandidate('SFS-2026-0418', 3)],
       confidence: 0.62,
     })) as unknown as ExtractionFieldState[]
 
@@ -602,7 +686,7 @@ describe('the vocabulary EXTR-12 owns', () => {
         screen.queryByText(fieldLabel(f.name)),
         `${f.name} did not render its label — every absence below is vacuous`,
       ).toBeTruthy()
-      expect(screen.queryByText(f.value as string), `${f.name}'s value did not render`).toBeTruthy()
+      expect(valueOf(f.name), `${f.name}'s value did not reach its input`).toBe(f.value)
     }
 
     const text = pane().textContent ?? ''
@@ -620,38 +704,52 @@ describe('the vocabulary EXTR-12 owns', () => {
 // The pane's own empty-state copy.
 const NO_FIELDS = 'Nothing was extracted from this document.'
 
-describe('the row is a real button', () => {
-  it('renders each cell as a <button type="button">, never a clickable div', () => {
-    // `fireEvent.click` fires on a <div> too, so every selection row above passes on a cell
-    // no keyboard can reach. The tag IS the keyboard contract: Tab, Enter and Space are the
-    // UA's, and jsdom synthesises none of them, so there is nothing else here to assert.
-    render(fieldsPane())
+describe('the cell is reachable by keyboard', () => {
+  it('holds at least one natively focusable control, and focusing it selects that field', () => {
+    // This replaces the deleted `tagName === 'BUTTON'` row and is strictly stronger: that one
+    // asserted a tag and nothing a key did. The cell is now a <div> holding an input and,
+    // depending on state, buttons — so the keyboard contract has to be carried by the controls,
+    // and each of them must select its own field when focus reaches it.
+    const onSelect = vi.fn()
+    render(fieldsPane({ fields: tenFields(), onSelect }))
 
-    expect(rows(), 'no row rendered — every check below is vacuous').toHaveLength(3)
-    for (const r of rows()) {
-      expect(r.tagName, `${r.dataset.testid} is not a button`).toBe('BUTTON')
-      // Without `type`, a button inside a form defaults to `submit` and a row click posts it.
-      expect((r as HTMLButtonElement).type, `${r.dataset.testid} takes the submit default`).toBe('button')
-      expect((r as HTMLButtonElement).disabled, `${r.dataset.testid} is unreachable`).toBe(false)
+    expect(rows(), 'no row rendered — every check below is vacuous').toHaveLength(HEADER_FIELDS.length)
+    for (const name of HEADER_FIELDS) {
+      const controls = controlsOf(name)
+      expect(controls.length, `${name} holds nothing a keyboard can reach`).toBeGreaterThan(0)
+      for (const c of controls) {
+        expect((c as HTMLInputElement | HTMLButtonElement).disabled, `${name}'s control leaves the tab order`).toBe(false)
+      }
+
+      onSelect.mockClear()
+      fireEvent.focus(controls[0])
+      expect(onSelect.mock.calls, `focusing ${name}'s control did not select it`).toEqual([[name]])
     }
   })
 
-  it('announces each row as its label and its value, not as an unnamed control', () => {
-    // The accessible name is computed from the row's own contents. A value moved outside the
-    // button still renders, still passes every row above, and leaves the control unnamed.
+  it('renders the cell as a plain container, not a button wrapping other buttons', () => {
+    // A <button> may not contain interactive content, so the chip row and Undo would be invalid
+    // markup inside one — and `aria-pressed` is only valid on a button role, which is why the
+    // selection moved to `aria-current`.
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    expectEveryPartRendered()
+
+    for (const r of rows()) {
+      expect(r.tagName, `${r.dataset.testid} is still a button and now wraps interactive content`).not.toBe('BUTTON')
+    }
+  })
+
+  it('keeps each cell announcing its own label beside its own control', () => {
+    // What the deleted accessible-name row protected: the label and the value belong to the
+    // same cell. `getAllByRole('button')` cannot state it any more — the cell is not a button,
+    // and an <input>'s value never joins an ancestor's accessible name.
     render(fieldsPane())
 
-    expect(screen.getAllByRole('button'), 'the rows carry no button role').toHaveLength(3)
     for (const f of THREE_FIELDS) {
-      // CONTAINS, not equals: the pill, the note and the was-line all join the accessible
-      // name of a flagged or corrected cell (`Y-2` keeps the cell a <button> until 07).
-      const label = fieldLabel(f.name)
-      const value = f.value as string
-      expect((row(f.name).textContent ?? '').trim(), `${f.name} announces nothing at all`).not.toBe('')
-      expect(
-        screen.queryAllByRole('button', { name: (n: string) => n.includes(label) && n.includes(value) }),
-        `${f.name} does not announce its own label and value`,
-      ).toEqual([row(f.name)])
+      const r = row(f.name)
+      expect(within(r).queryByText(fieldLabel(f.name)), `${f.name} does not carry its own label`).toBeTruthy()
+      expect(valueOf(f.name), `${f.name}'s value is not in its own cell`).toBe(f.value)
+      expect(r.contains(inputOf(f.name)), `${f.name}'s input rendered outside its cell`).toBe(true)
     }
   })
 })
@@ -668,9 +766,14 @@ describe('a long or hostile value', () => {
     const r = row('buyer_name')
     expect(r.style.minWidth, 'the cell takes a content-based automatic minimum').toBe('0')
 
-    const value = within(r).getByText(long)
-    expect(value.style.overflowWrap, 'a 400-character unbroken value cannot wrap').toBe('anywhere')
-    expect(r.textContent, 'the value was truncated or ellipsised').toContain(long)
+    // An <input> cannot `overflow-wrap`, so the claim changes shape: the control fills its cell
+    // through `.pf-input`'s own `width: 100%` (platform.css) and declares no width of its own,
+    // which is what keeps the grid track free to shrink (`AA-11`).
+    const input = inputOf('buyer_name')
+    expect(input, 'the long value renders in no input').toBeTruthy()
+    expect(classesOf(input as HTMLElement), 'the input does not fill its cell').toContain('pf-input')
+    expect(input!.style.width, 'an inline width overrides the cell’s own minimum').toBe('')
+    expect(input!.value, 'the value was truncated or ellipsised').toBe(long)
   })
 
   it('renders a value as text, never as markup', () => {
@@ -680,7 +783,7 @@ describe('a long or hostile value', () => {
     render(fieldsPane({ fields: [mkField({ name: 'buyer_name', value: hostile })] }))
 
     const r = row('buyer_name')
-    expect(within(r).getByText(hostile), 'the value did not render verbatim').toBeTruthy()
+    expect(valueOf('buyer_name'), 'the value did not reach the input verbatim').toBe(hostile)
     expect(r.querySelectorAll('img, b'), 'the value was parsed as markup').toHaveLength(0)
   })
 })
@@ -775,7 +878,7 @@ describe('the reason pill', () => {
 
     for (const f of fields) {
       const r = row(f.name)
-      expect(within(r).queryByText(f.value as string), `${f.name} did not render — its pill row is vacuous`).toBeTruthy()
+      expect(valueOf(f.name), `${f.name} did not render — its pill row is vacuous`).toBe(f.value)
       expect(within(r).queryByText(pills[f.name]), `${f.name} renders no "${pills[f.name]}" pill`).toBeTruthy()
 
       // within(row) is load-bearing: a pane that renders all four pills once, anywhere, passes
@@ -830,7 +933,7 @@ describe('the per-field note', () => {
     for (const [name, note] of notes) {
       const r = row(name)
       const value = fields.find((f) => f.name === name)!.value as string
-      expect(within(r).queryByText(value), `${name} did not render — its note row is vacuous`).toBeTruthy()
+      expect(valueOf(name), `${name} did not render — its note row is vacuous`).toBe(value)
       expect(within(r).queryByText(note), `${name} renders no note of its own`).toBeTruthy()
 
       // A pane that renders one note below the grid — the shipped SUPPLIER_NOTE shape — puts
@@ -873,7 +976,7 @@ describe('a corrected field', () => {
     render(fieldsPane({ fields }))
 
     const r = row('subtotal')
-    expect(within(r).queryByText('3,726,000.00'), 'the row did not render — every clause below is vacuous').toBeTruthy()
+    expect(valueOf('subtotal'), 'the row did not render — every clause below is vacuous').toBe('3,726,000.00')
 
     const marker = screen.queryByTestId('extraction-marker-subtotal')
     expect(marker, 'the corrected field renders no marker').toBeTruthy()
@@ -925,6 +1028,7 @@ describe('a corrected field', () => {
 
     const r = row('total')
     expect(within(r).queryByText(MARKER_TYPED), 'the row did not settle — the absence below is vacuous').toBeTruthy()
+    expect(valueOf('total'), 'the settled row did not render its value').toBe('2,222.00')
     expect(within(r).queryByText(PILL), 'a settled field still carries the region cue').toBeNull()
 
     // Unchanged where nothing is settled.
@@ -961,7 +1065,8 @@ describe('a corrected field', () => {
     expect(control!.style.position, 'an absolutely-positioned marker escapes an unpositioned wrapper').toBe('relative')
     expect(control!.style.display).toBe('flex')
     expect(control!.style.alignItems).toBe('center')
-    expect(within(control!).queryByText('2,222.00'), 'the value moved out of the control').toBeTruthy()
+    expect(control!.contains(inputOf('total')), 'the value input moved out of the control').toBe(true)
+    expect(valueOf('total'), 'the value moved out of the control').toBe('2,222.00')
 
     const marker = screen.queryByTestId('extraction-marker-total')
     expect(marker, 'the corrected field renders no marker').toBeTruthy()
@@ -984,11 +1089,19 @@ describe('a corrected field', () => {
   })
 })
 
-// One field per pill, one per note arm and one settled: every element EXTR-12 added to a cell
-// is on screen at once, so a walk over the cells reads all of them.
+// One field per pill, one per note arm, one ambiguous WITH real candidates, two locked and one
+// settled: every element EXTR-12 added to a cell is on screen at once, so a walk over the cells
+// reads all of them. `issue_date` carries alternatives because without them the fixture renders
+// no chip row, and `total` is corrected because without it there is no Undo — the two elements
+// the radius walk and the width walk exist to catch.
 const EVERY_CELL_PART: ExtractionFieldState[] = [
   mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
-  mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+  mkField({
+    name: 'issue_date',
+    value: '2026-08-12',
+    reason: 'ambiguous',
+    alternatives: [mkCandidate('2026-08-21', 3), mkCandidate('2026-12-08', 5)],
+  }),
   mkField({ name: 'subtotal', value: '3,626,000.00', reason: 'inconsistent' }),
   mkField({ name: 'supplier_tin', value: '20184412-0001', reason: 'inconsistent' }),
   mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' }),
@@ -1003,7 +1116,11 @@ function cellParts(): HTMLElement[] {
   return cells.flatMap((c) => [c, ...Array.from(c.querySelectorAll<HTMLElement>('*'))])
 }
 
-/** The floor for both rows below: every part EXTR-12 added really rendered. */
+/**
+ * The floor for every walk below: each part EXTR-12 added really rendered. Without the chip,
+ * input and Undo clauses the walks iterate elements that were never on screen and report clear
+ * — the same vacuity as a fixture that cannot produce what the guard forbids.
+ */
 function expectEveryPartRendered() {
   expect(within(row('vat')).queryByText(PILL_UNREADABLE), 'no reason pill rendered').toBeTruthy()
   expect(within(row('invoice_number')).queryByText(PILL), 'no region cue rendered').toBeTruthy()
@@ -1012,6 +1129,13 @@ function expectEveryPartRendered() {
   expect(screen.queryByTestId('extraction-marker-total'), 'no marker rendered').toBeTruthy()
   expect(within(row('total')).queryByText(MARKER_TYPED), 'no changed row rendered').toBeTruthy()
   expect(within(row('total')).queryByText('We read 1,000,000.00'), 'no was-line rendered').toBeTruthy()
+
+  // EXTR-12-07's own three.
+  expect(chipsOf('issue_date').length, 'no chip row rendered').toBeGreaterThan(1)
+  expect(inputOf('subtotal'), 'no editable input rendered').toBeTruthy()
+  expect(inputOf('invoice_number'), 'no locked input rendered').toBeTruthy()
+  expect(undoOf('total'), 'no Undo button rendered').toBeTruthy()
+  expect(within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED), 'no lock reason rendered').toBeTruthy()
 }
 
 describe('the cell EXTR-12 grew', () => {
@@ -1064,11 +1188,19 @@ describe('the pane renders nothing it does not declare', () => {
     // regex is weaker AND false-positives on a legitimate money value like 0.75. The fixture
     // carries one field per reason code, one region-less clean field and one corrected field,
     // so every string EXTR-12 taught this pane to say is on screen at once.
+    // Three DIFFERENT pages across the chip row, so each sub-label is its own string: the strip
+    // below replaces one occurrence per entry, and three chips reading `page 1` would leave two
+    // behind and red this row for a reason it is not about.
     const fields = [
       mkField({ name: 'invoice_number', value: 'SFS-2026-0418', region: null }),
       mkField({ name: 'supplier_tin', value: '20184412-0001', reason: 'inconsistent' }),
       mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
-      mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+      mkField({
+        name: 'issue_date',
+        value: '2026-08-12',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-08-21', 3), mkCandidate('2026-12-08', 5)],
+      }),
       mkField({ name: 'buyer_tin', value: null, reason: 'missing' }),
       mkField({
         name: 'total',
@@ -1078,11 +1210,14 @@ describe('the pane renders nothing it does not declare', () => {
     ]
     render(fieldsPane({ fields, selected: 'total' }))
 
+    // A CHIP's value is text and stays in the sweep; an INPUT's value is not in textContent at
+    // all, so it moves to the per-row floor below rather than out of the guard altogether.
+    const chipText = ['2026-08-12', '2026-08-21', '2026-12-08', 'page 1', 'page 3', 'page 5']
+
     const known = [
       TITLE,
       SENTENCE,
       PILL,
-      '—',
       PILL_UNREADABLE,
       PILL_AMBIGUOUS,
       PILL_INCONSISTENT,
@@ -1090,17 +1225,255 @@ describe('the pane renders nothing it does not declare', () => {
       NOTE_SUPPLIER,
       MARKER_TYPED,
       'We read 3,879,950.00',
+      UNDO,
+      INVOICE_NUMBER_LOCKED,
+      ...chipText,
       ...fields.map((f) => fieldLabel(f.name)),
-      ...fields.map((f) => f.value).filter((v): v is string => v !== null),
     ]
 
     let left = pane().textContent ?? ''
     // The floor first: every one really rendered, so the emptiness below is a real absence.
     for (const k of known) expect(left, `${k} did not render`).toContain(k)
 
+    // The other half of the floor, at the property the browser now holds these values in. The
+    // ambiguous field renders chips instead of an input, so it is read off the chip row above.
+    for (const f of fields) {
+      if (f.reason === 'ambiguous') continue
+      expect(valueOf(f.name), `${f.name}'s value left the pane entirely`).toBe(f.value ?? '')
+    }
+
     // Longest first, so a value that is a substring of another cannot eat it.
     for (const k of [...known].sort((a, b) => b.length - a.length)) left = left.replace(k, '')
 
     expect(left.replace(/\s+/g, ''), `the pane rendered copy it does not declare: ${JSON.stringify(left)}`).toBe('')
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-07. The candidate chips, the typed-over input, the lock and Undo. Written RED
+// against the SHIPPED cell, which renders a value <span> and no control at all — so every row
+// below fails on the control it is about, not on a missing export.
+// ==========================================================================================
+
+describe('an ambiguous field', () => {
+  it('renders one chip per candidate and no input, and its neighbour keeps its input', () => {
+    // The DECIDED reading is itself a chip (`W-3`): on the deployed mock issue_date decides
+    // 2026-01-01 and carries two lower-ranked alternatives, so "alternatives only" would hide
+    // the reading the extractor ranked highest and leave a user who agrees with it no way to
+    // say so — with no input to type it back into either.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-01-10', 3), mkCandidate('2026-10-01', 5)],
+      }),
+      mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
+    ]
+    render(fieldsPane({ fields }))
+
+    const chips = chipsOf('issue_date')
+    expect(chips.map((c) => c.textContent), 'the ambiguous field renders no chip row').toHaveLength(3)
+    for (const [i, want] of ['2026-01-01', '2026-01-10', '2026-10-01'].entries()) {
+      expect(chips[i].textContent, `chip ${i} does not carry candidate ${want}`).toContain(want)
+    }
+    expect(inputOf('issue_date'), 'the ambiguous field renders a chip row AND an input').toBeNull()
+
+    // The `vat` clause is what stops "render no input anywhere" passing the absence above: an
+    // absence asserted over an empty render proves nothing.
+    expect(inputOf('vat'), 'the neighbour lost its input — the absence above is vacuous').toBeTruthy()
+
+    // The chip's sub-label. `regionPhrase` supplies it, so the chip and the pointed was-line
+    // cannot drift; the artboard renders it uppercase, which is CSS and not a second string —
+    // `textContent` stays the phrase the copy sweep declares.
+    for (const [i, page] of ['page 1', 'page 3', 'page 5'].entries()) {
+      expect(chips[i].textContent, `chip ${i} states no page`).toContain(page)
+    }
+    const sub = within(chips[0]).getByText('page 1')
+    expect(sub.style.textTransform, 'the chip sub-label was uppercased in JavaScript, not in CSS').toBe('uppercase')
+  })
+
+  it('renders no chip for a field carrying alternatives without the ambiguous reason', () => {
+    // THE GATE. An implementation keyed on `alternatives.length > 0` passes the row above and
+    // fails here — and would also red the AC-9 sweep, whose fixture is `unreadable` and carries
+    // a real candidate. Both must be green together.
+    const fields = [
+      mkField({
+        name: 'subtotal',
+        value: '3,626,000.00',
+        reason: 'inconsistent',
+        alternatives: [mkCandidate('3,726,000.00', 3), mkCandidate('3,526,000.00', 5)],
+      }),
+    ]
+    render(fieldsPane({ fields }))
+
+    expect(inputOf('subtotal'), 'the floor: an inconsistent field still takes an input').toBeTruthy()
+    expect(chipsOf('subtotal'), 'the chip row is gated on the array, not on the reason').toHaveLength(0)
+    expect(pane().textContent, 'a lower-ranked candidate reached the screen').not.toContain('3,726,000.00')
+  })
+
+  it('reports the chosen candidate upward, and writes no correction of its own', () => {
+    const onChoose = vi.fn()
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-01-10', 3), mkCandidate('2026-10-01', 5)],
+      }),
+    ]
+    render(fieldsPane({ fields, onChoose }))
+
+    const chips = chipsOf('issue_date')
+    expect(chips, 'no chip rendered — the click below is vacuous').toHaveLength(3)
+
+    fireEvent.click(chips[2])
+
+    // The candidate, not its index and not the field's own value: the shell needs the box to
+    // move the highlight to, and the LAST chip is deliberately not the first alternative.
+    expect(onChoose.mock.calls, 'the chip click reported nothing upward').toEqual([
+      ['issue_date', fields[0].alternatives[1]],
+    ])
+  })
+})
+
+describe('what a field may be typed over with', () => {
+  it('gives seven fields an editable input and the three locked ones a readOnly one', () => {
+    // `lockedFields` refuses invoice_number, supplier_tin and supplier_name with a 422, and
+    // `invoiceEditFor` writes only the other seven columns. An implementation that locks
+    // invoice_number alone answers 9/1 and ships two inputs whose Save 422s — on supplier_tin,
+    // which the deployed mock renders. The NAMES are asserted because a bare count of 3 passes
+    // on the wrong three.
+    render(fieldsPane({ fields: tenFields() }))
+
+    const inputs = HEADER_FIELDS.map((name) => inputOf(name))
+    expect(inputs.filter(Boolean), 'the pane renders no inputs at all').toHaveLength(HEADER_FIELDS.length)
+
+    const locked = HEADER_FIELDS.filter((name) => inputOf(name)!.readOnly)
+    const editable = HEADER_FIELDS.filter((name) => !inputOf(name)!.readOnly)
+    expect(locked, 'the pane offers an edit the server refuses with a 422').toEqual(LOCKED_FIELDS)
+    expect(editable, 'the pane locked a field the invoice accepts').toHaveLength(7)
+
+    // readOnly, never disabled: a disabled input leaves the tab order and fires no focus, so
+    // the three locked cells would become unreachable and unselectable by keyboard.
+    for (const name of LOCKED_FIELDS) {
+      const input = inputOf(name)!
+      expect(input.disabled, `${name} left the tab order`).toBe(false)
+      expect(input.getAttribute('aria-readonly'), `${name} does not announce itself read-only`).toBe('true')
+      expect(classesOf(input), `${name} is not the shipped input`).toContain('pf-input')
+    }
+  })
+
+  it('reports typed text upward without redrawing the value itself', () => {
+    const onType = vi.fn()
+    render(fieldsPane({ fields: [mkField({ name: 'total', value: '1,250,000.00' })] }))
+    const input = inputOf('total')
+    expect(input, 'nothing to type into').toBeTruthy()
+
+    cleanup()
+    render(fieldsPane({ fields: [mkField({ name: 'total', value: '1,250,000.00' })], onType }))
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '9,999.00' } })
+
+    // The pane holds no draft of its own: the shell owns the write, exactly as ExpandedFixPanel
+    // holds the draft above FixCardView.
+    expect(onType.mock.calls, 'the typed text never reached the shell').toEqual([['total', '9,999.00']])
+  })
+
+  it('states the invoice-number lock in text, and hides no reason in a tooltip', () => {
+    render(fieldsPane({ fields: tenFields() }))
+
+    const r = row('invoice_number')
+    expect(within(r).queryByText(INVOICE_NUMBER_LOCKED), 'the lock states no reason').toBeTruthy()
+
+    // A `title=` implementation reds TWICE: the text is absent, and the [title] count is 1.
+    expect(pane().querySelectorAll('[title]'), 'the pane hides a reason in a tooltip').toHaveLength(0)
+
+    // The two supplier fields take the pane-level client-record sentence instead, which already
+    // ships and already says why they are locked — no second string is invented for them.
+    expect(screen.getAllByText(SENTENCE), 'the supplier lock lost its explanation').toHaveLength(1)
+    for (const name of ['supplier_tin', 'supplier_name']) {
+      expect(
+        within(row(name)).queryByText(INVOICE_NUMBER_LOCKED),
+        `${name} borrowed the invoice number's reason`,
+      ).toBeNull()
+    }
+  })
+})
+
+describe('Undo', () => {
+  it('renders on a corrected field and nowhere else, and reports upward', () => {
+    const onUndo = vi.fn()
+    const fields = [
+      mkField({ name: 'total', value: '2,222.00', corrected: CORRECTED_TOTAL }),
+      mkField({ name: 'subtotal', value: '950.00' }),
+    ]
+    render(fieldsPane({ fields, onUndo }))
+
+    const undo = undoOf('total')
+    expect(undo, 'the corrected field offers no way back').toBeTruthy()
+    expect(undo!.textContent, 'the Undo control is unlabelled').toBe(UNDO)
+    expect(row('total').contains(undo), 'Undo rendered outside the cell it undoes').toBe(true)
+    expect(undoOf('subtotal'), 'an uncorrected field offers an Undo').toBeNull()
+
+    fireEvent.click(undo as HTMLElement)
+    expect(onUndo.mock.calls, 'the Undo click reported nothing upward').toEqual([['total']])
+  })
+})
+
+describe('selection after the restructure', () => {
+  it('is aria-current, and no element in the pane carries aria-pressed', () => {
+    // `aria-pressed` is valid only on a button role, and the cell now holds an input and
+    // buttons. Scoped to this pane on purpose: screen-wide the negative would red
+    // `extraction-zoom-100`, which is EXTR-11's shipped contract.
+    render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total' }))
+    expectEveryPartRendered()
+
+    expect(row('total').getAttribute('aria-current')).toBe('true')
+    expect(row('vat').getAttribute('aria-current')).toBe('false')
+    expect(pane().querySelectorAll('[aria-pressed]'), 'a half-finished migration left aria-pressed behind').toHaveLength(0)
+
+    // The control needle: the same query finds a planted node, so the zero above is a real
+    // absence and not a selector that matches nothing.
+    const probe = document.createElement('span')
+    probe.setAttribute('aria-pressed', 'true')
+    pane().appendChild(probe)
+    expect(pane().querySelectorAll('[aria-pressed]'), 'the [aria-pressed] selector is inert').toHaveLength(1)
+    probe.remove()
+  })
+
+  it('reports once for a click on the cell, once for the input and once for a chip', () => {
+    // The shipped `:323`/`:335` contract, extended to the new controls. An input whose onFocus
+    // fires alongside the cell's own onClick yields TWO calls for one gesture — which is what
+    // Playwright produces when it clicks the cell centre and lands on the input.
+    const onSelect = vi.fn()
+    const onChoose = vi.fn()
+    const fields = [
+      mkField({ name: 'total', value: '2,222.00' }),
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-01-10', 3), mkCandidate('2026-10-01', 5)],
+      }),
+    ]
+    render(fieldsPane({ fields, onSelect, onChoose }))
+
+    const input = inputOf('total')
+    expect(input, 'the cell renders no input — the focus gesture below is vacuous').toBeTruthy()
+
+    fireEvent.click(row('total'))
+    fireEvent.focus(input as HTMLElement)
+    expect(onSelect.mock.calls, 'a cell click and an input focus do not each report once').toEqual([
+      ['total'],
+      ['total'],
+    ])
+
+    onSelect.mockClear()
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'no chip rendered — the click below is vacuous').toBeGreaterThan(0)
+    fireEvent.click(chips[0])
+
+    expect(onSelect.mock.calls, 'a chip click does not select its own field, exactly once').toEqual([['issue_date']])
+    expect(onChoose.mock.calls, 'the chip click produced no draft write').toHaveLength(1)
   })
 })

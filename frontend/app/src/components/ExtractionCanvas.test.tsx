@@ -898,17 +898,17 @@ describe('the toolbar', () => {
     expect(meta.style.letterSpacing).toBe('0.04em')
     expect(meta.style.marginTop).toBe('2px')
 
-    // 4. The READ ONLY pill.
-    const pill = screen.getByTestId('extraction-read-only')
-    expect(pill.textContent).toBe('READ ONLY')
-    expect(pill.className.split(/\s+/)).toContain('mono')
-    expect(pill.style.fontSize).toBe('9px')
-    expect(pill.style.fontWeight).toBe('700')
-    expect(pill.style.letterSpacing).toBe('0.09em')
-    expect(pill.style.color).toBe('var(--fg-3)')
-    expect(pill.style.border).toBe('1px solid var(--line-2)')
-    expect(pill.style.borderRadius).toBe('999px')
-    expect(pill.style.padding).toBe('3px 9px')
+    // 4. The READ ONLY pill is RETIRED (AC-7). The toolbar's claim is now false: every field
+    //    beside it takes an input, a chip row or an Undo. The artboard renders the badge beside
+    //    editable inputs (`:43`, `:300-340`), so retiring it is a deliberate deviation FROM the
+    //    artboard rather than a return to it, and EXTR-12-09 records it with its reason.
+    //    Converted rather than deleted: nine assertions on a badge that still renders would
+    //    stay green while it does.
+    expect(
+      screen.queryByTestId('extraction-read-only'),
+      'the document toolbar still claims the screen is read-only',
+    ).toBeNull()
+    expect(toolbar.innerHTML, 'the badge lost its testid but kept its copy').not.toContain('READ ONLY')
   })
 
   it('tints the type tile with fileTypeTone, not a fixed colour', () => {

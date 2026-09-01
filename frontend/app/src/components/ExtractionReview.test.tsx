@@ -136,24 +136,39 @@ function mkDetail(o: Partial<ExtractionDetail> = {}): ExtractionDetail {
 // the four style helpers with it and the panes would render nothing.
 type ReviewCtx = Pick<PlatformCtx, 'authedFetch' | 'getToken'>
 
-interface Wire {
-  ctx: PlatformCtx
-  /** Every job id the screen asked the wire for, in order. */
-  asked: () => string[]
+/** One request the screen made, as the seam saw it. */
+interface WireCall {
+  url: string
+  method: string
+  body: unknown
 }
 
-function wire(reply: (jobId: string) => Promise<ExtractionDetail>): Wire {
+interface Wire {
+  ctx: PlatformCtx
+  /**
+   * Every job id the screen asked the wire for, in order. An EXACT-EQUALITY pin in three
+   * shipped rows, and it takes the URL's LAST path segment — so a POST appends the literal
+   * 'corrections'. Left exactly as it is; `calls()` is what the write rows read.
+   */
+  asked: () => string[]
+  /** Every request, whole: url, method and body. */
+  calls: () => WireCall[]
+}
+
+function wire(reply: (jobId: string, url: string, opts?: { method?: string; body?: unknown }) => Promise<unknown>): Wire {
   const asked: string[] = []
-  const authedFetch = async (url: string): Promise<ExtractionDetail> => {
+  const calls: WireCall[] = []
+  const authedFetch = async (url: string, opts?: { method?: string; body?: unknown }): Promise<unknown> => {
     const last = url.split('?')[0].split('/').filter(Boolean).pop() ?? ''
     asked.push(decodeURIComponent(last))
-    return reply(decodeURIComponent(last))
+    calls.push({ url, method: opts?.method ?? 'GET', body: opts?.body })
+    return reply(decodeURIComponent(last), url, opts)
   }
   const fake: ReviewCtx = {
     authedFetch: authedFetch as unknown as PlatformCtx['authedFetch'],
     getToken: () => 'tok',
   }
-  return { ctx: fake as unknown as PlatformCtx, asked: () => [...asked] }
+  return { ctx: fake as unknown as PlatformCtx, asked: () => [...asked], calls: () => [...calls] }
 }
 
 /** The ordinary wire: one detail, whatever job is asked for. */
@@ -276,10 +291,29 @@ function fieldRows(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="extraction-field-"]'))
 }
 
+// `aria-current`, not `aria-pressed`: the cell holds an input and buttons and can no longer
+// take a button role. The name is left alone — sixteen shipped call sites read it.
 function pressedRows(): string[] {
   return fieldRows()
-    .filter((el) => el.getAttribute('aria-pressed') === 'true')
+    .filter((el) => el.getAttribute('aria-current') === 'true')
     .map((el) => el.dataset.testid ?? '')
+}
+
+function inputOf(name: string): HTMLInputElement | null {
+  return screen.queryByTestId(`extraction-input-${name}`) as HTMLInputElement | null
+}
+
+function chipsOf(name: string): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[data-testid^="extraction-chip-${name}-"]`))
+}
+
+function saveButton(): HTMLButtonElement | null {
+  return screen.queryByTestId('extraction-save') as HTMLButtonElement | null
+}
+
+/** Every request that was not the detail GET. */
+function writes(w: Wire): WireCall[] {
+  return w.calls().filter((c) => c.method !== 'GET')
 }
 
 function highlights(): HTMLElement[] {
@@ -614,14 +648,14 @@ describe('selecting a field', () => {
     expect(scrollToSpy.mock.instances[0], 'the screen scrolled something other than the ground').toBe(ground())
   })
 
-  it('centres again when the already-selected row is clicked a second time', async () => {
-    // `D-25`. EXTR-11-06 shipped its half: the pane re-reports rather than guarding on
-    // `f.name !== selected` (ExtractionFields.test.tsx, "reports again when the
-    // already-selected row is clicked"). This is the other half. `ExtractionCanvas`'s scroll
-    // effect keys on `[selected, jobId]`, so a shell that only calls `setSelected(name)`
-    // bails out of the re-render and the reader who scrolled away gets no re-centre — the
-    // brief's "reachable in one action" is false on the second click. A per-click nonce or a
-    // scroll call in the handler both satisfy this; neither is mandated.
+  it('leaves the pick counter alone when the already-selected row is selected again', async () => {
+    // REVERSES `D-25`, deliberately. On the deployed build a click on the cell centre lands on
+    // the 38px input, so the browser fires `focus` AND a bubbled `click` — two selections, two
+    // pick bumps and two canvas scrolls for one gesture. jsdom's `fireEvent.click` dispatches
+    // no focus, so no unit row can see the pair; making re-selection IDEMPOTENT closes it at
+    // the state layer, which jsdom CAN see. The pane still reports every gesture upward
+    // (ExtractionFields.test.tsx, "reports again when the already-selected row is clicked");
+    // the shell is what stops the repeat from moving anything.
     vi.useFakeTimers()
     silenceObserver()
     deferredPageFetch()
@@ -633,7 +667,7 @@ describe('selecting a field', () => {
     act(() => {
       vi.advanceTimersByTime(20)
     })
-    expect(scrollToSpy, 'the first selection never centred').toHaveBeenCalledTimes(1)
+    expect(scrollToSpy, 'the first selection never centred — the count below is vacuous').toHaveBeenCalledTimes(1)
 
     fireEvent.click(fieldRow('total_amount'))
     await flush()
@@ -641,13 +675,24 @@ describe('selecting a field', () => {
       vi.advanceTimersByTime(20)
     })
 
-    expect(scrollToSpy, 'a second click on the selected row did not re-centre it').toHaveBeenCalledTimes(2)
-    // The row stayed selected: a shell that toggled the selection off would also scroll
-    // twice, and would be a different product.
-    expect(pressedRows(), 'the second click cleared the selection instead of re-centring it').toEqual([
+    expect(
+      scrollToSpy,
+      're-selecting the selected field bumped the pick counter and scrolled the ground again',
+    ).toHaveBeenCalledTimes(1)
+    // The row stayed selected: a shell that toggled the selection off would also scroll once,
+    // and would be a different product.
+    expect(pressedRows(), 'the second selection cleared the selection instead of ignoring it').toEqual([
       'extraction-field-total_amount',
     ])
-    expect(highlights(), 'the second click removed the highlight').toHaveLength(1)
+    expect(highlights(), 'the second selection removed the highlight').toHaveLength(1)
+
+    // A DIFFERENT field still moves it, so the idempotence above is not a dead handler.
+    fireEvent.click(fieldRow('invoice_number'))
+    await flush()
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
+    expect(scrollToSpy, 'selecting another field no longer centres anything').toHaveBeenCalledTimes(2)
   })
 
   it('does not centre again on a re-render that changed no selection', async () => {
@@ -837,5 +882,213 @@ describe('the screen renders inside its own tree', () => {
     // Matched on the declaration and the hand-down, never on the word: a comment saying zoom
     // lives in the canvas is the right comment to write and must not fail this row.
     expect(source(), 'the shell declares or hands down zoom state').not.toMatch(/\bsetZoom\b|\bZOOMS\b|\bzoom=\{/)
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-07. One shared draft, one Save, N POSTs. Written RED against the SHIPPED shell,
+// which holds no draft and renders no Save — so every row fails on the write it is about.
+//
+// `serving()` replies an ExtractionDetail to ANY url, a POST included, so every row below
+// declares its own reply rather than letting a detail object arrive typed as a correction.
+// ==========================================================================================
+
+const SAVE = 'Save what you settled'
+
+const AMBIGUOUS_JOB: ExtractionDetail = mkDetail({
+  fields: [
+    mkField({
+      name: 'issue_date',
+      value: '2026-01-01',
+      region: mkRegion({ page: 1 }),
+      reason: 'ambiguous',
+      alternatives: [
+        { value: '2026-01-10', region: mkRegion({ page: 2 }) },
+        { value: '2026-10-01', region: mkRegion({ page: 3 }) },
+      ],
+    }),
+    mkField({ name: 'subtotal', value: '950.00', region: mkRegion({ page: 1 }) }),
+    mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 1 }) }),
+  ],
+})
+
+const CORRECTED_JOB: ExtractionDetail = mkDetail({
+  fields: [
+    mkField({
+      name: 'total',
+      value: '1,500.00',
+      region: mkRegion({ page: 1 }),
+      corrected: { method: 'typed', was: '1000.00', where: null },
+    }),
+    mkField({ name: 'subtotal', value: '950.00', region: mkRegion({ page: 1 }) }),
+  ],
+})
+
+/** The 201 body the correction route answers, so a POST reply is never a detail object. */
+function mkCorrectionResponse(field: string, value: string, method: string): Record<string, unknown> {
+  return {
+    id: 'ec1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+    field_name: field,
+    value,
+    method,
+    region: null,
+    invoice_id: '5d2f7a10-6b3c-4e8d-9f01-2a3b4c5d6e7f',
+    created_at: '2026-09-01T09:00:00Z',
+  }
+}
+
+/** Answers the detail GET with `detail` and every POST with a 201-shaped correction body. */
+function writing(detail: ExtractionDetail, onPost?: (url: string, body: unknown) => Promise<unknown>): Wire {
+  return wire(async (_last, url, opts) => {
+    if ((opts?.method ?? 'GET') === 'GET') return detail
+    if (onPost) return onPost(url, opts?.body)
+    return mkCorrectionResponse('total', '1', 'typed')
+  })
+}
+
+describe('one shared draft, one Save', () => {
+  it('drafts a chosen chip and posts nothing until Save', async () => {
+    // The story's own Description: "no per-field Save. One shared draft across the pane and one
+    // Save action ... Choosing a candidate, typing a value and Undo all write through the same
+    // draft." A chip that POSTs on click is the shape the subtask's Test Specs assumed and the
+    // Description forbids.
+    const w = writing(AMBIGUOUS_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip — every claim below is vacuous').toBe(3)
+
+    fireEvent.click(chips[2])
+    await flush()
+
+    expect(writes(w), 'the chip click wrote to the register before anyone pressed Save').toEqual([])
+    expect(saveButton(), 'the screen renders no Save button').toBeTruthy()
+    expect(saveButton()!.disabled, 'a drafted chip did not arm Save').toBe(false)
+  })
+
+  it('disables Save while nothing is drafted, and neutralises its filter', async () => {
+    // `.v2-btn-primary:hover` sets `filter: brightness(1.22)` with no `:disabled` guard
+    // (app-layer.css:213), so a disabled Save brightens under the cursor and reads enabled.
+    // There is NO disabled reason: the only condition is "nothing settled yet", which is
+    // self-evident, and both shipped precedents disable without one.
+    const w = writing(AMBIGUOUS_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const save = saveButton()
+    expect(save, 'the screen renders no Save button').toBeTruthy()
+    expect(save!.textContent, 'the Save control is unlabelled').toBe(SAVE)
+    expect(save!.disabled, 'Save is pressable with an empty draft').toBe(true)
+    expect(save!.style.filter, 'a disabled Save still brightens on hover and reads enabled').toBe('none')
+    expect(save!.hasAttribute('title'), 'the Save control hides something in a tooltip').toBe(false)
+  })
+
+  it('sends one POST per drafted field in vocabulary order, and keeps what did not commit', async () => {
+    // Two fields typed, the first accepted and the second refused with a sentence that appears
+    // in no SPA constant. A status->copy table cannot render it, and a run that fires both
+    // POSTs in parallel cannot promise the order the append-only table records them in.
+    const REFUSAL = 'the invoice refused this value'
+    const w = writing(mkDetail({ fields: AMBIGUOUS_JOB.fields }), async (url) => {
+      if (url.includes('/fields/subtotal/')) return mkCorrectionResponse('subtotal', '1,111.00', 'typed')
+      throw new ApiError('http', REFUSAL, 400)
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const subtotal = inputOf('subtotal')
+    const total = inputOf('total')
+    expect(subtotal && total, 'the pane renders no inputs — every claim below is vacuous').toBeTruthy()
+
+    fireEvent.change(subtotal as HTMLInputElement, { target: { value: '1,111.00' } })
+    fireEvent.change(total as HTMLInputElement, { target: { value: '2,222.00' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const posted = writes(w)
+    expect(
+      posted.map((c) => c.url.split('/fields/')[1]?.split('/')[0]),
+      'the POSTs do not follow the vocabulary order the person reads',
+    ).toEqual(['subtotal', 'total'])
+    expect(posted.every((c) => c.method === 'POST'), 'a correction was sent with the wrong verb').toBe(true)
+
+    // The committed half comes back from the server; the refused one keeps the person's own
+    // typing, because it is not the screen's to discard.
+    expect(inputOf('total')!.value, 'the refused field lost the typing nobody accepted').toBe('2,222.00')
+    expect(
+      screen.queryByTestId('extraction-write-error')?.textContent,
+      "the server's own sentence was not rendered verbatim",
+    ).toBe(REFUSAL)
+  })
+
+  it('re-reads after a write and never blanks while it does', async () => {
+    // `asyncReducer`'s start arm returns `{ status: 'loading', data: null }` and the shell
+    // renders `<Loading/>` on `data === null`, so a `detail.run()` re-read unmounts BOTH panes,
+    // re-fetches every page image and drops the canvas scroll. A run() implementation PASSES
+    // the second-GET clause and fails the never-blank one — that pair is this row's whole point.
+    const w = writing(AMBIGUOUS_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const before = w.calls().filter((c) => c.method === 'GET').length
+    expect(before, 'the screen never read the detail — the count below is vacuous').toBeGreaterThan(0)
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip').toBe(3)
+    fireEvent.click(chips[1])
+    await flush()
+
+    let blanked = false
+    for (let i = 0; i < 8; i += 1) {
+      await act(async () => {
+        if (i === 0) fireEvent.click(saveButton() as HTMLElement)
+        await Promise.resolve()
+      })
+      if (screen.queryByTestId('extraction-fields') === null) blanked = true
+      if (document.querySelector(LOADING_SPINNER) !== null) blanked = true
+    }
+    await flush()
+
+    expect(
+      w.calls().filter((c) => c.method === 'GET').length,
+      'the screen never re-read the detail, so the settled state on screen is the client’s guess',
+    ).toBeGreaterThan(before)
+    expect(blanked, 'the re-read unmounted both panes and threw away the canvas scroll').toBe(false)
+  })
+
+  it('drafts an Undo and posts one undone correction on Save, never a DELETE', async () => {
+    const w = writing(CORRECTED_JOB, async () => mkCorrectionResponse('total', '1,500.00', 'undone'))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const undo = screen.queryByTestId('extraction-undo-total')
+    expect(undo, 'the corrected field offers no way back — every claim below is vacuous').toBeTruthy()
+
+    fireEvent.click(undo as HTMLElement)
+    await flush()
+    expect(writes(w), 'Undo wrote to the register before anyone pressed Save').toEqual([])
+
+    // The artboard's own draft rule (`:634`): the value resets before Save, not after it.
+    expect(inputOf('total')!.value, 'the drafted undo still shows the value it is about to discard').toBe('1000.00')
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const posted = writes(w)
+    expect(posted, 'Save sent no correction for the drafted undo').toHaveLength(1)
+    expect((posted[0].body as { method?: string }).method, 'the undo was recorded as some other method').toBe('undone')
+    expect(posted[0].url, 'the undo was posted to another field').toContain('/fields/total/corrections')
+
+    // Vacuous on its own; non-vacuous only because the clause above proves a request was made.
+    expect(
+      w.calls().map((c) => c.method),
+      'a correction was deleted; the table is append-only and an undo is a new row',
+    ).not.toContain('DELETE')
   })
 })

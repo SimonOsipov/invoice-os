@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { ApiError } from '@invoice-os/api-client'
 
 import {
+  applyDraft,
   correctedMarker,
   docMetaLine,
   fetchPageImage,
@@ -20,9 +21,18 @@ import {
   highlightStyle,
   pageFrameStyle,
   reasonPill,
+  regionPhrase,
+  savableCorrections,
   scrollRegionIntoView,
 } from './extractionReview'
-import type { ExtractionDetail, ExtractionDocument, ExtractionPage, ExtractionRegion } from './extractionReview'
+import type {
+  DraftEntries,
+  ExtractionDetail,
+  ExtractionDocument,
+  ExtractionFieldState,
+  ExtractionPage,
+  ExtractionRegion,
+} from './extractionReview'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -763,5 +773,212 @@ describe('correctedMarker', () => {
   it('returns null for an uncorrected field', () => {
     // What lets the cell branch on the return value alone rather than re-testing `corrected`.
     expect(correctedMarker(null, mkRegion({ page: 4 }))).toBeNull()
+  })
+})
+
+// -- EXTR-12-07. The shared draft, and the phrase both the chip and the was-line read --------
+//
+// Written RED against stubs that answer one fixed wrong value each: `regionPhrase` -> 'page 0'
+// (never right: the page CHECK is `page >= 1`), `applyDraft` -> every field rewritten, and
+// `savableCorrections` -> one request for a field named 'no field yet'.
+
+function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
+  return {
+    name: 'total',
+    value: '1000.00',
+    region: mkRegion({ page: 2 }),
+    reason: '',
+    alternatives: [],
+    corrected: null,
+    ...o,
+  }
+}
+
+describe('regionPhrase', () => {
+  it('names the page, and is null without a region', () => {
+    // Never page 1 in the fixture: a hardcoded 'page 1' would pass on it. Two different pages,
+    // so a phrase that reads any region's page but the field's own also fails.
+    expect(regionPhrase(mkRegion({ page: 3 }))).toBe('page 3')
+    expect(regionPhrase(mkRegion({ page: 5 }))).toBe('page 5')
+
+    // An alternative the extractor found nowhere renders no sub-label at all, rather than a
+    // dangling 'page '.
+    expect(regionPhrase(null), 'a region-less candidate claimed a page').toBeNull()
+  })
+
+  it('is the same phrase correctedMarker already states for a pointed correction', () => {
+    // The extraction's own proof: the pointed was-line is `Taken from ` + this phrase, and
+    // correctedMarker's shipped rows stay green byte-for-byte because nothing else moved.
+    expect(correctedMarker({ method: 'pointed', was: null, where: null }, mkRegion({ page: 3 }))).toEqual({
+      label: 'YOU POINTED THIS OUT',
+      was: `Taken from ${regionPhrase(mkRegion({ page: 3 }))}`,
+    })
+  })
+})
+
+describe('applyDraft', () => {
+  it('lays a typed value over the wire and claims no correction', () => {
+    // A drafted field must not say YOU CHANGED THIS: nothing has been recorded, and the copy
+    // table has no pending string. Its reason and its region are equally untouched -- a draft
+    // is the user's own text echoed back, not a new reading.
+    const fields = [mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 2 }), reason: 'inconsistent' })]
+    const entries: DraftEntries = { total: { kind: 'typed', value: '9,999.00', region: null } }
+
+    const out = applyDraft(fields, entries)
+
+    expect(out, 'the draft dropped or duplicated a field').toHaveLength(1)
+    expect(out[0].value, 'the typed draft never reached the field').toBe('9,999.00')
+    expect(out[0].corrected, 'a drafted field claims a correction the server has not accepted').toBeNull()
+    expect(out[0].reason, 'the draft cleared the reason the extractor reported').toBe('inconsistent')
+    expect(out[0].region?.page ?? null, 'a typed draft moved the highlight').toBe(2)
+  })
+
+  it("moves a chosen field's region to that alternative's own box", () => {
+    // Three distinct pages, so neither keeping the decided region (1) nor taking the FIRST
+    // alternative (3) can pass. This is Core AC 7's both-ways binding: the highlight follows
+    // the chip before anything is saved.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        region: mkRegion({ page: 1 }),
+        reason: 'ambiguous',
+        alternatives: [
+          { value: '2026-01-10', region: mkRegion({ page: 3 }) },
+          { value: '2026-10-01', region: mkRegion({ page: 5 }) },
+        ],
+      }),
+    ]
+    const entries: DraftEntries = {
+      issue_date: { kind: 'chosen', value: '2026-10-01', region: mkRegion({ page: 5 }) },
+    }
+
+    const out = applyDraft(fields, entries)
+
+    expect(out[0].value, 'the chosen candidate never reached the field').toBe('2026-10-01')
+    expect(out[0].region?.page ?? null, "the highlight stayed on the reading the chip replaced").toBe(5)
+    expect(out[0].corrected, 'a drafted chip claims a correction the server has not accepted').toBeNull()
+  })
+
+  it("resets an undone field to the extractor's reading and drops the marker", () => {
+    // The artboard's own draft rule (`Recognition Review.dc.html:634`): an undo resets the
+    // rendered value BEFORE any Save. `corrected.was` is the reading the correction superseded
+    // and it is always present while an Undo control exists, so nothing here is invented.
+    const fields = [
+      mkField({
+        name: 'total',
+        value: '1,500.00',
+        corrected: { method: 'typed', was: '1000.00', where: null },
+      }),
+    ]
+    const entries: DraftEntries = { total: { kind: 'undone', value: '1,500.00', region: null } }
+
+    const out = applyDraft(fields, entries)
+
+    // Not the entry's own value: an undo posts a value the server ignores, and the screen must
+    // show what the register is about to hold.
+    expect(out[0].value, 'the drafted undo still shows the value it is about to discard').toBe('1000.00')
+    expect(out[0].corrected, 'a drafted undo still renders its marker, its was-line and its Undo').toBeNull()
+  })
+
+  it('empties an undone field the extractor never read', () => {
+    // buyer_tin and vat carry a NULL rank-0 reading on the deployed mock, and the server writes
+    // the EMPTY STRING for them. The artboard's `f.was || value` would keep the typed value on
+    // screen instead -- a deliberate deviation, because it reopens the screen/register
+    // divergence the server-side undo exists to close.
+    const fields = [
+      mkField({
+        name: 'buyer_tin',
+        value: '31775208-0003',
+        region: null,
+        corrected: { method: 'typed', was: null, where: null },
+      }),
+    ]
+    const entries: DraftEntries = { buyer_tin: { kind: 'undone', value: '31775208-0003', region: null } }
+
+    const out = applyDraft(fields, entries)
+
+    expect(out[0].value, "the undo kept a value the extractor never read and the register will not hold").toBe('')
+    expect(out[0].corrected, 'a drafted undo still renders its marker, its was-line and its Undo').toBeNull()
+  })
+
+  it('leaves a field with no entry byte-identical', () => {
+    // A do-nothing PASSES this row, and it is kept anyway: it catches the opposite mutation, a
+    // mapper that rewrites every field. Stated rather than counted as coverage.
+    const untouched = [
+      mkField({ name: 'subtotal', value: '950.00', reason: 'inconsistent' }),
+      mkField({ name: 'vat', value: null, region: null, reason: 'unreadable' }),
+    ]
+    const fields = [mkField({ name: 'total', value: '1000.00' }), ...untouched]
+    const entries: DraftEntries = { total: { kind: 'typed', value: '2,000.00', region: null } }
+
+    const out = applyDraft(fields, entries)
+
+    expect(out.map((f) => f.name), 'the draft reordered the wire').toEqual(['total', 'subtotal', 'vat'])
+    expect(out[1], 'a field nobody drafted was rewritten').toEqual(untouched[0])
+    expect(out[2], 'a field nobody drafted was rewritten').toEqual(untouched[1])
+  })
+})
+
+describe('savableCorrections', () => {
+  it('emits one request per entry, in HeaderFields order', () => {
+    // The entries are inserted in the REVERSE of the vocabulary order, so `Object.keys` alone
+    // answers total, vat, issue_date and fails here -- the order clause is not a tie.
+    const fields = [
+      mkField({ name: 'issue_date', value: '2026-01-01' }),
+      mkField({ name: 'vat', value: '75.00' }),
+      mkField({ name: 'total', value: '1000.00' }),
+    ]
+    const entries: DraftEntries = {
+      total: { kind: 'typed', value: '2,000.00', region: null },
+      vat: { kind: 'typed', value: '150.00', region: null },
+      issue_date: { kind: 'chosen', value: '2026-01-10', region: mkRegion({ page: 3 }) },
+    }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(out.map((p) => p.field), 'the POSTs do not follow the order the person reads').toEqual([
+      'issue_date',
+      'vat',
+      'total',
+    ])
+    expect(out.map((p) => p.body.method)).toEqual(['chosen', 'typed', 'typed'])
+    expect(out.map((p) => p.body.value)).toEqual(['2026-01-10', '150.00', '2,000.00'])
+
+    // A non-pointed request carrying a region is a 400 on the deployed build
+    // (msgRegionDisagrees), even when the draft knows the box the chip came from.
+    for (const p of out) {
+      expect(p.body.region, `${p.field} sent a region on a ${p.body.method} correction`).toBeNull()
+      expect(p.body.anchor_label, `${p.field} sent an anchor label`).toBe('')
+    }
+
+    expect(savableCorrections(fields, {}), 'an empty draft owes a POST').toEqual([])
+  })
+
+  it('drops an entry equal to the value already on the wire', () => {
+    // diffEditInput's rule (invoices.ts): a no-op correction recorded as a human decision is a
+    // lie the append-only table cannot take back.
+    const fields = [mkField({ name: 'subtotal', value: '950.00' }), mkField({ name: 'total', value: '1000.00' })]
+    const entries: DraftEntries = {
+      subtotal: { kind: 'typed', value: '950.00', region: null },
+      total: { kind: 'typed', value: '1,500.00', region: null },
+    }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(out.map((p) => p.field), 'a no-op correction was recorded as a human decision').toEqual(['total'])
+  })
+
+  it('keeps an undone entry even when its value equals the wire', () => {
+    // The no-op guard is about the VALUE; an undo is a decision about the CORRECTION, and the
+    // server ignores the value it carries. A guard keyed on the value alone swallows it.
+    const fields = [mkField({ name: 'total', value: '1,500.00', corrected: { method: 'typed', was: '1000.00', where: null } })]
+    const entries: DraftEntries = { total: { kind: 'undone', value: '1,500.00', region: null } }
+
+    const out = savableCorrections(fields, entries)
+
+    expect(out.map((p) => p.field), 'the undo was dropped as a no-op').toEqual(['total'])
+    expect(out[0].body.method).toBe('undone')
+    expect(out[0].body.value, 'an undo posts a blank value and the boundary 400s it').not.toBe('')
   })
 })

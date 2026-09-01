@@ -3563,7 +3563,7 @@ test('EXTR12-E2E-02 (AC-7): the corrected marker sits inside the value control, 
 
   const cell = page.getByTestId('extraction-field-total')
   await cell.click()
-  await expect(cell, 'the corrected cell did not take the selection').toHaveAttribute('aria-pressed', 'true')
+  await expect(cell, 'the corrected cell did not take the selection').toHaveAttribute('aria-current', 'true')
 
   const control = page.getByTestId('extraction-control-total')
   const marker = page.getByTestId('extraction-marker-total')
@@ -3621,6 +3621,135 @@ test('EXTR12-E2E-02 (AC-7): the corrected marker sits inside the value control, 
 
   await testInfo.attach('extraction-corrected-marker.json', {
     body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-12-07 · the retired badge and the chip row, on the deployed build ---
+//
+// Neither row can execute before EXTR-12-09 marks the PR ready: `dev-env.yml` gates deploy and
+// E2E on `pull_request.draft == false`. The local oracle is `pnpm -r typecheck` plus
+// `playwright test --list`.
+
+test('EXTR12-E2E-03 (AC-7): the document toolbar no longer claims the screen is read-only', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-07 read-only')
+  await openExtractionReview(page)
+
+  // The two-element floor is load-bearing: a bare toHaveCount(0) is green on a screen that
+  // failed to render at all, which is how an absence row turns into a false green.
+  const toolbar = page.getByTestId('extraction-toolbar')
+  await expect(toolbar, 'the document toolbar did not render -- the absence below is vacuous').toBeVisible()
+  await expect(
+    page.getByTestId('extraction-zoom-100'),
+    'the toolbar rendered no zoom control -- the absence below is vacuous',
+  ).toBeVisible()
+
+  await expect(page.getByTestId('extraction-read-only'), 'the toolbar still carries the READ ONLY badge').toHaveCount(0)
+  const toolbarText = await toolbar.innerText()
+  expect(toolbarText.length, 'the toolbar rendered no text -- the absence below is vacuous').toBeGreaterThan(0)
+  expect(toolbarText, 'the badge lost its testid but kept its copy').not.toContain('READ ONLY')
+
+  // The claim is false because the fields beside it are editable now. Asserted here so
+  // "the badge is gone" cannot pass on a screen that also lost its controls.
+  await expect(
+    page.getByTestId('extraction-input-total'),
+    'the badge went and no editable control replaced it',
+  ).toBeVisible()
+
+  await testInfo.attach('extraction-read-only-retired.json', {
+    body: JSON.stringify({ toolbarText }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_WIDTHS', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-07 chips')
+  const detail = await openExtractionReview(page)
+
+  // The field name and the chip count come OFF THE WIRE, never out of mock.go: a fixture change
+  // that dropped the alternatives would otherwise leave this row measuring one chip and calling
+  // it even.
+  const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
+  expect(ambiguous, 'this document reported no ambiguous field -- there is no chip row to measure').toBeTruthy()
+  expect(
+    ambiguous!.alternatives.length,
+    `${ambiguous!.name} carries ${ambiguous!.alternatives.length} alternative(s) -- fewer than two is not a row to share`,
+  ).toBeGreaterThanOrEqual(2)
+
+  const cell = page.getByTestId(`extraction-field-${ambiguous!.name}`)
+  const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
+  await expect(cell, 'the ambiguous field rendered no cell').toBeVisible()
+  // W-3: the decided reading is itself a chip, so the row carries N + 1.
+  await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
+
+  type Measured = { width: number; cell: Rect; chips: Rect[]; rowGaps: { left: number; right: number } }
+  const measured: Measured[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a floor strands only what the window is
+    // too narrow for, rather than every width after it.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const c = await cell.boundingBox()
+        const boxes = await chips.all()
+        const rects = await Promise.all(boxes.map((b) => b.boundingBox()))
+        return { c, rects }
+      }, `chip row geometry at ${width}px`)
+
+      expect(m.c, `the cell must render at ${width}px`).toBeTruthy()
+      expect(m.rects.every(Boolean), `every chip must render at ${width}px`).toBe(true)
+      const rects = m.rects as Rect[]
+      for (const [i, r] of rects.entries()) {
+        // Non-empty first: a rect collapsed on either axis is contained by anything and clears
+        // everything, so both claims below pass vacuously on it.
+        expect(r.width, `chip ${i} has no width at ${width}px`).toBeGreaterThan(0)
+        expect(r.height, `chip ${i} has no height at ${width}px`).toBeGreaterThan(0)
+      }
+
+      // Evenly: `flex: 1; min-width: 0` on every chip. A fixed-width chip fails at 1280 first.
+      for (const [i, r] of rects.entries()) {
+        expect(
+          Math.abs(r.width - rects[0].width),
+          `chip ${i} is ${r.width}px beside chip 0's ${rects[0].width}px at ${width}px -- the row does not share evenly`,
+        ).toBeLessThanOrEqual(1)
+      }
+
+      // Inside its column on BOTH edges. The cell is a grid item with `min-width: 0`, so its
+      // own border box stays pinned however far its content spills -- these gaps are what
+      // notice the spill.
+      const first = rects[0]
+      const last = rects[rects.length - 1]
+      const rowRect = { x: first.x, width: last.x + last.width - first.x }
+      const g = gaps(rowRect, m.c as Rect)
+      expect(g.left, `the chip row passes its column's left edge by ${-g.left}px at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the chip row passes its column's right edge by ${-g.right}px at ${width}px`).toBeGreaterThanOrEqual(-1)
+
+      measured.push({ width, cell: m.c as Rect, chips: rects, rowGaps: g })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // Mirrors the sweep-length guard every sibling row carries, so a loop that ran zero times
+  // cannot report clear.
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([
+    ...WIDE_WIDTHS,
+  ])
+
+  await testInfo.attach('extraction-chip-row.json', {
+    body: JSON.stringify({ field: ambiguous!.name, candidates: ambiguous!.alternatives.length + 1, measured }, null, 2),
     contentType: 'application/json',
   })
 
@@ -3894,13 +4023,23 @@ const FIDELITY: FidelityRow[] = [
   { element: 'extraction-toolbar', property: 'row-gap', artboard: '11px', source: ':36', expected: '11px', deviation: null },
   { element: 'extraction-toolbar', property: 'background-color', artboard: BG_2_TOKEN, source: ':36', expected: BG_2_TOKEN, deviation: null },
 
-  // The READ ONLY pill. `font-size: 9px; letter-spacing: 0.09em; border-radius: 999px`.
+  // The READ ONLY pill's five rows are RETIRED with the badge itself (EXTR-12-07, AC-7), and
+  // replaced -- not dropped -- by the element that supersedes the claim they were about: the
+  // candidate chip, which is what the toolbar's "read only" is now false for. The chip's radius
+  // is also the one the `.pf-chip` class would destroy (`border-radius: var(--radius-pill)
+  // !important`), so these four are the deployed half of the unit-level class ban.
+  // `extraction-chip-issue_date-0` is the DECIDED reading's chip: mockDefaultResult reports
+  // issue_date ambiguous with two alternatives, so the row has three chips on this build.
+  { element: 'extraction-chip-issue_date-0', property: 'border-top-left-radius', artboard: '10px', source: ':315', expected: '10px', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'border-top-right-radius', artboard: '10px', source: ':315', expected: '10px', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'border-bottom-right-radius', artboard: '10px', source: ':315', expected: '10px', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'border-bottom-left-radius', artboard: '10px', source: ':315', expected: '10px', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'padding-top', artboard: '8px', source: ':315', expected: '8px', deviation: null },
+  { element: 'extraction-chip-issue_date-0', property: 'padding-left', artboard: '11px', source: ':315', expected: '11px', deviation: null },
+
+  // The chip's mono `where` sub-label. `font-size: 8.5px; letter-spacing: 0.05em`.
   // letter-spacing is asserted separately, in ems -- see below.
-  { element: 'extraction-read-only', property: 'font-size', artboard: '9px', source: ':43', expected: '9px', deviation: null },
-  { element: 'extraction-read-only', property: 'border-top-left-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
-  { element: 'extraction-read-only', property: 'border-top-right-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
-  { element: 'extraction-read-only', property: 'border-bottom-right-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
-  { element: 'extraction-read-only', property: 'border-bottom-left-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-chip-where-issue_date-0', property: 'font-size', artboard: '8.5px', source: ':317', expected: '8.5px', deviation: null },
 ]
 
 // EXCLUDED BY NAME, with the reason, per this subtask's own AC. Both are elements this story
@@ -4056,16 +4195,17 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   ).toBe(frame!.marginRight)
   if (entryViewport) await page.setViewportSize(entryViewport)
 
-  // 2. `letter-spacing: 0.09em` at `font-size: 9px` (`:43`). Chrome computes it to px, so a
-  //    string compare would pin a rounding rather than the artboard's ratio. 0.02px on 0.81px
-  //    is two orders finer than any real drift (the next tracking step in this file is 0.04em).
-  const pill = measured.out['extraction-read-only']!
-  const pillFontPx = parseFloat(pill['font-size'])
-  const pillTrackPx = parseFloat(pill['letter-spacing'])
-  expect(Number.isFinite(pillFontPx) && Number.isFinite(pillTrackPx), 'the pill resolved no font metrics').toBe(true)
+  // 2. `letter-spacing: 0.05em` at `font-size: 8.5px` (`:317`). Chrome computes it to px, so a
+  //    string compare would pin a rounding rather than the artboard's ratio. The subject moved
+  //    from the retired READ ONLY pill to the chip's `where` sub-label, which is the em-declared
+  //    tracking this screen still has.
+  const where = measured.out['extraction-chip-where-issue_date-0']!
+  const whereFontPx = parseFloat(where['font-size'])
+  const whereTrackPx = parseFloat(where['letter-spacing'])
+  expect(Number.isFinite(whereFontPx) && Number.isFinite(whereTrackPx), 'the chip sub-label resolved no font metrics').toBe(true)
   expect(
-    Math.abs(pillTrackPx - 0.09 * pillFontPx),
-    `the READ ONLY pill tracks ${pillTrackPx}px on ${pillFontPx}px, and the artboard's 0.09em is ${(0.09 * pillFontPx).toFixed(3)}px`,
+    Math.abs(whereTrackPx - 0.05 * whereFontPx),
+    `the chip sub-label tracks ${whereTrackPx}px on ${whereFontPx}px, and the artboard's 0.05em is ${(0.05 * whereFontPx).toFixed(3)}px`,
   ).toBeLessThanOrEqual(0.02)
 
   // -- The exclusions, each proved to exclude something real --------------------------------
@@ -4097,7 +4237,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
           frameWidth: frame?.frameWidth ?? null,
           columnWidth: frame?.padWidth ?? null,
         },
-        readOnlyTracking: { fontSizePx: pillFontPx, letterSpacingPx: pillTrackPx, artboardEm: 0.09 },
+        chipWhereTracking: { fontSizePx: whereFontPx, letterSpacingPx: whereTrackPx, artboardEm: 0.05 },
         metaLine: meta,
       },
       null,

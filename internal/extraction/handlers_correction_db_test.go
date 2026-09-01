@@ -753,3 +753,138 @@ func TestRLS_CorrectionHandsTheInvoiceSeamThePostedMethod(t *testing.T) {
 		})
 	}
 }
+
+// --- EXTR-12-07: what an undo writes to the invoice --------------------------------------
+
+const (
+	// The extractor's own rank-0 reading for total, distinct from cxTotalBefore (what the
+	// invoice starts at) and cxTotalAfter (what the caller posts), so no shortcut passes.
+	cxReadingTotal = "777.00"
+	// The rank-1 alternative, the same field's reading on ANOTHER job, and a SECOND field's
+	// reading on this one. A lookup that forgets candidate_rank, extraction_job_id or
+	// field_name lands on one of these instead.
+	cxAltTotal      = "888.00"
+	cxOtherJobTotal = "999.00"
+	cxReadingSub    = "666.00"
+)
+
+// cxReading seeds one extraction_field_results row. A nil value is the shape mockDefaultResult
+// gives buyer_tin and vat -- a field the extractor never read.
+func cxReading(t *testing.T, ctx context.Context, tenantID, jobID, field string, rank int, value *string) {
+	t.Helper()
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO extraction_field_results (tenant_id, extraction_job_id, field_name, value, candidate_rank)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		tenantID, jobID, field, value, rank); err != nil {
+		t.Fatalf("seed %s reading rank %d for job %s: %v", field, rank, jobID, err)
+	}
+}
+
+func cxStr(s string) *string { return &s }
+
+// cxJobIn seeds a second extraction job inside a tenant that already has one. No UNIQUE over
+// (tenant_id, document_id), so the document is shared deliberately.
+func cxJobIn(t *testing.T, ctx context.Context, tenantID, documentID string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, tenantID, documentID, stExtractor, stExtractorVersion); err != nil {
+		t.Fatalf("seed a second extraction job: %v", err)
+	}
+	return id
+}
+
+// An undo is a full reset to what the extractor read, and the register has to agree with the
+// screen. mergeCorrections already resets the SCREEN to the rank-0 reading and ignores the
+// undone row's own value (reader.go), so applying the POSTed value to the invoice leaves the
+// two disagreeing: after A -> typed B -> typed C -> Undo the screen says A and the invoice
+// holds C. The typed arm is the control -- an applier that ALWAYS wrote the reading would
+// satisfy the undo arm and fail here.
+func TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		want   string
+	}{
+		{"undone", cxReadingTotal},
+		{"typed", cxTotalAfter},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			ctx := t.Context()
+			reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+			t.Cleanup(func() { rdaPurge(t, tenantID) })
+			entityID := cxEntity(t, ctx, tenantID)
+			invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-07-UNDO-"+jobID[:8], "draft")
+
+			cxReading(t, ctx, tenantID, jobID, "total", 0, cxStr(cxReadingTotal))
+			cxReading(t, ctx, tenantID, jobID, "total", 1, cxStr(cxAltTotal))
+			cxReading(t, ctx, tenantID, jobID, "subtotal", 0, cxStr(cxReadingSub))
+			cxReading(t, ctx, tenantID, cxJobIn(t, ctx, tenantID, documentID), "total", 0, cxStr(cxOtherJobTotal))
+
+			var seen cxSeamCall
+			w := cxServe(t, reqCtx, jobID, "total", corBody(cxTotalAfter, tc.method, ""),
+				cxRecorder(&seen, true), cxAuditor(nil))
+
+			if w.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+			}
+			if seen.calls != 1 {
+				t.Fatalf("the invoice seam ran %d time(s), want 1 -- every claim below is vacuous", seen.calls)
+			}
+			if seen.value != tc.want {
+				t.Errorf("the invoice seam was handed %q for a %q correction, want %q -- the register would hold a value the screen has stopped showing",
+					seen.value, tc.method, tc.want)
+			}
+			if got := cxTotal(t, ctx, invoiceID); got != tc.want {
+				t.Errorf("invoices.total = %s after a %q correction, want %s", got, tc.method, tc.want)
+			}
+			// The row keeps what the caller sent: the correction table is the append-only record
+			// of a human action, and the server simply does not trust that value for the invoice.
+			if stored := cxCorrectionValue(t, ctx, jobID); stored != cxTotalAfter {
+				t.Errorf("the correction row carries value %q, want the posted %q -- the row records the action, not the applied value", stored, cxTotalAfter)
+			}
+		})
+	}
+}
+
+// mockDefaultResult gives buyer_tin and vat a NULL rank-0 value, so two of the five undoable
+// deployed fields have no reading to restore -- and buyer_tin is the field a human types into
+// first. The screen resets to "no value"; the invoice must agree, and "" is the only
+// representable no-value through the edit path. The boundary's blank-value 400 gates the
+// REQUEST, not the applied value, which is why the POST below still carries one.
+func TestRLS_UndoOnAFieldTheExtractorNeverReadAppliesTheEmptyString(t *testing.T) {
+	const posted = "31775208-0003"
+
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-07-UNDO-NULL", "draft")
+
+	// The reading EXISTS and its value is NULL -- not the same as no row at all, and the two
+	// must not be conflated: a job with no results row is a job that was never read.
+	cxReading(t, ctx, tenantID, jobID, "buyer_tin", 0, nil)
+	cxReading(t, ctx, tenantID, jobID, "total", 0, cxStr(cxReadingTotal))
+
+	var seen cxSeamCall
+	w := cxServe(t, reqCtx, jobID, "buyer_tin", corBody(posted, "undone", ""),
+		cxRecorder(&seen, false), cxAuditor(nil))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if seen.calls != 1 {
+		t.Fatalf("the invoice seam ran %d time(s), want 1 -- every claim below is vacuous", seen.calls)
+	}
+	if seen.field != "buyer_tin" || seen.method != extraction.MethodUndone {
+		t.Fatalf("the invoice seam was handed (%q, %q), want (%q, %q)", seen.field, seen.method, "buyer_tin", extraction.MethodUndone)
+	}
+	if seen.value != "" {
+		t.Errorf("the invoice seam was handed %q for an undo on a field the extractor never read, want the empty string -- the register would keep a value the screen has stopped showing",
+			seen.value)
+	}
+	if stored := cxCorrectionValue(t, ctx, jobID); stored != posted {
+		t.Errorf("the correction row carries value %q, want the posted %q", stored, posted)
+	}
+}

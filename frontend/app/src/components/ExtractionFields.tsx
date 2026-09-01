@@ -6,7 +6,7 @@
 import type { CSSProperties } from 'react'
 
 import { correctedMarker, fieldLabel, fieldNote, reasonPill } from '../lib/extractionReview'
-import type { ExtractionFieldState } from '../lib/extractionReview'
+import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
 
 const TITLE = 'The invoice as it will be filed'
 const NO_REGION = 'NO REGION'
@@ -124,6 +124,9 @@ const EMPTY_PANEL: CSSProperties = {
   color: 'var(--fg-3)',
 }
 
+// draft and the three write callbacks are the seam EXTR-12-07's controls hang off. Optional
+// while the cell still renders a read-only value span, so ExtractionReview needs no change to
+// widen it.
 export function ExtractionFields({
   fields,
   selected,
@@ -131,7 +134,11 @@ export function ExtractionFields({
 }: {
   fields: ExtractionFieldState[]
   selected: string | null
+  draft?: DraftEntries
   onSelect: (name: string) => void
+  onType?: (name: string, value: string) => void
+  onChoose?: (name: string, candidate: ExtractionCandidate) => void
+  onUndo?: (name: string) => void
 }) {
   const supplier = fields.some((f) => SUPPLIER_FIELDS.includes(f.name))
 

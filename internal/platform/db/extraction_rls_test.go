@@ -3658,3 +3658,75 @@ func assertCorrectionCheckFires(t *testing.T, err error, what, constraint string
 			"testing its subject", what, name, constraint)
 	}
 }
+
+// EFC-09: the three bound CHECKs the AC suite leaves untouched — page is 1-based, field_name
+// is 1..128, actor is 1..255. Each case varies one column and holds the rest legal, and each
+// bound is probed on both sides, so an off-by-one in either direction reds.
+func TestRLS_ExtractionFieldCorrectionsLengthAndPageBounds(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFC-09/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_corrections WHERE id = ANY($1)`, probes)
+	}()
+	// page travels with method='pointed' and a complete box, so _pointed_has_region and
+	// _region_complete are satisfied and page_check is the only CHECK left to fire.
+	insert := func(field, actor string, page *int) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		method, r := efcMethod, efrRegion{}
+		if page != nil {
+			method, r = "pointed", efrBox()
+			r.page = page
+		}
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			var noAnchor *string
+			_, err := tx.Exec(ctx, efcInsert, id, h.tenantA, jobA, field, efcValue, method,
+				r.page, r.x0, r.y0, r.x1, r.y1, noAnchor, actor)
+			return err
+		})
+	}
+
+	// The accepted halves, first: every refusal below is about the bound, not the column.
+	for _, c := range []struct {
+		what  string
+		field string
+		actor string
+		page  *int
+	}{
+		{"field_name at the 128-char ceiling", strings.Repeat("f", 128), efcActor, nil},
+		{"actor at the 255-char ceiling", efcField, strings.Repeat("a", 255), nil},
+		{"page 1, the lowest legal page", efcField, efcActor, efrPtr(1)},
+	} {
+		err := insert(c.field, c.actor, c.page)
+		if failIfUndefinedFieldCorrections(t, "INSERT with "+c.what, err) {
+			return
+		}
+		if err != nil {
+			t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+		}
+	}
+
+	for _, c := range []struct {
+		what       string
+		field      string
+		actor      string
+		page       *int
+		constraint string
+	}{
+		{"an empty field_name", "", efcActor, nil, "extraction_field_corrections_field_name_check"},
+		{"a field_name one over the ceiling", strings.Repeat("f", 129), efcActor, nil, "extraction_field_corrections_field_name_check"},
+		{"an empty actor", efcField, "", nil, "extraction_field_corrections_actor_check"},
+		{"an actor one over the ceiling", efcField, strings.Repeat("a", 256), nil, "extraction_field_corrections_actor_check"},
+		{"page 0, one below the lowest legal page", efcField, efcActor, efrPtr(0), "extraction_field_corrections_page_check"},
+		{"a negative page", efcField, efcActor, efrPtr(-1), "extraction_field_corrections_page_check"},
+	} {
+		assertCorrectionCheckFires(t, insert(c.field, c.actor, c.page), c.what, c.constraint)
+	}
+}

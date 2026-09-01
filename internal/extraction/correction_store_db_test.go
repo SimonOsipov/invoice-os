@@ -5,7 +5,11 @@ package extraction_test
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/token"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -169,5 +173,175 @@ func TestExtractionCorrectionStore_LatestPerFieldReturnsOneRowPerField(t *testin
 	}
 	if got[0].Value != "INV-1" {
 		t.Errorf("invoice_number value = %q, want %q", got[0].Value, "INV-1")
+	}
+}
+
+// The source the latest-per-field query is read out of, and the index it must lean on.
+const (
+	csStoreSource = "correction_store.go"
+	csLatestIndex = "extraction_field_corrections_tenant_job_field_seq_idx"
+)
+
+// AC-6's query half. The tied-created_at case above cannot reach it: a tie is settled by
+// whatever row order the plan happens to feed a stable sort, so ORDER BY created_at DESC
+// reads as correct under an index scan and incorrect under a seq scan. Here the two orderings
+// DISAGREE — the row that supersedes carries the EARLIER timestamp — so only seq answers.
+func TestExtractionCorrectionStore_HigherSeqWinsAnEarlierCreatedAt(t *testing.T) {
+	ctx := t.Context()
+	h := stRequire(t)
+	s := csStore(t)
+	tenantID, jobID := csJob(t, ctx)
+
+	if err := db.WithinTenantTx(ctx, h.app, tenantID, func(tx pgx.Tx) error {
+		for _, r := range []struct {
+			value     string
+			createdAt time.Time
+		}{
+			{"superseded", time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)},
+			{"current", time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+		} {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO extraction_field_corrections
+				     (tenant_id, extraction_job_id, field_name, value, method, actor, created_at)
+				 VALUES ($1, $2, 'total_amount', $3, 'typed', $4, $5)`,
+				tenantID, jobID, r.value, csActor, r.createdAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("write the disagreeing pair: %v", err)
+	}
+
+	// Without a genuine disagreement the assertion below is satisfied by either ordering.
+	var bySeq, byCreatedAt string
+	if err := h.super.QueryRow(ctx,
+		`SELECT (SELECT value FROM extraction_field_corrections
+		          WHERE extraction_job_id = $1 ORDER BY seq DESC LIMIT 1),
+		        (SELECT value FROM extraction_field_corrections
+		          WHERE extraction_job_id = $1 ORDER BY created_at DESC LIMIT 1)`,
+		jobID).Scan(&bySeq, &byCreatedAt); err != nil {
+		t.Fatalf("read back the disagreeing pair: %v", err)
+	}
+	if bySeq != "current" || byCreatedAt != "superseded" {
+		t.Fatalf("seq DESC picks %q and created_at DESC picks %q, want %q and %q — the pair does "+
+			"not disagree, so this test proves nothing", bySeq, byCreatedAt, "current", "superseded")
+	}
+
+	got, err := s.LatestPerField(ctx, tenantID, jobID)
+	if err != nil {
+		t.Fatalf("LatestPerField: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LatestPerField returned %d row(s) (%+v), want 1", len(got), got)
+	}
+	if got[0].Value != "current" {
+		t.Errorf("LatestPerField picked %q, want %q — the highest seq, never the latest created_at",
+			got[0].Value, "current")
+	}
+}
+
+// csLatestPerFieldSQL reads the query latestCorrectionsPerFieldTx actually issues out of the
+// source, so the EXPLAIN below cannot drift from a copy of it.
+func csLatestPerFieldSQL(t *testing.T) string {
+	t.Helper()
+	f, _ := mxParse(t, csStoreSource)
+
+	var sql string
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "latestCorrectionsPerFieldTx" {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			bl, ok := n.(*ast.BasicLit)
+			if ok && bl.Kind == token.STRING && strings.Contains(bl.Value, "DISTINCT ON") {
+				sql = strings.Trim(bl.Value, "`")
+			}
+			return true
+		})
+	}
+	if sql == "" {
+		t.Fatalf("%s: latestCorrectionsPerFieldTx issues no DISTINCT ON query, so this test has "+
+			"lost its subject", csStoreSource)
+	}
+	return sql
+}
+
+// AC-7's index half. The read's ORDER BY must be answerable by csLatestIndex's column order
+// alone; a Sort node means it no longer is. enable_seqscan=off is the only way to ask on a
+// table this small — on cost the planner would never choose the index. The Index Scan is
+// asserted first, or "no Sort" would also pass on a plan that never reached the index.
+func TestExtractionCorrectionStore_LatestPerFieldOrdersFromTheIndexWithoutASort(t *testing.T) {
+	ctx := t.Context()
+	h := stRequire(t)
+	s := csStore(t)
+	tenantID, jobID := csJob(t, ctx)
+
+	for _, c := range []extraction.Correction{
+		{FieldName: "total_amount", Value: "100.00", Method: extraction.MethodTyped, Actor: csActor},
+		{FieldName: "invoice_number", Value: "INV-1", Method: extraction.MethodChosen, Actor: csActor},
+		{FieldName: "total_amount", Value: "212.50", Method: extraction.MethodTyped, Actor: csActor},
+	} {
+		if _, err := s.Append(ctx, tenantID, jobID, c); err != nil {
+			t.Fatalf("Append %s=%s: %v", c.FieldName, c.Value, err)
+		}
+	}
+
+	var plan strings.Builder
+	if err := db.WithinTenantTx(ctx, h.app, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, "EXPLAIN (COSTS OFF) "+csLatestPerFieldSQL(t), tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return err
+			}
+			plan.WriteString(line + "\n")
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("explain the latest-per-field read: %v", err)
+	}
+
+	if !strings.Contains(plan.String(), "Index Scan using "+csLatestIndex) {
+		t.Fatalf("the plan does not scan %s, so the assertion below examines nothing:\n%s",
+			csLatestIndex, plan.String())
+	}
+	if strings.Contains(plan.String(), "Sort") {
+		t.Errorf("the plan sorts, so %s no longer answers ORDER BY field_name, seq DESC on its "+
+			"own:\n%s", csLatestIndex, plan.String())
+	}
+}
+
+// seq is a bigserial, not GENERATED ALWAYS, so a caller-supplied seq is accepted by the
+// database — total order rests on the writer never naming the column. The SELECT and
+// RETURNING clauses do name it, so only the INSERT's column list is the subject here.
+func TestExtractionCorrectionStore_TheInsertNeverNamesSeq(t *testing.T) {
+	f, fset := mxParse(t, csStoreSource)
+
+	var checked int
+	ast.Inspect(f, func(n ast.Node) bool {
+		bl, ok := n.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING || !strings.Contains(bl.Value, "INSERT INTO extraction_field_corrections") {
+			return true
+		}
+		checked++
+		cols, _, _ := strings.Cut(bl.Value, "VALUES")
+		if strings.Contains(cols, "seq") {
+			t.Errorf("%s: the INSERT names seq in its column list; a hand-supplied seq breaks the "+
+				"total order LatestPerField reads", fset.Position(bl.Pos()))
+		}
+		return true
+	})
+	if checked == 0 {
+		t.Fatalf("%s issues no INSERT INTO extraction_field_corrections, so this scan examined nothing",
+			csStoreSource)
 	}
 }

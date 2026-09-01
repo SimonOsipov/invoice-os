@@ -154,10 +154,19 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
       }
 
       if (write.current !== mine) return
+      // A save keeps only what it POSTED and did not commit -- that is the person's typing
+      // under a refusal. An entry savableCorrections never posted (a blank, a no-op) was not
+      // refused, so keeping it would leave applyDraft laying it over every later read: the
+      // cell would deny a value the register holds, with Save disabled and no gesture left to
+      // clear it. An entry typed while the POSTs were in flight is a different object, and is
+      // not this save's to judge either way.
+      const refused = new Set(posts.map((p) => p.field).filter((f) => !committed.includes(f)))
       setDraft((d) => {
         const held = d && d.jobId === jobId ? d.entries : {}
         const kept: DraftEntries = {}
-        for (const name of Object.keys(held)) if (!committed.includes(name)) kept[name] = held[name]
+        for (const name of Object.keys(held)) {
+          if (refused.has(name) || held[name] !== entries[name]) kept[name] = held[name]
+        }
         return { jobId, entries: kept }
       })
       setWriteError(refusal)

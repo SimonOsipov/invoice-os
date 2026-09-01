@@ -376,7 +376,7 @@ func newFieldCorrectedAuditor() extraction.RecordFieldCorrected {
 // crosses as one of the extraction sentinels so statusForErr maps it by identity; anything else
 // passes through raw and stays a 500 (TestNewInvoiceFieldApplier_MapsEachDomainError).
 func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoice {
-	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string) (string, error) {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string, _ extraction.CorrectionMethod) (string, error) {
 		in, err := invoiceEditFor(field, value)
 		if err != nil {
 			return "", err

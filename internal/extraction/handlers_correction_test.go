@@ -66,6 +66,7 @@ type corSpy struct {
 	gotDocumentID string
 	gotField      string
 	gotValue      string
+	gotMethod     extraction.CorrectionMethod
 	gotSubject    string
 	gotCorrection extraction.FieldCorrection
 
@@ -78,9 +79,9 @@ func newCorSpy() *corSpy {
 	return &corSpy{invoiceID: "5d2f7a10-6b3c-4e8d-9f01-2a3b4c5d6e7f"}
 }
 
-func (s *corSpy) apply(_ context.Context, _ pgx.Tx, documentID, field, value string) (string, error) {
+func (s *corSpy) apply(_ context.Context, _ pgx.Tx, documentID, field, value string, method extraction.CorrectionMethod) (string, error) {
 	s.applies++
-	s.gotDocumentID, s.gotField, s.gotValue = documentID, field, value
+	s.gotDocumentID, s.gotField, s.gotValue, s.gotMethod = documentID, field, value, method
 	if s.applyErr != nil {
 		return "", s.applyErr
 	}

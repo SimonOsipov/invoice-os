@@ -87,7 +87,7 @@ const (
 // what makes the rollback arm mean something -- a seam that wrote nothing would satisfy the
 // unchanged-column assertion without any rollback at all.
 func cxApplier(write bool, failAfter error) extraction.ApplyFieldToInvoice {
-	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string) (string, error) {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string, _ extraction.CorrectionMethod) (string, error) {
 		var id string
 		if err := tx.QueryRow(ctx,
 			`SELECT id FROM invoices WHERE source_document_id = $1`, documentID).Scan(&id); err != nil {
@@ -111,7 +111,9 @@ func cxApplier(write bool, failAfter error) extraction.ApplyFieldToInvoice {
 
 // cxRefusingApplier reports one domain sentinel without touching a row.
 func cxRefusingApplier(err error) extraction.ApplyFieldToInvoice {
-	return func(context.Context, pgx.Tx, string, string, string) (string, error) { return "", err }
+	return func(context.Context, pgx.Tx, string, string, string, extraction.CorrectionMethod) (string, error) {
+		return "", err
+	}
 }
 
 // cxAuditor writes the same three columns internal/audit.Record writes, through the tx the
@@ -491,9 +493,9 @@ func TestRLS_CorrectionNormalisesIssueDateToOneSpelling(t *testing.T) {
 			cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-04-DATE-"+jobID[:8], "draft")
 
 			var gotField, gotValue string
-			apply := func(ctx context.Context, tx pgx.Tx, documentID, field, value string) (string, error) {
+			apply := func(ctx context.Context, tx pgx.Tx, documentID, field, value string, m extraction.CorrectionMethod) (string, error) {
 				gotField, gotValue = field, value
-				return cxApplier(false, nil)(ctx, tx, documentID, field, value)
+				return cxApplier(false, nil)(ctx, tx, documentID, field, value, m)
 			}
 
 			w := cxServe(t, reqCtx, jobID, "issue_date", cxBody(tc.sent), apply, cxAuditor(nil))
@@ -687,4 +689,67 @@ func cxShowInt(p *int) string {
 		return "<null>"
 	}
 	return strconv.Itoa(*p)
+}
+
+// --- the method the invoice seam is handed ----------------------------------------------
+
+// cxSeamCall is what the handler handed ApplyFieldToInvoice on the last call.
+type cxSeamCall struct {
+	calls        int
+	field, value string
+	method       extraction.CorrectionMethod
+}
+
+// cxRecorder records the seam's arguments and then defers to cxApplier, so the invoice write
+// still happens (or not) exactly as it would without the recorder.
+func cxRecorder(seen *cxSeamCall, write bool) extraction.ApplyFieldToInvoice {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string, method extraction.CorrectionMethod) (string, error) {
+		seen.calls++
+		seen.field, seen.value, seen.method = field, value, method
+		return cxApplier(write, nil)(ctx, tx, documentID, field, value, method)
+	}
+}
+
+// The seam is handed the METHOD the caller posted, not the value alone. An undo and a typed
+// correction write different things to the invoice, and before this parameter existed nothing
+// downstream could tell the two apart.
+func TestRLS_CorrectionHandsTheInvoiceSeamThePostedMethod(t *testing.T) {
+	region := `"region":{"page":2,"x0":0.11,"y0":0.37,"x1":0.62,"y1":0.44}`
+
+	for _, tc := range []struct {
+		method string
+		extra  string
+		want   extraction.CorrectionMethod
+	}{
+		{"typed", "", extraction.MethodTyped},
+		{"chosen", "", extraction.MethodChosen},
+		{"pointed", region, extraction.MethodPointed},
+		{"undone", "", extraction.MethodUndone},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			ctx := t.Context()
+			reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+			t.Cleanup(func() { rdaPurge(t, tenantID) })
+			entityID := cxEntity(t, ctx, tenantID)
+			cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-07-METHOD-"+jobID[:8], "draft")
+
+			var seen cxSeamCall
+			w := cxServe(t, reqCtx, jobID, "total", corBody(cxTotalAfter, tc.method, tc.extra),
+				cxRecorder(&seen, false), cxAuditor(nil))
+
+			if w.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+			}
+			if seen.calls != 1 {
+				t.Fatalf("the invoice seam ran %d time(s), want 1 -- the method assertion below is vacuous", seen.calls)
+			}
+			if seen.method != tc.want {
+				t.Errorf("the invoice seam was handed method %q for a %q correction, want %q -- nothing downstream can tell an undo from a typed correction",
+					seen.method, tc.method, tc.want)
+			}
+			if seen.field != "total" {
+				t.Errorf("the invoice seam was handed field %q, want %q", seen.field, "total")
+			}
+		})
+	}
 }

@@ -35,6 +35,10 @@ const (
 	fcPoolArg     = "pool"
 	fcLoggerArg   = "app.Logger"
 
+	// The method every row here posts. Named so a later undo-specific row reads as the
+	// deliberate other half rather than as a typo.
+	fcMethodTyped = extraction.MethodTyped
+
 	// docs/read-path-suspension.md reads "61 distinct routes, 67 registrations" before this
 	// route lands. Floors, so a later story raises them rather than breaking this.
 	fcMinDocRoutes        = 62
@@ -222,7 +226,7 @@ func TestNewInvoiceFieldApplier_MapsEachDomainError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spy := &fcEditSpy{err: tc.in, returnedID: fcInvoiceID}
 
-			id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, "total", fcCorrectedTo)
+			id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, "total", fcCorrectedTo, fcMethodTyped)
 
 			if !errors.Is(err, tc.want) {
 				t.Errorf("the adapter returned %v for %v, want %v", err, tc.in, tc.want)
@@ -242,7 +246,7 @@ func TestNewInvoiceFieldApplier_MapsEachDomainError(t *testing.T) {
 	// nil one panics inside EditBySourceDocumentTx on the first correction.
 	var tx pgx.Tx = &eaTx{}
 	spy := &fcEditSpy{returnedID: fcInvoiceID}
-	id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), tx, fcDocumentID, "total", fcCorrectedTo)
+	id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), tx, fcDocumentID, "total", fcCorrectedTo, fcMethodTyped)
 	if err != nil {
 		t.Fatalf("the adapter returned %v on a successful edit, want nil", err)
 	}
@@ -281,7 +285,7 @@ func TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn(t *testing.T)
 		t.Run(tc.field, func(t *testing.T) {
 			spy := &fcEditSpy{returnedID: fcInvoiceID}
 
-			if _, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, tc.field, tc.value); err != nil {
+			if _, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, tc.field, tc.value, fcMethodTyped); err != nil {
 				t.Fatalf("applying %s=%q: %v", tc.field, tc.value, err)
 			}
 			if spy.calls != 1 {

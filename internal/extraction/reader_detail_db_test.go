@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -74,6 +75,25 @@ type rvdBox struct {
 // ordering the read path relies on could not be observed.
 func rvdSeedField(t *testing.T, ctx context.Context, tenantID, jobID, name string, value *string, box *rvdBox, rank int, reason *string, createdAt time.Time) {
 	t.Helper()
+	rvdSeedFieldID(t, ctx, tenantID, jobID, uuid.NewString(), name, value, box, rank, reason, createdAt)
+}
+
+// rvdOrderedIDs returns n uuids sharing one random prefix and differing only in their last four
+// hex digits, so their bytewise order is the order returned. Random-prefixed because the dev DB
+// keeps rows between runs and id is the primary key.
+func rvdOrderedIDs(n int) []string {
+	base := uuid.NewString()
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, fmt.Sprintf("%s%04x", base[:len(base)-4], i))
+	}
+	return out
+}
+
+// rvdSeedFieldID is rvdSeedField with the primary key named, so a test can make id order
+// disagree with candidate_rank order (TestExtractionDetail_AlternativeOrderSurvivesACreatedAtTie).
+func rvdSeedFieldID(t *testing.T, ctx context.Context, tenantID, jobID, id, name string, value *string, box *rvdBox, rank int, reason *string, createdAt time.Time) {
+	t.Helper()
 
 	var (
 		page           *int
@@ -85,10 +105,10 @@ func rvdSeedField(t *testing.T, ctx context.Context, tenantID, jobID, name strin
 
 	if _, err := stRequire(t).super.Exec(ctx,
 		`INSERT INTO extraction_field_results
-		     (tenant_id, extraction_job_id, field_name, value, page,
+		     (id, tenant_id, extraction_job_id, field_name, value, page,
 		      bbox_x0, bbox_y0, bbox_x1, bbox_y1, candidate_rank, reason_code, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		tenantID, jobID, name, value, page, x0, y0, x1, y1, rank, reason, createdAt,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		id, tenantID, jobID, name, value, page, x0, y0, x1, y1, rank, reason, createdAt,
 	); err != nil {
 		t.Fatalf("seed field result %q rank %d for job %s: %v", name, rank, jobID, err)
 	}
@@ -320,8 +340,9 @@ func TestExtractionDetail_PagesOrderedByPageNumber(t *testing.T) {
 	}
 }
 
-// AC 6: candidate_rank = 0 is the decided reading; 1..N are alternatives and are not on this
-// wire.
+// AC 6: candidate_rank = 0 is the decided reading. One wire entry per field NAME, not per row
+// -- EXTR-12-02 nests ranks 1..N under their rank-0 sibling, which must not change this count
+// and must never promote an alternative to a top-level field.
 func TestExtractionDetail_ExcludesAlternativeCandidates(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)
@@ -359,6 +380,311 @@ func TestExtractionDetail_ExcludesAlternativeCandidates(t *testing.T) {
 	}
 	if byName["supplier_tin"] != "DECIDED-TIN" {
 		t.Errorf("supplier_tin came back %q, want DECIDED-TIN", byName["supplier_tin"])
+	}
+}
+
+// EXTR-12-02 AC-1: reason_code reaches the wire verbatim. All four values the CHECK admits,
+// because a reader that hardcoded one would pass a single-code fixture.
+func TestExtractionDetail_CarriesTheStoredReasonCode(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	order := []string{"invoice_number", "supplier_tin", "total_amount", "issue_date", "currency"}
+	want := map[string]string{
+		"invoice_number": "unreadable",
+		"supplier_tin":   "ambiguous",
+		"total_amount":   "inconsistent",
+		"issue_date":     "missing",
+		"currency":       "", // NULL reason_code, the clean case
+	}
+	for i, name := range order {
+		var reason *string
+		if want[name] != "" {
+			reason = rvdStr(want[name])
+		}
+		rvdSeedField(t, ctx, tenantA, jobA, name, rvdStr("v"), nil, 0, reason,
+			now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != len(want) {
+		t.Fatalf("got %d field(s) %v, want %d -- every assertion below is vacuous over a short list",
+			len(got.Fields), rvdFieldNames(got.Fields), len(want))
+	}
+	for _, f := range got.Fields {
+		w, ok := want[f.Name]
+		if !ok {
+			t.Errorf("unexpected field %q", f.Name)
+			continue
+		}
+		if f.Reason != w {
+			t.Errorf("field %q came back with reason %q, want the stored reason_code %q", f.Name, f.Reason, w)
+		}
+	}
+}
+
+// EXTR-12-02 AC-1, the NULL half: a clean field's reason crosses as "", never null. Proved on
+// the marshalled bytes -- the Go value is "" either way if Reason ever becomes a *string.
+func TestExtractionDetail_CleanFieldCarriesAnEmptyReason(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, nil, now)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 1 {
+		t.Fatalf("got %d field(s) %v, want exactly 1", len(got.Fields), rvdFieldNames(got.Fields))
+	}
+	if got.Fields[0].Reason != "" {
+		t.Errorf("a NULL reason_code came back as %q, want the empty string", got.Fields[0].Reason)
+	}
+
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	if !strings.Contains(string(b), `"reason":""`) {
+		t.Errorf("the detail marshals to\n  %s\nwithout \"reason\":\"\"", b)
+	}
+	if strings.Contains(string(b), `"reason":null`) {
+		t.Errorf("the detail marshals to\n  %s\nwhich carries \"reason\":null; a clean field's reason is \"\"", b)
+	}
+}
+
+// EXTR-12-02 AC-2: alternatives is [] on every field, never null. The oracle is the marshalled
+// bytes: len(x) == 0 is true of nil and of []T{} alike, so it passes on the exact bug it must
+// catch. The control below proves a nil slice really does emit null.
+func TestExtractionDetail_AlternativesAreNeverNil(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	for i, name := range []string{"invoice_number", "supplier_tin"} {
+		rvdSeedField(t, ctx, tenantA, jobA, name, rvdStr("v"), nil, 0, nil,
+			now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 2 {
+		t.Fatalf("got %d field(s) %v, want 2 -- the count below is vacuous over a short list",
+			len(got.Fields), rvdFieldNames(got.Fields))
+	}
+
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	if n := strings.Count(string(b), `"alternatives":[]`); n != len(got.Fields) {
+		t.Errorf("the detail marshals to\n  %s\nwith %d empty alternatives array(s), want one per field (%d)",
+			b, n, len(got.Fields))
+	}
+	if strings.Contains(string(b), `"alternatives":null`) {
+		t.Errorf("the detail marshals to\n  %s\nwhich carries \"alternatives\":null", b)
+	}
+
+	// Control: a nil []ExtractionCandidate really does marshal to null, so the scan above is
+	// an assertion and not a tautology.
+	var ctl struct {
+		Alternatives []extraction.ExtractionCandidate `json:"alternatives"`
+	}
+	cb, err := json.Marshal(ctl)
+	if err != nil {
+		t.Fatalf("marshal the nil-slice control: %v", err)
+	}
+	if string(cb) != `{"alternatives":null}` {
+		t.Fatalf("a nil []ExtractionCandidate marshals to %s, want {\"alternatives\":null}; the null scan above proves nothing", cb)
+	}
+}
+
+// EXTR-12-02 AC-3: ranks 1..N nest under their rank-0 sibling, in rank order, and reach the
+// wire nowhere else. The rank-1 row carries a box and the rank-2 row does not, so an
+// alternative's region is read per row rather than copied from the decision.
+func TestExtractionDetail_NestsAlternativeCandidatesUnderTheirDecidedField(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	decidedBox := &rvdBox{Page: 1, X0: 0.10, Y0: 0.20, X1: 0.30, Y1: 0.40}
+	altBox := &rvdBox{Page: 2, X0: 0.51, Y0: 0.52, X1: 0.53, Y1: 0.54}
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("DECIDED-0"), decidedBox, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-1"), altBox, 1, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-2"), nil, 2, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("DECIDED-TIN"), nil, 0, nil, now.Add(time.Millisecond))
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 2 {
+		t.Fatalf("got %d field(s) %v, want exactly 2 -- alternatives nest, they do not add entries",
+			len(got.Fields), rvdFieldNames(got.Fields))
+	}
+
+	byName := map[string]extraction.ExtractionFieldState{}
+	for _, f := range got.Fields {
+		byName[f.Name] = f
+	}
+
+	inv, ok := byName["invoice_number"]
+	if !ok {
+		t.Fatalf("no invoice_number in %v", rvdFieldNames(got.Fields))
+	}
+	if inv.Reason != "ambiguous" {
+		t.Errorf("invoice_number came back with reason %q, want ambiguous", inv.Reason)
+	}
+	if len(inv.Alternatives) != 2 {
+		t.Fatalf("invoice_number came back with %d alternative(s), want the rank-1 and rank-2 rows",
+			len(inv.Alternatives))
+	}
+	for i, want := range []struct {
+		value  string
+		region *extraction.ExtractionRegion
+	}{
+		{"ALTERNATIVE-1", &extraction.ExtractionRegion{Page: 2, X0: 0.51, Y0: 0.52, X1: 0.53, Y1: 0.54}},
+		{"ALTERNATIVE-2", nil},
+	} {
+		alt := inv.Alternatives[i]
+		if alt.Value == nil || *alt.Value != want.value {
+			t.Errorf("alternative at index %d came back with value %v, want %q in rank order", i, alt.Value, want.value)
+			continue
+		}
+		switch {
+		case want.region == nil && alt.Region != nil:
+			t.Errorf("alternative %q came back with region %+v; its row stored no box", want.value, *alt.Region)
+		case want.region != nil && alt.Region == nil:
+			t.Errorf("alternative %q came back with a nil region, want %+v", want.value, *want.region)
+		case want.region != nil && *alt.Region != *want.region:
+			t.Errorf("alternative %q came back with region %+v, want %+v", want.value, *alt.Region, *want.region)
+		}
+	}
+
+	tin, ok := byName["supplier_tin"]
+	if !ok {
+		t.Fatalf("no supplier_tin in %v", rvdFieldNames(got.Fields))
+	}
+	if len(tin.Alternatives) != 0 {
+		t.Errorf("supplier_tin came back with %d alternative(s) %+v; its job wrote it only at rank 0",
+			len(tin.Alternatives), tin.Alternatives)
+	}
+	for _, f := range got.Fields {
+		if f.Value != nil && strings.HasPrefix(*f.Value, "ALTERNATIVE-") {
+			t.Errorf("top-level field %q carries %q, which is a candidate_rank > 0 row", f.Name, *f.Value)
+		}
+	}
+}
+
+// EXTR-12-02 AC-3, the shape half: an alternative is value and region only. Asserted on the
+// marshalled keys rather than the Go type, because that is what the SPA and e2e mirrors read.
+func TestExtractionDetail_AnAlternativeCarriesOnlyValueAndRegion(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("DECIDED-0"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-1"),
+		&rvdBox{Page: 1, X0: 0.1, Y0: 0.2, X1: 0.3, Y1: 0.4}, 1, nil, now)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+
+	var wire struct {
+		Fields []struct {
+			Name         string                       `json:"name"`
+			Alternatives []map[string]json.RawMessage `json:"alternatives"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("unmarshal the detail %s: %v", b, err)
+	}
+
+	var scanned int
+	for _, f := range wire.Fields {
+		for i, alt := range f.Alternatives {
+			keys := make([]string, 0, len(alt))
+			for k := range alt {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if !reflect.DeepEqual(keys, []string{"region", "value"}) {
+				t.Errorf("field %q alternative %d marshals keys %v, want exactly [region value] -- no name, no reason, no nesting",
+					f.Name, i, keys)
+			}
+			scanned++
+		}
+	}
+	if scanned == 0 {
+		t.Fatalf("the detail marshals to\n  %s\nwith no alternative at all, so the key-set assertion examined nothing", b)
+	}
+}
+
+// EXTR-12-02: every row of one job shares a created_at in production (writeFieldResultsTx runs
+// in one transaction and now() is transaction-constant), so the tie is real. The ids here
+// ascend in an order that disagrees with BOTH field_name and candidate_rank: an ORDER BY that
+// falls back to id alone returns supplier_tin first and ALTERNATIVE-2 before ALTERNATIVE-1.
+func TestExtractionDetail_AlternativeOrderSurvivesACreatedAtTie(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	ids := rvdOrderedIDs(4)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[0], "supplier_tin", rvdStr("DECIDED-TIN"), nil, 0, nil, now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[1], "invoice_number", rvdStr("ALTERNATIVE-2"), nil, 2, nil, now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[2], "invoice_number", rvdStr("ALTERNATIVE-1"), nil, 1, nil, now)
+	rvdSeedFieldID(t, ctx, tenantA, jobA, ids[3], "invoice_number", rvdStr("DECIDED-0"), nil, 0, rvdStr("ambiguous"), now)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if names := rvdFieldNames(got.Fields); !reflect.DeepEqual(names, []string{"invoice_number", "supplier_tin"}) {
+		t.Fatalf("fields came back in order %v, want [invoice_number supplier_tin] -- field_name breaks the created_at tie, not id", names)
+	}
+
+	alts := []string{}
+	for _, a := range got.Fields[0].Alternatives {
+		if a.Value == nil {
+			alts = append(alts, "<nil>")
+			continue
+		}
+		alts = append(alts, *a.Value)
+	}
+	if !reflect.DeepEqual(alts, []string{"ALTERNATIVE-1", "ALTERNATIVE-2"}) {
+		t.Errorf("invoice_number's alternatives came back in order %v, want [ALTERNATIVE-1 ALTERNATIVE-2] -- candidate_rank breaks the tie, not id", alts)
 	}
 }
 

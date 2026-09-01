@@ -424,11 +424,13 @@ func TestRLS_ExtractionDetailKeepsADegenerateRegion(t *testing.T) {
 	}
 }
 
-// AC 6, the leak-proof half: the AC suite gives every candidate the same shape, so a reader
-// that read rank 1 instead of rank 0 would still return one row per field. Here the decided
-// reading has a NULL value and NO box while its alternatives carry both, so a wrong rank
-// changes what reaches the wire rather than how much.
-func TestRLS_ExtractionDetailAlternativesLeakNeitherValueNorRegion(t *testing.T) {
+// EXTR-12-02, the leak-proof half, deliberately rewritten: alternatives are ON this wire now,
+// so the old absence scan asserted the opposite of what ships. What it proved survives -- the
+// decided reading still has a NULL value and NO box while its alternatives carry both, so a
+// reader that confused rank 1 for rank 0 still changes WHAT reaches the wire, not how much --
+// and the absence scan moves to where the alternatives may not appear: any other field, and
+// any top-level position.
+func TestRLS_ExtractionDetailAlternativesNestOnlyUnderTheirOwnField(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)
 
@@ -437,20 +439,24 @@ func TestRLS_ExtractionDetailAlternativesLeakNeitherValueNorRegion(t *testing.T)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
 	altBox := &rvdBox{Page: 3, X0: 0.11, Y0: 0.22, X1: 0.33, Y1: 0.44}
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", nil, nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", nil, nil, 0, rvdStr("ambiguous"), now)
 	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-RANK-1"), altBox, 1, nil, now)
 	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-RANK-2"), altBox, 2, nil, now)
+	// The neighbour is what makes "under their own field" testable: with one field, "nowhere
+	// else" and "nowhere" are the same assertion.
+	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("DECIDED-TIN"), nil, 0, nil, now.Add(time.Millisecond))
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
 		t.Fatalf("Detail for job %s: %v", jobA, err)
 	}
-	if len(got.Fields) != 1 {
-		t.Fatalf("got %d field(s) %v, want exactly the one rank-0 reading", len(got.Fields), rvdFieldNames(got.Fields))
+	if len(got.Fields) != 2 {
+		t.Fatalf("got %d field(s) %v, want exactly the two rank-0 readings", len(got.Fields), rvdFieldNames(got.Fields))
 	}
+
 	f := got.Fields[0]
 	if f.Name != "invoice_number" {
-		t.Errorf("the reading came back as %q, want invoice_number", f.Name)
+		t.Fatalf("the first reading came back as %q, want invoice_number", f.Name)
 	}
 	if f.Value != nil {
 		t.Errorf("value came back %q; rank 0 stored NULL, so this is an alternative's value", *f.Value)
@@ -459,21 +465,176 @@ func TestRLS_ExtractionDetailAlternativesLeakNeitherValueNorRegion(t *testing.T)
 		t.Errorf("region came back %+v; rank 0 stored no box, so this is an alternative's region", *f.Region)
 	}
 
-	// Nothing of the alternatives reaches the wire at all, not even under another key.
+	wantRegion := extraction.ExtractionRegion{Page: 3, X0: 0.11, Y0: 0.22, X1: 0.33, Y1: 0.44}
+	if len(f.Alternatives) != 2 {
+		t.Fatalf("invoice_number came back with %d alternative(s), want the rank-1 and rank-2 rows nested under it",
+			len(f.Alternatives))
+	}
+	for i, wantValue := range []string{"ALT-RANK-1", "ALT-RANK-2"} {
+		alt := f.Alternatives[i]
+		if alt.Value == nil || *alt.Value != wantValue {
+			t.Errorf("alternative at index %d came back with value %v, want %q in rank order", i, alt.Value, wantValue)
+		}
+		if alt.Region == nil || *alt.Region != wantRegion {
+			t.Errorf("alternative at index %d came back with region %v, want %+v", i, alt.Region, wantRegion)
+		}
+	}
+	if n := len(got.Fields[1].Alternatives); n != 0 {
+		t.Errorf("supplier_tin came back with %d alternative(s) %+v; its rows are rank 0 only",
+			n, got.Fields[1].Alternatives)
+	}
+
 	b, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal the detail: %v", err)
 	}
-	for _, needle := range []string{"ALT-RANK-1", "ALT-RANK-2", "0.11", "0.22", "0.33", "0.44"} {
-		if strings.Contains(string(b), needle) {
-			t.Errorf("the detail marshals to\n  %s\nwhich carries %s from a candidate_rank > 0 row", b, needle)
+	// Each needle appears exactly as often as its own rows: twice for the shared box, once per
+	// alternative value. More than that is a copy under some other key.
+	for needle, want := range map[string]int{
+		"ALT-RANK-1": 1, "ALT-RANK-2": 1, "DECIDED-TIN": 1,
+		`"x0":0.11`: 2, `"y0":0.22`: 2, `"x1":0.33`: 2, `"y1":0.44`: 2,
+	} {
+		if n := strings.Count(string(b), needle); n != want {
+			t.Errorf("the detail marshals to\n  %s\nwith %s appearing %d time(s), want %d", b, needle, n, want)
 		}
 	}
-	// Control: the marshalled form is searchable at all, so the six absences above mean
-	// something.
-	if !strings.Contains(string(b), `"invoice_number"`) {
-		t.Errorf("the detail marshals to\n  %s\nwithout the field name, so the needle scan above proved nothing", b)
+
+	// Blank every alternatives slice and the needles must vanish entirely: that is what makes
+	// "only inside their own field's alternatives" an assertion rather than a count.
+	stripped := extraction.ExtractionDetail{
+		ID: got.ID, DocumentID: got.DocumentID, State: got.State,
+		Document: got.Document, Pages: got.Pages,
+		Fields: make([]extraction.ExtractionFieldState, 0, len(got.Fields)),
 	}
+	for _, sf := range got.Fields {
+		sf.Alternatives = []extraction.ExtractionCandidate{}
+		stripped.Fields = append(stripped.Fields, sf)
+	}
+	sb, err := json.Marshal(stripped)
+	if err != nil {
+		t.Fatalf("marshal the stripped detail: %v", err)
+	}
+	for _, needle := range []string{"ALT-RANK-1", "ALT-RANK-2", "0.11", "0.22", "0.33", "0.44"} {
+		if strings.Contains(string(sb), needle) {
+			t.Errorf("with every alternatives slice emptied the detail still marshals to\n  %s\nwhich carries %s -- a candidate_rank > 0 row reached the wire somewhere else",
+				sb, needle)
+		}
+	}
+	// Control: the stripped form is still the same document, so the six absences mean something.
+	for _, needle := range []string{`"invoice_number"`, "DECIDED-TIN"} {
+		if !strings.Contains(string(sb), needle) {
+			t.Errorf("the stripped detail marshals to\n  %s\nwithout %s, so the needle scan above proved nothing", sb, needle)
+		}
+	}
+}
+
+// EXTR-12-02 AC-4: a rank>0 row whose field_name has no rank-0 sibling is dropped, never
+// promoted to a field. supplier_tin is the positive control -- without it "invoice_number is
+// absent" is also what a job with no rows at all returns.
+func TestExtractionDetail_OrphanAlternativeIsDropped(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("DECIDED-TIN"), nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ORPHAN-1"),
+		&rvdBox{Page: 2, X0: 0.61, Y0: 0.62, X1: 0.63, Y1: 0.64}, 1, nil, now.Add(time.Millisecond))
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ORPHAN-2"), nil, 2, nil, now.Add(2*time.Millisecond))
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 1 {
+		t.Fatalf("got %d field(s) %v, want only supplier_tin -- an orphan alternative is not a field",
+			len(got.Fields), rvdFieldNames(got.Fields))
+	}
+	if got.Fields[0].Name != "supplier_tin" {
+		t.Fatalf("the one reading came back as %q, want supplier_tin", got.Fields[0].Name)
+	}
+	if n := len(got.Fields[0].Alternatives); n != 0 {
+		t.Errorf("supplier_tin came back with %d alternative(s) %+v; the orphans belong to another field name",
+			n, got.Fields[0].Alternatives)
+	}
+
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	for _, needle := range []string{"invoice_number", "ORPHAN-1", "ORPHAN-2", "0.61", "0.62", "0.63", "0.64"} {
+		if strings.Contains(string(b), needle) {
+			t.Errorf("the detail marshals to\n  %s\nwhich carries %s from an orphan candidate_rank > 0 row", b, needle)
+		}
+	}
+	// Control: the marshalled form is searchable, so the absences above mean something.
+	if !strings.Contains(string(b), "DECIDED-TIN") {
+		t.Errorf("the detail marshals to\n  %s\nwithout the control value, so the needle scan above proved nothing", b)
+	}
+}
+
+// EXTR-12-02 AC-5: another tenant's alternatives are as unreachable as its decided readings.
+// The positive control is load-bearing -- a reader that returned no alternative to anyone would
+// pass the refusal alone, which is exactly the shape a cross-tenant test tends to fail at.
+func TestRLS_ExtractionDetailCrossTenantAlternativesAreInvisible(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, _, _ := rdTenant(t, ctx, "active")
+	ctxB, tenantB, docB := rdTenant(t, ctx, "active")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobB := rdSeedJob(t, ctx, tenantB, docB, "succeeded", now, nil)
+
+	altBox := &rvdBox{Page: 1, X0: 0.71, Y0: 0.72, X1: 0.73, Y1: 0.74}
+	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-DECIDED"), nil, 0, rvdStr("ambiguous"), now)
+	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-ALT-1"), altBox, 1, nil, now)
+	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-ALT-2"), altBox, 2, nil, now)
+
+	// Control: B's own alternatives are readable, so A's empty answer is isolation and not an
+	// empty fixture.
+	ownGot, err := r.Detail(ctxB, jobB)
+	if err != nil {
+		t.Fatalf("B reading its own job %s: %v", jobB, err)
+	}
+	if len(ownGot.Fields) != 1 || len(ownGot.Fields[0].Alternatives) != 2 {
+		t.Fatalf("B's own read gave %d field(s) with %v alternative(s); the fixture must hold alternatives or the refusal below proves nothing",
+			len(ownGot.Fields), rvdAlternativeCounts(ownGot.Fields))
+	}
+
+	gotForeign, errForeign := r.Detail(ctxA, jobB)
+	gotAbsent, errAbsent := r.Detail(ctxA, uuid.NewString())
+	if !errors.Is(errForeign, extraction.ErrNotFound) {
+		t.Fatalf("A reading B's job returned %v, want ErrNotFound", errForeign)
+	}
+	if errAbsent.Error() != errForeign.Error() {
+		t.Errorf("the two refusals read differently:\n  absent:  %s\n  foreign: %s", errAbsent, errForeign)
+	}
+	if !reflect.DeepEqual(gotForeign, gotAbsent) {
+		t.Errorf("A got %+v for B's job and %+v for an absent one; the two answers must be one value", gotForeign, gotAbsent)
+	}
+
+	b, err := json.Marshal(gotForeign)
+	if err != nil {
+		t.Fatalf("marshal the refused detail: %v", err)
+	}
+	for _, needle := range []string{"B-DECIDED", "B-ALT-1", "B-ALT-2", "0.71", "0.72", "0.73", "0.74"} {
+		if strings.Contains(string(b), needle) {
+			t.Errorf("A's refused read marshals to\n  %s\nwhich carries %s from tenant B", b, needle)
+		}
+	}
+}
+
+// rvdAlternativeCounts reports the per-field alternative counts, so a fixture failure names
+// what it got instead of a bare number.
+func rvdAlternativeCounts(fields []extraction.ExtractionFieldState) []int {
+	out := make([]int, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, len(f.Alternatives))
+	}
+	return out
 }
 
 // page_number is an int column, so ORDER BY is numeric. The AC suite stops at three pages,

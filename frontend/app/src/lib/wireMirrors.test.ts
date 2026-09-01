@@ -76,9 +76,20 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getAuditLog(',
     floor: 10,
   },
-  // EXTR-11-04 — the review screen's five. One Go file, five distinct anchors, so a
-  // deleted struct cannot be masked by a neighbour's still-present symbol. Each anchor
-  // ends in '(' — without it a renamed getExtractionDetailX still contains the anchor.
+  // EXTR-11-04, plus EXTR-12-02's ExtractionCandidate — the review screen's six. One Go
+  // file, six distinct anchors, so a deleted struct cannot be masked by a neighbour's
+  // still-present symbol. Each anchor ends in '(' — without it a renamed
+  // getExtractionDetailX still contains the anchor.
+  {
+    ts: 'ExtractionCandidate',
+    go: 'ExtractionCandidate',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func (r *Reader) PageImageKey(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function fetchPageImage(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 2,
+  },
   {
     ts: 'ExtractionDetail',
     go: 'ExtractionDetail',
@@ -235,6 +246,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
       'StatusChange',
       'AuditEvent',
+      'ExtractionCandidate',
       'ExtractionDetail',
       'ExtractionDocument',
       'ExtractionPage',

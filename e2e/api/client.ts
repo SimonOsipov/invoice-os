@@ -1070,10 +1070,19 @@ export interface ExtractionPage {
   height_px: number
 }
 
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+
+export interface ExtractionCandidate {
+  value: string | null
+  region: ExtractionRegion | null
+}
+
 export interface ExtractionFieldState {
   name: string
   value: string | null
   region: ExtractionRegion | null
+  reason: ExtractionReason
+  alternatives: ExtractionCandidate[]
 }
 
 export interface ExtractionDocument {

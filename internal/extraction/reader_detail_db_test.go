@@ -31,7 +31,8 @@ var rvdWireStructs = []struct {
 }{
 	{"ExtractionRegion", []string{"page", "x0", "y0", "x1", "y1"}},
 	{"ExtractionPage", []string{"page", "width_px", "height_px"}},
-	{"ExtractionFieldState", []string{"name", "value", "region"}},
+	{"ExtractionCandidate", []string{"value", "region"}},
+	{"ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives"}},
 	{"ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	{"ExtractionDetail", []string{"id", "document_id", "state", "document", "pages", "fields"}},
 }
@@ -71,7 +72,7 @@ type rvdBox struct {
 // rvdSeedField writes one extraction_field_results row. created_at is named explicitly: the
 // column default now() is the TRANSACTION timestamp, so co-seeded rows would tie and the
 // ordering the read path relies on could not be observed.
-func rvdSeedField(t *testing.T, ctx context.Context, tenantID, jobID, name string, value *string, box *rvdBox, rank int, createdAt time.Time) {
+func rvdSeedField(t *testing.T, ctx context.Context, tenantID, jobID, name string, value *string, box *rvdBox, rank int, reason *string, createdAt time.Time) {
 	t.Helper()
 
 	var (
@@ -85,9 +86,9 @@ func rvdSeedField(t *testing.T, ctx context.Context, tenantID, jobID, name strin
 	if _, err := stRequire(t).super.Exec(ctx,
 		`INSERT INTO extraction_field_results
 		     (tenant_id, extraction_job_id, field_name, value, page,
-		      bbox_x0, bbox_y0, bbox_x1, bbox_y1, candidate_rank, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		tenantID, jobID, name, value, page, x0, y0, x1, y1, rank, createdAt,
+		      bbox_x0, bbox_y0, bbox_x1, bbox_y1, candidate_rank, reason_code, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		tenantID, jobID, name, value, page, x0, y0, x1, y1, rank, reason, createdAt,
 	); err != nil {
 		t.Fatalf("seed field result %q rank %d for job %s: %v", name, rank, jobID, err)
 	}
@@ -155,7 +156,7 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
 	rvdSeedPage(t, ctx, tenantA, docA, 2, 1275, 1651)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, nil, now)
 
 	// A's own second document and second job: the counts below are per-document and per-job,
 	// not per-tenant, and RLS cannot tell those apart.
@@ -165,7 +166,7 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 		rvdSeedPage(t, ctx, tenantA, docA2, page, 600, 800)
 	}
 	for _, name := range []string{"issue_date", "currency", "total_amount"} {
-		rvdSeedField(t, ctx, tenantA, jobA2, name, rvdStr("A2"), nil, 0, now)
+		rvdSeedField(t, ctx, tenantA, jobA2, name, rvdStr("A2"), nil, 0, nil, now)
 	}
 
 	// B's rows are what make A's counts mean something: without them "2 pages, 1 field" is
@@ -173,8 +174,8 @@ func TestRLS_ExtractionDetailCrossTenantReadRefused(t *testing.T) {
 	rvdSeedPage(t, ctx, tenantB, docB, 1, 900, 1200)
 	rvdSeedPage(t, ctx, tenantB, docB, 2, 900, 1200)
 	rvdSeedPage(t, ctx, tenantB, docB, 3, 900, 1200)
-	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, now)
-	rvdSeedField(t, ctx, tenantB, jobB, "supplier_tin", rvdStr("B-TIN"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantB, jobB, "supplier_tin", rvdStr("B-TIN"), nil, 0, nil, now)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
@@ -329,10 +330,10 @@ func TestExtractionDetail_ExcludesAlternativeCandidates(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("DECIDED-0"), nil, 0, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-1"), nil, 1, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-2"), nil, 2, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("DECIDED-TIN"), nil, 0, now.Add(time.Millisecond))
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("DECIDED-0"), nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-1"), nil, 1, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALTERNATIVE-2"), nil, 2, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("DECIDED-TIN"), nil, 0, nil, now.Add(time.Millisecond))
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
@@ -371,7 +372,7 @@ func TestExtractionDetail_NullPageYieldsNullRegion(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
-	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("12345678-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("12345678-0001"), nil, 0, nil, now)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
@@ -408,7 +409,7 @@ func TestExtractionDetail_RegionRoundTripsNormalised(t *testing.T) {
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
 	want := rvdBox{Page: 2, X0: 0.62, Y0: 0.08, X1: 0.90, Y1: 0.13}
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("MOCK-INV-0001"), &want, 0, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("MOCK-INV-0001"), &want, 0, nil, now)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {

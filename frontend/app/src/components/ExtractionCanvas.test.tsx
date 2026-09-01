@@ -73,7 +73,7 @@ function mkRegion(o: Partial<ExtractionRegion> = {}): ExtractionRegion {
 }
 
 function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
-  return { name: 'invoice_number', value: 'INV-2026-0037', region: mkRegion(), ...o }
+  return { name: 'invoice_number', value: 'INV-2026-0037', region: mkRegion(), reason: '', alternatives: [], ...o }
 }
 
 function mkDocument(o: Partial<ExtractionDocument> = {}): ExtractionDocument {

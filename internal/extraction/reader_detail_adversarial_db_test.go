@@ -90,7 +90,7 @@ func TestRLS_ExtractionDetailDiscardsRowsWhenTheCommitFails(t *testing.T) {
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
 	rvdSeedPage(t, ctx, tenantA, docA, 2, 1275, 1651)
 	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"),
-		&rvdBox{Page: 1, X0: 0.1, Y0: 0.2, X1: 0.3, Y1: 0.4}, 0, now)
+		&rvdBox{Page: 1, X0: 0.1, Y0: 0.2, X1: 0.3, Y1: 0.4}, 0, nil, now)
 
 	// Positive control on the untraced pool: the rows exist, so the empty answer below is not
 	// an empty-fixture artefact.
@@ -144,7 +144,7 @@ func TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit(t *testing
 		rvdSeedPage(t, ctx, tenantA, docA, page, 1275, 1651)
 	}
 	for i, name := range []string{"invoice_number", "supplier_tin"} {
-		rvdSeedField(t, ctx, tenantA, jobA, name, rvdStr("v"), nil, 0, now.Add(time.Duration(i)*time.Millisecond))
+		rvdSeedField(t, ctx, tenantA, jobA, name, rvdStr("v"), nil, 0, nil, now.Add(time.Duration(i)*time.Millisecond))
 	}
 
 	got, err := r.Detail(ctxA, jobA)
@@ -299,11 +299,11 @@ func TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections(t *testing.T)
 
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
 	rvdSeedPage(t, ctx, tenantA, docA, 2, 1275, 1651)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("A-TIN"), nil, 0, now.Add(time.Millisecond))
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "supplier_tin", rvdStr("A-TIN"), nil, 0, nil, now.Add(time.Millisecond))
 
 	rvdSeedPage(t, ctx, tenantB, docB, 1, 900, 1200)
-	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, nil, now)
 
 	// Each tenant's own second document and job: without these the counts above are also what
 	// a per-tenant answer returns.
@@ -321,7 +321,7 @@ func TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections(t *testing.T)
 			rvdSeedPage(t, ctx, o.tenant, other, page, 600, 800)
 		}
 		for i, name := range o.fields {
-			rvdSeedField(t, ctx, o.tenant, otherJob, name, rvdStr("x"), nil, 0, now.Add(time.Duration(i)*time.Millisecond))
+			rvdSeedField(t, ctx, o.tenant, otherJob, name, rvdStr("x"), nil, 0, nil, now.Add(time.Duration(i)*time.Millisecond))
 		}
 	}
 
@@ -396,7 +396,7 @@ func TestRLS_ExtractionDetailKeepsADegenerateRegion(t *testing.T) {
 	for i, name := range []string{"zero_area", "zero_height", "whole_page"} {
 		w := want[name]
 		rvdSeedField(t, ctx, tenantA, jobA, name, rvdStr("v"),
-			&rvdBox{Page: w.Page, X0: w.X0, Y0: w.Y0, X1: w.X1, Y1: w.Y1}, 0,
+			&rvdBox{Page: w.Page, X0: w.X0, Y0: w.Y0, X1: w.X1, Y1: w.Y1}, 0, nil,
 			now.Add(time.Duration(i)*time.Millisecond))
 	}
 
@@ -437,9 +437,9 @@ func TestRLS_ExtractionDetailAlternativesLeakNeitherValueNorRegion(t *testing.T)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
 	altBox := &rvdBox{Page: 3, X0: 0.11, Y0: 0.22, X1: 0.33, Y1: 0.44}
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", nil, nil, 0, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-RANK-1"), altBox, 1, now)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-RANK-2"), altBox, 2, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", nil, nil, 0, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-RANK-1"), altBox, 1, nil, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("ALT-RANK-2"), altBox, 2, nil, now)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {
@@ -580,7 +580,7 @@ func TestRLS_ExtractionDetailRefusalsCarryNoDistinguisher(t *testing.T) {
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	jobB := rdSeedJob(t, ctx, tenantB, docB, "succeeded", now, nil)
 	rvdSeedPage(t, ctx, tenantB, docB, 1, 900, 1200)
-	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantB, jobB, "invoice_number", rvdStr("B-0001"), nil, 0, nil, now)
 
 	// Control: A can read something, so the refusals below are refusals.
 	if _, err := r.Detail(ctxA, jobA); err != nil {

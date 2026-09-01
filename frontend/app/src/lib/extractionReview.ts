@@ -28,12 +28,26 @@ export interface ExtractionPage {
   height_px: number
 }
 
+// The four reason_code values extraction_field_results' CHECK admits, plus '' for a clean
+// field. A union, not string: the wire cannot carry a fifth code.
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+
+// internal/extraction/reader.go, ExtractionCandidate. One alternative reading; it carries no
+// name, no reason and no alternatives of its own.
+export interface ExtractionCandidate {
+  value: string | null
+  region: ExtractionRegion | null
+}
+
 // internal/extraction/reader.go, ExtractionFieldState. region is null when the extractor
-// pointed at nothing.
+// pointed at nothing. Both reason and alternatives are always present — Go has no omitempty
+// here, so neither key is optional.
 export interface ExtractionFieldState {
   name: string
   value: string | null
   region: ExtractionRegion | null
+  reason: ExtractionReason
+  alternatives: ExtractionCandidate[]
 }
 
 // internal/extraction/reader.go, ExtractionDocument. stored_at is RFC3339 text, not a time.

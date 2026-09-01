@@ -122,12 +122,24 @@ type ExtractionPage struct {
 	HeightPx int `json:"height_px"`
 }
 
-// ExtractionFieldState is one decided reading. Region is nil when the extractor could point at
-// nothing.
-type ExtractionFieldState struct {
-	Name   string            `json:"name"`
+// ExtractionCandidate is one alternative reading kept beside an ambiguous field's decision. No
+// Name, Reason or Alternatives of its own: FieldResult (reconcile.go:27-34) gives an alternative
+// none of the three, and a recursive ExtractionFieldState would let the wire express a nesting
+// the domain never produces.
+type ExtractionCandidate struct {
 	Value  *string           `json:"value"`
 	Region *ExtractionRegion `json:"region"`
+}
+
+// ExtractionFieldState is one decided reading plus the alternatives an ambiguous field kept.
+// Region is nil when the extractor could point at nothing. Reason is "" for a clean field and
+// Alternatives is never nil (TestExtractionDetail_AlternativesAreNeverNil).
+type ExtractionFieldState struct {
+	Name         string                `json:"name"`
+	Value        *string               `json:"value"`
+	Region       *ExtractionRegion     `json:"region"`
+	Reason       string                `json:"reason"`
+	Alternatives []ExtractionCandidate `json:"alternatives"`
 }
 
 // ExtractionDocument is what the document toolbar renders. Filename and ContentType are
@@ -248,9 +260,9 @@ func detailPagesTx(ctx context.Context, tx pgx.Tx, documentID string) ([]Extract
 	return out, nil
 }
 
-// detailFieldsTx returns the decided readings only: candidate_rank 0 is the decision and 1..N
-// are alternatives, which are not on this wire
-// (TestExtractionDetail_ExcludesAlternativeCandidates). The ordering is fieldResultsTx's.
+// detailFieldsTx returns one entry per field_name: candidate_rank 0 is the decision, which is
+// what TestExtractionDetail_ExcludesAlternativeCandidates pins -- one wire entry per field, not
+// per row. The ordering is fieldResultsTx's.
 func detailFieldsTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ExtractionFieldState, error) {
 	out := []ExtractionFieldState{}
 
@@ -279,6 +291,8 @@ func detailFieldsTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ExtractionF
 		if page != nil {
 			f.Region = &ExtractionRegion{Page: *page, X0: *x0, Y0: *y0, X1: *x1, Y1: *y1}
 		}
+		// Coercion is at construction, not by a tag: a nil slice marshals to null.
+		f.Alternatives = []ExtractionCandidate{}
 		out = append(out, f)
 	}
 	if err := rows.Err(); err != nil {

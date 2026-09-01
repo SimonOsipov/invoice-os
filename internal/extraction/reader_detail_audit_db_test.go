@@ -109,7 +109,7 @@ func TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, nil, now)
 
 	// The before-counts are what make "one" a delta rather than a coincidence.
 	if before := rdaReadRows(t, ctx, tenantA, docA); before != 0 {
@@ -233,7 +233,7 @@ func TestRLS_ExtractionDetailAuditFailureFailsTheRead(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, nil, now)
 
 	// Control: this fixture reads and audits when the recorder succeeds, so the refusal below is
 	// the recorder's doing rather than an empty fixture or a job A cannot see.
@@ -280,7 +280,7 @@ func TestRLS_ExtractionDetailAuditsInsideTheReadsOwnTransaction(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	rvdSeedPage(t, ctx, tenantA, docA, 1, 1275, 1651)
-	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, now)
+	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-0001"), nil, 0, nil, now)
 
 	got, err := r.Detail(ctxA, jobA)
 	if err != nil {

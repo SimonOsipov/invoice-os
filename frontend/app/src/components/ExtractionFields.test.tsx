@@ -27,9 +27,12 @@
 // `getComputedStyle` appears in no app unit spec and none is used below: every style oracle
 // reads `el.style.*`, the inline declaration the component wrote.
 
+import type { ReactNode } from 'react'
+
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { crossGlyph, crosshairGlyph } from '../glyphs'
 import { fieldLabel } from '../lib/extractionReview'
 import type {
   DraftEntries,
@@ -738,10 +741,22 @@ describe('the cell is reachable by keyboard', () => {
     // asserted a tag and nothing a key did. The cell is now a <div> holding an input and,
     // depending on state, buttons — so the keyboard contract has to be carried by the controls,
     // and each of them must select its own field when focus reaches it.
+    //
+    // ARMED, over a fixture carrying a `missing` field. `tenFields()` builds every cell with
+    // the default reason, so the point button never rendered here and the `disabled` clause
+    // below iterated controls that could not include it — the guard could not produce the
+    // thing it forbids. Measured: adding `disabled` to the point button passed this walk.
     const onSelect = vi.fn()
-    render(fieldsPane({ fields: tenFields(), onSelect }))
+    const fields: ExtractionFieldState[] = tenFields().map((f) =>
+      f.name === 'buyer_tin' ? mkField({ name: f.name, value: null, region: null, reason: 'missing' }) : f,
+    )
+    render(fieldsPane({ fields, armed: 'buyer_tin', canPoint: true, onSelect }))
 
     expect(rows(), 'no row rendered — every check below is vacuous').toHaveLength(HEADER_FIELDS.length)
+    // The floor the walk was missing: both new controls are on screen, so the sweep below
+    // really did reach them.
+    expect(pointOf('buyer_tin'), 'no point button rendered — the disabled clause cannot see it').toBeTruthy()
+    expect(cancelOf('buyer_tin'), 'no Stop pointing button rendered — the disabled clause cannot see it').toBeTruthy()
     for (const name of HEADER_FIELDS) {
       const controls = controlsOf(name)
       expect(controls.length, `${name} holds nothing a keyboard can reach`).toBeGreaterThan(0)
@@ -1729,6 +1744,64 @@ describe('a missing field', () => {
     for (const k of [...known].sort((a, b) => b.length - a.length)) left = left.replace(k, '')
     expect(left.replace(/\s+/g, ''), `the armed cell rendered copy it does not declare: ${JSON.stringify(left)}`).toBe(
       '',
+    )
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08, QA. Two affordances on the point button that nothing read: the only accessible
+// signal that a field is armed, and the glyph a whole new export was added for. Both were
+// found by deleting them from the shipped component and watching all 3639 tests pass.
+// ==========================================================================================
+
+/** One glyph's rendered markup, read off a probe rather than retyped as a path string. */
+function glyphMarkup(node: ReactNode): string {
+  const probe = render(<span data-testid="glyph-probe">{node}</span>)
+  const html = probe.getByTestId('glyph-probe').innerHTML
+  probe.unmount()
+  return html
+}
+
+describe('the point button, as an affordance', () => {
+  it('announces the armed field to a screen reader, and only that field', () => {
+    // `Stop pointing` and the amber triple are both SIGHTED signals; the cell's own
+    // `aria-current` names the SELECTED row, not the armed one. This attribute is the only
+    // thing that tells a screen-reader user which field is waiting for a box. Deleting it
+    // passed the whole suite. `aria-current`, never `aria-pressed` -- the pane-wide negative
+    // forbids the latter, and the row that enforces it sits above.
+    const { rerender } = render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: null }))
+
+    expect(pointOf('buyer_tin')?.getAttribute('aria-current'), 'an unarmed field announces itself as current').toBe(
+      'false',
+    )
+
+    rerender(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: 'buyer_tin' }))
+
+    expect(pointOf('buyer_tin')?.getAttribute('aria-current'), 'the armed field announces nothing').toBe('true')
+    // The neighbour is what makes it an identity and not a flag: both cells carry the
+    // attribute, so a build setting it on every point button reds here.
+    expect(pointOf('buyer_name')?.getAttribute('aria-current'), 'arming one field announced its neighbour too').toBe(
+      'false',
+    )
+  })
+
+  it('carries the crosshair, not the dismissal X', () => {
+    // The repo's `crossGlyph` is an X used to dismiss things; rendering it here would put a
+    // close icon on a control that OPENS a gesture, which is why `crosshairGlyph` was added.
+    // Read off a probe, so this row cannot disagree with glyphs.tsx about a path -- and the
+    // negative is its pair: it is what still reds if crosshairGlyph is edited into an X.
+    render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: null }))
+
+    const button = pointOf('buyer_tin')
+    expect(button, 'no point button rendered -- the glyph claim is vacuous').toBeTruthy()
+    const svg = button!.querySelector('svg')
+    expect(svg, 'the point button renders no glyph at all').toBeTruthy()
+
+    expect(svg!.outerHTML, "the point button does not carry the artboard's crosshair").toBe(
+      glyphMarkup(crosshairGlyph),
+    )
+    expect(svg!.outerHTML, 'the point button carries the dismissal X, which reads as "close"').not.toBe(
+      glyphMarkup(crossGlyph),
     )
   })
 })

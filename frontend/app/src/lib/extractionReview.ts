@@ -448,6 +448,11 @@ export function typedEntry(prev: DraftEntry | undefined, value: string): DraftEn
  * Drawing a box on a field. The box records WHERE and the person types WHAT -- nothing in this
  * build can read text out of a region -- so the value the draft already holds survives, falling
  * back to the extractor's own reading and then to blank.
+ *
+ * UNENFORCED INVARIANT: the point button renders only on `reason === 'missing'`, and both
+ * producers of that reason (mock.go, reconcile.go) leave the value nil -- so `wireValue` is
+ * always null from the shell today and the middle arm is unreachable from it. Kept, because
+ * nothing enforces that a missing field carries no value, and the arm is one expression.
  */
 export function pointedEntry(
   prev: DraftEntry | undefined,

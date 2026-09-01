@@ -27,7 +27,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { StrictMode, type CSSProperties } from 'react'
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 import * as glyphs from '../glyphs'
@@ -1861,5 +1861,70 @@ describe('the drag surface', () => {
 
     expect(onPoint.mock.calls, "the release wrote the first field's box onto the second").toEqual([])
     expect(liveBoxes(), 'a box drawn for another field is still on the document').toHaveLength(0)
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08, QA. Four declarations on the drag surface that nothing read: the overlay's own
+// geometry, its two affordances, and the suppression that keeps a drag from selecting text.
+// Each was found by mutating the shipped component and watching all 3639 tests pass.
+// ==========================================================================================
+
+const SURFACE_INSET = ['position', 'left', 'top', 'right', 'bottom'] as const
+
+describe('the drag surface, as declared', () => {
+  it('fills its frame edge to edge, so its own rect is the box the highlight resolves against', () => {
+    // WHAT THIS CATCHES: an overlay that is not flush with the frame. `normaliseBox` divides
+    // by whatever this element measures, so an inset of n px shifts every posted region by n
+    // at the origin and by 2n/W in scale -- a 4px inset moves a box ~4px on a 560px frame,
+    // an order of magnitude past AC-2's one-pixel claim. Measured: `inset: 4` passed the whole
+    // suite before this row existed, because every drag row stubs the rect and never reads it.
+    //
+    // WHAT THIS DOES NOT CATCH, and must not be read as catching: the BORDER-box transform --
+    // a handler dividing by the frame's rect instead of this overlay's. That mutant's error is
+    // (2u - W)/(W+2), under one pixel everywhere at every zoom and every frame size, so it
+    // satisfies AC-2 as written and NO row in this story falsifies it. The four assertions
+    // below are about this element's own box, not about which box the handler divides by.
+    render(canvas({ armed: 'buyer_tin' }))
+
+    expect(surfaces(), 'no surface rendered -- the declarations below are vacuous').toHaveLength(3)
+
+    for (const el of surfaces()) {
+      const declared = pick(el.style, SURFACE_INSET)
+      expect(declared, `${el.dataset.testid} does not fill its frame`).toEqual({
+        position: 'absolute',
+        left: '0px',
+        top: '0px',
+        right: '0px',
+        bottom: '0px',
+      })
+    }
+  })
+
+  it('says with the cursor that the document takes a drag', () => {
+    // The artboard puts an arming banner over the document pane; this build did not build it
+    // (it needs two strings the copy table does not carry), so `Stop pointing` sits in the
+    // cell and the CURSOR is the only thing on the document itself that says a drag is what
+    // is wanted. `userSelect` is the other half of the gesture: without it the drag paints a
+    // text selection across the page under the box.
+    render(canvas({ armed: 'buyer_tin' }))
+
+    const s = surface(2)
+    expect(s.style.cursor, 'the document gives no sign it takes a drag').toBe('crosshair')
+    expect(s.style.userSelect, 'a drag across the page selects the text under it').toBe('none')
+  })
+
+  it('cancels the browser default on mousedown, so no native drag starts under the cursor', () => {
+    render(canvas({ armed: 'buyer_tin' }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    const down = createEvent.mouseDown(s, DRAG_FROM)
+    fireEvent(s, down)
+
+    expect(down.defaultPrevented, 'mousedown was left to the browser, which starts its own drag').toBe(true)
+    // The floor: the handler really ran, so the flag above is this component's doing.
+    fireEvent.mouseMove(s, DRAG_TO)
+    expect(liveBoxes(), 'the gesture drew nothing -- the flag above proves nothing').toHaveLength(1)
   })
 })

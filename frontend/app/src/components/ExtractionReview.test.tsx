@@ -1409,6 +1409,7 @@ describe('one shared draft, one Save', () => {
 // import of the constant under test.
 const POINT_IDLE = 'Not found — point at it on the document'
 const POINT_ARMED = 'Waiting — drag a box around it on the document'
+const POINT_PAGELESS = 'Not found — type it in'
 const MARKER_POINTED = 'YOU POINTED THIS OUT'
 const WAS_POINTED = 'Taken from page 2'
 
@@ -1649,5 +1650,121 @@ describe('a completed point', () => {
     const cell = fieldRow('buyer_tin')
     expect(within(cell).queryByText(MARKER_POINTED), 'the settled cell does not say the person pointed it out').toBeTruthy()
     expect(within(cell).queryByText(WAS_POINTED), 'the settled cell does not say which page the box is on').toBeTruthy()
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08, QA. Three shell wirings the subtask's own rows could not see: `canPoint` is
+// computed HERE and proved only in the pane, and two job tags are read only through state
+// nobody re-enters. Each was found by mutating the shipped file and watching 3639 tests pass.
+// ==========================================================================================
+
+/** A document with no page images at all — the artboard's docx case, and AC-5's whole subject. */
+const PAGELESS_JOB: ExtractionDetail = mkDetail({
+  pages: [],
+  fields: [
+    mkField({ name: 'buyer_tin', value: null, region: null, reason: 'missing' }),
+    mkField({ name: 'total', value: '1000.00', region: null }),
+  ],
+})
+
+describe('a job with no pages', () => {
+  it('offers typing, not pointing, and arms nothing (AC-5)', async () => {
+    // The pane's own AC-5 row takes `canPoint` as a PROP, so it proves the cell honours false
+    // and nothing more. `canPoint={data.pages.length > 0}` is computed in the shell, and
+    // hardcoding it true passed all 3639 tests: the pageless document would offer to be
+    // pointed at, arm on the click, and leave the reader waiting for a drag over a pane that
+    // renders no frame to drag on. Both halves are asserted for that reason.
+    const w = writing(PAGELESS_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    // Floors first: the document really has no pages, and the cell really rendered a button.
+    expect(frames(), 'the pageless fixture rendered a page frame — every claim below is vacuous').toHaveLength(0)
+    const button = pointOf('buyer_tin')
+    expect(button, 'the pageless cell offers no control at all').toBeTruthy()
+
+    expect(button!.textContent, 'a document with no pages still asks to be pointed at').toBe(POINT_PAGELESS)
+    expect(inputOf('buyer_tin'), '"type it in" and there is nothing to type into').toBeTruthy()
+
+    fireEvent.click(button as HTMLElement)
+    await flush()
+
+    expect(button!.textContent, 'the pageless button armed a gesture nothing can complete').toBe(POINT_PAGELESS)
+    expect(armedLabels(), 'a document with no pages armed a field').toEqual([])
+    expect(
+      document.querySelectorAll('[data-testid^="extraction-point-surface-"]'),
+      'a pageless document rendered a drag surface',
+    ).toHaveLength(0)
+    // The artboard's own docx fallback: the button still selects its field.
+    expect(pressedRows(), 'the pageless button stopped selecting its own field').toEqual(['extraction-field-buyer_tin'])
+  })
+})
+
+describe('what a job change drops', () => {
+  it('does not hand document 1 its old arming back on the way to it (AC-1)', async () => {
+    // A -> B -> A with the pane never unmounted, the shape of the shipped selection row above.
+    // `armed` is job-tagged at TWO sites (the render-time reset and the `arming` derivation)
+    // and deleting either passed all 3639 tests, because nothing re-entered the job it was
+    // armed under. The person comes back to a field they never re-armed, waiting for a box.
+    silenceObserver()
+    const two = wire(async (id) => ({ ...POINT_JOB, id }))
+    const { rerender } = render(review({ ctx: two.ctx, jobId: JOB_ID }))
+    await flush()
+
+    arm('buyer_tin')
+    await flush()
+    expect(armedLabels(), 'the field never armed — every absence below is vacuous').toEqual([
+      'extraction-point-buyer_tin',
+    ])
+
+    rerender(review({ ctx: two.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(armedLabels(), "document 2 opened carrying document 1's arming").toEqual([])
+
+    rerender(review({ ctx: two.ctx, jobId: JOB_ID }))
+    await flush()
+
+    // The control: the panes really did come back, so "nothing armed" is a live screen.
+    expect(fieldRows(), 'document 1 rendered no row on the way back').toHaveLength(3)
+    expect(armedLabels(), 'document 1 reopened with the field it was left armed on').toEqual([])
+    expect(
+      document.querySelectorAll('[data-testid^="extraction-point-surface-"]'),
+      'document 1 reopened taking a drag nobody asked for',
+    ).toHaveLength(0)
+  })
+
+  it('does not hand document 1 its old draft back on the way to it', async () => {
+    // The third sibling of the same tag, unkilled for the same reason. Pre-existing (07's
+    // `draft` slot, not 08's `armed` one) and two lines from the row above, so it is closed
+    // here rather than left as the one bare guard of three.
+    //
+    // The oracle is Save, not the input: a resurrected draft is only a defect because it
+    // POSTS. `total` is typed over on document 1 and left there; on the way back Save must be
+    // disabled, because the screen holds nothing anybody typed into it.
+    silenceObserver()
+    const two = wire(async (last, _url, opts) => {
+      if ((opts?.method ?? 'GET') !== 'GET') return mkCorrectionResponse('total', '1', 'typed')
+      return { ...POINT_JOB, id: last }
+    })
+    const { rerender } = render(review({ ctx: two.ctx, jobId: JOB_ID }))
+    await flush()
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '1,500.00' } })
+    await flush()
+    // Floor: the draft really was taken, so its absence at the end is a fact.
+    expect(saveButton()?.disabled, 'typing armed no Save — every claim below is vacuous').toBe(false)
+    expect(inputOf('total')?.value, 'the typed value never reached the input').toBe('1,500.00')
+
+    rerender(review({ ctx: two.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(saveButton()?.disabled, "document 2 opened able to post document 1's draft").toBe(true)
+
+    rerender(review({ ctx: two.ctx, jobId: JOB_ID }))
+    await flush()
+
+    expect(fieldRows(), 'document 1 rendered no row on the way back').toHaveLength(3)
+    expect(inputOf('total')?.value, 'document 1 reopened holding the value it was left with').toBe('1000.00')
+    expect(saveButton()?.disabled, 'document 1 reopened able to post a draft nobody re-entered').toBe(true)
   })
 })

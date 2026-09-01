@@ -182,8 +182,8 @@ const UNDO_BUTTON: CSSProperties = {
 
 // `:324`, without `.pf-btn` (it forces a pill radius over the artboard's 10px card) and without
 // its `width: 100%` (the cell is a flex column, so the button already stretches).
-// The 1.5px is the artboard's, and load-bearing: `dashedPanel()` counts inline `1px dashed `
-// borders and requires exactly one, so rounding this to 1px reds a row about the empty panel.
+// The 1.5px is the artboard's, and load-bearing: `moves the border, the ground and the label
+// together when it arms` pins both dashes, so rounding it to 1px reds.
 const POINT_BUTTON: CSSProperties = {
   display: 'flex',
   alignItems: 'center',

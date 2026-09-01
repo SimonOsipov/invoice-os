@@ -260,43 +260,88 @@ func detailPagesTx(ctx context.Context, tx pgx.Tx, documentID string) ([]Extract
 	return out, nil
 }
 
-// detailFieldsTx returns one entry per field_name: candidate_rank 0 is the decision, which is
-// what TestExtractionDetail_ExcludesAlternativeCandidates pins -- one wire entry per field, not
-// per row. The ordering is fieldResultsTx's.
+// detailFieldsTx returns one entry per field_name: candidate_rank 0 is the decision and ranks
+// 1..N nest under it, so the count is per field and never per row
+// (TestExtractionDetail_AlternativesDoNotBecomeTopLevelFields). Every row of one job ties on
+// created_at in production, so field_name, candidate_rank and id break it
+// (TestExtractionDetail_AlternativeOrderSurvivesACreatedAtTie).
 func detailFieldsTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ExtractionFieldState, error) {
+	type fieldRow struct {
+		name           string
+		value          *string
+		page           *int
+		x0, y0, x1, y1 *float64
+		reason         *string
+		rank           int
+	}
+
 	out := []ExtractionFieldState{}
 
 	rows, err := tx.Query(ctx,
-		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1
+		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code, candidate_rank
 		   FROM extraction_field_results
-		  WHERE extraction_job_id = $1 AND candidate_rank = 0
-		  ORDER BY created_at, field_name`,
+		  WHERE extraction_job_id = $1
+		  ORDER BY created_at, field_name, candidate_rank, id`,
 		jobID)
 	if err != nil {
 		return out, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
 	}
 	defer rows.Close()
 
+	buf := []fieldRow{}
 	for rows.Next() {
-		var (
-			f              ExtractionFieldState
-			page           *int
-			x0, y0, x1, y1 *float64
-		)
-		if err := rows.Scan(&f.Name, &f.Value, &page, &x0, &y0, &x1, &y1); err != nil {
+		var r fieldRow
+		if err := rows.Scan(&r.name, &r.value, &r.page,
+			&r.x0, &r.y0, &r.x1, &r.y1, &r.reason, &r.rank); err != nil {
 			return []ExtractionFieldState{}, fmt.Errorf("extraction: scan field result for job %s: %w", jobID, err)
 		}
-		// extraction_field_results_region_complete makes the five box columns all-or-none, so
-		// page alone decides whether there is a box.
-		if page != nil {
-			f.Region = &ExtractionRegion{Page: *page, X0: *x0, Y0: *y0, X1: *x1, Y1: *y1}
-		}
-		// Coercion is at construction, not by a tag: a nil slice marshals to null.
-		f.Alternatives = []ExtractionCandidate{}
-		out = append(out, f)
+		buf = append(buf, r)
 	}
 	if err := rows.Err(); err != nil {
 		return []ExtractionFieldState{}, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
+	}
+
+	// extraction_field_results_region_complete makes the five box columns all-or-none, so page
+	// alone decides whether there is a box.
+	region := func(r fieldRow) *ExtractionRegion {
+		if r.page == nil {
+			return nil
+		}
+		return &ExtractionRegion{Page: *r.page, X0: *r.x0, Y0: *r.y0, X1: *r.x1, Y1: *r.y1}
+	}
+
+	// Two passes so a rank-0 row need not precede its own alternatives in the buffer.
+	byName := map[string]int{}
+	for _, r := range buf {
+		if r.rank != 0 {
+			continue
+		}
+		reason := ""
+		if r.reason != nil {
+			reason = *r.reason
+		}
+		byName[r.name] = len(out)
+		out = append(out, ExtractionFieldState{
+			Name:   r.name,
+			Value:  r.value,
+			Region: region(r),
+			Reason: reason,
+			// Coercion is at construction, not by a tag: a nil slice marshals to null.
+			Alternatives: []ExtractionCandidate{},
+		})
+	}
+	for _, r := range buf {
+		if r.rank == 0 {
+			continue
+		}
+		// An alternative with no rank-0 sibling is dropped, never promoted
+		// (TestExtractionDetail_OrphanAlternativeIsDropped).
+		idx, ok := byName[r.name]
+		if !ok {
+			continue
+		}
+		out[idx].Alternatives = append(out[idx].Alternatives,
+			ExtractionCandidate{Value: r.value, Region: region(r)})
 	}
 	return out, nil
 }

@@ -340,10 +340,10 @@ func TestExtractionDetail_PagesOrderedByPageNumber(t *testing.T) {
 	}
 }
 
-// AC 6: candidate_rank = 0 is the decided reading. One wire entry per field NAME, not per row
-// -- EXTR-12-02 nests ranks 1..N under their rank-0 sibling, which must not change this count
-// and must never promote an alternative to a top-level field.
-func TestExtractionDetail_ExcludesAlternativeCandidates(t *testing.T) {
+// The detail carries one wire entry per field NAME, not per row: ranks 1..N nest under their
+// rank-0 sibling, so three rows on invoice_number still yield one field, and no top-level
+// reading ever carries a candidate_rank > 0 value. This is the guard against an ungrouped read.
+func TestExtractionDetail_AlternativesDoNotBecomeTopLevelFields(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)
 

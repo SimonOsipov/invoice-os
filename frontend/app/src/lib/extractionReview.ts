@@ -8,6 +8,7 @@ import { ApiError } from '@invoice-os/api-client'
 import { formatLabel } from '../components/SourceDocumentStates'
 import { fmtTimeWAT } from './format'
 import type { AuthedFetch } from './portfolio'
+import { EDIT_FIELD_LABELS } from './reviewBatch'
 import { formatBytes, type DocumentBytes } from './sourceDocument'
 
 // internal/extraction/reader.go, ExtractionRegion. Normalised [0,1], TOP-LEFT origin, page
@@ -102,26 +103,67 @@ export interface CorrectedMarker {
   was: string | null
 }
 
-// The four pure mappings the field cell renders through. STUBS: each returns a fixed
-// wrong-but-typed value so the red phase fails on its own assertions, never on a missing
-// export. Pinned by extractionReview.test.ts.
-export function fieldLabel(_name: string): string {
-  return 'UNIMPLEMENTED'
+// The extraction vocabulary is ten names wide, the edit form's nine: EDIT_FIELD_KEYS refuses
+// invoice_number ([D9]), so the nine strings stay where they are and this overlay adds the
+// tenth. Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
+const FIELD_LABELS: Record<string, string> = { ...EDIT_FIELD_LABELS, invoice_number: 'Invoice number' }
+
+const REASON_PILLS: Record<Exclude<ExtractionReason, ''>, string> = {
+  unreadable: "COULDN'T READ THIS CLEARLY",
+  ambiguous: 'FOUND TWO POSSIBLE VALUES',
+  inconsistent: "DOESN'T ADD UP",
+  missing: 'NOT FOUND',
 }
 
-export function reasonPill(_reason: ExtractionReason): string | null {
-  return null
+// Reconcile reuses one `inconsistent` code for the line-sum check and the entity match, so
+// the note is what tells them apart.
+const NOTE_SUBTOTAL = 'The line items we read do not add up to this subtotal.'
+const NOTE_SUPPLIER =
+  "This document's supplier doesn't match the client you picked. It is filed from your client record either way."
+const NOTE_GENERIC = 'This value disagrees with the other numbers on the document.'
+
+const SUPPLIER_MISMATCH_FIELDS = ['supplier_tin', 'supplier_name']
+
+/** The curated label, or the raw wire name -- never a mechanical humanisation of it. */
+export function fieldLabel(name: string): string {
+  return FIELD_LABELS[name] ?? name
 }
 
-export function fieldNote(_reason: ExtractionReason, _name: string): string | null {
-  return ''
+export function reasonPill(reason: ExtractionReason): string | null {
+  return reason === '' ? null : REASON_PILLS[reason]
 }
 
+/** Keyed on the reason first: a clean subtotal carries no note. */
+export function fieldNote(reason: ExtractionReason, name: string): string | null {
+  if (reason !== 'inconsistent') return null
+  if (name === 'subtotal') return NOTE_SUBTOTAL
+  return SUPPLIER_MISMATCH_FIELDS.includes(name) ? NOTE_SUPPLIER : NOTE_GENERIC
+}
+
+/**
+ * What a settled field says instead of its reason. `was` is null where the correction has no
+ * provenance to state -- omitting the clause invents no copy, where "We read null" would.
+ * No default arm: a fifth CorrectionMethod must fail tsc here, not fall through silently.
+ */
 export function correctedMarker(
-  _corrected: ExtractionCorrected | null,
-  _region: ExtractionRegion | null,
+  corrected: ExtractionCorrected | null,
+  region: ExtractionRegion | null,
 ): CorrectedMarker | null {
-  return { label: '', was: null }
+  if (corrected === null) return null
+  switch (corrected.method) {
+    case 'typed':
+      return { label: 'YOU CHANGED THIS', was: corrected.was === null ? null : `We read ${corrected.was}` }
+    case 'pointed': {
+      // The anchor label when the correction carries one, else the region as a phrase.
+      const where = corrected.where ?? (region === null ? null : `page ${region.page}`)
+      return { label: 'YOU POINTED THIS OUT', was: where === null ? null : `Taken from ${where}` }
+    }
+    case 'chosen':
+      return { label: 'YOU CHOSE THIS', was: 'We found more than one candidate' }
+    case 'undone':
+      // reader.go returns `corrected: null` for an undone field, so this never renders.
+      return null
+  }
 }
 
 export async function getExtractionDetail(authedFetch: AuthedFetch, base: string, jobId: string): Promise<ExtractionDetail> {

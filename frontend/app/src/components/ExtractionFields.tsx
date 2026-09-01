@@ -1,9 +1,11 @@
 // The fields pane: the artboard's right column. A header over a scrollable body holding one
-// cell per wire field — label, value, and the selection the document pane follows.
+// cell per wire field — label, value, why it is in doubt, what a person changed, and the
+// selection the document pane follows.
 // Pinned by ExtractionFields.test.tsx.
 
 import type { CSSProperties } from 'react'
 
+import { correctedMarker, fieldLabel, fieldNote, reasonPill } from '../lib/extractionReview'
 import type { ExtractionFieldState } from '../lib/extractionReview'
 
 const TITLE = 'The invoice as it will be filed'
@@ -84,6 +86,35 @@ const PILL: CSSProperties = {
 
 const NOTE: CSSProperties = { margin: '12px 0 0', fontSize: 11.5, color: 'var(--fg-2)', lineHeight: 1.5 }
 
+// The artboard's `:301` seat for the marker. EXTR-12-07 swaps the value span inside it for a
+// full-width input and the wrapper's box is unchanged, so the marker's geometry does not move.
+const CONTROL: CSSProperties = { position: 'relative', display: 'flex', alignItems: 'center' }
+
+// `:307`. The artboard's `var(--accent)` there means teal, which is `--action` in the app layer.
+const MARKER: CSSProperties = {
+  position: 'absolute',
+  right: 11,
+  width: 7,
+  height: 7,
+  borderRadius: 2,
+  background: 'var(--action)',
+  pointerEvents: 'none',
+}
+
+// `:330` as a block <span>: <p> is flow content and invalid inside the cell's <button>.
+const FIELD_NOTE: CSSProperties = {
+  display: 'block',
+  fontSize: 11.5,
+  color: 'var(--fg-2)',
+  lineHeight: 1.5,
+  textWrap: 'pretty',
+}
+
+// `:333-336`. Undo is EXTR-12-07's.
+const CHANGED_ROW: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }
+const CHANGED_LABEL: CSSProperties = { fontSize: 8.5, fontWeight: 700, letterSpacing: '0.07em', color: 'var(--action)' }
+const WAS_LINE: CSSProperties = { fontSize: 11.5, color: 'var(--fg-3)' }
+
 const EMPTY_PANEL: CSSProperties = {
   padding: '14px 16px',
   border: '1px dashed var(--line-3)',
@@ -118,6 +149,12 @@ export function ExtractionFields({
             <div style={GRID}>
               {fields.map((f) => {
                 const on = f.name === selected
+                // A settled field stops shouting: no reason pill, no note, a marker instead.
+                const settled = correctedMarker(f.corrected, f.region)
+                const note = settled === null ? fieldNote(f.reason, f.name) : null
+                // One slot, and the reason outranks the region cue.
+                const reason = settled === null ? reasonPill(f.reason) : null
+                const pill = reason ?? (f.reason === '' && f.region === null ? NO_REGION : null)
                 return (
                   <button
                     key={f.name}
@@ -130,14 +167,28 @@ export function ExtractionFields({
                     style={on ? SELECTED_CELL : CELL}
                   >
                     <span style={LABEL_STRIP}>
-                      <span style={LABEL}>{f.name}</span>
-                      {f.region === null ? (
+                      <span style={LABEL}>{fieldLabel(f.name)}</span>
+                      {pill === null ? null : (
                         <span className="mono" style={PILL}>
-                          {NO_REGION}
+                          {pill}
                         </span>
-                      ) : null}
+                      )}
                     </span>
-                    <span style={VALUE}>{f.value === null || f.value === '' ? '—' : f.value}</span>
+                    <span data-testid={`extraction-control-${f.name}`} style={CONTROL}>
+                      <span style={VALUE}>{f.value === null || f.value === '' ? '—' : f.value}</span>
+                      {settled === null ? null : (
+                        <span data-testid={`extraction-marker-${f.name}`} style={MARKER} />
+                      )}
+                    </span>
+                    {note === null ? null : <span style={FIELD_NOTE}>{note}</span>}
+                    {settled === null ? null : (
+                      <span style={CHANGED_ROW}>
+                        <span className="mono" style={CHANGED_LABEL}>
+                          {settled.label}
+                        </span>
+                        {settled.was === null ? null : <span style={WAS_LINE}>{settled.was}</span>}
+                      </span>
+                    )}
                   </button>
                 )
               })}

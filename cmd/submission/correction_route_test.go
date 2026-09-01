@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,13 @@ const (
 	fcInvoiceID   = "5d2f7a10-6b3c-4e8d-9f01-2a3b4c5d6e7f"
 	fcCorrectedTo = "1500.00"
 	fcActor       = "e5b10007-0000-4000-8000-000000000001"
+	fcPoolArg     = "pool"
+	fcLoggerArg   = "app.Logger"
+
+	// docs/read-path-suspension.md reads "61 distinct routes, 67 registrations" before this
+	// route lands. Floors, so a later story raises them rather than breaking this.
+	fcMinDocRoutes        = 62
+	fcMinDocRegistrations = 68
 )
 
 // The route must be mounted on app.Mux -- a route on a locally built mux is registered and
@@ -92,6 +100,15 @@ func TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators(t *testing.T)
 			}
 			if c, ok := handlerCall.Args[2].(*ast.CallExpr); !ok || wtCallName(c.Fun) != fcAdapterFn {
 				t.Errorf("CorrectionHandler's record argument is %s, want a %s(...) call", wtRender(handlerCall.Args[2]), fcAdapterFn)
+			}
+			// The pool and the logger, for the same reason: nothing in Go dereferences either
+			// until a request arrives, so a nil in argument 0 compiles, passes every adapter
+			// test and panics inside BeginTx on the first correction.
+			if got := wtRender(handlerCall.Args[0]); got != fcPoolArg {
+				t.Errorf("CorrectionHandler's pool argument is %s, want %s -- the route must run on the service's own invoice_app pool", got, fcPoolArg)
+			}
+			if got := wtRender(handlerCall.Args[3]); got != fcLoggerArg {
+				t.Errorf("CorrectionHandler's logger argument is %s, want %s", got, fcLoggerArg)
 			}
 		}
 		return true
@@ -172,14 +189,15 @@ func TestNewFieldCorrectedAuditor_WritesTheInvoiceIdPayload(t *testing.T) {
 type fcEditSpy struct {
 	calls      int
 	gotDocID   string
+	gotTx      pgx.Tx
 	gotInput   invoice.EditInput
 	err        error
 	returnedID string
 }
 
-func (s *fcEditSpy) edit(_ context.Context, _ pgx.Tx, documentID string, in invoice.EditInput) (invoice.Invoice, error) {
+func (s *fcEditSpy) edit(_ context.Context, tx pgx.Tx, documentID string, in invoice.EditInput) (invoice.Invoice, error) {
 	s.calls++
-	s.gotDocID, s.gotInput = documentID, in
+	s.gotDocID, s.gotTx, s.gotInput = documentID, tx, in
 	if s.err != nil {
 		return invoice.Invoice{}, s.err
 	}
@@ -218,9 +236,13 @@ func TestNewInvoiceFieldApplier_MapsEachDomainError(t *testing.T) {
 		})
 	}
 
-	// The success arm: the invoice the edit reached is what the audit payload will name.
+	// The success arm: the invoice the edit reached is what the audit payload will name, and the
+	// handler's OWN transaction is what the edit runs on. internal/extraction's DB suite injects
+	// an applier of its own, so nothing there can see this adapter drop the transaction -- and a
+	// nil one panics inside EditBySourceDocumentTx on the first correction.
+	var tx pgx.Tx = &eaTx{}
 	spy := &fcEditSpy{returnedID: fcInvoiceID}
-	id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, "total", fcCorrectedTo)
+	id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), tx, fcDocumentID, "total", fcCorrectedTo)
 	if err != nil {
 		t.Fatalf("the adapter returned %v on a successful edit, want nil", err)
 	}
@@ -229,6 +251,9 @@ func TestNewInvoiceFieldApplier_MapsEachDomainError(t *testing.T) {
 	}
 	if spy.gotDocID != fcDocumentID {
 		t.Errorf("the edit was handed document %q, want %q", spy.gotDocID, fcDocumentID)
+	}
+	if spy.gotTx != tx {
+		t.Errorf("the edit was handed transaction %v, want the caller's own %v -- the correction row, the invoice write and the audit row share one transaction or none of the three does", spy.gotTx, tx)
 	}
 }
 
@@ -306,4 +331,79 @@ func fcNonNil(in invoice.UpdateInput) int {
 		}
 	}
 	return n
+}
+
+// fcDeclaredRoutes parses docs/read-path-suspension.md's endpoint table to route -> verdict.
+func fcDeclaredRoutes(t *testing.T, lines []string) map[string]string {
+	t.Helper()
+	declared := map[string]string{}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(trimmed, "|"), "|")
+		if len(cells) < 3 {
+			continue
+		}
+		m := drRowCell.FindStringSubmatch(strings.TrimSpace(cells[0]))
+		if m == nil {
+			continue
+		}
+		declared[m[1]] = strings.TrimSpace(cells[2])
+	}
+	if len(declared) < drMinDocRows {
+		t.Fatalf("%s's endpoint table parsed to %d row(s), want at least %d -- a parse that lost the table finds no missing row either",
+			drDocPath, len(declared), drMinDocRows)
+	}
+	return declared
+}
+
+// TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute errors for a registered route with no row,
+// but its floors leave the prose count free: the sentence could keep claiming 61/67 while the
+// table carried 62. Floors move with the table, so an honest doc is what ships.
+func TestReadPathSuspensionDoc_DeclaresTheCorrectionRoute(t *testing.T) {
+	lines := drDocSection(t)
+	declared := fcDeclaredRoutes(t, lines)
+
+	// Control needle: the collection route this one hangs off is declared today, so a broken
+	// parser fails here rather than reporting the correction route missing.
+	if got, ok := declared["GET /v1/extractions"]; !ok || got != "covered" {
+		t.Fatalf("the parse read `GET /v1/extractions` as verdict %q (present=%v), want covered -- the row parser is broken", got, ok)
+	}
+
+	verdict, ok := declared[fcRoute]
+	switch {
+	case !ok:
+		t.Errorf("%s declares no row for `%s`", drDocPath, fcRoute)
+	case verdict != "covered":
+		t.Errorf("%s declares `%s` with verdict %q, want exactly covered", drDocPath, fcRoute, verdict)
+	}
+
+	var m []string
+	for _, line := range lines {
+		if got := drCountLine.FindStringSubmatch(line); got != nil {
+			if m != nil {
+				t.Fatalf("%s carries two route-count sentences; they can disagree", drDocPath)
+			}
+			m = got
+		}
+	}
+	if m == nil {
+		t.Fatalf("%s's endpoint section carries no \"N distinct routes, M registrations\" sentence", drDocPath)
+	}
+	routes, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("route count %q is not a number: %v", m[1], err)
+	}
+	registrations, err := strconv.Atoi(m[2])
+	if err != nil {
+		t.Fatalf("registration count %q is not a number: %v", m[2], err)
+	}
+	if routes < fcMinDocRoutes {
+		t.Errorf("%s claims %d distinct routes, want at least %d -- the correction route raises it by one", drDocPath, routes, fcMinDocRoutes)
+	}
+	if registrations < fcMinDocRegistrations {
+		t.Errorf("%s claims %d registrations, want at least %d -- the correction route raises it by one", drDocPath, registrations, fcMinDocRegistrations)
+	}
 }

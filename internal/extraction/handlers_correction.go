@@ -75,6 +75,7 @@ const (
 	msgBlankValue       = "value must not be blank"
 	msgUnknownMethod    = "method must be one of typed, chosen, pointed, undone"
 	msgRegionDisagrees  = "only a pointed correction carries a region"
+	msgRegionBox        = "region must be a normalised box: page at least 1, 0 <= x0 <= x1 <= 1 and 0 <= y0 <= y1 <= 1"
 	msgBadIssueDate     = "issue_date must be a date this system can read"
 	msgUnknownField     = "this document field is not one we file on an invoice"
 	msgInvoiceNumberSet = "invoice_number identifies the invoice and is not corrected here"
@@ -108,6 +109,15 @@ func refuseField(name string) (msg string, refused bool) {
 		return msg, true
 	}
 	return "", false
+}
+
+// normalisedBox mirrors extraction_field_corrections_bbox_normalised and the page CHECK, so a
+// caller sending pixel coordinates reads a 400 rather than a 23514 surfacing as a 500. A
+// degenerate zero-area box is admitted, exactly as the constraint admits it.
+func normalisedBox(r ExtractionRegion) bool {
+	return r.Page >= 1 &&
+		r.X0 >= 0 && r.X0 <= r.X1 && r.X1 <= 1 &&
+		r.Y0 >= 0 && r.Y0 <= r.Y1 && r.Y1 <= 1
 }
 
 func validMethod(m CorrectionMethod) bool {
@@ -163,10 +173,13 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 			writeError(w, http.StatusBadRequest, msgUnknownMethod)
 			return
 		}
-		// Both directions, mirroring extraction_field_corrections_pointed_has_region, so the
-		// CHECK never surfaces as a 500.
+		// Both directions, mirroring extraction_field_corrections_pointed_has_region.
 		if (req.Method == MethodPointed) != (req.Region != nil) {
 			writeError(w, http.StatusBadRequest, msgRegionDisagrees)
+			return
+		}
+		if req.Region != nil && !normalisedBox(*req.Region) {
+			writeError(w, http.StatusBadRequest, msgRegionBox)
 			return
 		}
 		// issue_date is the one field the handler parses: UpdateInput.IssueDate is a

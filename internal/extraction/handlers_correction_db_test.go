@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -174,6 +175,28 @@ func cxCorrectionValue(t *testing.T, ctx context.Context, jobID string) string {
 		t.Fatalf("read the correction value for job %s: %v", jobID, err)
 	}
 	return out
+}
+
+// cxRow is one stored correction, read as the SUPERUSER: an app-pool read is RLS-scoped, and a
+// NULL box reads the same as a row that is not there.
+type cxRow struct {
+	fieldName, value, method, actor string
+	page                            *int
+	x0, y0, x1, y1                  *float64
+	anchor                          *string
+}
+
+func cxCorrectionRow(t *testing.T, ctx context.Context, jobID string) cxRow {
+	t.Helper()
+	var r cxRow
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT field_name, value, method, actor, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, anchor_label
+		   FROM extraction_field_corrections WHERE extraction_job_id = $1`, jobID).
+		Scan(&r.fieldName, &r.value, &r.method, &r.actor,
+			&r.page, &r.x0, &r.y0, &r.x1, &r.y1, &r.anchor); err != nil {
+		t.Fatalf("read the correction row for job %s: %v", jobID, err)
+	}
+	return r
 }
 
 func cxTotal(t *testing.T, ctx context.Context, invoiceID string) string {
@@ -416,9 +439,7 @@ func TestRLS_CorrectionOnANonFixableInvoiceIsRefused(t *testing.T) {
 	w := cxServe(t, reqCtx, jobID, "total", cxBody(cxTotalAfter),
 		cxRefusingApplier(extraction.ErrInvoiceNotEditable), cxAuditor(nil))
 
-	if w.Code != http.StatusConflict {
-		t.Errorf("status = %d, want %d for an invoice past the fixable states (body=%q)", w.Code, http.StatusConflict, w.Body.String())
-	}
+	hndAssert(t, w, http.StatusConflict, hndErrBody(t, corMsgNotFixable))
 	if n := cxCorrectionRows(t, ctx, jobID); n != 0 {
 		t.Errorf("%d correction row(s) landed on a refused correction, want 0", n)
 	}
@@ -437,9 +458,7 @@ func TestRLS_CorrectionWithNoInvoiceFiledFromTheDocumentIsRefused(t *testing.T) 
 
 	w := cxServe(t, reqCtx, jobID, "total", cxBody(cxTotalAfter), cxApplier(true, nil), cxAuditor(nil))
 
-	if w.Code != http.StatusConflict {
-		t.Errorf("status = %d, want %d for a document with no invoice (body=%q)", w.Code, http.StatusConflict, w.Body.String())
-	}
+	hndAssert(t, w, http.StatusConflict, hndErrBody(t, corMsgNoInvoice))
 	if n := cxCorrectionRows(t, ctx, jobID); n != 0 {
 		t.Errorf("%d correction row(s) landed with no invoice to apply them to, want 0 -- a row with a NULL entity_id claims the action was firm-wide", n)
 	}
@@ -554,4 +573,118 @@ func TestRLS_ConfirmingCorrectionStillWritesItsRowAndAuditEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- what a pointed correction stores ----------------------------------------------------
+
+// The region the reviewer drew, the anchor label and the caller's own subject, read off the
+// STORED row. The 201 body echoes the request region, so it agrees with the request whatever
+// regionFromWire did to the box on the way to the database; only this read can say the stored
+// box is the one that was sent. Four distinct coordinates and page 2, so a transposed pair or a
+// hardcoded page fails here rather than satisfying the region CHECK set anyway.
+func TestRLS_PointedCorrectionStoresTheBoxTheAnchorAndTheActor(t *testing.T) {
+	const (
+		cxPage   = 2
+		cxX0     = 0.11
+		cxY0     = 0.37
+		cxX1     = 0.62
+		cxY1     = 0.44
+		cxAnchor = "Grand Total"
+	)
+	region := `"region":{"page":2,"x0":0.11,"y0":0.37,"x1":0.62,"y1":0.44},"anchor_label":"  ` + cxAnchor + `  "`
+
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-04-POINTED", "draft")
+
+	w := cxServe(t, reqCtx, jobID, "total", corBody(cxTotalAfter, "pointed", region),
+		cxApplier(true, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	row := cxCorrectionRow(t, ctx, jobID)
+	if row.fieldName != "total" || row.value != cxTotalAfter || row.method != "pointed" {
+		t.Errorf("the stored row is (%q, %q, %q), want (%q, %q, %q)",
+			row.fieldName, row.value, row.method, "total", cxTotalAfter, "pointed")
+	}
+	// A row naming the wrong actor is worse than no row: this table is the append-only record of
+	// who changed what.
+	if row.actor != rdMemberSubject {
+		t.Errorf("the stored row names actor %q, want the caller's own subject %q", row.actor, rdMemberSubject)
+	}
+	if row.anchor == nil || *row.anchor != cxAnchor {
+		t.Errorf("the stored row carries anchor_label %v, want %q trimmed of its surrounding space", row.anchor, cxAnchor)
+	}
+	if row.page == nil {
+		t.Fatalf("the stored row carries no page; a pointed correction always does")
+	}
+	if *row.page != cxPage {
+		t.Errorf("the stored row is on page %d, want %d", *row.page, cxPage)
+	}
+	for _, c := range []struct {
+		name string
+		got  *float64
+		want float64
+	}{
+		{"bbox_x0", row.x0, cxX0}, {"bbox_y0", row.y0, cxY0},
+		{"bbox_x1", row.x1, cxX1}, {"bbox_y1", row.y1, cxY1},
+	} {
+		if c.got == nil {
+			t.Errorf("the stored row carries no %s", c.name)
+			continue
+		}
+		if *c.got != c.want {
+			t.Errorf("the stored row carries %s = %v, want %v -- the box points somewhere the reviewer did not click", c.name, *c.got, c.want)
+		}
+	}
+
+	// The 201 body and the stored row must describe ONE box.
+	var body struct {
+		Region *extraction.ExtractionRegion `json:"region"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode the 201 body: %v", err)
+	}
+	if body.Region == nil {
+		t.Fatalf("the 201 body carries region null for a pointed correction")
+	}
+	if want := (extraction.ExtractionRegion{Page: cxPage, X0: cxX0, Y0: cxY0, X1: cxX1, Y1: cxY1}); *body.Region != want {
+		t.Errorf("the 201 body carries region %+v, want %+v", *body.Region, want)
+	}
+
+	// The negative half, on its own job: a typed correction stores no box and no anchor, so the
+	// assertions above are reading what was SENT rather than a box the handler always writes.
+	reqCtx2, tenant2, document2, job2 := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenant2) })
+	entity2 := cxEntity(t, ctx, tenant2)
+	cxInvoice(t, ctx, tenant2, entity2, document2, "EXTR12-04-TYPED", "draft")
+
+	w2 := cxServe(t, reqCtx2, job2, "total", cxBody(cxTotalAfter), cxApplier(true, nil), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("the typed control answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	typed := cxCorrectionRow(t, ctx, job2)
+	if typed.page != nil || typed.x0 != nil || typed.y0 != nil || typed.x1 != nil || typed.y1 != nil {
+		t.Errorf("a typed correction stored a box (page %v, x0 %v); only a pointed one carries one", cxShowInt(typed.page), cxShow(typed.x0))
+	}
+	if typed.anchor != nil {
+		t.Errorf("a typed correction stored anchor_label %q; an empty label binds as NULL", *typed.anchor)
+	}
+}
+
+func cxShow(p *float64) string {
+	if p == nil {
+		return "<null>"
+	}
+	return strconv.FormatFloat(*p, 'f', -1, 64)
+}
+
+func cxShowInt(p *int) string {
+	if p == nil {
+		return "<null>"
+	}
+	return strconv.Itoa(*p)
 }

@@ -40,14 +40,20 @@ const (
 	// The wire messages this route owns. hndMsgUnauthorized and hndMsgInternal carry the rest;
 	// retyping either here would let the wire and the constant drift apart while this file
 	// stayed green.
-	corMsgMalformedID     = "id must be a well-formed uuid"
-	corMsgBlankValue      = "value must not be blank"
-	corMsgUnknownMethod   = "method must be one of typed, chosen, pointed, undone"
-	corMsgRegionDisagrees = "only a pointed correction carries a region"
-	corMsgBadIssueDate    = "issue_date must be a date this system can read"
-	corMsgUnknownField    = "this document field is not one we file on an invoice"
-	corMsgInvoiceNumber   = "invoice_number identifies the invoice and is not corrected here"
-	corMsgSupplierField   = "supplier_tin and supplier_name come from the client record, not from the document"
+	corMsgMalformedID        = "id must be a well-formed uuid"
+	corMsgBlankValue         = "value must not be blank"
+	corMsgUnknownMethod      = "method must be one of typed, chosen, pointed, undone"
+	corMsgRegionDisagrees    = "only a pointed correction carries a region"
+	corMsgRegionUnnormalised = "region must be a normalised box: page at least 1, 0 <= x0 <= x1 <= 1 and 0 <= y0 <= y1 <= 1"
+	corMsgBadIssueDate       = "issue_date must be a date this system can read"
+	corMsgUnknownField       = "this document field is not one we file on an invoice"
+	corMsgInvoiceNumber      = "invoice_number identifies the invoice and is not corrected here"
+	corMsgSupplierField      = "supplier_tin and supplier_name come from the client record, not from the document"
+
+	// The two 409s. One status, two reasons: a caller must be able to tell "nothing was filed
+	// from this document" from "this invoice is past editing".
+	corMsgNoInvoice  = "no invoice has been filed from this document"
+	corMsgNotFixable = "this invoice can no longer be corrected"
 )
 
 // corSpy is the injected pair. applies/records count invocations, which is the only way to
@@ -331,5 +337,39 @@ func TestCorrectionHandler_LockedFieldRefusalPrecedesTheBodyDecode(t *testing.T)
 			hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, tc.want))
 			corAssertUntouched(t, spy)
 		})
+	}
+}
+
+// The box CHECKs, mirrored at the boundary. Unrefused, a caller sending pixel coordinates or an
+// inverted pair reaches the INSERT, raises 23514 and reads back as a 500 with an error log --
+// the same class of caller mistake the method/region arms answer with a 400.
+func TestCorrectionHandler_UnnormalisedRegionIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		region string
+	}{
+		{"page below one", `"region":{"page":0,"x0":0.1,"y0":0.2,"x1":0.3,"y1":0.25}`},
+		{"x1 left of x0", `"region":{"page":1,"x0":0.5,"y0":0.2,"x1":0.3,"y1":0.25}`},
+		{"y1 above y0", `"region":{"page":1,"x0":0.1,"y0":0.9,"x1":0.3,"y1":0.25}`},
+		{"x1 past the right edge", `"region":{"page":1,"x0":0.1,"y0":0.2,"x1":1.4,"y1":0.25}`},
+		{"a negative origin", `"region":{"page":1,"x0":-0.1,"y0":0.2,"x1":0.3,"y1":0.25}`},
+		{"pixels, not fractions", `"region":{"page":1,"x0":120,"y0":300,"x1":480,"y1":330}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := newCorSpy()
+
+			w := corPost(t, spy, "total", corBody("1500.00", "pointed", tc.region))
+
+			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, corMsgRegionUnnormalised))
+			corAssertUntouched(t, spy)
+		})
+	}
+
+	// The control: a degenerate zero-area box is admitted, exactly as
+	// extraction_field_corrections_bbox_normalised admits it -- a reviewer's click can land on one.
+	spy := newCorSpy()
+	w := corPost(t, spy, "total", corBody("1500.00", "pointed", `"region":{"page":1,"x0":0.3,"y0":0.4,"x1":0.3,"y1":0.4}`))
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("a zero-area box was refused with 400 %q; the arms above then refuse every region rather than an unnormalised one", w.Body.String())
 	}
 }

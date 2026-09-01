@@ -158,8 +158,37 @@ EXTR-17's.
 
 ## What this does not cover
 
-No read path exists yet. `extraction_page_images` is written and never read: nothing serves a page
-image, no store method selects one, and no screen displays one. The inventory is here so that the
-story which builds the review canvas has something to enumerate; until then, the strongest true
-statement about the tenant isolation on these rows is that the schema enforces it, not that a
-request path exercises it.
+The pixels are now served. `(*Reader).Detail` selects `page_number, width_px, height_px` per
+document and `(*Reader).PageImageKey` selects one row's `storage_key` by job id and page number,
+both inside a request-scoped transaction (`internal/extraction/reader.go`);
+`GET /v1/extractions/{id}/pages/{n}` streams the object that key names back as `image/png`
+(`internal/extraction/handlers.go`). `storage_key` therefore has a second exit from this package,
+and it is a narrow one: the key is selected off an RLS-visible row and handed straight to object
+storage, so no caller-supplied text reaches a bucket and a refused read touches none.
+
+The canvas itself now exists — `frontend/app/src/components/ExtractionCanvas.tsx` (EXTR-11-05)
+renders one aspect-locked frame per stored page and fetches each page's bytes into a blob URL —
+and `ExtractionReview.tsx` mounts it. **A user can now reach it.** EXTR-11-08 added the
+`'extraction'` view, the `openExtraction(jobId)` hand-off on `PlatformCtx`, and the
+`open-extraction-review` control on the invoice detail's source-document card. That control is
+the screen's **only** entry: there is no hash route (`#review/…` is the review batch's, not
+this screen's) and no sidebar item, so an operator arrives at the review screen by opening an
+invoice whose source document has a settled extraction job, and by no other path.
+
+Reachable *in code* is not the same as *proven on the deployed build*. Twelve `EXTR11-E2E-*` rows
+in `e2e/topology/import-wizard.spec.ts` walk this path; eleven enter through that one control, and
+`EXTR11-E2E-07` is the exception — it stays on the invoice detail to measure the control's geometry
+and never opens the screen. `dev-env.yml` gates its E2E job on `pull_request.draft == false`, so a
+draft PR proves none of them. EXTR-11-09 is what settles it.
+
+Both reads name `document_id` and no `tenant_id`, so **two** independent mechanisms stand between
+them and another tenant's rows: this table's own `tenant_isolation` policy, which scopes every
+statement the app role issues, and `extraction_page_images_tenant_document_fk`, which forbids a
+page-image row pointing at another tenant's document
+(`TestRLS_ExtractionDetailChildTablesRefuseACrossTenantRow`). Because the second makes the
+cross-tenant case unconstructible, no request-path test can distinguish a working policy from an
+absent one — the read is *scoped* by the policy and does not *demonstrate* it. What a request path
+now exercises is the enclosing job's own RLS
+(`TestRLS_ExtractionDetailCrossTenantRefusalHoldsBothDirections`,
+`TestRLS_ExtractionPageImageCrossTenantRefused`); on these rows the schema is still the
+load-bearing part.

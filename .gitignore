@@ -59,6 +59,7 @@ CLAUDE.md
 .playwright-mcp/
 # RALPH per-story scratch (design notes, checkpoints), never repo content.
 .ralph/
+.ralph-install.log
 
 # ---- Editor / OS ----
 .DS_Store

@@ -7,9 +7,12 @@
 // error. The exact-string assertion is deliberately loose (contains a date and a
 // ':'-separated time) rather than pinned to one locale-formatted string:
 // toLocaleString('en-NG') output varies with the Node ICU build.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
-import { fmtDateTime, fmtTime, toDateInputValue } from './format'
+import { fmtDateTime, fmtTime, fmtTimeWAT, toDateInputValue } from './format'
 
 describe('fmtDateTime', () => {
   it('F-1: renders date and time, and guards bad input', () => {
@@ -213,5 +216,57 @@ describe('fmtTime: adversarial', () => {
     // Control: both render the same valid input.
     expect(fmtTime('2026-07-01T14:32:07')).not.toBe('—')
     expect(fmtDateTime('2026-07-01T14:32:07')).not.toBe('—')
+  })
+})
+
+// fmtTimeWAT lives here rather than in extractionReview.ts because T-4 above already records
+// the ICU hazard it exists to dodge. Written RED (EXTR-11-04, Mode A) against a throwing stub.
+
+describe('fmtTimeWAT', () => {
+  const INSTANT = '2026-08-30T10:42:07Z' // 11:42 in Lagos
+
+  it('W-1: renders the Lagos wall clock for an instant', () => {
+    expect(fmtTimeWAT(INSTANT)).toBe('11:42')
+  })
+
+  it('W-2: the same instant in every host zone, and the host zone really moved', () => {
+    const original = process.env.TZ
+    const zones = ['UTC', 'America/New_York', 'Australia/Sydney']
+    const hostClock = new Set<string>()
+    try {
+      for (const tz of zones) {
+        process.env.TZ = tz
+        // Control: fmtTime reads the host clock, so these MUST differ. Without it a runner
+        // that ignores a runtime TZ change makes the invariance below vacuous.
+        hostClock.add(fmtTime(INSTANT))
+        expect(fmtTimeWAT(INSTANT), tz).toBe('11:42')
+      }
+    } finally {
+      if (original === undefined) delete process.env.TZ
+      else process.env.TZ = original
+    }
+    expect(hostClock.size, 'process.env.TZ did not take effect — the invariance proves nothing').toBe(zones.length)
+  })
+
+  it('W-3: midnight in Lagos is 00:xx, never 24:xx', () => {
+    // A bare hour12:false yields '24:10' on some ICU builds; hourCycle 'h23' is what forbids it.
+    expect(fmtTimeWAT('2026-08-29T23:10:00Z')).toBe('00:10')
+  })
+
+  it('W-4: unparseable input yields the em-dash rather than throwing', () => {
+    // Intl.DateTimeFormat.format(new Date('x')) throws RangeError, which would blank the
+    // whole document toolbar. Every sibling formatter in this file guards the same way.
+    expect(fmtTimeWAT(null)).toBe('—')
+    expect(fmtTimeWAT(undefined)).toBe('—')
+    expect(fmtTimeWAT('')).toBe('—')
+    expect(fmtTimeWAT('not-a-date')).toBe('—')
+  })
+
+  it('W-5: format.ts names Africa/Lagos and hourCycle h23 explicitly', () => {
+    const src = readFileSync(fileURLToPath(new URL('./format.ts', import.meta.url)), 'utf8')
+    expect(src, 'the scan read the wrong file').toContain('export function fmtTimeWAT(')
+
+    expect(src, "the ' WAT' suffix is only true if the formatter names the zone").toContain("'Africa/Lagos'")
+    expect(src, 'a small-ICU build falls back to a 12-hour default without it').toContain("hourCycle: 'h23'")
   })
 })

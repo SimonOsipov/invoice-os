@@ -28,9 +28,10 @@
 //
 // This scan reports an ABSENCE, which is the instrument class that reports
 // all-clear while examining nothing. So it carries a control needle it must still
-// find and floors on the population walked. cmd/ holds two audit.Record calls, both
-// in cmd/submission's extraction auditor, and its file floor is what proves the cmd/
-// half of the walk ran at all.
+// find and floors on the population walked. cmd/'s only audit.Record calls are
+// cmd/submission's two audit adapters, a population
+// TestSubmissionMain_AuditWritersAreEachAccountedFor pins; this file's cmd/ file floor
+// is what proves the cmd/ half of the walk ran at all.
 //
 // The TestRLS_ prefix is load-bearing: ci.yml runs this package under -run TestRLS,
 // and nothing else in that filter set would reach these names
@@ -261,8 +262,8 @@ func anSitesIn(fset *token.FileSet, rel string, f *ast.File) (sites []anSite, to
 }
 
 // anAllSites walks cmd/ and internal/ once. scSeamFiles floors the walk over both
-// roots; cmd/ holds two audit.Record calls, in cmd/submission's extraction auditor,
-// and its file floor is what proves the cmd/ half ran.
+// roots; cmd/'s only audit.Record calls are cmd/submission's two audit adapters, and
+// its file floor is what proves the cmd/ half ran.
 func anAllSites(t *testing.T) []anSite {
 	t.Helper()
 	root := repoRootDir(t)

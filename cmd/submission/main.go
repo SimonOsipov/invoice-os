@@ -7,8 +7,10 @@
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
 //
-// The domain HTTP surface is GET /v1/extractions (EXTR-07) and POST /v1/documents (EXTR-09),
-// which stores the upload and enqueues its extraction on this service's own River client.
+// The domain HTTP surface is GET /v1/extractions (EXTR-07), GET /v1/extractions/{id} — the
+// review screen's read, which audits document.read — GET /v1/extractions/{id}/pages/{n}, which
+// streams one rendered page image, and POST /v1/documents (EXTR-09), which stores the upload
+// and enqueues its extraction on this service's own River client.
 package main
 
 import (
@@ -158,9 +160,19 @@ func main() {
 		_, _ = w.Write([]byte(`{"service":"submission","status":"ok"}`))
 	})
 
-	// GET /v1/extractions -- reached as /api/submission/v1/extractions: the gateway routes
-	// on the first segment under /api/ and forwards the subpath, so the pattern has no prefix.
-	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler((&extraction.Reader{Pool: pool}).JobsForDocument, app.Logger))
+	// GET /v1/extractions and GET /v1/extractions/{id} -- reached as
+	// /api/submission/v1/extractions…: the gateway routes on the first segment under /api/ and
+	// forwards the subpath, so the patterns have no prefix. One reader serves both; only Detail
+	// audits (TestSubmissionMain_WiresTheDocumentReadAuditorOntoAReader).
+	reader := &extraction.Reader{Pool: pool, Audit: newDocumentReadAuditor()}
+	app.Mux.HandleFunc("GET /v1/extractions", extraction.JobsHandler(reader.JobsForDocument, app.Logger))
+	app.Mux.HandleFunc("GET /v1/extractions/{id}", extraction.DetailHandler(reader.Detail, app.Logger))
+
+	// GET /v1/extractions/{id}/pages/{n} streams one rendered page from the same bucket
+	// newPageSink writes to. It audits nothing: one open screen owes one document.read row,
+	// from the detail route above, not one per page.
+	app.Mux.HandleFunc("GET /v1/extractions/{id}/pages/{n}",
+		extraction.PageImageHandler(reader.PageImageKey, newPageObjectReader(docObjects), app.Logger))
 
 	// POST /v1/documents -- the upload that stores a source document and queues its
 	// extraction. Two transactions on purpose: Service.Store commits its own, the enqueue
@@ -269,6 +281,28 @@ func newPageSink(objects document.ObjectStore) extraction.PageSink {
 	}
 }
 
+// newPageObjectReader adapts the document object store to the page-image read seam: whole
+// object, no range, body handed over UNREAD so the handler streams it. The key arrives already
+// selected off an RLS-visible row, so nothing here rewrites it
+// (TestNewPageObjectReader_ReadsTheKeyItIsGiven).
+func newPageObjectReader(objects document.ObjectStore) extraction.PageObject {
+	return func(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+		obj, err := objects.Get(ctx, key, "")
+		// Closed ON the error branch: a Get that hands back both a body and an error still owes
+		// a close (TestNewPageObjectReader_ClosesBodyWhenGetErrors).
+		if err != nil {
+			if obj.Body != nil {
+				_ = obj.Body.Close()
+			}
+			return nil, 0, err
+		}
+		if obj.Body == nil {
+			return nil, 0, fmt.Errorf("submission: page object %s opened with no body", key)
+		}
+		return obj.Body, obj.Size, nil
+	}
+}
+
 // newExtractionAuditor adapts the audit module to the extraction seam. Two call sites, each
 // with its event name spelled once: a const identifier here reads as a non-literal to
 // internal/platform/db's audit.Record scan and lands the site in no bucket.
@@ -299,6 +333,16 @@ func newExtractionAuditor() extraction.RecordExtractionAudit {
 			"state":             ev.State,
 			"failure_kind":      string(ev.FailureKind),
 		})
+	}
+}
+
+// newDocumentReadAuditor adapts the audit module to the detail seam. The event name is spelled
+// here rather than in internal/extraction: a const identifier there reads as a non-literal to
+// internal/platform/db's audit.Record scan and lands the site in no bucket
+// (TestNewDocumentReadAuditor_SpellsTheEventInCmd).
+func newDocumentReadAuditor() extraction.RecordDocumentRead {
+	return func(ctx context.Context, tx pgx.Tx, subject, documentID string) error {
+		return audit.Record(ctx, tx, subject, "document.read", map[string]any{"id": documentID})
 	}
 }
 

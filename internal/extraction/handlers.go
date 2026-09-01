@@ -1,17 +1,21 @@
-// handlers.go: GET /v1/extractions. Reached through the gateway as
-// /api/submission/v1/extractions — the gateway routes on the first segment under /api/
-// and forwards the subpath, so the mux pattern carries no prefix.
+// handlers.go: GET /v1/extractions, GET /v1/extractions/{id} and
+// GET /v1/extractions/{id}/pages/{n}. Reached through the gateway as /api/submission/v1/… — the
+// gateway routes on the first segment under /api/ and forwards the subpath, so the mux patterns
+// carry no prefix.
 //
-// writeJSON/writeError/statusForErr mirror internal/audit/handlers.go:42-64 verbatim;
-// per-package duplicates are the convention here, not a shared library.
+// writeJSON and writeError mirror internal/audit/handlers.go verbatim; statusForErr mirrors it
+// plus the 404 arm this package owns. Per-package duplicates are the convention here, not a
+// shared library.
 package extraction
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -37,6 +41,11 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	// Safe for the collection route, which never raises it
+	// (TestExtractionJobsForDocument_NeverReturnsErrNotFound), and narrow: everything else is
+	// still a 500 (TestStatusForErr_UnknownErrorIsStill500).
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound, "not found"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}
@@ -87,5 +96,137 @@ func JobsHandler(list func(ctx context.Context, documentID string) (JobsResponse
 		}
 
 		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// DetailHandler returns GET /v1/extractions/{id}. Identity is checked FIRST, before the path
+// value is read, so an unauthenticated caller cannot tell a malformed id from a well-formed one
+// (TestExtractionDetailHandler_UnauthenticatedIs401BeforeParsing). An absent job and another
+// tenant's are one answer: the reader raises ErrNotFound for both and statusForErr maps it to
+// 404.
+func DetailHandler(detail func(ctx context.Context, jobID string) (ExtractionDetail, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// The message names this route's own parameter: the collection route's would tell a
+		// caller the wrong field (TestExtractionDetailHandler_MalformedIdIs400).
+		parsed, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+
+		// Forward the canonical spelling, not the raw path value: uuid.Parse accepts a
+		// "urn:uuid:" prefix that Postgres rejects with 22P02, which would surface as a 500
+		// (TestExtractionDetailHandler_UrnPrefixedUuidReachesTheReaderCanonicalised).
+		out, err := detail(r.Context(), parsed.String())
+		if err != nil {
+			status, body := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "extraction: detail for job", slog.Any("err", err))
+			}
+			writeError(w, status, body)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// PageObject fetches one stored object by key, handing the body back UNREAD. A func value, not
+// internal/document's ObjectStore: deps_test.go fences this package off that one, so
+// cmd/submission supplies the adapter (TestExtractionPackage_DoesNotImportDocumentPackage).
+type PageObject func(ctx context.Context, key string) (io.ReadCloser, int64, error)
+
+// PageImageHandler returns GET /v1/extractions/{id}/pages/{n}. Identity is checked FIRST, before
+// either path value is read (TestExtractionPageImageHandler_UnauthenticatedIs401BeforeParsing),
+// and the object key comes off the RLS-visible row rather than the request, so no
+// caller-supplied text reaches object storage.
+//
+// The three headers and the ABSENT Content-Disposition are the deliverable: an attachment is
+// never painted as an image (TestExtractionPageImageHandler_ServesImagePngWithoutADisposition).
+func PageImageHandler(key func(ctx context.Context, jobID string, page int) (string, error), object PageObject, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// The detail route's message: both routes bind the same {id}, and a second spelling
+		// would tell a caller the wrong field (TestExtractionPageImageHandler_MalformedJobIdIs400).
+		parsed, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+		// page_number is 1-based. Atoi refuses "", " 1", "1.5" and anything past int64; the sign
+		// check refuses the rest (TestExtractionPageImageHandler_NonPositivePageIs400).
+		page, err := strconv.Atoi(r.PathValue("n"))
+		if err != nil || page < 1 {
+			writeError(w, http.StatusBadRequest, "page must be a positive integer")
+			return
+		}
+
+		// Canonical spelling, not the raw path value: uuid.Parse accepts a "urn:uuid:" prefix
+		// that Postgres rejects with 22P02.
+		storageKey, err := key(r.Context(), parsed.String(), page)
+		if err != nil {
+			status, body := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "extraction: page image key", slog.Any("err", err))
+			}
+			writeError(w, status, body)
+			return
+		}
+
+		body, size, err := object(r.Context(), storageKey)
+		// Registered before the error branch: a store that hands back both a body and an error
+		// still owes a close (TestExtractionPageImageHandler_ClosesBodyWhenTheStoreErrors).
+		if body != nil {
+			defer func() { _ = body.Close() }()
+		}
+		if err == nil && body == nil {
+			err = errors.New("the object store returned no body")
+		}
+		if err != nil {
+			log.ErrorContext(r.Context(), "extraction: page image object",
+				slog.String("key", storageKey), slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		// Refused before the 200, so Content-Length below can be unconditional. That header is
+		// what turns a mid-stream object failure into a broken response rather than a short,
+		// well-formed PNG the browser accepts
+		// (TestExtractionPageImageHandler_ATruncatedObjectDoesNotArriveAsASuccessfulShortPng).
+		if size <= 0 {
+			log.ErrorContext(r.Context(), "extraction: page image object reports no length",
+				slog.String("key", storageKey), slog.Int64("size", size))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		h := w.Header()
+		h.Set("Content-Type", "image/png")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "private, no-store")
+		h.Set("Content-Length", strconv.FormatInt(size, 10))
+		w.WriteHeader(http.StatusOK)
+
+		// io.Copy, never io.ReadAll: a page is ~113 KiB and a document may hold 800
+		// (TestExtractionPageImageHandler_StreamsRatherThanBuffers).
+		if _, err := io.Copy(w, body); err != nil {
+			log.ErrorContext(r.Context(), "extraction: stream page image",
+				slog.String("key", storageKey), slog.Any("err", err))
+		}
 	}
 }

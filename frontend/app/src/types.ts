@@ -169,7 +169,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals' | 'audit'
+export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals' | 'audit' | 'extraction'
 
 // 'review' was added by M4-08-04 under its former name (plan B1/DRIFT-1) — one subtask
 // ahead of story §6's original assignment (M4-08-05), because wizardHeader's index-2
@@ -425,6 +425,9 @@ export type PlatformCtx = {
   // Set by openAuditForInvoice and consumed by the NEXT AuditView mount, which reads it in a
   // lazy useState initializer. Workspace clears it; AuditView never does.
   auditPrefilter: AuditPrefilter | null
+  // The extraction job the review screen renders. Unlike auditPrefilter this is NOT
+  // consume-once -- the screen reads it on every render for as long as it is open.
+  extractionJobId: string | null
 
   nav: (id: View) => void
   setInvoiceQuery: (q: string) => void
@@ -491,6 +494,8 @@ export type PlatformCtx = {
   // Sets auditPrefilter and navigates to Audit in ONE handler, so no committed render can carry
   // one without the other.
   openAuditForInvoice: (invoiceId: string, invoiceNumber: string | null) => void
+  // Sets extractionJobId and navigates to the review screen in ONE handler, same reason.
+  openExtraction: (jobId: string) => void
   setSandbox: (v: boolean) => void
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void

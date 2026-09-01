@@ -65,11 +65,11 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
-import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS } from '../api/client'
+import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, PERSONAS, type ExtractionDetail } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
-import { gaps, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
 
@@ -1883,6 +1883,22 @@ function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// Committed by EXTR-11-09. Hand-written on internal/extraction/fixtures_test.go's own recipe
+// (fxAssemble :96-118 lays the objects down and computes every xref offset from their real byte
+// positions; fxPage / fxStream / fxText) -- two US-Letter text pages sharing one font:
+// `/Kids [3 0 R 5 0 R] /Count 2`, two `/Type /Page` objects. Verified through the SAME
+// go-pdfium the worker renders with, before commit: 2 pages, both with text, each 1275x1651 at
+// 150 DPI -- identical to the one-pager's grid. NATIVE_INVOICE_PDF is `/Count 1`, so without
+// this file every gate run renders exactly one frame and AC-5's canvas half has no subject.
+const NATIVE_INVOICE_2P_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'native_invoice_2p.pdf'))
+
+// uniquePdfBytes()'s recipe, same reason, same trailing-comment trick -- and re-verified
+// through pdfium WITH the comment appended, because a byte past %%EOF that moved the xref
+// would open in some readers and fail in pdfium.
+function uniqueTwoPagePdfBytes(): Buffer {
+  return Buffer.concat([NATIVE_INVOICE_2P_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
 // upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
 // selection and upload, then fails pdfium.OpenDocument on every one of River's 3
@@ -2637,6 +2653,1285 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 
   await testInfo.attach('progress-row-geometry.json', {
     body: JSON.stringify({ shortSweep, longSweep }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-11 · the review screen's document pane: the ratio oracle, the grid, the band ---
+//
+// Written in EXTR-11-05 (Mode A). EXTR-11-07 has built the screen; these stay red until
+// EXTR-11-08 adds the route and the entry control `openExtractionReview` clicks. Nothing skips
+// them: what keeps them off the gate meanwhile is the PR staying DRAFT --
+// `dev-env.yml`'s deploy and E2E jobs are gated on `pull_request.draft == false`. The
+// `skip-visual` label the branch strategy names is a human marker; no workflow reads it.
+//
+// CONTRACT OWED BY EXTR-11-08: the entry control on SourceDocumentCard must carry
+// `data-testid="open-extraction-review"`. The testid is the only handle these specs have, and
+// a role/name locator would couple them to copy. The copy itself is NOT open -- the story's
+// Invented-copy table fixes all three strings ("Check the extraction", "This document has no
+// extraction to check.", "Extraction review"); an earlier draft of this comment said otherwise.
+
+/**
+ * The document journey EXTR09-E2E-01 proved, stopped at the real invoice detail.
+ *
+ * `file` defaults to the one-page fixture every caller before EXTR-11-09 used, so the eight
+ * specs above are byte-for-byte unchanged; only EXTR11-E2E-05 passes the two-page one.
+ */
+async function extractOneDocument(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
+): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  await expect(page.getByTestId('invoice-detail'), 'the document run must land on the real invoice detail').toBeVisible({
+    timeout: 240_000,
+  })
+}
+
+// Opens the review screen and RETURNS the 200 the SPA itself consumed. Every wire fact these
+// specs assert comes off this one response -- never a literal copied out of mock.go, which
+// would assert the fixture against itself.
+async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
+  // Promise.all, not a bare waiter awaited after the click (EXTR-11-09 correction). The waiter
+  // is created first either way -- an array literal evaluates left to right, so the response
+  // listener is registered before the click starts -- but a click that fails its 30s
+  // actionability check used to leave the 120s waiter unhandled, and its rejection surfaced as
+  // worker noise ~90s AFTER the test had already reported. Promise.all attaches a handler to
+  // both, so the click's failure is the one that propagates and nothing is left dangling.
+  //
+  // `$`-anchored: the LIST route has no id segment and the page route ends in /pages/{n}.
+  const [res] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    page.getByTestId('open-extraction-review').click(),
+  ])
+
+  expect(res.status(), 'the review screen must read its detail over a 200').toBe(200)
+  await expect(page.getByTestId('extraction-review'), 'the review screen must open').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('extraction-page-1'), 'the canvas must render at least one frame').toBeVisible({
+    timeout: 60_000,
+  })
+  return (await res.json()) as ExtractionDetail
+}
+
+/** The first field the extractor pointed somewhere. The specs read its region off the wire. */
+function firstLocatedField(detail: ExtractionDetail) {
+  const field = detail.fields.find((f) => f.region !== null)
+  expect(field, 'no field on this document carries a region -- every ratio below would be vacuous').toBeTruthy()
+  return { name: field!.name, region: field!.region! }
+}
+
+async function boxOf(page: Page, testid: string): Promise<Rect> {
+  const box = await page.getByTestId(testid).boundingBox()
+  expect(box, `${testid} did not render`).not.toBeNull()
+  return box as Rect
+}
+
+// AC-4's ONLY real oracle. `overlapOf(highlight, image) === highlight` is true for a box
+// anywhere inside the page and VACUOUSLY true for a 0x0 box entirely off it -- overlapOf
+// clamps per axis with Math.max(0, …), so the intersection collapses to the highlight's own
+// rect (layout.ts:68). Containment therefore rides along below as a cheap extra, never as the
+// assertion.
+//
+// Per-axis pixel tolerance, not a strict float compare: the browser resolves `left: 62%` and
+// `width: 28%` against the frame independently, so an edge can carry two roundings, and a
+// strict toEqual on boundingBox() floats flakes. 1.5px on a 560-960px frame is under 0.3% --
+// three orders coarser than the defect this catches (a wrong axis, an inverted origin, or a
+// transform, all of which land tens of percent out).
+const RATIO_TOL_PX = 1.5
+
+test('EXTR11-E2E-03 (AC-4): the highlight lands where the region says, at every zoom', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 ratio')
+  const detail = await openExtractionReview(page)
+  const { name, region } = firstLocatedField(detail)
+
+  await page.getByTestId(`extraction-field-${name}`).click()
+  const imageId = `extraction-page-image-${region.page}`
+  // The selection loads its own page directly, without waiting on the observer (AC-6).
+  await expect(page.getByTestId(imageId), "the selected field's page must load").toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('extraction-highlight'), 'the selection must draw exactly one highlight').toHaveCount(1)
+
+  type Measured = {
+    zoom: number
+    image: Rect
+    highlight: Rect
+    expected: { x: number; y: number; width: number; height: number }
+  }
+  const measured: Measured[] = []
+
+  for (const zoom of [50, 100, 150]) {
+    await page.getByTestId(`extraction-zoom-${zoom}`).click()
+
+    // settledRead, not a bare read: selecting a field scrolls the ground with
+    // `behavior: 'smooth'`, and two boundingBox() calls taken mid-scroll disagree
+    // ([[drawer-animation-defeats-geometry-specs]]). Both boxes move together, so the
+    // RATIO is scroll-invariant -- but only if the pair is read from one settled frame.
+    const m = await settledRead(async () => {
+      const [image, highlight] = await Promise.all([boxOf(page, imageId), boxOf(page, 'extraction-highlight')])
+      return { image, highlight }
+    }, `highlight ratio at zoom ${zoom}`)
+
+    const expected = {
+      x: m.image.x + region.x0 * m.image.width,
+      y: m.image.y + region.y0 * m.image.height,
+      width: (region.x1 - region.x0) * m.image.width,
+      height: (region.y1 - region.y0) * m.image.height,
+    }
+
+    // The frame really did change size, or all three zooms measure one rendering.
+    expect(m.image.width, `the page image has no width at zoom ${zoom}`).toBeGreaterThan(0)
+
+    for (const axis of ['x', 'y', 'width', 'height'] as const) {
+      expect(
+        Math.abs(m.highlight[axis] - expected[axis]),
+        `zoom ${zoom}: the highlight's ${axis} is ${m.highlight[axis]}, the wire's region says ${expected[axis]}`,
+      ).toBeLessThanOrEqual(RATIO_TOL_PX)
+    }
+
+    // The cheap extras, stated as extras.
+    expect(m.highlight.width, `zoom ${zoom}: a zero-width highlight satisfies containment vacuously`).toBeGreaterThan(0)
+    expect(m.highlight.height, `zoom ${zoom}: a zero-height highlight satisfies containment vacuously`).toBeGreaterThan(0)
+    const inside = overlapOf(m.highlight, m.image)
+    expect(Math.round(inside.width), `zoom ${zoom}: the highlight escapes its page horizontally`).toBe(
+      Math.round(m.highlight.width),
+    )
+    expect(Math.round(inside.height), `zoom ${zoom}: the highlight escapes its page vertically`).toBe(
+      Math.round(m.highlight.height),
+    )
+
+    measured.push({ zoom, image: m.image, highlight: m.highlight, expected })
+  }
+
+  // The sweep ran all three, in order -- a loop that measured fewer would otherwise pass on
+  // whatever it did reach.
+  expect(measured.map((m) => m.zoom), 'every zoom must be measured').toEqual([50, 100, 150])
+  // And they really were three different renderings, not one page measured three times.
+  expect(new Set(measured.map((m) => Math.round(m.image.width))).size, 'zoom moved nothing').toBeGreaterThan(1)
+
+  await testInfo.attach('extraction-highlight-ratio.json', {
+    body: JSON.stringify({ region, measured }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR11-E2E-04 and -04b read the SAME 200, so they share one journey rather than paying for
+// two -- the file's own E2E-04/E2E-09 precedent, with labelled blocks.
+test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly the contract', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 grid')
+  const detail = await openExtractionReview(page)
+
+  // -- EXTR11-E2E-04 -- the intrinsic pixels ARE the stored grid.
+  //
+  // go-pdfium ceils `pt * dpi / 72` (pdfium.go:154-159), so a recomputed grid is off by one
+  // row on US-Letter at 150 DPI -- 1651, not 1650. Nothing else in the suite compares the
+  // bytes the browser decoded against the numbers the frame was locked to.
+  expect(detail.pages.length, 'a document with no page rows cannot prove a grid').toBeGreaterThan(0)
+
+  const grids: { page: number; wire: [number, number]; natural: [number, number] }[] = []
+  for (const p of detail.pages) {
+    const img = page.getByTestId(`extraction-page-image-${p.page}`)
+    // Lazy by design: scroll the frame in and let the observer fire (AC-6).
+    await page.getByTestId(`extraction-page-${p.page}`).scrollIntoViewIfNeeded()
+    await expect(img, `page ${p.page} must load its bytes`).toBeVisible({ timeout: 60_000 })
+
+    // Polled, never read once: naturalWidth is 0 until the blob decodes, and 0 === 0 would
+    // make an unloaded image agree with a zero grid.
+    let natural = ''
+    await expect
+      .poll(
+        async () => {
+          natural = await img.evaluate((el) => {
+            const i = el as HTMLImageElement
+            return i.complete && i.naturalWidth > 0 ? `${i.naturalWidth}x${i.naturalHeight}` : ''
+          })
+          return natural
+        },
+        { message: `page ${p.page}'s bytes never decoded`, timeout: 60_000 },
+      )
+      .not.toBe('')
+
+    expect(natural, `page ${p.page}: the decoded bytes are not the grid the frame was locked to`).toBe(
+      `${p.width_px}x${p.height_px}`,
+    )
+    const [nw, nh] = natural.split('x').map(Number)
+    grids.push({ page: p.page, wire: [p.width_px, p.height_px], natural: [nw, nh] })
+  }
+  expect(grids.length, 'no page was measured').toBe(detail.pages.length)
+
+  // -- EXTR11-E2E-04b -- the wire key set, off that same 200.
+  //
+  // It cannot live in e2e/api/extractions.spec.ts: that file creates no row, so it can never
+  // hold a settled job (:29-32). This is the only DEPLOYED check of Go's `[]T` nil -> `null`
+  // coercion, which no `omitempty`-free struct tag prevents.
+  expect(Object.keys(detail).sort(), 'the top-level key set drifted from internal/extraction/reader.go').toEqual(
+    ['document', 'document_id', 'fields', 'id', 'pages', 'state'].sort(),
+  )
+  expect(Array.isArray(detail.pages), 'pages arrived as null, not []').toBe(true)
+  expect(Array.isArray(detail.fields), 'fields arrived as null, not []').toBe(true)
+  expect(detail.document, 'document arrived as null').not.toBeNull()
+  expect(typeof detail.document, 'document is not an object').toBe('object')
+  expect(Object.keys(detail.document).sort()).toEqual(['content_type', 'filename', 'size_bytes', 'stored_at'].sort())
+  expect(Object.keys(detail.pages[0]).sort()).toEqual(['height_px', 'page', 'width_px'].sort())
+  expect(detail.fields.length, 'a settled job with no fields cannot prove a field key set').toBeGreaterThan(0)
+  expect(Object.keys(detail.fields[0]).sort()).toEqual(['name', 'region', 'value'].sort())
+
+  await testInfo.attach('extraction-wire.json', {
+    body: JSON.stringify({ grids, keys: Object.keys(detail).sort(), detail }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where it fits', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 band')
+  await openExtractionReview(page)
+
+  const frame = page.getByTestId('extraction-page-1')
+  const ground = page.getByTestId('extraction-ground')
+  // The ground's inner pad -- the frame's actual containing block. Its only element child,
+  // which ExtractionCanvas.test.tsx pins from the other side.
+  const innerPad = ground.locator('> div').first()
+
+  type Fit = {
+    width: number
+    zoom: number
+    frameWidth: number
+    innerWidth: number
+    gapLeft: number
+    gapRight: number
+    fits: boolean
+    groundScrollsX: boolean
+    groundScrollsY: boolean
+    bodyScrollsX: boolean
+  }
+  const measured: Fit[] = []
+
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a band strands only what the window
+    // gives it room to strand.
+    for (const zoom of [100, 150]) {
+      await page.getByTestId(`extraction-zoom-${zoom}`).click()
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 1080 })
+
+        const m = await settledRead(async () => {
+          const [frameBox, innerBox, scroll] = await Promise.all([
+            frame.boundingBox(),
+            innerPad.boundingBox(),
+            ground.evaluate((el) => ({
+              groundScrollsX: el.scrollWidth > el.clientWidth + 1,
+              groundScrollsY: el.scrollHeight > el.clientHeight + 1,
+              bodyScrollsX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+            })),
+          ])
+          return { frameBox, innerBox, ...scroll }
+        }, `page frame at ${width}px, zoom ${zoom}`)
+
+        expect(m.frameBox && m.innerBox, `the frame and its pad must both render at ${width}px`).toBeTruthy()
+        const g = gaps({ x: m.frameBox!.x, width: m.frameBox!.width }, { x: m.innerBox!.x, width: m.innerBox!.width })
+
+        // 1. The band. pageFrameStyle's min/max-width are absolute, so this holds at every
+        //    width whether or not the frame fits its column.
+        const [floor, ceiling] = zoom === 100 ? [560, 640] : [840, 960]
+        expect(m.frameBox!.width, `the frame is below its ${floor}px floor at ${width}px, zoom ${zoom}`).toBeGreaterThanOrEqual(floor - 1)
+        expect(m.frameBox!.width, `the frame is above its ${ceiling}px ceiling at ${width}px, zoom ${zoom}`).toBeLessThanOrEqual(ceiling + 1)
+
+        // 2. `margin: 0 auto` -- but only where there is room. An overflowing block resolves
+        //    both auto margins to zero and spills right, so asserting symmetry at every width
+        //    would fail on CORRECT rendering wherever the floor exceeds the column.
+        const fits = m.frameBox!.width <= m.innerBox!.width + 1
+        if (fits) {
+          expect(
+            Math.abs(g.left - g.right),
+            `the frame's margins must agree at ${width}px, zoom ${zoom} (left ${g.left}, right ${g.right})`,
+          ).toBeLessThanOrEqual(2)
+        } else {
+          // 3. Where it does NOT fit, the GROUND is what scrolls.
+          expect(m.groundScrollsX, `the frame overflows at ${width}px, zoom ${zoom}, and the ground does not scroll`).toBe(true)
+        }
+
+        // 4. The body never scrolls sideways, at any width or zoom. `overflow: hidden` on the
+        //    body row is what contains the enlarged page; without it the whole app slides.
+        expect(m.bodyScrollsX, `the page itself scrolls horizontally at ${width}px, zoom ${zoom}`).toBe(false)
+
+        // 5. The GROUND is what scrolls vertically. At zoom 150 a US-Letter frame is ~1090px
+        //    tall inside a 1080px viewport, so this holds for a one-page document. It is the
+        //    only oracle in the suite for the containment (`minHeight: 0` down the flex
+        //    column) that lazy loading rests on: if the ground grows to its content instead of
+        //    scrolling, every frame sits inside the observer's 800px root margin and an
+        //    800-page document fetches all 800 at mount. That fetch COUNT still has no oracle
+        //    -- the deployed corpus has no document long enough to show it.
+        if (zoom === 150) {
+          expect(
+            m.groundScrollsY,
+            `the ground does not scroll vertically at ${width}px, zoom ${zoom} -- it grew to its content instead`,
+          ).toBe(true)
+        }
+
+        measured.push({
+          width,
+          zoom,
+          frameWidth: m.frameBox!.width,
+          innerWidth: m.innerBox!.width,
+          gapLeft: g.left,
+          gapRight: g.right,
+          fits,
+          groundScrollsX: m.groundScrollsX,
+          groundScrollsY: m.groundScrollsY,
+          bodyScrollsX: m.bodyScrollsX,
+        })
+      }
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(
+    measured.map((m) => `${m.zoom}@${m.width}`),
+    'every zoom x WIDE_WIDTHS cell must be measured, widest first',
+  ).toEqual([100, 150].flatMap((z) => WIDE_WIDTHS.map((w) => `${z}@${w}`)))
+
+  // Both branches must have been exercised, or the two assertions above are each vacuous on
+  // half the sweep and nobody would know which half.
+  expect(measured.some((m) => m.fits), 'the frame never fit its column -- the centring assertion never ran').toBe(true)
+  expect(measured.some((m) => !m.fits), 'the frame always fit -- the ground-scroll assertion never ran').toBe(true)
+
+  await testInfo.attach('extraction-frame-band.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-08 (AC-5): the toolbar never overlaps the ground', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-05 clearance')
+  await openExtractionReview(page)
+
+  const toolbar = page.getByTestId('extraction-toolbar')
+  const ground = page.getByTestId('extraction-ground')
+
+  const measured: { width: number; toolbar: Rect; ground: Rect; overlap: Rect }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [t, g] = await Promise.all([toolbar.boundingBox(), ground.boundingBox()])
+        return { t, g }
+      }, `toolbar clearance at ${width}px`)
+
+      expect(m.t && m.g, `the toolbar and the ground must both render at ${width}px`).toBeTruthy()
+      // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
+      expect(m.t!.height, `the toolbar has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.g!.height, `the ground has no height at ${width}px`).toBeGreaterThan(0)
+
+      // Both axes, never one: `flex: none` on the toolbar plus `minHeight: 0` on the ground is
+      // what keeps them stacked; without the pair the ground grows to its content and slides
+      // under the toolbar (SourceDocumentModal.test.tsx spec 1's defect, one pane over).
+      const overlap = overlapOf(m.t as Rect, m.g as Rect)
+      expect(
+        rectsOverlap(m.t as Rect, m.g as Rect),
+        `the toolbar covers ${overlap.width}x${overlap.height}px of the ground at ${width}px`,
+      ).toBe(false)
+
+      measured.push({ width, toolbar: m.t as Rect, ground: m.g as Rect, overlap })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-toolbar-clearance.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR-11-06's half of the pane relationship: the two panes never cover each other, and no
+// field row spills the column it is laid out in. EXTR-11-07 owns `EXTR11-E2E-02` proper (the
+// panes TILE the body) and `-10` (the right pane yields first, never below 470px); this row is
+// the overlap half plus the spill, written where the pane's own grid is written.
+test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spills its column', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-06 spill')
+  const detail = await openExtractionReview(page)
+
+  // The floor, off the wire the SPA itself consumed: with no field the spill sweep below
+  // measures nothing and passes vacuously.
+  expect(detail.fields.length, 'no field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
+
+  const canvas = page.getByTestId('extraction-canvas')
+  const fields = page.getByTestId('extraction-fields')
+  // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.
+  const rows = page.locator('[data-testid^="extraction-field-"]')
+  await expect(rows, 'the pane rendered no row for a wire that carries fields').toHaveCount(detail.fields.length)
+
+  type Spill = { testid: string; left: number; right: number }
+  const measured: { width: number; canvas: Rect; fields: Rect; overlap: Rect; worst: Spill }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a floor strands only what the window
+    // is too narrow to hold, so the narrow end is where a spill appears.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [c, f, rs] = await Promise.all([
+          canvas.boundingBox(),
+          fields.boundingBox(),
+          rows.evaluateAll((els) =>
+            els.map((el) => {
+              const r = el.getBoundingClientRect()
+              return { testid: el.getAttribute('data-testid') ?? '', left: r.left, right: r.right, width: r.width }
+            }),
+          ),
+        ])
+        return { c, f, rs }
+      }, `pane geometry at ${width}px`)
+
+      expect(m.c && m.f, `both panes must render at ${width}px`).toBeTruthy()
+      // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
+      expect(m.c!.width, `the document pane has no width at ${width}px`).toBeGreaterThan(0)
+      expect(m.c!.height, `the document pane has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.f!.width, `the fields pane has no width at ${width}px`).toBeGreaterThan(0)
+      expect(m.f!.height, `the fields pane has no height at ${width}px`).toBeGreaterThan(0)
+
+      // Both axes, never one (layout.ts's own rule). A fields pane that has stopped being a
+      // flex sibling and started overlaying the document clears neither.
+      const overlap = overlapOf(m.c as Rect, m.f as Rect)
+      expect(
+        rectsOverlap(m.c as Rect, m.f as Rect),
+        `the fields pane covers ${overlap.width}x${overlap.height}px of the document pane at ${width}px`,
+      ).toBe(false)
+
+      // Every row stays inside its own pane, on BOTH edges -- gaps()'s rule applied to a row.
+      // This is the relationship the artboard's `min-width: 470px` floor exists to protect:
+      // a `1fr 1fr` grid inside a pane squeezed below it pushes its cells' content out, and
+      // the body's `overflow-y: auto` (y ONLY) means a horizontal spill has nowhere to hide.
+      expect(m.rs.length, `no row measured at ${width}px`).toBe(detail.fields.length)
+      let worst: Spill = { testid: '', left: 0, right: 0 }
+      for (const r of m.rs) {
+        expect(r.width, `${r.testid} collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
+        const outLeft = m.f!.x - r.left
+        const outRight = r.right - (m.f!.x + m.f!.width)
+        expect(outLeft, `${r.testid} starts ${outLeft.toFixed(1)}px left of the pane at ${width}px`).toBeLessThanOrEqual(1)
+        expect(outRight, `${r.testid} ends ${outRight.toFixed(1)}px right of the pane at ${width}px`).toBeLessThanOrEqual(1)
+        if (Math.max(outLeft, outRight) > Math.max(worst.left, worst.right)) worst = { testid: r.testid, left: outLeft, right: outRight }
+      }
+
+      measured.push({ width, canvas: m.c as Rect, fields: m.f as Rect, overlap, worst })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-pane-spill.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-11-07 · the shell's two-pane flex row ------------------------------------------
+//
+// Written in EXTR-11-07 (Mode A). `ExtractionReview` now exists; these stay red until
+// EXTR-11-08 adds the route. The PR staying DRAFT is what keeps them off the gate meanwhile.
+//
+// jsdom computes no layout, so nothing above this line is an oracle for the pane
+// relationships: `ExtractionReview.test.tsx` asserts the STYLE OBJECTS as a structural
+// regression guard and stops there. These three rows are AC-6's whole oracle.
+
+test('EXTR11-E2E-02 (AC-1/AC-6): the panes tile the body and never overlap', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-07 tile')
+  await openExtractionReview(page)
+
+  const shellBody = page.getByTestId('extraction-review-body')
+  const column = page.locator('main .pf-scroll')
+  const canvas = page.getByTestId('extraction-canvas')
+  const fields = page.getByTestId('extraction-fields')
+
+  // 1. The body fills the view column at every width. A width-only assertion passes on the
+  //    very defect this exists to catch (layout.ts:1-18): a capped, left-pinned body strands
+  //    a band on the right and still measures the width it was told to.
+  const fit = await assertFillsColumn(page, shellBody, column, 'the extraction review body')
+  expect(fit.map((f) => f.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  type Tile = { width: number; body: Rect; canvas: Rect; fields: Rect; seam: number; leftEdge: number; rightEdge: number }
+  const measured: Tile[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [b, c, f] = await Promise.all([shellBody.boundingBox(), canvas.boundingBox(), fields.boundingBox()])
+        return { b, c, f }
+      }, `pane tiling at ${width}px`)
+
+      expect(m.b && m.c && m.f, `the body and both panes must render at ${width}px`).toBeTruthy()
+      // Non-empty first: three collapsed rects tile perfectly and clear each other vacuously.
+      for (const [label, r] of [['body', m.b!], ['document pane', m.c!], ['fields pane', m.f!]] as const) {
+        expect(r.width, `the ${label} has no width at ${width}px`).toBeGreaterThan(0)
+        expect(r.height, `the ${label} has no height at ${width}px`).toBeGreaterThan(0)
+      }
+
+      // 2. Both axes, never one (layout.ts's own rule). EXTR11-E2E-02a asserts this same
+      //    clearance from the fields pane's side; it is repeated here because the tiling
+      //    numbers below are meaningless over two rects that cover each other.
+      expect(rectsOverlap(m.c as Rect, m.f as Rect), `the panes overlap at ${width}px`).toBe(false)
+
+      // 3. The document pane starts at the body's left edge and the fields pane ends at its
+      //    right edge. Both edges, never one -- gaps()'s rule: a right-only check reads a
+      //    left-pinned pair as a large right gap and a right-pinned pair as a perfect fit.
+      const leftEdge = m.c!.x - m.b!.x
+      const rightEdge = m.b!.x + m.b!.width - (m.f!.x + m.f!.width)
+      expect(leftEdge, `the document pane starts ${leftEdge.toFixed(1)}px off the body's left edge at ${width}px`).toBeLessThanOrEqual(1)
+      expect(rightEdge, `the fields pane ends ${rightEdge.toFixed(1)}px off the body's right edge at ${width}px`).toBeLessThanOrEqual(1)
+
+      // 4. And they MEET. Clearance plus two flush outer edges still permits a stranded band
+      //    between them -- the BUG-03-05 shape, moved inside the row.
+      const seam = m.f!.x - (m.c!.x + m.c!.width)
+      expect(Math.abs(seam), `a ${seam.toFixed(1)}px band is stranded between the panes at ${width}px`).toBeLessThanOrEqual(2)
+
+      measured.push({ width, body: m.b as Rect, canvas: m.c as Rect, fields: m.f as Rect, seam, leftEdge, rightEdge })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-pane-tiling.json', {
+    body: JSON.stringify({ fit, measured }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-10 (AC-6): the right pane yields first, and never below its floor', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-07 floor')
+  await openExtractionReview(page)
+
+  const fields = page.getByTestId('extraction-fields')
+  const frame = page.getByTestId('extraction-page-1')
+
+  type Yield = { width: number; fieldsWidth: number; frameWidth: number }
+  const measured: Yield[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order): a floor strands only what the window is too
+    // narrow to hold, so the narrow end is where the pane is pushed onto its 470px floor.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [f, fr] = await Promise.all([fields.boundingBox(), frame.boundingBox()])
+        return { f, fr }
+      }, `pane yield at ${width}px`)
+
+      expect(m.f && m.fr, `the fields pane and the page frame must both render at ${width}px`).toBeTruthy()
+
+      // 1. The artboard's floor (`:223`). Below it the pane's `1fr 1fr` grid pushes its cells
+      //    past their column -- the spill EXTR11-E2E-02a measures from the other side.
+      expect(m.f!.width, `the fields pane is below its 470px floor at ${width}px`).toBeGreaterThanOrEqual(469)
+
+      // 2. And the document pane did not pay for it: the page frame is still inside the band
+      //    pageFrameStyle declares at zoom 100. A right pane pinned to a fixed track squeezes
+      //    the frame under its floor here.
+      expect(m.fr!.width, `the page frame fell below its 560px floor at ${width}px`).toBeGreaterThanOrEqual(559)
+      expect(m.fr!.width, `the page frame rose above its 640px ceiling at ${width}px`).toBeLessThanOrEqual(641)
+
+      measured.push({ width, fieldsWidth: m.f!.width, frameWidth: m.fr!.width })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  // 3. The pane grows with the chrome rather than pinning a track. `width === 620` would be
+  //    the tempting assertion and would FAIL on correct rendering at 2560, where both panes
+  //    grow; `>= 470` alone passes on a pane frozen at its basis. This is the relationship.
+  const widest = measured.find((m) => m.width === 2560)
+  const narrowest = measured.find((m) => m.width === 1280)
+  expect(widest && narrowest, 'the sweep did not measure both ends -- the comparison below is vacuous').toBeTruthy()
+  expect(
+    widest!.fieldsWidth,
+    `the fields pane is ${widest!.fieldsWidth}px at 2560 and ${narrowest!.fieldsWidth}px at 1280 -- it is pinned to a track, not yielding`,
+  ).toBeGreaterThan(narrowest!.fieldsWidth)
+
+  await testInfo.attach('extraction-pane-yield.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR-11-06's AC-1 ("the fields pane's body is scrollable") had no oracle at any layer: jsdom
+// computes no layout, so ExtractionFields.test.tsx pins the declaration triple and stops. This
+// subtask mounts the pane inside the shell whose `minHeight: 0` chain makes the scroll real, so
+// the claim becomes measurable here. Written in EXTR-11-07 for that reason.
+test('EXTR11-E2E-02b (AC-6): the fields pane scrolls its rows under a fixed header', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-07 scroll')
+  const detail = await openExtractionReview(page)
+  expect(detail.fields.length, 'no field on this document -- the overflow below cannot be produced').toBeGreaterThan(0)
+
+  const pane = page.getByTestId('extraction-fields')
+  // The pane's two children, in the artboard's order (`:225` header over `:230` body) --
+  // ExtractionFields.test.tsx pins that shape from the other side, so this index is not a guess.
+  const header = pane.locator('> div').first()
+  const paneBody = pane.locator('> div').nth(1)
+
+  const entryViewport = page.viewportSize()
+  let measured: Record<string, number | boolean> = {}
+  try {
+    // Short, not narrow: the rows have to outgrow the box before "scrollable" means anything.
+    await page.setViewportSize({ width: 1280, height: 320 })
+
+    measured = await settledRead(async () => {
+      const box = await paneBody.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollTop: el.scrollTop }))
+      const paneBox = await pane.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
+      const headerBox = await header.boundingBox()
+      return { ...box, paneScroll: paneBox.scrollHeight - paneBox.clientHeight, headerTop: headerBox?.y ?? -1 }
+    }, 'fields pane scroll geometry')
+
+    // The precondition, asserted rather than assumed. A failure here is the containment
+    // chain, not the fixture: if the shell's `minHeight: 0` column does not bound the pane,
+    // the whole screen grows and `.pf-scroll` scrolls the page instead.
+    expect(
+      measured.scrollHeight as number,
+      `the fields body is ${measured.scrollHeight}px of content in a ${measured.clientHeight}px box -- nothing to scroll, so the claim below is vacuous`,
+    ).toBeGreaterThan((measured.clientHeight as number) + 1)
+
+    const headerTopBefore = measured.headerTop as number
+    await paneBody.evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+    })
+
+    const after = await settledRead(async () => {
+      const scrollTop = await paneBody.evaluate((el) => el.scrollTop)
+      const headerBox = await header.boundingBox()
+      return { scrollTop, headerTop: headerBox?.y ?? -1 }
+    }, 'fields pane after scrolling')
+
+    expect(after.scrollTop, 'the fields body did not move -- it is not the scroller').toBeGreaterThan(0)
+    // The header is `flex: none` (`:225`) above the scroller, never inside it.
+    expect(
+      Math.abs(after.headerTop - headerTopBefore),
+      `the pane header moved ${(after.headerTop - headerTopBefore).toFixed(1)}px -- it scrolled away with the rows`,
+    ).toBeLessThanOrEqual(1)
+    expect(measured.paneScroll as number, 'the pane itself scrolls, so the header is inside the scroller').toBeLessThanOrEqual(1)
+
+    measured = { ...measured, scrolledTo: after.scrollTop, headerDrift: after.headerTop - headerTopBefore }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  await testInfo.attach('extraction-fields-scroll.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// EXTR-11-08's own layout claim. This subtask adds a second full-width control to a shipped
+// card, which changes that card's vertical rhythm -- so the two controls clearing each other,
+// and both still spanning the card's content box, is written here rather than in EXTR-11-09.
+// No review screen is opened: the card on the invoice detail is the whole subject.
+test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other on the card', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-08 card rhythm')
+
+  const card = page.getByTestId('source-document-card')
+  const control = page.getByTestId('open-extraction-review')
+  const sibling = page.getByTestId('view-source-document')
+
+  await expect(control, 'the entry control must be on the invoice detail').toBeVisible({ timeout: 60_000 })
+  await expect(sibling, 'its sibling must still be there').toBeVisible()
+
+  const measured: { width: number; control: Rect; sibling: Rect; overlap: Rect }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [c, s] = await Promise.all([control.boundingBox(), sibling.boundingBox()])
+        return { c, s }
+      }, `card control clearance at ${width}px`)
+
+      expect(m.c && m.s, `both controls must render at ${width}px`).toBeTruthy()
+      // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
+      expect(m.c!.height, `the entry control has no height at ${width}px`).toBeGreaterThan(0)
+      expect(m.s!.height, `view-source-document has no height at ${width}px`).toBeGreaterThan(0)
+
+      const overlap = overlapOf(m.c as Rect, m.s as Rect)
+      expect(
+        rectsOverlap(m.c as Rect, m.s as Rect),
+        `the two controls share ${overlap.width}x${overlap.height}px at ${width}px`,
+      ).toBe(false)
+      // Beneath, not merely elsewhere: `marginTop: 12` is what stacks them, and a control
+      // that floated above its sibling would clear it just as well.
+      expect(
+        m.c!.y,
+        `the entry control sits above view-source-document at ${width}px`,
+      ).toBeGreaterThanOrEqual(m.s!.y + m.s!.height)
+
+      measured.push({ width, control: m.c as Rect, sibling: m.s as Rect, overlap })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  // Both fill the card's content box, so neither is a half-width button that happens to
+  // clear the other. The card pads 16/18, so the expected gap is 18px a side -- comfortably
+  // inside the helper's default slack, and the attachment below records what was measured.
+  const controlFit = await assertFillsColumn(page, control, card, 'the entry control in the card content box')
+  const siblingFit = await assertFillsColumn(page, sibling, card, 'view-source-document in the card content box')
+
+  await testInfo.attach('extraction-entry-control-rhythm.json', {
+    body: JSON.stringify({ measured, controlFit, siblingFit }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-11-09 · the deployed proof: the journey, the two-page fixture, the fidelity diff ---
+//
+// The FINAL subtask. `Test-first: n/a` -- at order 9 of 9 every subject already exists, so these
+// specs cannot be red for the right reason; the subtask that built a thing wrote that thing's
+// deployed assertion (05-08 above). What genuinely remains is the journey end to end, the
+// two-page navigation AC-5's canvas half had no subject for, and the AC-8 fidelity diff.
+//
+// WHAT THIS SECTION CANNOT DELIVER, stated rather than faked: AC-5's second clause -- "the page
+// a field lives on is reachable in one action from that field" -- has NO deployed oracle. Every
+// mock region sits on page 1 (`grep -c 'Page: [2-9]' internal/extraction/mock.go` -> 0) and
+// every lever that would move one is outside this story's fence (`D-16`). The two-page fixture
+// below yields two FRAMES; it does not yield a field pointing at page 2, and nothing here
+// pretends otherwise. The clause is verified at component level only, in EXTR-11-05.
+
+test('EXTR11-E2E-01/09 (AC-2): the review screen opens from the invoice detail, and the journey raises no console error', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // A page image is fetched with a bare `fetch` and a bearer header, and a refusal is swallowed
+  // into an inline panel with NO console error (ExtractionCanvas.tsx's `.catch` -> 'error'
+  // slot). So the console gate alone cannot see a broken page route; this observer can.
+  //
+  // GET only, as openExtractionReview's own waiter is: the page fetch carries an Authorization
+  // header to another origin, so the browser sends a CORS preflight first, and an OPTIONS
+  // answered 204 would read as a refusal here on a perfectly correct build.
+  const pageImageResponses: { url: string; status: number }[] = []
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET') return
+    if (/\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}\/pages\/\d+$/.test(new URL(r.url()).pathname)) {
+      pageImageResponses.push({ url: new URL(r.url()).pathname, status: r.status() })
+    }
+  })
+
+  await extractOneDocument(page, 'EXTR-11-09 journey')
+
+  // -- EXTR11-E2E-01 -- the entry control is ENABLED, then opens the screen.
+  //
+  // EXTR11-E2E-07 measures this control's geometry and never asks whether it works: a deployed
+  // /v1/extractions lookup that 500s leaves it permanently disabled, and -07 would pass over
+  // the corpse. This is the row that asks. `toBeEnabled` polls, which is required rather than
+  // convenient -- the lookup is CHAINED behind the source-document read (InvoiceDetail.tsx:201-219),
+  // so the control is legitimately disabled for a beat after the detail paints.
+  const control = page.getByTestId('open-extraction-review')
+  await expect(control, 'the entry control must be on the invoice detail').toBeVisible({ timeout: 60_000 })
+  await expect(control, 'the entry control must be ENABLED after a settled extraction').toBeEnabled({ timeout: 60_000 })
+
+  const detail = await openExtractionReview(page)
+
+  // "at least one page frame", off the wire the SPA itself consumed rather than a literal.
+  // `[data-page]` inside the ground, not a testid prefix: `extraction-page-image-N` is itself
+  // prefixed by `extraction-page-`, and `data-page` is the attribute the canvas's own observer
+  // resolves frames by (ExtractionCanvas.tsx:248).
+  expect(detail.pages.length, 'a settled job with no page rows cannot prove a canvas').toBeGreaterThan(0)
+  const frames = page.getByTestId('extraction-ground').locator('[data-page]')
+  await expect(frames, 'one frame per wire page').toHaveCount(detail.pages.length)
+
+  // -- EXTR11-E2E-09 -- the journey raises no error, on two independent instruments.
+  //
+  // The floor first: the page route must actually have been exercised, or the status sweep
+  // below is a claim about an empty list.
+  await expect(page.getByTestId('extraction-page-image-1'), "page 1's bytes must load").toBeVisible({ timeout: 60_000 })
+  expect(pageImageResponses.length, 'no page image was ever requested -- the status sweep below is vacuous').toBeGreaterThan(0)
+  expect(
+    pageImageResponses.filter((r) => r.status !== 200),
+    `a page image was refused, and the screen swallows that silently:\n${JSON.stringify(pageImageResponses)}`,
+  ).toEqual([])
+
+  await testInfo.attach('extraction-review-entry.json', {
+    body: JSON.stringify(
+      { jobId: detail.id, state: detail.state, pages: detail.pages, fields: detail.fields.length, pageImageResponses },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR11-E2E-05 (AC-5): a two-page document is navigable', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-09 two pages', {
+    name: 'native_invoice_2p.pdf',
+    buffer: uniqueTwoPagePdfBytes(),
+  })
+  const detail = await openExtractionReview(page)
+
+  // 1. TWO page-image rows really landed. Off the wire, not off the fixture: `pages` is read
+  //    from extraction_page_images, so this is the assertion that go-pdfium rendered the second
+  //    page and the sink stored it -- not merely that the PDF this repo committed says
+  //    `/Count 2`. A one-page fixture makes every assertion below vacuous, so it is first.
+  expect(
+    detail.pages.map((p) => p.page),
+    'the two-page fixture must produce two stored page images, in page order',
+  ).toEqual([1, 2])
+
+  const frame1 = page.getByTestId('extraction-page-1')
+  const frame2 = page.getByTestId('extraction-page-2')
+  await expect(frame1, 'frame 1 must render').toBeVisible({ timeout: 60_000 })
+  await expect(frame2, 'frame 2 must render').toBeVisible({ timeout: 60_000 })
+
+  // 2. The toolbar's meta line counts them. Derived from the wire, never typed: `2 PAGES` as a
+  //    literal would still pass on a hard-coded string. The singular/plural fork is
+  //    docMetaLine's own (extractionReview.ts:131-139), and this is its only deployed reading
+  //    at a count above one.
+  const expectedPages = `${detail.pages.length} PAGES`
+  const metaText = (await page.getByTestId('extraction-doc-meta').innerText()).trim()
+  expect(metaText, `the meta line must count the pages (got "${metaText}")`).toContain(expectedPages)
+  expect(expectedPages, 'the fixture must be plural, or the assertion above proves nothing').toBe('2 PAGES')
+
+  // 3. The ground is the scroller. `D-17` dropped the page rail, so continuous scroll IS the
+  //    navigation and this is the whole of AC-5's first clause on the deployed build.
+  const ground = page.getByTestId('extraction-ground')
+  const before = await settledRead(async () => {
+    const [scroll, g, f1, f2] = await Promise.all([
+      ground.evaluate((el) => ({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight })),
+      ground.boundingBox(),
+      frame1.boundingBox(),
+      frame2.boundingBox(),
+    ])
+    return { scroll, g, f1, f2 }
+  }, 'two-page ground geometry')
+
+  expect(before.g && before.f1 && before.f2, 'the ground and both frames must render').toBeTruthy()
+  // Non-empty first: a collapsed ground and a collapsed frame overlap vacuously.
+  expect(before.f2!.height, 'frame 2 has no height').toBeGreaterThan(0)
+  expect(before.g!.height, 'the ground has no height').toBeGreaterThan(0)
+  expect(
+    before.scroll.scrollHeight,
+    `the ground holds ${before.scroll.scrollHeight}px in a ${before.scroll.clientHeight}px box -- there is nothing to scroll`,
+  ).toBeGreaterThan(before.scroll.clientHeight + 1)
+
+  const overlapBefore = overlapOf(before.f2 as Rect, before.g as Rect)
+
+  // 4. Scrolling to the bottom brings frame 2 into the ground's visible band.
+  await ground.evaluate((el) => {
+    el.scrollTop = el.scrollHeight
+  })
+  const after = await settledRead(async () => {
+    const [scrollTop, g, f2] = await Promise.all([
+      ground.evaluate((el) => el.scrollTop),
+      ground.boundingBox(),
+      frame2.boundingBox(),
+    ])
+    return { scrollTop, g, f2 }
+  }, 'two-page ground after scrolling')
+
+  expect(after.scrollTop, 'the ground did not move -- it is not the scroller').toBeGreaterThan(0)
+  const overlapAfter = overlapOf(after.f2 as Rect, after.g as Rect)
+
+  // Half the ground's height, not a single pixel: `overlapOf` clamps per axis, so `> 0` passes
+  // on a one-pixel sliver at the very bottom edge, which is not "reached".
+  expect(
+    overlapAfter.height,
+    `frame 2 covers only ${overlapAfter.height.toFixed(1)}px of the ground's ${after.g!.height.toFixed(1)}px band after scrolling to the bottom`,
+  ).toBeGreaterThanOrEqual(after.g!.height / 2)
+
+  // The control needle. Without it the assertion above would also pass on a ground that never
+  // scrolled because both frames already fit -- which is the one shape that would make "a
+  // multi-page document is navigable" unproven while reporting green.
+  expect(
+    overlapAfter.height,
+    `frame 2 was already ${overlapBefore.height.toFixed(1)}px into view before the scroll -- the scroll proved nothing`,
+  ).toBeGreaterThan(overlapBefore.height)
+
+  await testInfo.attach('extraction-two-page-navigation.json', {
+    body: JSON.stringify(
+      {
+        wirePages: detail.pages,
+        metaText,
+        scroll: before.scroll,
+        scrolledTo: after.scrollTop,
+        overlapBefore,
+        overlapAfter,
+        groundHeight: after.g!.height,
+      },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR11-E2E-11 · the AC-8 fidelity diff -----------------------------------------------
+//
+// AC-8 makes `.ralph/design/Recognition Review.dc.html` the spec, and a spec is only a spec if
+// something reads it. Every other AC-8 assertion in this repository reads a STYLE OBJECT in
+// jsdom (ExtractionCanvas.test.tsx, ExtractionFields.test.tsx, ExtractionReview.test.tsx),
+// which proves the declaration was written and nothing about what the browser resolved. This
+// row reads `getComputedStyle` off the deployed surface.
+//
+// THE ARTBOARD IS NOT IN THE REPOSITORY. `.gitignore:61` ignores `.ralph/`, so no CI checkout
+// carries the file and no spec can parse it at run time. The `artboard` column below is a
+// TRANSCRIPTION from the untruncated 62KB source, each row carrying the line it came from --
+// stated here because a transcription can be wrong in a way a parse cannot, and a later reader
+// deserves to know which of the two this is.
+type FidelityRow = {
+  element: string
+  property: string
+  /** The declaration in Recognition Review.dc.html, verbatim. */
+  artboard: string
+  source: string
+  /** What the deployed surface must resolve to. Equal to `artboard` unless `deviation` says why not. */
+  expected: string
+  deviation: string | null
+}
+
+// A placeholder rather than a literal: `var(--bg-2)` resolves to whatever the deployed theme
+// resolves it to, and the diff compares the toolbar against that token rather than against a
+// colour typed here. Filled in from the probe below.
+const BG_2_TOKEN = '<var(--bg-2)>'
+
+const FIDELITY: FidelityRow[] = [
+  // The document pane. `flex: 1 1 auto; min-width: 0`.
+  { element: 'extraction-canvas', property: 'flex-grow', artboard: '1', source: ':34', expected: '1', deviation: null },
+  { element: 'extraction-canvas', property: 'flex-shrink', artboard: '1', source: ':34', expected: '1', deviation: null },
+  { element: 'extraction-canvas', property: 'flex-basis', artboard: 'auto', source: ':34', expected: 'auto', deviation: null },
+  { element: 'extraction-canvas', property: 'min-width', artboard: '0px', source: ':34', expected: '0px', deviation: null },
+
+  // The fields pane. `width: 620px; flex: 1 1 620px; min-width: 470px`.
+  { element: 'extraction-fields', property: 'flex-grow', artboard: '1', source: ':223', expected: '1', deviation: null },
+  { element: 'extraction-fields', property: 'flex-shrink', artboard: '1', source: ':223', expected: '1', deviation: null },
+  { element: 'extraction-fields', property: 'flex-basis', artboard: '620px', source: ':223', expected: '620px', deviation: null },
+  { element: 'extraction-fields', property: 'min-width', artboard: '470px', source: ':223', expected: '470px', deviation: null },
+
+  // The page frame, read at zoom 100 (asserted below). `min-width: 560px; max-width: 640px;
+  // margin: 0 auto 18px; border: 1px solid var(--line-2); padding: 44px 42px`.
+  { element: 'extraction-page-1', property: 'min-width', artboard: '560px', source: ':72', expected: '560px', deviation: null },
+  { element: 'extraction-page-1', property: 'max-width', artboard: '640px', source: ':72', expected: '640px', deviation: null },
+  { element: 'extraction-page-1', property: 'margin-top', artboard: '0px', source: ':72', expected: '0px', deviation: null },
+  { element: 'extraction-page-1', property: 'margin-bottom', artboard: '18px', source: ':72', expected: '18px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-top-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-right-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-bottom-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  { element: 'extraction-page-1', property: 'border-left-width', artboard: '1px', source: ':72', expected: '1px', deviation: null },
+  // The ONE stated deviation in this table. The artboard's page card is HTML invoice text, and
+  // `44px 42px` is that text's inset; an image page has no analogue. It is also mandatory
+  // rather than cosmetic: the highlight is positioned in percentages against the frame's
+  // PADDING box while the image fills its CONTENT box, and padding is the only thing that
+  // separates the two -- any non-zero value drifts every region (story `P-29`, :2170-2175).
+  ...(['padding-top', 'padding-right', 'padding-bottom', 'padding-left'] as const).map((property) => ({
+    element: 'extraction-page-1',
+    property,
+    artboard: property === 'padding-top' || property === 'padding-bottom' ? '44px' : '42px',
+    source: ':72',
+    expected: '0px',
+    deviation: 'the artboard pads its page card for HTML invoice text; a rendered image has no such inset, and padding on a positioned frame drifts every highlight (P-29)',
+  })),
+
+  // The ground. `flex: 1; min-height: 0; overflow: auto` -- BOTH axes, which is what a zoomed
+  // page needs and what `D-18` cites to keep the zoom control.
+  { element: 'extraction-ground', property: 'overflow-x', artboard: 'auto', source: ':65', expected: 'auto', deviation: null },
+  { element: 'extraction-ground', property: 'overflow-y', artboard: 'auto', source: ':65', expected: 'auto', deviation: null },
+
+  // The toolbar. `gap: 11px; padding: 10px 16px; background: var(--bg-2)`.
+  { element: 'extraction-toolbar', property: 'padding-top', artboard: '10px', source: ':36', expected: '10px', deviation: null },
+  { element: 'extraction-toolbar', property: 'padding-right', artboard: '16px', source: ':36', expected: '16px', deviation: null },
+  { element: 'extraction-toolbar', property: 'padding-bottom', artboard: '10px', source: ':36', expected: '10px', deviation: null },
+  { element: 'extraction-toolbar', property: 'padding-left', artboard: '16px', source: ':36', expected: '16px', deviation: null },
+  { element: 'extraction-toolbar', property: 'column-gap', artboard: '11px', source: ':36', expected: '11px', deviation: null },
+  { element: 'extraction-toolbar', property: 'row-gap', artboard: '11px', source: ':36', expected: '11px', deviation: null },
+  { element: 'extraction-toolbar', property: 'background-color', artboard: BG_2_TOKEN, source: ':36', expected: BG_2_TOKEN, deviation: null },
+
+  // The READ ONLY pill. `font-size: 9px; letter-spacing: 0.09em; border-radius: 999px`.
+  // letter-spacing is asserted separately, in ems -- see below.
+  { element: 'extraction-read-only', property: 'font-size', artboard: '9px', source: ':43', expected: '9px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-top-left-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-top-right-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-bottom-right-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+  { element: 'extraction-read-only', property: 'border-bottom-left-radius', artboard: '999px', source: ':43', expected: '999px', deviation: null },
+]
+
+// EXCLUDED BY NAME, with the reason, per this subtask's own AC. Both are elements this story
+// builds that the artboard does not have, and a diff against an absent element compares nothing
+// and reports all-clear:
+//   - the ZOOM CONTROL (`D-18`). The artboard's pages are HTML text at 11.5px that stays crisp
+//     at any size; ours are rendered images clamped to a 640px ceiling, and the user's task is
+//     reading a TIN's last four characters off one.
+//   - the PAGE COUNT in the toolbar's meta line (`D-17`). The artboard's toolbar carries a
+//     `{{ docMeta }}` placeholder (`:41`) whose content it never fixes, and the page rail that
+//     would have carried a `PAGE n OF m` stamp is dropped.
+// Each is asserted PRESENT on the deployed surface below: "excluded" has to exclude something
+// real, or a mistyped testid would silently exclude nothing and read as diligence.
+
+test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved values", async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-11-09 fidelity')
+  await openExtractionReview(page)
+
+  // The page frame's band is `560 * zoom` / `640 * zoom` (extractionReview.ts:114-118), so the
+  // artboard's 560/640 are only the right expectation at zoom 100. Asserted, not assumed.
+  await expect(
+    page.getByTestId('extraction-zoom-100'),
+    "the frame rows below are the artboard's numbers only at zoom 100",
+  ).toHaveAttribute('aria-pressed', 'true')
+
+  const elements = [...new Set(FIDELITY.map((r) => r.element))]
+  // Waited for, not assumed present: a missing element would otherwise fail the read as a hard
+  // error where it can equally be a paint this assertion arrived one frame ahead of.
+  for (const testid of elements) {
+    await expect(page.getByTestId(testid), `${testid} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
+  }
+
+  const properties: Record<string, string[]> = {}
+  for (const row of FIDELITY) (properties[row.element] ??= []).push(row.property)
+  // Read once, in one frame: two evaluates across a re-render can disagree.
+  const measured = await page.evaluate(
+    ({ elements, properties }: { elements: string[]; properties: Record<string, string[]> }) => {
+      const out: Record<string, Record<string, string> | null> = {}
+      for (const testid of elements) {
+        const el = document.querySelector(`[data-testid="${testid}"]`)
+        if (!el) {
+          out[testid] = null
+          continue
+        }
+        const cs = getComputedStyle(el)
+        const values: Record<string, string> = {}
+        for (const p of properties[testid]) values[p] = cs.getPropertyValue(p)
+        // The two read outside the row table, both recorded so the artifact is complete.
+        values['letter-spacing'] = cs.getPropertyValue('letter-spacing')
+        values['margin-left'] = cs.getPropertyValue('margin-left')
+        values['margin-right'] = cs.getPropertyValue('margin-right')
+        out[testid] = values
+      }
+      // The token, resolved in the toolbar's OWN custom-property environment rather than
+      // compared against a colour typed into this file. `--bg-2` is declared on `.asc-app`, so
+      // a probe outside that subtree would resolve to nothing.
+      const host = document.querySelector('[data-testid="extraction-toolbar"]')
+      let bg2 = ''
+      if (host) {
+        const probe = document.createElement('div')
+        probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;background:var(--bg-2)'
+        host.appendChild(probe)
+        bg2 = getComputedStyle(probe).backgroundColor
+        probe.remove()
+      }
+      return { out, bg2 }
+    },
+    { elements, properties },
+  )
+
+  for (const testid of elements) {
+    expect(measured.out[testid], `${testid} did not render -- every row below it would compare nothing`).not.toBeNull()
+  }
+  expect(measured.bg2, 'var(--bg-2) resolved to nothing -- the toolbar background row would compare two empty strings').not.toBe('')
+  expect(measured.bg2, 'var(--bg-2) resolved to transparent -- the toolbar background row would be vacuous').not.toBe('rgba(0, 0, 0, 0)')
+
+  // `declared` keeps the raw table entry -- the placeholder included -- so the artifact still
+  // shows that the toolbar row compared a TOKEN and not a colour typed into this file. Both
+  // `expected` and `artboard` resolve to the same probe reading, which is what keeps the
+  // "expected equals artboard unless it is a stated deviation" check below honest for that row.
+  const table = FIDELITY.map((row) => {
+    const expected = row.expected === BG_2_TOKEN ? measured.bg2 : row.expected
+    const artboard = row.artboard === BG_2_TOKEN ? measured.bg2 : row.artboard
+    const deployed = measured.out[row.element]![row.property] ?? ''
+    return { ...row, declared: row.artboard, artboard, expected, deployed, match: deployed === expected }
+  })
+
+  // The floor: a table that silently shrank would report all-clear on whatever it still held.
+  expect(table.length, 'the fidelity table lost rows').toBe(FIDELITY.length)
+  for (const row of table) {
+    expect(row.deployed, `${row.element} has no resolved ${row.property} -- an empty string matches nothing`).not.toBe('')
+    expect(
+      row.deployed,
+      `${row.element} · ${row.property}: deployed ${row.deployed}, expected ${row.expected} (artboard declares ${row.declared}, Recognition Review.dc.html${row.source})`,
+    ).toBe(row.expected)
+  }
+
+  // Exactly the four padding rows deviate, and each says why. A silent divergence added later
+  // fails here rather than passing as "documented".
+  const deviations = table.filter((r) => r.deviation !== null)
+  expect(
+    deviations.map((r) => `${r.element}·${r.property}`).sort(),
+    'the set of stated deviations from the artboard changed',
+  ).toEqual(['extraction-page-1·padding-bottom', 'extraction-page-1·padding-left', 'extraction-page-1·padding-right', 'extraction-page-1·padding-top'])
+  for (const row of deviations) {
+    expect(row.expected, `${row.element} · ${row.property} is listed as a deviation but matches the artboard`).not.toBe(row.artboard)
+  }
+  for (const row of table.filter((r) => r.deviation === null)) {
+    expect(row.expected, `${row.element} · ${row.property} silently expects something the artboard does not declare`).toBe(row.artboard)
+  }
+
+  // -- The two rows a string compare cannot carry ------------------------------------------
+  //
+  // 1. `margin: 0 auto 18px` (`:72`). Chrome resolves an `auto` margin to its USED value, so
+  //    there is no 'auto' string to compare -- the observable form of the pair is that the two
+  //    used values agree. The vertical halves are exact rows in the table above.
+  //
+  //    That pair agrees only where the frame FITS its column. The 560px floor asserted above
+  //    exceeds the document pane's column at this file's default 1280px viewport, and CSS 2.1
+  //    10.3.3 then sets margin-left to 0 and solves for margin-right -- correct rendering, and
+  //    what EXTR11-E2E-06 measures from the other side. So this row widens the window until the
+  //    frame fits and asserts the centring where it means something. Guarding the assertion
+  //    behind a `fits` check instead would skip it at every width this test runs at.
+  const entryViewport = page.viewportSize()
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  const frame = await settledRead(
+    () =>
+      page.evaluate(() => {
+        const el = document.querySelector('[data-testid="extraction-page-1"]')
+        const pad = document.querySelector('[data-testid="extraction-ground"] > div')
+        if (!el || !pad) return null
+        const cs = getComputedStyle(el)
+        return {
+          marginLeft: cs.marginLeft,
+          marginRight: cs.marginRight,
+          frameWidth: el.getBoundingClientRect().width,
+          padWidth: pad.getBoundingClientRect().width,
+        }
+      }),
+    'the page frame margins at 1920px',
+  )
+  expect(frame, 'the frame and its column must both render at 1920px').not.toBeNull()
+  expect(
+    frame!.frameWidth,
+    `the frame still overflows its column at 1920px (frame ${frame!.frameWidth}, column ${frame!.padWidth}), so the centring below would pin CSS 2.1 10.3.3's overconstraint rule rather than 'margin: 0 auto'`,
+  ).toBeLessThanOrEqual(frame!.padWidth + 1)
+  expect(
+    frame!.marginLeft,
+    `the frame's auto margins disagree (left ${frame!.marginLeft}, right ${frame!.marginRight}) -- 'margin: 0 auto 18px' is what centres it`,
+  ).toBe(frame!.marginRight)
+  if (entryViewport) await page.setViewportSize(entryViewport)
+
+  // 2. `letter-spacing: 0.09em` at `font-size: 9px` (`:43`). Chrome computes it to px, so a
+  //    string compare would pin a rounding rather than the artboard's ratio. 0.02px on 0.81px
+  //    is two orders finer than any real drift (the next tracking step in this file is 0.04em).
+  const pill = measured.out['extraction-read-only']!
+  const pillFontPx = parseFloat(pill['font-size'])
+  const pillTrackPx = parseFloat(pill['letter-spacing'])
+  expect(Number.isFinite(pillFontPx) && Number.isFinite(pillTrackPx), 'the pill resolved no font metrics').toBe(true)
+  expect(
+    Math.abs(pillTrackPx - 0.09 * pillFontPx),
+    `the READ ONLY pill tracks ${pillTrackPx}px on ${pillFontPx}px, and the artboard's 0.09em is ${(0.09 * pillFontPx).toFixed(3)}px`,
+  ).toBeLessThanOrEqual(0.02)
+
+  // -- The exclusions, each proved to exclude something real --------------------------------
+  for (const zoom of [50, 100, 150]) {
+    await expect(
+      page.getByTestId(`extraction-zoom-${zoom}`),
+      `the zoom control is excluded from this diff by name (D-18); a missing ${zoom}% segment would make that exclusion a claim about nothing`,
+    ).toBeVisible()
+  }
+  const meta = (await page.getByTestId('extraction-doc-meta').innerText()).trim()
+  expect(
+    meta,
+    `the meta line's page count is excluded from this diff by name (D-17); it must exist to be excluded (got "${meta}")`,
+  ).toMatch(/\b\d+ PAGES?\b/)
+
+  await testInfo.attach('extraction-fidelity-diff.json', {
+    body: JSON.stringify(
+      {
+        artboard: '.ralph/design/Recognition Review.dc.html (gitignored; the artboard column is a transcription)',
+        excludedByName: [
+          { element: 'extraction-zoom-{50,100,150}', reason: 'the artboard has no zoom control (D-18)' },
+          { element: 'extraction-doc-meta page count', reason: 'the artboard fixes no content for {{ docMeta }} and has no page stamp (D-17)' },
+        ],
+        table,
+        autoMargins: {
+          measuredAtWidth: 1920,
+          left: frame?.marginLeft ?? null,
+          right: frame?.marginRight ?? null,
+          frameWidth: frame?.frameWidth ?? null,
+          columnWidth: frame?.padWidth ?? null,
+        },
+        readOnlyTracking: { fontSizePx: pillFontPx, letterSpacingPx: pillTrackPx, artboardEm: 0.09 },
+        metaLine: meta,
+      },
+      null,
+      2,
+    ),
     contentType: 'application/json',
   })
 

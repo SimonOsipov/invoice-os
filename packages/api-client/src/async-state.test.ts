@@ -7,9 +7,9 @@
 // and the real implementations return synchronously, so the same call shape works both
 // RED and green.
 //
-// useAsync itself is NOT unit-tested here — Decision (i) in the story: hook logic is
-// covered by testing the extracted pure reducer + helpers; the hook's runtime path is
-// exercised once a live surface wires it (M3-08/09).
+// useAsync's runtime path is not tested here — Decision (i) in the story: hook logic is
+// covered by testing the extracted pure reducer + helpers, and the runtime path is exercised
+// by the surface that wires it. Its shape is pinned in async-state.hook-shape.test.ts.
 import { describe, expect, it } from 'vitest'
 
 import { ApiError } from './client'

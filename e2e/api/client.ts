@@ -1052,3 +1052,49 @@ export function getExtractions(token: string, documentId?: string): Promise<Extr
     { token },
   )
 }
+
+// EXTR-11: GET /v1/extractions/{id} on the submission binary -- the review screen's read.
+// Mirrored key-for-key from internal/extraction/reader.go; wireMirrors.test.ts fails if this
+// side or frontend/app/src/lib/extractionReview.ts gains or loses a key.
+export interface ExtractionRegion {
+  page: number
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+export interface ExtractionPage {
+  page: number
+  width_px: number
+  height_px: number
+}
+
+export interface ExtractionFieldState {
+  name: string
+  value: string | null
+  region: ExtractionRegion | null
+}
+
+export interface ExtractionDocument {
+  filename: string | null
+  content_type: string | null
+  size_bytes: number
+  stored_at: string
+}
+
+export interface ExtractionDetail {
+  id: string
+  document_id: string
+  state: string
+  document: ExtractionDocument
+  pages: ExtractionPage[]
+  fields: ExtractionFieldState[]
+}
+
+export function getExtractionDetail(token: string, jobId: string): Promise<ExtractionDetail> {
+  return apiFetch<ExtractionDetail>(
+    `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}`,
+    { token },
+  )
+}

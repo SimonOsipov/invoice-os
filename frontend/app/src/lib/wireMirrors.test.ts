@@ -1,10 +1,6 @@
-// AC-5's story-level fence: this story changes no wire shape.
-//
-// `ApprovalRun`'s tri-mirror already lives in approvals.test.ts and is left where it is;
-// the two below had no cross-language mirror at all (`StatusChange`) or only a one-way
-// Go->SPA substring scan with no SPA<->e2e leg (`AuditEvent`). One file rather than three
-// per-type homes: AC-5 is a story-level fence, and lib/invoices.ts and lib/audit.ts carry
-// no pointer to it (F-AJ).
+// Go <-> SPA <-> e2e key-set mirrors for wire types nothing links at compile time. One file
+// rather than a per-type home in each consumer; `ApprovalRun`'s tri-mirror is the one
+// exception and stays in approvals.test.ts.
 //
 // The three extractors are approvals.test.ts:864-898's, verbatim.
 
@@ -57,6 +53,8 @@ const E2E_CLIENT = 'e2e/api/client.ts'
 
 // Each anchor is a symbol OTHER than the type being extracted, so a moved or emptied file
 // fails loudly instead of yielding [] and passing the equality row on {} === {} === {}.
+// Every anchor ends at '(': a bare prefix still matches getAuditLogV2, so a rename would
+// leave the control-needle row green over a symbol that no longer exists.
 const WIRE_MIRRORS = [
   {
     ts: 'StatusChange',
@@ -64,8 +62,8 @@ const WIRE_MIRRORS = [
     goPath: 'internal/invoice/invoice.go',
     goAnchor: 'func (s Status) valid() bool',
     spaPath: 'frontend/app/src/lib/invoices.ts',
-    spaAnchor: 'export async function getInvoiceHistory',
-    e2eAnchor: 'export function getInvoiceHistory',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
     floor: 6,
   },
   {
@@ -74,9 +72,62 @@ const WIRE_MIRRORS = [
     goPath: 'internal/audit/reader.go',
     goAnchor: 'func ScopeOf(',
     spaPath: 'frontend/app/src/lib/audit.ts',
-    spaAnchor: 'export async function getAuditLog',
-    e2eAnchor: 'export function getAuditLog',
+    spaAnchor: 'export async function getAuditLog(',
+    e2eAnchor: 'export function getAuditLog(',
     floor: 10,
+  },
+  // EXTR-11-04 — the review screen's five. One Go file, five distinct anchors, so a
+  // deleted struct cannot be masked by a neighbour's still-present symbol. Each anchor
+  // ends in '(' — without it a renamed getExtractionDetailX still contains the anchor.
+  {
+    ts: 'ExtractionDetail',
+    go: 'ExtractionDetail',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func emptyDetail()',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function getExtractionDetail(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 6,
+  },
+  {
+    ts: 'ExtractionDocument',
+    go: 'ExtractionDocument',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function docMetaLine(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 4,
+  },
+  {
+    ts: 'ExtractionPage',
+    go: 'ExtractionPage',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailPagesTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function pageFrameStyle(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 3,
+  },
+  {
+    ts: 'ExtractionFieldState',
+    go: 'ExtractionFieldState',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailFieldsTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function scrollRegionIntoView(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 3,
+  },
+  {
+    ts: 'ExtractionRegion',
+    go: 'ExtractionRegion',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func (r *Reader) Detail(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function highlightStyle(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 5,
   },
 ] as const
 
@@ -181,7 +232,15 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     // The registry of what this file checks. A cleared table would let every loop here pass
     // on zero iterations, so each table is named — a new mirror that skips this row is a
     // mirror nothing runs.
-    expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual(['StatusChange', 'AuditEvent'])
+    expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
+      'StatusChange',
+      'AuditEvent',
+      'ExtractionDetail',
+      'ExtractionDocument',
+      'ExtractionPage',
+      'ExtractionFieldState',
+      'ExtractionRegion',
+    ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
 

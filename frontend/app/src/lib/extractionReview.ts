@@ -247,20 +247,27 @@ function vocabularyRank(name: string): number {
  * The draft turned into the POSTs one Save owes, in vocabulary order: each POST opens its own
  * transaction, so the append-only table's seq follows the order the person reads.
  *
- * An entry carrying the value the wire already holds is dropped -- diffEditInput's rule, and a
- * no-op recorded as a human decision is a lie the append-only table cannot take back. An UNDO
- * is exempt: it is a decision about the correction, not about the value, and the server ignores
- * the value it carries anyway.
+ * A TYPED entry carrying the value the wire already holds is dropped -- diffEditInput's rule,
+ * and a no-op recorded as a human decision is a lie the append-only table cannot take back.
+ * CHOSEN and UNDONE are exempt: each is a decision about the FIELD rather than the value, and
+ * both are real when the value does not move -- a chosen entry equal to the reading is how a
+ * person settles an ambiguous field by agreeing with it, and the server ignores an undo's value
+ * anyway.
  */
 export function savableCorrections(fields: ExtractionFieldState[], entries: DraftEntries): CorrectionPost[] {
   const byName = new Map(fields.map((f) => [f.name, f]))
   return Object.keys(entries)
     .filter((name) => {
       const entry = entries[name]
-      if (entry.kind === 'undone') return true
+      // The no-op guard is about the VALUE, and only a TYPED entry is only about the value:
+      // retyping the same characters decides nothing. A chosen entry settles an ambiguous
+      // field and an undone one withdraws a correction, and both are real decisions when the
+      // value does not move -- agreeing with the extractor is the only way to settle a field
+      // whose reading you believe.
+      if (entry.kind !== 'typed') return true
       // A trimmed-empty typed value is not sent: the boundary refuses a blank one, so the
       // round trip and its message buy nothing. fixEditPatch's rule (reviewBatch.ts).
-      if (entry.kind === 'typed' && entry.value.trim() === '') return false
+      if (entry.value.trim() === '') return false
       return entry.value !== (byName.get(name)?.value ?? '')
     })
     .sort((a, b) => vocabularyRank(a) - vocabularyRank(b))

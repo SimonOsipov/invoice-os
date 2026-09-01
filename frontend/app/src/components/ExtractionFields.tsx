@@ -256,7 +256,11 @@ export function ExtractionFields({
                     : null
                 const locked = LOCKED_FIELDS.includes(f.name)
                 const lock = LOCK_REASONS[f.name] ?? null
-                const picked = draft[f.name]?.kind === 'chosen' ? draft[f.name].value : null
+                // The value the invoice holds, or the one the draft will settle it to. With no
+                // chosen entry it falls back to the WIRE's own reading, so the row always says
+                // which of the candidates is filed -- an ambiguous cell renders no input, and a
+                // chip's position is not a signal anyone can read.
+                const picked = draft[f.name]?.kind === 'chosen' ? draft[f.name].value : wire.value
                 return (
                   // A <div>, not a <button>: a button may not contain interactive content, and
                   // `aria-pressed` is valid only on a button role — hence `aria-current`, which
@@ -302,9 +306,9 @@ export function ExtractionFields({
                             key={`${a.value ?? ''}-${i}`}
                             type="button"
                             data-testid={`extraction-chip-${f.name}-${i}`}
-                            aria-current={picked !== null && picked === a.value}
+                            aria-current={picked === a.value}
                             onClick={() => onChoose(f.name, a)}
-                            style={picked !== null && picked === a.value ? CHIP_PICKED : CHIP}
+                            style={picked === a.value ? CHIP_PICKED : CHIP}
                           >
                             <span style={CHIP_VALUE}>{a.value ?? ''}</span>
                             {regionPhrase(a.region) === null ? null : (

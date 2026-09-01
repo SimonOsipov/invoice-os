@@ -391,8 +391,8 @@ export interface ViewportPoint {
 
 // The artboard's gesture floor (`onUp`), in CSS pixels of the drag itself: the floor exists to
 // tell a drag from a click, and a hand moves in the units it moves in, not in normalised ones.
-export const POINT_MIN_W = 24
-export const POINT_MIN_H = 12
+const POINT_MIN_W = 24
+const POINT_MIN_H = 12
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v))

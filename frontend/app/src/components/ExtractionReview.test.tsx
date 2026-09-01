@@ -1019,6 +1019,55 @@ describe('one shared draft, one Save', () => {
     ).toBe(REFUSAL)
   })
 
+  it('discards a blank typed entry when the save that dropped it commits another field', async () => {
+    // `savableCorrections` never posts a blank, so a blank entry is never in `committed`. A
+    // handler keeping every UNCOMMITTED entry therefore keeps it forever, and `applyDraft`
+    // re-lays it over every fresh read: the cell denies a value the register still holds, and
+    // Save is disabled again so no gesture is left that clears it. Keep an entry only if it
+    // was POSTED and did not commit.
+    const w = writing(
+      mkDetail({
+        fields: [
+          mkField({ name: 'subtotal', value: '950.00', region: mkRegion({ page: 1 }) }),
+          mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 1 }) }),
+        ],
+      }),
+      async (_url, body) => mkCorrectionResponse('total', String((body as { value?: string }).value ?? ''), 'typed'),
+    )
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const subtotal = inputOf('subtotal')
+    const total = inputOf('total')
+    expect(subtotal && total, 'the pane renders no inputs — every claim below is vacuous').toBeTruthy()
+
+    fireEvent.change(subtotal as HTMLInputElement, { target: { value: '' } })
+    fireEvent.change(total as HTMLInputElement, { target: { value: '2,222.00' } })
+    await flush()
+    expect(inputOf('subtotal')!.value, 'the blank never reached the draft, so the save below proves nothing').toBe('')
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    // The floor: exactly one POST, for the field that carried a value.
+    expect(
+      writes(w).map((c) => c.url.split('/fields/')[1]?.split('/')[0]),
+      'the blank was posted, or the field beside it was not',
+    ).toEqual(['total'])
+    expect(
+      screen.queryByTestId('extraction-write-error'),
+      'the save was refused, so nothing below is about the blank',
+    ).toBeNull()
+
+    // The claim. A kept blank survives the post-save re-read and every one after it.
+    expect(
+      inputOf('subtotal')!.value,
+      'the dropped blank outlived the save and the cell now denies a value the register holds',
+    ).toBe('950.00')
+  })
+
   it('re-reads after a write and never blanks while it does', async () => {
     // `asyncReducer`'s start arm returns `{ status: 'loading', data: null }` and the shell
     // renders `<Loading/>` on `data === null`, so a `detail.run()` re-read unmounts BOTH panes,

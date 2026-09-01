@@ -304,6 +304,50 @@ func TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn(t *testing.T)
 	}
 }
 
+// A nil value is an undo of a field the extractor never read: every writable column takes its
+// own clear sentinel, so the invoice ends up holding nothing rather than the empty string --
+// which for the three numeric columns is 22P02, not a clear. issue_date is the arm that would
+// otherwise time.Parse a value that is not there.
+func TestInvoiceEditFor_ANilValueClearsEveryWritableColumn(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		read  func(invoice.UpdateInput) any
+		want  any
+	}{
+		{"issue_date", func(in invoice.UpdateInput) any { return in.IssueDate }, invoice.ClearDate},
+		{"buyer_tin", func(in invoice.UpdateInput) any { return in.BuyerTIN }, invoice.ClearText},
+		{"buyer_name", func(in invoice.UpdateInput) any { return in.BuyerName }, invoice.ClearText},
+		{"currency", func(in invoice.UpdateInput) any { return in.Currency }, invoice.ClearText},
+		{"subtotal", func(in invoice.UpdateInput) any { return in.Subtotal }, invoice.ClearText},
+		{"vat", func(in invoice.UpdateInput) any { return in.VAT }, invoice.ClearText},
+		{"total", func(in invoice.UpdateInput) any { return in.Total }, invoice.ClearText},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			in, err := invoiceEditFor(tc.field, nil)
+			if err != nil {
+				t.Fatalf("clearing %s: %v", tc.field, err)
+			}
+			// Pointer IDENTITY: a copy of the sentinel is refused by updateContentTx, so a
+			// value comparison here would pass on an input the write layer rejects.
+			if got := tc.read(in.UpdateInput); got != tc.want {
+				t.Errorf("%s reached the edit as %s, want the clear sentinel", tc.field, fcShow(got))
+			}
+			if n := fcNonNil(in.UpdateInput); n != 1 {
+				t.Errorf("clearing %s built an EditInput with %d non-nil header field(s), want exactly 1", tc.field, n)
+			}
+			if in.LineItems != nil {
+				t.Errorf("clearing %s sent a line-items array", tc.field)
+			}
+		})
+	}
+
+	// The control: a nil on a field outside the writable seven is still refused, so the clear
+	// arm did not widen the vocabulary.
+	if _, err := invoiceEditFor("invoice_number", nil); !errors.Is(err, extraction.ErrValueRefused) {
+		t.Errorf("clearing invoice_number: err = %v, want ErrValueRefused", err)
+	}
+}
+
 func fcStr(s string) *string { return &s }
 
 // fcShow renders a possibly-nil pointer so a mismatch names values rather than addresses.

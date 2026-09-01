@@ -1126,7 +1126,30 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 	const text = "%s = $%d"
 	const numeric = "%s = $%d::text::numeric"
 
-	if in.IssueDate != nil {
+	// The clear sentinels, by pointer identity: NULL through the same placeholder, so a numeric
+	// column takes NULL::text::numeric and needs no second format string. A member holding a
+	// COPY of a sentinel is a caller who dereferenced and re-took an address; it is named here
+	// and refused below rather than writing "" into a numeric column and raising 22P02.
+	var copiedSentinel string
+	put := func(col, placeholder string, p *string) {
+		switch {
+		case p == nil:
+		case p == ClearText:
+			set(col, placeholder, (*string)(nil))
+		case *p == clearText:
+			copiedSentinel = col
+		default:
+			set(col, placeholder, *p)
+		}
+	}
+
+	switch {
+	case in.IssueDate == nil:
+	case in.IssueDate == ClearDate:
+		set("issue_date", text, (*time.Time)(nil))
+	case in.IssueDate.Equal(clearDate):
+		copiedSentinel = "issue_date"
+	default:
 		set("issue_date", text, *in.IssueDate)
 	}
 
@@ -1145,23 +1168,16 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		changedFields = append(changedFields, "supplier_name")
 	}
 
-	if in.BuyerTIN != nil {
-		set("buyer_tin", text, *in.BuyerTIN)
-	}
-	if in.BuyerName != nil {
-		set("buyer_name", text, *in.BuyerName)
-	}
-	if in.Currency != nil {
-		set("currency", text, *in.Currency)
-	}
-	if in.Subtotal != nil {
-		set("subtotal", numeric, *in.Subtotal)
-	}
-	if in.VAT != nil {
-		set("vat", numeric, *in.VAT)
-	}
-	if in.Total != nil {
-		set("total", numeric, *in.Total)
+	put("buyer_tin", text, in.BuyerTIN)
+	put("buyer_name", text, in.BuyerName)
+	put("currency", text, in.Currency)
+	put("subtotal", numeric, in.Subtotal)
+	put("vat", numeric, in.VAT)
+	put("total", numeric, in.Total)
+
+	if copiedSentinel != "" {
+		return Invoice{}, nil, fmt.Errorf(
+			"%w: %s carries a copy of the clear sentinel, not the sentinel itself", ErrValidation, copiedSentinel)
 	}
 
 	args = append(args, id)

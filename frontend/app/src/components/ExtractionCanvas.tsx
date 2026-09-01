@@ -82,17 +82,6 @@ const META: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const READ_ONLY: CSSProperties = {
-  flex: 'none',
-  fontSize: 9,
-  fontWeight: 700,
-  letterSpacing: '0.09em',
-  color: 'var(--fg-3)',
-  border: '1px solid var(--line-2)',
-  borderRadius: 999,
-  padding: '3px 9px',
-}
-
 const ZOOM_GROUP: CSSProperties = {
   whiteSpace: 'nowrap',
   flex: 'none',
@@ -305,9 +294,6 @@ export function ExtractionCanvas({
             </button>
           ))}
         </div>
-        <span data-testid="extraction-read-only" className="mono" style={READ_ONLY}>
-          READ ONLY
-        </span>
       </div>
 
       {banner ? (

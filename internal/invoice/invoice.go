@@ -205,12 +205,27 @@ type CreateInput struct {
 	SourceRows []int
 }
 
+// ClearText and ClearDate are the third state an UpdateInput member can carry:
+// assign one and updateContentTx writes SQL NULL to that column instead of a
+// value. Matched by POINTER IDENTITY, so an ordinary "" still writes the empty
+// string and a JSON body can never express a clear. Their contents are
+// unforgeable, and a member holding a COPY of one is refused as ErrValidation
+// rather than silently degrading to "" — which for a numeric column would raise
+// 22P02 (TestUpdateContentTx_RefusesACopiedClearSentinel).
+var (
+	clearText = "\x00invoice.clear"
+	clearDate = time.Unix(0, 1).UTC()
+
+	ClearText = &clearText
+	ClearDate = &clearDate
+)
+
 // UpdateInput is the Store.Update argument: a partial update over invoices'
 // mutable MBS-content columns only. Only non-nil fields are applied; nil
-// means "leave unchanged". Deliberately has NO EntityID/InvoiceNumber/Status
-// field — identity and lifecycle are not Update's job ([D9]); an all-nil
-// UpdateInput is rejected as ErrValidation before any tx opens (a no-op
-// UPDATE is forbidden).
+// means "leave unchanged", and ClearText/ClearDate mean "write SQL NULL".
+// Deliberately has NO EntityID/InvoiceNumber/Status field — identity and
+// lifecycle are not Update's job ([D9]); an all-nil UpdateInput is rejected as
+// ErrValidation before any tx opens (a no-op UPDATE is forbidden).
 type UpdateInput struct {
 	IssueDate    *time.Time
 	SupplierTIN  *string

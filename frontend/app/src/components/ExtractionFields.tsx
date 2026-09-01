@@ -5,18 +5,29 @@
 
 import type { CSSProperties } from 'react'
 
-import { correctedMarker, fieldLabel, fieldNote, reasonPill } from '../lib/extractionReview'
+import { applyDraft, correctedMarker, fieldLabel, fieldNote, reasonPill, regionPhrase } from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
 
 const TITLE = 'The invoice as it will be filed'
 const NO_REGION = 'NO REGION'
 const NO_FIELDS = 'Nothing was extracted from this document.'
+const UNDO = 'Undo'
+const INVOICE_NUMBER_LOCKED = "The invoice number is this invoice's identity and cannot be changed here."
 
 // internal/invoice/store.go:205-221 overwrites both supplier fields from the signed-in entity
 // on every Store.Create, so neither value below is what gets filed.
 const SUPPLIER_NOTE = 'The supplier filed on this invoice comes from your client record, not from this document.'
 
 const SUPPLIER_FIELDS = ['supplier_tin', 'supplier_name']
+
+// internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
+// a 422, and updateContentTx re-derives the two supplier fields from the client entity anyway.
+// readOnly, never disabled -- a disabled input leaves the tab order and fires no focus, so the
+// cell would stop being reachable or selectable by keyboard.
+const LOCKED_FIELDS = ['invoice_number', ...SUPPLIER_FIELDS]
+
+// SUPPLIER_NOTE already says why the two supplier cells are locked, at pane level.
+const LOCK_REASONS: Record<string, string> = { invoice_number: INVOICE_NUMBER_LOCKED }
 
 const PANE: CSSProperties = {
   width: 620,
@@ -67,8 +78,6 @@ const LABEL_STRIP: CSSProperties = { display: 'flex', alignItems: 'center', gap:
 
 const LABEL: CSSProperties = { fontSize: 12, fontWeight: 500, color: 'var(--fg-2)' }
 
-const VALUE: CSSProperties = { fontSize: 13, fontWeight: 500, color: 'var(--fg-1)', overflowWrap: 'anywhere' }
-
 // The artboard's own pill slot (`:296`), not RulePills.tsx — the amber triple is shared, the
 // two font metrics are not.
 const PILL: CSSProperties = {
@@ -101,6 +110,68 @@ const MARKER: CSSProperties = {
   pointerEvents: 'none',
 }
 
+// The artboard's own input (`:305`). The class carries the box and `width: 100%`; the inline
+// padding is the room the marker needs, and NO inline width -- one would override the cell's
+// `min-width: 0` and let a long value widen the grid track.
+const INPUT: CSSProperties = { paddingRight: 30 }
+const LOCKED_INPUT: CSSProperties = { ...INPUT, color: 'var(--fg-3)' }
+
+// `:312-320`. `.pf-chip` is barred here: app-layer.css:275 forces `border-radius: pill` over the
+// artboard's 10px card, and the pane's own walk forbids the class for that reason.
+const CHIP_ROW: CSSProperties = { display: 'flex', gap: 8 }
+
+const CHIP: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  textAlign: 'left',
+  border: '1px solid var(--line-2)',
+  background: 'var(--bg-2)',
+  borderRadius: 10,
+  padding: '8px 11px',
+  fontFamily: 'var(--font-sans)',
+  cursor: 'pointer',
+  transition: 'background 120ms, border-color 120ms, color 120ms',
+}
+
+// The artboard's `a.border` hook, moved to the app layer's own teal: a drafted pick has to be
+// visible before Save, which the artboard never has to show.
+const CHIP_PICKED: CSSProperties = { ...CHIP, border: '1px solid var(--action)' }
+
+// Block <span>s, not the artboard's <div>s: flow content is invalid inside a <button>, and the
+// two lines still have to stack.
+const CHIP_VALUE: CSSProperties = {
+  display: 'block',
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'var(--fg-1)',
+  overflowWrap: 'anywhere',
+}
+
+// `:317`. Uppercased in CSS, never in JavaScript: `text-transform` leaves textContent the phrase
+// the copy table declares, so the pane's own residue sweep still reads it.
+const CHIP_WHERE: CSSProperties = {
+  display: 'block',
+  fontSize: 8.5,
+  color: 'var(--fg-3)',
+  letterSpacing: '0.05em',
+  marginTop: 4,
+  textTransform: 'uppercase',
+  overflowWrap: 'anywhere',
+}
+
+// `:337`, without `.pf-btn` -- same radius override.
+const UNDO_BUTTON: CSSProperties = {
+  border: 0,
+  background: 'transparent',
+  padding: 0,
+  fontFamily: 'var(--font-sans)',
+  fontSize: 11.5,
+  color: 'var(--action)',
+  cursor: 'pointer',
+  textDecoration: 'underline',
+  transition: 'background 120ms ease-out',
+}
+
 // `:330` as a block <span>: <p> is flow content and invalid inside the cell's <button>.
 const FIELD_NOTE: CSSProperties = {
   display: 'block',
@@ -124,23 +195,31 @@ const EMPTY_PANEL: CSSProperties = {
   color: 'var(--fg-3)',
 }
 
-// draft and the three write callbacks are the seam EXTR-12-07's controls hang off. Optional
-// while the cell still renders a read-only value span, so ExtractionReview needs no change to
-// widen it.
+// The pane holds no draft of its own: the shell owns the write, the way ExpandedFixPanel holds
+// the draft above FixCardView. `fields` is the WIRE and `draft` the overlay, kept apart because
+// the cell needs both -- the controls show the drafted value, while the chip row is the set of
+// readings the extractor offered and must not fold a chosen one back in as a duplicate.
 export function ExtractionFields({
   fields,
   selected,
+  draft,
   onSelect,
+  onType,
+  onChoose,
+  onUndo,
 }: {
   fields: ExtractionFieldState[]
   selected: string | null
-  draft?: DraftEntries
+  draft: DraftEntries
   onSelect: (name: string) => void
-  onType?: (name: string, value: string) => void
-  onChoose?: (name: string, candidate: ExtractionCandidate) => void
-  onUndo?: (name: string) => void
+  onType: (name: string, value: string) => void
+  onChoose: (name: string, candidate: ExtractionCandidate) => void
+  onUndo: (name: string) => void
 }) {
   const supplier = fields.some((f) => SUPPLIER_FIELDS.includes(f.name))
+  // Same length, same order: applyDraft maps the array (extractionReview.test.ts, "leaves a
+  // field with no entry byte-identical").
+  const drafted = applyDraft(fields, draft)
 
   return (
     <div data-testid="extraction-fields" style={PANE}>
@@ -154,7 +233,8 @@ export function ExtractionFields({
         ) : (
           <>
             <div style={GRID}>
-              {fields.map((f) => {
+              {fields.map((wire, i) => {
+                const f = drafted[i]
                 const on = f.name === selected
                 // A settled field stops shouting: no pill of either kind, no note, a marker
                 // instead. mock.go gives total, subtotal and buyer_tin no region and a typed
@@ -164,12 +244,27 @@ export function ExtractionFields({
                 // One slot, and the reason outranks the region cue.
                 const cue = f.region === null ? NO_REGION : null
                 const pill = settled === null ? (reasonPill(f.reason) ?? cue) : null
+                // The gate is the REASON first -- a field can carry alternatives the extractor
+                // ranked below a reading it is sure of, and those stay off the screen. The
+                // second clause is the render invariant, not a weakening: no chips means there
+                // is an input. Reconcile only sets `ambiguous` with two or more candidates
+                // (reconcile.go), so an ambiguous field with nothing to choose between is a
+                // shape the producer cannot emit.
+                const candidates =
+                  wire.reason === 'ambiguous' && wire.alternatives.length > 0
+                    ? [{ value: wire.value, region: wire.region }, ...wire.alternatives]
+                    : null
+                const locked = LOCKED_FIELDS.includes(f.name)
+                const lock = LOCK_REASONS[f.name] ?? null
+                const picked = draft[f.name]?.kind === 'chosen' ? draft[f.name].value : null
                 return (
-                  <button
+                  // A <div>, not a <button>: a button may not contain interactive content, and
+                  // `aria-pressed` is valid only on a button role — hence `aria-current`, which
+                  // means the current item in a set and is valid anywhere.
+                  <div
                     key={f.name}
-                    type="button"
                     data-testid={`extraction-field-${f.name}`}
-                    aria-pressed={on}
+                    aria-current={on}
                     // Unguarded, per AC-4: the shell bumps its nonce on a repeat click and
                     // ExtractionCanvas re-centres the region (`D-25`).
                     onClick={() => onSelect(f.name)}
@@ -183,12 +278,53 @@ export function ExtractionFields({
                         </span>
                       )}
                     </span>
-                    <span data-testid={`extraction-control-${f.name}`} style={CONTROL}>
-                      <span style={VALUE}>{f.value === null || f.value === '' ? '—' : f.value}</span>
-                      {settled === null ? null : (
-                        <span data-testid={`extraction-marker-${f.name}`} style={MARKER} />
-                      )}
-                    </span>
+                    {candidates === null ? (
+                      <span data-testid={`extraction-control-${f.name}`} style={CONTROL}>
+                        <input
+                          data-testid={`extraction-input-${f.name}`}
+                          className="pf-input"
+                          value={f.value ?? ''}
+                          readOnly={locked}
+                          aria-readonly={locked}
+                          aria-label={fieldLabel(f.name)}
+                          onChange={(e) => onType(f.name, e.target.value)}
+                          onFocus={() => onSelect(f.name)}
+                          style={locked ? LOCKED_INPUT : INPUT}
+                        />
+                        {settled === null ? null : (
+                          <span data-testid={`extraction-marker-${f.name}`} style={MARKER} />
+                        )}
+                      </span>
+                    ) : (
+                      <span style={CHIP_ROW}>
+                        {candidates.map((a, i) => (
+                          <button
+                            key={`${a.value ?? ''}-${i}`}
+                            type="button"
+                            data-testid={`extraction-chip-${f.name}-${i}`}
+                            aria-current={picked !== null && picked === a.value}
+                            onClick={() => onChoose(f.name, a)}
+                            style={picked !== null && picked === a.value ? CHIP_PICKED : CHIP}
+                          >
+                            <span style={CHIP_VALUE}>{a.value ?? ''}</span>
+                            {regionPhrase(a.region) === null ? null : (
+                              <span
+                                className="mono"
+                                data-testid={`extraction-chip-where-${f.name}-${i}`}
+                                style={CHIP_WHERE}
+                              >
+                                {regionPhrase(a.region)}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                    {lock === null ? null : (
+                      <span data-testid={`extraction-lock-${f.name}`} style={FIELD_NOTE}>
+                        {lock}
+                      </span>
+                    )}
                     {note === null ? null : <span style={FIELD_NOTE}>{note}</span>}
                     {settled === null ? null : (
                       <span style={CHANGED_ROW}>
@@ -196,9 +332,17 @@ export function ExtractionFields({
                           {settled.label}
                         </span>
                         {settled.was === null ? null : <span style={WAS_LINE}>{settled.was}</span>}
+                        <button
+                          type="button"
+                          data-testid={`extraction-undo-${f.name}`}
+                          onClick={() => onUndo(f.name)}
+                          style={UNDO_BUTTON}
+                        >
+                          {UNDO}
+                        </button>
                       </span>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>

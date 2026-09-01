@@ -891,7 +891,8 @@ func cxShowValue(p *string) string {
 // deployed fields have no reading to restore -- and buyer_tin is the field a human types into
 // first. The screen resets to "no value" and the register must agree; the column is nullable
 // with no CHECK (migrations/20260714103137_invoices.sql), so NULL is the representation it was
-// built for. "" is not: vat and total are numeric(14,2) and ”::numeric raises 22P02.
+// built for. The empty string is not: vat and total are numeric(14,2), and casting an
+// empty string to numeric raises 22P02.
 // The boundary's blank-value 400 gates the REQUEST, not the applied value, which is why the
 // POST below still carries one.
 func TestRLS_UndoOnAFieldTheExtractorNeverReadClearsTheColumn(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -406,5 +407,114 @@ func TestStoreEdit_BodyIsUnchangedByTheEditTxExtraction(t *testing.T) {
 	}
 	if n := auditCount(t, f.app, f.tenantID, "invoice.updated"); n != beforeUpdated+1 {
 		t.Errorf("invoice.updated rows = %d, want %d", n, beforeUpdated+1)
+	}
+}
+
+// --- the clear sentinels ----------------------------------------------------------------------
+
+func ebsShow(p *string) string {
+	if p == nil {
+		return "NULL"
+	}
+	return `"` + *p + `"`
+}
+
+// ebsColumn reads one header column as text, as the SUPERUSER, so a NULL is distinguishable
+// from a row RLS filtered away.
+func (f *ebsFix) column(t *testing.T, invoiceID, col string) *string {
+	t.Helper()
+	var out *string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT (to_jsonb(i) ->> $1) FROM invoices i WHERE i.id = $2`, col, invoiceID).Scan(&out); err != nil {
+		t.Fatalf("read invoices.%s for %s: %v", col, invoiceID, err)
+	}
+	return out
+}
+
+// ClearText/ClearDate write SQL NULL, over TEXT, NUMERIC and DATE alike -- the three column
+// shapes the extraction vocabulary spans, and the reason "" is not the alternative: vat and
+// total are numeric(14,2) and an empty string cast to numeric raises 22P02. The audit payload must still NAME the
+// column, or the trail says an undo changed nothing.
+func TestRLS_EditBySourceDocumentTxClearsAColumnToNull(t *testing.T) {
+	for _, tc := range []struct {
+		col   string
+		seed  string
+		clear func(*UpdateInput)
+	}{
+		{"buyer_tin", "31775208-0003", func(in *UpdateInput) { in.BuyerTIN = ClearText }},
+		{"buyer_name", "Honeywell Group", func(in *UpdateInput) { in.BuyerName = ClearText }},
+		{"currency", "NGN", func(in *UpdateInput) { in.Currency = ClearText }},
+		{"subtotal", "950.00", func(in *UpdateInput) { in.Subtotal = ClearText }},
+		{"vat", "75.00", func(in *UpdateInput) { in.VAT = ClearText }},
+		{"total", "1500.00", func(in *UpdateInput) { in.Total = ClearText }},
+		{"issue_date", "2026-03-01", func(in *UpdateInput) { in.IssueDate = ClearDate }},
+	} {
+		t.Run(tc.col, func(t *testing.T) {
+			f := ebsSeed(t, "EBS-CLEAR-"+tc.col)
+			if _, err := f.super.Exec(context.Background(),
+				`UPDATE invoices SET `+tc.col+` = $1 WHERE id = $2`, tc.seed, f.invoiceID); err != nil {
+				t.Fatalf("seed %s: %v", tc.col, err)
+			}
+			// The floor: the column really holds something, so the NULL below is a real clear
+			// and not a column that was empty all along.
+			if got := f.column(t, f.invoiceID, tc.col); got == nil {
+				t.Fatalf("%s is already NULL before the clear -- every claim below is vacuous", tc.col)
+			}
+
+			var in UpdateInput
+			tc.clear(&in)
+			if _, err := f.edit(t, f.documentID, EditInput{UpdateInput: in}); err != nil {
+				t.Fatalf("clearing %s: %v", tc.col, err)
+			}
+
+			if got := f.column(t, f.invoiceID, tc.col); got != nil {
+				t.Errorf("invoices.%s = %q after the clear, want SQL NULL", tc.col, *got)
+			}
+			if fields := auditFields(t, f.app, f.tenantID, "invoice.updated"); !slices.Contains(fields, tc.col) {
+				t.Errorf("the invoice.updated payload names %v, which omits %s -- the trail says the clear changed nothing", fields, tc.col)
+			}
+		})
+	}
+}
+
+// A member holding a COPY of a sentinel is a caller who dereferenced and re-took an address.
+// Pointer identity no longer matches, so without this guard the copy is written as its own
+// CONTENTS. MEASURED with the guard removed: the two text-shaped arms raise 22021 (the NUL byte
+// is not valid UTF8), which no sentinel maps and which surfaces as a 500, and the date arm
+// commits a 1970 timestamp with no error at all. All three are wrong in a different way; the
+// guard makes all three one ErrValidation the boundary can report.
+func TestUpdateContentTx_RefusesACopiedClearSentinel(t *testing.T) {
+	f := ebsSeed(t, "EBS-CLEAR-COPY")
+
+	copied := *ClearText
+	copiedDate := *ClearDate
+	for _, tc := range []struct {
+		col string
+		in  UpdateInput
+	}{
+		{"buyer_tin", UpdateInput{BuyerTIN: &copied}},
+		{"total", UpdateInput{Total: &copied}},
+		{"issue_date", UpdateInput{IssueDate: &copiedDate}},
+	} {
+		t.Run(tc.col, func(t *testing.T) {
+			before := f.column(t, f.invoiceID, tc.col)
+
+			_, err := f.edit(t, f.documentID, EditInput{UpdateInput: tc.in})
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("a copied sentinel on %s: err = %v, want ErrValidation", tc.col, err)
+			}
+			if got := f.column(t, f.invoiceID, tc.col); !strPtrEqual(before, got) {
+				t.Errorf("invoices.%s moved from %s to %s on a refused edit", tc.col, ebsShow(before), ebsShow(got))
+			}
+		})
+	}
+
+	// The control: the sentinel ITSELF still clears, so the guard above rejects the copy and
+	// not the mechanism.
+	if _, err := f.edit(t, f.documentID, EditInput{UpdateInput: UpdateInput{Total: ClearText}}); err != nil {
+		t.Fatalf("the sentinel itself: %v", err)
+	}
+	if got := f.column(t, f.invoiceID, "total"); got != nil {
+		t.Errorf("invoices.total = %q, want SQL NULL", *got)
 	}
 }

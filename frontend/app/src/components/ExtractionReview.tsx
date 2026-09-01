@@ -2,17 +2,19 @@
 // Zoom and the page handles stay inside ExtractionCanvas; this shell owns only the selection.
 // Pinned by ExtractionReview.test.tsx.
 
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { ErrorState, Loading, gatewayBase, useAsync } from '@invoice-os/api-client'
 
-import { getExtractionDetail, type ExtractionDetail } from '../lib/extractionReview'
+import { applyDraft, getExtractionDetail, postFieldCorrection, savableCorrections } from '../lib/extractionReview'
+import type { DraftEntries, ExtractionCandidate, ExtractionDetail } from '../lib/extractionReview'
 import type { PlatformCtx } from '../types'
 import { ExtractionCanvas } from './ExtractionCanvas'
 import { ExtractionFields } from './ExtractionFields'
 
 const STILL_READING = 'This document is still being read.'
 const COULD_NOT_READ = 'This document could not be read.'
+const SAVE = 'Save what you settled'
 
 // River retries a `failed` job, so it is not terminal and takes the still-reading sentence.
 const UNSETTLED = ['queued', 'extracting', 'failed']
@@ -30,6 +32,30 @@ const PAD: CSSProperties = { padding: '30px 36px' }
 
 const SENTENCE: CSSProperties = { ...PAD, fontSize: 13, color: 'var(--fg-2)' }
 
+// The artboard's right column is header / scrolling body / `flex: none` footer (`:406`). Outside
+// the panes, so Save takes the shipped button recipe verbatim and the pane stays at two children.
+const FOOTER: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 14,
+  padding: '12px 20px',
+  borderTop: '1px solid var(--line-1)',
+  background: 'var(--bg-2)',
+}
+
+// `.v2-btn-primary:hover` brightens with no `:disabled` guard (app-layer.css:213), so a disabled
+// Save would light up under the cursor and read pressable. EvidenceBundleDrawer.tsx's spread.
+const SAVE_DISABLED: CSSProperties = {
+  background: 'var(--bg-3)',
+  color: 'var(--fg-4)',
+  cursor: 'not-allowed',
+  filter: 'none',
+}
+
+const WRITE_ERROR: CSSProperties = { flex: 1, minWidth: 0, fontSize: 12, color: 'var(--status-red-text)' }
+
 export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: string }) {
   const base = gatewayBase()
   const detail = useAsync<ExtractionDetail>(
@@ -46,7 +72,29 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
   const current = pick && pick.jobId === jobId ? pick : null
   const selected = current?.name ?? null
 
-  const data = detail.data
+  // One shared draft across the pane and one Save: a chip, a typed value and an Undo all write
+  // through it, and nothing reaches the register until Save. Job-tagged and dropped on a job
+  // change, the same render-time guard `pick` uses.
+  const [draft, setDraft] = useState<{ jobId: string; entries: DraftEntries } | null>(null)
+  if (draft && draft.jobId !== jobId) setDraft(null)
+  const entries = draft && draft.jobId === jobId ? draft.entries : {}
+
+  // The post-write re-read, held HERE rather than through detail.run(): asyncReducer's start arm
+  // returns `data: null` and the shell renders <Loading/> on it, so a run() would unmount both
+  // panes, re-fetch every page image and drop the canvas scroll mid-write.
+  const [merged, setMerged] = useState<{ jobId: string; detail: ExtractionDetail } | null>(null)
+  if (merged && merged.jobId !== jobId) setMerged(null)
+  const [writing, setWriting] = useState(false)
+  const [writeError, setWriteError] = useState<string | null>(null)
+  // The generation both shipped overlays carry: a re-read still in flight when a second Save
+  // starts must not land on top of the newer one. A navigation is handled by the job tag above.
+  const write = useRef(0)
+
+  const draftField = (name: string, entry: DraftEntries[string]) => {
+    setDraft((d) => ({ jobId, entries: { ...(d && d.jobId === jobId ? d.entries : {}), [name]: entry } }))
+  }
+
+  const data = merged && merged.jobId === jobId ? merged.detail : detail.data
   let content: ReactNode
   if (detail.status === 'error' && detail.error) {
     content = (
@@ -66,23 +114,103 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     // The designed could-not-read screen is EXTR-15's; this is the honest placeholder (`D-9`).
     content = <div style={SENTENCE}>{COULD_NOT_READ}</div>
   } else {
+    const wire = data.fields
+    // The canvas follows the draft: a chosen chip moves the highlight to that alternative's own
+    // box before anything is saved, which is the both-ways binding read the other way round.
+    const shown = applyDraft(wire, entries)
+    const posts = savableCorrections(wire, entries)
+
+    // N POSTs, awaited ONE AT A TIME in vocabulary order: each opens its own transaction over
+    // the same invoice, and the append-only table's seq should follow the order the person
+    // reads. The run stops at the first refusal and keeps every entry that did not commit --
+    // the user's typing is not the screen's to discard.
+    const save = async () => {
+      if (!base || writing || posts.length === 0) return
+      const mine = write.current + 1
+      write.current = mine
+      setWriting(true)
+      setWriteError(null)
+
+      const committed: string[] = []
+      let refusal: string | null = null
+      for (const p of posts) {
+        try {
+          await postFieldCorrection(ctx.authedFetch, base, jobId, p.field, p.body)
+          committed.push(p.field)
+        } catch (e) {
+          // The server's own sentence, verbatim: apiFetch already lifts the error envelope into
+          // ApiError.message and the house convention renders it unmodified.
+          refusal = e instanceof Error ? e.message : String(e)
+          break
+        }
+      }
+
+      let fresh: ExtractionDetail | null = null
+      try {
+        fresh = await getExtractionDetail(ctx.authedFetch, base, jobId)
+      } catch {
+        // A failed re-read leaves the screen on what it already had; the committed half is
+        // still in the register and the next read shows it.
+      }
+
+      if (write.current !== mine) return
+      setDraft((d) => {
+        const held = d && d.jobId === jobId ? d.entries : {}
+        const kept: DraftEntries = {}
+        for (const name of Object.keys(held)) if (!committed.includes(name)) kept[name] = held[name]
+        return { jobId, entries: kept }
+      })
+      setWriteError(refusal)
+      if (fresh !== null) setMerged({ jobId, detail: fresh })
+      setWriting(false)
+    }
+
     content = (
-      <div data-testid="extraction-review-body" style={BODY}>
-        <ExtractionCanvas
-          ctx={ctx}
-          jobId={jobId}
-          doc={data.document}
-          pages={data.pages}
-          fields={data.fields}
-          selected={selected}
-          scrollNonce={current?.n ?? 0}
-        />
-        <ExtractionFields
-          fields={data.fields}
-          selected={selected}
-          onSelect={(name) => setPick((p) => ({ jobId, name, n: (p?.n ?? 0) + 1 }))}
-        />
-      </div>
+      <>
+        <div data-testid="extraction-review-body" style={BODY}>
+          <ExtractionCanvas
+            ctx={ctx}
+            jobId={jobId}
+            doc={data.document}
+            pages={data.pages}
+            fields={shown}
+            selected={selected}
+            scrollNonce={current?.n ?? 0}
+          />
+          <ExtractionFields
+            fields={wire}
+            draft={entries}
+            selected={selected}
+            onSelect={(name) => setPick((p) => ({ jobId, name, n: (p?.n ?? 0) + 1 }))}
+            onType={(name, value) => draftField(name, { kind: 'typed', value, region: null })}
+            onChoose={(name, a: ExtractionCandidate) =>
+              draftField(name, { kind: 'chosen', value: a.value ?? '', region: a.region })
+            }
+            // The undo posts a value the server ignores -- it applies the extractor's own rank-0
+            // reading -- but the boundary 400s a blank one, so it carries the value it replaces.
+            onUndo={(name) =>
+              draftField(name, { kind: 'undone', value: wire.find((f) => f.name === name)?.value ?? '', region: null })
+            }
+          />
+        </div>
+        <div style={FOOTER}>
+          {writeError === null ? null : (
+            <span data-testid="extraction-write-error" style={WRITE_ERROR}>
+              {writeError}
+            </span>
+          )}
+          <button
+            type="button"
+            data-testid="extraction-save"
+            className="v2-btn v2-btn-primary pf-btn"
+            disabled={writing || posts.length === 0}
+            onClick={save}
+            style={writing || posts.length === 0 ? SAVE_DISABLED : undefined}
+          >
+            {SAVE}
+          </button>
+        </div>
+      </>
     )
   }
 

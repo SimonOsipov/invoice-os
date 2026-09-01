@@ -140,6 +140,11 @@ export function fieldNote(reason: ExtractionReason, name: string): string | null
   return SUPPLIER_MISMATCH_FIELDS.includes(name) ? NOTE_SUPPLIER : NOTE_GENERIC
 }
 
+/** The chip sub-label and the pointed was-line read the same phrase, so the two cannot drift. */
+export function regionPhrase(region: ExtractionRegion | null): string | null {
+  return region === null ? null : `page ${region.page}`
+}
+
 /**
  * What a settled field says instead of its reason. `was` is null where the correction has no
  * provenance to state -- omitting the clause invents no copy, where "We read null" would.
@@ -154,8 +159,9 @@ export function correctedMarker(
     case 'typed':
       return { label: 'YOU CHANGED THIS', was: corrected.was === null ? null : `We read ${corrected.was}` }
     case 'pointed': {
-      // The anchor label when the correction carries one, else the region as a phrase.
-      const where = corrected.where ?? (region === null ? null : `page ${region.page}`)
+      // The anchor label when the correction carries one, else the region as a phrase --
+      // regionPhrase, so the was-line and the chip sub-label cannot drift apart.
+      const where = corrected.where ?? regionPhrase(region)
       return { label: 'YOU POINTED THIS OUT', was: where === null ? null : `Taken from ${where}` }
     }
     case 'chosen':
@@ -210,31 +216,60 @@ export const HEADER_FIELDS: readonly string[] = [
   'total',
 ]
 
-// EXTR-12-07 red-phase stubs. Each answers one value that is wrong for EVERY row asserting on
-// it, so a row fails on its own assertion rather than on a missing export.
-const RED_PHRASE = 'page 0'
-const RED_VALUE = 'no answer yet'
-const RED_FIELD = 'no field yet'
-
-/** The chip sub-label and the pointed was-line read the same phrase, so the two cannot drift. */
-export function regionPhrase(_region: ExtractionRegion | null): string | null {
-  return RED_PHRASE
+/**
+ * The pane's own view of the wire: the shared draft laid over it. A drafted field claims NO
+ * correction -- nothing has been recorded, and the copy table has no pending string -- so the
+ * affordance is the control itself. An undone entry resets the value to the reading the
+ * correction superseded and drops the marker, the was-line and the Undo with it; where the
+ * extractor read nothing that reset is the empty string, which is how an input says "no value"
+ * -- and the column the server clears holds nothing either.
+ */
+export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries): ExtractionFieldState[] {
+  return fields.map((f) => {
+    const entry = entries[f.name]
+    if (entry === undefined) return f
+    if (entry.kind === 'undone') {
+      return { ...f, value: f.corrected?.was ?? '', corrected: null }
+    }
+    // Only `chosen` moves the highlight: it names the alternative's own box, which is the
+    // both-ways binding between the chip and the document.
+    return { ...f, value: entry.value, region: entry.kind === 'chosen' ? entry.region : f.region }
+  })
 }
 
-/** The pane's own view of the wire: the shared draft laid over it, claiming no correction. */
-export function applyDraft(fields: ExtractionFieldState[], _entries: DraftEntries): ExtractionFieldState[] {
-  return fields.map((f) => ({
-    ...f,
-    value: RED_VALUE,
-    region: null,
-    reason: '',
-    corrected: { method: 'typed', was: RED_VALUE, where: null },
-  }))
+/** Where a field sits in the vocabulary; anything the wire adds later sorts after all of it. */
+function vocabularyRank(name: string): number {
+  const i = HEADER_FIELDS.indexOf(name)
+  return i === -1 ? HEADER_FIELDS.length : i
 }
 
-/** The draft turned into the POSTs one Save owes, in vocabulary order. */
-export function savableCorrections(_fields: ExtractionFieldState[], _entries: DraftEntries): CorrectionPost[] {
-  return [{ field: RED_FIELD, body: { value: RED_VALUE, method: 'typed', region: null, anchor_label: '' } }]
+/**
+ * The draft turned into the POSTs one Save owes, in vocabulary order: each POST opens its own
+ * transaction, so the append-only table's seq follows the order the person reads.
+ *
+ * An entry carrying the value the wire already holds is dropped -- diffEditInput's rule, and a
+ * no-op recorded as a human decision is a lie the append-only table cannot take back. An UNDO
+ * is exempt: it is a decision about the correction, not about the value, and the server ignores
+ * the value it carries anyway.
+ */
+export function savableCorrections(fields: ExtractionFieldState[], entries: DraftEntries): CorrectionPost[] {
+  const byName = new Map(fields.map((f) => [f.name, f]))
+  return Object.keys(entries)
+    .filter((name) => {
+      const entry = entries[name]
+      if (entry.kind === 'undone') return true
+      // A trimmed-empty typed value is not sent: the boundary refuses a blank one, so the
+      // round trip and its message buy nothing. fixEditPatch's rule (reviewBatch.ts).
+      if (entry.kind === 'typed' && entry.value.trim() === '') return false
+      return entry.value !== (byName.get(name)?.value ?? '')
+    })
+    .sort((a, b) => vocabularyRank(a) - vocabularyRank(b))
+    .map((name) => ({
+      field: name,
+      // region stays null: only a pointed correction may carry one, and the server re-derives
+      // a chosen candidate's box by matching its value.
+      body: { value: entries[name].value, method: entries[name].kind, region: null, anchor_label: '' },
+    }))
 }
 
 // authedFetch, never bare fetch: it is the seam that fires onUnauthorized/onSuspended.

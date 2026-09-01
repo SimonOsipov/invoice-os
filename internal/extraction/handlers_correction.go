@@ -244,7 +244,20 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
-		invoiceID, err := in.apply(ctx, tx, documentID, in.field, &in.value, in.req.Method)
+		// An undo is a reset to the extractor's own reading, so the posted value is recorded
+		// but never applied: mergeCorrections already resets the SCREEN to the rank-0 reading,
+		// and applying what the caller sent would leave the register holding a value the screen
+		// has stopped showing. A field the extractor never read clears its column.
+		applied := &in.value
+		if in.req.Method == MethodUndone {
+			reading, err := rankZeroReadingTx(ctx, tx, in.jobID, in.field)
+			if err != nil {
+				return err
+			}
+			applied = reading
+		}
+
+		invoiceID, err := in.apply(ctx, tx, documentID, in.field, applied, in.req.Method)
 		if err != nil {
 			return err
 		}
@@ -285,6 +298,25 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 		return CorrectionResponse{}, err
 	}
 	return out, nil
+}
+
+// rankZeroReadingTx returns the extractor's decided reading for one field, and nil where it read
+// nothing -- a NULL value and no row at all are the same answer to an undo. No tenant predicate:
+// tenant_isolation supplies it. The ordering matches detailFieldsTx's last-wins over the
+// duplicate rank-0 rows the schema admits, so the undo restores the reading the screen renders.
+func rankZeroReadingTx(ctx context.Context, tx pgx.Tx, jobID, field string) (*string, error) {
+	var value *string
+	err := tx.QueryRow(ctx,
+		`SELECT value FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2 AND candidate_rank = 0
+		  ORDER BY created_at DESC, id DESC LIMIT 1`, jobID, field).Scan(&value)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 // regionFromWire converts the wire box to the domain one the correction store binds.

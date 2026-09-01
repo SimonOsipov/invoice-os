@@ -400,33 +400,47 @@ func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoic
 // internal/extraction cannot name invoice.UpdateInput; the handler has already refused every
 // field outside this switch, and issue_date arrives normalised to ISO
 // (TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn).
+//
+// A NIL value is an undo of a field the extractor never read: the column goes back to holding
+// nothing, which is what the screen shows
+// (TestInvoiceEditFor_ANilValueClearsEveryWritableColumn).
 func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 	var in invoice.UpdateInput
-	if value == nil {
-		// The clear arm is EXTR-12-07's green step; nothing hands this a nil yet.
-		return invoice.EditInput{}, fmt.Errorf("%w: %q was handed no value", extraction.ErrValueRefused, field)
-	}
-	switch field {
-	case "issue_date":
-		at, err := time.Parse(time.DateOnly, *value)
-		if err != nil {
-			return invoice.EditInput{}, fmt.Errorf("%w: issue_date %q", extraction.ErrValueRefused, *value)
+	if field == "issue_date" {
+		switch {
+		case value == nil:
+			in.IssueDate = invoice.ClearDate
+		default:
+			at, err := time.Parse(time.DateOnly, *value)
+			if err != nil {
+				return invoice.EditInput{}, fmt.Errorf("%w: issue_date %q", extraction.ErrValueRefused, *value)
+			}
+			in.IssueDate = &at
 		}
-		in.IssueDate = &at
+		return invoice.EditInput{UpdateInput: in}, nil
+	}
+
+	var column **string
+	switch field {
 	case "buyer_tin":
-		in.BuyerTIN = value
+		column = &in.BuyerTIN
 	case "buyer_name":
-		in.BuyerName = value
+		column = &in.BuyerName
 	case "currency":
-		in.Currency = value
+		column = &in.Currency
 	case "subtotal":
-		in.Subtotal = value
+		column = &in.Subtotal
 	case "vat":
-		in.VAT = value
+		column = &in.VAT
 	case "total":
-		in.Total = value
+		column = &in.Total
 	default:
 		return invoice.EditInput{}, fmt.Errorf("%w: %q is not an invoice-writable field", extraction.ErrValueRefused, field)
+	}
+	if value == nil {
+		*column = invoice.ClearText
+	} else {
+		*column = value
 	}
 	return invoice.EditInput{UpdateInput: in}, nil
 }

@@ -376,7 +376,7 @@ func newFieldCorrectedAuditor() extraction.RecordFieldCorrected {
 // crosses as one of the extraction sentinels so statusForErr maps it by identity; anything else
 // passes through raw and stays a 500 (TestNewInvoiceFieldApplier_MapsEachDomainError).
 func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoice {
-	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string, _ extraction.CorrectionMethod) (string, error) {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, _ extraction.CorrectionMethod) (string, error) {
 		in, err := invoiceEditFor(field, value)
 		if err != nil {
 			return "", err
@@ -400,27 +400,31 @@ func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoic
 // internal/extraction cannot name invoice.UpdateInput; the handler has already refused every
 // field outside this switch, and issue_date arrives normalised to ISO
 // (TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn).
-func invoiceEditFor(field, value string) (invoice.EditInput, error) {
+func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 	var in invoice.UpdateInput
+	if value == nil {
+		// The clear arm is EXTR-12-07's green step; nothing hands this a nil yet.
+		return invoice.EditInput{}, fmt.Errorf("%w: %q was handed no value", extraction.ErrValueRefused, field)
+	}
 	switch field {
 	case "issue_date":
-		at, err := time.Parse(time.DateOnly, value)
+		at, err := time.Parse(time.DateOnly, *value)
 		if err != nil {
-			return invoice.EditInput{}, fmt.Errorf("%w: issue_date %q", extraction.ErrValueRefused, value)
+			return invoice.EditInput{}, fmt.Errorf("%w: issue_date %q", extraction.ErrValueRefused, *value)
 		}
 		in.IssueDate = &at
 	case "buyer_tin":
-		in.BuyerTIN = &value
+		in.BuyerTIN = value
 	case "buyer_name":
-		in.BuyerName = &value
+		in.BuyerName = value
 	case "currency":
-		in.Currency = &value
+		in.Currency = value
 	case "subtotal":
-		in.Subtotal = &value
+		in.Subtotal = value
 	case "vat":
-		in.VAT = &value
+		in.VAT = value
 	case "total":
-		in.Total = &value
+		in.Total = value
 	default:
 		return invoice.EditInput{}, fmt.Errorf("%w: %q is not an invoice-writable field", extraction.ErrValueRefused, field)
 	}

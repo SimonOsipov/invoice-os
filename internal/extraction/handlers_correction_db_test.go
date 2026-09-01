@@ -87,7 +87,7 @@ const (
 // what makes the rollback arm mean something -- a seam that wrote nothing would satisfy the
 // unchanged-column assertion without any rollback at all.
 func cxApplier(write bool, failAfter error) extraction.ApplyFieldToInvoice {
-	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string, _ extraction.CorrectionMethod) (string, error) {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, _ extraction.CorrectionMethod) (string, error) {
 		var id string
 		if err := tx.QueryRow(ctx,
 			`SELECT id FROM invoices WHERE source_document_id = $1`, documentID).Scan(&id); err != nil {
@@ -111,7 +111,7 @@ func cxApplier(write bool, failAfter error) extraction.ApplyFieldToInvoice {
 
 // cxRefusingApplier reports one domain sentinel without touching a row.
 func cxRefusingApplier(err error) extraction.ApplyFieldToInvoice {
-	return func(context.Context, pgx.Tx, string, string, string, extraction.CorrectionMethod) (string, error) {
+	return func(context.Context, pgx.Tx, string, string, *string, extraction.CorrectionMethod) (string, error) {
 		return "", err
 	}
 }
@@ -493,8 +493,8 @@ func TestRLS_CorrectionNormalisesIssueDateToOneSpelling(t *testing.T) {
 			cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-04-DATE-"+jobID[:8], "draft")
 
 			var gotField, gotValue string
-			apply := func(ctx context.Context, tx pgx.Tx, documentID, field, value string, m extraction.CorrectionMethod) (string, error) {
-				gotField, gotValue = field, value
+			apply := func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, m extraction.CorrectionMethod) (string, error) {
+				gotField, gotValue = field, cxShowValue(value)
 				return cxApplier(false, nil)(ctx, tx, documentID, field, value, m)
 			}
 
@@ -503,8 +503,8 @@ func TestRLS_CorrectionNormalisesIssueDateToOneSpelling(t *testing.T) {
 			if w.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
 			}
-			if gotField != "issue_date" || gotValue != tc.want {
-				t.Errorf("the seam was handed (%q, %q), want (%q, %q)", gotField, gotValue, "issue_date", tc.want)
+			if gotField != "issue_date" || gotValue != `"`+tc.want+`"` {
+				t.Errorf("the seam was handed (%q, %s), want (%q, %q)", gotField, gotValue, "issue_date", tc.want)
 			}
 			if stored := cxCorrectionValue(t, ctx, jobID); stored != tc.want {
 				t.Errorf("the correction row carries value %q, want %q -- the row and the register must carry one spelling", stored, tc.want)
@@ -695,15 +695,16 @@ func cxShowInt(p *int) string {
 
 // cxSeamCall is what the handler handed ApplyFieldToInvoice on the last call.
 type cxSeamCall struct {
-	calls        int
-	field, value string
-	method       extraction.CorrectionMethod
+	calls  int
+	field  string
+	value  *string
+	method extraction.CorrectionMethod
 }
 
 // cxRecorder records the seam's arguments and then defers to cxApplier, so the invoice write
 // still happens (or not) exactly as it would without the recorder.
 func cxRecorder(seen *cxSeamCall, write bool) extraction.ApplyFieldToInvoice {
-	return func(ctx context.Context, tx pgx.Tx, documentID, field, value string, method extraction.CorrectionMethod) (string, error) {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, method extraction.CorrectionMethod) (string, error) {
 		seen.calls++
 		seen.field, seen.value, seen.method = field, value, method
 		return cxApplier(write, nil)(ctx, tx, documentID, field, value, method)
@@ -832,9 +833,9 @@ func TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue(t *testing.T) {
 			if seen.calls != 1 {
 				t.Fatalf("the invoice seam ran %d time(s), want 1 -- every claim below is vacuous", seen.calls)
 			}
-			if seen.value != tc.want {
-				t.Errorf("the invoice seam was handed %q for a %q correction, want %q -- the register would hold a value the screen has stopped showing",
-					seen.value, tc.method, tc.want)
+			if seen.value == nil || *seen.value != tc.want {
+				t.Errorf("the invoice seam was handed %s for a %q correction, want %q -- the register would hold a value the screen has stopped showing",
+					cxShowValue(seen.value), tc.method, tc.want)
 			}
 			if got := cxTotal(t, ctx, invoiceID); got != tc.want {
 				t.Errorf("invoices.total = %s after a %q correction, want %s", got, tc.method, tc.want)
@@ -848,19 +849,63 @@ func TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue(t *testing.T) {
 	}
 }
 
+// cxClearingApplier writes buyer_tin -- the column the row below undoes -- so a nil value is
+// observable as a NULL column rather than only as a nil argument. What the PRODUCTION applier
+// does with a nil is proved where it lives: TestInvoiceEditFor_ANilValueClearsEveryWritableColumn
+// (cmd/submission) and TestRLS_EditBySourceDocumentTxClearsAColumnToNull (internal/invoice).
+func cxClearingApplier(seen *cxSeamCall) extraction.ApplyFieldToInvoice {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, method extraction.CorrectionMethod) (string, error) {
+		seen.calls++
+		seen.field, seen.value, seen.method = field, value, method
+		var id string
+		if err := tx.QueryRow(ctx,
+			`UPDATE invoices SET buyer_tin = $1 WHERE source_document_id = $2 RETURNING id`,
+			value, documentID).Scan(&id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", extraction.ErrNoInvoiceForDocument
+			}
+			return "", err
+		}
+		return id, nil
+	}
+}
+
+func cxBuyerTIN(t *testing.T, ctx context.Context, invoiceID string) *string {
+	t.Helper()
+	var out *string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT buyer_tin FROM invoices WHERE id = $1`, invoiceID).Scan(&out); err != nil {
+		t.Fatalf("read invoices.buyer_tin for %s: %v", invoiceID, err)
+	}
+	return out
+}
+
+func cxShowValue(p *string) string {
+	if p == nil {
+		return "<clear>"
+	}
+	return `"` + *p + `"`
+}
+
 // mockDefaultResult gives buyer_tin and vat a NULL rank-0 value, so two of the five undoable
 // deployed fields have no reading to restore -- and buyer_tin is the field a human types into
-// first. The screen resets to "no value"; the invoice must agree, and "" is the only
-// representable no-value through the edit path. The boundary's blank-value 400 gates the
-// REQUEST, not the applied value, which is why the POST below still carries one.
-func TestRLS_UndoOnAFieldTheExtractorNeverReadAppliesTheEmptyString(t *testing.T) {
+// first. The screen resets to "no value" and the register must agree; the column is nullable
+// with no CHECK (migrations/20260714103137_invoices.sql), so NULL is the representation it was
+// built for. "" is not: vat and total are numeric(14,2) and ”::numeric raises 22P02.
+// The boundary's blank-value 400 gates the REQUEST, not the applied value, which is why the
+// POST below still carries one.
+func TestRLS_UndoOnAFieldTheExtractorNeverReadClearsTheColumn(t *testing.T) {
 	const posted = "31775208-0003"
 
 	ctx := t.Context()
 	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
 	t.Cleanup(func() { rdaPurge(t, tenantID) })
 	entityID := cxEntity(t, ctx, tenantID)
-	cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-07-UNDO-NULL", "draft")
+	invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR12-07-UNDO-NULL", "draft")
+	if _, err := stRequire(t).super.Exec(ctx,
+		`UPDATE invoices SET buyer_tin = $1 WHERE id = $2`, posted, invoiceID); err != nil {
+		t.Fatalf("seed the buyer_tin the undo has to clear: %v", err)
+	}
 
 	// The reading EXISTS and its value is NULL -- not the same as no row at all, and the two
 	// must not be conflated: a job with no results row is a job that was never read.
@@ -869,7 +914,7 @@ func TestRLS_UndoOnAFieldTheExtractorNeverReadAppliesTheEmptyString(t *testing.T
 
 	var seen cxSeamCall
 	w := cxServe(t, reqCtx, jobID, "buyer_tin", corBody(posted, "undone", ""),
-		cxRecorder(&seen, false), cxAuditor(nil))
+		cxClearingApplier(&seen), cxAuditor(nil))
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
@@ -880,9 +925,12 @@ func TestRLS_UndoOnAFieldTheExtractorNeverReadAppliesTheEmptyString(t *testing.T
 	if seen.field != "buyer_tin" || seen.method != extraction.MethodUndone {
 		t.Fatalf("the invoice seam was handed (%q, %q), want (%q, %q)", seen.field, seen.method, "buyer_tin", extraction.MethodUndone)
 	}
-	if seen.value != "" {
-		t.Errorf("the invoice seam was handed %q for an undo on a field the extractor never read, want the empty string -- the register would keep a value the screen has stopped showing",
-			seen.value)
+	if seen.value != nil {
+		t.Errorf("the invoice seam was handed %s for an undo on a field the extractor never read, want the clear signal -- the register would keep a value the screen has stopped showing",
+			cxShowValue(seen.value))
+	}
+	if got := cxBuyerTIN(t, ctx, invoiceID); got != nil {
+		t.Errorf("invoices.buyer_tin = %q after the undo, want SQL NULL -- the screen shows no value and the register must agree", *got)
 	}
 	if stored := cxCorrectionValue(t, ctx, jobID); stored != posted {
 		t.Errorf("the correction row carries value %q, want the posted %q", stored, posted)

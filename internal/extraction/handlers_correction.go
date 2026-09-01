@@ -24,9 +24,11 @@ import (
 // caller's transaction. A func value, not an internal/invoice import: deps_test.go fences this
 // package to internal/platform/*, in two scans.
 //
-// method travels with the value because an undo is not a typed correction: the two write
-// different things to the invoice (TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue).
-type ApplyFieldToInvoice func(ctx context.Context, tx pgx.Tx, documentID, field, value string, method CorrectionMethod) (invoiceID string, err error)
+// value is NIL to clear the column, which is what an undo of a field the extractor never read
+// asks for (TestRLS_UndoOnAFieldTheExtractorNeverReadClearsTheColumn). method travels with it
+// because an undo is not a typed correction: the two write different things to the invoice
+// (TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue).
+type ApplyFieldToInvoice func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, method CorrectionMethod) (invoiceID string, err error)
 
 // FieldCorrection is what the audit seam records. The event name is spelled in cmd/submission:
 // a literal here reads as a non-literal to the repo-wide audit.Record scan and lands the call
@@ -242,7 +244,7 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
-		invoiceID, err := in.apply(ctx, tx, documentID, in.field, in.value, in.req.Method)
+		invoiceID, err := in.apply(ctx, tx, documentID, in.field, &in.value, in.req.Method)
 		if err != nil {
 			return err
 		}

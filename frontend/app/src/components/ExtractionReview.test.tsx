@@ -648,14 +648,19 @@ describe('selecting a field', () => {
     expect(scrollToSpy.mock.instances[0], 'the screen scrolled something other than the ground').toBe(ground())
   })
 
-  it('leaves the pick counter alone when the already-selected row is selected again', async () => {
-    // REVERSES `D-25`, deliberately. On the deployed build a click on the cell centre lands on
-    // the 38px input, so the browser fires `focus` AND a bubbled `click` — two selections, two
-    // pick bumps and two canvas scrolls for one gesture. jsdom's `fireEvent.click` dispatches
-    // no focus, so no unit row can see the pair; making re-selection IDEMPOTENT closes it at
-    // the state layer, which jsdom CAN see. The pane still reports every gesture upward
-    // (ExtractionFields.test.tsx, "reports again when the already-selected row is clicked");
-    // the shell is what stops the repeat from moving anything.
+  it('centres again when the already-selected row is clicked a second time', async () => {
+    // `D-25`. EXTR-11-06 shipped its half: the pane re-reports rather than guarding on
+    // `f.name !== selected` (ExtractionFields.test.tsx, "reports again when the
+    // already-selected row is clicked"). This is the other half. `ExtractionCanvas`'s scroll
+    // effect keys on `[selected, jobId]`, so a shell that only calls `setSelected(name)`
+    // bails out of the re-render and the reader who scrolled away gets no re-centre — the
+    // brief's "reachable in one action" is false on the second click. A per-click nonce or a
+    // scroll call in the handler both satisfy this; neither is mandated.
+    //
+    // The nonce is also why re-selection is NOT made idempotent: `scrollRegionIntoView` is a
+    // direct scrollTop assignment, so a repeat with the same selection recomputes the same
+    // coordinates and costs nothing, while suppressing it would disable the feature the nonce
+    // exists for.
     vi.useFakeTimers()
     silenceObserver()
     deferredPageFetch()
@@ -667,7 +672,7 @@ describe('selecting a field', () => {
     act(() => {
       vi.advanceTimersByTime(20)
     })
-    expect(scrollToSpy, 'the first selection never centred — the count below is vacuous').toHaveBeenCalledTimes(1)
+    expect(scrollToSpy, 'the first selection never centred').toHaveBeenCalledTimes(1)
 
     fireEvent.click(fieldRow('total_amount'))
     await flush()
@@ -675,24 +680,13 @@ describe('selecting a field', () => {
       vi.advanceTimersByTime(20)
     })
 
-    expect(
-      scrollToSpy,
-      're-selecting the selected field bumped the pick counter and scrolled the ground again',
-    ).toHaveBeenCalledTimes(1)
-    // The row stayed selected: a shell that toggled the selection off would also scroll once,
-    // and would be a different product.
-    expect(pressedRows(), 'the second selection cleared the selection instead of ignoring it').toEqual([
+    expect(scrollToSpy, 'a second click on the selected row did not re-centre it').toHaveBeenCalledTimes(2)
+    // The row stayed selected: a shell that toggled the selection off would also scroll
+    // twice, and would be a different product.
+    expect(pressedRows(), 'the second click cleared the selection instead of re-centring it').toEqual([
       'extraction-field-total_amount',
     ])
-    expect(highlights(), 'the second selection removed the highlight').toHaveLength(1)
-
-    // A DIFFERENT field still moves it, so the idempotence above is not a dead handler.
-    fireEvent.click(fieldRow('invoice_number'))
-    await flush()
-    act(() => {
-      vi.advanceTimersByTime(20)
-    })
-    expect(scrollToSpy, 'selecting another field no longer centres anything').toHaveBeenCalledTimes(2)
+    expect(highlights(), 'the second click removed the highlight').toHaveLength(1)
   })
 
   it('does not centre again on a re-render that changed no selection', async () => {

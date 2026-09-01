@@ -882,10 +882,11 @@ describe('applyDraft', () => {
   })
 
   it('empties an undone field the extractor never read', () => {
-    // buyer_tin and vat carry a NULL rank-0 reading on the deployed mock, and the server writes
-    // the EMPTY STRING for them. The artboard's `f.was || value` would keep the typed value on
-    // screen instead -- a deliberate deviation, because it reopens the screen/register
-    // divergence the server-side undo exists to close.
+    // buyer_tin and vat carry a NULL rank-0 reading on the deployed mock, and the server CLEARS
+    // the invoice column for them. An input cannot render null, so '' is how the screen says the
+    // same thing. The artboard's `f.was || value` would keep the typed value on screen instead
+    // -- a deliberate deviation, because it reopens the screen/register divergence the
+    // server-side undo exists to close.
     const fields = [
       mkField({
         name: 'buyer_tin',

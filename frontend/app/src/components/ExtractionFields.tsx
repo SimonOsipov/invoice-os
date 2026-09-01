@@ -82,7 +82,10 @@ const CELL: CSSProperties = {
 const SELECTED_CELL: CSSProperties = { ...CELL, background: 'var(--accent-10)', boxShadow: 'inset 2px 0 0 var(--accent)' }
 
 // The `min-height` keeps a row without a pill the same height as its neighbour with one.
-const LABEL_STRIP: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, minHeight: 18 }
+// `flex-wrap` is ours, not the artboard's (`:293`): at the pane's 470px floor the label is at
+// min-content and the pill declares `flex: none`, so a nowrap strip spills its column by 7.8px
+// on `issue_date` and 6.0px on `vat`. Pinned by `wraps the label strip` and EXTR12-E2E-07.
+const LABEL_STRIP: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, minHeight: 18, flexWrap: 'wrap' }
 
 const LABEL: CSSProperties = { fontSize: 12, fontWeight: 500, color: 'var(--fg-2)' }
 

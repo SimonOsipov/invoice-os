@@ -384,6 +384,19 @@ describe('the field cells', () => {
     expect(strip.style.minHeight).toBe('18px')
   })
 
+  it('wraps the label strip, so a pill drops to its own line instead of spilling its column', () => {
+    // W-6, measured in Chromium at the pane's 470px floor: 191px of cell content against a
+    // 199px strip on `issue_date` and 197px on `vat`. The label is already at min-content and
+    // the pill declares `flex: none`, so a nowrap row has nowhere to put the remainder.
+    // Declaration-level only — the deployed oracle is EXTR12-E2E-07's floor walk, which needs
+    // real fonts and therefore first executes on the gate.
+    render(fieldsPane({ fields: ONE_REGIONLESS }))
+
+    const strip = within(row('invoice_number')).getByText(PILL).parentElement as HTMLElement
+    expect(strip.style.display, 'the pill does not sit in the label strip').toBe('flex')
+    expect(strip.style.flexWrap).toBe('wrap')
+  })
+
   it('renders an empty input for a null value, and no em-dash placeholder', () => {
     // The em-dash was the read-only cell's stand-in for "nothing here". An editable field says
     // it by being empty, and a typed em-dash would be a value the person has to delete first.

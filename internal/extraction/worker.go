@@ -103,7 +103,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		Subject: workerActor, Role: "authenticated", TenantID: args.TenantID,
 	})
 
-	var fields []Field
+	var results []FieldResult
 	var images []PageImage
 	// Set by whichever stage below fails. Control flow, never a parse of last_error
 	// (TestExtractWorker_FailureKindPerStage).
@@ -133,7 +133,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	if err == nil {
 		// ctx, not octx: the extractor is fenced from the database and must not be handed a
 		// tenant identity.
-		if fields, err = w.Extractor.Extract(ctx, doc); err != nil {
+		if results, err = w.Extractor.Extract(ctx, doc); err != nil {
 			kind = FailureExtractFailed
 		}
 	}
@@ -167,7 +167,6 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		return err
 	}
 
-	results := asFieldResults(fields)
 	flagged := flaggedCount(results)
 
 	return db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
@@ -187,23 +186,12 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 				ExtractionJobID:  row.ID,
 				Extractor:        w.Extractor.Name(),
 				ExtractorVersion: w.Extractor.Version(),
-				FieldCount:       len(fields),
+				FieldCount:       len(results),
 				FlaggedCount:     flagged,
 			})
 		})
 		return err
 	})
-}
-
-// asFieldResults lifts the extractor's flat fields into rank-0 results with no alternatives:
-// the extractor produces none on its own, only Reconcile does, and nothing wires Reconcile's
-// output into the worker yet (EXTR-05-07).
-func asFieldResults(fields []Field) []FieldResult {
-	out := make([]FieldResult, len(fields))
-	for i, f := range fields {
-		out[i] = FieldResult{Field: f, Alternatives: []Field{}}
-	}
-	return out
 }
 
 // flaggedCount counts decided fields only: it stops at the top level and never descends into

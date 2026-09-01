@@ -221,17 +221,20 @@ func (refExtractor) Name() string    { return "contract-reference" }
 func (refExtractor) Version() string { return "v1" }
 
 // Extract reads nothing out of doc, so it cannot retain or mutate the caller's bytes.
-func (refExtractor) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+func (refExtractor) Extract(ctx context.Context, _ extraction.Document) ([]extraction.FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	// A fresh pointer per call: a shared one would be state leaking between instances.
 	value := "REF-0001"
-	return []extraction.Field{{
-		Name:   "invoice_number",
-		Value:  &value,
-		Region: &extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20},
-		Reason: extraction.ReasonNone,
+	return []extraction.FieldResult{{
+		Field: extraction.Field{
+			Name:   "invoice_number",
+			Value:  &value,
+			Region: &extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20},
+			Reason: extraction.ReasonNone,
+		},
+		Alternatives: []extraction.Field{},
 	}}, nil
 }
 
@@ -282,14 +285,14 @@ var declaredReasons = map[extraction.Reason]bool{
 // Erroring on a document it cannot read is lawful, and the fields are meaningless then, so
 // E06-E11 skip that case. E04 owns the error path and E05 hashes either way: mutating the
 // caller's bytes on the way out is still a mutation.
-func callExtract(ext extraction.Extractor, doc extraction.Document) ([]extraction.Field, error) {
+func callExtract(ext extraction.Extractor, doc extraction.Document) ([]extraction.FieldResult, error) {
 	return ext.Extract(context.Background(), doc)
 }
 
 // cancelledOutcome carries one E12 probe back off its goroutine. panicked is the formatted
 // panic value and stack, empty when Extract returned.
 type cancelledOutcome struct {
-	fields   []extraction.Field
+	fields   []extraction.FieldResult
 	err      error
 	panicked string
 }
@@ -303,7 +306,7 @@ type cancelledOutcome struct {
 // invariant TestAllLaws_IdsAreUniqueAndUsed enforces. Re-raising only buys attribution -- it
 // makes a panic here fail the running test the way a panic under the other eleven laws does,
 // instead of killing the binary from an anonymous goroutine.
-func callExtractCancelled(ext extraction.Extractor, doc extraction.Document) (fields []extraction.Field, err error, timedOut bool) {
+func callExtractCancelled(ext extraction.Extractor, doc extraction.Document) (fields []extraction.FieldResult, err error, timedOut bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -379,7 +382,7 @@ func RunExtractorContract(t ContractT, newExtractor func() extraction.Extractor)
 		fields, err := callExtract(first, c.doc)
 		switch {
 		case err == nil && fields == nil:
-			t.Errorf("E04: %s: Extract returned a nil []Field alongside a nil error; success is an empty non-nil slice", c.name)
+			t.Errorf("E04: %s: Extract returned a nil []FieldResult alongside a nil error; success is an empty non-nil slice", c.name)
 		case err != nil && fields != nil:
 			t.Errorf("E04: %s: Extract returned a non-nil %d-field slice alongside the error %v; on error the slice is nil", c.name, len(fields), err)
 		}

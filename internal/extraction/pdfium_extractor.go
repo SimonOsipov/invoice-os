@@ -39,7 +39,7 @@ func (e *PDFiumExtractor) pageReader() PageReader {
 //
 // PagesWithText is read in no branch: the verdict is document-level (D-9), and
 // TestPDFiumExtractor_DoesNotFlagAHybridDocument fails the day that changes.
-func (e *PDFiumExtractor) Extract(ctx context.Context, doc Document) ([]Field, error) {
+func (e *PDFiumExtractor) Extract(ctx context.Context, doc Document) ([]FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (e *PDFiumExtractor) Extract(ctx context.Context, doc Document) ([]Field, e
 	}
 
 	if res.TextChars == 0 {
-		return []Field{{Name: pdfiumTextLayerField, Reason: ReasonUnreadable}}, nil
+		return []FieldResult{{Field: Field{Name: pdfiumTextLayerField, Reason: ReasonUnreadable}, Alternatives: []Field{}}}, nil
 	}
-	return []Field{}, nil
+	return []FieldResult{}, nil
 }

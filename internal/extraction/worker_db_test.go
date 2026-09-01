@@ -82,13 +82,13 @@ var wkErrRollback = errors.New("worker suite: intentional rollback")
 type wkExtract struct {
 	mu    sync.Mutex
 	calls int
-	fn    func(context.Context, extraction.Document) ([]extraction.Field, error)
+	fn    func(context.Context, extraction.Document) ([]extraction.FieldResult, error)
 }
 
 func (e *wkExtract) Name() string    { return wkExtractorName }
 func (e *wkExtract) Version() string { return wkExtractorVersion }
 
-func (e *wkExtract) Extract(ctx context.Context, doc extraction.Document) ([]extraction.Field, error) {
+func (e *wkExtract) Extract(ctx context.Context, doc extraction.Document) ([]extraction.FieldResult, error) {
 	e.mu.Lock()
 	e.calls++
 	e.mu.Unlock()
@@ -102,13 +102,13 @@ func (e *wkExtract) count() int {
 }
 
 func wkOK() *wkExtract {
-	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.Field, error) {
+	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.FieldResult, error) {
 		return wkOneField(), nil
 	}}
 }
 
 func wkFailing(err error) *wkExtract {
-	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.Field, error) {
+	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.FieldResult, error) {
 		return nil, err
 	}}
 }
@@ -116,7 +116,7 @@ func wkFailing(err error) *wkExtract {
 // wkSlow honours ctx: without ExtractWorker's own Timeout the executor cancels the job at 60s
 // and this returns that cancellation rather than sleeping on regardless.
 func wkSlow(d time.Duration) *wkExtract {
-	return &wkExtract{fn: func(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+	return &wkExtract{fn: func(ctx context.Context, _ extraction.Document) ([]extraction.FieldResult, error) {
 		select {
 		case <-time.After(d):
 			return wkOneField(), nil
@@ -126,8 +126,8 @@ func wkSlow(d time.Duration) *wkExtract {
 	}}
 }
 
-func wkOneField() []extraction.Field {
-	return []extraction.Field{{Name: "invoice_number", Value: stPtr("INV-EXTR-09")}}
+func wkOneField() []extraction.FieldResult {
+	return []extraction.FieldResult{{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-EXTR-09")}, Alternatives: []extraction.Field{}}}
 }
 
 // wkSeen is one OpenDocument call: the identity the worker synthesised onto the seam's
@@ -1303,16 +1303,16 @@ func TestRLS_ExtractWorkerRetryReplacesTheRowSet(t *testing.T) {
 
 // wkFlaggedFields is three fields of which two carry a reason. field_count and flagged_count
 // must differ and neither may be 0 or 1: a swapped pair reads as clean otherwise.
-func wkFlaggedFields() []extraction.Field {
-	return []extraction.Field{
-		{Name: "invoice_number", Value: stPtr("INV-EXTR-08-03")},
-		{Name: "total_amount", Value: stPtr("100.00"), Reason: extraction.ReasonAmbiguous},
-		{Name: "supplier_tin", Value: stPtr("?"), Reason: extraction.ReasonUnreadable},
+func wkFlaggedFields() []extraction.FieldResult {
+	return []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: stPtr("INV-EXTR-08-03")}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "total_amount", Value: stPtr("100.00"), Reason: extraction.ReasonAmbiguous}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "supplier_tin", Value: stPtr("?"), Reason: extraction.ReasonUnreadable}, Alternatives: []extraction.Field{}},
 	}
 }
 
-func wkFieldsExtractor(fields []extraction.Field) *wkExtract {
-	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.Field, error) {
+func wkFieldsExtractor(fields []extraction.FieldResult) *wkExtract {
+	return &wkExtract{fn: func(context.Context, extraction.Document) ([]extraction.FieldResult, error) {
 		return fields, nil
 	}}
 }
@@ -1911,5 +1911,120 @@ func TestRLS_ExtractionAuditRowIsNotVisibleAcrossTenants(t *testing.T) {
 	}
 	if n := wkAuditRowVisibleTo(t, ctx, tenantB, rowID); n != 0 {
 		t.Errorf("tenant B reads %d row(s) for tenant A's audit row %d, want 0", n, rowID)
+	}
+}
+
+// --- EXTR-12-01: alternatives reach the table at rank 1 and rank 2 ---------------
+
+// wkFieldResultRow is one extraction_field_results row as the rank spec reads it.
+type wkFieldResultRow struct {
+	rank  int
+	value *string
+	page  *int
+}
+
+// wkFieldRowsByName reads every row one job wrote for one field, in candidate_rank order.
+func wkFieldRowsByName(t *testing.T, ctx context.Context, jobID, field string) []wkFieldResultRow {
+	t.Helper()
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT candidate_rank, value, page FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2
+		  ORDER BY candidate_rank`, jobID, field)
+	if err != nil {
+		t.Fatalf("read %s rows: %v", field, err)
+	}
+	defer rows.Close()
+
+	var out []wkFieldResultRow
+	for rows.Next() {
+		var r wkFieldResultRow
+		if err := rows.Scan(&r.rank, &r.value, &r.page); err != nil {
+			t.Fatalf("scan %s row: %v", field, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read %s rows: %v", field, err)
+	}
+	return out
+}
+
+// AC-7 (RED-FIRST). The real MockExtractor over bytes no fixture claims, so the ambiguous field
+// and its two alternatives are the production ones, not a hand-built result.
+// TestRLS_ExtractWorkerWritesRankZeroForEveryExtractorField covers the no-alternatives arm;
+// this is the arm that reaches rank > 0.
+func TestRLS_ExtractWorkerWritesAlternativeRowsAtRankOneAndTwo(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	// The opener's bytes miss both fixture hashes, so Extract takes the default arm.
+	ext := extraction.NewMockExtractor()
+	want, err := ext.Extract(ctx, extraction.Document{Bytes: []byte("extr-09 worker fixture"), ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var ambiguous extraction.FieldResult
+	for _, r := range want {
+		if len(r.Alternatives) == 2 {
+			ambiguous = r
+			break
+		}
+	}
+	if ambiguous.Name == "" {
+		t.Fatal("the default result carries no field with two alternatives; there are no rank>0 rows to read back")
+	}
+
+	const riverJobID = int64(912001)
+	if err := wkWorker(t, ext, wkNewOpener()).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+
+	got := wkFieldRowsByName(t, ctx, xid, ambiguous.Name)
+	if len(got) != 3 {
+		t.Fatalf("%q has %d row(s), want 3: one decided reading at rank 0 and two alternatives", ambiguous.Name, len(got))
+	}
+
+	// Slice order IS rank order: the alternative a reviewer sees second must not arrive first.
+	wantRows := []struct {
+		rank  int
+		value *string
+	}{
+		{0, ambiguous.Value},
+		{1, ambiguous.Alternatives[0].Value},
+		{2, ambiguous.Alternatives[1].Value},
+	}
+	for i, w := range wantRows {
+		if got[i].rank != w.rank {
+			t.Errorf("%q row %d has candidate_rank %d, want %d", ambiguous.Name, i, got[i].rank, w.rank)
+		}
+		switch {
+		case w.value == nil && got[i].value != nil:
+			t.Errorf("%q rank %d has value %q, want NULL", ambiguous.Name, w.rank, *got[i].value)
+		case w.value != nil && got[i].value == nil:
+			t.Errorf("%q rank %d has a NULL value, want %q", ambiguous.Name, w.rank, *w.value)
+		case w.value != nil && *got[i].value != *w.value:
+			t.Errorf("%q rank %d has value %q, want %q -- the alternatives are written in slice order", ambiguous.Name, w.rank, *got[i].value, *w.value)
+		}
+	}
+
+	// The three readings point at three different places, so a page-only check cannot tell
+	// them apart; the distinct boxes are what EXTR-12-05 highlights.
+	if got[0].page == nil || got[1].page == nil || got[2].page == nil {
+		t.Errorf("%q wrote a NULL page for one of its three readings; each carries a region", ambiguous.Name)
+	}
+
+	// The alternatives never carry a reason of their own: FieldResult's contract puts it on the
+	// decided reading alone.
+	var reasons int
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT count(*) FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2 AND candidate_rank > 0 AND reason_code IS NOT NULL`,
+		xid, ambiguous.Name).Scan(&reasons); err != nil {
+		t.Fatalf("count rank>0 reason codes: %v", err)
+	}
+	if reasons != 0 {
+		t.Errorf("%d alternative row(s) carry a reason_code, want 0 -- only the decided reading does", reasons)
 	}
 }

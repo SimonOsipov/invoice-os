@@ -121,13 +121,16 @@ var errRedUnreadable = errors.New("red extractor: document unreadable")
 // lawfulFields is the reference result: one named field, a non-empty value, a normalised
 // region, a declared reason. Each row's defect is a single departure from this. A fresh Value
 // pointer per call, matching refExtractor.
-func lawfulFields() []extraction.Field {
+func lawfulFields() []extraction.FieldResult {
 	value := redValue
-	return []extraction.Field{{
-		Name:   "invoice_number",
-		Value:  &value,
-		Region: &extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20},
-		Reason: extraction.ReasonNone,
+	return []extraction.FieldResult{{
+		Field: extraction.Field{
+			Name:   "invoice_number",
+			Value:  &value,
+			Region: &extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20},
+			Reason: extraction.ReasonNone,
+		},
+		Alternatives: []extraction.Field{},
 	}}
 }
 
@@ -135,10 +138,10 @@ func lawfulFields() []extraction.Field {
 // honours cancellation, so build is the only variable and no such row can trip E05 or E12.
 type redFields struct {
 	refExtractor
-	build func() []extraction.Field
+	build func() []extraction.FieldResult
 }
 
-func (e redFields) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+func (e redFields) Extract(ctx context.Context, _ extraction.Document) ([]extraction.FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -224,7 +227,7 @@ func (e instanceStampedVersion) Version() string { return fmt.Sprintf("stamped-v
 // E04, success half: a nil slice alongside a nil error -- the []T to JSON null hazard.
 func newNilSliceOnSuccess() extraction.Extractor { return redFields{build: nilSliceOnSuccess} }
 
-func nilSliceOnSuccess() []extraction.Field { return nil }
+func nilSliceOnSuccess() []extraction.FieldResult { return nil }
 
 // fieldsWithError is E04's error half: a non-nil slice smuggled out alongside an error. It
 // takes doc as a blank so it cannot touch doc.Bytes -- E05 does not skip a live-context error,
@@ -235,7 +238,7 @@ type fieldsWithError struct{ refExtractor }
 
 func newFieldsWithError() extraction.Extractor { return fieldsWithError{} }
 
-func (fieldsWithError) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+func (fieldsWithError) Extract(ctx context.Context, _ extraction.Document) ([]extraction.FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -250,7 +253,7 @@ type bytesMutating struct{ refExtractor }
 
 func newBytesMutating() extraction.Extractor { return bytesMutating{} }
 
-func (bytesMutating) Extract(ctx context.Context, doc extraction.Document) ([]extraction.Field, error) {
+func (bytesMutating) Extract(ctx context.Context, doc extraction.Document) ([]extraction.FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -264,14 +267,14 @@ func (bytesMutating) Extract(ctx context.Context, doc extraction.Document) ([]ex
 // this stays a singleton.
 func newEmptyFieldName() extraction.Extractor { return redFields{build: emptyFieldName} }
 
-func emptyFieldName() []extraction.Field {
-	return append(lawfulFields(), extraction.Field{Reason: extraction.ReasonNone})
+func emptyFieldName() []extraction.FieldResult {
+	return append(lawfulFields(), extraction.FieldResult{Field: extraction.Field{Reason: extraction.ReasonNone}, Alternatives: []extraction.Field{}})
 }
 
 // E07: two fields sharing a Name, each otherwise lawful.
 func newDuplicateFieldNames() extraction.Extractor { return redFields{build: duplicateFieldNames} }
 
-func duplicateFieldNames() []extraction.Field {
+func duplicateFieldNames() []extraction.FieldResult {
 	second := lawfulFields()[0]
 	value := "RED-0002"
 	second.Value = &value
@@ -281,16 +284,16 @@ func duplicateFieldNames() []extraction.Field {
 // E08: a non-nil Value pointing at an empty string. Region is nil, so E11 skips the field.
 func newEmptyValuePointer() extraction.Extractor { return redFields{build: emptyValuePointer} }
 
-func emptyValuePointer() []extraction.Field {
+func emptyValuePointer() []extraction.FieldResult {
 	value := ""
-	return []extraction.Field{{Name: "invoice_number", Value: &value, Reason: extraction.ReasonNone}}
+	return []extraction.FieldResult{{Field: extraction.Field{Name: "invoice_number", Value: &value, Reason: extraction.ReasonNone}, Alternatives: []extraction.Field{}}}
 }
 
 // E09: a Reason outside the five contract_test.go writes out. Not ReasonMissing, so E10 stays
 // clear.
 func newUndeclaredReason() extraction.Extractor { return redFields{build: undeclaredReason} }
 
-func undeclaredReason() []extraction.Field {
+func undeclaredReason() []extraction.FieldResult {
 	fields := lawfulFields()
 	fields[0].Reason = extraction.Reason("bogus")
 	return fields
@@ -300,7 +303,7 @@ func undeclaredReason() []extraction.Field {
 // ReasonMissing is declared so E09 does.
 func newMissingWithValue() extraction.Extractor { return redFields{build: missingWithValue} }
 
-func missingWithValue() []extraction.Field {
+func missingWithValue() []extraction.FieldResult {
 	fields := lawfulFields()
 	fields[0].Reason = extraction.ReasonMissing
 	return fields
@@ -311,7 +314,7 @@ func missingWithValue() []extraction.Field {
 // clear for both.
 func newAbsoluteRegionX() extraction.Extractor { return redFields{build: absoluteRegionX} }
 
-func absoluteRegionX() []extraction.Field {
+func absoluteRegionX() []extraction.FieldResult {
 	fields := lawfulFields()
 	fields[0].Region = &extraction.Region{Page: 1, X0: 72, Y0: 0.10, X1: 540, Y1: 0.20}
 	return fields
@@ -319,7 +322,7 @@ func absoluteRegionX() []extraction.Field {
 
 func newAbsoluteRegionY() extraction.Extractor { return redFields{build: absoluteRegionY} }
 
-func absoluteRegionY() []extraction.Field {
+func absoluteRegionY() []extraction.FieldResult {
 	fields := lawfulFields()
 	fields[0].Region = &extraction.Region{Page: 1, X0: 0.10, Y0: 720, X1: 0.40, Y1: 750}
 	return fields
@@ -331,7 +334,7 @@ func absoluteRegionY() []extraction.Field {
 // literal rather than inferring it from the two halves.
 func newAbsoluteRegion() extraction.Extractor { return redFields{build: absoluteRegion} }
 
-func absoluteRegion() []extraction.Field {
+func absoluteRegion() []extraction.FieldResult {
 	fields := lawfulFields()
 	fields[0].Region = &extraction.Region{Page: 1, X0: 72, Y0: 720, X1: 540, Y1: 750}
 	return fields
@@ -342,7 +345,7 @@ func absoluteRegion() []extraction.Field {
 // corpus case rather than three times.
 func newPageZeroRegion() extraction.Extractor { return redFields{build: pageZeroRegion} }
 
-func pageZeroRegion() []extraction.Field {
+func pageZeroRegion() []extraction.FieldResult {
 	fields := lawfulFields()
 	fields[0].Region = &extraction.Region{Page: 0, X0: 0.10, Y0: 0.10, X1: 0.40, Y1: 0.20}
 	return fields
@@ -357,7 +360,7 @@ type nilErrorUnderCancellation struct{ refExtractor }
 
 func newNilErrorUnderCancellation() extraction.Extractor { return nilErrorUnderCancellation{} }
 
-func (nilErrorUnderCancellation) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+func (nilErrorUnderCancellation) Extract(ctx context.Context, _ extraction.Document) ([]extraction.FieldResult, error) {
 	if ctx.Err() != nil {
 		return nil, nil
 	}
@@ -370,7 +373,7 @@ type fieldsUnderCancellation struct{ refExtractor }
 
 func newFieldsUnderCancellation() extraction.Extractor { return fieldsUnderCancellation{} }
 
-func (fieldsUnderCancellation) Extract(ctx context.Context, _ extraction.Document) ([]extraction.Field, error) {
+func (fieldsUnderCancellation) Extract(ctx context.Context, _ extraction.Document) ([]extraction.FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return lawfulFields(), err
 	}
@@ -392,7 +395,7 @@ type cancellationBlocking struct{ refExtractor }
 
 func newCancellationBlocking() extraction.Extractor { return cancellationBlocking{} }
 
-func (cancellationBlocking) Extract(ctx context.Context, doc extraction.Document) ([]extraction.Field, error) {
+func (cancellationBlocking) Extract(ctx context.Context, doc extraction.Document) ([]extraction.FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		if len(doc.Bytes) > 1<<20 {
 			time.Sleep(cancelledExtractBudget + time.Second)

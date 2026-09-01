@@ -195,11 +195,11 @@ func TestDocumentCreateInput_SupplierFieldsNeverSetEvenWhenExtractionCarriesThem
 
 // --- MAP-04: unknown field names dropped -------------------------------------------------
 
-// TestDocumentCreateInput_UnknownFieldNamesDropped reproduces internal/extraction/mock.go:
-// 95-99's clean-invoice literal field set by hand (invoice_date/total_amount are the mock
-// extractor's real unknown names) plus two synthetic unknown names the story calls out
-// (line_items, line_items[0].line_total). internal/importer cannot import internal/extraction
-// (document_deps_test.go), so the values are copied, not referenced.
+// invoice_date/total_amount are ILLUSTRATIVE off-vocabulary names, not the mock extractor's
+// current output: EXTR-12-01 renamed its fields onto the real vocabulary (issue_date, total).
+// They stay unmapped either way, alongside two synthetic ones (line_items,
+// line_items[0].line_total). internal/importer cannot import internal/extraction
+// (document_deps_test.go), so every value here is copied, not referenced.
 func TestDocumentCreateInput_UnknownFieldNamesDropped(t *testing.T) {
 	ex := SettledExtraction{
 		Fields: []extractedField{
@@ -630,4 +630,70 @@ func mpStringSliceVar(t *testing.T, path, name string) []string {
 		}
 	}
 	return nil
+}
+
+// --- EXTR-12-01: the mock's default result, mapped ---------------------------------------
+
+// AC-6/AC-8, and CONFIRMATORY, not red-first: document_deps_test.go fences this package off from
+// internal/extraction, so the field set below is hand-copied and asserting it would pass whatever
+// the mock actually emits. The oracle for the rename is
+// internal/extraction's TestMockExtractor_DefaultResultNamesAreOnTheVocabulary; MAP-11 links
+// HeaderFields to mapperFieldNames, closing the chain to the columns asserted here.
+//
+// What this adds over MAP-01: the mock's PARTIAL field set, where three readings are flagged and
+// two carry no value at all, still maps every decided value and leaves the absent ones NULL.
+func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
+	ex := SettledExtraction{
+		JobID: "job-extr-12-01",
+		Fields: []extractedField{
+			{Name: "invoice_number", Value: mpPtr("MOCK-INV-0001")},
+			{Name: "issue_date", Value: mpPtr("2026-01-01"), Reason: mpPtr("ambiguous")},
+			{Name: "total", Value: mpPtr("1000.00"), Reason: mpPtr("inconsistent")},
+			{Name: "subtotal", Value: mpPtr("950.00"), Reason: mpPtr("inconsistent")},
+			{Name: "supplier_tin", Value: mpPtr("MOCK-TIN-SUPPLIER-ALT"), Reason: mpPtr("inconsistent")},
+			{Name: "buyer_tin", Value: nil, Reason: mpPtr("missing")},
+			{Name: "vat", Value: nil, Reason: mpPtr("unreadable")},
+		},
+	}
+
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+
+	docID := "doc-1"
+	want := invoice.CreateInput{
+		EntityID:      "entity-1",
+		InvoiceNumber: "MOCK-INV-0001",
+		IssueDate:     timePtr(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		Subtotal:      mpPtr("950.00"),
+		Total:         mpPtr("1000.00"),
+		// Q11: Store.Create overwrites the supplier from the entity, so the mapper leaves both
+		// unset however loudly the extraction carries them.
+		SourceDocumentID: &docID,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CreateInput = %+v, want %+v", got, want)
+	}
+
+	// Named again below DeepEqual: these are the two the rename repairs, and a DeepEqual failure
+	// on any other field would otherwise bury which one moved.
+	if got.IssueDate == nil {
+		t.Error("IssueDate = nil -- the mock's issue_date is on the vocabulary now and must map")
+	} else if !got.IssueDate.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("IssueDate = %v, want 2026-01-01", got.IssueDate)
+	}
+	if got.Total == nil || *got.Total != "1000.00" {
+		t.Errorf("Total = %v, want %q -- the mock's total is on the vocabulary now and must map", got.Total, "1000.00")
+	}
+	if got.Subtotal == nil || *got.Subtotal != "950.00" {
+		t.Errorf("Subtotal = %v, want %q", got.Subtotal, "950.00")
+	}
+	// An unreadable field carries no reading, so it maps to NULL rather than to an empty string.
+	if got.VAT != nil {
+		t.Errorf("VAT = %q, want nil -- the mock's vat is unreadable and carries no value", *got.VAT)
+	}
+	if got.BuyerTIN != nil {
+		t.Errorf("BuyerTIN = %q, want nil -- the mock's buyer_tin is missing", *got.BuyerTIN)
+	}
 }

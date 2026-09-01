@@ -24,11 +24,11 @@ type Extractor interface {
 	// extraction_jobs.extractor_version (NOT NULL, CHECK char_length > 0).
 	Version() string
 
-	// Extract returns one Field per field it looked for. It must not retain or mutate
-	// doc.Bytes past the call. On success the slice is non-nil (possibly empty), so no caller
-	// has to coerce a nil slice away from a JSON null; on error it is nil and the caller
-	// records the job failed.
-	Extract(ctx context.Context, doc Document) ([]Field, error)
+	// Extract returns one FieldResult per field it looked for: the decided reading, plus the
+	// alternatives an ambiguous one keeps. It must not retain or mutate doc.Bytes past the
+	// call. On success the slice is non-nil (possibly empty), so no caller has to coerce a nil
+	// slice away from a JSON null; on error it is nil and the caller records the job failed.
+	Extract(ctx context.Context, doc Document) ([]FieldResult, error)
 }
 
 // Document is the input. Bytes are owned by the caller.

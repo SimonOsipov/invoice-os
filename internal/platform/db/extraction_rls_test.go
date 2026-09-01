@@ -3024,3 +3024,637 @@ func TestRLS_ExtractionFieldResultsOwnerCrossTenantWriteRefused(t *testing.T) {
 		t.Fatalf("owner in-tenant UPDATE: want success, got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// extraction_field_corrections (EXTR-12-03). Same RED-first shape as the two blocks
+// above: every case here fails 42P01 until the migration lands.
+// ---------------------------------------------------------------------------
+
+// The names every rejection case asserts. SQLSTATE 23514 alone does not say which CHECK
+// refused, so a case asserting only the code would silently stop testing its subject.
+// Measured against PG18: when a row violates two CHECKs at once, the one Postgres reports is
+// the alphabetically FIRST by constraint name, not the first declared -- reversing the DDL
+// order changed nothing. So bbox_normalised outranks pointed_has_region outranks
+// region_complete, whatever order the migration writes them in.
+const (
+	efcRegionComplete   = "extraction_field_corrections_region_complete"
+	efcBboxNormalised   = "extraction_field_corrections_bbox_normalised"
+	efcPointedHasRegion = "extraction_field_corrections_pointed_has_region"
+	efcValueCheck       = "extraction_field_corrections_value_check"
+	efcMethodCheck      = "extraction_field_corrections_method_check"
+	efcTenantJobFK      = "extraction_field_corrections_tenant_job_fk"
+)
+
+// The field_name/value/method/actor set supplied whenever none of them is the subject.
+// actor is a raw GoTrue subject, the convention audit_log.actor already follows.
+const (
+	efcField  = "total_amount"
+	efcValue  = "212.50"
+	efcMethod = "typed"
+	efcActor  = "8f1c0d64-4c2e-4a1b-9d33-6f5f0f2c7a01"
+)
+
+// The canonical INSERT. Every column a constraint case varies is bound, so one statement
+// shape serves them all and no case can differ by accident.
+const efcInsert = `INSERT INTO extraction_field_corrections
+	(id, tenant_id, extraction_job_id, field_name, value, method, page,
+	 bbox_x0, bbox_y0, bbox_x1, bbox_y1, anchor_label, actor)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
+
+// failIfUndefinedFieldCorrections turns the pre-migration failure mode into a self-explaining
+// message instead of a raw driver error. Returns true when it fired.
+func failIfUndefinedFieldCorrections(t *testing.T, what string, err error) bool {
+	t.Helper()
+	if pgCode(err) == "42P01" {
+		t.Fatalf("%s: undefined_table (42P01) — the extraction_field_corrections migration is not applied yet: %v", what, err)
+		return true
+	}
+	return false
+}
+
+// insertCorrection issues the canonical INSERT on tx and returns the driver error unchanged,
+// so each caller asserts its own SQLSTATE and constraint name. The region reuses efrRegion:
+// this table carries the same five columns.
+func insertCorrection(ctx context.Context, tx pgx.Tx, id, tenantID, jobID, field, value, method string, r efrRegion) error {
+	var noAnchor *string
+	_, err := tx.Exec(ctx, efcInsert,
+		id, tenantID, jobID, field, value, method, r.page, r.x0, r.y0, r.x1, r.y1, noAnchor, efcActor)
+	return err
+}
+
+// seedFieldCorrection inserts one row as the superuser (BYPASSRLS, so seeding needs neither
+// tenant context nor an INSERT grant). Seed the document and the extraction job first: this
+// row's composite FK needs both.
+func seedFieldCorrection(t *testing.T, tenantID, jobID, fieldName string) (id string, cleanup func()) {
+	t.Helper()
+	ctx := context.Background()
+	id = uuid.NewString()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_field_corrections
+		     (id, tenant_id, extraction_job_id, field_name, value, method, actor)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, tenantID, jobID, fieldName, efcValue, efcMethod, efcActor,
+	); err != nil {
+		if pgCode(err) == "42P01" {
+			t.Fatalf("seed extraction_field_corrections: undefined_table (42P01) — "+
+				"extraction_field_corrections migration not applied yet: %v", err)
+		}
+		t.Fatalf("seed extraction_field_corrections: %v", err)
+	}
+	return id, func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_corrections WHERE id = $1`, id)
+	}
+}
+
+// EFC-01: the catalog half of the isolation posture. ENABLE alone would let the owner bypass
+// the policy, and a TO clause on tenant_isolation would leave unnamed roles unbound.
+func TestRLS_ExtractionFieldCorrectionsForceRLSAndPolicyDeclared(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var enabled, forced bool
+	err := h.super.QueryRow(ctx,
+		`SELECT relrowsecurity, relforcerowsecurity
+		   FROM pg_class WHERE oid = 'public.extraction_field_corrections'::regclass`,
+	).Scan(&enabled, &forced)
+	if failIfUndefinedFieldCorrections(t, "read pg_class for extraction_field_corrections", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("read pg_class for extraction_field_corrections: %v", err)
+	}
+	if !enabled || !forced {
+		t.Errorf("extraction_field_corrections relrowsecurity/relforcerowsecurity = %v/%v, want true/true "+
+			"(ENABLE alone would let the migrator/owner bypass the policy)", enabled, forced)
+	}
+
+	type policy struct {
+		roles []string
+		cmd   string
+		qual  string
+	}
+	got := map[string]policy{}
+	rows, err := h.super.Query(ctx,
+		`SELECT policyname, roles::text[], cmd, coalesce(qual, '')
+		   FROM pg_policies WHERE schemaname = 'public' AND tablename = 'extraction_field_corrections'`)
+	if err != nil {
+		t.Fatalf("query pg_policies for extraction_field_corrections: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var p policy
+		if e := rows.Scan(&name, &p.roles, &p.cmd, &p.qual); e != nil {
+			t.Fatalf("scan pg_policies row: %v", e)
+		}
+		got[name] = p
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate pg_policies rows: %v", e)
+	}
+
+	if len(got) != 1 {
+		t.Errorf("policies on extraction_field_corrections = %d (%v), want exactly 1 (tenant_isolation) — "+
+			"this table has no cross-tenant enumeration reader", len(got), got)
+	}
+
+	iso, ok := got["tenant_isolation"]
+	if !ok {
+		t.Fatal("no tenant_isolation policy on extraction_field_corrections — the migration is not applied yet")
+	}
+	if strings.Join(iso.roles, ",") != "public" {
+		t.Errorf("tenant_isolation roles = %v, want [public] (no TO clause — it must bind every role)", iso.roles)
+	}
+	if iso.cmd != "ALL" {
+		t.Errorf("tenant_isolation cmd = %q, want %q (its USING must double as the INSERT WITH CHECK)", iso.cmd, "ALL")
+	}
+	if !strings.Contains(iso.qual, "app.current_tenant") {
+		t.Errorf("tenant_isolation qual = %q, want a comparison against the app.current_tenant GUC", iso.qual)
+	}
+}
+
+// EFC-02: cross-tenant SELECT is refused. The unfiltered count is the load-bearing half — a
+// tenant_id-filtered query would come out right even if RLS did nothing.
+func TestRLS_ExtractionFieldCorrectionsCrossTenantSelectRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFC-02/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFC-02/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	corrA, cleanupCorrA := seedFieldCorrection(t, h.tenantA, jobA, efcField)
+	defer cleanupCorrA()
+	corrB1, cleanupCorrB1 := seedFieldCorrection(t, h.tenantB, jobB, efcField)
+	defer cleanupCorrB1()
+	corrB2, cleanupCorrB2 := seedFieldCorrection(t, h.tenantB, jobB, "vendor_name")
+	defer cleanupCorrB2()
+
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		// By id, not by tenant_id: a tenant_id predicate would prove nothing about RLS.
+		if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_corrections WHERE id = $1`, corrA); n != 1 {
+			t.Errorf("A's own correction visible to A = %d, want 1", n)
+		}
+		for _, id := range []string{corrB1, corrB2} {
+			if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_corrections WHERE id = $1`, id); n != 0 {
+				t.Errorf("B's correction %s visible to A = %d, want 0", id, n)
+			}
+		}
+		// RLS is the only thing narrowing this one: B seeded two more rows.
+		if n := mustCount(t, tx, `SELECT count(*) FROM extraction_field_corrections`); n != 1 {
+			t.Errorf("unfiltered count under A's RLS = %d, want 1 (A's own row only; B seeded 2 more)", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}
+
+// EFC-03: an INSERT naming tenant B while scoped to A is refused with 42501 and lands no
+// row. The positive half stops this passing against a policy written USING (false).
+func TestRLS_ExtractionFieldCorrectionsCrossTenantInsertRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFC-03/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFC-03/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	crossID := uuid.NewString()
+	ownID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_corrections WHERE id IN ($1, $2)`, crossID, ownID)
+	}()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertCorrection(ctx, tx, crossID, h.tenantB, jobB, efcField, efcValue, efcMethod, efrRegion{})
+	})
+	if failIfUndefinedFieldCorrections(t, "cross-tenant INSERT", err) {
+		return
+	}
+	assertRLSViolation(t, err)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_corrections WHERE id = $1`, crossID); n != 0 {
+		t.Errorf("rows after the refused cross-tenant INSERT = %d, want 0", n)
+	}
+
+	// Positive half, own tx: the same statement shape succeeds for A's own tenant.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertCorrection(ctx, tx, ownID, h.tenantA, jobA, efcField, efcValue, efcMethod, efrRegion{})
+	}); err != nil {
+		t.Fatalf("own-tenant INSERT of the same shape: want success, got: %v", err)
+	}
+}
+
+// EFC-04 (AC-2): a correction naming another tenant's job is refused by the composite FK.
+// Attempted as the superuser so no policy stands in the way — a single-column
+// extraction_job_id FK would let this through, which is what the composite FK exists to close.
+func TestRLS_ExtractionFieldCorrectionsRejectAnotherTenantsJob(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDocA := seedDocument(t, h.tenantA, "EFC-04/a.pdf")
+	defer cleanupDocA()
+	docB, cleanupDocB := seedDocument(t, h.tenantB, "EFC-04/b.pdf")
+	defer cleanupDocB()
+	jobA, cleanupJobA := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJobA()
+	jobB, cleanupJobB := seedExtractionJob(t, h.tenantB, docB)
+	defer cleanupJobB()
+
+	danglingID := uuid.NewString()
+	okID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_field_corrections WHERE id IN ($1, $2)`, danglingID, okID)
+	}()
+
+	const stmt = `INSERT INTO extraction_field_corrections
+	    (id, tenant_id, extraction_job_id, field_name, value, method, actor)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7)`
+
+	_, err := h.super.Exec(ctx, stmt, danglingID, h.tenantA, jobB, efcField, efcValue, efcMethod, efcActor)
+	if failIfUndefinedFieldCorrections(t, "cross-tenant job reference", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("INSERT of a tenant-A correction pointing at tenant B's job succeeded, want " +
+			"foreign_key_violation (SQLSTATE 23503) — a single-column extraction_job_id FK would let " +
+			"this through, which is the bug the composite FK exists to close")
+	}
+	if code := pgCode(err); code != "23503" {
+		t.Fatalf("cross-tenant job reference: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != efcTenantJobFK {
+		t.Errorf("cross-tenant job reference: constraint = %q, want %q", name, efcTenantJobFK)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_field_corrections WHERE id = $1`, danglingID); n != 0 {
+		t.Errorf("rows after the refused cross-tenant job reference = %d, want 0", n)
+	}
+
+	// Positive half: A's own job is accepted by the very same FK.
+	if _, err := h.super.Exec(ctx, stmt, okID, h.tenantA, jobA, efcField, efcValue, efcMethod, efcActor); err != nil {
+		t.Fatalf("same-tenant job reference: want success, got: %v", err)
+	}
+}
+
+// EFC-05 (AC-1): append-only is a GRANT, not a policy or a trigger. invoice_app's UPDATE and
+// DELETE fail 42501 before RLS is ever consulted. The catalog half makes this a MISSING grant
+// rather than only a refused statement, and the two `true` rows keep it from passing against a
+// role that holds nothing at all.
+func TestRLS_ExtractionFieldCorrectionsAreAppendOnlyByGrant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		role string
+		priv string
+		want bool
+	}{
+		{"invoice_app", "SELECT", true},
+		{"invoice_app", "INSERT", true},
+		{"invoice_app", "UPDATE", false},
+		{"invoice_app", "DELETE", false},
+		{"invoice_app", "TRUNCATE", false},
+		{"invoice_app", "REFERENCES", false},
+		{"invoice_tenant_reader", "SELECT", false},
+		{"invoice_tenant_reader", "INSERT", false},
+		{"invoice_tenant_reader", "UPDATE", false},
+		{"invoice_tenant_reader", "DELETE", false},
+	} {
+		var got bool
+		err := h.super.QueryRow(ctx,
+			`SELECT has_table_privilege($1, 'public.extraction_field_corrections', $2)`, c.role, c.priv,
+		).Scan(&got)
+		if failIfUndefinedFieldCorrections(t, "has_table_privilege("+c.role+", "+c.priv+")", err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("has_table_privilege(%q, extraction_field_corrections, %q): %v", c.role, c.priv, err)
+		}
+		if got != c.want {
+			t.Errorf("has_table_privilege(%q, extraction_field_corrections, %q) = %v, want %v — the grant is "+
+				"exactly SELECT, INSERT to invoice_app and nothing to invoice_tenant_reader",
+				c.role, c.priv, got, c.want)
+		}
+	}
+
+	// seq is bigserial (house convention) rather than an identity column, and a bigserial
+	// default calls nextval: SELECT, INSERT on the table alone leaves every invoice_app INSERT
+	// failing 42501 "permission denied for sequence". Measured both ways against these roles;
+	// audit_log.sql:79 is the precedent. The positive halves below would fail without naming
+	// this as the cause.
+	var seqUsage bool
+	seqErr := h.super.QueryRow(ctx,
+		`SELECT has_sequence_privilege('invoice_app', 'public.extraction_field_corrections_seq_seq', 'USAGE')`,
+	).Scan(&seqUsage)
+	if failIfUndefinedFieldCorrections(t, "has_sequence_privilege(invoice_app, USAGE)", seqErr) {
+		return
+	}
+	if seqErr != nil {
+		t.Fatalf("has_sequence_privilege(invoice_app, extraction_field_corrections_seq_seq, USAGE): %v", seqErr)
+	}
+	if !seqUsage {
+		t.Error("invoice_app holds no USAGE on extraction_field_corrections_seq_seq — every INSERT " +
+			"fails 42501 (permission denied for sequence); GRANT SELECT, INSERT does not carry it")
+	}
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFC-05/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+	corrID, cleanupCorr := seedFieldCorrection(t, h.tenantA, jobA, efcField)
+	defer cleanupCorr()
+
+	insertID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_corrections WHERE id = $1`, insertID)
+	}()
+
+	// Each refused statement gets its own tx: a failed statement poisons the surrounding one.
+	for _, c := range []struct {
+		what string
+		sql  string
+	}{
+		{"UPDATE", `UPDATE extraction_field_corrections SET value = 'tampered' WHERE id = $1`},
+		{"DELETE", `DELETE FROM extraction_field_corrections WHERE id = $1`},
+	} {
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, c.sql, corrID)
+			return e
+		})
+		if failIfUndefinedFieldCorrections(t, "app "+c.what, err) {
+			return
+		}
+		if err == nil {
+			t.Errorf("invoice_app ran %s on extraction_field_corrections, want permission denied "+
+				"(SQLSTATE 42501) — a correction is superseded by a new row, never edited in place", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "42501" {
+			t.Errorf("app %s: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", c.what, code, err)
+		}
+	}
+
+	var value string
+	if err := h.super.QueryRow(ctx,
+		`SELECT value FROM extraction_field_corrections WHERE id = $1`, corrID).Scan(&value); err != nil {
+		t.Fatalf("read back the row after the refused UPDATE and DELETE: %v", err)
+	}
+	if value != efcValue {
+		t.Errorf("value after the refused UPDATE = %q, want unchanged %q", value, efcValue)
+	}
+
+	// Positive half, own tx: the same role CAN insert, so the two 42501s are about UPDATE and
+	// DELETE and not about the table being unreachable.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertCorrection(ctx, tx, insertID, h.tenantA, jobA, "vendor_name", "ACME LTD", efcMethod, efrRegion{})
+	}); err != nil {
+		t.Fatalf("INSERT by the same role: want success, got: %v", err)
+	}
+}
+
+// EFC-06 (AC-3): value cannot be empty and method is confined to four words. 'undone' is in
+// the positive half because it re-asserts the extractor's own reading and carries a value like
+// every other method — there is no value/method presence rule for it to satisfy.
+func TestRLS_ExtractionFieldCorrectionsConstraintSet(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFC-06/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_corrections WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(value, method string) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertCorrection(ctx, tx, id, h.tenantA, jobA, efcField, value, method, efrRegion{})
+		})
+	}
+
+	// Positive halves first, so the refusals below are about the values and not about the
+	// columns being unusable. 'pointed' is absent: EFC-08 owns it, since it needs a box.
+	for _, method := range []string{"typed", "chosen", "undone"} {
+		err := insert(efcValue, method)
+		if failIfUndefinedFieldCorrections(t, "INSERT method="+method, err) {
+			return
+		}
+		if err != nil {
+			t.Errorf("INSERT method=%q: want success, got: %v", method, err)
+		}
+	}
+
+	for _, c := range []struct {
+		what       string
+		value      string
+		method     string
+		constraint string
+	}{
+		{"an empty value", "", efcMethod, efcValueCheck},
+		// char_length counts a space, so the CHECK admits it and the field renders blank. Pinned
+		// rather than left unspecified: tightening this to btrim() is a decision, not a detail.
+		{"a whitespace-only value, which is NOT refused", " ", efcMethod, ""},
+		{"method 'edited', the obvious fifth word", efcValue, "edited", efcMethodCheck},
+		{"method 'Typed', wrong case", efcValue, "Typed", efcMethodCheck},
+		{"an empty method", efcValue, "", efcMethodCheck},
+	} {
+		err := insert(c.value, c.method)
+		if c.constraint == "" {
+			if err != nil {
+				t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514) on %s", c.what, c.constraint)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514 (check_violation): %v", c.what, code, err)
+			continue
+		}
+		if name := pgConstraint(err); name != c.constraint {
+			t.Errorf("INSERT with %s: constraint = %q, want %q — another CHECK fired, so this case is "+
+				"not testing its subject", c.what, name, c.constraint)
+		}
+	}
+}
+
+// EFC-07 (AC-4): a pointed correction supplies all five region columns, and the box is
+// normalised. Both refusals carry method='pointed', so _pointed_has_region is satisfied and
+// the constraint under test is the only one that can fire.
+func TestRLS_ExtractionFieldCorrectionsPointedRegionIsAllOrNone(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFC-07/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_corrections WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(r efrRegion) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertCorrection(ctx, tx, id, h.tenantA, jobA, efcField, efcValue, "pointed", r)
+		})
+	}
+
+	// The positive half: a complete, normalised box is accepted for a pointed correction.
+	err := insert(efrBox())
+	if failIfUndefinedFieldCorrections(t, "INSERT a complete pointed region", err) {
+		return
+	}
+	if err != nil {
+		t.Errorf("INSERT with all five region columns set: want success, got: %v", err)
+	}
+
+	// Each of the four bbox columns is addressable, so every conjunct of _region_complete's
+	// second arm is load-bearing. page NULL is EFC-08's subject, not this one: dropping it
+	// flips _pointed_has_region instead.
+	var halfWritten []struct {
+		what string
+		r    efrRegion
+	}
+	for _, c := range []struct {
+		name  string
+		clear func(*efrRegion)
+	}{
+		{"bbox_x0", func(r *efrRegion) { r.x0 = nil }},
+		{"bbox_y0", func(r *efrRegion) { r.y0 = nil }},
+		{"bbox_x1", func(r *efrRegion) { r.x1 = nil }},
+		{"bbox_y1", func(r *efrRegion) { r.y1 = nil }},
+	} {
+		r := efrBox()
+		c.clear(&r)
+		halfWritten = append(halfWritten, struct {
+			what string
+			r    efrRegion
+		}{"page set, " + c.name + " NULL", r})
+	}
+	if len(halfWritten) != 4 {
+		t.Fatalf("built %d half-written cases, want 4 — one per bbox column", len(halfWritten))
+	}
+	for _, c := range halfWritten {
+		assertCorrectionCheckFires(t, insert(c.r), c.what, efcRegionComplete)
+	}
+
+	// The un-normalised half: an unconverted US-Letter box in PDF points, plus each bound.
+	box := func(x0, y0, x1, y1 float64) efrRegion {
+		return efrRegion{page: efrPtr(1), x0: efrPtr(x0), y0: efrPtr(y0), x1: efrPtr(x1), y1: efrPtr(y1)}
+	}
+	for _, c := range []struct {
+		what string
+		r    efrRegion
+	}{
+		{"an absolute-point box (72,720,540,750)", box(72, 720, 540, 750)},
+		{"bbox_x0 below 0", box(-0.0001, 0.2, 0.3, 0.4)},
+		{"bbox_x1 above 1", box(0.1, 0.2, 1.0001, 0.4)},
+		{"bbox_x0 greater than bbox_x1", box(0.9, 0.2, 0.1, 0.4)},
+		{"bbox_y0 below 0", box(0.1, -0.0001, 0.3, 0.4)},
+		{"bbox_y1 above 1", box(0.1, 0.2, 0.3, 1.0001)},
+		{"bbox_y0 greater than bbox_y1", box(0.1, 0.9, 0.3, 0.2)},
+	} {
+		assertCorrectionCheckFires(t, insert(c.r), c.what, efcBboxNormalised)
+	}
+}
+
+// EFC-08 (AC-5): method and region presence agree in BOTH directions. The all-or-none region
+// CHECK alone admits both shapes below — a settled-by-hand correction carrying a box, and a
+// pointed one carrying none — which is why _pointed_has_region exists.
+func TestRLS_ExtractionFieldCorrectionsMethodAndRegionMustAgree(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EFC-08/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_field_corrections WHERE id = ANY($1)`, probes)
+	}()
+
+	insert := func(method string, r efrRegion) error {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return insertCorrection(ctx, tx, id, h.tenantA, jobA, efcField, efcValue, method, r)
+		})
+	}
+
+	// The two legal shapes first: every refusal below is about the pairing, not the columns.
+	err := insert("pointed", efrBox())
+	if failIfUndefinedFieldCorrections(t, "INSERT pointed with a box", err) {
+		return
+	}
+	if err != nil {
+		t.Errorf("INSERT method='pointed' with a complete box: want success, got: %v", err)
+	}
+	if err := insert("typed", efrRegion{}); err != nil {
+		t.Errorf("INSERT method='typed' with no region: want success, got: %v", err)
+	}
+
+	// Direction 1: a box on a method that never points at one. Both bbox_normalised and
+	// region_complete are satisfied by efrBox(), so only _pointed_has_region can fire.
+	for _, method := range []string{"typed", "chosen", "undone"} {
+		assertCorrectionCheckFires(t, insert(method, efrBox()),
+			"method='"+method+"' carrying a complete normalised box", efcPointedHasRegion)
+	}
+
+	// Direction 2: pointed with nothing to point at. All five region columns NULL satisfies
+	// region_complete's first arm, so again only _pointed_has_region can fire.
+	assertCorrectionCheckFires(t, insert("pointed", efrRegion{}),
+		"method='pointed' with every region column NULL", efcPointedHasRegion)
+
+	// A pointed correction carrying a bbox but no page violates region_complete AND
+	// pointed_has_region at once; the name order above is what decides that the second is the
+	// one reported. Measured, not assumed — the composition through `page` is the point, and
+	// EFC-07 is where region_complete is asserted alone.
+	noPage := efrBox()
+	noPage.page = nil
+	assertCorrectionCheckFires(t, insert("pointed", noPage),
+		"method='pointed' with a bbox but no page", efcPointedHasRegion)
+}
+
+// assertCorrectionCheckFires asserts err is a CHECK violation raised by the named constraint.
+// The name matters: SQLSTATE 23514 alone would not say which CHECK refused.
+func assertCorrectionCheckFires(t *testing.T, err error, what, constraint string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514) on %s", what, constraint)
+		return
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514 (check_violation): %v", what, code, err)
+		return
+	}
+	if name := pgConstraint(err); name != constraint {
+		t.Errorf("INSERT with %s: constraint = %q, want %q — another CHECK fired, so this case is not "+
+			"testing its subject", what, name, constraint)
+	}
+}

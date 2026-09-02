@@ -4,6 +4,8 @@ package extraction
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -59,5 +61,42 @@ func TestLineItemsResponse_EmptySetIsAnArrayNotNull(t *testing.T) {
 	populated := normalizeLines([]LineItemInput{{Description: &desc}})
 	if len(populated) != 1 || populated[0].Description != &desc {
 		t.Errorf("normalizeLines dropped or replaced a populated set: got %+v", populated)
+	}
+}
+
+// wireMirrors' goStructKeys reads a struct body with type\s+NAME\s+struct\s*\{([^{}]*)\} -- not
+// brace-balanced, so one inline anonymous struct truncates the match to ” and the mirror row
+// passes vacuously. This applies the same regex to the source and holds each type to its key
+// count, so a nested brace or a dropped field fails here rather than silently in TypeScript.
+func TestLineItemsWireTypes_HaveBraceFreeBodies(t *testing.T) {
+	src, err := os.ReadFile("handlers_lineitems.go")
+	if err != nil {
+		t.Fatalf("read handlers_lineitems.go: %v", err)
+	}
+	jsonKey := regexp.MustCompile("`json:\"([^\"]+)\"`")
+
+	for _, tc := range []struct {
+		name string
+		want int
+	}{
+		{"LineItemInput", 4},
+		{"LineItemsRequest", 1},
+		{"LineItemsResponse", 4},
+	} {
+		body := regexp.MustCompile(`type\s+` + tc.name + `\s+struct\s*\{([^{}]*)\}`).FindSubmatch(src)
+		if body == nil {
+			t.Errorf("goStructKeys' regex finds no body for %s -- a nested brace truncates the match and the wire mirror then compares nothing", tc.name)
+			continue
+		}
+		if got := len(jsonKey.FindAllSubmatch(body[1], -1)); got != tc.want {
+			t.Errorf("%s exposes %d json key(s) to goStructKeys, want %d", tc.name, got, tc.want)
+		}
+	}
+
+	// The control: the same regex reads '' for a type whose body does carry a nested brace, so
+	// the assertions above are exercising the regex's blind spot rather than always matching.
+	nested := []byte("type lixNested struct {\n\tInner struct{ A string } `json:\"inner\"`\n}\n")
+	if m := regexp.MustCompile(`type\s+lixNested\s+struct\s*\{([^{}]*)\}`).FindSubmatch(nested); m != nil && len(jsonKey.FindAllSubmatch(m[1], -1)) > 0 {
+		t.Errorf("the control matched a nested body, so this test cannot catch what it claims to")
 	}
 }

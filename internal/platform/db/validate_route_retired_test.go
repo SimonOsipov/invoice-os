@@ -135,13 +135,8 @@ func TestRLS_SingleDocumentValidateRouteIsNotRegistered(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// The other half of AC 3: "registers OR REFERENCES". The scan above reads
-// registrations only, so a comment or symbol naming the retired route reads
-// clean — which is how `evaluators.go`'s "for the M3-09 UI" and
-// `handlers.go`'s "contrast ValidateHandler's identity-first-401 above"
-// survived the retirement commit.
-// ---------------------------------------------------------------------------
+// The scan above reads route registrations only; a comment or symbol naming
+// the retired route reads clean. The text scan below covers that half.
 
 // vrGoFiles is every .go file in the repo bar this one, which carries the
 // needles by necessity.

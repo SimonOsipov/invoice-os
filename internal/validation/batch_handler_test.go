@@ -3,8 +3,7 @@
 // in-process Test Specs, driven with an injected stub loader closure (no
 // DB) plus the REAL validation.Engine (NewDefaultEngine -- Evaluate itself
 // is already-correct, already-shipped code; only the batch WIRING around it
-// is new for this subtask). Driven the same way batch_handler_test.go's own
-// helpers are: an injected stub loader closure plus the real NewDefaultEngine.
+// is new for this subtask).
 //
 // These specs are written against BatchValidateHandler as the story's plan
 // specifies it (single load per batch, ≤5,000 items, ≤16 MiB body, one

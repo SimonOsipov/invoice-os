@@ -157,8 +157,9 @@ func loadActiveRuleSetTx(ctx context.Context, tx pgx.Tx) (RuleSet, error) {
 // the active row carries no rules.
 //
 // Signature and tenant wrap are unchanged (M4-04-03): this remains the
-// identity-carrying, tenant-scoped loader. It now also populates rs.ID -- the versionID it always scanned
-// and, until M4-04-03, silently discarded ([uuid-stamp]).
+// identity-carrying, tenant-scoped loader. It now also populates rs.ID -- the
+// versionID it always scanned and, until M4-04-03, silently discarded
+// ([uuid-stamp]).
 func (s *Store) LoadActiveRuleSet(ctx context.Context) (RuleSet, error) {
 	var rs RuleSet
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

@@ -98,7 +98,7 @@ func TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed(t *testing.T) {
 			"loader fails open identically to the batch path if this loader is unguarded", versionID, version, rs)
 	}
 	if !errors.Is(err, ErrNoActiveRuleSet) {
-		t.Errorf("errors.Is(err, ErrNoActiveRuleSet) = false (err = %v) -- ValidateHandler's statusForErr "+
+		t.Errorf("errors.Is(err, ErrNoActiveRuleSet) = false (err = %v) -- statusForErr "+
 			"keys off ErrNoActiveRuleSet to answer 503", err)
 	}
 	if !errors.Is(err, ErrEmptyRuleSet) {

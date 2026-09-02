@@ -57,8 +57,8 @@ func main() {
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler(store.ToggleRule, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
-	// calls to validate a whole batch in one request (M4-04-03). Unlike the two
-	// routes above, it carries NO identity: it is authenticated as a fleet PEER
+	// calls to validate a whole batch in one request (M4-04-03). Unlike the
+	// route above, it carries NO identity: it is authenticated as a fleet PEER
 	// via the shared S2S_TOKEN ([s2s-peer-auth]) and reads no tenant, because
 	// rule evaluation is a pure function of (payload, active global rule-set)
 	// and there is no tenant-scoped data behind it ([s2s-identity]). Hence

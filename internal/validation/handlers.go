@@ -120,7 +120,7 @@ type batchResponse struct {
 // the single rule-set version they were all evaluated against ([batch-wire]).
 //
 // It reads NO tenant. It never touches X-Tenant-ID and never calls
-// auth.IdentityFromContext ([s2s-identity]) -- contrast ValidateHandler's
+// auth.IdentityFromContext ([s2s-identity]) -- contrast ToggleHandler's
 // identity-first-401 above. Evaluation is a pure function of (payload, active
 // global rule-set): there is no tenant to assert and no tenant-scoped data
 // behind this endpoint to leak, so the trust boundary does not widen. Peer
@@ -129,8 +129,7 @@ type batchResponse struct {
 //
 // loadRuleSet is injected (rather than reaching for a Store) so the single-
 // load-per-batch property is provable with a counting fake, and so this file
-// keeps its no-DB-import shape -- the same discipline as ValidateHandler's
-// loadAndEval closure. main.go binds it to Store.LoadActiveRuleSetGlobal.
+// keeps its no-DB-import shape. main.go binds it to Store.LoadActiveRuleSetGlobal.
 // eng is the shipped, stateless *Engine, reused across every item.
 //
 // Order of operations is load-bearing:

@@ -951,6 +951,9 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
       ['frontend/app/src/App.tsx', APP_TSX],
     ]
 
+    // Floor 0: a truncated file list would report a false clean, so pin its length.
+    expect(files.length, 'app files scanned (a shortened walk reports a false clean)').toBe(4)
+
     // Floor 1: every file must actually have been read.
     const sources = new Map<string, string>()
     for (const [label, path] of files) {
@@ -988,9 +991,14 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const NAV_TOKEN = new RegExp('\\bNAV_VALIDATION\\b')
     const VIEW_LITERAL = new RegExp(`['"]validation['"]`)
 
+    // Every line here is a shape the four scanned files really carry. The quoted
+    // 'validationApi' and "validation.rule.enabled" entries are the load-bearing ones:
+    // without them a regex loosened to /['\"]validation/ still reads clean.
     const FIXTURE = [
       "import { NAV_APPROVALS } from './glyphs'",
       "import { validateInvoice } from './lib/validationApi'",
+      "import { severityStyle } from './validationApi'",
+      "const MODULE = 'validationApi'",
       "export type View = 'dashboard' | 'approvals'",
       "{view === 'approvals' && <ApprovalsView ctx={ctx} />}",
     ].join('\n')
@@ -1003,5 +1011,30 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const POSITIVE = "export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation' }"
     expect(NAV_TOKEN.test(POSITIVE)).toBe(true)
     expect(VIEW_LITERAL.test(POSITIVE)).toBe(true)
+  })
+
+  // The two tests above can only see the deletion going too FAR SHORT, never too far. The
+  // audit vocabulary carries its own unrelated 'validation' domain, so an over-broad sweep
+  // would silently drop live audit filters -- and the pinned scan scope would still read
+  // clean. Pin the survivors instead.
+  it('rmv01_theSweepDidNotReachTheAuditValidationDomain -- audit vocabulary keeps its own \'validation\' domain', () => {
+    const AUDIT_FILES = [
+      'frontend/app/src/lib/auditVocabulary.ts',
+      'frontend/app/src/components/AuditFilterCard.tsx',
+    ] as const
+    expect(AUDIT_FILES.length, 'audit files pinned (a shortened walk reports a false clean)').toBe(2)
+
+    for (const rel of AUDIT_FILES) {
+      const src = readFileSync(join(REPO_ROOT, rel), 'utf8')
+      expect(src.length, `${rel} has no content to scan`).toBeGreaterThan(0)
+      expect(/['"]validation['"]/.test(src), `${rel} lost its audit 'validation' domain -- the RMV-01 sweep over-reached`).toBe(true)
+    }
+
+    // The two event keys the domain exists to label. Pinned by value, because a domain
+    // string surviving while its events left would still satisfy the check above.
+    const vocab = readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/auditVocabulary.ts'), 'utf8')
+    for (const key of ['validation.rule.enabled', 'validation.rule.disabled']) {
+      expect(vocab.includes(key), `auditVocabulary.ts lost the ${key} event`).toBe(true)
+    }
   })
 })

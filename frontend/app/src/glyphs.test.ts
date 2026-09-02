@@ -48,7 +48,7 @@ function glyphSize(def: glyphs.NavDef): number | undefined {
 describe('nav glyph sizes (task-327 AC-1)', () => {
   it('every NAV_* constant glyph renders at the shared nav icon size', () => {
     // Keyed by def.id rather than a plain array so a mismatch's toEqual diff names WHICH
-    // nav item is wrong (e.g. "clients"/"validation") instead of a bare index.
+    // nav item is wrong (e.g. "clients"/"reports") instead of a bare index.
     const actual = Object.fromEntries(NAV_DEFS.map((def) => [def.id, glyphSize(def)]))
     const expected = Object.fromEntries(NAV_DEFS.map((def) => [def.id, EXPECTED_NAV_ICON_SIZE]))
     expect(actual).toEqual(expected)

@@ -100,10 +100,7 @@ export const NAV_WORKFLOWS: NavDef = {
   label: 'Workflows',
   glyph: <Icon paths={['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']} size={17} />,
 }
-// list-checks. Rules sits directly after Workflows, which is where the brief places
-// it: the Workflows nav item now exists (added with the approval-policy screen), so
-// the old fallback position — directly after Validation, for want of a Workflows
-// item — no longer applies.
+// list-checks. Rules sits directly after Workflows, which is where the brief places it.
 export const NAV_RULES: NavDef = {
   id: 'rules',
   label: 'Rules',

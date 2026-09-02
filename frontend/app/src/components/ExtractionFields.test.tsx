@@ -1857,3 +1857,40 @@ describe('the point button, as an affordance', () => {
     )
   })
 })
+
+// ==========================================================================================
+// QA additions (Stage 4). T11 asserts only that no line name reaches this pane's prefix. A
+// filter that dropped the line cells entirely would pass it, so this asserts the other half.
+// ==========================================================================================
+
+describe('the line-item field filter, both directions (EXTR-13-07)', () => {
+  it('hands every line cell to the grid while the header rows stay put', () => {
+    const header = tenFields()
+    const lineCells = [1, 2, 4].flatMap((i) =>
+      LINE_ROLES.map((role) => mkField({ name: lineFieldName(i, role), value: '1.00' })),
+    )
+    const onSelect = vi.fn()
+    render(
+      fieldsPane({ fields: [...header, mkField({ name: 'line_items', value: null, region: null }), ...lineCells], onSelect }),
+    )
+
+    // Both floors: the header half is populated and the line half is not empty.
+    expect(rowIds().length, 'the header pane rendered nothing to keep').toBe(HEADER_FIELDS.length)
+    expect(lineCells.length, 'the fixture carries no line cell to hand over').toBeGreaterThan(0)
+
+    const rows = document.querySelectorAll('[data-testid^="line-item-row-"]')
+    expect(rows, 'the filtered line cells reached neither pane').toHaveLength(3)
+    expect(screen.queryByTestId('line-item-empty'), 'the grid claims an empty extraction while holding rows').toBeNull()
+
+    // The wire's hole at index 3 closes in ordinal terms only -- the third row keeps index 4's
+    // own name, which is what the document highlight resolves through.
+    fireEvent.click(screen.getByTestId('line-item-cell-3-quantity'))
+    expect(onSelect.mock.calls, "the third row renumbered itself instead of keeping wire index 4's name").toEqual([
+      [lineFieldName(4, 'quantity')],
+    ])
+    expect(
+      (screen.getByTestId('line-item-input-3-quantity') as HTMLInputElement).getAttribute('aria-label'),
+      'the third row is not labelled by its ordinal',
+    ).toBe('Line 3 quantity')
+  })
+})

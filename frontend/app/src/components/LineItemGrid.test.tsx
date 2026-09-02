@@ -448,3 +448,190 @@ describe('T15 no hidden reasons, no disabled controls', () => {
     expect(gridEl().querySelectorAll('[title]'), 'the empty grid hides a reason in a tooltip').toHaveLength(0)
   })
 })
+
+// ==========================================================================================
+// QA additions (Stage 4). Adversarial, edge and negative arms the red phase did not carry.
+// ==========================================================================================
+
+/** T8 asserts the moved VALUE and the moved NAME. This captures the draft so the rest of the
+ *  cell -- the region the document highlight resolves through -- can be read too. */
+function CaptureHarness({ initial, sink }: { initial: LineRow[]; sink: { rows: LineRow[] } }) {
+  const [rows, setRows] = useState(initial)
+  sink.rows = rows
+  return (
+    <LineItemGrid
+      rows={rows}
+      wireRows={initial}
+      subtotal={null}
+      selected={null}
+      onSelectCell={() => {}}
+      onEditCell={(at, role, value) => setRows((r) => editCellAt(r, at, role, value))}
+      onAddRow={() => setRows((r) => addRow(r))}
+      onRemoveRow={(at) => setRows((r) => removeRow(r, at))}
+      onRemapRoles={(from, to) => setRows((r) => remapRoles(r, from, to))}
+    />
+  )
+}
+
+describe('QA-A1 a remap carries the region, not only the value', () => {
+  it('moves the whole cell so the document highlight follows the text', () => {
+    // A spec that reads the value alone passes on the bug that leaves the moved text pointing
+    // at the old column's box.
+    const row = mkRow(5, { quantity: '7', unit_price: '100.00' }, { quantity: REGION_A, unit_price: REGION_B })
+    const sink = { rows: [] as LineRow[] }
+    render(<CaptureHarness initial={[row]} sink={sink} />)
+
+    expect(sink.rows[0].cells.quantity.region, 'the floor: quantity starts on its own region').toBe(REGION_A)
+    expect(sink.rows[0].cells.unit_price.region, 'the floor: unit_price starts on its own region').toBe(REGION_B)
+    expect(REGION_A, 'the two fixtures must differ or a swap cannot be told from a no-op').not.toEqual(REGION_B)
+
+    fireEvent.change(roleSelect('quantity'), { target: { value: 'unit_price' } })
+
+    expect(inputAt(1, 'quantity').value, 'the floor: the value moved at all').toBe('100.00')
+    expect(sink.rows[0].cells.quantity.region, "the moved value kept the old column's region").toBe(REGION_B)
+    expect(sink.rows[0].cells.unit_price.region, "the moved value kept the old column's region").toBe(REGION_A)
+    expect(sink.rows[0].cells.quantity.name, 'the wire name did not travel with its cell').toBe(
+      lineFieldName(5, 'unit_price'),
+    )
+  })
+})
+
+describe('QA-A2 the arithmetic flag at its boundary', () => {
+  it('does not flag a row that misses by exactly the tolerance, and does flag the next penny', () => {
+    // exceedsTolerance is strictly greater (lineItems.ts): 0.01 is inside, 0.02 is not.
+    const inside = mkRow(1, { line_total: '200.01' }) // 2 * 100.00, off by 0.01
+    render(itemGrid({ rows: [inside], wireRows: [inside] }))
+    expect(rowsOf().length, 'the row did not render -- the absence below is vacuous').toBe(1)
+    expect(flagAt(1), 'a row inside the tolerance was flagged').toBeNull()
+    cleanup()
+
+    const outside = mkRow(1, { line_total: '200.02' })
+    render(itemGrid({ rows: [outside], wireRows: [outside] }))
+    expect(flagAt(1), 'a row outside the tolerance was not flagged').toBeTruthy()
+  })
+
+  it('leaves an unparseable row unflagged rather than calling it broken', () => {
+    // rowArithmetic returns 'unchecked', not 'flagged'; a component testing `!== 'ok'` would
+    // condemn a row it never checked.
+    const unchecked = mkRow(1, { quantity: '' })
+    const broken = mkRow(2, { quantity: '9' })
+    render(itemGrid({ rows: [unchecked, broken], wireRows: [unchecked, broken] }))
+
+    const flags = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="line-item-flag-"]'))
+    expect(flags.map((f) => f.dataset.testid), 'an unchecked row was condemned with the broken one').toEqual([
+      'line-item-flag-2',
+    ])
+  })
+})
+
+describe('QA-A3 the reachable empty state', () => {
+  it('removing the last row lands on the empty panel, not a silent empty table', () => {
+    // T9 renders `rows: []` directly. This proves a person can reach that branch, which is the
+    // state Core AC 8 exists for.
+    render(<Harness initial={[mkRow(1)]} />)
+    expect(rowsOf().length, 'the floor: one row before the removal').toBe(1)
+    expect(screen.queryByTestId('line-item-empty'), 'the empty panel showed while a row was present').toBeNull()
+
+    fireEvent.click(removeBtn(1))
+
+    const empty = screen.getByTestId('line-item-empty')
+    expect(empty.textContent, 'the first sentence is missing').toContain('We found no line items on this document.')
+    expect(empty.textContent, 'the second sentence is missing').toContain(
+      'An invoice cannot be filed until it has at least one line, so add one here.',
+    )
+    expect(gridEl().querySelectorAll('table'), 'an empty table survived the last removal').toHaveLength(0)
+    expect(screen.getAllByTestId('line-item-add'), 'the empty state offers no way back').toHaveLength(1)
+  })
+
+  it('adding from the empty state renders an editable row', () => {
+    render(<Harness initial={[]} />)
+    expect(screen.getByTestId('line-item-empty'), 'the floor: the empty panel is showing').toBeTruthy()
+
+    fireEvent.click(addBtn())
+
+    expect(rowsOf().length, 'Add from the empty state produced no row').toBe(1)
+    expect(screen.queryByTestId('line-item-empty'), 'the empty panel outlived the row it asked for').toBeNull()
+    for (const role of LINE_ROLES) expect(inputAt(1, role).value, `the new row's ${role} is not blank`).toBe('')
+  })
+})
+
+describe('QA-A4 selection from the control a person actually clicks', () => {
+  it('clicking the input reaches the same seam the cell does', () => {
+    const rows = [mkRow(1), mkRow(2)]
+    const onSelectCell = vi.fn()
+    render(<Harness initial={rows} spies={{ onSelectCell }} />)
+
+    fireEvent.click(inputAt(2, 'line_total'))
+    expect(onSelectCell.mock.calls, 'a click on the input itself selected nothing').toEqual([
+      [lineFieldName(2, 'line_total')],
+    ])
+  })
+
+  it('typing in a cell never selects, so an edit does not scroll the document away', () => {
+    const rows = [mkRow(1)]
+    const onSelectCell = vi.fn()
+    render(<Harness initial={rows} spies={{ onSelectCell }} />)
+
+    fireEvent.change(inputAt(1, 'quantity'), { target: { value: '4' } })
+    expect(inputAt(1, 'quantity').value, 'the floor: the keystroke landed').toBe('4')
+    expect(onSelectCell.mock.calls, 'a keystroke fired a selection').toEqual([])
+  })
+})
+
+describe('QA-A5 the sum line over an added row', () => {
+  it('counts a typed row into the total it reports', () => {
+    const rows = [mkRow(1, { line_total: '100.00' })]
+    render(<Harness initial={rows} subtotal="100.00" />)
+    expect(screen.queryByTestId('line-item-sum'), 'the floor: an agreeing sum says nothing').toBeNull()
+
+    fireEvent.click(addBtn())
+    fireEvent.change(inputAt(2, 'line_total'), { target: { value: '25.00' } })
+
+    const sum = screen.getByTestId('line-item-sum')
+    expect(sum.textContent, "the typed row's total was not counted").toContain('125.00')
+    expect(sum.textContent, 'the printed subtotal is missing').toContain('100.00')
+  })
+})
+
+// ==========================================================================================
+// QA-DEFECT-01 (Stage 4). RED: the changed marker compares a draft row to its POSITIONAL wire
+// counterpart, so a removal shifts every later row onto the wrong wire row. LineRow.key is
+// `i{wireIndex}` for a parsed row and `n{n}` for an added one, so looking the counterpart up by
+// key instead of by index fixes both arms below.
+// ==========================================================================================
+
+describe('QA-DEFECT-01 the changed marker survives a removal', () => {
+  it('does not mark a row that merely shifted position', () => {
+    const rows = [mkRow(1, { description: 'Alpha' }), mkRow(2, { description: 'Beta' }), mkRow(3, { description: 'Gamma' })]
+    render(<Harness initial={rows} />)
+    expect(rowsOf().length, 'the floor: three rows before the removal').toBe(3)
+    expect(
+      document.querySelectorAll('[data-testid^="line-item-marker-"]'),
+      'the floor: nothing is marked before anything is touched',
+    ).toHaveLength(0)
+
+    fireEvent.click(removeBtn(1))
+
+    expect(rowsOf().length, 'the removal did not land').toBe(2)
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="line-item-marker-"]')).map(
+        (e) => e.dataset.testid,
+      ),
+      'rows nobody edited wear the corrected marker after a removal',
+    ).toEqual([])
+  })
+
+  it('keeps marking a cell a person really did change', () => {
+    const wire = [mkRow(1, { quantity: '5' }), mkRow(2, { quantity: '9' })]
+    const edited = [
+      wire[0],
+      { ...wire[1], cells: { ...wire[1].cells, quantity: { ...wire[1].cells.quantity, value: '5' } } },
+    ]
+    render(<Harness initial={edited} wireRows={wire} />)
+    expect(markerAt(2, 'quantity'), 'the floor: the edit is marked before the removal').toBeTruthy()
+
+    fireEvent.click(removeBtn(1))
+
+    expect(markerAt(1, 'quantity'), 'the edited cell lost its marker when an unrelated row was removed').toBeTruthy()
+  })
+})

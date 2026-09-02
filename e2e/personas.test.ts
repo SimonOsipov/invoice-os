@@ -64,7 +64,6 @@ const EXPECTED_NAV_ONLY = new Set<string>([
 const EXPECTED_DRIVES_MIN = new Set<string>([
   'inhouse:NAV_DASHBOARD',
   'inhouse:NAV_INVOICES',
-  'inhouse:NAV_VALIDATION',
   'inhouse:NAV_WORKFLOWS', // Core AC 4
   'inhouse:NAV_RULES',
   'inhouse:NAV_APPROVALS', // Core AC 3
@@ -722,7 +721,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('row 17 (G6b) -- the named drives minimum holds', () => {
-    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(10)
+    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(9)
 
     const actualDrives = new Set<string>()
     for (const id of PERSONA_IDS) {
@@ -903,7 +902,6 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(SURFACES.map((s) => s.navConst), 'the app SPA nav catalogue is unchanged by EXTR-09').toEqual([
       'NAV_DASHBOARD',
       'NAV_INVOICES',
-      'NAV_VALIDATION',
       'NAV_WORKFLOWS',
       'NAV_RULES',
       'NAV_APPROVALS',
@@ -915,7 +913,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     ])
 
     const cells = PERSONA_IDS.flatMap((id) => PERSONAS[id].coverage ?? [])
-    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(20)
+    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(18)
 
     // The fork's own vocabulary, in either half of the map. `Import` is deliberately absent
     // from this list: the wizard has always been reached from Invoices, and no surface is
@@ -936,10 +934,8 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
 
   // --- RMV-01-01 (task-816) -- the Validation nav surface is gone from the app -----------
   //
-  // Authored RED: glyphs.tsx and Sidebar.tsx still carry NAV_VALIDATION today, so this row
-  // fails on its own assertion until the executor lands the deletion. The two defences
-  // (control needle + population floor) mirror A05-8's, because an absence scan whose file
-  // walk or regex broke would otherwise report a clean zero.
+  // The two defences (control needle + population floor) mirror A05-8's, because an absence
+  // scan whose file walk or regex broke would otherwise report a clean zero.
   it('rmv01_navValidationIsGoneFromTheAppSurface -- no NAV_VALIDATION token and no \'validation\' literal survives in the four app files', () => {
     // Both scans built from the same two shapes, so a control needle exercises the exact
     // pattern the absence assertion relies on.

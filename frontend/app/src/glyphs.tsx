@@ -66,7 +66,7 @@ export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 
 // idiom exactly (same 13 / 2.4 pair), one column of dots instead of two.
 export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']} size={13} strokeWidth={2.4} />
 
-export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'audit' | 'settings'; label: string; glyph: ReactNode }
+export type NavDef = { id: 'dashboard' | 'invoices' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'audit' | 'settings'; label: string; glyph: ReactNode }
 
 // Every NAV_* glyph renders at this size; the icon column is sized to fit it with room to
 // spare so label x-offset never depends on which glyph is in play (Sidebar.tsx:234).
@@ -92,13 +92,6 @@ export const NAV_CLIENTS: NavDef = {
   id: 'clients',
   label: 'Clients',
   glyph: <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={NAV_ICON_SIZE} />,
-}
-// Forked from shieldGlyph at NAV_ICON_SIZE; shieldGlyph itself stays at 16 for its other
-// three consumers ([nav-glyphs-forked-not-resized]).
-export const NAV_VALIDATION: NavDef = {
-  id: 'validation',
-  label: 'Validation',
-  glyph: <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={NAV_ICON_SIZE} />,
 }
 // git-branch. The approval-policy builder — the prototype's own Workflows glyph,
 // carried over unchanged so the two surfaces read as the same screen.

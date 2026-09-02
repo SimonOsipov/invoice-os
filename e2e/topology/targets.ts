@@ -87,10 +87,9 @@ export const FIRM_PERSONA = appPersona('firm')
 export const INHOUSE_PERSONA = appPersona('inhouse')
 
 // The seeded, ACTIVE MBS rule-set that the live gateway evaluates (v2 since M4-04-01 --
-// migrations/20260716185106_rule_set_v2.sql). The "has-violations" preset
-// (invoicePayload.ts PRESETS) fires a subset of these — a robust sample rather than all
-// 19 — plus the rule-set version the engine tags every violation row with, which
-// topology.spec.ts asserts against a live rendered table cell.
+// migrations/20260716185106_rule_set_v2.sql). A robust sample of rule keys rather than all
+// 19, plus the rule-set version the engine tags every violation row with, which
+// invoice-surfaces.spec.ts asserts against a live rendered table cell.
 //
 // The version comes from the shared ../rule-set module, NOT a literal here: it is the one
 // place the e2e package names it ([e2e-active-version]).

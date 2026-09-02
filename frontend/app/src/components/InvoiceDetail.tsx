@@ -117,7 +117,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // Own component (not extra hooks bolted onto InvoiceDetail's conditional-return body)
 // because InvoiceDetail's `target.kind === 'imported'` branch returns before this point —
 // calling useAsync/useState after that return would break the rules of hooks. Mirrors
-// ClientsView/ValidationView: gatewayBase() + useAsync + a Loading/ErrorState/ready
+// ClientsView: gatewayBase() + useAsync + a Loading/ErrorState/ready
 // ladder, zero network when no gateway is configured.
 // One editable line row (INVED-01-07). LineItemEditInput-shaped but with '' where the wire
 // carries null, because a controlled React input holds '' and never null. Deliberately no
@@ -127,8 +127,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax', string>
 
 // Six columns: description / qty / unit / amount / tax / remove. Declared once so the
-// header row and the body rows can never drift apart (ValidationView.tsx repeats the
-// literal in both places; one const is the same shape without that hazard).
+// header row and the body rows can never drift apart.
 //
 // Widths are budgeted against the row's REAL content box, which is narrow: this table
 // sits in the left cell of the page's `1fr 340px` split, so at a viewport V the row has
@@ -179,7 +178,7 @@ const REJECT_REASON_ID = 'reject-blocked-reason-text'
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
-  // Same `base ? … : …` narrowing as ClientsView/ValidationView ([A-e]/[A-m]) —
+  // Same `base ? … : …` narrowing as ClientsView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
   const detail = useAsync<InvoiceDetailRecord>(
     () => (base ? getInvoice(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
@@ -1397,8 +1396,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 // current `inv` prop (fresh on every parent re-render), so a later edit's patch is computed
 // against the latest saved content even though the fields were seeded once.
 //
-// Reuses ValidationView.tsx's field-label + `.pf-input` markup convention throughout, and
-// its line-item repeater (:118-151) for the table, remove ✕ and dashed add chip.
+// Field labels and `.pf-input` markup follow the app's shipped form convention; the
+// table, remove ✕ and dashed add chip are the line-item repeater idiom.
 function InvoiceEditBody({
   ctx,
   base,
@@ -1611,9 +1610,8 @@ function InvoiceEditBody({
         </div>
 
         {/* Line items, editable ([edit-ux], Core AC #2 — the read-only table above has no
-            equivalent). Markup follows ValidationView.tsx:115-151, the repo's shipped
-            line-item repeater. `key={i}` matches it too: every input is fully controlled
-            from `rows`, so a removal re-renders correct values regardless of key identity.
+            equivalent). `key={i}` is safe: every input is fully controlled from `rows`, so a
+            removal re-renders correct values regardless of key identity.
             No per-line rejection flags here ([line-level-flags-not-mapped]) — reasons whose
             MBS path points at a line still render in full on the rejection card. `line_tax`
             gets a column here only; widening the READ-ONLY table is out of scope, so a

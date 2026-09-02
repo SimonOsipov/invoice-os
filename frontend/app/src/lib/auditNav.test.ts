@@ -26,7 +26,6 @@ const NAV_ID: Record<string, string> = {
   NAV_DASHBOARD: 'dashboard',
   invoicesItem: 'invoices',
   approvalsItem: 'approvals',
-  NAV_VALIDATION: 'validation',
   NAV_RULES: 'rules',
   NAV_CUSTOMERS: 'customers',
   NAV_REPORTS: 'reports',

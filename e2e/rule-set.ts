@@ -14,16 +14,12 @@
 // Transitive consumers, via topology/targets.ts's VALIDATION_EXPECTED.ruleSetVersion --
 // each asserts it against a LIVE RENDERED browser table cell, not an API response body,
 // so each is exactly the positional-pin risk this header exists to flag:
-//   - topology/validation.spec.ts      -- the M3-09 playground's ViolationsTable.
 //   - topology/invoice-surfaces.spec.ts -- the M4-09 invoice-detail surface's OWN mount
 //                                 of the same ViolationsTable component (added
 //                                 INVCR-01-13/D8 -- it resolved VALIDATION_EXPECTED.
 //                                 ruleSetVersion at two call sites for every version this
 //                                 module has ever named, but was never added to this list
 //                                 until now [positional-pins-are-invisible]).
-//   - topology/persona-surfaces.spec.ts -- the in-house persona's validation-playground
-//                                 round trip's own ViolationsTable mount -- same risk,
-//                                 absent from this list until BUG-05-05.
 // All of the above are steps of the one gated `e2e` job in dev-env.yml, so a version
 // publish breaks them together -- and one constant fixes them together.
 //

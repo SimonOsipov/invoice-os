@@ -599,9 +599,9 @@ describe('an empty fields array', () => {
     expect(panel.style.border).toBe('1px dashed var(--line-3)')
     expect(panel.style.background).toBe('transparent')
 
-    // CreateForm.tsx:132 and ValidationView.tsx:148 both carry `pf-chip`, whose
-    // `border-radius: var(--radius-pill) !important` (app-layer.css:275) overrides their own
-    // inline radius. Copying either brings the override with it.
+    // CreateForm.tsx:132 carries `pf-chip`, whose
+    // `border-radius: var(--radius-pill) !important` (app-layer.css:275) overrides its own
+    // inline radius. Copying it brings the override with it.
     for (const forced of RADIUS_FORCING) {
       expect(classesOf(panel), `the empty panel carries ${forced}`).not.toContain(forced)
     }

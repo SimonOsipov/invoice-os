@@ -26,7 +26,6 @@ const EXPECTED_NAV_ICON_SIZE = 17
 const NAV_DEFS: glyphs.NavDef[] = [
   glyphs.NAV_DASHBOARD,
   glyphs.NAV_INVOICES,
-  glyphs.NAV_VALIDATION,
   glyphs.NAV_WORKFLOWS,
   glyphs.NAV_RULES,
   glyphs.NAV_CLIENTS,
@@ -97,7 +96,6 @@ describe('nav labels stay byte-identical to main (task-327 out-of-scope guard, A
     const EXPECTED_LABELS: Record<string, string> = {
       dashboard: 'Overview',
       invoices: 'Invoices',
-      validation: 'Validation',
       workflows: 'Workflows',
       rules: 'Rules',
       clients: 'Clients',

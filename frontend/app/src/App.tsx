@@ -93,7 +93,6 @@ import { InvoicesList } from './components/InvoicesList'
 import { CreateFlow } from './components/CreateFlow'
 import { InvoiceDetail } from './components/InvoiceDetail'
 import { ClientsView } from './components/ClientsView'
-import { ValidationView } from './components/ValidationView'
 import { RulesView } from './components/RulesView'
 import { WorkflowsView } from './components/WorkflowsView'
 import { CustomersView } from './components/CustomersView'
@@ -1450,7 +1449,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           {view === 'create' && <CreateFlow ctx={ctx} />}
           {view === 'detail' && <InvoiceDetail ctx={ctx} />}
           {view === 'clients' && <ClientsView ctx={ctx} />}
-          {view === 'validation' && <ValidationView ctx={ctx} />}
           {view === 'rules' && <RulesView ctx={ctx} />}
           {view === 'workflows' && <WorkflowsView ctx={ctx} />}
           {view === 'customers' && <CustomersView ctx={ctx} />}

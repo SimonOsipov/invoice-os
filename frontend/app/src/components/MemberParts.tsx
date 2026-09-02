@@ -53,8 +53,8 @@ const CHIP_TONE: Record<MemberStatus, { background: string; color: string; borde
   // box, since `box-sizing: border-box` means the dashed variant's border eats 2px.
   active: { background: 'var(--slate-800)', color: 'var(--text-on-dark)', border: '1px solid transparent' },
   // §10.1. The app's dashed idiom is always `1px dashed var(--line-3)` over a transparent
-  // ground — empty-state cards (CustomersView.tsx:134), add chips (ValidationView.tsx:148,
-  // InvoiceDetail.tsx:934), dropzones — and never over a fill, so the fill goes with it.
+  // ground — empty-state cards (CustomersView.tsx:134), add chips (InvoiceDetail.tsx:934),
+  // dropzones — and never over a fill, so the fill goes with it.
   invited: { background: 'transparent', color: 'var(--fg-3)', border: '1px dashed var(--line-3)' },
   // §10.2's red tint. Double-encoded with the SUSPENDED pill on purpose: AC#2 spells out
   // chip AND pill for both non-active states, so the redundancy is the specification.

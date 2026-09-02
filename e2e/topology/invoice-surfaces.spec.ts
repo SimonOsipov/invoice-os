@@ -1,7 +1,6 @@
 // M4-09-06 (task-187): the focused topology e2e for the live invoice list +
-// detail surfaces (M4-09-04/M4-09-05) -- mirrors M3-09's validation-playground
-// pattern (topology.spec.ts: firm-persona sign-in -> wait for the /v1/me
-// verified marker -> drive the live surface). NOT the M4-14 demo script
+// detail surfaces (M4-09-04/M4-09-05) -- firm-persona sign-in -> wait for the
+// /v1/me verified marker -> drive the live surface. NOT the M4-14 demo script
 // ([focused-e2e-topology], out of scope per the M4-09 story).
 //
 // db/seed.dev.sql now seeds 31 invoices, but only across 6 of its 10 curated
@@ -14,14 +13,12 @@
 // M4-14-01) -- with retries:1 in CI, against the same shared firm-persona
 // tenant every other topology spec also drives).
 //
-// Fixture data mirrors e2e/api/fixtures.ts's badInvoice/validInvoice shapes
-// (verified against the seeded v1+v2 rule set, migrations/
-// 20260711121327_seed_mbs_v1.sql + 20260716185106_rule_set_v2.sql), but built
-// as this service's own FLAT wire shape (supplier_tin/vat/... strings, not the
-// nested /v1/validate envelope) -- internal/invoice/payload.go's MBSPayload is
-// what nests them again before 04 evaluates, so a flat createInvoice + POST
-// .../validate round-trips the identical verdict fixtures.ts's BAD_INVOICE_KEYS
-// pins for the nested path.
+// Fixture data is verified against the seeded v1+v2 rule set (migrations/
+// 20260711121327_seed_mbs_v1.sql + 20260716185106_rule_set_v2.sql) and built as
+// this service's own FLAT wire shape (supplier_tin/vat/... strings) --
+// internal/invoice/payload.go's MBSPayload nests it again before the engine
+// evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
+// fixtures.ts's BAD_INVOICE_KEYS pins.
 import { test, expect, type Page, type Request } from '@playwright/test'
 import {
   login,
@@ -669,8 +666,8 @@ interface MixedImportResponse {
 // Dashboard/Clients carry no data-testid ([no-testids-on-portfolio-dashboard],
 // grep-verified) -- selected below by role/exact-text/CSS class, the same idiom
 // day30.spec.ts/topology.spec.ts already used for those surfaces before this story split
-// them into auth.spec.ts/validation.spec.ts (Dashboard/Clients coverage stayed here, in
-// this file's Day-60 arc).
+// them into auth.spec.ts (Dashboard/Clients coverage stayed here, in this file's
+// Day-60 arc).
 test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-inline -> re-validate-to-green -> dashboard rollup updates', async ({
   page,
 }) => {

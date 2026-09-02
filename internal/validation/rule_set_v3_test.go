@@ -401,12 +401,11 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 // migration is not deployed; see this task's PR/story notes for the deferral to task-292).
 // ---------------------------------------------------------------------
 
-// TestV3ViolationOrderStableUnderPathSort (AC-7 hazard): topology/validation.spec.ts:70
-// and topology/invoice-surfaces.spec.ts:344 both read `firstRow.locator('td').last()`,
-// which ViolationsTable.tsx (frontend/app/src/components/ViolationsTable.tsx) renders
-// as the SAME `ruleSetVersion` prop on every row -- not per-violation -- so which
-// violation ends up "first" cannot change what either assertion observes, regardless of
-// path-based reordering.
+// TestV3ViolationOrderStableUnderPathSort (AC-7 hazard): topology/invoice-surfaces.spec.ts
+// reads `firstRow.locator('td').last()`, which ViolationsTable.tsx
+// (frontend/app/src/components/ViolationsTable.tsx) renders as the SAME `ruleSetVersion`
+// prop on every row -- not per-violation -- so which violation ends up "first" cannot
+// change what that assertion observes, regardless of path-based reordering.
 //
 // More fundamentally, the engine's rule_key-then-path sort (Decision N16, engine.go)
 // can only ever reorder two violations that SHARE a rule_key -- and rules.key carries

@@ -94,8 +94,7 @@ just an SPA in isolation. In the unified dev env the app is always gateway-wired
 (`VITE_GATEWAY_URL` set), so this suite owns the app's assertion — the persona sign-in
 hand-off must render the backend-verified tenant identity, not the mock-only shell render
 the smoke suite used to check. It also asserts cross-tenant isolation over the live edge,
-and drives the app's persona-scoped surfaces, the import wizard, invoices, validation and
-Workflows.
+and drives the app's persona-scoped surfaces, the import wizard, invoices and Workflows.
 
 Serial for the same reason as the api suite: it shares the same non-reset deployed dev
 database (`[topology-config-conforms-workers-1]`). Beyond `GATEWAY_URL` + `APP_URL` it

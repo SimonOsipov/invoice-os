@@ -13,7 +13,6 @@ import type { PlatformCtx, View } from '../types'
 const CRUMB_MAP: Record<View, string> = {
   dashboard: 'Overview',
   invoices: 'Invoices',
-  validation: 'Validation',
   workflows: 'Approval workflow',
   rules: 'Validation rules',
   create: 'New invoice',

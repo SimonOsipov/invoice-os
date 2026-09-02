@@ -155,8 +155,9 @@ var mockDefaultResult = append([]FieldResult{
 }, mockDefaultLineBlock()...)
 
 // mockLineColumns and mockLineRows are the line grid's bands on page 1: four columns by four
-// rows, clear of every header box the default result carries (issue_date's third reading is
-// the lowest, at 0.50-0.55).
+// rows, clear of every header box the default result carries. The nearest one below the grid
+// is issue_date's third reading at 0.50-0.55, not the lowest: its second sits lower still, at
+// 0.80-0.85.
 var mockLineColumns = map[string][2]float64{
 	LineRoleDescription: {0.10, 0.44},
 	LineRoleQuantity:    {0.46, 0.54},

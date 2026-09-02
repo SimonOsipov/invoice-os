@@ -2915,9 +2915,53 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   expect(Object.keys(detail.document).sort()).toEqual(['content_type', 'filename', 'size_bytes', 'stored_at'].sort())
   expect(Object.keys(detail.pages[0]).sort()).toEqual(['height_px', 'page', 'width_px'].sort())
   expect(detail.fields.length, 'a settled job with no fields cannot prove a field key set').toBeGreaterThan(0)
-  expect(Object.keys(detail.fields[0]).sort()).toEqual(
-    ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
-  )
+  // EVERY field, never `fields[0]`. The wire is ordered by field_name -- created_at defaults to
+  // now() and writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's
+  // `ORDER BY created_at, field_name, ...` degenerates to the name -- and EXTR-13-02's line
+  // cells sort ahead of most header readings, which moved `fields[0]` from invoice_number to
+  // buyer_tin with no assertion noticing. A read at one index was never a key-set claim.
+  for (const f of detail.fields) {
+    expect(Object.keys(f).sort(), `${f.name}'s key set drifted from internal/extraction/reader.go`).toEqual(
+      ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
+    )
+  }
+
+  // The field SET itself, widened by EXTR-13-02 from seven header readings to twenty-three.
+  // Transcribed from internal/extraction/mock.go (mockDefaultResult, then mockDefaultLines
+  // through LineItemResults) and deliberately not derived: this is the only DEPLOYED oracle
+  // that the widened fixture reaches the screen, so a mock that silently dropped a line must
+  // red here and not only in Go. Line 3 carries no `quantity` -- that hole is the fixture's
+  // point (Core AC 3), and a count could not express it. Both sides are sorted in JS, so the
+  // database's collation is not what this compares.
+  const WIRE_FIELD_SET = [
+    'invoice_number',
+    'issue_date',
+    'total',
+    'subtotal',
+    'supplier_tin',
+    'buyer_tin',
+    'vat',
+    'line_items',
+    'line_items[1].description',
+    'line_items[1].quantity',
+    'line_items[1].unit_price',
+    'line_items[1].line_total',
+    'line_items[2].description',
+    'line_items[2].quantity',
+    'line_items[2].unit_price',
+    'line_items[2].line_total',
+    'line_items[3].description',
+    'line_items[3].unit_price',
+    'line_items[3].line_total',
+    'line_items[4].description',
+    'line_items[4].quantity',
+    'line_items[4].unit_price',
+    'line_items[4].line_total',
+  ]
+  expect(
+    [...detail.fields.map((f) => f.name)].sort(),
+    "the wire's field set drifted from mockDefaultResult -- a line the grid needs is missing, or a name changed shape",
+  ).toEqual([...WIRE_FIELD_SET].sort())
 
   await testInfo.attach('extraction-wire.json', {
     body: JSON.stringify({ grids, keys: Object.keys(detail).sort(), detail }, null, 2),
@@ -3491,10 +3535,15 @@ const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
   missing: 'NOT FOUND',
 }
 
-// internal/extraction/vocabulary.go, HeaderFields. EXTR-13-02 widened the mock's default
-// result with 16 line-item names; the header pane renders none of them until EXTR-13-07 --
-// the per-field loop below is bounded to this vocabulary for that reason.
-const HEADER_VOCABULARY = [
+// internal/extraction/vocabulary.go, HeaderFields -- and the order one Save writes in. The
+// file's ONE copy: EXTR-12-09's block below cites this declaration rather than repeating it,
+// because two transcriptions of one list drift apart silently. A transcription, deliberately
+// not an import: the SPA is a different package, and reading the order out of the module under
+// test would assert it against itself.
+//
+// EXTR-13-02 widened the mock's default result with 16 line-item names; the header pane renders
+// none of them until EXTR-13-07, so the per-field loop below is bounded to this vocabulary.
+const VOCABULARY = [
   'invoice_number',
   'issue_date',
   'supplier_tin',
@@ -3523,7 +3572,7 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
 
   // The pill loop is a header-pane claim -- a line-item cell has no header-pane home until
   // EXTR-13-07, so it is excluded here rather than left to fail the AC it does not test.
-  const headerFlagged = flagged.filter((f) => HEADER_VOCABULARY.includes(f.name))
+  const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
   expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
 
   for (const f of headerFlagged) {
@@ -4600,6 +4649,28 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     properties[row.element].push(row.property)
   }
 
+  // The sweep's BOUND, checked against the wire the screen read rather than against this
+  // table's own literals. EXTR-13-02 widened the mock with 15 line-item cells and the fields
+  // pane renders them raw until EXTR-13-07, so "this table names only header-pane elements" is
+  // a claim that can now be wrong; L-12 above records why the grid gains no row here. The line
+  // floor first: with no line cell on the wire the exclusion below would exclude nothing.
+  const wireNames = detail.fields.map((f) => f.name)
+  const wireHeaderNames = wireNames.filter((n) => !n.startsWith('line_items'))
+  expect(
+    wireNames.filter((n) => n.startsWith('line_items')).length,
+    'this document delivered no line-item field, so the exclusion below excludes nothing',
+  ).toBeGreaterThan(0)
+  expect(
+    subjects.filter((s) => wireHeaderNames.some((n) => s.element.includes(n))).length,
+    'no subject names a field the wire delivered -- the bound below is over a table of nothing',
+  ).toBeGreaterThan(0)
+  for (const s of subjects) {
+    expect(
+      `${s.element} ${s.selector}`,
+      `${s.element} sweeps a line-item cell, which has no artboard to resolve values against`,
+    ).not.toContain('line_items')
+  }
+
   // Waited for, not assumed present: a missing element would otherwise fail the read as a hard
   // error where it can equally be a paint this assertion arrived one frame ahead of. A scoped
   // selector matching two nodes raises Playwright's strict-mode violation here, which is the
@@ -4607,6 +4678,24 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   for (const s of subjects) {
     await expect(page.locator(s.selector), `${s.element} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
   }
+
+  // The bound's DEPLOYED half: no subject resolves inside a line-item cell. The pane renders
+  // every line name raw as `extraction-field-line_items...` until EXTR-13-07 filters them, so
+  // this reads the surface rather than the table above -- and it stays true, not merely
+  // vacuous, once that filter lands. What CANNOT be asserted, so it is recorded instead of
+  // skipped: the subject set is not derivable from the wire at all, because four subjects
+  // (extraction-canvas, extraction-fields, extraction-ground, extraction-toolbar) and the page
+  // frame are pane chrome that no wire field names. The bound is therefore a guard against a
+  // row retargeted at the grid, not a discovery of what the table should hold.
+  const insideALineCell = await page.evaluate(
+    (selectors: string[]) =>
+      selectors.filter((sel) => {
+        const el = document.querySelector(sel)
+        return el !== null && el.closest('[data-testid^="extraction-field-line_items"]') !== null
+      }),
+    subjects.map((s) => s.selector),
+  )
+  expect(insideALineCell, 'a fidelity subject resolved inside a line-item cell on the deployed pane').toEqual([])
 
   // Read once, in one frame: two evaluates across a re-render can disagree.
   const measured = await page.evaluate(
@@ -4879,21 +4968,9 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 // E2E on `pull_request.draft == false`. The local oracle is `pnpm -r typecheck` plus
 // `playwright test --list`.
 
-// internal/extraction/vocabulary.go, HeaderFields -- the order one Save writes in. A
-// transcription, deliberately not an import: the SPA is a different package, and reading the
-// order out of the module under test would assert it against itself.
-const VOCABULARY = [
-  'invoice_number',
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-]
+// The header vocabulary this block reads -- HeaderFields, in the order one Save writes in --
+// is `VOCABULARY`, declared once above beside EXTR12-E2E-01. It used to be transcribed twice in
+// this file, byte for byte; one list, one copy.
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
 // a 422, so none of them is what this journey types over.
@@ -4942,8 +5019,24 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   expect(missing!.value, 'the missing field already carries a value').toBeNull()
   expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
 
-  const typed = detail.fields.find((f) => f.reason === 'inconsistent' && !LOCKED_FIELDS.includes(f.name))
-  expect(typed, 'this document reported no writable inconsistent field -- there is nothing to type over').toBeTruthy()
+  // By NAME, the way EXTR12-E2E-02 and EXTR11-E2E-11 pick `total` above -- never by position.
+  // The wire is ordered by field_name (created_at defaults to now() and writeFieldResultsTx
+  // writes a job's rows on ONE transaction, so reader.go's ORDER BY degenerates to the name),
+  // and EXTR-13-02's line cells sort ahead of `total`: "the first writable inconsistent field"
+  // resolves to line_items[2].line_total, which has no header cell to type into and which
+  // refuseField would 422. The two properties that pick made implicit are asserted here instead
+  // of assumed, so a build that locked `total` or stopped flagging it reds on the wire rather
+  // than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the ordering
+  // from the Go side.
+  const typed = detail.fields.find((f) => f.name === 'total')
+  expect(typed, 'the wire the screen read carries no `total` -- there is nothing to type over').toBeTruthy()
+  expect(LOCKED_FIELDS, 'total is locked now, so the correction this journey posts would be a 422').not.toContain(
+    typed!.name,
+  )
+  expect(
+    typed!.reason,
+    'total is not flagged inconsistent, so this journey types over a field that never asked to be settled',
+  ).toBe('inconsistent')
 
   const names = [ambiguous!.name, missing!.name, typed!.name]
   expect(new Set(names).size, `two of the three subjects are the same field: ${names.join(', ')}`).toBe(3)
@@ -5094,6 +5187,20 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
     page.locator('[data-testid^="extraction-marker-"]'),
     'the settled fields did not each take exactly one marker',
   ).toHaveCount(3)
+  // And the namespace resolves to those three BY NAME. EXTR-13-02 put 15 line-item cells into
+  // the pane's render, and a marker renders only over a correction, so this is the assertion
+  // that the widened fixture left the `extraction-marker-` sweep where it was: a count alone
+  // would still read 3 if a line cell took a marker while a settled field lost its own.
+  const markerNames = (
+    await page
+      .locator('[data-testid^="extraction-marker-"]')
+      .evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.testid ?? ''))
+  )
+    .map((id) => id.replace('extraction-marker-', ''))
+    .sort()
+  expect(markerNames, 'the marker namespace resolved to fields other than the three that were settled').toEqual(
+    plan.map((p) => p.field).sort(),
+  )
   for (const p of plan) {
     await expect(page.getByTestId(`extraction-marker-${p.field}`), `${p.field} settled and shows no marker`).toBeVisible()
     await expect(

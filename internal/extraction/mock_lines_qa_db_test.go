@@ -18,9 +18,9 @@ import (
 // block, then the cells -- is NOT what the screen reads.
 //
 // The consequence this pins: a line cell sorts before subtotal, supplier_tin and total, so any
-// spec that picks a subject by POSITION ("the first inconsistent field") now lands on
-// line_items[2].line_total rather than on total. EXTR12-E2E-06 does exactly that
-// (import-wizard.spec.ts:4945). Subtasks 07 and 09 must pick by NAME, not by position.
+// spec that picks a subject by POSITION ("the first inconsistent field") lands on
+// line_items[2].line_total rather than on total. EXTR12-E2E-06 did exactly that and now picks
+// `total` by name; subtasks 07 and 09 must do the same.
 func TestExtractionDetail_MockDefaultArrivesInFieldNameOrder(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)

@@ -150,11 +150,6 @@ export interface Violation {
   path?: string
 }
 
-export interface ValidateResult {
-  rule_set_version: number
-  violations: Violation[]
-}
-
 // Rule mirrors internal/validation/rule.go's Rule struct (the PATCH
 // /v1/rules/{key} response body).
 export interface Rule {
@@ -190,14 +185,6 @@ export interface ListEntitiesQuery {
   q?: string
   limit?: number
   offset?: number
-}
-
-// InvoiceEnvelope is the POST /v1/validate request body shape (Decision
-// N19: the engine's resolvePath roots at p["invoice"]). fixtures.ts's
-// InvoicePayload is structurally identical — declared separately there so
-// fixtures.ts has no dependency on this module, but assignable here as-is.
-export interface InvoiceEnvelope {
-  invoice: Record<string, unknown>
 }
 
 // ---- Typed request wrappers over apiFetch. Each builds the absolute
@@ -256,14 +243,6 @@ export function onboardEntity(token: string, id: string): Promise<Entity> {
   return apiFetch<Entity>(`${apiBase()}/api/portfolio/v1/entities/${id}/onboard`, { method: 'POST', token })
 }
 
-export function validate(token: string, invoiceBody: InvoiceEnvelope): Promise<ValidateResult> {
-  return apiFetch<ValidateResult>(`${apiBase()}/api/validation/v1/validate`, {
-    method: 'POST',
-    body: invoiceBody,
-    token,
-  })
-}
-
 export function toggleRule(token: string, key: string, enabled: boolean): Promise<Rule> {
   return apiFetch<Rule>(`${apiBase()}/api/validation/v1/rules/${key}`, {
     method: 'PATCH',
@@ -299,9 +278,9 @@ export interface InvoiceLineItem {
 // task-115). violations is Go json.RawMessage on the wire -- always a JSON array in
 // practice (invoices.violations jsonb NOT NULL DEFAULT '[]', migrations/
 // 20260714103137_invoices.sql), so Violation[] is the accurate wire shape, not a raw
-// string. rule_set_version_id is the LIVE-STAMPED uuid ([uuid-stamp]) -- distinct from
-// ValidateResult.rule_set_version above, which is the plain int the /v1/validate route
-// echoes; no route returns both on the same object. irn/csid/qr_payload/rejection_reasons
+// string. rule_set_version_id is the LIVE-STAMPED uuid ([uuid-stamp]), not the plain
+// evaluated int -- see ValidateInvoiceResult.rule_set_version below; no route returns
+// both names for the same concept. irn/csid/qr_payload/rejection_reasons
 // (M5-01/M5-03/M5-05) are all `json:"..."` with no `omitempty` on the Go struct
 // (invoice.go:101-104) and all four are in invoiceColumns (store.go:46-50), so they are
 // present -- as an explicit value or explicit null -- on BOTH the list and get wire.

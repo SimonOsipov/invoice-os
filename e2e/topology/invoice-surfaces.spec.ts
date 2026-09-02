@@ -184,8 +184,7 @@ function badInvoiceFields(invoiceNumber: string) {
 }
 
 // The same invoice with both broken fields corrected (a canonical
-// NNNNNNNN-NNNN supplier TIN, VAT at the correct 7.5%) -- fires ZERO
-// violations, mirroring fixtures.ts's validInvoice.
+// NNNNNNNN-NNNN supplier TIN, VAT at the correct 7.5%) -- fires ZERO violations.
 function cleanInvoiceFields(invoiceNumber: string) {
   return {
     invoice_number: invoiceNumber,

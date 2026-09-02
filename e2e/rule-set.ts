@@ -6,7 +6,6 @@
 // below: this list has already under-counted itself once, when api/perf.spec.ts's own
 // comment called itself "a FOURTH consumer" against a header that still said "THREE").
 // Direct importers of ACTIVE_RULE_SET_VERSION:
-//   - api/validation.spec.ts   -- asserts the version /v1/validate stamps on its result.
 //   - topology/targets.ts      -- re-exports it as VALIDATION_EXPECTED.ruleSetVersion (see
 //                                 below for THAT constant's own consumers).
 //   - api/perf.spec.ts         -- asserts the version POST /v1/imports stamps into its

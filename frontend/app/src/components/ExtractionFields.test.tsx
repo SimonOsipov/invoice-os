@@ -34,6 +34,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { crossGlyph, crosshairGlyph } from '../glyphs'
 import { fieldLabel } from '../lib/extractionReview'
+import { LINE_ROLES, lineFieldName } from '../lib/lineItems'
 import type {
   DraftEntries,
   ExtractionCandidate,
@@ -72,6 +73,12 @@ const MARKER_CHOSEN = 'YOU CHOSE THIS'
 const WAS_CHOSEN = 'We found more than one candidate'
 const UNDO = 'Undo'
 const INVOICE_NUMBER_LOCKED = "The invoice number is this invoice's identity and cannot be changed here."
+
+// EXTR-13-07's own copy table (LineItemGrid), verbatim -- the grid mounts inside this pane's
+// body, so the residue sweep below has to know it.
+const LINE_ITEM_EMPTY_1 = 'We found no line items on this document.'
+const LINE_ITEM_EMPTY_2 = 'An invoice cannot be filed until it has at least one line, so add one here.'
+const LINE_ITEM_ADD = 'Add a line'
 
 // EXTR-12's Invented-copy table again, with the lead's two Stage-1 corrections:
 // `POINT_PAGELESS` is the artboard's isDocx branch (`:663`), transcribed into a row the table
@@ -330,7 +337,7 @@ describe('the pane chrome', () => {
 // ==========================================================================================
 
 describe('the field cells', () => {
-  it('renders one row per wire field, in wire order', () => {
+  it('renders one row per HEADER wire field, in wire order', () => {
     render(fieldsPane())
 
     // The fixture is deliberately unsorted: a pane that sorts by the vocabulary or
@@ -737,6 +744,32 @@ describe('the vocabulary EXTR-12 owns', () => {
     for (const leaked of ['unreadable', 'LOW_CONFIDENCE', 'SFS-2026-0418', '0.62', '62', '%']) {
       expect(text, `the pane rendered "${leaked}"`).not.toContain(leaked)
     }
+  })
+})
+
+// ==========================================================================================
+// T11 (task-813). line_items[N].role belongs to LineItemGrid, not this pane -- a line-item
+// name must never reach `extraction-field-*`, the same prefix EXTR11-E2E-02a counts on the
+// deploy gate.
+// ==========================================================================================
+
+describe('the line-item field filter (EXTR-13-07)', () => {
+  it('renders no line-item cell once the wire carries them', () => {
+    const header = tenFields()
+    const blockRow = mkField({ name: 'line_items', value: null, region: null })
+    const lineCells = [1, 2].flatMap((i) =>
+      LINE_ROLES.map((role) => mkField({ name: lineFieldName(i, role), value: '1.00' })),
+    )
+
+    render(fieldsPane({ fields: [...header, blockRow, ...lineCells] }))
+
+    // The floor: the fixture really carries line-item fields, so the exclusion below excludes
+    // something rather than nothing.
+    expect(lineCells.length, 'the fixture carries no line cell to exclude').toBeGreaterThan(0)
+
+    expect(rowIds().slice().sort(), 'a line-item name reached the header prefix').toEqual(
+      HEADER_FIELDS.map((name) => `extraction-field-${name}`).sort(),
+    )
   })
 })
 
@@ -1313,6 +1346,12 @@ describe('the pane renders nothing it does not declare', () => {
       POINT_IDLE,
       ...chipText,
       ...fields.map((f) => fieldLabel(f.name)),
+      // EXTR-13-07: LineItemGrid mounts unconditionally whenever the pane is populated
+      // (fields.length > 0), so its declared copy joins this sweep too -- with no line-item
+      // fields on this fixture it renders its own empty state.
+      LINE_ITEM_EMPTY_1,
+      LINE_ITEM_EMPTY_2,
+      LINE_ITEM_ADD,
     ]
 
     let left = pane().textContent ?? ''

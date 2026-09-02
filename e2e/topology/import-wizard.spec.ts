@@ -3163,11 +3163,18 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
   // measures nothing and passes vacuously.
   expect(detail.fields.length, 'no field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
 
+  // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
+  // own grid, LineItemGrid -- so the row count below is bounded to it, the same predicate
+  // EXTR11-E2E-11 uses at `wireHeaderNames`.
+  const wireNamesA = detail.fields.map((f) => f.name)
+  const headerNamesA = wireNamesA.filter((n) => !n.startsWith('line_items'))
+  expect(headerNamesA.length, 'no header field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
+
   const canvas = page.getByTestId('extraction-canvas')
   const fields = page.getByTestId('extraction-fields')
   // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.
   const rows = page.locator('[data-testid^="extraction-field-"]')
-  await expect(rows, 'the pane rendered no row for a wire that carries fields').toHaveCount(detail.fields.length)
+  await expect(rows, 'the pane rendered no row for a wire that carries header fields').toHaveCount(headerNamesA.length)
 
   type Spill = { testid: string; left: number; right: number }
   const measured: { width: number; canvas: Rect; fields: Rect; overlap: Rect; worst: Spill }[] = []
@@ -3211,7 +3218,7 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
       // This is the relationship the artboard's `min-width: 470px` floor exists to protect:
       // a `1fr 1fr` grid inside a pane squeezed below it pushes its cells' content out, and
       // the body's `overflow-y: auto` (y ONLY) means a horizontal spill has nowhere to hide.
-      expect(m.rs.length, `no row measured at ${width}px`).toBe(detail.fields.length)
+      expect(m.rs.length, `no row measured at ${width}px`).toBe(headerNamesA.length)
       let worst: Spill = { testid: '', left: 0, right: 0 }
       for (const r of m.rs) {
         expect(r.width, `${r.testid} collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
@@ -3543,8 +3550,9 @@ const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
 // frontend/app/src/lib/wireMirrors.test.ts now compares this copy to the Go slice in order, so
 // a drift here reds that file rather than passing quietly.
 //
-// EXTR-13-02 widened the mock's default result with 16 line-item names; the header pane renders
-// none of them until EXTR-13-07, so the per-field loop below is bounded to this vocabulary.
+// EXTR-13-02 widened the mock's default result with 16 line-item names; EXTR-13-07 gives them
+// their own grid, LineItemGrid, and the header pane renders none of them -- so the per-field
+// loop below is bounded to this vocabulary.
 const VOCABULARY = [
   'invoice_number',
   'issue_date',
@@ -4652,10 +4660,11 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   }
 
   // The sweep's BOUND, checked against the wire the screen read rather than against this
-  // table's own literals. EXTR-13-02 widened the mock with 15 line-item cells and the fields
-  // pane renders them raw until EXTR-13-07, so "this table names only header-pane elements" is
-  // a claim that can now be wrong; L-12 above records why the grid gains no row here. The line
-  // floor first: with no line cell on the wire the exclusion below would exclude nothing.
+  // table's own literals. EXTR-13-02 widened the mock with 15 line-item cells and EXTR-13-07
+  // gives them their own grid, LineItemGrid, off this table's fidelity surface entirely -- so
+  // "this table names only header-pane elements" still has to be enforced, not assumed; L-12
+  // above records why the grid gains no row here. The line floor first: with no line cell on
+  // the wire the exclusion below would exclude nothing.
   const wireNames = detail.fields.map((f) => f.name)
   const wireHeaderNames = wireNames.filter((n) => !n.startsWith('line_items'))
   expect(
@@ -5304,6 +5313,12 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   const detail = await openExtractionReview(page)
   expect(detail.fields.length, 'no field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
 
+  // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
+  // own grid, LineItemGrid -- so every rendered-row count below is bounded to it.
+  const wireNamesB = detail.fields.map((f) => f.name)
+  const headerNamesB = wireNamesB.filter((n) => !n.startsWith('line_items'))
+  expect(headerNamesB.length, 'no header field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
+
   const pane = page.getByTestId('extraction-fields')
   const shellBody = page.getByTestId('extraction-review-body')
   // The pane's two children, in the artboard's order (`:225` header over `:230` body) --
@@ -5351,7 +5366,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 
       // 3. Two columns, exactly. A collapsed one-column grid reports 1, a three-track grid 3,
       //    and nothing else in this suite asserts the track count.
-      expect(m.xs.length, `no field cell measured at ${width}px`).toBe(detail.fields.length)
+      expect(m.xs.length, `no field cell measured at ${width}px`).toBe(headerNamesB.length)
       const columns = [...new Set(m.xs)].sort((a, b) => a - b)
       expect(columns.length, `the grid reports ${columns.length} column(s) at ${width}px, not two`).toBe(2)
 
@@ -5437,7 +5452,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
       return out
     })
 
-    expect(spill.length, `no field cell measured at the ${floorWidth}px floor`).toBe(detail.fields.length)
+    expect(spill.length, `no field cell measured at the ${floorWidth}px floor`).toBe(headerNamesB.length)
     for (const cell of spill) {
       expect(cell.clientWidth, `${cell.testid} has no width at the floor -- its edges are vacuous`).toBeGreaterThan(0)
       expect(

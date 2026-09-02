@@ -844,6 +844,120 @@ func TestRLS_ExtractionJobsGrantMatrix(t *testing.T) {
 	}
 }
 
+// L-08: layout_fingerprint is nullable, but any non-NULL value must be non-empty and no
+// longer than 128 bytes.
+func TestRLS_ExtractionJobsLayoutFingerprintBounds(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "L-08/a.pdf")
+	defer cleanupDoc()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = ANY($1)`, probes)
+	}()
+
+	for _, c := range []struct {
+		what        string
+		fingerprint any // nil encodes SQL NULL
+		wantErr     bool
+	}{
+		{"an empty layout_fingerprint", "", true},
+		{"a 129-character layout_fingerprint", strings.Repeat("a", 129), true},
+		{"NULL", nil, false},
+		{"a 67-byte v1: fingerprint", "v1:" + strings.Repeat("a", 64), false},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx,
+				`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version, layout_fingerprint)
+				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				id, h.tenantA, docA, ejExtractor, ejExtractorVersion, c.fingerprint)
+			return e
+		})
+		if !c.wantErr {
+			if err != nil {
+				t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514)", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514: %v", c.what, code, err)
+			continue
+		}
+		if got := pgConstraint(err); got != "extraction_jobs_layout_fingerprint_check" {
+			t.Errorf("INSERT with %s tripped constraint %q, want extraction_jobs_layout_fingerprint_check", c.what, got)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, id); n != 0 {
+			t.Errorf("rows after the refused %s = %d, want 0", c.what, n)
+		}
+	}
+}
+
+// L-09: layout_anchors is nullable, but any non-NULL value must be a JSON array — a JSON
+// object, a JSON scalar and the JSON null literal (jsonb 'null', distinct from SQL NULL) are
+// all refused.
+func TestRLS_ExtractionJobsLayoutAnchorsMustBeAnArray(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "L-09/a.pdf")
+	defer cleanupDoc()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = ANY($1)`, probes)
+	}()
+
+	for _, c := range []struct {
+		what    string
+		anchors any // nil encodes SQL NULL; a Go string is cast ::jsonb
+		wantErr bool
+	}{
+		{"a JSON object", `{}`, true},
+		{"a JSON string scalar", `"x"`, true},
+		{"the JSON null literal", `null`, true},
+		{"NULL", nil, false},
+		{"an empty JSON array", `[]`, false},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx,
+				`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version, layout_anchors)
+				 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+				id, h.tenantA, docA, ejExtractor, ejExtractorVersion, c.anchors)
+			return e
+		})
+		if !c.wantErr {
+			if err != nil {
+				t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514)", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514: %v", c.what, code, err)
+			continue
+		}
+		if got := pgConstraint(err); got != "extraction_jobs_layout_anchors_check" {
+			t.Errorf("INSERT with %s tripped constraint %q, want extraction_jobs_layout_anchors_check", c.what, got)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, id); n != 0 {
+			t.Errorf("rows after the refused %s = %d, want 0", c.what, n)
+		}
+	}
+}
+
 // EJ-16: two jobs for the same (tenant_id, document_id) both persist. Pins D-6: a unique
 // index here would turn a tolerated duplicate into a runtime 23505 on a path where nothing
 // is ready to render it.

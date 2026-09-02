@@ -13,14 +13,17 @@ package db_test
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 // earInsert names every column, so a test that means to violate one CHECK cannot silently
@@ -229,13 +232,10 @@ func TestRLS_ExtractionAnchorRulesMissingContextFailsClosed(t *testing.T) {
 	}
 }
 
-// R-04: no INSERT grant. The row is well-formed and OWN-TENANT, so the policy's WITH CHECK is
-// perfectly satisfied and only the absent grant can refuse it.
-//
-// A missing grant and a WITH CHECK failure are BOTH 42501 and neither carries a constraint
-// name, so the SQLSTATE alone cannot tell them apart — this case asserts the message shape
-// too, and R-14 is the catalog oracle for the same claim.
-func TestRLS_ExtractionAnchorRulesInsertRefusedForApp(t *testing.T) {
+// L-02: invoice_app now holds INSERT and its own-tenant row lands. Reads back the row rather
+// than only checking "no error" — that would also pass if the WITH CHECK silently rewrote a
+// column.
+func TestRLS_ExtractionAnchorRulesAppInsertsItsOwnTenantsRule(t *testing.T) {
 	h := requireHarness(t)
 
 	id := uuid.NewString()
@@ -243,33 +243,97 @@ func TestRLS_ExtractionAnchorRulesInsertRefusedForApp(t *testing.T) {
 		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_anchor_rules WHERE id = $1`, id)
 	}()
 
-	err := earAsApp(t, h.tenantA, earInsert, id, h.tenantA, earFingerprint(), earField, earRuleBody, 1)
+	fingerprint := earFingerprint()
+	err := earAsApp(t, h.tenantA, earInsert, id, h.tenantA, fingerprint, earField, earRuleBody, 1)
 	if failIfUndefinedAnchorRules(t, "own-tenant INSERT as invoice_app", err) {
 		return
 	}
-	if got := pgCode(err); got != "42501" {
-		t.Fatalf("invoice_app ran INSERT on extraction_anchor_rules and got SQLSTATE %q (%v), want 42501 "+
-			"— the table holds no INSERT grant", got, err)
+	if err != nil {
+		t.Fatalf("invoice_app INSERT of its own tenant's rule: want success, got: %v", err)
 	}
 
-	msg := pgMessage(err)
-	if !strings.Contains(msg, "permission denied") {
-		t.Errorf("the refusal message is %q, want one naming \"permission denied\" — an own-tenant row "+
-			"cannot fail the policy, so a WITH CHECK message here means the grant is present and "+
-			"something else refused", msg)
+	var gotTenant, gotFingerprint, gotField string
+	if e := h.super.QueryRow(context.Background(),
+		`SELECT tenant_id::text, layout_fingerprint, field_name FROM extraction_anchor_rules WHERE id = $1`, id,
+	).Scan(&gotTenant, &gotFingerprint, &gotField); e != nil {
+		t.Fatalf("read back the row invoice_app inserted: %v", e)
 	}
-	if strings.Contains(msg, "row-level security") {
-		t.Errorf("the refusal message is %q — that is the policy refusing, not a missing grant; "+
-			"invoice_app must hold no INSERT privilege at all", msg)
-	}
-
-	if n := earRowCount(t, id); n != 0 {
-		t.Errorf("rows after the refused INSERT = %d, want 0", n)
+	if gotTenant != h.tenantA || gotFingerprint != fingerprint || gotField != earField {
+		t.Errorf("row read back = (%s, %s, %s), want (%s, %s, %s)",
+			gotTenant, gotFingerprint, gotField, h.tenantA, fingerprint, earField)
 	}
 }
 
-// R-05: no UPDATE and no DELETE grant either. Rules are append-only and EXTR-14 ships the
-// migration that widens this; nothing in EXTR-04 may edit or remove a stored rule.
+// L-05: seq is the recency order, not created_at — created_at defaults to now(), which is
+// transaction-constant, so two rows written together tie on it exactly while nextval
+// separates them. Both halves are asserted: created_at equality is what makes seqB > seqA
+// prove seq ordering rather than accidentally agreeing with a clock-ordered read.
+func TestRLS_ExtractionAnchorRulesSeqOrdersWithinOneTransaction(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	idA, idB := uuid.NewString(), uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_anchor_rules WHERE id = ANY($1)`, []string{idA, idB})
+	}()
+
+	fingerprint := earFingerprint()
+	var seqA, seqB int64
+	var createdAtA, createdAtB time.Time
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, earInsert, idA, h.tenantA, fingerprint, earField, earRuleBody, 1); e != nil {
+			return e
+		}
+		if _, e := tx.Exec(ctx, earInsert, idB, h.tenantA, fingerprint, earField, earRuleBody, 1); e != nil {
+			return e
+		}
+		if e := tx.QueryRow(ctx, `SELECT seq, created_at FROM extraction_anchor_rules WHERE id = $1`, idA).
+			Scan(&seqA, &createdAtA); e != nil {
+			return e
+		}
+		return tx.QueryRow(ctx, `SELECT seq, created_at FROM extraction_anchor_rules WHERE id = $1`, idB).
+			Scan(&seqB, &createdAtB)
+	})
+	if err != nil {
+		t.Fatalf("two INSERTs for one fingerprint in one transaction: %v — until Migration A grants "+
+			"INSERT and adds seq, this fails closed", err)
+	}
+
+	// Strict, not seqB == seqA+1: a concurrent test in this package can consume a nextval.
+	if !(seqB > seqA) {
+		t.Fatalf("seq = %d then %d, want strictly increasing", seqA, seqB)
+	}
+	if !createdAtA.Equal(createdAtB) {
+		t.Fatalf("created_at = %v then %v, want identical — the fixture no longer ties on the clock, "+
+			"so seqB > seqA above no longer proves seq (not created_at) orders the rows", createdAtA, createdAtB)
+	}
+}
+
+// L-06: without USAGE on the sequence, invoice_app's INSERT fails 42501 "permission denied
+// for sequence" even holding the table grant — extraction_field_corrections (EFC-05) and
+// audit_log.sql:79 are the precedent.
+func TestRLS_ExtractionAnchorRulesAppHoldsSequenceUsage(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var got bool
+	err := h.super.QueryRow(ctx,
+		`SELECT has_sequence_privilege('invoice_app', 'public.extraction_anchor_rules_seq_seq', 'USAGE')`,
+	).Scan(&got)
+	if failIfUndefinedAnchorRules(t, "has_sequence_privilege(invoice_app, extraction_anchor_rules_seq_seq, USAGE)", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("has_sequence_privilege(invoice_app, extraction_anchor_rules_seq_seq, USAGE): %v", err)
+	}
+	if !got {
+		t.Error("invoice_app holds no USAGE on extraction_anchor_rules_seq_seq — every INSERT fails " +
+			"42501 (permission denied for sequence); GRANT INSERT on the table does not carry it")
+	}
+}
+
+// R-05, still true after Migration A: no UPDATE and no DELETE grant. Rules are append-only —
+// nothing may edit or remove a stored rule.
 func TestRLS_ExtractionAnchorRulesUpdateAndDeleteRefusedForApp(t *testing.T) {
 	h := requireHarness(t)
 
@@ -468,31 +532,55 @@ func TestRLS_ExtractionAnchorRulesRejectsSchemaVersionBelowOne(t *testing.T) {
 	}
 }
 
-// R-11: the only read this table serves is "what rules apply to a layout that looks like
-// this". A fingerprint-leading index is not tenant-prunable and the policy would scan every
-// tenant's rules first.
+// L-07: the recency index leads with tenant, then fingerprint, then the write order, and
+// supersedes the old index — which must be gone. Both facts come from the same pg_index
+// read: a query that stopped matching extraction_anchor_rules at all could not pass the
+// "new index exists with these columns" half either.
 func TestRLS_ExtractionAnchorRulesFingerprintIndexLeadsWithTenant(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
-	var cols []string
-	err := h.super.QueryRow(ctx,
-		`SELECT (SELECT array_agg(att.attname ORDER BY k.ord)
+	const (
+		newIdx = "extraction_anchor_rules_tenant_fingerprint_seq_idx"
+		oldIdx = "extraction_anchor_rules_tenant_fingerprint_idx"
+	)
+
+	got := map[string][]string{}
+	rows, err := h.super.Query(ctx,
+		`SELECT c.relname,
+		        (SELECT array_agg(att.attname ORDER BY k.ord)
 		           FROM unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
 		           JOIN pg_attribute att
 		             ON att.attrelid = x.indrelid AND att.attnum = k.attnum)
 		   FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid
 		  WHERE x.indrelid = 'public.extraction_anchor_rules'::regclass
-		    AND c.relname = 'extraction_anchor_rules_tenant_fingerprint_idx'`,
-	).Scan(&cols)
+		    AND c.relname IN ($1, $2)`, newIdx, oldIdx)
 	if failIfUndefinedAnchorRules(t, "read pg_index for extraction_anchor_rules", err) {
 		return
 	}
 	if err != nil {
-		t.Fatalf("read extraction_anchor_rules_tenant_fingerprint_idx: %v", err)
+		t.Fatalf("read pg_index for extraction_anchor_rules: %v", err)
 	}
-	if want := []string{"tenant_id", "layout_fingerprint"}; !reflect.DeepEqual(cols, want) {
-		t.Errorf("extraction_anchor_rules_tenant_fingerprint_idx columns = %v, want %v — tenant_id must lead", cols, want)
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var cols []string
+		if e := rows.Scan(&name, &cols); e != nil {
+			t.Fatalf("scan pg_index row: %v", e)
+		}
+		got[name] = cols
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate pg_index rows: %v", e)
+	}
+
+	if cols, ok := got[newIdx]; !ok {
+		t.Errorf("no index named %s on extraction_anchor_rules; got %v", newIdx, got)
+	} else if want := []string{"tenant_id", "layout_fingerprint", "seq"}; !reflect.DeepEqual(cols, want) {
+		t.Errorf("%s columns = %v, want %v — tenant_id must lead, seq is the recency order", newIdx, cols, want)
+	}
+	if _, ok := got[oldIdx]; ok {
+		t.Errorf("%s still exists; Migration A supersedes and drops it", oldIdx)
 	}
 }
 
@@ -550,11 +638,10 @@ func TestRLS_ExtractionAnchorRulesCascadesWithItsTenant(t *testing.T) {
 	}
 }
 
-// R-14: least privilege, and the catalog oracle R-04 needs. Asked as the superuser on purpose
-// — information_schema.role_table_grants shows only the current role's own grants, so the
-// "reader holds nothing" half cannot be proven from the app pool. The one `true` row makes
-// this notice a MISSING grant, not only a forbidden present one.
-func TestRLS_ExtractionAnchorRulesGrantIsSelectOnly(t *testing.T) {
+// L-01 (folds L-04): least privilege, and the catalog oracle L-02 needs. Asked as the
+// superuser on purpose — information_schema.role_table_grants shows only the current role's
+// own grants, so the "reader holds nothing" half cannot be proven from the app pool.
+func TestRLS_ExtractionAnchorRulesGrantIsSelectAndInsert(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
@@ -564,7 +651,7 @@ func TestRLS_ExtractionAnchorRulesGrantIsSelectOnly(t *testing.T) {
 		want bool
 	}{
 		{"invoice_app", "SELECT", true},
-		{"invoice_app", "INSERT", false},
+		{"invoice_app", "INSERT", true},
 		{"invoice_app", "UPDATE", false},
 		{"invoice_app", "DELETE", false},
 		{"invoice_app", "TRUNCATE", false},
@@ -588,9 +675,155 @@ func TestRLS_ExtractionAnchorRulesGrantIsSelectOnly(t *testing.T) {
 		}
 		if got != c.want {
 			t.Errorf("has_table_privilege(%q, extraction_anchor_rules, %q) = %v, want %v — the grant is "+
-				"exactly SELECT to invoice_app and nothing to invoice_tenant_reader",
+				"exactly SELECT, INSERT to invoice_app and nothing to invoice_tenant_reader",
 				c.role, c.priv, got, c.want)
 		}
+	}
+}
+
+// earMigrationGlob is a suffix, not a timestamp: this subtask's migration is scaffolded
+// fresh in every worktree, so its filename is not predictable.
+const earMigrationGlob = "*_extraction_learned_rule_writer.sql"
+
+// earMigrationStatements returns one goose section ("Up" or "Down") of the shipped
+// migration, read from migrations.FS. Naive splitter — correct for this migration, which
+// is plain DDL and GRANT with no function body.
+func earMigrationStatements(t *testing.T, section string) []string {
+	t.Helper()
+	matches, err := fs.Glob(migrations.FS, earMigrationGlob)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("glob %s in migrations.FS = %v (err %v), want exactly one file — Migration A of "+
+			"this subtask is not applied yet", earMigrationGlob, matches, err)
+	}
+	raw, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("read %s: %v", matches[0], err)
+	}
+	body := string(raw)
+	up := strings.Index(body, gooseUp)
+	down := strings.Index(body, gooseDown)
+	if up < 0 || down < 0 || down < up {
+		t.Fatalf("%s: want both %q and %q, in that order (up=%d down=%d)", matches[0], gooseUp, gooseDown, up, down)
+	}
+	var piece string
+	switch section {
+	case "Up":
+		piece = body[up+len(gooseUp) : down]
+	case "Down":
+		piece = body[down+len(gooseDown):]
+	default:
+		t.Fatalf("unknown goose section %q", section)
+	}
+
+	var stripped []string
+	for _, line := range strings.Split(piece, "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		stripped = append(stripped, line)
+	}
+	var out []string
+	for _, s := range strings.Split(strings.Join(stripped, "\n"), ";") {
+		if s := strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// L-11: the Down restores the previous shape exactly — the dropped index returns, the
+// sequence and its grant disappear, and the INSERT grant is gone. Executed for real, inside
+// one invoice_migrator transaction that is always rolled back, so it leaves nothing behind.
+func TestRLS_ExtractionAnchorRulesMigrationDownRestoresTheShape(t *testing.T) {
+	ctx := context.Background()
+	tx := migratorTx(t, ctx)
+
+	up := earMigrationStatements(t, "Up")
+	if len(up) == 0 {
+		t.Fatal("Up body is empty")
+	}
+	for i, s := range up {
+		if _, err := tx.Exec(ctx, s); err != nil {
+			t.Fatalf("Up statement %d failed: %v\n%s", i+1, err, s)
+		}
+	}
+
+	down := earMigrationStatements(t, "Down")
+	if len(down) == 0 {
+		t.Fatal("Down body is empty")
+	}
+	for i, s := range down {
+		if _, err := tx.Exec(ctx, s); err != nil {
+			t.Fatalf("Down statement %d failed: %v\n%s", i+1, err, s)
+		}
+	}
+
+	for _, priv := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"} {
+		var got bool
+		if err := tx.QueryRow(ctx,
+			`SELECT has_table_privilege('invoice_app', 'public.extraction_anchor_rules', $1)`, priv,
+		).Scan(&got); err != nil {
+			t.Fatalf("has_table_privilege after the round-trip: %v", err)
+		}
+		if want := priv == "SELECT"; got != want {
+			t.Errorf("after Up+Down, has_table_privilege(invoice_app, extraction_anchor_rules, %s) = %v, want %v",
+				priv, got, want)
+		}
+	}
+
+	var colCount int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM information_schema.columns
+		  WHERE table_schema = 'public' AND table_name = 'extraction_anchor_rules' AND column_name = 'seq'`,
+	).Scan(&colCount); err != nil {
+		t.Fatalf("count the seq column: %v", err)
+	}
+	if colCount != 0 {
+		t.Error("extraction_anchor_rules.seq survives the Down, want dropped")
+	}
+
+	var seqCount int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM pg_class WHERE relkind = 'S' AND relname = 'extraction_anchor_rules_seq_seq'`,
+	).Scan(&seqCount); err != nil {
+		t.Fatalf("count the sequence relation: %v", err)
+	}
+	if seqCount != 0 {
+		t.Error("extraction_anchor_rules_seq_seq survives the Down, want dropped")
+	}
+
+	// Both index names in the same query: the old one must be back, the new one gone.
+	idxCols := map[string][]string{}
+	rows, err := tx.Query(ctx,
+		`SELECT c.relname,
+		        (SELECT array_agg(att.attname ORDER BY k.ord)
+		           FROM unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
+		           JOIN pg_attribute att
+		             ON att.attrelid = x.indrelid AND att.attnum = k.attnum)
+		   FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid
+		  WHERE x.indrelid = 'public.extraction_anchor_rules'::regclass
+		    AND c.relname IN ('extraction_anchor_rules_tenant_fingerprint_idx',
+		                       'extraction_anchor_rules_tenant_fingerprint_seq_idx')`)
+	if err != nil {
+		t.Fatalf("read pg_index after the round-trip: %v", err)
+	}
+	for rows.Next() {
+		var name string
+		var cols []string
+		if e := rows.Scan(&name, &cols); e != nil {
+			t.Fatalf("scan pg_index row: %v", e)
+		}
+		idxCols[name] = cols
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate pg_index rows: %v", e)
+	}
+	if want := []string{"tenant_id", "layout_fingerprint"}; !reflect.DeepEqual(idxCols["extraction_anchor_rules_tenant_fingerprint_idx"], want) {
+		t.Errorf("extraction_anchor_rules_tenant_fingerprint_idx columns after the round-trip = %v, want %v",
+			idxCols["extraction_anchor_rules_tenant_fingerprint_idx"], want)
+	}
+	if _, ok := idxCols["extraction_anchor_rules_tenant_fingerprint_seq_idx"]; ok {
+		t.Error("extraction_anchor_rules_tenant_fingerprint_seq_idx survives the Down, want dropped")
 	}
 }
 

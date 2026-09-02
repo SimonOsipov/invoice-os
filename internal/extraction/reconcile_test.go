@@ -5,6 +5,7 @@ package extraction_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,11 +30,24 @@ func rcFind(results []extraction.FieldResult, name string) (extraction.FieldResu
 	return extraction.FieldResult{}, false
 }
 
-// rcLineFlags returns every per-row arithmetic flag (line_items[N].line_total) in results.
+// rcLineFlags returns every per-row arithmetic flag: a line_items[N].<role> row at
+// ReasonInconsistent. rcLineValues is its ReasonNone sibling.
 func rcLineFlags(results []extraction.FieldResult) []extraction.FieldResult {
 	var out []extraction.FieldResult
 	for _, r := range results {
-		if strings.HasPrefix(r.Name, "line_items[") {
+		if strings.HasPrefix(r.Name, "line_items[") && r.Reason == extraction.ReasonInconsistent {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// rcLineValues returns every per-cell line-item value row: a line_items[N].<role> row at
+// ReasonNone -- the flagged total's sibling rows, and the whole row for a clean total.
+func rcLineValues(results []extraction.FieldResult) []extraction.FieldResult {
+	var out []extraction.FieldResult
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") && r.Reason == extraction.ReasonNone {
 			out = append(out, r)
 		}
 	}
@@ -232,6 +246,93 @@ func TestReconcile_OneBadRowDoesNotCondemnTheTable(t *testing.T) {
 	}
 	if flags[0].Reason != extraction.ReasonInconsistent {
 		t.Errorf("reason = %q, want ReasonInconsistent", flags[0].Reason)
+	}
+}
+
+// TestReconcile_AFlaggedLineFieldSetIsCompleteAndUnduplicated pins Core AC 4: a flagged line
+// total does not swallow its row's other three cells. The complete, unduplicated name set is
+// asserted first, so the flag itself is only inspected once the set is known to be right --
+// asserting the flag alone could pass on a Reconcile that drops description/quantity/unit_price
+// entirely.
+func TestReconcile_AFlaggedLineFieldSetIsCompleteAndUnduplicated(t *testing.T) {
+	desc := "Widget"
+	in := extraction.Input{
+		Lines: []extraction.DocLine{
+			{Index: 1, Description: &desc, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("25.00")},
+		},
+	}
+	results := extraction.Reconcile(in)
+
+	var rank0 []extraction.FieldResult
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[1].") {
+			rank0 = append(rank0, r)
+		}
+	}
+	wantNames := []string{
+		"line_items[1].description", "line_items[1].quantity",
+		"line_items[1].unit_price", "line_items[1].line_total",
+	}
+	if len(rank0) != len(wantNames) {
+		t.Fatalf("index 1's rank-0 set has %d row(s) %v, want exactly %d: %v", len(rank0), rcNames(rank0), len(wantNames), wantNames)
+	}
+	seen := make(map[string]int, len(rank0))
+	for _, r := range rank0 {
+		seen[r.Name]++
+	}
+	for _, name := range wantNames {
+		if seen[name] != 1 {
+			t.Errorf("%q appears %d time(s) in the rank-0 set %v, want exactly 1", name, seen[name], rcNames(rank0))
+		}
+	}
+	for name := range seen {
+		if !slices.Contains(wantNames, name) {
+			t.Errorf("rank-0 set carries unexpected name %q, want only %v", name, wantNames)
+		}
+	}
+
+	total, ok := rcFind(rank0, "line_items[1].line_total")
+	if !ok {
+		t.Fatal(`"line_items[1].line_total" not present in the set checked above`)
+	}
+	if total.Reason != extraction.ReasonInconsistent {
+		t.Errorf("line_items[1].line_total reason = %q, want ReasonInconsistent -- 2 x 10.00 = 20.00, printed 25.00", total.Reason)
+	}
+	if total.Value == nil || *total.Value != "25.00" {
+		t.Errorf("line_items[1].line_total Value = %v, want \"25.00\"", total.Value)
+	}
+	for _, name := range []string{"line_items[1].description", "line_items[1].quantity", "line_items[1].unit_price"} {
+		r, ok := rcFind(rank0, name)
+		if !ok {
+			continue // already reported missing above
+		}
+		if r.Reason != extraction.ReasonNone {
+			t.Errorf("%s reason = %q, want ReasonNone -- only the flagged total carries a reason", name, r.Reason)
+		}
+	}
+}
+
+// TestReconcile_ACleanLineTotalHasExactlyOneRankZeroRow pins Core AC 4's other half: a line
+// total that passes the arithmetic check gets its value row, never a duplicate.
+func TestReconcile_ACleanLineTotalHasExactlyOneRankZeroRow(t *testing.T) {
+	in := extraction.Input{
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("500.00"), LineTotal: rcStr("1000.00")},
+		},
+	}
+	results := extraction.Reconcile(in)
+
+	var rows []extraction.FieldResult
+	for _, r := range rcLineValues(results) {
+		if r.Name == "line_items[1].line_total" {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf(`got %d ReasonNone row(s) named "line_items[1].line_total" %+v, want exactly 1`, len(rows), rows)
+	}
+	if rows[0].Value == nil || *rows[0].Value != "1000.00" {
+		t.Errorf("line_items[1].line_total Value = %v, want \"1000.00\"", rows[0].Value)
 	}
 }
 

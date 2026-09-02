@@ -103,6 +103,40 @@ func TestReconcile_AllLineTotalsUnparseableLeavesTheBlockMissing(t *testing.T) {
 	}
 }
 
+// TestReconcile_LineItemsBlockReasonIsUnchanged is a regression guard: the block's shipped
+// meaning -- ReasonMissing until some line carries a parseable total, ReasonNone after -- must
+// not move as the per-cell projection is wired in.
+func TestReconcile_LineItemsBlockReasonIsUnchanged(t *testing.T) {
+	cases := []struct {
+		name string
+		in   extraction.Input
+		want extraction.Reason
+	}{
+		{"no lines", extraction.Input{}, extraction.ReasonMissing},
+		{"one line, parseable total", extraction.Input{Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00")},
+		}}, extraction.ReasonNone},
+		{"one line, unparseable total", extraction.Input{Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("1"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("garbled")},
+		}}, extraction.ReasonMissing},
+		{"one line, flagged total still counts as parseable", extraction.Input{Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("25.00")},
+		}}, extraction.ReasonNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := extraction.Reconcile(tc.in)
+			got, ok := rcFind(results, "line_items")
+			if !ok {
+				t.Fatalf(`"line_items" result not found in %+v`, results)
+			}
+			if got.Reason != tc.want {
+				t.Errorf("line_items reason = %q, want %q", got.Reason, tc.want)
+			}
+		})
+	}
+}
+
 // TestReconcile_LargeAmountsStayExactUnderDecimal proves the row check is genuinely decimal, not
 // float64 wearing a decimal.Decimal wrapper. 99999999.999 * 9999999999.99 is exactly
 // 999999999989000000.00001 under shopspring/decimal; the same multiplication in float64 rounds
@@ -370,7 +404,7 @@ func TestReconcile_ClosedSetHoldsAcrossShapedInputs(t *testing.T) {
 			}
 			for _, r := range results[len(want):] {
 				if !strings.HasPrefix(r.Name, "line_items[") {
-					t.Errorf("result past the total run named %q, want a line_items[N].line_total flag", r.Name)
+					t.Errorf("result past the total run named %q, want a line_items[N].<role> row", r.Name)
 				}
 			}
 			for _, r := range results {

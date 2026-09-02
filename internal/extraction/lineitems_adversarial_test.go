@@ -230,7 +230,65 @@ func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T)
 	liWant(t, got[1].LineTotal, "20.00", "line 1 LineTotal")
 }
 
+// TestLineItems_DescriptionOnlyHeaderIsStillSkipped pins that description alone does not widen
+// the fail-closed gate (edge case 3): a header naming only description is prose, not a
+// line-item table.
+func TestLineItems_DescriptionOnlyHeaderIsStillSkipped(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 1,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(1, 0, "Terms and conditions apply.", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a header naming only description, want 0 -- description alone does not widen the fail-closed gate", len(got))
+	}
+}
+
+// TestLineItems_BlankDescriptionCellIsAbsentNotEmpty pins edge case 1: a blank description
+// cell leaves Description nil, never "" -- extraction_field_results.value's CHECK forbids an
+// empty string. The other three roles populating in the same row is the positive control.
+func TestLineItems_BlankDescriptionCellIsAbsentNotEmpty(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 4,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit Price", nil),
+			liCell(0, 3, "Line Total", nil),
+			liCell(1, 0, "   ", nil), // whitespace only
+			liCell(1, 1, "1", nil),
+			liCell(1, 2, "10.00", nil),
+			liCell(1, 3, "10.00", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s), want 1", len(got))
+	}
+	liWantNil(t, got[0].Description, "Description")
+	liWant(t, got[0].Quantity, "1", "Quantity")
+	liWant(t, got[0].UnitPrice, "10.00", "UnitPrice")
+	liWant(t, got[0].LineTotal, "10.00", "LineTotal")
+}
+
 // --- purity scan --------------------------------------------------------------
+
+// TestLineItems_PurityScanUnchanged guards the fence itself: TestLineItems_StartsNoGoroutineAndReadsNoClock
+// already scans lineitems.go's actual imports, so this only pins that the allowlist has not
+// quietly widened.
+func TestLineItems_PurityScanUnchanged(t *testing.T) {
+	want := []string{"regexp", "strconv", "strings", "unicode"}
+	if !slices.Equal(liAllowedImports, want) {
+		t.Errorf("liAllowedImports = %v, want %v -- lineitems.go's purity fence must not widen", liAllowedImports, want)
+	}
+}
 
 // liParse parses one source. src nil reads the named file; a string is a needle/control.
 func liParse(t *testing.T, name string, src any) *ast.File {

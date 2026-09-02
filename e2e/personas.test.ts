@@ -933,4 +933,79 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(forkWords.test('Extraction'), 'the scan must see an Extraction label').toBe(true)
     expect(forkWords.test('NAV_INVOICES'), 'and must not fire on the shipped catalogue').toBe(false)
   })
+
+  // --- RMV-01-01 (task-816) -- the Validation nav surface is gone from the app -----------
+  //
+  // Authored RED: glyphs.tsx and Sidebar.tsx still carry NAV_VALIDATION today, so this row
+  // fails on its own assertion until the executor lands the deletion. The two defences
+  // (control needle + population floor) mirror A05-8's, because an absence scan whose file
+  // walk or regex broke would otherwise report a clean zero.
+  it('rmv01_navValidationIsGoneFromTheAppSurface -- no NAV_VALIDATION token and no \'validation\' literal survives in the four app files', () => {
+    // Both scans built from the same two shapes, so a control needle exercises the exact
+    // pattern the absence assertion relies on.
+    const token = (w: string) => new RegExp(`\\b${w}\\b`)
+    const quoted = (w: string) => new RegExp(`['"]${w}['"]`)
+    const NAV_TOKEN = token('NAV_VALIDATION')
+    const VIEW_LITERAL = quoted('validation')
+
+    const files: readonly [string, string][] = [
+      ['frontend/app/src/glyphs.tsx', GLYPHS],
+      ['frontend/app/src/components/Sidebar.tsx', SIDEBAR],
+      ['frontend/app/src/types.ts', TYPES_TS],
+      ['frontend/app/src/App.tsx', APP_TSX],
+    ]
+
+    // Floor 1: every file must actually have been read.
+    const sources = new Map<string, string>()
+    for (const [label, path] of files) {
+      const src = readFileSync(path, 'utf8')
+      expect(src.length, `${label} has no content to scan`).toBeGreaterThan(0)
+      sources.set(label, src)
+    }
+
+    // Floor 2: Sidebar.tsx still parses through G3's anchors and resolves a real roster.
+    const { firm, inhouse } = extractSidebarNavConsts(sources.get('frontend/app/src/components/Sidebar.tsx')!)
+    expect(firm.length, 'firm nav items resolved (vacuity guard)').toBeGreaterThanOrEqual(8)
+    expect(inhouse.length, 'in-house nav items resolved (vacuity guard)').toBeGreaterThanOrEqual(8)
+
+    // Control needles: both regexes must still find a LIVE neighbour, so a scanner that
+    // stopped matching fails loudly instead of reporting clean.
+    expect(
+      token('NAV_APPROVALS').test(sources.get('frontend/app/src/components/Sidebar.tsx')!),
+      'control needle: Sidebar.tsx must still carry NAV_APPROVALS -- the NAV_* scan is broken',
+    ).toBe(true)
+    expect(
+      quoted('approvals').test(sources.get('frontend/app/src/types.ts')!),
+      "control needle: types.ts must still carry the quoted 'approvals' view id -- the literal scan is broken",
+    ).toBe(true)
+
+    const hits: string[] = []
+    for (const [label] of files) {
+      const src = sources.get(label)!
+      if (NAV_TOKEN.test(src)) hits.push(`${label}: NAV_VALIDATION`)
+      if (VIEW_LITERAL.test(src)) hits.push(`${label}: 'validation'`)
+    }
+    expect(hits, `the Validation nav surface still exists: ${hits.join(', ')}`).toEqual([])
+  })
+
+  it("rmv01_navValidationScanDoesNotFalsePositive -- the scan tells NAV_VALIDATION apart from a live neighbour and from validationApi (non-vacuity control)", () => {
+    const NAV_TOKEN = new RegExp('\\bNAV_VALIDATION\\b')
+    const VIEW_LITERAL = new RegExp(`['"]validation['"]`)
+
+    const FIXTURE = [
+      "import { NAV_APPROVALS } from './glyphs'",
+      "import { validateInvoice } from './lib/validationApi'",
+      "export type View = 'dashboard' | 'approvals'",
+      "{view === 'approvals' && <ApprovalsView ctx={ctx} />}",
+    ].join('\n')
+
+    expect(NAV_TOKEN.test(FIXTURE), 'must not fire on NAV_APPROVALS').toBe(false)
+    expect(VIEW_LITERAL.test(FIXTURE), "must not fire on 'approvals' or on the surviving validationApi module").toBe(false)
+
+    // Paired positive: the same two patterns DO fire on the surface being deleted, so the
+    // scan is not vacuously always-false.
+    const POSITIVE = "export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation' }"
+    expect(NAV_TOKEN.test(POSITIVE)).toBe(true)
+    expect(VIEW_LITERAL.test(POSITIVE)).toBe(true)
+  })
 })

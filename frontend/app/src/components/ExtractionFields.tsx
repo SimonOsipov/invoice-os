@@ -267,10 +267,10 @@ export function ExtractionFields({
   onArm,
   onDisarm,
   lineRows,
-  onLineEdit = () => {},
-  onLineAdd = () => {},
-  onLineRemove = () => {},
-  onLineRemap = () => {},
+  onLineEdit,
+  onLineAdd,
+  onLineRemove,
+  onLineRemap,
 }: {
   fields: ExtractionFieldState[]
   selected: string | null
@@ -285,12 +285,15 @@ export function ExtractionFields({
   onUndo: (name: string) => void
   onArm: (name: string) => void
   onDisarm: () => void
-  /** The shell's line draft. Undefined until it holds one, and then the wire's own rows show. */
-  lineRows?: LineRow[]
-  onLineEdit?: (at: number, role: LineRole, value: string) => void
-  onLineAdd?: () => void
-  onLineRemove?: (at: number) => void
-  onLineRemap?: (from: LineRole, to: LineRole) => void
+  /**
+   * The shell's line draft, or null while it holds none. All five line props are REQUIRED, so a
+   * shell that forgets one is a tsc error rather than a grid that silently swallows keystrokes.
+   */
+  lineRows: LineRow[] | null
+  onLineEdit: (at: number, role: LineRole, value: string) => void
+  onLineAdd: () => void
+  onLineRemove: (at: number) => void
+  onLineRemap: (from: LineRole, to: LineRole) => void
 }) {
   const header = fields.filter((f) => isHeaderField(f.name))
   const supplier = header.some((f) => SUPPLIER_FIELDS.includes(f.name))
@@ -461,8 +464,8 @@ export function ExtractionFields({
                 ExtractionCanvas's find-by-name over the same channel a header cell does --
                 nonce bump and all. */}
             <LineItemGrid
-              // EXTR-13-08 must make lineRows/onLine* required: today a shell that forgets to
-              // pass the draft falls back to wireLines with no-op callbacks and swallows edits.
+              // A null draft is the deliberate no-draft-yet state, not a wiring accident -- the
+              // props are required -- and this is the single place the wire seeds the grid.
               rows={lineRows ?? wireLines}
               wireRows={wireLines}
               subtotal={subtotal}

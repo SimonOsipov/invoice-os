@@ -2043,7 +2043,12 @@ describe('the line draft and the widened Save', () => {
     fireEvent.click(lineCellOf(1, 'quantity') as HTMLElement)
     await flush()
 
-    expect(pressedRows().length, 'nothing rendered as selected after the click').toBeGreaterThan(0)
+    // Read over the whole screen, not `pressedRows()`: subtask 07's filter keeps line cells out
+    // of the header pane's `extraction-field-*` rows, so a line selection marks the grid cell.
+    expect(
+      root().querySelectorAll('[aria-current="true"]').length,
+      'nothing rendered as selected after the click',
+    ).toBeGreaterThan(0)
     expect(
       highlights().map((h) => h.dataset.snip),
       'the edited cell no longer carries its own field name, so selecting it highlights nothing',

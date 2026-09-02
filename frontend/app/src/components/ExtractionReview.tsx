@@ -1,5 +1,7 @@
 // The review screen: the detail fetch, the state ladder, and the artboard's two-pane flex row.
-// Zoom and the page handles stay inside ExtractionCanvas; this shell owns only the selection.
+// Zoom and the page handles stay inside ExtractionCanvas; this shell owns the selection and both
+// drafts -- the header entries and the line rows, kept apart because only one of them is postable
+// as a per-field correction.
 // Pinned by ExtractionReview.test.tsx.
 
 import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
@@ -11,10 +13,13 @@ import {
   getExtractionDetail,
   pointedEntry,
   postFieldCorrection,
+  postLineItems,
   savableCorrections,
   typedEntry,
 } from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionDetail, ExtractionRegion } from '../lib/extractionReview'
+import { addRow, lineSetChanged, linesFromFields, linesToPost, remapRoles, removeRow } from '../lib/lineItems'
+import type { LineRow } from '../lib/lineItems'
 import type { PlatformCtx } from '../types'
 import { ExtractionCanvas } from './ExtractionCanvas'
 import { ExtractionFields } from './ExtractionFields'
@@ -109,6 +114,13 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     })
   }
 
+  // The grid's own draft, deliberately NOT folded into DraftEntries: savableCorrections iterates
+  // that map's keys and would post every line cell as a per-field header correction, which the
+  // boundary 422s. Job-tagged and dropped on a job change, the same render-time guard `pick` uses.
+  const [lineDraft, setLineDraft] = useState<{ jobId: string; rows: LineRow[] } | null>(null)
+  if (lineDraft && lineDraft.jobId !== jobId) setLineDraft(null)
+  const lineRows = lineDraft && lineDraft.jobId === jobId ? lineDraft.rows : null
+
   // The armed slot: ONE field waits for a box, and one nullable slot cannot hold two, so
   // "exactly one at a time" is structural. Job-tagged, the same render-time guard `pick` uses.
   const [armed, setArmed] = useState<{ jobId: string; name: string } | null>(null)
@@ -141,6 +153,18 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
     const shown = applyDraft(wire, entries)
     const posts = savableCorrections(wire, entries)
 
+    const wireLines = linesFromFields(wire)
+    const lineChanged = lineRows !== null && lineSetChanged(wireLines, lineRows)
+    const nothingToSave = posts.length === 0 && !lineChanged
+
+    // Seeded LAZILY, on the first grid gesture, the way `draft` is {} until one: an eager seed
+    // would flip lineSetChanged true at load on any cell linesToPost canonicalises and arm Save
+    // with nothing drafted (e2e/topology/import-wizard.spec.ts:3947 and :5065 both assert it is
+    // disabled). A useEffect seed would re-fire on every re-read; this is a render-time idiom.
+    const editLines = (next: (rows: LineRow[]) => LineRow[]) => {
+      setLineDraft((d) => ({ jobId, rows: next(d && d.jobId === jobId ? d.rows : wireLines) }))
+    }
+
     // The drag landed: the box goes into the draft, applyDraft moves the highlight onto it, and
     // the arm's work is done. Nothing bumps the scroll nonce -- centring a box the person is
     // already looking at would scroll the page out from under their cursor.
@@ -151,12 +175,14 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
       setArmed(null)
     }
 
-    // N POSTs, awaited ONE AT A TIME in vocabulary order: each opens its own transaction over
-    // the same invoice, and the append-only table's seq should follow the order the person
-    // reads. The run stops at the first refusal and keeps every entry that did not commit --
-    // the user's typing is not the screen's to discard.
+    // One action, two writes: the header POSTs one at a time in vocabulary order, then the line
+    // set as one POST, then a single re-read. Each header POST opens its own transaction over the
+    // same invoice, and the append-only table's seq should follow the order the person reads; the
+    // line set goes LAST so the invoice's final state reflects the whole gesture. The run stops at
+    // the first refusal and keeps whatever did not commit -- the user's typing is not the screen's
+    // to discard.
     const save = async () => {
-      if (!base || writing || posts.length === 0) return
+      if (!base || writing || nothingToSave) return
       const mine = write.current + 1
       write.current = mine
       setWriting(true)
@@ -175,6 +201,19 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
           // ApiError.message and the house convention renders it unmodified.
           refusal = e instanceof Error ? e.message : String(e)
           break
+        }
+      }
+
+      // A header refusal SKIPS the line POST: extraction-write-error holds one string, and the
+      // commonest line refusal (409 not-editable) is the same cause that just refused the header.
+      const postedRows = lineRows
+      let lineCommitted = false
+      if (refusal === null && lineChanged && postedRows !== null) {
+        try {
+          await postLineItems(ctx.authedFetch, base, jobId, linesToPost(postedRows))
+          lineCommitted = true
+        } catch (e) {
+          refusal = e instanceof Error ? e.message : String(e)
         }
       }
 
@@ -201,6 +240,15 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
           if (refused.has(name) || held[name] !== entries[name]) kept[name] = held[name]
         }
         return { jobId, entries: kept }
+      })
+      // The line draft is kept WHOLE under a refusal, the header rule at the row level. Cleared
+      // on commit so the grid re-derives from the fresh detail and shows what the server holds:
+      // renumbered line_items[1..N], blank rows dropped. A set typed while the POST was in flight
+      // is a different array -- the `held[name] !== entries[name]` arm above, by identity.
+      setLineDraft((d) => {
+        if (!lineCommitted) return d
+        if (d && d.jobId === jobId && d.rows !== postedRows) return d
+        return null
       })
       setWriteError(refusal)
       if (fresh !== null) setMerged({ jobId, detail: fresh })
@@ -246,6 +294,17 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
             onUndo={(name) =>
               draftField(name, { kind: 'undone', value: wire.find((f) => f.name === name)?.value ?? '', region: null })
             }
+            lineRows={lineRows}
+            // The WHOLE cell is spread, not replaced: dropping `name` would kill the cell's
+            // click-to-select and dropping `region` would kill its highlight.
+            onLineEdit={(at, role, value) =>
+              editLines((rows) =>
+                rows.map((r, i) => (i === at ? { ...r, cells: { ...r.cells, [role]: { ...r.cells[role], value } } } : r)),
+              )
+            }
+            onLineAdd={() => editLines(addRow)}
+            onLineRemove={(at) => editLines((rows) => removeRow(rows, at))}
+            onLineRemap={(from, to) => editLines((rows) => remapRoles(rows, from, to))}
           />
         </div>
         <div style={FOOTER}>
@@ -258,9 +317,9 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
             type="button"
             data-testid="extraction-save"
             className="v2-btn v2-btn-primary pf-btn"
-            disabled={writing || posts.length === 0}
+            disabled={writing || nothingToSave}
             onClick={save}
-            style={writing || posts.length === 0 ? SAVE_DISABLED : undefined}
+            style={writing || nothingToSave ? SAVE_DISABLED : undefined}
           >
             {SAVE}
           </button>

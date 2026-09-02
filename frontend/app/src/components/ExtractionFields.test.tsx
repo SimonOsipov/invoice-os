@@ -35,6 +35,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { crossGlyph, crosshairGlyph } from '../glyphs'
 import { fieldLabel } from '../lib/extractionReview'
 import { LINE_ROLES, lineFieldName } from '../lib/lineItems'
+import type { LineRole, LineRow } from '../lib/lineItems'
 import type {
   DraftEntries,
   ExtractionCandidate,
@@ -165,6 +166,12 @@ interface FieldsProps {
   onUndo: (name: string) => void
   onArm: (name: string) => void
   onDisarm: () => void
+  /** Null is the no-draft-yet state: the grid then renders the wire's own rows, as every row here expects. */
+  lineRows: LineRow[] | null
+  onLineEdit: (at: number, role: LineRole, value: string) => void
+  onLineAdd: () => void
+  onLineRemove: (at: number) => void
+  onLineRemap: (from: LineRole, to: LineRole) => void
 }
 
 function fieldsPane(over: Partial<FieldsProps> = {}) {
@@ -180,6 +187,11 @@ function fieldsPane(over: Partial<FieldsProps> = {}) {
     onUndo: () => {},
     onArm: () => {},
     onDisarm: () => {},
+    lineRows: null,
+    onLineEdit: () => {},
+    onLineAdd: () => {},
+    onLineRemove: () => {},
+    onLineRemap: () => {},
     ...over,
   }
   return <ExtractionFields {...props} />

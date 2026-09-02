@@ -338,7 +338,7 @@ describe('remapRoles', () => {
 
   it('a three-cycle composes correctly', () => {
     // description -> quantity -> unit_price -> description, via two pairwise swaps.
-    const step1 = remapRoles([base], 'description', 'quantity')
+    const step1 = remapRoles([base], 'description', 'unit_price')
     const step2 = remapRoles(step1, 'quantity', 'unit_price')
     expect(step2[0].cells.description, 'the three-cycle did not land unit_price in description').toEqual(
       base.cells.unit_price,

@@ -3847,6 +3847,12 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
   await expect(surface, 'the armed field takes no drag on page 2').toBeVisible({ timeout: 15_000 })
   const save = page.getByTestId('extraction-save')
 
+  // Required before either drag, and the whole difference between page 2 and page 1:
+  // `page.mouse` takes VIEWPORT coordinates, and page 2's box sits at y=955 in a 720px viewport
+  // until the ground is scrolled. `toBeVisible` does not mean in the viewport.
+  await page.getByTestId('extraction-page-2').scrollIntoViewIfNeeded()
+  const liveBox = page.getByTestId('extraction-point-box')
+
   // -- CLAIM 2 (AC-3) -- a gesture under the artboard's floor is a click, not a box.
   //
   // A build that discards EVERYTHING also passes this claim; claim 3 is its pair.
@@ -3854,6 +3860,10 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
   await page.mouse.move(s0.x + 0.2 * s0.width, s0.y + 0.2 * s0.height)
   await page.mouse.down()
   await page.mouse.move(s0.x + 0.2 * s0.width + 10, s0.y + 0.2 * s0.height + 6)
+  // The live box is drawn under the cursor with no floor at all, so it is the proof the surface
+  // took the gesture -- without it, refusing the twitch below is equally satisfied by a mouse
+  // that never reached page 2.
+  await expect(liveBox, 'the twitch reached no surface, so refusing it proves nothing').toHaveCount(1)
   await page.mouse.up()
 
   await expect(page.getByTestId('extraction-point-box'), 'a 10x6 twitch was drafted as a region').toHaveCount(0)
@@ -3876,6 +3886,7 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
   await page.mouse.move(from.x, from.y)
   await page.mouse.down()
   await page.mouse.move(to.x, to.y, { steps: 8 })
+  await expect(liveBox, 'the drag reached no surface on page 2').toHaveCount(1)
   await page.mouse.up()
 
   const want = ratioOf(
@@ -4228,6 +4239,12 @@ const ACCENT_TOKEN = '<var(--accent)>'
 const TEAL_IS_ACTION =
   "the artboard's `var(--accent)` here means TEAL; in this repo `--accent` IS the design system's amber and is deliberately not aliased, so every teal transcribes to `--action` (app-layer.css:37-47, WorkflowParts.tsx:7-9)"
 
+// Measured, not reasoned: Chrome floors a fractional border-width to a whole CSS pixel and never
+// to zero -- 0.5px, 1.2px, 1.5px and 1.9px all resolve `1px`, 2.5px resolves `2px` -- identically
+// at deviceScaleFactor 1, 2 and 3, so this is not a retina artefact of the run's own DPR.
+const BORDER_FLOOR =
+  "Chrome resolves a fractional border-width to a whole CSS pixel, so the artboard's 1.5px dash resolves 1px on the deployed build. The DECLARATION stays 1.5px (ExtractionFields.tsx:196, :211) -- ExtractionFields.test.tsx:1694-1697 pins both dashes in jsdom, where the declaration is what is read"
+
 const FIDELITY: FidelityRow[] = [
   // The document pane. `flex: 1 1 auto; min-width: 0`.
   { element: 'extraction-canvas', property: 'flex-grow', artboard: '1', source: ':34', expected: '1', deviation: null },
@@ -4299,10 +4316,10 @@ const FIDELITY: FidelityRow[] = [
 
   // -- EXTR-12's four elements ---------------------------------------------------------------
   //
-  // Chrome's resolved forms were READ off synthetic nodes rather than assumed: `1.5px dashed`
-  // stays `1.5px` (no rounding), `border-radius: 999px` stays `999px`, `flex: 1` resolves
-  // `1 / 1 / 0%`, `min-height: 38px` stays `38px`, `padding: 0 12px` gives `0px` / `12px`. A row
-  // that reds on a correct build for an unchecked rounding is the one real hazard here.
+  // Chrome's resolved forms are READ off synthetic nodes, never assumed -- `border-radius: 999px`
+  // stays `999px`, `flex: 1` resolves `1 / 1 / 0%`, `min-height: 38px` stays `38px`,
+  // `padding: 0 12px` gives `0px` / `12px`. The one that does NOT survive is the dash's width:
+  // see BORDER_FLOOR below, which the first gate run caught.
   //
   // Two elements below carry no testid and are reached by a `selector`; their `element` is a
   // NAME for the failure message, not a handle.
@@ -4344,7 +4361,7 @@ const FIDELITY: FidelityRow[] = [
   { element: 'extraction-point-buyer_tin', property: 'padding-left', artboard: '12px', source: ':324', expected: '12px', deviation: null },
   { element: 'extraction-point-buyer_tin', property: 'padding-right', artboard: '12px', source: ':324', expected: '12px', deviation: null },
   { element: 'extraction-point-buyer_tin', property: 'border-top-style', artboard: 'dashed', source: ':324', expected: 'dashed', deviation: null },
-  { element: 'extraction-point-buyer_tin', property: 'border-top-width', artboard: '1.5px', source: ':324', expected: '1.5px', deviation: null },
+  { element: 'extraction-point-buyer_tin', property: 'border-top-width', artboard: '1.5px', source: ':324', expected: '1px', deviation: BORDER_FLOOR },
   { element: 'extraction-point-buyer_tin', property: 'border-top-left-radius', artboard: '10px', source: ':324', expected: '10px', deviation: null },
   { element: 'extraction-point-buyer_tin', property: 'font-size', artboard: '12.5px', source: ':324', expected: '12.5px', deviation: null },
   { element: 'extraction-point-buyer_tin', property: 'font-weight', artboard: '500', source: ':324', expected: '500', deviation: null },
@@ -4680,7 +4697,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     ).toBe(row.expected)
   }
 
-  // Exactly six rows deviate, and each says why. A silent divergence added later fails here
+  // Exactly seven rows deviate, and each says why. A silent divergence added later fails here
   // rather than passing as "documented". The two teal rows are AC-2: with both tokens probed in
   // the pane's own environment, this loop's `expected !== artboard` fires on the fact that this
   // repo does not resolve `--accent` to teal.
@@ -4695,6 +4712,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     'extraction-page-1·padding-left',
     'extraction-page-1·padding-right',
     'extraction-page-1·padding-top',
+    'extraction-point-buyer_tin·border-top-width',
   ])
   for (const row of deviations) {
     expect(row.expected, `${row.element} · ${row.property} is listed as a deviation but matches the artboard`).not.toBe(row.artboard)

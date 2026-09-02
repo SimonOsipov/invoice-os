@@ -3539,7 +3539,9 @@ const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
 // file's ONE copy: EXTR-12-09's block below cites this declaration rather than repeating it,
 // because two transcriptions of one list drift apart silently. A transcription, deliberately
 // not an import: the SPA is a different package, and reading the order out of the module under
-// test would assert it against itself.
+// test would assert it against itself. EXTR-13-06's headerFields guard in
+// frontend/app/src/lib/wireMirrors.test.ts now compares this copy to the Go slice in order, so
+// a drift here reds that file rather than passing quietly.
 //
 // EXTR-13-02 widened the mock's default result with 16 line-item names; the header pane renders
 // none of them until EXTR-13-07, so the per-field loop below is bounded to this vocabulary.

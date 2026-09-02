@@ -33,6 +33,8 @@ export interface LineSumState {
   agrees: boolean | null
 }
 
+// internal/extraction/handlers_lineitems.go, LineItemInput -- the POST body's element and the
+// 201 body's. wireMirrors.test.ts pins the key set against Go and e2e/api/client.ts.
 export interface LineItemInput {
   description: string | null
   quantity: string | null

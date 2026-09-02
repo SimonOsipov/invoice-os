@@ -7,6 +7,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { formatLabel } from '../components/SourceDocumentStates'
 import { fmtTimeWAT } from './format'
+import type { LineItemInput } from './lineItems'
 import type { AuthedFetch } from './portfolio'
 import { EDIT_FIELD_LABELS } from './reviewBatch'
 import { formatBytes, type DocumentBytes } from './sourceDocument'
@@ -302,6 +303,38 @@ export async function postFieldCorrection(
   return authedFetch<CorrectionResponse>(
     `${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/fields/${encodeURIComponent(field)}/corrections`,
     { method: 'POST', body },
+  )
+}
+
+// lineItems.ts owns the element type -- it is the layer that builds it (linesToPost) and this
+// module must not declare a second copy. Re-exported so the screen has one import site.
+export type { LineItemInput }
+
+// internal/extraction/handlers_lineitems.go, LineItemsRequest -- the POST body. The wrapper is
+// the wire, not a bare array.
+export interface LineItemsRequest {
+  lines: LineItemInput[]
+}
+
+// internal/extraction/handlers_lineitems.go, LineItemsResponse -- the 201 body. `lines` is
+// never null: normalizeLines returns an empty slice for an empty set.
+export interface LineItemsResponse {
+  id: string
+  invoice_id: string
+  lines: LineItemInput[]
+  created_at: string
+}
+
+// authedFetch, never bare fetch: it is the seam that fires onUnauthorized/onSuspended.
+export async function postLineItems(
+  authedFetch: AuthedFetch,
+  base: string,
+  jobId: string,
+  lines: LineItemInput[],
+): Promise<LineItemsResponse> {
+  return authedFetch<LineItemsResponse>(
+    `${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/line-items`,
+    { method: 'POST', body: { lines } },
   )
 }
 

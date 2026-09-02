@@ -51,6 +51,32 @@ function render(hits: Hit[]): string {
   return hits.map((h) => `  ${h.file}:${h.line}  ${h.text.trim()}`).join('\n')
 }
 
+// Import bindings routinely span lines here (api/portfolio.spec.ts:23), so the seam scan
+// matches the whole brace group rather than one line -- a per-line regex read clean with a
+// live multi-line seam caller re-planted. rmv01_theSeamScanSeesAMultiLineImportOfValidate
+// pins it. `validate (` also occurs in prose comments (invoice-surfaces.spec.ts:744, :808,
+// :1664), so a call only counts in a file that actually imports the binding.
+const CLIENT_IMPORT = /import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*'\.{1,2}(?:\/api)?\/client'/g
+const SEAM_BINDING = /(?<![A-Za-z0-9_$])validate(?![A-Za-z0-9_$])/
+const SEAM_CALL = /(?<![A-Za-z0-9_.$])validate\s*\(/
+
+function seamOffenders(label: string, src: string): Hit[] {
+  const lines = src.split('\n')
+  const hits: Hit[] = []
+  for (const m of src.matchAll(CLIENT_IMPORT)) {
+    const bind = SEAM_BINDING.exec(m[1])
+    if (!bind) continue
+    const at = m.index + m[0].indexOf(m[1]) + bind.index
+    const line = src.slice(0, at).split('\n').length
+    hits.push({ file: label, line, text: lines[line - 1] })
+  }
+  if (hits.length === 0) return []
+  lines.forEach((text, i) => {
+    if (SEAM_CALL.test(text)) hits.push({ file: label, line: i + 1, text })
+  })
+  return hits.sort((a, b) => a.line - b.line)
+}
+
 const WALKED = listTsFiles(E2E_ROOT).filter((f) => f !== SELF_SRC)
 // Set from the measured population (78 after self-exclusion). A truncated file list read clean
 // in subtask 01's QA; this floor is what stops that.
@@ -97,21 +123,26 @@ describe('RMV-01-02 removal guards: the single-document validate route', () => {
     ).toEqual([])
   })
 
-  // The literal scan above cannot see validation.spec.ts: it reaches the route through the
-  // typed client.ts seam. Both callers must go for the route to be dead.
+  it('rmv01_theSeamScanSeesAMultiLineImportOfValidate', () => {
+    const multiLine = "import {\n  login,\n  validate,\n} from './client'\n\nawait validate(token, {})\n"
+    expect(seamOffenders('fixture', multiLine).map((h) => h.line), 'a multi-line import of the seam must be reported').toEqual([3, 6])
+
+    // validateInvoice is the SURVIVING route's seam and must never be reported.
+    const survivor = "import {\n  validateInvoice,\n} from '../api/client'\n\nawait validateInvoice(token, id)\n"
+    expect(seamOffenders('fixture', survivor), 'validateInvoice is the surviving seam').toEqual([])
+
+    // A real file that imports validateInvoice, to prove the survivor case is not fixture-only.
+    const killSwitch = WALKED.find((f) => relPath(f) === 'api/validation.spec.ts')
+    expect(killSwitch, 'api/validation.spec.ts missing from the walk').toBeDefined()
+    expect(seamOffenders('api/validation.spec.ts', readFileSync(killSwitch!, 'utf8'))).toEqual([])
+  })
+
+  // The literal scan above cannot see a caller that reaches the route through the typed
+  // client.ts seam. Both callers must go for the route to be dead.
   it('rmv01_noE2ECallerOfTheValidateSeamFromApiClient', () => {
-    // Importers first: `validate (` also occurs in prose comments that are not calls
-    // (invoice-surfaces.spec.ts:745, :809, :1665), and those files import no seam.
-    const seamImport = /^import .*\bvalidate\b.*from '\.{1,2}(\/api)?\/client'/
-    const seamCall = /(?<![A-Za-z0-9_.$])validate\s*\(/
-    const offenders = WALKED.filter((f) => relPath(f) !== 'api/client.ts')
-      .map((f) => ({ rel: relPath(f), lines: readFileSync(f, 'utf8').split('\n') }))
-      .filter((f) => f.lines.some((l) => seamImport.test(l)))
-      .flatMap((f) =>
-        f.lines
-          .map((text, i) => ({ file: f.rel, line: i + 1, text }))
-          .filter((h) => seamCall.test(h.text) || seamImport.test(h.text)),
-      )
+    const offenders = WALKED.filter((f) => relPath(f) !== 'api/client.ts').flatMap((f) =>
+      seamOffenders(relPath(f), readFileSync(f, 'utf8')),
+    )
     expect(
       offenders.map((h) => `${h.file}:${h.line}`),
       `e2e still reaches the retiring route through client.ts's validate() seam:\n${render(offenders)}`,

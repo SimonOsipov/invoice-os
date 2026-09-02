@@ -2,7 +2,7 @@
 // amount fires against the seeded rule set (verified against the committed golden
 // internal/validation/testdata/golden/demo_bad_invoice.json). It has no code consumer --
 // it survives as the canonical NAME for that verdict set, which
-// topology/invoice-surfaces.spec.ts cites in prose at :21, :156 and :461.
+// topology/invoice-surfaces.spec.ts cites in prose at :21, :156 and :460.
 export const BAD_INVOICE_KEYS = ['supplier-tin-format', 'vat-standard-rate']
 
 // freshTin(): an NNNNNNNN-NNNN TIN with a correct Luhn check digit, generated

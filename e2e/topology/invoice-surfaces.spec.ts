@@ -42,7 +42,7 @@ import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped (D3
-// protocol, ../api/validation.spec.ts:14-26) -- the api run ahead of this one (dev-env.yml)
+// protocol, ../api/validation.spec.ts:5-22) -- the api run ahead of this one (dev-env.yml)
 // leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
 // cleanup), so every approval below would otherwise 404 against an invoice that armed no
 // run. A genuine convergence failure must abort this file loudly, not surface as confusing

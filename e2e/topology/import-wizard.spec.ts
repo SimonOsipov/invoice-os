@@ -1074,7 +1074,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 // AC-6/AC-7: this file had no test.describe/beforeAll/module-scope-token infrastructure
 // before this subtask -- scoped to just this submitting test rather than the whole file,
 // so unrelated tests below (INVCR-E2E-2, BULK-E2E-*, ...) stay untouched by it. Self-heal
-// (D3 protocol, ../api/validation.spec.ts:14-26), unwrapped: the api run ahead of this one
+// (D3 protocol, ../api/validation.spec.ts:5-22), unwrapped: the api run ahead of this one
 // leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
 // cleanup), and [topology-never-publishes] stays satisfied -- this restores the tenant's
 // OWN seeded policy, never a new one (docs/e2e-convention.md).

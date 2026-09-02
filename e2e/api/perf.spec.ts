@@ -353,7 +353,6 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
 // ACTIVE_RULE_SET_VERSION (a FOURTH consumer -- added to that module's header
 // list, [e2e-active-version]) rather than a literal; (2) the day30.spec.ts fix
 // already committed (652a232) un-pinning the third, positional consumer
-// Stage-1 found; and (3) api/validation.spec.ts + topology/targets.ts's
-// existing resolution through the same module. There is no fifth thing to
-// author here -- the gate either goes green as a whole, or Stage-1's BLOCKER
+// Stage-1 found; and (3) topology/targets.ts's existing resolution through
+// the same module. There is no fifth thing to author here -- the gate either goes green as a whole, or Stage-1's BLOCKER
 // finding was wrong, and that is for the deploy run (not Mode A) to show.

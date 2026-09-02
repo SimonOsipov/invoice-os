@@ -18,7 +18,7 @@
 //     check) and as a violation for required (a null is not present).
 //   - A present value that fails the type's check => a non-nil *Violation
 //     carrying RuleKey=r.Key, Severity=r.Severity, Message=r.Message,
-//     Path=r.Target (the resolved dotted path, for the M3-09 UI).
+//     Path=r.Target (the resolved dotted path).
 //   - Malformed/undecodable Params => a non-nil error (an engine/config
 //     fault -- Decision N15: fail loud on a broken rule, NEVER a silent
 //     pass), not a violation. Params are validated FIRST, before the
@@ -62,7 +62,7 @@ func withActual(actual string) violationOption {
 }
 
 // violation builds the *Violation a failed rule returns: the rule's key +
-// severity + message, plus the resolved target path (for the M3-09 UI) and,
+// severity + message, plus the resolved target path and,
 // via opts, this evaluation's Expected/Actual (D9).
 func violation(r Rule, opts ...violationOption) *Violation {
 	v := &Violation{

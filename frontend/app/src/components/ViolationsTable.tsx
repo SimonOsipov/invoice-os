@@ -1,5 +1,5 @@
-// Reusable violations table (M3-09-03) — the M4 deliverable. Playground-agnostic:
-// imports ONLY from lib/validationApi + React so M4 can mount it unchanged (AC-1).
+// Reusable violations table. Imports ONLY from lib/validationApi + React, so any screen
+// can mount it unchanged.
 // Pure function of props (no state, no effects). Styling mirrors ClientsView.tsx's
 // token usage (container/header/row + the severity-pill pattern at L109-111) so it
 // reads as the same design language.

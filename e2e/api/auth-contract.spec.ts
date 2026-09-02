@@ -63,11 +63,14 @@ test.describe('auth-header contract (API E2E, over the deployed gateway)', () =>
 
     const tenancy = await rawFetch('/api/tenancy/v1/me', { headers: invalidBearer })
     const portfolio = await rawFetch('/api/portfolio/v1/entities', { headers: invalidBearer })
-    const validation = await rawFetch('/api/validation/v1/validate', { method: 'POST', headers: invalidBearer })
+    // The validation surface's probe is a PATCH at the kill-switch route: a 401 is raised
+    // pre-routing (internal/gateway/gateway.go), so the request never reaches a handler and
+    // nothing is toggled.
+    const validation = await rawFetch('/api/validation/v1/rules/vat-standard-rate', { method: 'PATCH', headers: invalidBearer })
 
     assertUnauthorizedEnvelope(tenancy, 'tenancy surface (/api/tenancy/v1/me)')
     assertUnauthorizedEnvelope(portfolio, 'portfolio surface (/api/portfolio/v1/entities)')
-    assertUnauthorizedEnvelope(validation, 'validation surface (/api/validation/v1/validate)')
+    assertUnauthorizedEnvelope(validation, 'validation surface (/api/validation/v1/rules/{key})')
 
     // Not just three independently-shaped envelopes — the SAME body, proving
     // a single pre-routing reject() path produced all three rather than each

@@ -2,7 +2,7 @@
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
 // jsdom always reports scrollWidth === clientWidth === 0 -- real overflow geometry is
-// proven only by e2e (invoice-surfaces.spec.ts / validation.spec.ts), never here.
+// proven only by e2e (invoice-surfaces.spec.ts), never here.
 
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -106,11 +106,9 @@ describe('ViolationsTable', () => {
     expect(scrollEl.getAttribute('aria-label')).toBeTruthy()
   })
 
-  // role="region" + aria-label registers as a landmark, which ValidationView.tsx's
-  // full-width (never-overflowing) mount would also pick up -- AC-5 bars any playground
-  // presentation change, and a spurious landmark is one screen readers surface. "group"
-  // supports an author-supplied name without landmark status.
-  it('the scroll wrapper uses a non-landmark role, so the playground gets no spurious landmark', () => {
+  // role="region" + aria-label registers as a landmark, which screen readers surface.
+  // "group" supports an author-supplied name without landmark status.
+  it('the scroll wrapper uses a non-landmark role, so no spurious landmark is announced', () => {
     render(<ViolationsTable violations={[violation()]} ruleSetVersion={3} />)
 
     const scrollEl = screen.getByTestId('violations-scroll')

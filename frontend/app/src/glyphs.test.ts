@@ -26,7 +26,6 @@ const EXPECTED_NAV_ICON_SIZE = 17
 const NAV_DEFS: glyphs.NavDef[] = [
   glyphs.NAV_DASHBOARD,
   glyphs.NAV_INVOICES,
-  glyphs.NAV_VALIDATION,
   glyphs.NAV_WORKFLOWS,
   glyphs.NAV_RULES,
   glyphs.NAV_CLIENTS,
@@ -49,7 +48,7 @@ function glyphSize(def: glyphs.NavDef): number | undefined {
 describe('nav glyph sizes (task-327 AC-1)', () => {
   it('every NAV_* constant glyph renders at the shared nav icon size', () => {
     // Keyed by def.id rather than a plain array so a mismatch's toEqual diff names WHICH
-    // nav item is wrong (e.g. "clients"/"validation") instead of a bare index.
+    // nav item is wrong (e.g. "clients"/"reports") instead of a bare index.
     const actual = Object.fromEntries(NAV_DEFS.map((def) => [def.id, glyphSize(def)]))
     const expected = Object.fromEntries(NAV_DEFS.map((def) => [def.id, EXPECTED_NAV_ICON_SIZE]))
     expect(actual).toEqual(expected)
@@ -97,7 +96,6 @@ describe('nav labels stay byte-identical to main (task-327 out-of-scope guard, A
     const EXPECTED_LABELS: Record<string, string> = {
       dashboard: 'Overview',
       invoices: 'Invoices',
-      validation: 'Validation',
       workflows: 'Workflows',
       rules: 'Rules',
       clients: 'Clients',

@@ -1,7 +1,6 @@
 // M4-09-06 (task-187): the focused topology e2e for the live invoice list +
-// detail surfaces (M4-09-04/M4-09-05) -- mirrors M3-09's validation-playground
-// pattern (topology.spec.ts: firm-persona sign-in -> wait for the /v1/me
-// verified marker -> drive the live surface). NOT the M4-14 demo script
+// detail surfaces (M4-09-04/M4-09-05) -- firm-persona sign-in -> wait for the
+// /v1/me verified marker -> drive the live surface. NOT the M4-14 demo script
 // ([focused-e2e-topology], out of scope per the M4-09 story).
 //
 // db/seed.dev.sql now seeds 31 invoices, but only across 6 of its 10 curated
@@ -14,14 +13,12 @@
 // M4-14-01) -- with retries:1 in CI, against the same shared firm-persona
 // tenant every other topology spec also drives).
 //
-// Fixture data mirrors e2e/api/fixtures.ts's badInvoice/validInvoice shapes
-// (verified against the seeded v1+v2 rule set, migrations/
-// 20260711121327_seed_mbs_v1.sql + 20260716185106_rule_set_v2.sql), but built
-// as this service's own FLAT wire shape (supplier_tin/vat/... strings, not the
-// nested /v1/validate envelope) -- internal/invoice/payload.go's MBSPayload is
-// what nests them again before 04 evaluates, so a flat createInvoice + POST
-// .../validate round-trips the identical verdict fixtures.ts's BAD_INVOICE_KEYS
-// pins for the nested path.
+// Fixture data is verified against the seeded v1+v2 rule set (migrations/
+// 20260711121327_seed_mbs_v1.sql + 20260716185106_rule_set_v2.sql) and built as
+// this service's own FLAT wire shape (supplier_tin/vat/... strings) --
+// internal/invoice/payload.go's MBSPayload nests it again before the engine
+// evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
+// fixtures.ts's BAD_INVOICE_KEYS pins.
 import { test, expect, type Page, type Request } from '@playwright/test'
 import {
   login,
@@ -45,7 +42,7 @@ import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped (D3
-// protocol, ../api/validation.spec.ts:14-26) -- the api run ahead of this one (dev-env.yml)
+// protocol, ../api/validation.spec.ts:5-22) -- the api run ahead of this one (dev-env.yml)
 // leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
 // cleanup), so every approval below would otherwise 404 against an invoice that armed no
 // run. A genuine convergence failure must abort this file loudly, not surface as confusing
@@ -161,8 +158,8 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 // line-items-required, line-items-sum-subtotal, line-cost-non-negative) is satisfied so
 // no incidental third violation sneaks in and breaks an exact-key assertion.
 //
-// REVISED (INVCR-01-16, task-292, AC-10): true only through the STATELESS /v1/validate
-// path (unaffected, e2e/api/validation.spec.ts's own use). Every caller HERE goes
+// REVISED (INVCR-01-16, task-292, AC-10): true only of a payload validated directly,
+// never re-derived from storage. Every caller HERE goes
 // through createInvoice -- and task-293's C7 fix ([supplier-from-entity]) makes
 // Store.Create discard any caller-supplied supplier_tin and re-derive it from the
 // invoice's own entity -- so 'BADTIN' never reaches storage and supplier-tin-format can
@@ -187,8 +184,7 @@ function badInvoiceFields(invoiceNumber: string) {
 }
 
 // The same invoice with both broken fields corrected (a canonical
-// NNNNNNNN-NNNN supplier TIN, VAT at the correct 7.5%) -- fires ZERO
-// violations, mirroring fixtures.ts's validInvoice.
+// NNNNNNNN-NNNN supplier TIN, VAT at the correct 7.5%) -- fires ZERO violations.
 function cleanInvoiceFields(invoiceNumber: string) {
   return {
     invoice_number: invoiceNumber,
@@ -669,8 +665,8 @@ interface MixedImportResponse {
 // Dashboard/Clients carry no data-testid ([no-testids-on-portfolio-dashboard],
 // grep-verified) -- selected below by role/exact-text/CSS class, the same idiom
 // day30.spec.ts/topology.spec.ts already used for those surfaces before this story split
-// them into auth.spec.ts/validation.spec.ts (Dashboard/Clients coverage stayed here, in
-// this file's Day-60 arc).
+// them into auth.spec.ts (Dashboard/Clients coverage stayed here, in this file's
+// Day-60 arc).
 test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-inline -> re-validate-to-green -> dashboard rollup updates', async ({
   page,
 }) => {

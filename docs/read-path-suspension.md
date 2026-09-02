@@ -275,7 +275,6 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/entities/{id}/offboard` | portfolio | covered | |
 | `POST /v1/entities/{id}/onboard` | portfolio | covered | |
 | `GET /v1/rollup` | dashboard | covered | |
-| `POST /v1/validate` | validation | covered | |
 | `PATCH /v1/rules/{key}` | validation | covered | |
 | `GET /v1/invoices` | invoice | covered | |
 | `POST /v1/invoices` | invoice | covered | |

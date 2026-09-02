@@ -31,11 +31,11 @@ import { createEntity, createInvoice, listInvoices, login, rollup, validateInvoi
 import { freshTin } from '../api/fixtures'
 import { collectErrors, sidebarRoster, signInAs } from '../personaSession'
 import { WIDE_WIDTHS } from './layout'
-import { FIRM_PERSONA, INHOUSE_PERSONA, VALIDATION_EXPECTED } from './targets'
+import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
 // nothing). The FLAT wire shape POST /v1/invoices takes -- supplier_tin/vat as strings --
-// NOT api/fixtures.ts's nested /v1/validate envelope; internal/invoice/payload.go's
+// NOT a nested validation-engine envelope; internal/invoice/payload.go's
 // MBSPayload re-nests them server-side. Fires ZERO violations against the active v2 rule
 // set: a canonical Luhn-valid supplier TIN, VAT at exactly 7.5% of the subtotal, and one
 // line item that reconciles to it -- which is what promotes draft -> validated on
@@ -178,11 +178,11 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 }
 
 // The two rosters, derived from Sidebar.tsx's navGroups x glyphs.tsx (each NavDef's
-// label). Firm mode splits into a CLIENT group of 7 and a FIRM-WIDE group of 3;
+// label). Firm mode splits into a CLIENT group of 6 and a FIRM-WIDE group of 4;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
-const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Validation', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Audit', 'Settings']
-const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Validation', 'Workflows', 'Rules', 'Approvals', 'Reports', 'Audit', 'Settings']
+const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Audit', 'Settings']
+const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Workflows', 'Rules', 'Approvals', 'Reports', 'Audit', 'Settings']
 
 // ---------------------------------------------------------------------------------------
 // Test 1 -- the in-house sidebar sweep (Core AC 2, AC 8)
@@ -248,21 +248,6 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(validatedRow.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expect(invoiceRowByNumber(page, draftNumber)).toBeVisible()
 
-  // --- Validation -----------------------------------------------------------------------
-  // The playground round trip, driven exactly as validation.spec.ts:53-70 drives it as the
-  // FIRM persona. ValidationView reads neither ctx.active nor an entity id, so this is
-  // persona-agnostic by construction -- which is the point: it proves the in-house persona
-  // reaches the same live engine, tagged with the same rule-set version.
-  await goTo(page, 'Validation')
-  await page.getByRole('button', { name: /Has violations/ }).click()
-  await page.getByRole('button', { name: 'Validate' }).click()
-  const violations = page.getByRole('table')
-  await expect(violations).toBeVisible()
-  for (const key of VALIDATION_EXPECTED.sampleRuleKeys) {
-    await expect(violations).toContainText(key)
-  }
-  await expect(violations.locator('tbody tr').first().locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
-
   // --- Workflows ------------------------------------------------------------------------
   // LIVE, and deliberately thin. APPR-09 wired this list to internal/approval, so everything
   // this block used to assert below the subtitle -- the count, the status pills, the
@@ -302,7 +287,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   // --- Rules ----------------------------------------------------------------------------
   // Pins MOCK FIXTURE BEHAVIOUR (GOLDEN_RULES / GOLDEN_SET, lib/rules.ts), not a backend
   // contract -- the golden ruleset rendered here is static app data, unrelated to the live
-  // MBS rule set the Validation surface above round-trips. [workflows-included]'s trade-off.
+  // MBS rule set the engine evaluates. [workflows-included]'s trade-off.
   await goTo(page, 'Rules')
   await expect(page.getByRole('heading', { level: 1, name: 'Rules', exact: true })).toBeVisible()
   await expect(page.getByText('Golden ruleset · NG-MBS', { exact: false })).toBeVisible()
@@ -532,16 +517,16 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
 // ---------------------------------------------------------------------------------------
 // Sidebar.tsx wraps each nav glyph in an UNSIZED span, so a glyph's own width leaks into
 // where its label starts. Scope choice: FIRM_ROSTER, which spans BOTH firm nav groups
-// (CLIENT: Overview/Invoices/Approvals/Validation/Rules/Customers/Reports, FIRM-WIDE:
+// (CLIENT: Overview/Invoices/Approvals/Rules/Customers/Reports, FIRM-WIDE:
 // Workflows/Clients/Settings) -- required, not incidental: NAV_CLIENTS (the
-// 14px forked glyph) lives in FIRM-WIDE and NAV_VALIDATION (the 16px shieldGlyph) lives in
-// CLIENT, so scoping to a single group would miss one of the two reported defects.
+// 14px forked glyph) lives in FIRM-WIDE, so scoping to the CLIENT group alone would miss
+// the reported defect.
 //
 // Cannot be run locally -- this package's vitest projects run in `node` with no DOM
 // layer (docs/e2e-convention.md:71-73) -- so this cannot go RED in a local run; its first
 // green run is the post-deploy gate (dev-env.yml). Today's pre-fix values, measured
-// against the deployed build: label x = 45 (Clients), 47 (Validation), 48 (every other
-// item) -- three distinct icon widths leaking into three distinct label offsets.
+// against the deployed build: label x = 45 (Clients), 48 (every other item) -- distinct
+// icon widths leaking into distinct label offsets.
 test('nav-alignment: every sidebar nav item renders its label and icon column at an identical x', async ({ page }) => {
   const errors = collectErrors(page)
 

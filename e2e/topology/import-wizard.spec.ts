@@ -4544,6 +4544,7 @@ const LEFTOVERS = [
   'L-8: AA-16 -- ReviewRow.tsx:468\'s Save is `v2-btn v2-btn-primary pf-btn` with no disabled spread and no `filter: none`: a shipped instance of the defect AC-5 exists to prevent, on another screen.',
   'L-9: the pageless point label has no deployed oracle -- no fixture produces a job with zero page images, so AC-5 of subtask 08 is proved in jsdom only.',
   'L-10: DD-17 -- R27 is a negative that has never been shown to fail. Until a mutated handler is shown to red it, R27 is unproven rather than passing.',
+  'L-12: the four-line grid the mock now emits gains ZERO rows in FIDELITY above, because no artboard covers it -- the prototype set carries no line-item screen to resolve values against. Its owners are in this PR: EXTR13-LAYOUT-01..04 and EXTR13-E2E-01..10, not a future story.',
   'L-11: `extraction.field_corrected` is NOT in the audit_log.invoice_id generated column\'s event list (migrations/20260822080722_audit_log_invoice_id_column_and_index.sql), so an invoice-scoped audit read of a correction returns zero rows by construction. EXTR12-E2E-06 filters on the event and matches the invoice in the payload instead, and asserts the empty invoice-scoped read as the reason.',
 ]
 

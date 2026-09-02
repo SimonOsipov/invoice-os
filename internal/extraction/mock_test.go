@@ -55,6 +55,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -329,6 +330,68 @@ func mxSiblingTypesAndConsts(t *testing.T) map[string]bool {
 	return out
 }
 
+// mockLineAPI is part 2's only exemption: the line-item projection mock.go must call, because
+// TestLineFieldName_IsThePackagesOnlyNameSource forbids it from spelling a bracketed line name
+// itself. A literal set, never a prefix -- and mxAssertLineAPIExemptionIsFloored proves it is
+// safe rather than assuming it.
+var mockLineAPI = []string{"LineFieldName", "LineItemResults", "LineRoles"}
+
+// mxAssertLineAPIExemptionIsFloored proves the exemption is real, used and safe: each name is
+// declared in lineitems.go, each is actually referenced by mock.go (a dead exemption is a hole
+// nobody would notice), and the purity scans that make lineitems.go safe to call still exist.
+func mxAssertLineAPIExemptionIsFloored(t *testing.T, mock *ast.File) {
+	t.Helper()
+	if len(mockLineAPI) != 3 {
+		t.Fatalf("mockLineAPI carries %d name(s), want 3; the exemption has widened", len(mockLineAPI))
+	}
+
+	declared := map[string]bool{}
+	lineItems, _ := mxParse(t, "lineitems.go")
+	for _, decl := range lineItems.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				declared[d.Name.Name] = true
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				if s, ok := spec.(*ast.ValueSpec); ok {
+					for _, n := range s.Names {
+						declared[n.Name] = true
+					}
+				}
+			}
+		}
+	}
+	referenced := map[string]bool{}
+	ast.Inspect(mock, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			referenced[id.Name] = true
+		}
+		return true
+	})
+	for _, name := range mockLineAPI {
+		if !declared[name] {
+			t.Errorf("%q is exempted but lineitems.go declares no such func or var; the exemption names something that does not exist", name)
+		}
+		if !referenced[name] {
+			t.Errorf("%q is exempted but %s never names it; a dead exemption is a hole in part 2", name, mockSourceFile)
+		}
+	}
+
+	// The exemption is safe only because lineitems.go's purity is proven elsewhere. Delete
+	// those scans and this exemption goes unfloored in silence, so pin them by name.
+	src, err := os.ReadFile("lineitems_adversarial_test.go")
+	if err != nil {
+		t.Fatalf("read lineitems_adversarial_test.go: %v", err)
+	}
+	for _, guard := range []string{"TestLineItems_StartsNoGoroutineAndReadsNoClock", "TestLineItems_PurityScanUnchanged"} {
+		if !strings.Contains(string(src), guard) {
+			t.Errorf("%s is gone; it is what proves lineitems.go reaches no clock, network or database, and without it %v must not be exempt", guard, mockLineAPI)
+		}
+	}
+}
+
 // TestMockExtractor_HasNoAmbientDependency (REGRESSION GUARD): AC-4. Part 1 is an import
 // ALLOWLIST, strictly stronger than the denylist the AC names -- time, os, math/rand,
 // crypto/rand and net/* all need an import, and so do runtime, sync/atomic and unsafe, which the
@@ -359,6 +422,7 @@ func TestMockExtractor_HasNoAmbientDependency(t *testing.T) {
 		t.Fatalf("go/parser resolved every identifier in %s; ast.File.Unresolved is deprecated and this scan has stopped working", mockSourceFile)
 	}
 	siblings := mxSiblingTypesAndConsts(t)
+	mxAssertLineAPIExemptionIsFloored(t, f)
 	var sawQualifier bool
 	for _, id := range f.Unresolved {
 		switch {
@@ -366,6 +430,7 @@ func TestMockExtractor_HasNoAmbientDependency(t *testing.T) {
 		case seen[id.Name] || mxImportQualifier(seen, id.Name):
 			sawQualifier = true
 		case siblings[id.Name]:
+		case slices.Contains(mockLineAPI, id.Name):
 		default:
 			t.Errorf("%s: %s names %q, which is neither a universe name, one of its own imports, nor a sibling type or const -- a sibling func or var is the one way this file reaches ambient state without importing anything",
 				fset.Position(id.Pos()), mockSourceFile, id.Name)

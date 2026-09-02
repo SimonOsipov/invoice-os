@@ -99,8 +99,9 @@ type mockFixture struct {
 func mockClean(f Field) FieldResult { return FieldResult{Field: f, Alternatives: []Field{}} }
 
 // No TIN here is in the reserved 99999999-000N block internal/submission/mock_script.go:76-91
-// treats as behavioural triggers. Every name below is on HeaderFields (vocabulary.go), so
-// documentCreateInput maps it to a column instead of dropping it.
+// treats as behavioural triggers. Every name in mockFixtures is on HeaderFields
+// (vocabulary.go), so documentCreateInput maps it to a column instead of dropping it. The
+// default result below also carries line-item names, which are deliberately off HeaderFields.
 var mockFixtures = []mockFixture{
 	{
 		name: "clean-invoice",
@@ -126,13 +127,16 @@ var mockFixtures = []mockFixture{
 	},
 }
 
-// mockDefaultResult answers every unrecognised document: all five Reason values, both Region
-// states and both Value states, so a downstream story gets every branch without a fixture file.
+// mockDefaultResult answers every unrecognised document: seven header readings covering all
+// five Reason values, both Region states and both Value states, then the four-line block below
+// -- so a downstream story gets every branch without a fixture file.
 // buyer_tin carries a nil Value, not an empty string -- laws E08 and E10 together leave that
 // the only legal shape for a ReasonMissing field. issue_date's three readings sit at three
 // distinct boxes; TestMockExtractor_AlternativeRegionsDifferFromTheDecidedReading holds them
 // apart, because a region-swap cannot be observed against a shared box.
-var mockDefaultResult = []FieldResult{
+// subtotal disagrees with the four line totals (2095.50) by design: the table-level
+// reconciliation state needs a demo that shows it.
+var mockDefaultResult = append([]FieldResult{
 	mockClean(Field{Name: "invoice_number", Value: mockValue("MOCK-INV-0001"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.08, X1: 0.90, Y1: 0.13}, Reason: ReasonNone}),
 	{
 		Field: Field{Name: "issue_date", Value: mockValue("2026-01-01"), Region: &Region{Page: 1, X0: 0.62, Y0: 0.14, X1: 0.90, Y1: 0.19}, Reason: ReasonAmbiguous},
@@ -148,6 +152,70 @@ var mockDefaultResult = []FieldResult{
 	mockClean(Field{Name: "supplier_tin", Value: mockValue("MOCK-TIN-SUPPLIER-ALT"), Region: &Region{Page: 1, X0: 0.10, Y0: 0.08, X1: 0.38, Y1: 0.13}, Reason: ReasonInconsistent}),
 	mockClean(Field{Name: "buyer_tin", Reason: ReasonMissing}),
 	mockClean(Field{Name: "vat", Region: &Region{Page: 1, X0: 0.62, Y0: 0.64, X1: 0.90, Y1: 0.69}, Reason: ReasonUnreadable}),
+}, mockDefaultLineBlock()...)
+
+// mockLineColumns and mockLineRows are the line grid's bands on page 1: four columns by four
+// rows, clear of every header box the default result carries (issue_date's third reading is
+// the lowest, at 0.50-0.55).
+var mockLineColumns = map[string][2]float64{
+	LineRoleDescription: {0.10, 0.44},
+	LineRoleQuantity:    {0.46, 0.54},
+	LineRoleUnitPrice:   {0.56, 0.72},
+	LineRoleLineTotal:   {0.74, 0.90},
+}
+
+var mockLineRows = [][2]float64{{0.30, 0.34}, {0.35, 0.39}, {0.40, 0.44}, {0.45, 0.49}}
+
+// mockLineRegions boxes one line's cells. A role left out gets no box, matching an absent
+// value: LineItemResults emits no row for it, so a box would be dead data.
+func mockLineRegions(index int, roles ...string) map[string]*Region {
+	out := make(map[string]*Region, len(roles))
+	for _, role := range roles {
+		x, y := mockLineColumns[role], mockLineRows[index-1]
+		out[role] = &Region{Page: 1, X0: x[0], Y0: y[0], X1: x[1], Y1: y[1]}
+	}
+	return out
+}
+
+// mockDefaultLines is the demo grid: one clean line, one whose total disagrees with qty x
+// price, one missing a cell, one clean. Line 2's description is long on purpose -- it is what
+// exercises the grid column's width.
+var mockDefaultLines = []DocLine{
+	{
+		Index: 1, Description: mockValue("Widget"), Quantity: mockValue("2"),
+		UnitPrice: mockValue("500.00"), LineTotal: mockValue("1000.00"),
+		Regions: mockLineRegions(1, LineRoles...),
+	},
+	{
+		Index: 2, Description: mockValue("Assembly, calibration and on-site commissioning of the line-item rig"), Quantity: mockValue("3"),
+		UnitPrice: mockValue("250.00"), LineTotal: mockValue("900.00"),
+		Regions: mockLineRegions(2, LineRoles...),
+	},
+	{
+		Index: 3, Description: mockValue("Delivery"),
+		UnitPrice: mockValue("120.00"), LineTotal: mockValue("120.00"),
+		Regions: mockLineRegions(3, LineRoleDescription, LineRoleUnitPrice, LineRoleLineTotal),
+	},
+	{
+		Index: 4, Description: mockValue("Installation"), Quantity: mockValue("1"),
+		UnitPrice: mockValue("75.50"), LineTotal: mockValue("75.50"),
+		Regions: mockLineRegions(4, LineRoles...),
+	},
+}
+
+// mockDefaultLineBlock is the block row plus one row per populated cell, in LineItemResults'
+// own emit order. Reconcile never runs on the mock's output -- the worker calls Extract
+// directly -- so line 2's arithmetic disagreement (3 x 250.00 = 750.00, not 900.00) is stamped
+// here rather than derived.
+func mockDefaultLineBlock() []FieldResult {
+	out := []FieldResult{mockClean(Field{Name: "line_items", Reason: ReasonNone})}
+	for _, fr := range LineItemResults(mockDefaultLines) {
+		if fr.Name == LineFieldName(2, LineRoleLineTotal) {
+			fr.Reason = ReasonInconsistent
+		}
+		out = append(out, fr)
+	}
+	return out
 }
 
 // mockResults is the SHA-256 lookup Extract reads.

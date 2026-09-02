@@ -136,10 +136,11 @@ func reconcileLines(lines []DocLine) (block FieldResult, lineSum decimal.Decimal
 			continue
 		}
 		if exceedsTolerance(qty.Mul(price).Sub(printed).Abs()) {
+			v := *line.LineTotal // copied: a caller mutating its DocLine must not reach an emitted row
 			rowFlags = append(rowFlags, FieldResult{
 				Field: Field{
 					Name:   LineFieldName(line.Index, LineRoleLineTotal),
-					Value:  line.LineTotal,
+					Value:  &v,
 					Region: line.Region,
 					Reason: ReasonInconsistent,
 				},

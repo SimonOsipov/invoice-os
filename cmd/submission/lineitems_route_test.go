@@ -32,6 +32,11 @@ const (
 	// route lands. Floors, so a later story raises them rather than breaking this.
 	liMinDocRoutes        = 63
 	liMinDocRegistrations = 69
+
+	// Population floor for the walk below: cmd/submission/main.go registers 7 string-literal
+	// patterns today. A floor, so an unrelated route may leave without breaking this; 0 (a
+	// broken walk) still reds.
+	liMinRegistrationsWalked = 6
 )
 
 // Each domain outcome must cross the seam as one of internal/extraction's own sentinels, exactly
@@ -81,10 +86,10 @@ func TestNewInvoiceLineItemsApplier_MapsEachDomainError(t *testing.T) {
 	}
 }
 
-// A NIL EditInput.LineItems pointer means "leave the lines alone"; a non-nil, empty one means
-// "remove every line" ([line-items-optional]). This route always replaces the whole set, so the
-// pointer must be non-nil on every call -- the nil INPUT slice is the case an append-based
-// conversion actually breaks, not the already-non-nil empty one.
+// A NIL EditInput.LineItems pointer means "leave the lines alone"; a non-nil one replaces the
+// whole set ([line-items-optional]), so this route must never send nil. Only the POINTER carries
+// that meaning: `&converted` is non-nil however converted was built, so this does not
+// distinguish make from append.
 func TestNewInvoiceLineItemsApplier_AlwaysPassesANonNilPointer(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -301,5 +306,131 @@ func TestReadPathSuspensionDoc_DeclaresTheLineItemsRoute(t *testing.T) {
 	}
 	if registrations < liMinDocRegistrations {
 		t.Errorf("%s claims %d registrations, want at least %d -- the line-items route raises it by one", drDocPath, registrations, liMinDocRegistrations)
+	}
+}
+
+// TestNewFieldCorrectedAuditor_SpellsTheEventInCmd allows any number of cmd/submission spellings.
+// This route reuses the shipped auditor rather than adding a second; that is what pins it.
+func TestFieldCorrectedEvent_IsSpelledExactlyOnceInProduction(t *testing.T) {
+	root, files := eaProdFiles(t)
+
+	// Control needle: the matcher finds a literal that IS present, or "exactly one" below is a
+	// broken walk reporting an empty set.
+	if got := eaLiteralSites(t, root, files, drNeedleLiteral); len(got) == 0 {
+		t.Fatalf("the literal matcher found no site for %q -- the scan is broken, so the count below means nothing", drNeedleLiteral)
+	}
+
+	sites := eaLiteralSites(t, root, files, fcEvent)
+	if len(sites) != 1 {
+		t.Fatalf("%q is spelled as a production literal at %v, want exactly 1 site -- one seam, one auditor", fcEvent, sites)
+	}
+	if !strings.HasPrefix(sites[0], "cmd/submission/main.go:") {
+		t.Errorf("%q is spelled at %s, want cmd/submission/main.go -- the composition root's job", fcEvent, sites[0])
+	}
+}
+
+// net/http's mux PANICS on a duplicate pattern, which no test in this package would reach
+// because none builds a mux. A second registration is therefore a boot-time crash that only
+// the AST can see here.
+func TestSubmissionMain_RegistersTheLineItemsRouteExactlyOnce(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+
+	var walked, hits int
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		walked++
+		if strings.Trim(lit.Value, "\"") == liRoute {
+			hits++
+		}
+		return true
+	})
+
+	// Population floor: the walk must actually reach this file's registrations.
+	if walked < liMinRegistrationsWalked {
+		t.Fatalf("the walk reached %d HandleFunc registration(s), want at least %d -- a broken walk reports 0 hits and reads as a clean single registration", walked, liMinRegistrationsWalked)
+	}
+	if hits != 1 {
+		t.Errorf("%s is registered %d time(s) on the mux, want exactly 1 -- net/http panics at boot on a duplicate pattern", liRoute, hits)
+	}
+}
+
+// If either type grows a field, the adapter leaves the new invoice cell nil and
+// CopiesEveryCellByPosition still passes -- both sides get the zero. This forces D-04-1 to be
+// retaken rather than defaulted.
+func TestLineItemInputTypes_CarryTheFieldsTheAdapterWasWrittenFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  reflect.Type
+		want []string
+	}{
+		{"extraction.LineItemInput", reflect.TypeOf(extraction.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal"}},
+		{"invoice.LineItemInput", reflect.TypeOf(invoice.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if len(tc.want) == 0 {
+				t.Fatal("the expected field list is empty; the comparison below would assert nothing")
+			}
+			var got []string
+			for i := 0; i < tc.typ.NumField(); i++ {
+				got = append(got, tc.typ.Field(i).Name)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("%s has fields %v, want %v -- a new cell needs a deliberate mapping decision (D-04-1), not a silent nil", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// The conversion must happen before the edit runs, so a failing edit still saw the replace-all
+// shape -- and the handler's own transaction must reach the store untouched, or the row lands
+// outside the request's tx.
+func TestNewInvoiceLineItemsApplier_HandsTheTxThroughAndConvertsBeforeTheEditFails(t *testing.T) {
+	desc := "Widget"
+	in := []extraction.LineItemInput{{Description: &desc}}
+	tx := &eaTx{}
+
+	spy := &fcEditSpy{err: invoice.ErrNotFixable, returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), tx, liDocumentID, in); !errors.Is(err, extraction.ErrInvoiceNotEditable) {
+		t.Fatalf("the adapter returned %v, want %v", err, extraction.ErrInvoiceNotEditable)
+	}
+
+	if spy.gotTx != tx {
+		t.Errorf("the edit was handed tx %v, want the caller's own %v -- a different handle writes outside the request's transaction", spy.gotTx, tx)
+	}
+	if spy.gotInput.LineItems == nil || len(*spy.gotInput.LineItems) != 1 {
+		t.Fatalf("the failing edit saw LineItems %v, want a non-nil pointer to 1 line -- the conversion must precede the call", spy.gotInput.LineItems)
+	}
+	if got := (*spy.gotInput.LineItems)[0].Description; got == nil || *got != desc {
+		t.Errorf("the failing edit saw description %v, want %q", got, desc)
+	}
+}
+
+// The caller's slice is the decoded request body; the adapter must not write back into it.
+func TestNewInvoiceLineItemsApplier_LeavesTheCallersSliceUntouched(t *testing.T) {
+	desc, qty := "Widget", "2"
+	in := []extraction.LineItemInput{{Description: &desc, Quantity: &qty}}
+	want := []extraction.LineItemInput{{Description: &desc, Quantity: &qty}}
+
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, in); err != nil {
+		t.Fatalf("the adapter returned %v, want nil", err)
+	}
+
+	if !reflect.DeepEqual(in, want) {
+		t.Errorf("the caller's slice is now %+v, want %+v -- the adapter must convert, never write back", in, want)
 	}
 }

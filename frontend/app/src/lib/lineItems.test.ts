@@ -1,9 +1,6 @@
-// RED specs (EXTR-13-05, Mode A) — pin lineItems.ts before Stage 3 implements the body.
-// Every spec below currently fails either because lineItems.ts's stub throws
-// `new Error('... not implemented')` before computing a result (invoiceDraft.test.ts's own
-// RED reason) or, for LINE_TOLERANCE, because the stub's placeholder value disagrees with
-// reconcile.go's real literal. Both are the correct RED reason — an assertion / not-yet-built
-// failure, never an import or collection error.
+// lineItems.ts's spec. The rows above the "adversarial" banner were authored RED against a
+// throwing stub and are now green; the rows below it were added in QA against the shipped
+// body, each one pinned by a mutation that kills it.
 //
 // Genuinely discriminating against a plausible wrong implementation: the index-order test
 // (arrival order vs numeric index — only multi-digit indices expose it), the hole test (a
@@ -405,7 +402,10 @@ describe('addRow', () => {
 })
 
 describe('linesToPost', () => {
-  it('renumbers by array position, drops an all-blank row, nulls a blank cell, and never rewrites a value', () => {
+  // Title corrected in QA: LineItemInput carries no ordinal key, so "renumbers by position"
+  // was unassertable here. The server assigns line_no from array order; the order itself is
+  // pinned by the adversarial spec below.
+  it('drops an all-blank row, nulls a blank cell, and never rewrites a value', () => {
     const rows: LineRow[] = [
       mkRow(1, { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00' }),
       {
@@ -518,5 +518,196 @@ describe('lineItems.ts reaches no network and no storage', () => {
       needles.some((n) => reviewSrc.includes(n)),
       'the control file does not trip the scan -- the scan is not actually live',
     ).toBe(true)
+  })
+})
+
+// == adversarial / edge / negative coverage (QA, Mode B) =======================================
+// Added against the shipped body. Each row is pinned by a mutation that kills it; the notes
+// name the gap the RED phase left open.
+
+describe('remapRoles (adversarial)', () => {
+  // The RED fixture ties all four reasons to '', so a mutant that leaves `reason` behind
+  // survives every assertion above. These reasons differ, so the tie cannot hide the bug.
+  const reasoned: LineRow = {
+    key: 'r1',
+    cells: {
+      description: { name: 'line_items[1].description', value: 'Widget', region: null, reason: 'ambiguous' },
+      quantity: { name: 'line_items[1].quantity', value: '2', region: null, reason: 'unreadable' },
+      unit_price: { name: 'line_items[1].unit_price', value: '3.00', region: null, reason: 'inconsistent' },
+      line_total: { name: 'line_items[1].line_total', value: '6.00', region: null, reason: 'missing' },
+    },
+  }
+
+  it("the moved cell's reason travels with it, not just its value, name and region", () => {
+    const reasons = LINE_ROLES.map((role) => reasoned.cells[role].reason)
+    expect(
+      new Set(reasons).size,
+      'the fixture ties its reasons -- a tie cannot discriminate a reason that fails to move',
+    ).toBe(LINE_ROLES.length)
+
+    const swapped = remapRoles([reasoned], 'quantity', 'unit_price')
+    expect(swapped[0].cells.quantity.reason, "the reason stayed behind while its value moved").toBe('inconsistent')
+    expect(swapped[0].cells.unit_price.reason, 'the reason stayed behind while its value moved').toBe('unreadable')
+    expect(swapped[0].cells.description.reason, 'an untouched role lost its reason').toBe('ambiguous')
+  })
+
+  it('remapping a role onto itself is the identity, not a self-erasure', () => {
+    expect(
+      remapRoles([reasoned], 'quantity', 'quantity'),
+      'from === to must be total and leave the row exactly as it was',
+    ).toEqual([reasoned])
+  })
+
+  it('an empty row set is returned empty, not undefined', () => {
+    expect(remapRoles([], 'quantity', 'unit_price'), 'remapRoles is not total over an empty set').toEqual([])
+  })
+})
+
+describe('rowArithmetic (adversarial)', () => {
+  // The RED boundaries only ever put the total ABOVE the product (1.01, 1.02), so the
+  // positive branch of absScaled is never exercised at the boundary. These are its mirror.
+  it('the tolerance is symmetric: the product exceeding the total by 0.01 does not flag either', () => {
+    expect(rowArithmetic(mkRow(1, { quantity: '1', unit_price: '1.00', line_total: '0.99' })), '+0.01').toBe('ok')
+    expect(rowArithmetic(mkRow(1, { quantity: '1', unit_price: '1.00', line_total: '0.98' })), '+0.02').toBe('flagged')
+  })
+
+  it('a difference off the 0.01 grid still compares: 0.011 flags where 0.010 does not', () => {
+    expect(
+      rowArithmetic(mkRow(1, { quantity: '1', unit_price: '1.000', line_total: '0.990' })),
+      'exactly 0.010 must not flag',
+    ).toBe('ok')
+    expect(
+      rowArithmetic(mkRow(1, { quantity: '1', unit_price: '1.000', line_total: '0.989' })),
+      'an equality-against-0.02 check (rather than a comparison) would let 0.011 pass',
+    ).toBe('flagged')
+  })
+
+  it('operands of different scales compare exactly, and 0.1 x 0.2 is 0.02 (not float64 0.020000000000000004)', () => {
+    expect(0.1 * 0.2, 'the float64 trap this row exists for has been fixed in the language').not.toBe(0.02)
+    expect(
+      rowArithmetic(mkRow(1, { quantity: '0.1', unit_price: '0.2', line_total: '0.02' })),
+      'a float64 multiply leaves 4e-18 of residue here; the exact kit must land on zero',
+    ).toBe('ok')
+    expect(
+      rowArithmetic(mkRow(1, { quantity: '1', unit_price: '1', line_total: '1.0000' })),
+      'scale 0 against scale 4 must rescale, not compare mantissas raw',
+    ).toBe('ok')
+  })
+
+  it('negative money is checked, not skipped or absolute-valued into agreement', () => {
+    expect(rowArithmetic(mkRow(1, { quantity: '-2', unit_price: '3.00', line_total: '-6.00' })), 'exact').toBe('ok')
+    expect(
+      rowArithmetic(mkRow(1, { quantity: '-2', unit_price: '3.00', line_total: '-6.02' })),
+      'a sign-blind comparison would call this exact',
+    ).toBe('flagged')
+  })
+})
+
+describe('lineSumState (adversarial)', () => {
+  it('an empty row set is null, mirroring haveLineTotal on no rows at all', () => {
+    expect(lineSumState([], '100.00'), 'an empty set has no parseable line total, so there is no sum').toBeNull()
+  })
+
+  it('rows of differing scale sum exactly', () => {
+    const rows = [mkRow(1, { line_total: '0.5' }), mkRow(2, { line_total: '0.25' })]
+    expect(lineSumState(rows, '0.75'), 'a mixed-scale sum did not land exactly').toEqual({
+      sum: '0.75',
+      printed: '0.75',
+      agrees: true,
+    })
+  })
+
+  it('an unparseable line total is skipped, not folded to zero, and the rest still sum', () => {
+    const rows = [mkRow(1, { line_total: '100.00' }), mkRow(2, { line_total: 'garbled' })]
+    expect(
+      lineSumState(rows, '100.00'),
+      'a garbled line total was folded into the sum instead of being skipped',
+    ).toEqual({ sum: '100.00', printed: '100.00', agrees: true })
+  })
+})
+
+describe('linesFromFields (adversarial)', () => {
+  it('a field the module does not own is ignored, and the line fields still land', () => {
+    const fields = [
+      mkField('invoice_number', 'INV-1'),
+      mkField('line_items[1].description', 'One'),
+      mkField('document_text_layer', 'blah'),
+      mkField('line_items', 'the block itself'),
+      mkField('subtotal', '100.00'),
+    ]
+    // Floor: the fixture really does carry non-line fields to be dropped.
+    const lineFieldCount = fields.filter((f) => parseLineFieldName(f.name) !== null).length
+    expect(lineFieldCount, 'the fixture has no line fields at all').toBe(1)
+    expect(fields.length - lineFieldCount, 'the fixture has no foreign fields to ignore').toBe(4)
+
+    const rows = linesFromFields(fields)
+    expect(rows.length, 'a foreign field was grouped into a row, or the line field was dropped').toBe(1)
+    expect(rows[0].cells.description.value, 'the surviving row lost its value').toBe('One')
+  })
+
+  it('a wire cell with a null value becomes an empty string, never null', () => {
+    const rows = linesFromFields([mkField('line_items[1].quantity', null)])
+    expect(rows.length, 'the null-valued cell dropped its whole row').toBe(1)
+    expect(
+      rows[0].cells.quantity.value,
+      "an input holds '' and never null -- a null here would render as the string 'null'",
+    ).toBe('')
+  })
+
+  it('an empty field list yields no rows, not one blank row', () => {
+    expect(linesFromFields([]), 'an empty wire fabricated a row').toEqual([])
+  })
+})
+
+describe('addRow (adversarial)', () => {
+  it('two consecutive appends get distinct keys, so React never sees a duplicate', () => {
+    const once = addRow([])
+    const twice = addRow(once)
+    const keys = twice.map((r) => r.key)
+    expect(keys.length, 'the append fixture is empty').toBe(2)
+    expect(new Set(keys).size, 'two appended rows share a key -- React would collapse them').toBe(2)
+  })
+
+  it('an appended key does not collide with a key already in the set', () => {
+    const seeded: LineRow[] = [{ ...mkRow(1), key: 'n1' }]
+    const after = addRow(seeded)
+    expect(after[1].key, 'the fresh key collided with the existing n1').not.toBe('n1')
+  })
+})
+
+describe('linesToPost / lineSetChanged (adversarial)', () => {
+  it('the posted order is array order, independent of the wire index each row carries', () => {
+    // Rows deliberately out of wire-index order: the body must not re-sort them.
+    const rows = [
+      mkRow(9, { description: 'Nine' }),
+      mkRow(2, { description: 'Two' }),
+      mkRow(5, { description: 'Five' }),
+    ]
+    expect(
+      linesToPost(rows).map((l) => l.description),
+      'linesToPost re-sorted by wire index; the server assigns line_no from array order',
+    ).toEqual(['Nine', 'Two', 'Five'])
+  })
+
+  it('every cell of a posted row is carried, not just the ones the grid shows', () => {
+    const posted = linesToPost([mkRow(1, { description: 'W', quantity: '1', unit_price: '2.00', line_total: '2.00' })])
+    expect(posted.length, 'the single row was dropped').toBe(1)
+    expect(Object.keys(posted[0]).sort(), 'the posted body gained or lost a key').toEqual([
+      'description',
+      'line_total',
+      'quantity',
+      'unit_price',
+    ])
+  })
+
+  it('two empty sets are unchanged, and an added row is a change', () => {
+    expect(lineSetChanged([], []), 'two empty sets read as changed').toBe(false)
+    expect(lineSetChanged([], addRow([])), 'an appended blank row was not detected as a change').toBe(true)
+  })
+
+  it('an edit confined to the last row is still detected', () => {
+    const wire = [mkRow(1, { quantity: '1' }), mkRow(2, { quantity: '2' })]
+    const draft = [wire[0], { ...wire[1], cells: { ...wire[1].cells, quantity: { ...wire[1].cells.quantity, value: '9' } } }]
+    expect(lineSetChanged(wire, draft), 'a short-circuit that only checks the first row would miss this').toBe(true)
   })
 })

@@ -34,6 +34,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { crossGlyph, crosshairGlyph } from '../glyphs'
 import { fieldLabel } from '../lib/extractionReview'
+import { LINE_ROLES, lineFieldName } from '../lib/lineItems'
+import type { LineRole, LineRow } from '../lib/lineItems'
 import type {
   DraftEntries,
   ExtractionCandidate,
@@ -72,6 +74,12 @@ const MARKER_CHOSEN = 'YOU CHOSE THIS'
 const WAS_CHOSEN = 'We found more than one candidate'
 const UNDO = 'Undo'
 const INVOICE_NUMBER_LOCKED = "The invoice number is this invoice's identity and cannot be changed here."
+
+// EXTR-13-07's own copy table (LineItemGrid), verbatim -- the grid mounts inside this pane's
+// body, so the residue sweep below has to know it.
+const LINE_ITEM_EMPTY_1 = 'We found no line items on this document.'
+const LINE_ITEM_EMPTY_2 = 'An invoice cannot be filed until it has at least one line, so add one here.'
+const LINE_ITEM_ADD = 'Add a line'
 
 // EXTR-12's Invented-copy table again, with the lead's two Stage-1 corrections:
 // `POINT_PAGELESS` is the artboard's isDocx branch (`:663`), transcribed into a row the table
@@ -158,6 +166,12 @@ interface FieldsProps {
   onUndo: (name: string) => void
   onArm: (name: string) => void
   onDisarm: () => void
+  /** Null is the no-draft-yet state: the grid then renders the wire's own rows, as every row here expects. */
+  lineRows: LineRow[] | null
+  onLineEdit: (at: number, role: LineRole, value: string) => void
+  onLineAdd: () => void
+  onLineRemove: (at: number) => void
+  onLineRemap: (from: LineRole, to: LineRole) => void
 }
 
 function fieldsPane(over: Partial<FieldsProps> = {}) {
@@ -173,6 +187,11 @@ function fieldsPane(over: Partial<FieldsProps> = {}) {
     onUndo: () => {},
     onArm: () => {},
     onDisarm: () => {},
+    lineRows: null,
+    onLineEdit: () => {},
+    onLineAdd: () => {},
+    onLineRemove: () => {},
+    onLineRemap: () => {},
     ...over,
   }
   return <ExtractionFields {...props} />
@@ -326,11 +345,11 @@ describe('the pane chrome', () => {
 })
 
 // ==========================================================================================
-// One cell per wire field, in wire order (AC-2, AC-3)
+// One cell per HEADER wire field, in wire order (AC-2, AC-3)
 // ==========================================================================================
 
 describe('the field cells', () => {
-  it('renders one row per wire field, in wire order', () => {
+  it('renders one row per HEADER wire field, in wire order', () => {
     render(fieldsPane())
 
     // The fixture is deliberately unsorted: a pane that sorts by the vocabulary or
@@ -737,6 +756,32 @@ describe('the vocabulary EXTR-12 owns', () => {
     for (const leaked of ['unreadable', 'LOW_CONFIDENCE', 'SFS-2026-0418', '0.62', '62', '%']) {
       expect(text, `the pane rendered "${leaked}"`).not.toContain(leaked)
     }
+  })
+})
+
+// ==========================================================================================
+// T11 (task-813). line_items[N].role belongs to LineItemGrid, not this pane -- a line-item
+// name must never reach `extraction-field-*`, the same prefix EXTR11-E2E-02a counts on the
+// deploy gate.
+// ==========================================================================================
+
+describe('the line-item field filter (EXTR-13-07)', () => {
+  it('renders no line-item cell once the wire carries them', () => {
+    const header = tenFields()
+    const blockRow = mkField({ name: 'line_items', value: null, region: null })
+    const lineCells = [1, 2].flatMap((i) =>
+      LINE_ROLES.map((role) => mkField({ name: lineFieldName(i, role), value: '1.00' })),
+    )
+
+    render(fieldsPane({ fields: [...header, blockRow, ...lineCells] }))
+
+    // The floor: the fixture really carries line-item fields, so the exclusion below excludes
+    // something rather than nothing.
+    expect(lineCells.length, 'the fixture carries no line cell to exclude').toBeGreaterThan(0)
+
+    expect(rowIds().slice().sort(), 'a line-item name reached the header prefix').toEqual(
+      HEADER_FIELDS.map((name) => `extraction-field-${name}`).sort(),
+    )
   })
 })
 
@@ -1313,6 +1358,12 @@ describe('the pane renders nothing it does not declare', () => {
       POINT_IDLE,
       ...chipText,
       ...fields.map((f) => fieldLabel(f.name)),
+      // EXTR-13-07: LineItemGrid mounts unconditionally whenever the pane is populated
+      // (fields.length > 0), so its declared copy joins this sweep too -- with no line-item
+      // fields on this fixture it renders its own empty state.
+      LINE_ITEM_EMPTY_1,
+      LINE_ITEM_EMPTY_2,
+      LINE_ITEM_ADD,
     ]
 
     let left = pane().textContent ?? ''
@@ -1816,5 +1867,42 @@ describe('the point button, as an affordance', () => {
     expect(svg!.outerHTML, 'the point button carries the dismissal X, which reads as "close"').not.toBe(
       glyphMarkup(crossGlyph),
     )
+  })
+})
+
+// ==========================================================================================
+// QA additions (Stage 4). T11 asserts only that no line name reaches this pane's prefix. A
+// filter that dropped the line cells entirely would pass it, so this asserts the other half.
+// ==========================================================================================
+
+describe('the line-item field filter, both directions (EXTR-13-07)', () => {
+  it('hands every line cell to the grid while the header rows stay put', () => {
+    const header = tenFields()
+    const lineCells = [1, 2, 4].flatMap((i) =>
+      LINE_ROLES.map((role) => mkField({ name: lineFieldName(i, role), value: '1.00' })),
+    )
+    const onSelect = vi.fn()
+    render(
+      fieldsPane({ fields: [...header, mkField({ name: 'line_items', value: null, region: null }), ...lineCells], onSelect }),
+    )
+
+    // Both floors: the header half is populated and the line half is not empty.
+    expect(rowIds().length, 'the header pane rendered nothing to keep').toBe(HEADER_FIELDS.length)
+    expect(lineCells.length, 'the fixture carries no line cell to hand over').toBeGreaterThan(0)
+
+    const rows = document.querySelectorAll('[data-testid^="line-item-row-"]')
+    expect(rows, 'the filtered line cells reached neither pane').toHaveLength(3)
+    expect(screen.queryByTestId('line-item-empty'), 'the grid claims an empty extraction while holding rows').toBeNull()
+
+    // The wire's hole at index 3 closes in ordinal terms only -- the third row keeps index 4's
+    // own name, which is what the document highlight resolves through.
+    fireEvent.click(screen.getByTestId('line-item-cell-3-quantity'))
+    expect(onSelect.mock.calls, "the third row renumbered itself instead of keeping wire index 4's name").toEqual([
+      [lineFieldName(4, 'quantity')],
+    ])
+    expect(
+      (screen.getByTestId('line-item-input-3-quantity') as HTMLInputElement).getAttribute('aria-label'),
+      'the third row is not labelled by its ordinal',
+    ).toBe('Line 3 quantity')
   })
 })

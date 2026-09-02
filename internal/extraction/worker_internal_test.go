@@ -212,7 +212,7 @@ func TestMockExtractor_DefaultResultFlaggedCountIgnoresAlternatives(t *testing.T
 		t.Fatalf("the default result carries %d decided field(s) and no alternatives; this spec would pass on a flaggedCount that flattened them", decided)
 	}
 
-	if got, want := flaggedCount(results), 6; got != want {
+	if got, want := flaggedCount(results), 7; got != want {
 		t.Errorf("flaggedCount over the default result = %d, want %d -- %d decided field(s) carry a reason and %d alternative(s) must not be counted",
 			got, want, flagged, alternatives)
 	}

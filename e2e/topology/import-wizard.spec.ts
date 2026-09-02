@@ -2915,9 +2915,53 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   expect(Object.keys(detail.document).sort()).toEqual(['content_type', 'filename', 'size_bytes', 'stored_at'].sort())
   expect(Object.keys(detail.pages[0]).sort()).toEqual(['height_px', 'page', 'width_px'].sort())
   expect(detail.fields.length, 'a settled job with no fields cannot prove a field key set').toBeGreaterThan(0)
-  expect(Object.keys(detail.fields[0]).sort()).toEqual(
-    ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
-  )
+  // EVERY field, never `fields[0]`. The wire is ordered by field_name -- created_at defaults to
+  // now() and writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's
+  // `ORDER BY created_at, field_name, ...` degenerates to the name -- and EXTR-13-02's line
+  // cells sort ahead of most header readings, which moved `fields[0]` from invoice_number to
+  // buyer_tin with no assertion noticing. A read at one index was never a key-set claim.
+  for (const f of detail.fields) {
+    expect(Object.keys(f).sort(), `${f.name}'s key set drifted from internal/extraction/reader.go`).toEqual(
+      ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
+    )
+  }
+
+  // The field SET itself, widened by EXTR-13-02 from seven header readings to twenty-three.
+  // Transcribed from internal/extraction/mock.go (mockDefaultResult, then mockDefaultLines
+  // through LineItemResults) and deliberately not derived: this is the only DEPLOYED oracle
+  // that the widened fixture reaches the screen, so a mock that silently dropped a line must
+  // red here and not only in Go. Line 3 carries no `quantity` -- that hole is the fixture's
+  // point (Core AC 3), and a count could not express it. Both sides are sorted in JS, so the
+  // database's collation is not what this compares.
+  const WIRE_FIELD_SET = [
+    'invoice_number',
+    'issue_date',
+    'total',
+    'subtotal',
+    'supplier_tin',
+    'buyer_tin',
+    'vat',
+    'line_items',
+    'line_items[1].description',
+    'line_items[1].quantity',
+    'line_items[1].unit_price',
+    'line_items[1].line_total',
+    'line_items[2].description',
+    'line_items[2].quantity',
+    'line_items[2].unit_price',
+    'line_items[2].line_total',
+    'line_items[3].description',
+    'line_items[3].unit_price',
+    'line_items[3].line_total',
+    'line_items[4].description',
+    'line_items[4].quantity',
+    'line_items[4].unit_price',
+    'line_items[4].line_total',
+  ]
+  expect(
+    [...detail.fields.map((f) => f.name)].sort(),
+    "the wire's field set drifted from mockDefaultResult -- a line the grid needs is missing, or a name changed shape",
+  ).toEqual([...WIRE_FIELD_SET].sort())
 
   await testInfo.attach('extraction-wire.json', {
     body: JSON.stringify({ grids, keys: Object.keys(detail).sort(), detail }, null, 2),
@@ -3119,11 +3163,18 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
   // measures nothing and passes vacuously.
   expect(detail.fields.length, 'no field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
 
+  // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
+  // own grid, LineItemGrid -- so the row count below is bounded to it, the same predicate
+  // EXTR11-E2E-11 uses at `wireHeaderNames`.
+  const wireNamesA = detail.fields.map((f) => f.name)
+  const headerNamesA = wireNamesA.filter((n) => !n.startsWith('line_items'))
+  expect(headerNamesA.length, 'no header field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
+
   const canvas = page.getByTestId('extraction-canvas')
   const fields = page.getByTestId('extraction-fields')
   // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.
   const rows = page.locator('[data-testid^="extraction-field-"]')
-  await expect(rows, 'the pane rendered no row for a wire that carries fields').toHaveCount(detail.fields.length)
+  await expect(rows, 'the pane rendered no row for a wire that carries header fields').toHaveCount(headerNamesA.length)
 
   type Spill = { testid: string; left: number; right: number }
   const measured: { width: number; canvas: Rect; fields: Rect; overlap: Rect; worst: Spill }[] = []
@@ -3167,7 +3218,7 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
       // This is the relationship the artboard's `min-width: 470px` floor exists to protect:
       // a `1fr 1fr` grid inside a pane squeezed below it pushes its cells' content out, and
       // the body's `overflow-y: auto` (y ONLY) means a horizontal spill has nowhere to hide.
-      expect(m.rs.length, `no row measured at ${width}px`).toBe(detail.fields.length)
+      expect(m.rs.length, `no row measured at ${width}px`).toBe(headerNamesA.length)
       let worst: Spill = { testid: '', left: 0, right: 0 }
       for (const r of m.rs) {
         expect(r.width, `${r.testid} collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
@@ -3491,6 +3542,30 @@ const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
   missing: 'NOT FOUND',
 }
 
+// internal/extraction/vocabulary.go, HeaderFields -- and the order one Save writes in. The
+// file's ONE copy: EXTR-12-09's block below cites this declaration rather than repeating it,
+// because two transcriptions of one list drift apart silently. A transcription, deliberately
+// not an import: the SPA is a different package, and reading the order out of the module under
+// test would assert it against itself. EXTR-13-06's headerFields guard in
+// frontend/app/src/lib/wireMirrors.test.ts now compares this copy to the Go slice in order, so
+// a drift here reds that file rather than passing quietly.
+//
+// EXTR-13-02 widened the mock's default result with 16 line-item names; EXTR-13-07 gives them
+// their own grid, LineItemGrid, and the header pane renders none of them -- so the per-field
+// loop below is bounded to this vocabulary.
+const VOCABULARY = [
+  'invoice_number',
+  'issue_date',
+  'supplier_tin',
+  'supplier_name',
+  'buyer_tin',
+  'buyer_name',
+  'currency',
+  'subtotal',
+  'vat',
+  'total',
+]
+
 test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
@@ -3505,7 +3580,13 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   const codes = new Set(flagged.map((f) => f.reason))
   expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the four codes`).toBe(4)
 
-  for (const f of flagged) {
+  // The pill loop is a header-pane claim -- a line-item cell has no header-pane home, since
+  // EXTR-13-07 gave it LineItemGrid, so it is excluded here rather than left to fail the AC it
+  // does not test.
+  const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
+  expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
+
+  for (const f of headerFlagged) {
     const cell = page.getByTestId(`extraction-field-${f.name}`)
     await expect(cell, `${f.name} rendered no cell`).toBeVisible()
     const pill = REASON_PILL[f.reason as Exclude<ExtractionReason, ''>]
@@ -4523,6 +4604,7 @@ const LEFTOVERS = [
   'L-8: AA-16 -- ReviewRow.tsx:468\'s Save is `v2-btn v2-btn-primary pf-btn` with no disabled spread and no `filter: none`: a shipped instance of the defect AC-5 exists to prevent, on another screen.',
   'L-9: the pageless point label has no deployed oracle -- no fixture produces a job with zero page images, so AC-5 of subtask 08 is proved in jsdom only.',
   'L-10: DD-17 -- R27 is a negative that has never been shown to fail. Until a mutated handler is shown to red it, R27 is unproven rather than passing.',
+  'L-12: the four-line grid the mock now emits gains ZERO rows in FIDELITY above, because no artboard covers it -- the prototype set carries no line-item screen to resolve values against. Its owners are in this PR: EXTR13-LAYOUT-01..04 and EXTR13-E2E-01..10, not a future story.',
   'L-11: `extraction.field_corrected` is NOT in the audit_log.invoice_id generated column\'s event list (migrations/20260822080722_audit_log_invoice_id_column_and_index.sql), so an invoice-scoped audit read of a correction returns zero rows by construction. EXTR12-E2E-06 filters on the event and matches the invoice in the payload instead, and asserts the empty invoice-scoped read as the reason.',
 ]
 
@@ -4578,6 +4660,29 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     properties[row.element].push(row.property)
   }
 
+  // The sweep's BOUND, checked against the wire the screen read rather than against this
+  // table's own literals. EXTR-13-02 widened the mock with 15 line-item cells and EXTR-13-07
+  // gives them their own grid, LineItemGrid, off this table's fidelity surface entirely -- so
+  // "this table names only header-pane elements" still has to be enforced, not assumed; L-12
+  // above records why the grid gains no row here. The line floor first: with no line cell on
+  // the wire the exclusion below would exclude nothing.
+  const wireNames = detail.fields.map((f) => f.name)
+  const wireHeaderNames = wireNames.filter((n) => !n.startsWith('line_items'))
+  expect(
+    wireNames.filter((n) => n.startsWith('line_items')).length,
+    'this document delivered no line-item field, so the exclusion below excludes nothing',
+  ).toBeGreaterThan(0)
+  expect(
+    subjects.filter((s) => wireHeaderNames.some((n) => s.element.includes(n))).length,
+    'no subject names a field the wire delivered -- the bound below is over a table of nothing',
+  ).toBeGreaterThan(0)
+  for (const s of subjects) {
+    expect(
+      `${s.element} ${s.selector}`,
+      `${s.element} sweeps a line-item cell, which has no artboard to resolve values against`,
+    ).not.toContain('line_items')
+  }
+
   // Waited for, not assumed present: a missing element would otherwise fail the read as a hard
   // error where it can equally be a paint this assertion arrived one frame ahead of. A scoped
   // selector matching two nodes raises Playwright's strict-mode violation here, which is the
@@ -4585,6 +4690,24 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   for (const s of subjects) {
     await expect(page.locator(s.selector), `${s.element} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
   }
+
+  // The bound's DEPLOYED half: no subject resolves inside a line-item cell. EXTR-13-07's filter
+  // keeps every line name out of `extraction-field-*` and gives it to LineItemGrid, so this
+  // reads the surface rather than the table above -- and it stays true, not merely vacuous,
+  // now that the filter has landed. What CANNOT be asserted, so it is recorded instead of
+  // skipped: the subject set is not derivable from the wire at all, because four subjects
+  // (extraction-canvas, extraction-fields, extraction-ground, extraction-toolbar) and the page
+  // frame are pane chrome that no wire field names. The bound is therefore a guard against a
+  // row retargeted at the grid, not a discovery of what the table should hold.
+  const insideALineCell = await page.evaluate(
+    (selectors: string[]) =>
+      selectors.filter((sel) => {
+        const el = document.querySelector(sel)
+        return el !== null && el.closest('[data-testid^="extraction-field-line_items"]') !== null
+      }),
+    subjects.map((s) => s.selector),
+  )
+  expect(insideALineCell, 'a fidelity subject resolved inside a line-item cell on the deployed pane').toEqual([])
 
   // Read once, in one frame: two evaluates across a re-render can disagree.
   const measured = await page.evaluate(
@@ -4857,21 +4980,9 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 // E2E on `pull_request.draft == false`. The local oracle is `pnpm -r typecheck` plus
 // `playwright test --list`.
 
-// internal/extraction/vocabulary.go, HeaderFields -- the order one Save writes in. A
-// transcription, deliberately not an import: the SPA is a different package, and reading the
-// order out of the module under test would assert it against itself.
-const VOCABULARY = [
-  'invoice_number',
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-]
+// The header vocabulary this block reads -- HeaderFields, in the order one Save writes in --
+// is `VOCABULARY`, declared once above beside EXTR12-E2E-01. It used to be transcribed twice in
+// this file, byte for byte; one list, one copy.
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
 // a 422, so none of them is what this journey types over.
@@ -4920,8 +5031,24 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   expect(missing!.value, 'the missing field already carries a value').toBeNull()
   expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
 
-  const typed = detail.fields.find((f) => f.reason === 'inconsistent' && !LOCKED_FIELDS.includes(f.name))
-  expect(typed, 'this document reported no writable inconsistent field -- there is nothing to type over').toBeTruthy()
+  // By NAME, the way EXTR12-E2E-02 and EXTR11-E2E-11 pick `total` above -- never by position.
+  // The wire is ordered by field_name (created_at defaults to now() and writeFieldResultsTx
+  // writes a job's rows on ONE transaction, so reader.go's ORDER BY degenerates to the name),
+  // and EXTR-13-02's line cells sort ahead of `total`: "the first writable inconsistent field"
+  // resolves to line_items[2].line_total, which has no header cell to type into and which
+  // refuseField would 422. The two properties that pick made implicit are asserted here instead
+  // of assumed, so a build that locked `total` or stopped flagging it reds on the wire rather
+  // than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the ordering
+  // from the Go side.
+  const typed = detail.fields.find((f) => f.name === 'total')
+  expect(typed, 'the wire the screen read carries no `total` -- there is nothing to type over').toBeTruthy()
+  expect(LOCKED_FIELDS, 'total is locked now, so the correction this journey posts would be a 422').not.toContain(
+    typed!.name,
+  )
+  expect(
+    typed!.reason,
+    'total is not flagged inconsistent, so this journey types over a field that never asked to be settled',
+  ).toBe('inconsistent')
 
   const names = [ambiguous!.name, missing!.name, typed!.name]
   expect(new Set(names).size, `two of the three subjects are the same field: ${names.join(', ')}`).toBe(3)
@@ -5072,6 +5199,20 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
     page.locator('[data-testid^="extraction-marker-"]'),
     'the settled fields did not each take exactly one marker',
   ).toHaveCount(3)
+  // And the namespace resolves to those three BY NAME. EXTR-13-02 put 15 line-item cells into
+  // the pane's render, and a marker renders only over a correction, so this is the assertion
+  // that the widened fixture left the `extraction-marker-` sweep where it was: a count alone
+  // would still read 3 if a line cell took a marker while a settled field lost its own.
+  const markerNames = (
+    await page
+      .locator('[data-testid^="extraction-marker-"]')
+      .evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.testid ?? ''))
+  )
+    .map((id) => id.replace('extraction-marker-', ''))
+    .sort()
+  expect(markerNames, 'the marker namespace resolved to fields other than the three that were settled').toEqual(
+    plan.map((p) => p.field).sort(),
+  )
   for (const p of plan) {
     await expect(page.getByTestId(`extraction-marker-${p.field}`), `${p.field} settled and shows no marker`).toBeVisible()
     await expect(
@@ -5173,6 +5314,12 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   const detail = await openExtractionReview(page)
   expect(detail.fields.length, 'no field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
 
+  // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
+  // own grid, LineItemGrid -- so every rendered-row count below is bounded to it.
+  const wireNamesB = detail.fields.map((f) => f.name)
+  const headerNamesB = wireNamesB.filter((n) => !n.startsWith('line_items'))
+  expect(headerNamesB.length, 'no header field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
+
   const pane = page.getByTestId('extraction-fields')
   const shellBody = page.getByTestId('extraction-review-body')
   // The pane's two children, in the artboard's order (`:225` header over `:230` body) --
@@ -5220,7 +5367,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 
       // 3. Two columns, exactly. A collapsed one-column grid reports 1, a three-track grid 3,
       //    and nothing else in this suite asserts the track count.
-      expect(m.xs.length, `no field cell measured at ${width}px`).toBe(detail.fields.length)
+      expect(m.xs.length, `no field cell measured at ${width}px`).toBe(headerNamesB.length)
       const columns = [...new Set(m.xs)].sort((a, b) => a - b)
       expect(columns.length, `the grid reports ${columns.length} column(s) at ${width}px, not two`).toBe(2)
 
@@ -5306,7 +5453,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
       return out
     })
 
-    expect(spill.length, `no field cell measured at the ${floorWidth}px floor`).toBe(detail.fields.length)
+    expect(spill.length, `no field cell measured at the ${floorWidth}px floor`).toBe(headerNamesB.length)
     for (const cell of spill) {
       expect(cell.clientWidth, `${cell.testid} has no width at the floor -- its edges are vacuous`).toBeGreaterThan(0)
       expect(
@@ -5333,6 +5480,924 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
   }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-13-09 · the line-item grid on the deployed fleet -------------------------------
+//
+// The FINAL subtask of EXTR-13. Everything provable in jsdom (LineItemGrid.test.tsx,
+// lineItems.test.ts, ExtractionReview.test.tsx) or over HTTP (EXTR13-API-01/02/03 in
+// e2e/api/extractions.spec.ts) is deliberately NOT re-proven here. What is left is what only a
+// browser against the deployed fleet can observe: the grid's real geometry at four widths, the
+// live recompute, the row -> region highlight, and one Save that reaches the deployed store.
+//
+// THE NINE PINNED SPECS this story's sweep named, and where each stands. All nine were moved by
+// the earlier subtasks; this row is the ledger, not a second edit:
+//   EXTR11-E2E-02a (:3155)  UPDATED in 13-07 -- its `extraction-field-` sweep is bounded to the
+//                           header vocabulary (`headerNamesA`), so a line cell cannot join it.
+//   EXTR12-E2E-07 (:5307)   UPDATED in 13-07 -- same bound at the pane's 470px floor
+//                           (`headerNamesB`); the grid sits BELOW the two-column grid and is not
+//                           a third column, which EXTR13-LAYOUT-03 below asserts from the front.
+//   EXTR12-E2E-01 (:3569)   UPDATED in 13-02/07 -- the per-field pill loop excludes line names.
+//   EXTR11-E2E-04/04b (:2858) UPDATED in 13-02 -- the wire body's field SET is the widened
+//                           twenty-three, listed literally as the only deployed oracle for it.
+//   EXTR11-E2E-11 (:4611)   UPDATED in 13-02/07 per D-13 -- zero FIDELITY rows, one LEFTOVERS
+//                           entry naming this PR, and both sweeps bounded to the header pane.
+//   EXTR12-E2E-06 (:4998)   UPDATED in 13-02 -- the `extraction-marker-` sweep resolves BY NAME
+//                           to the three settled fields, so a line marker cannot stand in.
+//   EXTR11-E2E-02 (:3257)   DELIBERATELY UNCHANGED -- it measures the shell's two flex siblings
+//                           tiling the body. The grid is a child of the fields pane's scrolling
+//                           body and adds no pane, so the tiling claim is untouched.
+//   EXTR11-E2E-10 (:3328)   DELIBERATELY UNCHANGED -- the pane's 470px floor is declared on
+//                           PANE, not derived from its content, and the grid absorbs its own
+//                           overflow in `line-item-scroll` (EXTR13-LAYOUT-01), so it cannot
+//                           raise that floor.
+//   EXTR11-E2E-02b (:3395)  DELIBERATELY UNCHANGED -- it asserts the pane body is the scroller
+//                           and the header does not move. The grid adds rows INSIDE that body,
+//                           which strengthens its own precondition rather than changing it.
+//
+// TWO GAPS this subtask does NOT close, named so they are not mistaken for coverage:
+//   1. The EXTRACTION-FOUND-NOTHING path has no deployed subject: the mock keys its fixtures by
+//      SHA-256 and `uniquePdfBytes()` mints a fresh hash per upload, so every deployed run
+//      resolves to `mockDefaultResult`, which always carries four lines. This is a gap in how
+//      the panel is REACHED, not in the panel. The panel itself is deployed-covered by
+//      EXTR13-E2E-02 below, which removes every row to reach the same single branch.
+//   2. `extraction-write-error` still has no deployed coverage (jsdom only) -- unchanged from
+//      EXTR-12, and not this story's to close.
+
+const LINE_ROLE_NAMES = ['description', 'quantity', 'unit_price', 'line_total'] as const
+type LineRoleName = (typeof LINE_ROLE_NAMES)[number]
+
+// lineItems.ts's LINE_FIELD_RE, restated rather than imported: e2e/ compiles against no
+// frontend source, and a spec that imported the parser would assert the parser against itself.
+const LINE_CELL_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total)$/
+
+type WireLineCell = { name: string; value: string | null; region: ExtractionRegion | null }
+type WireLine = { index: number; cells: Partial<Record<LineRoleName, WireLineCell>> }
+
+/** The line block off the wire the SPA itself consumed, in the grid's own row order. */
+function wireLines(detail: ExtractionDetail): WireLine[] {
+  const byIndex = new Map<number, WireLine>()
+  for (const f of detail.fields) {
+    const m = LINE_CELL_RE.exec(f.name)
+    if (m === null) continue
+    const index = Number(m[1])
+    let row = byIndex.get(index)
+    if (row === undefined) {
+      row = { index, cells: {} }
+      byIndex.set(index, row)
+    }
+    row.cells[m[2] as LineRoleName] = { name: f.name, value: f.value, region: f.region }
+  }
+  return [...byIndex.values()].sort((a, b) => a.index - b.index)
+}
+
+function decimalOf(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined || raw.trim() === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+// rowArithmetic's rule (lineItems.ts), computed here from the wire's own numbers so the grid is
+// checked against the document rather than against the module that draws it. LINE_TOLERANCE is
+// 0.01 and the comparison is STRICTLY greater, so exactly 0.01 does not flag; the 1e-9 absorbs
+// the binary float this arithmetic runs in, three orders below the 150.00 the mock disagrees by.
+function wireRowState(row: WireLine): 'ok' | 'flagged' | 'unchecked' {
+  const q = decimalOf(row.cells.quantity?.value)
+  const p = decimalOf(row.cells.unit_price?.value)
+  const t = decimalOf(row.cells.line_total?.value)
+  if (q === null || p === null || t === null) return 'unchecked'
+  return Math.abs(q * p - t) > 0.01 + 1e-9 ? 'flagged' : 'ok'
+}
+
+/** Every rendered cell value, by ordinal then role, as the grid holds it right now. */
+async function gridValues(page: Page, rowCount: number): Promise<Record<LineRoleName, string>[]> {
+  const out: Record<LineRoleName, string>[] = []
+  for (let n = 1; n <= rowCount; n += 1) {
+    const row = {} as Record<LineRoleName, string>
+    for (const role of LINE_ROLE_NAMES) {
+      row[role] = await page.getByTestId(`line-item-input-${n}-${role}`).inputValue()
+    }
+    out.push(row)
+  }
+  return out
+}
+
+/** The rendered ordinals of a `line-item-*` namespace, ascending. */
+async function lineOrdinals(page: Page, prefix: string): Promise<number[]> {
+  const ids = await page
+    .locator(`[data-testid^="${prefix}"]`)
+    .evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.testid ?? ''))
+  return ids.map((id) => Number(id.slice(prefix.length))).sort((a, b) => a - b)
+}
+
+/**
+ * One upload, one review screen, and the floors every claim below rests on.
+ *
+ * The floors are asserted rather than assumed: a fixture change that flattened the mock's line
+ * block would otherwise leave every sweep in this section measuring nothing and passing.
+ */
+async function openLineGrid(page: Page, label: string): Promise<{ detail: ExtractionDetail; lines: WireLine[] }> {
+  await extractOneDocument(page, label)
+  const detail = await openExtractionReview(page)
+  const lines = wireLines(detail)
+  expect(
+    lines.length,
+    'this document delivered no line-item cell on the wire -- every grid claim below is vacuous',
+  ).toBeGreaterThanOrEqual(2)
+
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(
+    page.locator('[data-testid^="line-item-row-"]'),
+    'the grid did not render one row per line the wire carried',
+  ).toHaveCount(lines.length)
+  return { detail, lines }
+}
+
+test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects, remaps, grows, shrinks and saves', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { detail, lines } = await openLineGrid(page, 'EXTR-13-09 journey')
+
+  // -- 1. every cell the wire carried reaches its own input, by name ------------------------
+  const present = lines.flatMap((row, i) =>
+    LINE_ROLE_NAMES.filter((role) => row.cells[role] !== undefined).map((role) => ({
+      n: i + 1,
+      role,
+      wire: row.cells[role] as WireLineCell,
+    })),
+  )
+  const absent = lines.flatMap((row, i) =>
+    LINE_ROLE_NAMES.filter((role) => row.cells[role] === undefined).map((role) => ({ n: i + 1, role })),
+  )
+  expect(present.length, 'the wire carried no line cell at all').toBeGreaterThanOrEqual(LINE_ROLE_NAMES.length)
+  // The control needle for the empty-cell arm below: with nothing absent it asserts nothing.
+  expect(
+    absent.length,
+    'every line on this document is complete, so the empty-cell arm below has no subject',
+  ).toBeGreaterThanOrEqual(1)
+
+  for (const c of present) {
+    await expect(
+      page.getByTestId(`line-item-input-${c.n}-${c.role}`),
+      `${c.wire.name} did not reach row ${c.n}'s ${c.role} input`,
+    ).toHaveValue(c.wire.value ?? '')
+  }
+  for (const c of absent) {
+    await expect(
+      page.getByTestId(`line-item-input-${c.n}-${c.role}`),
+      `row ${c.n} has no ${c.role} on the wire, yet the grid put something in that cell`,
+    ).toHaveValue('')
+  }
+
+  // -- 2. the flag is per row, and lands only where the wire's own numbers disagree ----------
+  const states = lines.map((row, i) => ({ n: i + 1, state: wireRowState(row) }))
+  const flagged = states.filter((s) => s.state === 'flagged').map((s) => s.n)
+  const settledRows = states.filter((s) => s.state === 'ok').map((s) => s.n)
+  expect(flagged.length, "no row's own numbers disagree -- the flag claim is vacuous").toBeGreaterThanOrEqual(1)
+  expect(
+    settledRows.length,
+    'every checkable row disagrees, so a grid that flagged all of them would pass -- there is no negative arm',
+  ).toBeGreaterThanOrEqual(1)
+  expect(
+    await lineOrdinals(page, 'line-item-flag-'),
+    'the flagged rows are not the rows whose own numbers disagree',
+  ).toEqual([...flagged].sort((a, b) => a - b))
+
+  // -- 3. the table-level statement carries BOTH numbers ------------------------------------
+  for (const row of lines) {
+    const raw = row.cells.line_total?.value
+    if (raw === null || raw === undefined) continue
+    expect(raw, `${raw} carries more than two decimals, so the rendered sum is not toFixed(2)`).toMatch(
+      /^-?\d+(\.\d{1,2})?$/,
+    )
+  }
+  const totals = lines.map((r) => decimalOf(r.cells.line_total?.value)).filter((n): n is number => n !== null)
+  expect(totals.length, 'no line carries a parseable total -- there is no sum to state').toBeGreaterThanOrEqual(2)
+  const printedRaw = detail.fields.find((f) => f.name === 'subtotal')?.value ?? null
+  expect(printedRaw, 'this document prints no subtotal -- the disagreement below cannot be shown').not.toBeNull()
+  expect(printedRaw as string, 'the printed subtotal carries more than two decimals').toMatch(/^-?\d+(\.\d{1,2})?$/)
+  const summed = totals.reduce((a, b) => a + b, 0)
+  const printed = decimalOf(printedRaw) as number
+  expect(
+    Math.abs(summed - printed),
+    'the lines already agree with the printed subtotal, so the statement does not render at all',
+  ).toBeGreaterThan(0.01)
+
+  const sumLine = page.getByTestId('line-item-sum')
+  await expect(sumLine, 'the lines disagree with the printed subtotal and the grid says nothing').toBeVisible()
+  const sumText = (await sumLine.textContent()) ?? ''
+  expect(sumText, `the statement does not carry the summed figure ${summed.toFixed(2)}`).toContain(summed.toFixed(2))
+  expect(sumText, `the statement does not carry the printed figure ${printed.toFixed(2)}`).toContain(printed.toFixed(2))
+
+  // -- 4. a line cell selects, and the document draws THAT cell's region ---------------------
+  const located = present.find((c) => c.wire.region !== null)
+  expect(located, 'no line cell carries a region -- the highlight claim is vacuous').toBeTruthy()
+  const region = (located as { wire: WireLineCell }).wire.region as ExtractionRegion
+  const cell = page.getByTestId(`line-item-cell-${located!.n}-${located!.role}`)
+  await cell.click()
+  const imageId = `extraction-page-image-${region.page}`
+  await expect(page.getByTestId(imageId), "the selected cell's page must load").toBeVisible({ timeout: 60_000 })
+  await expect(cell, 'the clicked line cell does not read as selected').toHaveAttribute('aria-current', 'true')
+  const highlight = page.getByTestId('extraction-highlight')
+  await expect(highlight, 'a selected line cell drew no highlight, or drew more than one').toHaveCount(1)
+  // The identity claim, and AC-7's whole point: a line cell reaches the canvas over the SAME
+  // channel a header cell does, so the box the document paints names the line field by name.
+  await expect(highlight, 'the highlight names a field other than the line cell that was clicked').toHaveAttribute(
+    'data-snip',
+    located!.wire.name,
+  )
+  const highlightBox = await boxOf(page, 'extraction-highlight')
+  const imageBox = await boxOf(page, imageId)
+  expect(
+    highlightBox.width * highlightBox.height,
+    'the highlight has no area, so the containment below is vacuous',
+  ).toBeGreaterThan(0)
+  const inside = overlapOf(highlightBox, imageBox)
+  expect(inside.width, 'the highlight is not horizontally inside the page it names').toBeGreaterThanOrEqual(
+    highlightBox.width - RATIO_TOL_PX,
+  )
+  expect(inside.height, 'the highlight is not vertically inside the page it names').toBeGreaterThanOrEqual(
+    highlightBox.height - RATIO_TOL_PX,
+  )
+
+  // -- 5. correcting the flagged row recomputes live, with no request ------------------------
+  const flaggedN = flagged[0]
+  const flaggedRow = lines[flaggedN - 1]
+  const q = decimalOf(flaggedRow.cells.quantity?.value) as number
+  const p = decimalOf(flaggedRow.cells.unit_price?.value) as number
+  const settledTotal = (q * p).toFixed(2)
+  expect(
+    settledTotal,
+    'the corrected total equals what row ' + flaggedN + ' already holds, so typing it moves nothing',
+  ).not.toBe(flaggedRow.cells.line_total?.value)
+
+  const lineWrites: string[] = []
+  page.on('request', (r) => {
+    if (r.method() !== 'POST') return
+    if (new URL(r.url()).pathname.endsWith('/line-items')) lineWrites.push(r.url())
+  })
+
+  await page.getByTestId(`line-item-input-${flaggedN}-line_total`).fill(settledTotal)
+  await expect(
+    page.getByTestId(`line-item-flag-${flaggedN}`),
+    `row ${flaggedN}'s numbers now agree and it still carries its flag`,
+  ).toHaveCount(0)
+  expect(
+    await lineOrdinals(page, 'line-item-flag-'),
+    'correcting one row moved another row’s flag',
+  ).toEqual(flagged.filter((n) => n !== flaggedN))
+  await expect(
+    page.getByTestId(`line-item-marker-${flaggedN}-line_total`),
+    'the corrected cell shows no changed marker',
+  ).toBeVisible()
+  expect(lineWrites, 'a live recompute posted to the server -- nothing reaches the store before Save').toEqual([])
+
+  // -- 6. remapping a column moves the cells, and remapping back restores them ---------------
+  const swappable = lines
+    .map((row, i) => ({ n: i + 1, row }))
+    .filter(
+      ({ row }) =>
+        row.cells.quantity !== undefined &&
+        row.cells.unit_price !== undefined &&
+        row.cells.quantity.value !== row.cells.unit_price.value,
+    )
+  expect(
+    swappable.length,
+    'no row carries two DIFFERENT values in the two columns being swapped -- a swap could not be observed',
+  ).toBeGreaterThanOrEqual(1)
+
+  const quantityColumn = page.getByTestId('line-item-role-quantity')
+  await quantityColumn.selectOption('unit_price')
+  for (const { n, row } of swappable) {
+    await expect(
+      page.getByTestId(`line-item-input-${n}-quantity`),
+      `row ${n}'s quantity column did not take the unit price`,
+    ).toHaveValue(row.cells.unit_price?.value ?? '')
+    await expect(
+      page.getByTestId(`line-item-input-${n}-unit_price`),
+      `row ${n}'s unit-price column did not take the quantity`,
+    ).toHaveValue(row.cells.quantity?.value ?? '')
+  }
+  // The selector always reads its OWN column's role, so the same choice repeats the swap.
+  await quantityColumn.selectOption('unit_price')
+  for (const { n, row } of swappable) {
+    await expect(
+      page.getByTestId(`line-item-input-${n}-quantity`),
+      `row ${n}'s quantity was not restored by the reverse remap`,
+    ).toHaveValue(row.cells.quantity?.value ?? '')
+    await expect(
+      page.getByTestId(`line-item-input-${n}-unit_price`),
+      `row ${n}'s unit price was not restored by the reverse remap`,
+    ).toHaveValue(row.cells.unit_price?.value ?? '')
+  }
+
+  // -- 7. add and remove, with the ordinals staying 1..N --------------------------------------
+  const rowCount = lines.length
+  await page.getByTestId('line-item-add').click()
+  await expect(
+    page.locator('[data-testid^="line-item-row-"]'),
+    'Add left the row count where it was',
+  ).toHaveCount(rowCount + 1)
+  await expect(
+    page.getByTestId(`line-item-input-${rowCount + 1}-description`),
+    'the appended row is not numbered N+1, or carries a value it was never given',
+  ).toHaveValue('')
+  await page.getByTestId(`line-item-remove-${rowCount + 1}`).click()
+  await expect(page.locator('[data-testid^="line-item-row-"]'), 'Remove left the row count where it was').toHaveCount(
+    rowCount,
+  )
+  expect(await lineOrdinals(page, 'line-item-row-'), 'the row ordinals are not 1..N with no gap').toEqual(
+    Array.from({ length: rowCount }, (_, i) => i + 1),
+  )
+
+  // -- 8. one Save, one line POST, and the store answers -------------------------------------
+  const save = page.getByTestId('extraction-save')
+  await expect(save, 'a line-only edit left Save disabled').toBeEnabled()
+
+  const posts: { status: number; body: Promise<Record<string, unknown> | null> }[] = []
+  page.on('response', (r) => {
+    if (r.request().method() !== 'POST') return
+    if (!new URL(r.url()).pathname.endsWith('/line-items')) return
+    posts.push({ status: r.status(), body: (r.json() as Promise<Record<string, unknown>>).catch(() => null) })
+  })
+
+  const [reread] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    save.click(),
+  ])
+  expect(reread.status(), 'the post-save re-read failed').toBe(200)
+
+  await expect
+    .poll(() => posts.length, { message: 'the Save posted no line set', timeout: 15_000 })
+    .toBe(1)
+  expect(posts[0].status, 'the line set was refused').toBe(201)
+  const posted = await posts[0].body
+  expect(posted, 'the line-items 201 carried no body').not.toBeNull()
+  const echoed = (posted as Record<string, unknown>).lines as Record<string, string | null>[]
+  expect(echoed.length, 'the server wrote a different number of lines than the grid held').toBe(rowCount)
+  expect(
+    echoed.map((l) => l.line_total),
+    'the total that was corrected is not in the set the server wrote',
+  ).toContain(settledTotal)
+
+  // The server's own values, read back. The line set lands on the `line_items` BLOCK row as one
+  // canonical-JSON correction (handlers_lineitems.go:169-181), and the reader projects that row
+  // onto the per-cell `line_items[N].role` readings, which no correction ever names directly
+  // (expandLineCorrection, internal/extraction/reader.go). The block row is where the write's
+  // own record is checked, below; the cells it projects onto are what the reopen reads.
+  const fresh = (await reread.json()) as ExtractionDetail
+  const block = fresh.fields.find((f) => f.name === 'line_items')
+  expect(block, 'the re-read carries no line_items block row -- the correction had nothing to land on').toBeTruthy()
+  expect(block!.corrected, 'the Save reached the store and left no correction on the block row').not.toBeNull()
+  expect(block!.corrected!.method, 'a line set is recorded as typed').toBe('typed')
+  expect(
+    block!.value,
+    'the block row does not hold the set the server echoed at 201 -- the write and the read disagree',
+  ).toBe(JSON.stringify(echoed))
+
+  await expect(page.getByTestId('extraction-write-error'), 'the Save reported an error').toHaveCount(0)
+  await expect(save, 'a committed Save left something still to save').toBeDisabled()
+
+  // The reopen, and the defect it closes: a saved line correction snapped back to the
+  // extractor's own reading on every reopen. The re-read JSON above proves the write happened,
+  // never that a fresh mount shows it.
+  //
+  // NOT a reload. The screen has no URL of its own -- App.tsx renders it while
+  // `view === 'extraction'` off a jobId in component state, and nothing puts that jobId in the
+  // hash -- so a reload lands on the default view and re-requests no detail. Sidebar out,
+  // entry control back in, which unmounts ExtractionReview and drops the draft it held.
+  //
+  // Nav idiom: invoice-surfaces.spec.ts's goToInvoices/openInvoiceRow. The row is taken by
+  // count -- this entity was created for this run and the list is narrowed to it server-side --
+  // so a second row fails here rather than opening some other invoice.
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
+  await expect(page.getByTestId('invoices-list'), 'the sidebar nav did not land on the invoices list').toBeVisible({
+    timeout: 60_000,
+  })
+  await expect(
+    page.getByTestId('extraction-review'),
+    'the review screen is still mounted, so what follows is not a reopen',
+  ).toHaveCount(0)
+  const invoiceRows = page.getByTestId('invoice-row')
+  await expect(
+    invoiceRows,
+    'this entity was created for this run and holds exactly the one imported invoice',
+  ).toHaveCount(1)
+  await invoiceRows.click()
+  await expect(page.getByTestId('invoice-detail'), 'the row did not open the live invoice detail').toBeVisible({
+    timeout: 60_000,
+  })
+
+  // The same entry control every spec in this section opens the screen with.
+  const reopened = await openExtractionReview(page)
+  const savedCell = flaggedRow.cells.line_total as WireLineCell
+  const reopenedCell = reopened.fields.find((f) => f.name === savedCell.name)
+  expect(reopenedCell, `the reopened detail carries no ${savedCell.name} reading at all`).toBeTruthy()
+  expect(
+    reopenedCell!.value,
+    `${savedCell.name} came back from a fresh read as the extractor's own reading ` +
+      `(${savedCell.value}) instead of the saved ${settledTotal}`,
+  ).toBe(settledTotal)
+  await expect(page.getByTestId('line-item-grid'), 'the reopened page rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(
+    page.getByTestId(`line-item-input-${flaggedN}-line_total`),
+    `row ${flaggedN}'s line_total snapped back to the extractor's own reading ` +
+      `(${flaggedRow.cells.line_total?.value}) on reopen, instead of keeping the saved ${settledTotal}`,
+  ).toHaveValue(settledTotal)
+
+  await testInfo.attach('extraction-line-grid-journey.json', {
+    body: JSON.stringify(
+      { lines: lines.length, flagged, settledRows, summed, printed, settledTotal, echoed },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR13-E2E-02 · the columns E2E-01 leaves untouched, and the empty panel -------------
+//
+// Its own upload, because E2E-01 ends on a Save and a reopen: an edit added after that point
+// could not be restored, and one added before it would move the set that Save posts. Nothing
+// here saves, so every gesture below is free to leave the draft where it lands.
+
+test('EXTR13-E2E-02 (Core AC 2, 7, 8): every column selector, both untyped columns, and the empty panel', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { lines } = await openLineGrid(page, 'EXTR-13-13 columns and empty')
+  const rowCount = lines.length
+
+  // -- 1. all four column selectors render, each reading its own column ----------------------
+  // E2E-01 drives `line-item-role-quantity` alone, so a grid that shipped one selector passes it.
+  for (const role of LINE_ROLE_NAMES) {
+    const select = page.getByTestId(`line-item-role-${role}`)
+    await expect(select, `the ${role} column carries no role selector`).toBeVisible()
+    await expect(select, `the ${role} selector does not read its own column`).toHaveValue(role)
+    await expect(select, `the ${role} selector is not operable`).toBeEnabled()
+  }
+
+  // -- 2. each of the four is individually operable, and moves only its own pair -------------
+  // Expectations are read off the grid immediately before each swap rather than off the wire,
+  // so a later pair is measured against what the earlier ones actually left on screen.
+  const pairs: [LineRoleName, LineRoleName][] = [
+    ['description', 'quantity'],
+    ['quantity', 'unit_price'],
+    ['unit_price', 'line_total'],
+    ['line_total', 'description'],
+  ]
+  for (const [driver, partner] of pairs) {
+    const before = await gridValues(page, rowCount)
+    expect(
+      before.filter((row) => row[driver] !== row[partner]).length,
+      `no row holds different values in ${driver} and ${partner} -- a swap could not be observed`,
+    ).toBeGreaterThanOrEqual(1)
+
+    await page.getByTestId(`line-item-role-${driver}`).selectOption(partner)
+    const after = await gridValues(page, rowCount)
+    for (let i = 0; i < before.length; i += 1) {
+      const n = i + 1
+      expect(after[i][driver], `row ${n}'s ${driver} column did not take the ${partner}`).toBe(before[i][partner])
+      expect(after[i][partner], `row ${n}'s ${partner} column did not take the ${driver}`).toBe(before[i][driver])
+      for (const other of LINE_ROLE_NAMES) {
+        if (other === driver || other === partner) continue
+        expect(after[i][other], `the ${driver} remap disturbed row ${n}'s ${other} column`).toBe(before[i][other])
+      }
+    }
+
+    // The selector always reads its OWN column's role, so the same choice repeats the swap.
+    await page.getByTestId(`line-item-role-${driver}`).selectOption(partner)
+    expect(await gridValues(page, rowCount), `the ${driver} remap is not its own inverse`).toEqual(before)
+  }
+
+  // -- 3. the two columns E2E-01 never types into --------------------------------------------
+  const settled = lines.map((row, i) => ({ n: i + 1, row })).filter(({ row }) => wireRowState(row) === 'ok')
+  expect(
+    settled.length,
+    'no row on this document settles, so there is no row a keystroke can be shown to break',
+  ).toBeGreaterThanOrEqual(1)
+  const { n: settledN, row: settledRow } = settled[0]
+  await expect(
+    page.getByTestId(`line-item-flag-${settledN}`),
+    `the BEFORE arm: row ${settledN} settles on the wire and must start unflagged`,
+  ).toHaveCount(0)
+
+  const typed = 'Rebar, 12mm, cut to length'
+  expect(
+    settledRow.cells.description?.value,
+    'this row already holds the description about to be typed, so the edit moves nothing',
+  ).not.toBe(typed)
+  const descriptionInput = page.getByTestId(`line-item-input-${settledN}-description`)
+  await descriptionInput.fill(typed)
+  await descriptionInput.press('Tab')
+  await expect(descriptionInput, 'the description column took no keystroke').toHaveValue(typed)
+  await expect(
+    page.getByTestId(`line-item-marker-${settledN}-description`),
+    'the typed description shows no changed marker',
+  ).toBeVisible()
+  await expect(
+    page.getByTestId(`line-item-flag-${settledN}`),
+    'a description edit moved the row arithmetic',
+  ).toHaveCount(0)
+
+  // The auto-derive arm: a grid deriving line_total from quantity x unit price would rewrite
+  // this row's total to match and never flag it.
+  const q = decimalOf(settledRow.cells.quantity?.value) as number
+  const documentTotal = settledRow.cells.line_total?.value as string
+  const brokenPrice = ((decimalOf(settledRow.cells.unit_price?.value) as number) + 1000).toFixed(2)
+  expect(
+    Math.abs(q * Number(brokenPrice) - (decimalOf(documentTotal) as number)),
+    `row ${settledN} still settles at a unit price of ${brokenPrice} -- the flag below would never appear`,
+  ).toBeGreaterThan(0.01 + 1e-9)
+
+  const priceInput = page.getByTestId(`line-item-input-${settledN}-unit_price`)
+  await priceInput.fill(brokenPrice)
+  await priceInput.press('Tab')
+  await expect(priceInput, 'the unit-price column took no keystroke').toHaveValue(brokenPrice)
+  await expect(
+    page.getByTestId(`line-item-flag-${settledN}`),
+    'the unit-price keystroke did not recompute the row flag',
+  ).toBeVisible()
+  await expect(
+    page.getByTestId(`line-item-input-${settledN}-line_total`),
+    'the grid derived the line total from quantity x unit price instead of keeping what the document read',
+  ).toHaveValue(documentTotal)
+
+  // -- 4. removing every line lands on the empty panel ----------------------------------------
+  await expect(
+    page.getByTestId('line-item-empty'),
+    'the empty panel showed while the document lines were still on screen',
+  ).toHaveCount(0)
+  for (let left = rowCount; left > 0; left -= 1) {
+    await page.getByTestId('line-item-remove-1').click()
+    await expect(
+      page.locator('[data-testid^="line-item-row-"]'),
+      `removing the first of ${left} rows left the row count where it was`,
+    ).toHaveCount(left - 1)
+  }
+
+  const empty = page.getByTestId('line-item-empty')
+  await expect(empty, 'a grid holding no row renders no panel at all').toBeVisible()
+  await expect(empty, 'the panel does not say the document carries no lines').toContainText(
+    'We found no line items on this document.',
+  )
+  await expect(empty, 'the panel does not say what an empty grid costs').toContainText(
+    'An invoice cannot be filed until it has at least one line, so add one here.',
+  )
+  await expect(
+    page.getByTestId('line-item-grid').locator('table'),
+    'an empty table survived the last removal',
+  ).toHaveCount(0)
+  await expect(page.getByTestId('line-item-sum'), 'a grid holding no line still states a sum').toHaveCount(0)
+
+  // Not a dead end: the panel's own Add is the way back to a fileable invoice.
+  await page.getByTestId('line-item-add').click()
+  await expect(
+    page.locator('[data-testid^="line-item-row-"]'),
+    'Add from the empty panel produced no row',
+  ).toHaveCount(1)
+  await expect(page.getByTestId('line-item-empty'), 'the panel outlived the row it asked for').toHaveCount(0)
+  for (const role of LINE_ROLE_NAMES) {
+    await expect(
+      page.getByTestId(`line-item-input-1-${role}`),
+      `the added row's ${role} is not a blank, editable cell`,
+    ).toHaveValue('')
+  }
+
+  await testInfo.attach('extraction-line-columns-and-empty.json', {
+    body: JSON.stringify({ rowCount, settledN, typed, brokenPrice, documentTotal }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- the four layout relationships -------------------------------------------------------
+//
+// Relationships, never dimensions (layout.ts's thesis): containment in a named parent,
+// equality with a named sibling, the contained-overflow PAIR, and reachability across a
+// measured extent. `assertFillsColumn` is deliberately not used for any of them -- it bounds
+// the gaps from ABOVE only, so a scrollbox spilling its pane satisfies it.
+
+// The fields pane's two children, in the artboard's order -- EXTR11-E2E-02b's own indices, and
+// ExtractionFields.test.tsx pins that shape from the other side.
+function fieldsPaneBody(page: Page): Locator {
+  return page.getByTestId('extraction-fields').locator('> div').nth(1)
+}
+
+test('EXTR13-LAYOUT-01: the grid scrollbox stays inside the fields pane body, on both edges, at every width', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await openLineGrid(page, 'EXTR-13-09 contained')
+
+  const paneBody = fieldsPaneBody(page)
+  const scroll = page.getByTestId('line-item-scroll')
+
+  const measured: { width: number; left: number; right: number; bodyScrollWidth: number; bodyClientWidth: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first, WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [s, b] = await Promise.all([scroll.boundingBox(), paneBody.boundingBox()])
+        const flow = await paneBody.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return { s, b, flow }
+      }, `line grid containment at ${width}px`)
+
+      expect(m.s && m.b, `both the scrollbox and the pane body must render at ${width}px`).toBeTruthy()
+      // Non-empty first: a rect collapsed to zero is inside anything and passes vacuously.
+      expect(m.s!.width, `the scrollbox collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
+      expect(m.b!.width, `the pane body collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+
+      // gaps()'s rule, with a FLOOR: a positive gap is slack, a negative one is a spill. Bounding
+      // it from above would pass on the very defect this exists to catch.
+      const g = gaps(m.s as Rect, m.b as Rect)
+      expect(g.left, `the scrollbox starts ${(-g.left).toFixed(1)}px left of the pane body at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the scrollbox ends ${(-g.right).toFixed(1)}px right of the pane body at ${width}px`).toBeGreaterThanOrEqual(-1)
+
+      // The other half of containment: the pane body declares `overflow-y: auto` (y ONLY), so a
+      // grid whose overflow escaped its own scrollbox would have nowhere to hide.
+      expect(
+        m.flow.scrollWidth,
+        `the pane body holds ${m.flow.scrollWidth}px of content in a ${m.flow.clientWidth}px box at ${width}px -- the grid's overflow escaped its scrollbox`,
+      ).toBeLessThanOrEqual(m.flow.clientWidth + 1)
+
+      measured.push({
+        width,
+        left: g.left,
+        right: g.right,
+        bodyScrollWidth: m.flow.scrollWidth,
+        bodyClientWidth: m.flow.clientWidth,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([
+    ...WIDE_WIDTHS,
+  ])
+
+  await testInfo.attach('extraction-line-grid-containment.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Forty is the story's own number (Core AC 9). Nothing on the deployed fleet PRODUCES forty
+// lines -- the mock emits four and its fixtures are keyed by content hash -- so the grid is
+// grown by the gesture a person would use.
+const FORTY_LINES = 40
+
+test('EXTR13-LAYOUT-02: forty lines overflow the scrollbox at 1280 and never the page', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { lines } = await openLineGrid(page, 'EXTR-13-09 forty')
+
+  const add = page.getByTestId('line-item-add')
+  for (let n = lines.length; n < FORTY_LINES; n += 1) await add.click()
+  await expect(
+    page.locator('[data-testid^="line-item-row-"]'),
+    `the grid did not reach ${FORTY_LINES} rows`,
+  ).toHaveCount(FORTY_LINES)
+  await expect(page.getByTestId(`line-item-row-${FORTY_LINES}`), `row ${FORTY_LINES} did not render`).toBeVisible()
+
+  const scroll = page.getByTestId('line-item-scroll')
+  const readAt = async (width: number) => {
+    await page.setViewportSize({ width, height: 1080 })
+    return settledRead(async () => {
+      const box = await scroll.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      const doc = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }))
+      return { width, box, doc }
+    }, `forty-line overflow at ${width}px`)
+  }
+
+  const entryViewport = page.viewportSize()
+  // Widest first, the house order.
+  const sweep: Awaited<ReturnType<typeof readAt>>[] = []
+  try {
+    sweep.push(await readAt(2560))
+    sweep.push(await readAt(1280))
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+  expect(sweep.map((s) => s.width), 'both arms must be measured, widest first').toEqual([2560, 1280])
+  const [wide, narrow] = sweep
+
+  expect(narrow.box.clientWidth, 'the scrollbox has no width at 1280px -- every claim here is vacuous').toBeGreaterThan(0)
+  expect(wide.box.clientWidth, 'the scrollbox has no width at 2560px').toBeGreaterThan(0)
+
+  // The PAIR is what proves containment rather than absence. Half one: at 1280 the grid really
+  // does overflow, so there is something for the scrollbox to hold.
+  expect(
+    narrow.box.scrollWidth,
+    `the grid fits its scrollbox at 1280px (${narrow.box.scrollWidth} in ${narrow.box.clientWidth}) -- there is no overflow to contain, so the page claim below proves nothing`,
+  ).toBeGreaterThan(narrow.box.clientWidth + 1)
+
+  // Half two, and Core AC 9: the page itself never gains a horizontal scroll under forty lines.
+  expect(
+    narrow.doc.scrollWidth,
+    `forty lines pushed the page ${narrow.doc.scrollWidth - narrow.doc.clientWidth}px past its viewport at 1280px`,
+  ).toBeLessThanOrEqual(narrow.doc.clientWidth + 1)
+  expect(
+    wide.doc.scrollWidth,
+    `forty lines pushed the page ${wide.doc.scrollWidth - wide.doc.clientWidth}px past its viewport at 2560px`,
+  ).toBeLessThanOrEqual(wide.doc.clientWidth + 1)
+
+  // The control arm. Without it a grid pinned to a constant width -- one that ALWAYS overflows,
+  // at any viewport -- passes both halves above. At 2560 the same forty lines fit their
+  // scrollbox, which places the overflow in the viewport rather than in the grid.
+  expect(
+    wide.box.scrollWidth,
+    `the same forty lines still overflow at 2560px (${wide.box.scrollWidth} in ${wide.box.clientWidth}) -- the grid overflows by construction, not because the window is narrow`,
+  ).toBeLessThanOrEqual(wide.box.clientWidth + 1)
+
+  await testInfo.attach('extraction-line-grid-forty.json', {
+    body: JSON.stringify({ rows: FORTY_LINES, wide, narrow }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR13-LAYOUT-03: the grid takes the same left and right edges as the header grid above it', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { detail } = await openLineGrid(page, 'EXTR-13-09 aligned')
+
+  // The sibling this aligns to, anchored by what it CONTAINS rather than by position alone: a
+  // wrong ancestor resolves zero header cells and reds here instead of measuring the wrong box.
+  const headerNames = detail.fields.map((f) => f.name).filter((n) => !n.startsWith('line_items'))
+  expect(headerNames.length, 'this document carries no header field -- there is no sibling to align to').toBeGreaterThan(0)
+  const paneBody = fieldsPaneBody(page)
+  const headerGrid = paneBody.locator('> div').first()
+  await expect(
+    headerGrid.locator('> [data-testid^="extraction-field-"]'),
+    'the first pane-body child is not the header field grid',
+  ).toHaveCount(headerNames.length)
+
+  const grid = page.getByTestId('line-item-grid')
+
+  const measured: { width: number; left: number; right: number; headerWidth: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [g, h] = await Promise.all([grid.boundingBox(), headerGrid.boundingBox()])
+        return { g, h }
+      }, `line grid alignment at ${width}px`)
+
+      expect(m.g && m.h, `both grids must render at ${width}px`).toBeTruthy()
+      expect(m.g!.width, `the line grid collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+      expect(m.h!.width, `the header grid collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+
+      // EQUALITY, not containment: bounded from both sides, so a grid indented inside the column
+      // and a grid spilling past it both red. This is what says the line block is a full-width
+      // section under the two-column header grid and not a third column of it.
+      const g = gaps(m.g as Rect, m.h as Rect)
+      expect(
+        Math.abs(g.left),
+        `the line grid's left edge is ${g.left.toFixed(1)}px off the header grid's at ${width}px`,
+      ).toBeLessThanOrEqual(1)
+      expect(
+        Math.abs(g.right),
+        `the line grid's right edge is ${g.right.toFixed(1)}px off the header grid's at ${width}px`,
+      ).toBeLessThanOrEqual(1)
+
+      measured.push({ width, left: g.left, right: g.right, headerWidth: m.h!.width })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([
+    ...WIDE_WIDTHS,
+  ])
+
+  await testInfo.attach('extraction-line-grid-alignment.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR13-LAYOUT-04: the rightmost column is reachable inside the scroll extent', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await openLineGrid(page, 'EXTR-13-09 reachable')
+
+  const scroll = page.getByTestId('line-item-scroll')
+  // The last column's control, and the one a person has to reach to drop a line.
+  const rightmost = page.getByTestId('line-item-remove-1')
+
+  const entryViewport = page.viewportSize()
+  let before: { extent: number; client: number; outRight: number } | null = null
+  let after: { scrollLeft: number; outRight: number; outLeft: number; width: number } | null = null
+  try {
+    // 1280, the narrow end of WIDE_WIDTHS: it is where a fixed-width table has an extent at all.
+    await page.setViewportSize({ width: 1280, height: 1080 })
+
+    const start = await settledRead(async () => {
+      const flow = await scroll.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        scrollLeft: el.scrollLeft,
+      }))
+      const [box, control] = await Promise.all([scroll.boundingBox(), rightmost.boundingBox()])
+      return { flow, box, control }
+    }, 'line grid reach, unscrolled')
+
+    expect(start.box && start.control, 'the scrollbox and its rightmost control must both render').toBeTruthy()
+    expect(start.control!.width, 'the rightmost control has no width -- its edges are vacuous').toBeGreaterThan(0)
+
+    // There IS an extent to cross. Without this the scroll below moves nothing and every claim
+    // after it is satisfied by a grid that was never cut off.
+    expect(
+      start.flow.scrollWidth,
+      `the grid already fits at 1280px (${start.flow.scrollWidth} in ${start.flow.clientWidth}) -- there is no extent to reach across`,
+    ).toBeGreaterThan(start.flow.clientWidth + 1)
+
+    // The needle: unscrolled, the rightmost control really is outside the visible box. A control
+    // that was already fully visible would make the reachability claim below vacuous.
+    const startOutRight = start.control!.x + start.control!.width - (start.box!.x + start.box!.width)
+    expect(
+      startOutRight,
+      'the rightmost control is already fully visible before any scrolling, so reaching it proves nothing',
+    ).toBeGreaterThan(1)
+    before = { extent: start.flow.scrollWidth, client: start.flow.clientWidth, outRight: startOutRight }
+
+    await scroll.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth
+    })
+
+    const end = await settledRead(async () => {
+      const scrollLeft = await scroll.evaluate((el) => el.scrollLeft)
+      const [box, control] = await Promise.all([scroll.boundingBox(), rightmost.boundingBox()])
+      return { scrollLeft, box, control }
+    }, 'line grid reach, scrolled to the end')
+
+    expect(end.box && end.control, 'the scrollbox and its rightmost control must still render after scrolling').toBeTruthy()
+    expect(end.scrollLeft, 'the scrollbox did not move -- it is not the scroller').toBeGreaterThan(0)
+
+    // Reachability, on BOTH edges: at the end of its own extent the rightmost control is inside
+    // the visible box. A grid clipped past its scroll extent reds on the right; one pushed off
+    // the other way reds on the left.
+    const outRight = end.control!.x + end.control!.width - (end.box!.x + end.box!.width)
+    const outLeft = end.box!.x - end.control!.x
+    expect(
+      outRight,
+      `the rightmost control is still ${outRight.toFixed(1)}px past the visible box at the end of the scroll extent`,
+    ).toBeLessThanOrEqual(1)
+    expect(
+      outLeft,
+      `the rightmost control sits ${outLeft.toFixed(1)}px left of the visible box at the end of the scroll extent`,
+    ).toBeLessThanOrEqual(1)
+    expect(end.control!.width, 'the rightmost control collapsed while being reached').toBeGreaterThan(0)
+    after = { scrollLeft: end.scrollLeft, outRight, outLeft, width: end.control!.width }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  await testInfo.attach('extraction-line-grid-reach.json', {
+    body: JSON.stringify({ before, after }, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

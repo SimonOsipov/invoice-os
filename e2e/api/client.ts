@@ -1127,3 +1127,39 @@ export function postFieldCorrection(
     { token, method: 'POST', body },
   )
 }
+
+// EXTR-13: POST /v1/extractions/{id}/line-items -- the replace-all line set.
+// Mirrored key-for-key from internal/extraction/handlers_lineitems.go; wireMirrors.test.ts
+// fails if this side, frontend/app/src/lib/lineItems.ts or
+// frontend/app/src/lib/extractionReview.ts gains or loses a key. Every key is non-optional on
+// both TypeScript legs: tsInterfaceKeys strips '?', so an optional key here would compare
+// equal to a required one there and the mirror would stay green over the drift.
+export interface LineItemInput {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+}
+
+export interface LineItemsRequest {
+  lines: LineItemInput[]
+}
+
+// lines is never null: normalizeLines returns an empty slice, so an empty set marshals to [].
+export interface LineItemsResponse {
+  id: string
+  invoice_id: string
+  lines: LineItemInput[]
+  created_at: string
+}
+
+export function postLineItems(
+  token: string,
+  jobId: string,
+  body: LineItemsRequest,
+): Promise<LineItemsResponse> {
+  return apiFetch<LineItemsResponse>(
+    `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/line-items`,
+    { token, method: 'POST', body },
+  )
+}

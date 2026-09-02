@@ -6,9 +6,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -201,14 +203,14 @@ func TestLineItems_SortsMoreThanTwelveOutOfOrderRows(t *testing.T) {
 	}
 }
 
-// A header naming only one of the three roles still proceeds (fail-closed is zero-of-three
-// only); the two unmapped roles are nil on every row, not just the first.
+// A header naming only one of the gate's three roles still proceeds (fail-closed is
+// zero-of-three only); the two unmapped roles are nil on every row, not just the first.
 func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T) {
 	tbl := extraction.Table{
 		Rows: 3, Cols: 2,
 		Cells: []extraction.TableCell{
 			liCell(0, 0, "Description", nil),
-			liCell(0, 1, "Line Total", nil), // the only recognised role
+			liCell(0, 1, "Line Total", nil), // the only role the fail-closed gate counts
 			liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
 			liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
 		},
@@ -230,7 +232,65 @@ func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T)
 	liWant(t, got[1].LineTotal, "20.00", "line 1 LineTotal")
 }
 
+// TestLineItems_DescriptionOnlyHeaderIsStillSkipped pins that description alone does not widen
+// the fail-closed gate (edge case 3): a header naming only description is prose, not a
+// line-item table.
+func TestLineItems_DescriptionOnlyHeaderIsStillSkipped(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 1,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(1, 0, "Terms and conditions apply.", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a header naming only description, want 0 -- description alone does not widen the fail-closed gate", len(got))
+	}
+}
+
+// TestLineItems_BlankDescriptionCellIsAbsentNotEmpty pins edge case 1: a blank description
+// cell leaves Description nil, never "" -- extraction_field_results.value's CHECK forbids an
+// empty string. The other three roles populating in the same row is the positive control.
+func TestLineItems_BlankDescriptionCellIsAbsentNotEmpty(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 4,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit Price", nil),
+			liCell(0, 3, "Line Total", nil),
+			liCell(1, 0, "   ", nil), // whitespace only
+			liCell(1, 1, "1", nil),
+			liCell(1, 2, "10.00", nil),
+			liCell(1, 3, "10.00", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s), want 1", len(got))
+	}
+	liWantNil(t, got[0].Description, "Description")
+	liWant(t, got[0].Quantity, "1", "Quantity")
+	liWant(t, got[0].UnitPrice, "10.00", "UnitPrice")
+	liWant(t, got[0].LineTotal, "10.00", "LineTotal")
+}
+
 // --- purity scan --------------------------------------------------------------
+
+// TestLineItems_PurityScanUnchanged guards the fence itself: TestLineItems_StartsNoGoroutineAndReadsNoClock
+// already scans lineitems.go's actual imports, so this only pins that the allowlist has not
+// quietly widened.
+func TestLineItems_PurityScanUnchanged(t *testing.T) {
+	want := []string{"regexp", "strconv", "strings", "unicode"}
+	if !slices.Equal(liAllowedImports, want) {
+		t.Errorf("liAllowedImports = %v, want %v -- lineitems.go's purity fence must not widen", liAllowedImports, want)
+	}
+}
 
 // liParse parses one source. src nil reads the named file; a string is a needle/control.
 func liParse(t *testing.T, name string, src any) *ast.File {
@@ -345,5 +405,181 @@ func f() {
 	}
 	if hits := liConcurrency(liParse(t, "control.go", goControl)); len(hits) != 0 {
 		t.Errorf("the control source only calls a function and the scan reported %v; the scan is not specific", hits)
+	}
+}
+
+// --- EXTR-13-01 QA: the projection's own guarantees --------------------------
+
+// TestLineItemResults_EachRowCarriesItsOwnCellRegion closes Core AC 6 on the projection.
+// TestLineItems_EachCellCarriesItsOwnRegion only reaches DocLine.Regions; nothing asserted the
+// emitted FieldResult carried it, so LineItemResults could hand every row the line-total box
+// and the suite stayed green.
+func TestLineItemResults_EachRowCarriesItsOwnCellRegion(t *testing.T) {
+	boxDesc := liBox(1, 0.05, 0.50, 0.20, 0.55)
+	boxQty := liBox(1, 0.22, 0.50, 0.30, 0.55)
+	boxPrice := liBox(1, 0.32, 0.50, 0.45, 0.55)
+	boxTotal := liBox(1, 0.47, 0.50, 0.60, 0.55)
+	tbl := extraction.Table{
+		Rows: 2, Cols: 4,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit Price", nil), liCell(0, 3, "Line Total", nil),
+			liCell(1, 0, "Widget", boxDesc), liCell(1, 1, "2", boxQty),
+			liCell(1, 2, "50.00", boxPrice), liCell(1, 3, "100.00", boxTotal),
+		},
+	}
+
+	rows := extraction.LineItemResults(extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}))
+	if len(rows) != 4 {
+		t.Fatalf("the round trip emitted %d row(s) %v, want 4 -- the region checks below need a populated set", len(rows), rcNames(rows))
+	}
+
+	want := map[string]*extraction.Region{
+		"line_items[1].description": boxDesc,
+		"line_items[1].quantity":    boxQty,
+		"line_items[1].unit_price":  boxPrice,
+		"line_items[1].line_total":  boxTotal,
+	}
+	seen := make(map[extraction.Region][]string, len(rows))
+	for _, r := range rows {
+		w, ok := want[r.Name]
+		if !ok {
+			t.Errorf("unexpected row %q", r.Name)
+			continue
+		}
+		if r.Region == nil {
+			t.Errorf("%s Region = nil, want %+v", r.Name, *w)
+			continue
+		}
+		if *r.Region != *w {
+			t.Errorf("%s Region = %+v, want that cell's own box %+v", r.Name, *r.Region, *w)
+		}
+		seen[*r.Region] = append(seen[*r.Region], r.Name)
+	}
+	for box, names := range seen {
+		if len(names) > 1 {
+			t.Errorf("rows %v all carry region %+v, want four distinct cell boxes", names, box)
+		}
+	}
+}
+
+// TestLineItemResults_CopiesCellValues pins that an emitted row owns its value: a caller
+// mutating the DocLine it passed in, through the very pointer it passed, must not reach the
+// output.
+func TestLineItemResults_CopiesCellValues(t *testing.T) {
+	desc, qty, price, total := "Widget", "2", "50.00", "100.00"
+	lines := []extraction.DocLine{{Index: 1, Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total}}
+
+	rows := extraction.LineItemResults(lines)
+	if len(rows) != 4 {
+		t.Fatalf("LineItemResults emitted %d row(s) %v, want 4", len(rows), rcNames(rows))
+	}
+	before := map[string]string{}
+	for _, r := range rows {
+		if r.Value == nil {
+			t.Fatalf("%s Value = nil, want a value -- the mutation check below needs one", r.Name)
+		}
+		before[r.Name] = *r.Value
+	}
+
+	desc, qty, price, total = "MUTATED", "MUTATED", "MUTATED", "MUTATED"
+
+	for _, r := range rows {
+		if *r.Value != before[r.Name] {
+			t.Errorf("%s Value = %q after the caller mutated its DocLine, want the copy %q", r.Name, *r.Value, before[r.Name])
+		}
+	}
+}
+
+// TestLineItemResults_IndexHolesDoNotRenumber pins edge case 4: a line whose every cell is
+// absent emits nothing, and the surrounding lines keep their own Index -- the emitted N values
+// skip rather than closing up.
+func TestLineItemResults_IndexHolesDoNotRenumber(t *testing.T) {
+	a, c := "Widget", "Gadget"
+	rows := extraction.LineItemResults([]extraction.DocLine{
+		{Index: 1, Description: &a},
+		{Index: 2}, // every cell absent
+		{Index: 3, Description: &c},
+	})
+
+	want := []string{"line_items[1].description", "line_items[3].description"}
+	if len(rows) == 0 {
+		t.Fatal("LineItemResults emitted nothing; the hole check below would be vacuous")
+	}
+	if got := rcNames(rows); !rcNamesEqual(got, want) {
+		t.Errorf("row names = %v, want %v -- a hole must not shift or renumber its neighbours", got, want)
+	}
+	for _, r := range rows {
+		if r.Name == "line_items[2].description" {
+			t.Errorf("found %q, want none -- line 2 has no populated cell", r.Name)
+		}
+	}
+}
+
+// TestLineItemResults_EmptyInputIsEmptyNotNil pins the projection's zero value, and that every
+// emitted row carries non-nil Alternatives (TestReconcile_AlternativesAreNeverNil's rule).
+func TestLineItemResults_EmptyInputIsEmptyNotNil(t *testing.T) {
+	for _, in := range [][]extraction.DocLine{nil, {}} {
+		got := extraction.LineItemResults(in)
+		if got == nil {
+			t.Errorf("LineItemResults(%v) = nil, want an empty non-nil slice", in)
+		}
+		if len(got) != 0 {
+			t.Errorf("LineItemResults(%v) emitted %d row(s), want 0", in, len(got))
+		}
+	}
+
+	d := "Widget"
+	rows := extraction.LineItemResults([]extraction.DocLine{{Index: 1, Description: &d, LineTotal: rcStr("10.00")}})
+	if len(rows) != 2 {
+		t.Fatalf("LineItemResults emitted %d row(s) %v, want 2 -- the Alternatives check needs a populated set", len(rows), rcNames(rows))
+	}
+	for _, r := range rows {
+		if r.Alternatives == nil {
+			t.Errorf("%s Alternatives = nil, want an empty non-nil slice", r.Name)
+		}
+	}
+}
+
+// TestLineFieldName_IsThePackagesOnlyNameSource pins that nothing hand-builds the
+// line_items[N].<role> string beside LineFieldName. Floor: the scan reads a non-empty set of
+// package files and finds LineFieldName's own literal, so a scan matching nothing cannot read
+// as a pass. Needle/control per this file's own scan convention.
+func TestLineFieldName_IsThePackagesOnlyNameSource(t *testing.T) {
+	const needle = `"line_items["`
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	hits := map[string]int{}
+	scanned := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		scanned++
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if n := strings.Count(string(b), needle); n > 0 {
+			hits[name] = n
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("the scan read zero non-test .go files; it would report a clean package either way")
+	}
+	if hits["lineitems.go"] != 1 {
+		t.Errorf("lineitems.go holds %d %s literal(s), want exactly 1 (LineFieldName's own); the scan's floor is broken", hits["lineitems.go"], needle)
+	}
+	delete(hits, "lineitems.go")
+	if len(hits) != 0 {
+		t.Errorf("%s hand-built outside LineFieldName in %v -- the flag row and the value rows must not drift apart", needle, hits)
+	}
+
+	if got := extraction.LineFieldName(999, extraction.LineRoleDescription); got != "line_items[999].description" {
+		t.Errorf("LineFieldName(999, description) = %q, want \"line_items[999].description\"", got)
 	}
 }

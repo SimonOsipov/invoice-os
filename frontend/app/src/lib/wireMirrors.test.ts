@@ -4,7 +4,8 @@
 //
 // The three extractors are approvals.test.ts:864-898's, verbatim.
 
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
@@ -170,6 +171,39 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function postFieldCorrection(',
     floor: 7,
   },
+  // EXTR-13-06 — the line-items route. LineItemInput's goPath pins internal/extraction, not
+  // internal/invoice: that package's own LineItemInput has a fifth key (LineTax) and a bare
+  // `go: 'LineItemInput'` without this path would read it and red the row (T4 below).
+  {
+    ts: 'LineItemInput',
+    go: 'LineItemInput',
+    goPath: 'internal/extraction/handlers_lineitems.go',
+    goAnchor: 'func canonicalLineJSON(',
+    spaPath: 'frontend/app/src/lib/lineItems.ts',
+    spaAnchor: 'export function linesToPost(',
+    e2eAnchor: 'export function postLineItems(',
+    floor: 4,
+  },
+  {
+    ts: 'LineItemsRequest',
+    go: 'LineItemsRequest',
+    goPath: 'internal/extraction/handlers_lineitems.go',
+    goAnchor: 'func LineItemsHandler(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postLineItems(',
+    e2eAnchor: 'export function postLineItems(',
+    floor: 1,
+  },
+  {
+    ts: 'LineItemsResponse',
+    go: 'LineItemsResponse',
+    goPath: 'internal/extraction/handlers_lineitems.go',
+    goAnchor: 'func writeLineItems(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postLineItems(',
+    e2eAnchor: 'export function postLineItems(',
+    floor: 4,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -285,8 +319,58 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionRegion',
       'CorrectionRequest',
       'CorrectionResponse',
+      'LineItemInput',
+      'LineItemsRequest',
+      'LineItemsResponse',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
+  })
+
+  // T3 — closes the blind spot AC-7 names: goStructKeys and
+  // TestLineItemsWireTypes_HaveBraceFreeBodies both count `json:"…"` matches, so an exported
+  // field with NO tag is invisible to both. Reads the three new structs' own brace-free bodies
+  // and demands a tag on every remaining line.
+  it('wireMirrors_everyGoFieldInTheNewStructsCarriesAJsonTag', () => {
+    const go = repoFile('internal/extraction/handlers_lineitems.go')
+    const structs = ['LineItemInput', 'LineItemsRequest', 'LineItemsResponse']
+
+    function fieldLinesOf(structName: string): string[] {
+      const body = new RegExp(`type\\s+${structName}\\s+struct\\s*\\{([^{}]*)\\}`).exec(go)?.[1] ?? ''
+      return body
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '' && !l.startsWith('//'))
+    }
+
+    for (const s of structs) {
+      const lines = fieldLinesOf(s)
+      expect(lines.length, `${s}: found no field lines to check`).toBeGreaterThan(0)
+      for (const line of lines) {
+        expect(line, `${s}: field line has no json tag -- invisible to goStructKeys`).toMatch(/`json:"[^"]+"`/)
+      }
+    }
+
+    // Planted positive: an untagged field must fail the same predicate.
+    const untagged = 'LineTax *string'
+    expect(untagged).not.toMatch(/`json:"[^"]+"`/)
+  })
+
+  // T4 — internal/invoice.LineItemInput is a DIFFERENT, five-field type (adds LineTax) with NO
+  // json tags at all -- it is Go-to-Go (Store.Create's input), never marshaled. goStructKeys
+  // counts only `json:"…"` matches, so reading it yields 0, not 5. That is the point: a goPath
+  // typo pointing this row at invoice.go would not silently agree, it would fail the floor of 4
+  // LOUDLY (0 < 4) before the equality row ever ran.
+  it('wireMirrors_theLineItemInputRowPointsAtTheExtractionPackage', () => {
+    const row = WIRE_MIRRORS.find((m) => m.ts === 'LineItemInput')
+    expect(row, 'LineItemInput row must exist').toBeDefined()
+    expect(row?.goPath).toBe('internal/extraction/handlers_lineitems.go')
+
+    const invoiceSrc = repoFile('internal/invoice/invoice.go')
+    expect(invoiceSrc, 'internal/invoice.LineItemInput must still exist, untagged').toContain(
+      'type LineItemInput struct {\n\tDescription *string\n\tQuantity    *string\n\tUnitPrice   *string\n\tLineTotal   *string\n\tLineTax     *string\n}',
+    )
+    const invoiceKeys = goStructKeys(invoiceSrc, 'LineItemInput')
+    expect(invoiceKeys.length, 'untagged fields must not be readable as wire keys').toBe(0)
   })
 
   it('wireMirrors_theApprovalRunMirrorStillLivesInApprovalsTest', () => {
@@ -411,3 +495,276 @@ describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-
     expect(tsUnionMembers(tsFixture, 'Absent')).toEqual([])
   })
 })
+
+// EXTR-13-06 — the HeaderFields vocabulary mirror. Three verbatim transcriptions of
+// internal/extraction/vocabulary.go's HeaderFields exist and none was ever compared: the
+// header/line split now depends on this order (extractionReview.ts's vocabularyRank), so a
+// silent drift here misfiles a field into the wrong section rather than merely mislabeling it.
+
+const HEADER_FIELDS_GO_PATH = 'internal/extraction/vocabulary.go'
+const HEADER_FIELDS_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
+const HEADER_FIELDS_TEST_PATH = 'frontend/app/src/components/ExtractionFields.test.tsx'
+const HEADER_FIELDS_E2E_PATH = 'e2e/topology/import-wizard.spec.ts'
+
+// var HeaderFields = []string{...}, quoted strings in declaration order.
+function goHeaderFields(source: string): string[] {
+  const body = /var\s+HeaderFields\s*=\s*\[\]string\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  return [...body.matchAll(/"([^"]*)"/g)].map((m) => m[1])
+}
+
+// Accepts both `export const NAME = [...]` (extractionReview.ts) and a bare
+// `const NAME = [...]` (the two test-file transcriptions), single-quoted members in order.
+function tsStringArrayConst(source: string, name: string): string[] {
+  const body = new RegExp(`(?:export\\s+)?const\\s+${name}\\s*(?::[^=]*)?=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? ''
+  return [...body.matchAll(/'([^']*)'/g)].map((m) => m[1])
+}
+
+const HEADER_FIELDS_TS_COPIES = [
+  { path: HEADER_FIELDS_SPA_PATH, name: 'HEADER_FIELDS' },
+  { path: HEADER_FIELDS_TEST_PATH, name: 'HEADER_FIELDS' },
+  { path: HEADER_FIELDS_E2E_PATH, name: 'VOCABULARY' },
+]
+
+describe('wire mirror: HeaderFields vocabulary <-> its three TypeScript transcriptions (EXTR-13-06)', () => {
+  it('headerFields_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
+    // A floor of ">0" is the classic escape here: if a rename made every extractor return [],
+    // an order-comparison row would still pass on [] === []. The vocabulary is a fixed 10.
+    expect(goHeaderFields(repoFile(HEADER_FIELDS_GO_PATH)), `no HeaderFields in ${HEADER_FIELDS_GO_PATH}`).toHaveLength(10)
+    for (const { path, name } of HEADER_FIELDS_TS_COPIES) {
+      expect(tsStringArrayConst(repoFile(path), name), `no ${name} in ${path}`).toHaveLength(10)
+    }
+  })
+
+  it('headerFields_theGoSliceEqualsAllThreeTranscriptions', () => {
+    // In order, not as a set: HEADER_FIELDS' contract is the order one Save writes in
+    // (extractionReview.ts's vocabularyRank), which a set comparison cannot see move.
+    const goValues = goHeaderFields(repoFile(HEADER_FIELDS_GO_PATH))
+    for (const { path, name } of HEADER_FIELDS_TS_COPIES) {
+      expect(tsStringArrayConst(repoFile(path), name), `${path} ${name} vs Go, in order`).toEqual(goValues)
+    }
+  })
+
+  it('headerFields_plantedPositiveTheExtractorsCanReportARealMismatch', () => {
+    // Synthetic, in-memory only: reordered AND one member differs ('c' vs 'd').
+    const goFixture = 'var HeaderFields = []string{\n\t"a", "b", "c",\n}'
+    const tsFixture = "const HEADER_FIELDS = [\n  'b',\n  'a',\n  'd',\n]\n"
+
+    const goValues = goHeaderFields(goFixture)
+    const tsValues = tsStringArrayConst(tsFixture, 'HEADER_FIELDS')
+    expect(goValues).toEqual(['a', 'b', 'c'])
+    expect(tsValues).toEqual(['b', 'a', 'd'])
+    expect(goValues, 'the fixtures must actually differ for this test to mean anything').not.toEqual(tsValues)
+
+    // An absent name yields [], not a thrown error and not a false [] === [] agreement.
+    expect(tsStringArrayConst(tsFixture, 'ABSENT')).toEqual([])
+  })
+})
+
+// -- QA additions (EXTR-13-06, Mode B) ----------------------------------------------------
+//
+// The rows above compare KEY SETS. Four things they cannot see, each closed here for the
+// line-items types only: optionality, nullability, an unmirrored struct in the same file, and
+// the gateway path -- which until now failed on the deployed fleet or nowhere.
+
+// The raw interface body, '?' and '| null' intact. tsInterfaceKeys strips both.
+function tsInterfaceBody(source: string, interfaceName: string): string {
+  return new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+}
+
+function tsFieldLines(body: string): string[] {
+  return body
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('//'))
+}
+
+function optionalKeys(body: string): string[] {
+  return tsFieldLines(body).flatMap((l) => /^([A-Za-z_][A-Za-z0-9_]*)\?\s*:/.exec(l)?.[1] ?? [])
+}
+
+const LINE_ITEM_TYPES = ['LineItemInput', 'LineItemsRequest', 'LineItemsResponse'] as const
+const LINE_ITEMS_GO_PATH = 'internal/extraction/handlers_lineitems.go'
+const LINE_ITEMS_SPA_PATH = 'frontend/app/src/lib/lineItems.ts'
+const REVIEW_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
+
+// Which file declares each type on the SPA side: LineItemInput lives in lineItems.ts, the
+// layer that builds it; extractionReview.ts re-exports rather than redeclaring.
+const SPA_DECL_PATH: Record<string, string> = {
+  LineItemInput: LINE_ITEMS_SPA_PATH,
+  LineItemsRequest: REVIEW_SPA_PATH,
+  LineItemsResponse: REVIEW_SPA_PATH,
+}
+
+describe('line-items wire types: what a key-set diff cannot see (EXTR-13-06)', () => {
+  it('lineItems_theDetectorFindsTheOptionalKeysThatDoExist', () => {
+    // The control for the row below. client.ts's CorrectionRequest really is optional-keyed
+    // where the SPA's is not -- the live asymmetry tsInterfaceKeys is blind to. If this row
+    // ever finds nothing, the absence assertion under it is asserting nothing.
+    const body = tsInterfaceBody(repoFile(E2E_CLIENT), 'CorrectionRequest')
+    expect(tsFieldLines(body).length, 'read no CorrectionRequest body').toBe(4)
+    expect(optionalKeys(body)).toEqual(['region', 'anchor_label'])
+    expect(optionalKeys(tsInterfaceBody(repoFile(REVIEW_SPA_PATH), 'CorrectionRequest'))).toEqual([])
+  })
+
+  it('lineItems_noNewInterfaceCarriesAnOptionalKeyOnEitherLeg', () => {
+    for (const ts of LINE_ITEM_TYPES) {
+      for (const path of [SPA_DECL_PATH[ts], E2E_CLIENT]) {
+        const body = tsInterfaceBody(repoFile(path), ts)
+        expect(tsFieldLines(body).length, `${path} ${ts}: read no body`).toBeGreaterThan(0)
+        expect(
+          optionalKeys(body),
+          `${path} ${ts}: an optional key compares equal to a required one, so the mirror stays green over the drift`,
+        ).toEqual([])
+      }
+    }
+  })
+
+  it('lineItems_theDetectorFindsTheNullableFieldsThatDoExist', () => {
+    // The control for the row below: LineItemInput's four cells ARE '| null'.
+    const nullable = tsFieldLines(tsInterfaceBody(repoFile(LINE_ITEMS_SPA_PATH), 'LineItemInput')).filter((l) =>
+      l.includes('| null'),
+    )
+    expect(nullable, 'the nullability scan finds nothing, so the absence row below is vacuous').toHaveLength(4)
+  })
+
+  it('lineItems_theLinesFieldIsAnArrayNeverNullOrAbsent', () => {
+    // AC-8's TypeScript half. Go's normalizeLines guarantees [], so a `| null` here would make
+    // every caller branch on a state the server cannot send.
+    for (const ts of ['LineItemsRequest', 'LineItemsResponse']) {
+      for (const path of [SPA_DECL_PATH[ts], E2E_CLIENT]) {
+        const lines = tsFieldLines(tsInterfaceBody(repoFile(path), ts)).filter((l) => l.startsWith('lines'))
+        expect(lines, `${path} ${ts}: no lines field`).toHaveLength(1)
+        expect(lines[0], `${path} ${ts}: lines must be LineItemInput[], not nullable or optional`).toBe(
+          'lines: LineItemInput[]',
+        )
+      }
+    }
+  })
+
+  it('lineItemInput_isDeclaredExactlyOnceAcrossTheSpa', () => {
+    // The row's spaPath watches ONE file. A second declaration elsewhere is a copy the
+    // registry stops watching. Inside extractionReview.ts tsc already refuses it (TS2440 over
+    // the type-import, TS2484 over the re-export); nothing refuses it in a third file.
+    const root = fileURLToPath(new URL('../', import.meta.url))
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.tsx?$/.test(f))
+    expect(files.length, 'the SPA source scan read no files').toBeGreaterThan(100)
+
+    // Concatenated so this file's own text cannot self-match the scan.
+    const needle = 'export interface ' + 'LineItemInput'
+    const declaring = files.filter((f) => readFileSync(join(root, f), 'utf8').includes(needle))
+    expect(declaring, 'LineItemInput must be declared once, in the file the mirror row watches').toEqual([
+      'lib/lineItems.ts',
+    ])
+    expect(WIRE_MIRRORS.find((m) => m.ts === 'LineItemInput')?.spaPath).toBe(LINE_ITEMS_SPA_PATH)
+  })
+})
+
+// Every exported struct in one file that carries a json tag, with its body.
+function exportedWireStructs(source: string): string[] {
+  return [...source.matchAll(/type\s+([A-Z][A-Za-z0-9_]*)\s+struct\s*\{([^{}]*)\}/g)]
+    .filter((m) => /`json:"[^"]+"`/.test(m[2]))
+    .map((m) => m[1])
+}
+
+describe('every wire struct in handlers_lineitems.go has a mirror row (EXTR-13-06)', () => {
+  it('wireMirrors_noTaggedStructInTheLineItemsFileIsUnmirrored', () => {
+    // tableIsNonVacuous catches a DELETED row; nothing caught a NEW struct with no row at all.
+    // Scoped to this one file -- a repo-wide inventory is internal/audit's shape and is not
+    // this story's.
+    const found = exportedWireStructs(repoFile(LINE_ITEMS_GO_PATH))
+    expect(found, 'the struct scan read nothing').toEqual([...LINE_ITEM_TYPES])
+
+    const mirrored = WIRE_MIRRORS.filter((m) => m.goPath === LINE_ITEMS_GO_PATH).map((m) => m.go)
+    for (const name of found) {
+      expect(mirrored, `${name} is a tagged wire struct with no WIRE_MIRRORS row`).toContain(name)
+    }
+  })
+
+  it('wireMirrors_plantedPositiveAnUnmirroredStructIsReported', () => {
+    // Synthetic, in-memory only. The untagged one must NOT be reported: it never reaches a wire.
+    const fixture =
+      'type Mirrored struct {\n\tA string `json:"a"`\n}\n\ntype Newcomer struct {\n\tB string `json:"b"`\n}\n\ntype Internal struct {\n\tC string\n}\n'
+    expect(exportedWireStructs(fixture)).toEqual(['Mirrored', 'Newcomer'])
+    expect(exportedWireStructs(fixture).filter((n) => !['Mirrored'].includes(n))).toEqual(['Newcomer'])
+  })
+})
+
+// The mux pattern cmd/submission/main.go registers, with {id} normalized to {}.
+function goMuxPattern(source: string, suffix: string): string {
+  const m = new RegExp(`"POST (/v1/[^"]*${suffix})"`).exec(source)?.[1] ?? ''
+  return m === '' ? '' : `/api/submission${m}`.replace(/\{[^}]*\}/g, '{}')
+}
+
+// A template literal's path, with every ${…} normalized to {}.
+function tsTemplatePath(source: string, pattern: RegExp): string {
+  return (pattern.exec(source)?.[1] ?? '').replace(/\$\{[^}]*\}/g, '{}')
+}
+
+describe('the line-items gateway path equals the registered mux pattern (EXTR-13-06)', () => {
+  // Nothing in Go reads the mux pattern and nothing in TypeScript reads the URL, so a
+  // misspelled path went green through tsc, vitest and the whole Go suite, and failed only on
+  // the deployed fleet. Three TypeScript legs, one Go source.
+  const MAIN = 'cmd/submission/main.go'
+
+  it('gatewayPath_bothTypeScriptCallersBuildThePathTheMuxRegistered', () => {
+    const want = goMuxPattern(repoFile(MAIN), '/line-items')
+    expect(want, `no POST …/line-items pattern in ${MAIN}`).toBe('/api/submission/v1/extractions/{}/line-items')
+
+    expect(
+      tsTemplatePath(repoFile(REVIEW_SPA_PATH), /`\$\{base\}([^`]*line-items)`/),
+      'the SPA posts to a path the submission mux does not register',
+    ).toBe(want)
+    expect(
+      tsTemplatePath(repoFile(E2E_CLIENT), /`\$\{apiBase\(\)\}([^`]*line-items)`/),
+      'e2e/api/client.ts posts to a path the submission mux does not register',
+    ).toBe(want)
+  })
+
+  it('gatewayPath_theApiSpecBuildsTheSamePath', () => {
+    const spec = repoFile('e2e/api/extractions.spec.ts')
+    const base = /const EXTRACTIONS_PATH = '([^']*)'/.exec(spec)?.[1] ?? ''
+    expect(base, 'EXTRACTIONS_PATH moved or was renamed').toBe('/api/submission/v1/extractions')
+
+    const built = (/const lineItemsPath = \(id: string\) => `([^`]*)`/.exec(spec)?.[1] ?? '')
+      .replace('${EXTRACTIONS_PATH}', base)
+      .replace(/\$\{[^}]*\}/g, '{}')
+    expect(built, 'the refusal specs would exercise a different route than the SPA calls').toBe(
+      goMuxPattern(repoFile(MAIN), '/line-items'),
+    )
+  })
+
+  it('gatewayPath_plantedPositiveAMisspelledPatternIsReported', () => {
+    // Synthetic, in-memory only.
+    const goFixture = 'app.Mux.HandleFunc("POST /v1/extractions/{id}/lineitems", h)'
+    const tsFixture = 'return authedFetch(`${base}/api/submission/v1/extractions/${jobId}/line-items`, {})'
+    expect(goMuxPattern(goFixture, '/lineitems')).toBe('/api/submission/v1/extractions/{}/lineitems')
+    expect(tsTemplatePath(tsFixture, /`\$\{base\}([^`]*line-items)`/)).toBe(
+      '/api/submission/v1/extractions/{}/line-items',
+    )
+    expect(goMuxPattern(goFixture, '/lineitems')).not.toBe(tsTemplatePath(tsFixture, /`\$\{base\}([^`]*line-items)`/))
+
+    // An absent pattern yields '', which the non-vacuity assertion above rejects.
+    expect(goMuxPattern(goFixture, '/absent')).toBe('')
+  })
+})
+
+// -- copies this file deliberately does NOT guard (EXTR-13-06, AC-9) ----------------------
+//
+// LOCKED_FIELDS (ExtractionFields.test.tsx) vs handlers_correction.go's lockedFields -- a Go
+//   map[string]string, not a slice; it needs a different extractor, and refuseField's 422 is
+//   already pinned by the correction e2e.
+// ExtractionJob / ExtractionJobsResponse (e2e/api/client.ts) -- no SPA copy exists, so a
+//   three-way row is impossible; the SPA does not read the jobs list.
+// CorrectionRequest's optionality asymmetry -- tsInterfaceKeys strips '?', so the SPA's
+//   all-required keys compare equal to client.ts's optional region/anchor_label. A live
+//   pre-existing defect, not this story's; the three line-items interfaces are non-optional on
+//   both legs, and lineItems_noNewInterfaceCarriesAnOptionalKeyOnEitherLeg holds them there.
+//   The asymmetry itself is the live control that test runs against.
+// import-wizard.spec.ts's WIRE_FIELD_SET -- transcribed from internal/extraction/mock.go, a
+//   fixture oracle rather than a wire type.
+// An exported wire struct with no row at all -- closed for handlers_lineitems.go by
+//   wireMirrors_noTaggedStructInTheLineItemsFileIsUnmirrored; the rest of internal/extraction
+//   is still unenumerated, which needs internal/audit's pinned-inventory shape.
+// A field added to all three legs at once -- goStructKeys compares SETS, so the registry is
+//   blind by construction. Go's TestLineItemsWireTypes_HaveBraceFreeBodies pins 4/1/4 exactly,
+//   which catches an addition; a same-count swap and wrong semantics stay open.

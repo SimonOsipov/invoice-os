@@ -103,6 +103,40 @@ func TestReconcile_AllLineTotalsUnparseableLeavesTheBlockMissing(t *testing.T) {
 	}
 }
 
+// TestReconcile_LineItemsBlockReasonIsUnchanged is a regression guard: the block's shipped
+// meaning -- ReasonMissing until some line carries a parseable total, ReasonNone after -- must
+// not move as the per-cell projection is wired in.
+func TestReconcile_LineItemsBlockReasonIsUnchanged(t *testing.T) {
+	cases := []struct {
+		name string
+		in   extraction.Input
+		want extraction.Reason
+	}{
+		{"no lines", extraction.Input{}, extraction.ReasonMissing},
+		{"one line, parseable total", extraction.Input{Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00")},
+		}}, extraction.ReasonNone},
+		{"one line, unparseable total", extraction.Input{Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("1"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("garbled")},
+		}}, extraction.ReasonMissing},
+		{"one line, flagged total still counts as parseable", extraction.Input{Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("25.00")},
+		}}, extraction.ReasonNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := extraction.Reconcile(tc.in)
+			got, ok := rcFind(results, "line_items")
+			if !ok {
+				t.Fatalf(`"line_items" result not found in %+v`, results)
+			}
+			if got.Reason != tc.want {
+				t.Errorf("line_items reason = %q, want %q", got.Reason, tc.want)
+			}
+		})
+	}
+}
+
 // TestReconcile_LargeAmountsStayExactUnderDecimal proves the row check is genuinely decimal, not
 // float64 wearing a decimal.Decimal wrapper. 99999999.999 * 9999999999.99 is exactly
 // 999999999989000000.00001 under shopspring/decimal; the same multiplication in float64 rounds
@@ -330,7 +364,7 @@ func TestReconcile_MutatesNeitherItsInputSliceNorItsCandidates(t *testing.T) {
 // TestReconcile_ClosedSetHoldsAcrossShapedInputs is Core AC 7 proved exhaustively rather than by
 // example: every result of every shaped input carries a Reason in the closed set, the leading
 // HeaderFields+line_items run is always exactly rcExpectedNames() (never a 10- or 12-element
-// slice), and anything past it is a per-row flag.
+// slice), and anything past it is a line_items[N].<role> row.
 func TestReconcile_ClosedSetHoldsAcrossShapedInputs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -370,7 +404,7 @@ func TestReconcile_ClosedSetHoldsAcrossShapedInputs(t *testing.T) {
 			}
 			for _, r := range results[len(want):] {
 				if !strings.HasPrefix(r.Name, "line_items[") {
-					t.Errorf("result past the total run named %q, want a line_items[N].line_total flag", r.Name)
+					t.Errorf("result past the total run named %q, want a line_items[N].<role> row", r.Name)
 				}
 			}
 			for _, r := range results {
@@ -517,5 +551,103 @@ func rowFlagName(i string) string {
 `
 	if controlHits := rcDBWriteHits(rcParse(t, "control.go", control)); len(controlHits) != 0 {
 		t.Errorf("the control source only names line_items, reconcile.go's own legitimate vocabulary, and the scan flagged %v; the scan is not specific", controlHits)
+	}
+}
+
+// --- EXTR-13-01 QA: the composed line block ----------------------------------
+
+// TestReconcile_TheComposedLineBlockKeepsReadingOrder pins where composeLineRows puts a flagged
+// total: in its own line's run, not trailing the block. Two lines, the first flagged, so an
+// implementation that appended flags last would reorder visibly.
+func TestReconcile_TheComposedLineBlockKeepsReadingOrder(t *testing.T) {
+	d1, d2 := "Widget", "Gadget"
+	results := extraction.Reconcile(extraction.Input{Lines: []extraction.DocLine{
+		{Index: 1, Description: &d1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("25.00")}, // 2 x 10 != 25
+		{Index: 2, Description: &d2, Quantity: rcStr("3"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("30.00")},
+	}})
+
+	var block []extraction.FieldResult
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") {
+			block = append(block, r)
+		}
+	}
+	want := []string{
+		"line_items[1].description", "line_items[1].quantity", "line_items[1].unit_price", "line_items[1].line_total",
+		"line_items[2].description", "line_items[2].quantity", "line_items[2].unit_price", "line_items[2].line_total",
+	}
+	if len(block) != len(want) {
+		t.Fatalf("the composed block has %d row(s) %v, want %d: %v", len(block), rcNames(block), len(want), want)
+	}
+	if got := rcNames(block); !rcNamesEqual(got, want) {
+		t.Errorf("composed block order = %v, want %v -- the flag sits in its own line's run", got, want)
+	}
+	if got := block[3]; got.Reason != extraction.ReasonInconsistent {
+		t.Errorf("block[3] (%s) reason = %q, want ReasonInconsistent -- the flag must occupy line 1's line_total slot", got.Name, got.Reason)
+	}
+}
+
+// TestReconcile_AHoleInTheLineBlockDoesNotRenumber pins edge case 4 through Reconcile: a line
+// with no populated cell contributes nothing and its neighbours keep their own N.
+func TestReconcile_AHoleInTheLineBlockDoesNotRenumber(t *testing.T) {
+	d1, d3 := "Widget", "Gadget"
+	results := extraction.Reconcile(extraction.Input{Lines: []extraction.DocLine{
+		{Index: 1, Description: &d1},
+		{Index: 2},
+		{Index: 3, Description: &d3},
+	}})
+
+	var block []extraction.FieldResult
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") {
+			block = append(block, r)
+		}
+	}
+	if len(block) == 0 {
+		t.Fatal("the composed block is empty; the hole check below would be vacuous")
+	}
+	want := []string{"line_items[1].description", "line_items[3].description"}
+	if got := rcNames(block); !rcNamesEqual(got, want) {
+		t.Errorf("composed block = %v, want %v -- a hole must not shift or renumber its neighbours", got, want)
+	}
+}
+
+// TestReconcile_EveryLineRowOwnsItsValue pins that every rank-0 line row is a copy, the flagged
+// total included. LineItemResults copies (TestLineItemResults_CopiesCellValues); reconcileLines
+// hands the flag row line.LineTotal itself, so one of the four rows of a flagged line aliases
+// the caller's DocLine while its three siblings do not.
+func TestReconcile_EveryLineRowOwnsItsValue(t *testing.T) {
+	desc, qty, price, total := "Widget", "2", "10.00", "25.00" // 2 x 10.00 != 25.00, so line 1 is flagged
+	in := extraction.Input{Lines: []extraction.DocLine{
+		{Index: 1, Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total},
+	}}
+
+	results := extraction.Reconcile(in)
+	before := map[string]string{}
+	for _, r := range results {
+		if !strings.HasPrefix(r.Name, "line_items[") {
+			continue
+		}
+		if r.Value == nil {
+			t.Fatalf("%s Value = nil, want a value -- the mutation check below needs one", r.Name)
+		}
+		before[r.Name] = *r.Value
+	}
+	if len(before) != 4 {
+		t.Fatalf("the composed block has %d valued row(s) %v, want 4", len(before), before)
+	}
+	if _, ok := rcFind(results, "line_items[1].line_total"); !ok {
+		t.Fatal(`"line_items[1].line_total" absent; the flagged row is the one this test exists for`)
+	}
+
+	desc, qty, price, total = "MUTATED", "MUTATED", "MUTATED", "MUTATED"
+
+	for _, r := range results {
+		if !strings.HasPrefix(r.Name, "line_items[") {
+			continue
+		}
+		if *r.Value != before[r.Name] {
+			t.Errorf("%s Value = %q after the caller mutated its DocLine, want the copy %q", r.Name, *r.Value, before[r.Name])
+		}
 	}
 }

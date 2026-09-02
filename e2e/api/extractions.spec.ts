@@ -53,9 +53,11 @@ import {
   getExtractionDetail,
   getExtractions,
   login,
+  postLineItems,
   rawFetch,
   PERSONAS,
   type ExtractionJob,
+  type LineItemInput,
 } from './client'
 import { assertErrorEnvelope, assertUnauthorizedEnvelope } from './contract-helpers'
 import { freshTin } from './fixtures'
@@ -67,6 +69,7 @@ const IMPORT_DOCUMENT_PATH = '/api/invoice/v1/imports/document'
 const detailPath = (id: string) => `${EXTRACTIONS_PATH}/${id}`
 const pagePath = (id: string, n: string) => `${EXTRACTIONS_PATH}/${id}/pages/${n}`
 const correctionPath = (id: string, field: string) => `${EXTRACTIONS_PATH}/${id}/fields/${field}/corrections`
+const lineItemsPath = (id: string) => `${EXTRACTIONS_PATH}/${id}/line-items`
 
 // e2e/ is ESM, so import.meta.url is the only cwd-independent anchor.
 const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')
@@ -75,6 +78,9 @@ const PDF_BYTES = new Uint8Array(readFileSync(PDF_FIXTURE))
 // The 201 body's complete key set (CorrectionResponse), sorted. Asserted as a WHOLE: an added
 // omitempty drops a field from the wire without touching one value assertion.
 const CORRECTION_KEYS = ['created_at', 'field_name', 'id', 'invoice_id', 'method', 'region', 'value']
+
+// The same claim for LineItemsResponse (handlers_lineitems.go:37-42), sorted.
+const LINE_ITEMS_KEYS = ['created_at', 'id', 'invoice_id', 'lines']
 
 const POLL_BUDGET_MS = 120_000
 const POLL_INTERVAL_MS = 1_000
@@ -382,5 +388,217 @@ test.describe('extraction job reader (API E2E, over the deployed gateway)', () =
       body.invoice_id,
       'EXTR12-API-02: invoice_id names the invoice the correction reached, which is the claim the audit row makes',
     ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  })
+})
+
+// --- EXTR-13-06 · the line-items replace-all POST ---------------------------------------
+//
+// Both rows below start GREEN, not RED: cmd/submission/main.go:188 registered this route in
+// subtask 04, before this subtask ran. They are deployed-wire regression guards, not new
+// coverage of unshipped behaviour -- a first green run here is correct, not a false one.
+//
+// The registration oracle is 'lines is required', never the 401 or the shared malformed-id
+// 400: the gateway verifier answers 401 before the router runs, and 'id must be a well-formed
+// uuid' is shared by the detail, correction and line-items routes alike, so neither
+// discriminates this route from the other two 404s an unregistered path could produce.
+// 'lines is required' is a string only LineItemsHandler produces (msgNoLinesKey).
+
+test.describe('line-items replace-all POST (API E2E, over the deployed gateway)', () => {
+  test('EXTR13-API-01: the line-items route is the one that answered', async () => {
+    const token = await login(PERSONAS.A)
+    const unknownJobId = crypto.randomUUID()
+
+    const res = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: {},
+    })
+
+    assertErrorEnvelope(res, 400, 'a line-items POST with no lines key')
+    expect(res.body, "the 400 should carry LineItemsHandler's own message, by name").toEqual({
+      error: 'lines is required',
+    })
+  })
+
+  test('EXTR13-API-02: the four refusals', async () => {
+    const token = await login(PERSONAS.A)
+    const unknownJobId = crypto.randomUUID()
+    const authorized = { Authorization: `Bearer ${token}` }
+
+    const unauthenticated = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: {},
+      body: { lines: [] },
+    })
+    assertUnauthorizedEnvelope(unauthenticated, 'the line-items route with no Authorization header')
+
+    const malformedId = await rawFetch(lineItemsPath('not-a-uuid'), {
+      method: 'POST',
+      headers: authorized,
+      body: { lines: [] },
+    })
+    assertErrorEnvelope(malformedId, 400, 'the line-items route with a malformed job id')
+    expect(malformedId.body, 'every {id} route in this service shares one message').toEqual({
+      error: 'id must be a well-formed uuid',
+    })
+
+    // {lines: []} is a legitimate, non-nil empty array -- it clears msgNoLinesKey and reaches
+    // writeLineItems, which is what makes an unknown job a genuine 404 rather than a 400.
+    const unknown = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: authorized,
+      body: { lines: [] },
+    })
+    assertErrorEnvelope(unknown, 404, 'an unknown job, line-items route')
+    expect(unknown.body, 'the line-items route shares the detail route not-found body').toEqual({
+      error: 'not found',
+    })
+
+    const noLinesKey = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: authorized,
+      body: {},
+    })
+    assertErrorEnvelope(noLinesKey, 400, 'a line-items POST with no lines key')
+    expect(noLinesKey.body, "the 400 should carry LineItemsHandler's own message, by name").toEqual({
+      error: 'lines is required',
+    })
+  })
+})
+
+// --- EXTR-13-09 · the line-items 201, over a settled job ---------------------------------
+//
+// EXTR13-API-01/02 above cover the refusals only, so nothing in this suite had ever read a 201
+// from this route and `postLineItems` (client.ts:1156) had no caller at all. A 201 needs a real
+// job, a real invoice and a real write, so this row uploads its own document under its own
+// per-run entity -- EXTR12-API-02's idiom exactly, and under the same rule: it asserts no count
+// and touches nothing another spec seeded.
+//
+// Two writes, because replace-all is the route's whole contract: a second POST that APPENDED
+// would leave the first set's cells behind, and one write cannot tell the two apart.
+
+test.describe('line-items replace-all, on a settled job (API E2E, over the deployed gateway)', () => {
+  test('EXTR13-API-03: a line set is written, echoed at 201, and the second set replaces the first', async () => {
+    test.setTimeout(TEST_TIMEOUT_MS)
+    const token = await login(PERSONAS.A)
+
+    // Its own entity, so the mock extractor's fixed MOCK-INV-0001 cannot collide with another
+    // run and quarantine instead of filing an invoice.
+    const entity = await createEntity(token, { name: `EXTR-13 lines ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadPdf(token, 'EXTR13-API-03')
+    const job = await pollUntilSucceeded(token, documentId, 'EXTR13-API-03')
+
+    const imported = await rawFetch(IMPORT_DOCUMENT_PATH, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { entity_id: entity.id, document_id: documentId },
+    })
+    expect(imported.status, 'EXTR13-API-03: the settled document should import as one batch').toBe(201)
+    expect(
+      (imported.body as Record<string, unknown>).ready_invoices,
+      'EXTR13-API-03: the import must FILE an invoice -- a quarantined row has no line set to replace',
+    ).toBe(1)
+
+    // No <, > or & anywhere in these strings: Go's json.Marshal escapes all three, and the
+    // canonical-JSON equality at the bottom compares against JSON.stringify, which does not.
+    const first: LineItemInput[] = [
+      { description: 'EXTR13-API-03 alpha', quantity: '2', unit_price: '10.00', line_total: '20.00' },
+      { description: 'EXTR13-API-03 beta', quantity: null, unit_price: '5.00', line_total: '5.00' },
+    ]
+
+    const raw = await rawFetch(lineItemsPath(job.id), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { lines: first },
+    })
+    expect(raw.status, `EXTR13-API-03: a line set on a settled job should return 201 (body ${JSON.stringify(raw.body)})`).toBe(201)
+    const rawBody = raw.body as Record<string, unknown>
+    // The WHOLE key set: an added omitempty drops a field from the wire without touching one
+    // value assertion below.
+    expect(Object.keys(rawBody).sort(), 'EXTR13-API-03: the 201 body is the whole LineItemsResponse').toEqual(
+      LINE_ITEMS_KEYS,
+    )
+    expect(rawBody.lines, 'EXTR13-API-03: the 201 echoes the set that was sent, cell for cell').toEqual(first)
+    expect(
+      rawBody.invoice_id,
+      'EXTR13-API-03: invoice_id names the invoice the set reached, which is the claim the audit row makes',
+    ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+
+    // The typed client, driven for the first time. A DIFFERENT length, so a route that appended
+    // rather than replaced cannot produce the block value asserted below.
+    const replaced: LineItemInput[] = [
+      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00' },
+    ]
+    const echoed = await postLineItems(token, job.id, { lines: replaced })
+    expect(echoed.lines, 'EXTR13-API-03: the second 201 echoes the second set, cell for cell').toEqual(replaced)
+    expect(echoed.invoice_id, 'EXTR13-API-03: both writes should name one invoice').toBe(rawBody.invoice_id)
+    expect(echoed.id, 'EXTR13-API-03: the second write should append a new correction row, not overwrite the first').not.toBe(
+      rawBody.id,
+    )
+
+    // What the store now holds, read back over the wire. The line set lands on the `line_items`
+    // BLOCK row as one canonical-JSON correction (handlers_lineitems.go:169-181) -- the per-cell
+    // `line_items[N].role` readings are the extractor's and this route does not rewrite them.
+    const detail = await getExtractionDetail(token, job.id)
+    const block = detail.fields.find((f) => f.name === 'line_items')
+    expect(block, 'EXTR13-API-03: the wire carries no line_items block row -- the correction has nothing to land on').toBeTruthy()
+    expect(block!.corrected, 'EXTR13-API-03: two line writes left no correction on the block row').not.toBeNull()
+    expect(block!.corrected!.method, 'EXTR13-API-03: a line set is recorded as typed').toBe('typed')
+    expect(
+      block!.value,
+      'EXTR13-API-03: the block row does not hold the LAST set posted -- the second write did not replace the first',
+    ).toBe(JSON.stringify(replaced))
+  })
+})
+
+// --- EXTR-13-10 · a line correction round-trips through Detail, not just the block row --------
+//
+// AUTHORED BUT NOT EXECUTED as part of this RED submission: there is no deployed backend in
+// this worktree to run against (this suite only runs over a real gateway, per the file's own
+// header). This is the same defect TestExtractionMerge_LineCorrectionOverwritesACell and
+// TestRLS_LineItemsCorrectionRoundTripsThroughDetail (internal/extraction) prove without a
+// browser -- this row is the deployed-wire regression guard once the fix ships.
+//
+// mockDefaultLines (mock.go) is the extractor's fixed reading for every uploaded PDF: line 1 is
+// Widget / 2 / 500.00 / 1000.00. Only description is changed here, so the other three cells stay
+// a control -- if the whole row went missing rather than one cell staying stale, they would fail
+// too.
+
+test.describe('a line correction round-trips through Detail (API E2E, over the deployed gateway)', () => {
+  test('EXTR13-API-04: line_items[1].description carries the correction, not the Widget reading', async () => {
+    test.setTimeout(TEST_TIMEOUT_MS)
+    const token = await login(PERSONAS.A)
+
+    const entity = await createEntity(token, { name: `EXTR-13-10 rt ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadPdf(token, 'EXTR13-API-04')
+    const job = await pollUntilSucceeded(token, documentId, 'EXTR13-API-04')
+
+    const imported = await rawFetch(IMPORT_DOCUMENT_PATH, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { entity_id: entity.id, document_id: documentId },
+    })
+    expect(imported.status, 'EXTR13-API-04: the settled document should import as one batch').toBe(201)
+
+    const before = await getExtractionDetail(token, job.id)
+    const readingName = 'line_items[1].description'
+    const reading = before.fields.find((f) => f.name === readingName)
+    expect(reading, `EXTR13-API-04: the wire carries no ${readingName} reading -- nothing to overwrite`).toBeTruthy()
+    expect(reading!.value, 'EXTR13-API-04: line 1 is not Widget -- mockDefaultLines changed under this test').toBe(
+      'Widget',
+    )
+
+    const corrected: LineItemInput[] = [
+      { description: 'EXTR13-API-04 corrected description', quantity: '2', unit_price: '500.00', line_total: '1000.00' },
+    ]
+    await postLineItems(token, job.id, { lines: corrected })
+
+    const after = await getExtractionDetail(token, job.id)
+    const field = after.fields.find((f) => f.name === readingName)
+    expect(field, `EXTR13-API-04: ${readingName} is gone from the wire after the correction`).toBeTruthy()
+    expect(
+      field!.value,
+      `EXTR13-API-04: ${readingName} still reads "Widget" after the correction -- it snapped back to the extractor's reading`,
+    ).toBe(corrected[0].description)
   })
 })

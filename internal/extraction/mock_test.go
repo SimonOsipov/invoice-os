@@ -55,10 +55,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/shopspring/decimal"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
@@ -327,6 +330,68 @@ func mxSiblingTypesAndConsts(t *testing.T) map[string]bool {
 	return out
 }
 
+// mockLineAPI is part 2's only exemption: the line-item projection mock.go must call, because
+// TestLineFieldName_IsThePackagesOnlyNameSource forbids it from spelling a bracketed line name
+// itself. A literal set, never a prefix -- and mxAssertLineAPIExemptionIsFloored proves it is
+// safe rather than assuming it.
+var mockLineAPI = []string{"LineFieldName", "LineItemResults", "LineRoles"}
+
+// mxAssertLineAPIExemptionIsFloored proves the exemption is real, used and safe: each name is
+// declared in lineitems.go, each is actually referenced by mock.go (a dead exemption is a hole
+// nobody would notice), and the purity scans that make lineitems.go safe to call still exist.
+func mxAssertLineAPIExemptionIsFloored(t *testing.T, mock *ast.File) {
+	t.Helper()
+	if len(mockLineAPI) != 3 {
+		t.Fatalf("mockLineAPI carries %d name(s), want 3; the exemption has widened", len(mockLineAPI))
+	}
+
+	declared := map[string]bool{}
+	lineItems, _ := mxParse(t, "lineitems.go")
+	for _, decl := range lineItems.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				declared[d.Name.Name] = true
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				if s, ok := spec.(*ast.ValueSpec); ok {
+					for _, n := range s.Names {
+						declared[n.Name] = true
+					}
+				}
+			}
+		}
+	}
+	referenced := map[string]bool{}
+	ast.Inspect(mock, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			referenced[id.Name] = true
+		}
+		return true
+	})
+	for _, name := range mockLineAPI {
+		if !declared[name] {
+			t.Errorf("%q is exempted but lineitems.go declares no such func or var; the exemption names something that does not exist", name)
+		}
+		if !referenced[name] {
+			t.Errorf("%q is exempted but %s never names it; a dead exemption is a hole in part 2", name, mockSourceFile)
+		}
+	}
+
+	// The exemption is safe only because lineitems.go's purity is proven elsewhere. Delete
+	// those scans and this exemption goes unfloored in silence, so pin them by name.
+	src, err := os.ReadFile("lineitems_adversarial_test.go")
+	if err != nil {
+		t.Fatalf("read lineitems_adversarial_test.go: %v", err)
+	}
+	for _, guard := range []string{"TestLineItems_StartsNoGoroutineAndReadsNoClock", "TestLineItems_PurityScanUnchanged"} {
+		if !strings.Contains(string(src), guard) {
+			t.Errorf("%s is gone; it is what proves lineitems.go reaches no clock, network or database, and without it %v must not be exempt", guard, mockLineAPI)
+		}
+	}
+}
+
 // TestMockExtractor_HasNoAmbientDependency (REGRESSION GUARD): AC-4. Part 1 is an import
 // ALLOWLIST, strictly stronger than the denylist the AC names -- time, os, math/rand,
 // crypto/rand and net/* all need an import, and so do runtime, sync/atomic and unsafe, which the
@@ -357,6 +422,7 @@ func TestMockExtractor_HasNoAmbientDependency(t *testing.T) {
 		t.Fatalf("go/parser resolved every identifier in %s; ast.File.Unresolved is deprecated and this scan has stopped working", mockSourceFile)
 	}
 	siblings := mxSiblingTypesAndConsts(t)
+	mxAssertLineAPIExemptionIsFloored(t, f)
 	var sawQualifier bool
 	for _, id := range f.Unresolved {
 		switch {
@@ -364,6 +430,7 @@ func TestMockExtractor_HasNoAmbientDependency(t *testing.T) {
 		case seen[id.Name] || mxImportQualifier(seen, id.Name):
 			sawQualifier = true
 		case siblings[id.Name]:
+		case slices.Contains(mockLineAPI, id.Name):
 		default:
 			t.Errorf("%s: %s names %q, which is neither a universe name, one of its own imports, nor a sibling type or const -- a sibling func or var is the one way this file reaches ambient state without importing anything",
 				fset.Position(id.Pos()), mockSourceFile, id.Name)
@@ -781,11 +848,29 @@ func TestMockExtractor_InvoiceNumberIsUnchangedAndClean(t *testing.T) {
 	}
 }
 
+// mxLineNames is every recognised line-item name: the block row plus every <role> of lines
+// 1-4, even roles no line actually populates (line 3's quantity). A superset allow-list, not a
+// prediction of what the result carries -- the floor below is what pins the real count.
+func mxLineNames() map[string]bool {
+	out := map[string]bool{"line_items": true}
+	for n := 1; n <= 4; n++ {
+		for _, role := range extraction.LineRoles {
+			out[extraction.LineFieldName(n, role)] = true
+		}
+	}
+	return out
+}
+
 // TestMockExtractor_DefaultResultNamesAreOnTheVocabulary (RED-FIRST): AC-4, and the only honest
 // oracle for it -- document_deps_test.go fences internal/importer off from this package, so an
 // importer-side fixture of these names is hand-copied and self-fulfilling. MAP-11 closes the
 // chain from HeaderFields to the mapper. A name outside HeaderFields is dropped by
 // documentCreateInput and reaches no invoices column.
+//
+// EXTR-13-02 (Mode A): a name can now legally be OFF HeaderFields too -- a line-item cell.
+// Two partitions, each floored, so neither side can pass over an empty set: header names must
+// be on HeaderFields (7 of them), line names must be the block row or a LineFieldName shape
+// (16 of them).
 func TestMockExtractor_DefaultResultNamesAreOnTheVocabulary(t *testing.T) {
 	vocabulary := map[string]bool{}
 	for _, n := range extraction.HeaderFields {
@@ -794,14 +879,22 @@ func TestMockExtractor_DefaultResultNamesAreOnTheVocabulary(t *testing.T) {
 	if len(vocabulary) < 10 {
 		t.Fatalf("HeaderFields carries %d name(s), want at least 10; the check below would be vacuous", len(vocabulary))
 	}
+	lineNames := mxLineNames()
 
 	results := mxDefault(t)
 	if len(results) == 0 {
 		t.Fatal("the default result is empty; the check below would examine nothing")
 	}
+
+	var headerCount, lineCount int
 	for _, r := range results {
-		if !vocabulary[r.Name] {
-			t.Errorf("the default result emits %q, which is not in HeaderFields; documentCreateInput drops it, so it reaches no invoices column", r.Name)
+		switch {
+		case vocabulary[r.Name]:
+			headerCount++
+		case lineNames[r.Name]:
+			lineCount++
+		default:
+			t.Errorf("the default result emits %q, which is neither on HeaderFields nor a recognised line-item name; documentCreateInput drops it, so it reaches no invoices column", r.Name)
 		}
 		// An alternative feeds the same column as the reading it competes with.
 		for i, alt := range r.Alternatives {
@@ -809,6 +902,12 @@ func TestMockExtractor_DefaultResultNamesAreOnTheVocabulary(t *testing.T) {
 				t.Errorf("%q alternative %d is named %q; an alternative is another reading of the SAME field", r.Name, i, alt.Name)
 			}
 		}
+	}
+	if headerCount != 7 {
+		t.Errorf("the default result carries %d header-vocabulary field(s), want 7", headerCount)
+	}
+	if lineCount != 16 {
+		t.Errorf("the default result carries %d line-item field(s), want 16 -- the line_items block row plus 15 populated cells", lineCount)
 	}
 }
 
@@ -946,5 +1045,187 @@ func TestFieldResult_AlternativesMarshalAsAnArrayNeverNull(t *testing.T) {
 	}
 	if empty == 0 || populated == 0 {
 		t.Fatalf("marshalled %d empty and %d populated Alternatives; both arms must be exercised", empty, populated)
+	}
+}
+
+// --- EXTR-13-02 (Mode A, RED-FIRST): the four-line block in the default result -----------
+
+// mxLineTotalName is LineFieldName(n, line_total), spelled out at each call site below so a
+// reader does not have to jump to the helper to see which line a check is about.
+func mxLineTotalName(n int) string { return extraction.LineFieldName(n, extraction.LineRoleLineTotal) }
+
+// TestMockExtractor_DefaultEmitsFourLineItemRows (RED-FIRST): Core AC 1. len(results) == 23
+// first -- 7 header rows, the line_items block, 15 cells -- then the ordered names from index 7
+// on must equal the exact 16-name literal, including line 3's missing quantity: a role-count
+// check alone cannot express that ONE role is the hole.
+func TestMockExtractor_DefaultEmitsFourLineItemRows(t *testing.T) {
+	results := mxDefault(t)
+	if len(results) != 23 {
+		t.Fatalf("the default result carries %d field(s), want 23 -- 7 header rows, the line_items block row, and 15 line cells", len(results))
+	}
+
+	want := []string{
+		"line_items",
+		extraction.LineFieldName(1, extraction.LineRoleDescription),
+		extraction.LineFieldName(1, extraction.LineRoleQuantity),
+		extraction.LineFieldName(1, extraction.LineRoleUnitPrice),
+		extraction.LineFieldName(1, extraction.LineRoleLineTotal),
+		extraction.LineFieldName(2, extraction.LineRoleDescription),
+		extraction.LineFieldName(2, extraction.LineRoleQuantity),
+		extraction.LineFieldName(2, extraction.LineRoleUnitPrice),
+		extraction.LineFieldName(2, extraction.LineRoleLineTotal),
+		extraction.LineFieldName(3, extraction.LineRoleDescription),
+		// no line_items[3].quantity -- the deliberate hole
+		extraction.LineFieldName(3, extraction.LineRoleUnitPrice),
+		extraction.LineFieldName(3, extraction.LineRoleLineTotal),
+		extraction.LineFieldName(4, extraction.LineRoleDescription),
+		extraction.LineFieldName(4, extraction.LineRoleQuantity),
+		extraction.LineFieldName(4, extraction.LineRoleUnitPrice),
+		extraction.LineFieldName(4, extraction.LineRoleLineTotal),
+	}
+	got := make([]string, 0, len(want))
+	for _, r := range results[7:] {
+		got = append(got, r.Name)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("results[7:] names = %v, want %v", got, want)
+	}
+}
+
+// TestMockExtractor_LineTwoIsFlaggedInconsistent (RED-FIRST): Core AC 4. A presence floor of 4
+// line_total rows first, so the reason comparisons below cannot pass by comparing zero values.
+func TestMockExtractor_LineTwoIsFlaggedInconsistent(t *testing.T) {
+	by := mxByName(t, mxDefault(t))
+
+	var totals []string
+	for n := 1; n <= 4; n++ {
+		if _, ok := by[mxLineTotalName(n)]; ok {
+			totals = append(totals, mxLineTotalName(n))
+		}
+	}
+	if len(totals) != 4 {
+		t.Fatalf("found %d line_total row(s) (%v), want 4 -- the reason checks below would examine fewer lines than the fixture carries", len(totals), totals)
+	}
+
+	for n := 1; n <= 4; n++ {
+		want := extraction.ReasonNone
+		if n == 2 {
+			want = extraction.ReasonInconsistent
+		}
+		if got := by[mxLineTotalName(n)].Reason; got != want {
+			t.Errorf("%s reason = %q, want %q", mxLineTotalName(n), got, want)
+		}
+	}
+}
+
+// TestMockExtractor_LineThreeIsPresentWithoutItsQuantity (RED-FIRST): Core AC 3's normal
+// failure -- an absent cell, not a bad one. A present set alongside the absence: line 3's other
+// three roles must exist before the quantity check means anything.
+func TestMockExtractor_LineThreeIsPresentWithoutItsQuantity(t *testing.T) {
+	results := mxDefault(t)
+
+	present := map[string]bool{}
+	for _, role := range extraction.LineRoles {
+		name := extraction.LineFieldName(3, role)
+		for _, r := range results {
+			if r.Name == name {
+				present[role] = true
+				break
+			}
+		}
+	}
+	if len(present) != 3 {
+		t.Fatalf("line 3 carries %d role(s) (%v), want exactly 3; the absence check below would be meaningless over a different-sized set", len(present), present)
+	}
+	for _, role := range []string{extraction.LineRoleDescription, extraction.LineRoleUnitPrice, extraction.LineRoleLineTotal} {
+		if !present[role] {
+			t.Errorf("line 3 carries no %s row; want it present", role)
+		}
+	}
+	if present[extraction.LineRoleQuantity] {
+		t.Errorf("line 3 carries a %s row; want it absent -- the deliberate missing cell", extraction.LineRoleQuantity)
+	}
+}
+
+// TestMockExtractor_SubtotalDisagreesWithTheLineSum (RED-FIRST): Core AC 5. Vacuous over an
+// empty line set -- sum(nothing) is 0, and |0 - 950.00| already exceeds the tolerance -- so the
+// four line totals are parsed and summed to the exact expected total FIRST, and only then
+// compared against subtotal.
+func TestMockExtractor_SubtotalDisagreesWithTheLineSum(t *testing.T) {
+	by := mxByName(t, mxDefault(t))
+
+	var sum decimal.Decimal
+	var found int
+	for n := 1; n <= 4; n++ {
+		f, ok := by[mxLineTotalName(n)]
+		if !ok || f.Value == nil {
+			continue
+		}
+		v, err := decimal.NewFromString(*f.Value)
+		if err != nil {
+			t.Fatalf("%s = %q, not parseable as money: %v", mxLineTotalName(n), *f.Value, err)
+		}
+		sum = sum.Add(v)
+		found++
+	}
+	if found != 4 {
+		t.Fatalf("parsed %d line_total value(s), want 4 -- the sum below would be over an incomplete set", found)
+	}
+	wantSum := decimal.RequireFromString("2095.50")
+	if !sum.Equal(wantSum) {
+		t.Fatalf("the four line totals sum to %s, want %s", sum, wantSum)
+	}
+
+	subtotal, ok := by["subtotal"]
+	if !ok || subtotal.Value == nil {
+		t.Fatal("the default result carries no subtotal value; the disagreement check below would be meaningless")
+	}
+	sv, err := decimal.NewFromString(*subtotal.Value)
+	if err != nil {
+		t.Fatalf("subtotal = %q, not parseable as money: %v", *subtotal.Value, err)
+	}
+	tol := decimal.RequireFromString("0.01")
+	diff := sv.Sub(sum).Abs()
+	if !diff.GreaterThan(tol) {
+		t.Errorf("subtotal %s and the line sum %s disagree by %s, want more than %s", sv, sum, diff, tol)
+	}
+}
+
+// TestMockExtractor_FifteenLineCellsAtFifteenDistinctBoxes (RED-FIRST): Core AC 6. The count of
+// 15 is asserted first, then every region is proven non-nil and on page 1 -- a nil-region set
+// would otherwise read as "distinct" by the pairwise comparison that follows.
+func TestMockExtractor_FifteenLineCellsAtFifteenDistinctBoxes(t *testing.T) {
+	lineNames := map[string]bool{}
+	for n := 1; n <= 4; n++ {
+		for _, role := range extraction.LineRoles {
+			lineNames[extraction.LineFieldName(n, role)] = true
+		}
+	}
+
+	var cells []extraction.FieldResult
+	for _, r := range mxDefault(t) {
+		if lineNames[r.Name] {
+			cells = append(cells, r)
+		}
+	}
+	if len(cells) != 15 {
+		t.Fatalf("found %d line cell(s), want 15 -- the distinctness check below would examine the wrong population", len(cells))
+	}
+
+	for _, c := range cells {
+		if c.Region == nil {
+			t.Fatalf("%s carries a nil Region; the distinctness check below would be meaningless", c.Name)
+		}
+		if c.Region.Page != 1 {
+			t.Errorf("%s.Region.Page = %d, want 1", c.Name, c.Region.Page)
+		}
+	}
+
+	for i := range cells {
+		for j := i + 1; j < len(cells); j++ {
+			if *cells[i].Region == *cells[j].Region {
+				t.Errorf("%s and %s share the box %+v; every cell must sit at its own box", cells[i].Name, cells[j].Name, *cells[i].Region)
+			}
+		}
 	}
 }

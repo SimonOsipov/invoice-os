@@ -182,6 +182,13 @@ func main() {
 		extraction.CorrectionHandler(pool, newInvoiceFieldApplier(invStore.EditBySourceDocumentTx),
 			newFieldCorrectedAuditor(), app.Logger))
 
+	// POST /v1/extractions/{id}/line-items -- the same transaction shape as the correction
+	// route, replacing the invoice's whole line set
+	// (TestSubmissionMain_WiresTheLineItemsRouteAndItsCollaborators).
+	app.Mux.HandleFunc("POST /v1/extractions/{id}/line-items",
+		extraction.LineItemsHandler(pool, newInvoiceLineItemsApplier(invStore.EditBySourceDocumentTx),
+			newFieldCorrectedAuditor(), app.Logger))
+
 	// POST /v1/documents -- the upload that stores a source document and queues its
 	// extraction. Two transactions on purpose: Service.Store commits its own, the enqueue
 	// opens a second. A crash between them leaves a document with no job, which is the safe
@@ -382,6 +389,37 @@ func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoic
 			return "", err
 		}
 		inv, err := edit(ctx, tx, documentID, in)
+		switch {
+		case errors.Is(err, invoice.ErrNotFound):
+			return "", extraction.ErrNoInvoiceForDocument
+		case errors.Is(err, invoice.ErrNotFixable):
+			return "", extraction.ErrInvoiceNotEditable
+		case errors.Is(err, invoice.ErrValidation):
+			return "", extraction.ErrValueRefused
+		case err != nil:
+			return "", err
+		}
+		return inv.ID, nil
+	}
+}
+
+// newInvoiceLineItemsApplier adapts the invoice store to the line-set seam, mapping each domain
+// outcome onto an extraction sentinel exactly as newInvoiceFieldApplier does. The LineItems
+// pointer is always non-nil so an empty array means "remove every line" rather than "leave them
+// alone" ([line-items-optional]); LineTax stays nil because the extractor never reads one
+// (TestNewInvoiceLineItemsApplier_LeavesLineTaxNil).
+func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItemsToInvoice {
+	return func(ctx context.Context, tx pgx.Tx, documentID string, lines []extraction.LineItemInput) (string, error) {
+		converted := make([]invoice.LineItemInput, len(lines))
+		for i, l := range lines {
+			converted[i] = invoice.LineItemInput{
+				Description: l.Description,
+				Quantity:    l.Quantity,
+				UnitPrice:   l.UnitPrice,
+				LineTotal:   l.LineTotal,
+			}
+		}
+		inv, err := edit(ctx, tx, documentID, invoice.EditInput{LineItems: &converted})
 		switch {
 		case errors.Is(err, invoice.ErrNotFound):
 			return "", extraction.ErrNoInvoiceForDocument

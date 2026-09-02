@@ -1,6 +1,6 @@
 // The fields pane: the artboard's right column. A header over a scrollable body holding one
-// cell per wire field — label, value, why it is in doubt, what a person changed, and the
-// selection the document pane follows.
+// cell per HEADER wire field — label, value, why it is in doubt, what a person changed, and the
+// selection the document pane follows — with LineItemGrid below them for the line block.
 // Pinned by ExtractionFields.test.tsx.
 
 import type { CSSProperties } from 'react'
@@ -8,6 +8,9 @@ import type { CSSProperties } from 'react'
 import { crosshairGlyph } from '../glyphs'
 import { applyDraft, correctedMarker, fieldLabel, fieldNote, reasonPill, regionPhrase } from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
+import { linesFromFields } from '../lib/lineItems'
+import type { LineRole, LineRow } from '../lib/lineItems'
+import { LineItemGrid } from './LineItemGrid'
 
 const TITLE = 'The invoice as it will be filed'
 const NO_REGION = 'NO REGION'
@@ -27,6 +30,15 @@ const POINT_CANCEL = 'Stop pointing'
 const SUPPLIER_NOTE = 'The supplier filed on this invoice comes from your client record, not from this document.'
 
 const SUPPLIER_FIELDS = ['supplier_tin', 'supplier_name']
+
+// The line block and its cells belong to LineItemGrid. The block row itself carries no value and
+// no region, so neither surface renders it. EXTR11-E2E-02a and EXTR12-E2E-07 count rendered
+// `extraction-field-*` against the header half of the wire, which is what this keeps true.
+const LINE_FIELD_RE = /^line_items(\[[1-9][0-9]*\]\.(description|quantity|unit_price|line_total))?$/
+
+function isHeaderField(name: string): boolean {
+  return !LINE_FIELD_RE.test(name)
+}
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
 // a 422, and updateContentTx re-derives the two supplier fields from the client entity anyway.
@@ -254,6 +266,11 @@ export function ExtractionFields({
   onUndo,
   onArm,
   onDisarm,
+  lineRows,
+  onLineEdit,
+  onLineAdd,
+  onLineRemove,
+  onLineRemap,
 }: {
   fields: ExtractionFieldState[]
   selected: string | null
@@ -268,11 +285,23 @@ export function ExtractionFields({
   onUndo: (name: string) => void
   onArm: (name: string) => void
   onDisarm: () => void
+  /**
+   * The shell's line draft, or null while it holds none. All five line props are REQUIRED, so a
+   * shell that forgets one is a tsc error rather than a grid that silently swallows keystrokes.
+   */
+  lineRows: LineRow[] | null
+  onLineEdit: (at: number, role: LineRole, value: string) => void
+  onLineAdd: () => void
+  onLineRemove: (at: number) => void
+  onLineRemap: (from: LineRole, to: LineRole) => void
 }) {
-  const supplier = fields.some((f) => SUPPLIER_FIELDS.includes(f.name))
+  const header = fields.filter((f) => isHeaderField(f.name))
+  const supplier = header.some((f) => SUPPLIER_FIELDS.includes(f.name))
   // Same length, same order: applyDraft maps the array (extractionReview.test.ts, "leaves a
   // field with no entry byte-identical").
-  const drafted = applyDraft(fields, draft)
+  const drafted = applyDraft(header, draft)
+  const wireLines = linesFromFields(fields)
+  const subtotal = drafted.find((f) => f.name === 'subtotal')?.value ?? null
 
   return (
     <div data-testid="extraction-fields" style={PANE}>
@@ -286,7 +315,7 @@ export function ExtractionFields({
         ) : (
           <>
             <div style={GRID}>
-              {fields.map((wire, i) => {
+              {header.map((wire, i) => {
                 const f = drafted[i]
                 const on = f.name === selected
                 // A settled field stops shouting: no pill of either kind, no note, a marker
@@ -431,6 +460,22 @@ export function ExtractionFields({
               })}
             </div>
             {supplier ? <p style={NOTE}>{SUPPLIER_NOTE}</p> : null}
+            {/* `onSelectCell` is the pane's own `onSelect`, so a line cell reaches
+                ExtractionCanvas's find-by-name over the same channel a header cell does --
+                nonce bump and all. */}
+            <LineItemGrid
+              // A null draft is the deliberate no-draft-yet state, not a wiring accident -- the
+              // props are required -- and this is the single place the wire seeds the grid.
+              rows={lineRows ?? wireLines}
+              wireRows={wireLines}
+              subtotal={subtotal}
+              selected={selected}
+              onSelectCell={onSelect}
+              onEditCell={onLineEdit}
+              onAddRow={onLineAdd}
+              onRemoveRow={onLineRemove}
+              onRemapRoles={onLineRemap}
+            />
           </>
         )}
       </div>

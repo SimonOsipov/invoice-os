@@ -255,7 +255,8 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 
 // mergeCorrections lays the latest correction per field over the decided readings, one entry per
 // field name (TestExtractionMerge_ResolvesEachMethodWithoutADatabase). A settled field is no
-// longer flagged, so its reason goes to "" and its alternatives to empty.
+// longer flagged, so its reason goes to "" and its alternatives to empty. The line-items row is
+// the one correction that also settles fields it does not name: see expandLineCorrection.
 func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) []ExtractionFieldState {
 	byName := map[string]int{}
 	for i, f := range fields {
@@ -329,7 +330,98 @@ func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) [
 	// Appended after the read fields and ordered here, not by the query's ORDER BY, so the output
 	// order does not rest on the caller. The corrections read is one row per field name, so no tie.
 	slices.SortFunc(added, func(a, b ExtractionFieldState) int { return cmp.Compare(a.Name, b.Name) })
-	return append(out, added...)
+	return expandLineCorrection(append(out, added...), corrections)
+}
+
+// expandLineCorrection projects the line-items correction -- one row carrying the whole set as
+// canonical JSON, appended under the block name "line_items" -- onto the per-cell readings named
+// line_items[N].<role>, which no correction ever names directly. Without it a saved line edit
+// reads back as the extractor's own reading on every reopen. The block row itself is merged
+// above like any other field.
+//
+// Accepted residual, EXTR-14's to close: the posted set is positional, so after a removal the
+// rows below inherit the box of the reading at their NEW position -- right values, one stale
+// highlight per shifted row. The POST carries no per-cell identity to fix it with.
+func expandLineCorrection(fields []ExtractionFieldState, corrections []Correction) []ExtractionFieldState {
+	var corr *Correction
+	for i := range corrections {
+		if corrections[i].FieldName == "line_items" && corrections[i].Method != MethodUndone {
+			corr = &corrections[i]
+		}
+	}
+	if corr == nil {
+		return fields
+	}
+	// A value this read cannot parse leaves every reading untouched: a stale grid is visible,
+	// a silently emptied one is not.
+	lines, ok := parseLineItemsJSON(corr.Value)
+	if !ok {
+		return fields
+	}
+	var prior []LineItemInput
+	if corr.Superseded != nil {
+		prior, _ = parseLineItemsJSON(*corr.Superseded)
+	}
+
+	// The replaced readings are kept by name for their boxes, and the expansion goes back in
+	// where the first of them sat -- head, expansion, tail -- so an edit that changes no name
+	// leaves the wire order as it was (mock_lines_qa_db_test.go is about what that order costs).
+	read := map[string]ExtractionFieldState{}
+	head := make([]ExtractionFieldState, 0, len(fields))
+	tail := []ExtractionFieldState{}
+	sawCell := false
+	for _, f := range fields {
+		if _, _, isCell := ParseLineFieldName(f.Name); isCell {
+			read[f.Name] = f
+			sawCell = true
+			continue
+		}
+		if sawCell {
+			tail = append(tail, f)
+			continue
+		}
+		head = append(head, f)
+	}
+
+	expanded := make([]ExtractionFieldState, 0, len(lines)*len(LineRoles))
+	for i, line := range lines {
+		for _, role := range LineRoles {
+			cell := line.cell(role)
+			if cell == nil {
+				continue // a null cell is an absence, never a row carrying an empty value
+			}
+			name := LineFieldName(i+1, role)
+			value := *cell
+			reading := read[name]
+			// The same rule the per-field merge follows: the superseded blob's own cell, and
+			// the reading only when this is the field's first correction.
+			was := priorLineCell(prior, i, role)
+			if was == nil {
+				was = reading.Value
+			}
+			expanded = append(expanded, ExtractionFieldState{
+				Name:         name,
+				Value:        &value,
+				Region:       reading.Region,
+				Reason:       "",
+				Alternatives: []ExtractionCandidate{},
+				Corrected:    &ExtractionCorrected{Method: string(corr.Method), Was: was},
+			})
+		}
+	}
+	out := make([]ExtractionFieldState, 0, len(head)+len(expanded)+len(tail))
+	out = append(out, head...)
+	out = append(out, expanded...)
+	return append(out, tail...)
+}
+
+// priorLineCell is the cell the correction before this one carried at the same position, nil
+// when there was no prior set or it was shorter.
+func priorLineCell(prior []LineItemInput, i int, role string) *string {
+	if i >= len(prior) {
+		return nil
+	}
+	return prior[i].cell(role)
 }
 
 // detailPagesTx returns the page inventory in page order. The stored grid is read, never

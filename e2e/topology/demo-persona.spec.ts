@@ -417,7 +417,7 @@ async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> 
 }
 
 // A clean flat wire body -- mirrors invoice-surfaces.spec.ts's cleanInvoiceFields
-// (createInvoice's shape, not fixtures.ts's nested /v1/validate envelope).
+// (createInvoice's shape, not a nested validation-engine envelope).
 function validInvoiceFields(invoiceNumber: string) {
   return {
     invoice_number: invoiceNumber,

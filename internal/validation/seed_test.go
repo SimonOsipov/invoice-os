@@ -1,6 +1,6 @@
 // M3-05-01 (Test-first: yes) — DB-backed proof that the MBS global rule-set
 // v1 seed migration (migrations/<goose-ts>_seed_mbs_v1.sql, not yet authored)
-// flips /v1/validate's evaluation surface from "no active rule-set" to live
+// flips the engine's evaluation surface from "no active rule-set" to live
 // content: the ACTIVE version + its 19 rules load via
 // NewStore(app).LoadActiveRuleSet, and get evaluated via
 // NewDefaultEngine().Evaluate against real payloads. This is the FIRST test

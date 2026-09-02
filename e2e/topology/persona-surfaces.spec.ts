@@ -35,7 +35,7 @@ import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
 // nothing). The FLAT wire shape POST /v1/invoices takes -- supplier_tin/vat as strings --
-// NOT api/fixtures.ts's nested /v1/validate envelope; internal/invoice/payload.go's
+// NOT a nested validation-engine envelope; internal/invoice/payload.go's
 // MBSPayload re-nests them server-side. Fires ZERO violations against the active v2 rule
 // set: a canonical Luhn-valid supplier TIN, VAT at exactly 7.5% of the subtotal, and one
 // line item that reconciles to it -- which is what promotes draft -> validated on

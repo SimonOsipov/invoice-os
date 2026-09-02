@@ -158,8 +158,8 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 // line-items-required, line-items-sum-subtotal, line-cost-non-negative) is satisfied so
 // no incidental third violation sneaks in and breaks an exact-key assertion.
 //
-// REVISED (INVCR-01-16, task-292, AC-10): true only through the STATELESS /v1/validate
-// path (unaffected, e2e/api/validation.spec.ts's own use). Every caller HERE goes
+// REVISED (INVCR-01-16, task-292, AC-10): true only of a payload validated directly,
+// never re-derived from storage. Every caller HERE goes
 // through createInvoice -- and task-293's C7 fix ([supplier-from-entity]) makes
 // Store.Create discard any caller-supplied supplier_tin and re-derive it from the
 // invoice's own entity -- so 'BADTIN' never reaches storage and supplier-tin-format can

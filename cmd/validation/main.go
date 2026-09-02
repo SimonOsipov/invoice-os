@@ -1,13 +1,11 @@
 // Command validation is the 04 Rules-as-Data Validation Engine service. It serves
-// the platform kit's /healthz + /readyz plus the /v1/validate + /v1/rules/{key}
-// + /v1/validate/batch routes (M3-04, M4-04): POST /v1/validate runs a submitted invoice payload through the
-// active published rule-set (all nine rule-type evaluators + the CEL guard) and
-// answers every collected violation stamped with the rule-set version; PATCH
-// /v1/rules/{key} is the M3-06 admin kill-switch that flips a rule's enabled bit
-// and audits the flip — both resolved via internal/validation.Store over the
-// invoice_app role. POST /v1/validate/batch (M4-04-03) is the tenant-free peer
-// surface 03 submits batches to: peer-authenticated via S2S_TOKEN, carrying no
-// identity, loading the rule-set once per batch.
+// the platform kit's /healthz + /readyz plus the /v1/rules/{key} +
+// /v1/validate/batch routes (M3-06, M4-04). PATCH /v1/rules/{key} is the M3-06
+// admin kill-switch that flips a rule's enabled bit and audits the flip, resolved
+// via internal/validation.Store over the invoice_app role. POST /v1/validate/batch
+// (M4-04-03) is the tenant-free peer surface 03 submits batches to:
+// peer-authenticated via S2S_TOKEN, carrying no identity, loading the rule-set
+// once per batch.
 package main
 
 import (
@@ -49,24 +47,13 @@ func main() {
 		_, _ = w.Write([]byte(`{"service":"validation","status":"ok"}`))
 	})
 
-	// /v1/validate + /v1/rules/{key} — the validation engine surface. Reached via
-	// the gateway as /api/validation/v1/... (the prefix is stripped upstream). The
-	// store reads the active rule-set under RLS-threaded identity; the engine is
-	// stateless (all nine evaluators + the CEL guard).
+	// The validation engine surface, reached via the gateway as
+	// /api/validation/v1/... (the prefix is stripped upstream). The engine is
+	// stateless (all nine evaluators + the CEL guard); the store resolves rules
+	// under the invoice_app role.
 	store := validation.NewStore(pool)
 	engine := validation.NewDefaultEngine()
 
-	// The full request body ({"invoice": {...}}) is passed to engine.Evaluate
-	// UNCHANGED — the engine's resolvePath roots at p["invoice"], so there is no
-	// unwrap/re-wrap seam here (Decision N19; handlers.go payload contract).
-	app.Mux.HandleFunc("POST /v1/validate", validation.ValidateHandler(
-		func(ctx context.Context, p validation.Payload) (validation.Result, error) {
-			rs, err := store.LoadActiveRuleSet(ctx)
-			if err != nil {
-				return validation.Result{}, err
-			}
-			return engine.Evaluate(p, rs)
-		}, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler(store.ToggleRule, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)

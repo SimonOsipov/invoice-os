@@ -862,7 +862,6 @@ func detectionHitAllowed(file, line string) bool {
 		return true
 	}
 	return strings.HasPrefix(file, "internal/validation/") ||
-		file == "e2e/api/validation.spec.ts" ||
 		file == "e2e/topology/targets.ts" ||
 		file == "frontend/app/src/lib/validationApi.test.ts" ||
 		file == "migrations/20260711121327_seed_mbs_v1.sql" ||

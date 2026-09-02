@@ -2,6 +2,7 @@
 // which cannot run locally -- so the test-first oracle is this vitest guard, which reads the
 // e2e sources as text. Mirrors rule-set.test.ts's walk + SELF_SRC self-exclusion.
 import { describe, expect, it } from 'vitest'
+import { execSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -146,6 +147,181 @@ describe('RMV-01-02 removal guards: the single-document validate route', () => {
     expect(
       offenders.map((h) => `${h.file}:${h.line}`),
       `e2e still reaches the retiring route through client.ts's validate() seam:\n${render(offenders)}`,
+    ).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// RMV-01-04 (task-819) -- AC 6's closing gate: nothing that served only the
+// validation playground survives anywhere in the tree.
+//
+// Scope is `git ls-files`, not a filesystem walk: only TRACKED files count, so
+// untracked build debris can neither inflate the population floor nor plant a
+// phantom offender.
+// ---------------------------------------------------------------------------
+
+const SELF_REL = 'e2e/removalGuards.test.ts'
+
+// Case-sensitivity is load-bearing on invoicePayload: /invoicepayload/i hits 94
+// legitimate validInvoicePayload/badInvoicePayload lines in internal/validation's
+// seed tests. rmv01_theAbsenceScanCanStillSeeAPlantedNeedle pins that both ways.
+type Needle = { name: string; re: RegExp; plant: string }
+const PATTERNS: readonly Needle[] = [
+  { name: 'playground', re: /playground/i, plant: '// the Validation Playground screen' },
+  { name: 'ValidationView', re: /\bValidationView\b/, plant: "{view === 'validation' && <ValidationView ctx={ctx} />}" },
+  { name: 'NAV_VALIDATION', re: /\bNAV_VALIDATION\b/, plant: 'export const NAV_VALIDATION: NavDef = { id: 0 }' },
+  { name: 'invoicePayload', re: /\binvoicePayload\b/, plant: 'const [invoicePayload, setInvoicePayload] = useState()' },
+  { name: 'playgroundState', re: /\bplaygroundState\b/, plant: 'const playgroundState = load()' },
+  { name: 'doValidate', re: /\bdoValidate\b/, plant: 'async function doValidate() {' },
+  { name: 'validateResponseBody', re: /\bvalidateResponseBody\b/, plant: 'export type validateResponseBody = {' },
+  { name: 'M3-09', re: /\bM3-09\b/, plant: '// Path/Target is rendered by the M3-09 UI' },
+]
+
+// The guard file necessarily carries every needle; a whole-file self-exclusion is
+// the same rule rule-set.test.ts:18,51 applies. The one NARROW (file, pattern)
+// pair is personas.test.ts's own NAV_VALIDATION absence guard, which must name the
+// token to assert it is gone. rmv01_theNarrowExclusionIsStillEarned stops it going stale.
+const PAIR_EXCLUSIONS: readonly { file: string; pattern: string }[] = [
+  { file: 'e2e/personas.test.ts', pattern: 'NAV_VALIDATION' },
+]
+
+const SCOPE_EXT = /\.(ts|tsx|go|md|sql|yml|json)$/
+const SCOPE_SKIP = /(^|\/)(node_modules|\.git|\.ralph|\.systemmap|dist|build)\//
+
+const TRACKED: string[] = execSync('git ls-files -z', { cwd: REPO_ROOT, maxBuffer: 256 * 1024 * 1024 })
+  .toString('utf8')
+  .split('\0')
+  .filter(Boolean)
+  .filter((p) => SCOPE_EXT.test(p) && !SCOPE_SKIP.test(p))
+
+// Measured on 02f98fa5 (subtasks 01-03 landed). Floors sit a few files below so
+// ordinary churn does not trip them, but a truncated listing does -- subtask 01's
+// guard read clean on a file list silently cut to 2 entries.
+const TREES: readonly { label: string; prefixes: string[]; measured: number; floor: number }[] = [
+  { label: 'frontend/app/src', prefixes: ['frontend/app/src/'], measured: 248, floor: 240 },
+  { label: 'e2e', prefixes: ['e2e/'], measured: 82, floor: 75 },
+  { label: 'cmd+internal+tools', prefixes: ['cmd/', 'internal/', 'tools/'], measured: 722, floor: 700 },
+  { label: 'docs', prefixes: ['docs/'], measured: 17, floor: 15 },
+  { label: 'migrations', prefixes: ['migrations/'], measured: 56, floor: 50 },
+]
+const TOTAL_MEASURED = 1291
+const TOTAL_FLOOR = 1250
+
+const SEED_MIGRATION = 'migrations/20260711121327_seed_mbs_v1.sql'
+
+// (file, needle) pairs that MUST still be found -- a walk that broke reports a
+// clean tree, which is indistinguishable from a clean tree.
+const REPO_CONTROLS: readonly [string, string][] = [
+  ['frontend/app/src/components/InvoiceDetail.tsx', 'ViolationsTable'],
+  ['internal/validation/handlers.go', 'BatchValidateHandler'],
+  ['e2e/personas.ts', 'SURFACES'],
+  ['docs/e2e-convention.md', 'invoice-surfaces.spec.ts'],
+  [SEED_MIGRATION, 'rule_set_versions'],
+]
+
+function readRepoFile(rel: string): string {
+  return readFileSync(join(REPO_ROOT, rel), 'utf8')
+}
+
+function excluded(rel: string, pattern: string): boolean {
+  if (rel === SELF_REL) return true
+  return PAIR_EXCLUSIONS.some((x) => x.file === rel && x.pattern === pattern)
+}
+
+function residueHits(): Hit[] {
+  const hits: Hit[] = []
+  for (const rel of TRACKED) {
+    if (rel === SELF_REL) continue
+    const lines = readRepoFile(rel).split('\n')
+    for (const n of PATTERNS) {
+      if (excluded(rel, n.name)) continue
+      lines.forEach((text, i) => {
+        if (n.re.test(text)) hits.push({ file: `${rel} [${n.name}]`, line: i + 1, text })
+      })
+    }
+  }
+  return hits
+}
+
+describe('RMV-01-04 removal guards: no playground residue anywhere in the repo', () => {
+  it('rmv01_theRepoWideWalkMeetsItsFloors', () => {
+    expect(TRACKED, 'git ls-files returned nothing in scope').not.toEqual([])
+    expect(TRACKED.length, `walked ${TRACKED.length} tracked files (measured ${TOTAL_MEASURED}) -- below the floor the listing is truncated`).toBeGreaterThanOrEqual(TOTAL_FLOOR)
+    expect(TRACKED.length, 'implausibly many files -- an excluded tree leaked into the walk').toBeLessThanOrEqual(5000)
+
+    for (const t of TREES) {
+      const n = TRACKED.filter((p) => t.prefixes.some((pre) => p.startsWith(pre))).length
+      expect(n, `${t.label}: walked ${n} files (measured ${t.measured}) -- below the floor the listing is truncated`).toBeGreaterThanOrEqual(t.floor)
+    }
+
+    // The scan skips this file, but the WALK must still see it -- otherwise a broken
+    // listing and a working one look the same.
+    expect(TRACKED, 'the walk must reach this guard file').toContain(SELF_REL)
+    expect(excluded(SELF_REL, 'playground'), 'this guard file must exclude itself from the scan').toBe(true)
+  })
+
+  it('rmv01_theAbsenceScanCanStillSeeAPlantedNeedle', () => {
+    // Every pattern, not one representative: a single rotted regex would otherwise
+    // hide behind its neighbours in an all-absent scan.
+    for (const n of PATTERNS) {
+      expect(n.re.test(n.plant), `pattern ${n.name} no longer matches its own planted needle: ${n.plant}`).toBe(true)
+    }
+
+    // invoicePayload must stay case-sensitive: these are the shapes it would wrongly
+    // claim, and they are live test helpers, not residue.
+    const SEED_SHAPES = [
+      'result, err := engine.Evaluate(validInvoicePayload(), rs)',
+      'p := badInvoicePayload()',
+      'func TestAuditNumber_InvoicePayloadKeysAreOnlyWidened(t *testing.T) {',
+    ].join('\n')
+    const invoicePayload = PATTERNS.find((n) => n.name === 'invoicePayload')!
+    expect(invoicePayload.re.test(SEED_SHAPES), 'invoicePayload must not fire on validInvoicePayload/badInvoicePayload').toBe(false)
+
+    // Not fixture-only: against the real seed tests the case-sensitive pattern is
+    // silent while a loosened /i variant is not. Both halves matter -- the second
+    // proves the first is a real discrimination, not an empty file.
+    const seedSrc = ['internal/validation/seed_test.go', 'internal/validation/seed_adversarial_test.go']
+      .map(readRepoFile)
+      .join('\n')
+    expect(seedSrc.length, 'the seed tests must have content to discriminate against').toBeGreaterThan(1000)
+    expect(invoicePayload.re.test(seedSrc), 'the real seed tests must yield zero case-sensitive invoicePayload hits').toBe(false)
+    expect(/invoicepayload/i.test(seedSrc), 'a loosened /i variant DOES hit the seed tests -- that is why the pattern is case-sensitive').toBe(true)
+
+    // playground stays case-insensitive.
+    expect(PATTERNS[0].re.test('Validation PLAYGROUND'), 'playground must match case-insensitively').toBe(true)
+  })
+
+  it('rmv01_theWalkStillFindsTheControlNeedles', () => {
+    for (const [rel, needle] of REPO_CONTROLS) {
+      expect(TRACKED, `control file ${rel} is missing from the walk`).toContain(rel)
+      expect(readRepoFile(rel).includes(needle), `control needle ${needle} not found in ${rel} -- the walk is broken, not the tree clean`).toBe(true)
+    }
+  })
+
+  it('rmv01_theSeedMigrationNeedsNoExclusion', () => {
+    const src = readRepoFile(SEED_MIGRATION)
+    const matched = PATTERNS.filter((n) => n.re.test(src)).map((n) => n.name)
+    expect(matched, `${SEED_MIGRATION} matches a pattern -- either narrow the pattern or earn an exclusion`).toEqual([])
+    expect(src.includes('rule_set_versions'), 'the seed migration was read but carries no rule_set_versions -- wrong file').toBe(true)
+  })
+
+  it('rmv01_theNarrowExclusionIsStillEarned', () => {
+    for (const x of PAIR_EXCLUSIONS) {
+      const src = readRepoFile(x.file)
+      const n = PATTERNS.find((p) => p.name === x.pattern)!
+      expect(n.re.test(src), `the (${x.file}, ${x.pattern}) exclusion no longer matches anything -- delete it before it hides a regression`).toBe(true)
+
+      // And it must be earned for that ONE pattern only.
+      const others = PATTERNS.filter((p) => p.name !== x.pattern && p.re.test(src)).map((p) => p.name)
+      expect(others, `${x.file} is excluded for ${x.pattern} but also carries ${others.join(', ')}`).toEqual([])
+    }
+  })
+
+  it('rmv01_noPlaygroundReferenceSurvivesInTheRepo', () => {
+    const offenders = residueHits()
+    expect(
+      offenders.map((h) => `${h.file}:${h.line}`),
+      `playground residue survives in the tree:\n${render(offenders)}`,
     ).toEqual([])
   })
 })

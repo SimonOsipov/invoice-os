@@ -5,9 +5,11 @@
 package extraction
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -122,12 +124,38 @@ type ExtractionPage struct {
 	HeightPx int `json:"height_px"`
 }
 
-// ExtractionFieldState is one decided reading. Region is nil when the extractor could point at
-// nothing.
-type ExtractionFieldState struct {
-	Name   string            `json:"name"`
+// ExtractionCandidate is one alternative reading kept beside an ambiguous field's decision. No
+// Name, Reason or Alternatives of its own: FieldResult (reconcile.go:27-34) gives an alternative
+// none of the three, and a recursive ExtractionFieldState would let the wire express a nesting
+// the domain never produces.
+type ExtractionCandidate struct {
 	Value  *string           `json:"value"`
 	Region *ExtractionRegion `json:"region"`
+}
+
+// ExtractionCorrected is the human layer over one field: how it was settled, the reading the
+// correction superseded, and the anchor label it was taken from. Named, never inline:
+// wireMirrors' goStructKeys reads a brace-free body only. Was and Where are both pointers --
+// the superseded reading may be a field the extractor never read, and most corrections carry
+// no anchor label.
+type ExtractionCorrected struct {
+	Method string  `json:"method"`
+	Was    *string `json:"was"`
+	Where  *string `json:"where"`
+}
+
+// ExtractionFieldState is one decided reading plus the alternatives an ambiguous field kept,
+// with the human layer over both. Region is nil when the extractor could point at nothing.
+// Reason is "" for a clean field and Alternatives is never nil
+// (TestExtractionDetail_AlternativesAreNeverNil). Corrected is nil, never an empty object, for
+// a field no human has touched (TestExtractionDetail_UncorrectedFieldHasNullCorrected).
+type ExtractionFieldState struct {
+	Name         string                `json:"name"`
+	Value        *string               `json:"value"`
+	Region       *ExtractionRegion     `json:"region"`
+	Reason       string                `json:"reason"`
+	Alternatives []ExtractionCandidate `json:"alternatives"`
+	Corrected    *ExtractionCorrected  `json:"corrected"`
 }
 
 // ExtractionDocument is what the document toolbar renders. Filename and ContentType are
@@ -158,7 +186,7 @@ func emptyDetail() ExtractionDetail {
 	return ExtractionDetail{Pages: []ExtractionPage{}, Fields: []ExtractionFieldState{}}
 }
 
-// Detail returns one job with its document, pages and decided fields. All three statements
+// Detail returns one job with its document, pages and merged fields. All four statements
 // share one transaction (TestRLS_ExtractionDetailUsesRequestTxNotTenantTx), and a successful
 // read audits on that same transaction (TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow).
 func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, error) {
@@ -168,7 +196,7 @@ func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, er
 		if out, err = detailTx(ctx, tx, jobID); err != nil {
 			return err
 		}
-		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at three
+		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at four
 		// statements (TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit).
 		// TestSubmissionMain_WiresTheDocumentReadAuditorOntoAReader is what keeps production
 		// from being one.
@@ -216,7 +244,92 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 	if out.Fields, err = detailFieldsTx(ctx, tx, jobID); err != nil {
 		return emptyDetail(), err
 	}
+	// Fourth and last, on the same transaction: the human layer laid over the readings above.
+	corrections, err := latestCorrectionsPerFieldTx(ctx, tx, jobID)
+	if err != nil {
+		return emptyDetail(), err
+	}
+	out.Fields = mergeCorrections(out.Fields, corrections)
 	return out, nil
+}
+
+// mergeCorrections lays the latest correction per field over the decided readings, one entry per
+// field name (TestExtractionMerge_ResolvesEachMethodWithoutADatabase). A settled field is no
+// longer flagged, so its reason goes to "" and its alternatives to empty.
+func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) []ExtractionFieldState {
+	byName := map[string]int{}
+	for i, f := range fields {
+		byName[f.Name] = i
+	}
+	out := make([]ExtractionFieldState, len(fields))
+	copy(out, fields)
+
+	// A correction may name a field the extractor never read: refuseField admits names
+	// mockDefaultResult never emits, and the value already reached the invoice.
+	added := []ExtractionFieldState{}
+	for _, c := range corrections {
+		// An undo is a full reset to the extractor's reading, its own value ignored
+		// (TestExtractionDetail_UndoneIgnoresItsOwnValueAndRestoresTheReading).
+		if c.Method == MethodUndone {
+			continue
+		}
+
+		f := ExtractionFieldState{Name: c.FieldName, Alternatives: []ExtractionCandidate{}}
+		idx, read := byName[c.FieldName]
+		if read {
+			f = out[idx]
+		}
+
+		// Read before Value is overwritten: the first correction on a field supersedes the
+		// reading, which may itself be a missing field with no value.
+		was := c.Superseded
+		if was == nil {
+			was = f.Value
+		}
+
+		value := c.Value
+		f.Value = &value
+		switch c.Method {
+		case MethodChosen:
+			// _pointed_has_region forbids a box on a chosen row, so the alternative is re-derived by
+			// value — before the alternatives are emptied below, or it is unrecoverable
+			// (TestExtractionDetail_ChosenCorrectionTakesTheAlternativesRegion).
+			for _, a := range f.Alternatives {
+				if a.Value != nil && *a.Value == c.Value {
+					f.Region = a.Region
+					break
+				}
+			}
+		case MethodPointed:
+			if c.Region != nil { // _pointed_has_region ties the stored box to this method exactly
+				f.Region = &ExtractionRegion{
+					Page: c.Region.Page, X0: c.Region.X0, Y0: c.Region.Y0, X1: c.Region.X1, Y1: c.Region.Y1,
+				}
+			}
+		}
+		f.Reason = ""
+		f.Alternatives = []ExtractionCandidate{}
+
+		// "" is no label, not an empty one: the wire key is nullable so subtask 06 never renders a
+		// dangling "Taken from " (TestExtractionDetail_WhereCarriesTheAnchorLabelAndIsNullWithoutOne).
+		var where *string
+		if c.AnchorLabel != "" {
+			label := c.AnchorLabel
+			where = &label
+		}
+		f.Corrected = &ExtractionCorrected{Method: string(c.Method), Was: was, Where: where}
+
+		if read {
+			out[idx] = f
+			continue
+		}
+		added = append(added, f)
+	}
+
+	// Appended after the read fields and ordered here, not by the query's ORDER BY, so the output
+	// order does not rest on the caller. The corrections read is one row per field name, so no tie.
+	slices.SortFunc(added, func(a, b ExtractionFieldState) int { return cmp.Compare(a.Name, b.Name) })
+	return append(out, added...)
 }
 
 // detailPagesTx returns the page inventory in page order. The stored grid is read, never
@@ -248,41 +361,88 @@ func detailPagesTx(ctx context.Context, tx pgx.Tx, documentID string) ([]Extract
 	return out, nil
 }
 
-// detailFieldsTx returns the decided readings only: candidate_rank 0 is the decision and 1..N
-// are alternatives, which are not on this wire
-// (TestExtractionDetail_ExcludesAlternativeCandidates). The ordering is fieldResultsTx's.
+// detailFieldsTx returns one entry per field_name: candidate_rank 0 is the decision and ranks
+// 1..N nest under it, so the count is per field and never per row
+// (TestExtractionDetail_AlternativesDoNotBecomeTopLevelFields). Every row of one job ties on
+// created_at in production, so field_name, candidate_rank and id break it
+// (TestExtractionDetail_AlternativeOrderSurvivesACreatedAtTie).
 func detailFieldsTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ExtractionFieldState, error) {
+	type fieldRow struct {
+		name           string
+		value          *string
+		page           *int
+		x0, y0, x1, y1 *float64
+		reason         *string
+		rank           int
+	}
+
 	out := []ExtractionFieldState{}
 
 	rows, err := tx.Query(ctx,
-		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1
+		`SELECT field_name, value, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1, reason_code, candidate_rank
 		   FROM extraction_field_results
-		  WHERE extraction_job_id = $1 AND candidate_rank = 0
-		  ORDER BY created_at, field_name`,
+		  WHERE extraction_job_id = $1
+		  ORDER BY created_at, field_name, candidate_rank, id`,
 		jobID)
 	if err != nil {
 		return out, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
 	}
 	defer rows.Close()
 
+	buf := []fieldRow{}
 	for rows.Next() {
-		var (
-			f              ExtractionFieldState
-			page           *int
-			x0, y0, x1, y1 *float64
-		)
-		if err := rows.Scan(&f.Name, &f.Value, &page, &x0, &y0, &x1, &y1); err != nil {
+		var r fieldRow
+		if err := rows.Scan(&r.name, &r.value, &r.page,
+			&r.x0, &r.y0, &r.x1, &r.y1, &r.reason, &r.rank); err != nil {
 			return []ExtractionFieldState{}, fmt.Errorf("extraction: scan field result for job %s: %w", jobID, err)
 		}
-		// extraction_field_results_region_complete makes the five box columns all-or-none, so
-		// page alone decides whether there is a box.
-		if page != nil {
-			f.Region = &ExtractionRegion{Page: *page, X0: *x0, Y0: *y0, X1: *x1, Y1: *y1}
-		}
-		out = append(out, f)
+		buf = append(buf, r)
 	}
 	if err := rows.Err(); err != nil {
 		return []ExtractionFieldState{}, fmt.Errorf("extraction: read field results for job %s: %w", jobID, err)
+	}
+
+	// extraction_field_results_region_complete makes the five box columns all-or-none, so page
+	// alone decides whether there is a box.
+	region := func(r fieldRow) *ExtractionRegion {
+		if r.page == nil {
+			return nil
+		}
+		return &ExtractionRegion{Page: *r.page, X0: *r.x0, Y0: *r.y0, X1: *r.x1, Y1: *r.y1}
+	}
+
+	// Two passes so a rank-0 row need not precede its own alternatives in the buffer.
+	byName := map[string]int{}
+	for _, r := range buf {
+		if r.rank != 0 {
+			continue
+		}
+		reason := ""
+		if r.reason != nil {
+			reason = *r.reason
+		}
+		byName[r.name] = len(out)
+		out = append(out, ExtractionFieldState{
+			Name:   r.name,
+			Value:  r.value,
+			Region: region(r),
+			Reason: reason,
+			// Coercion is at construction, not by a tag: a nil slice marshals to null.
+			Alternatives: []ExtractionCandidate{},
+		})
+	}
+	for _, r := range buf {
+		if r.rank == 0 {
+			continue
+		}
+		// An alternative with no rank-0 sibling is dropped, never promoted
+		// (TestExtractionDetail_OrphanAlternativeIsDropped).
+		idx, ok := byName[r.name]
+		if !ok {
+			continue
+		}
+		out[idx].Alternatives = append(out[idx].Alternatives,
+			ExtractionCandidate{Value: r.value, Region: region(r)})
 	}
 	return out, nil
 }

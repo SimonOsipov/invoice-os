@@ -3,6 +3,7 @@
 package extraction
 
 import (
+	"context"
 	"go/ast"
 	"testing"
 	"time"
@@ -183,5 +184,36 @@ func TestExtractWorker_AuditWriteIsLastInItsClosure(t *testing.T) {
 	// dead_lettered branch's own transaction.
 	if auditClosures != 2 {
 		t.Errorf("closures calling w.Audit = %d, want exactly 2 -- one per terminal point", auditClosures)
+	}
+}
+
+// TestMockExtractor_DefaultResultFlaggedCountIgnoresAlternatives (RED-FIRST): AC-9, over the
+// REAL default result rather than a hand-built one. TestExtractWorker_FlaggedCountIgnoresAlternatives
+// above proves the loop stops at the top level; nothing connected that to what the mock actually
+// ships, so a mock whose alternatives were lifted into decided fields would pass it.
+func TestMockExtractor_DefaultResultFlaggedCountIgnoresAlternatives(t *testing.T) {
+	results, err := NewMockExtractor().Extract(context.Background(),
+		Document{Bytes: []byte("no fixture claims these bytes"), ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	var decided, alternatives, flagged int
+	for _, r := range results {
+		decided++
+		alternatives += len(r.Alternatives)
+		if r.Reason != ReasonNone {
+			flagged++
+		}
+	}
+	// Floors: with no alternatives to descend into, the count below cannot tell a loop that
+	// stops at the top level from one that does not.
+	if alternatives == 0 {
+		t.Fatalf("the default result carries %d decided field(s) and no alternatives; this spec would pass on a flaggedCount that flattened them", decided)
+	}
+
+	if got, want := flaggedCount(results), 6; got != want {
+		t.Errorf("flaggedCount over the default result = %d, want %d -- %d decided field(s) carry a reason and %d alternative(s) must not be counted",
+			got, want, flagged, alternatives)
 	}
 }

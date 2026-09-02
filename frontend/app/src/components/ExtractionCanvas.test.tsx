@@ -27,7 +27,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { StrictMode, type CSSProperties } from 'react'
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 import * as glyphs from '../glyphs'
@@ -35,6 +35,7 @@ import {
   docMetaLine,
   highlightStyle,
   pageFrameStyle,
+  pointBoxStyle,
   type ExtractionDocument,
   type ExtractionFieldState,
   type ExtractionPage,
@@ -73,7 +74,15 @@ function mkRegion(o: Partial<ExtractionRegion> = {}): ExtractionRegion {
 }
 
 function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
-  return { name: 'invoice_number', value: 'INV-2026-0037', region: mkRegion(), ...o }
+  return {
+    name: 'invoice_number',
+    value: 'INV-2026-0037',
+    region: mkRegion(),
+    reason: '',
+    alternatives: [],
+    corrected: null,
+    ...o,
+  }
 }
 
 function mkDocument(o: Partial<ExtractionDocument> = {}): ExtractionDocument {
@@ -114,6 +123,9 @@ interface CanvasProps {
   selected: string | null
   /** The caller's per-click nonce. Held constant unless a row is asserting on it. */
   scrollNonce: number
+  /** The field waiting for a box. Null unless a row is arming one. */
+  armed: string | null
+  onPoint: (region: ExtractionRegion) => void
 }
 
 function canvas(over: Partial<CanvasProps> = {}) {
@@ -125,6 +137,8 @@ function canvas(over: Partial<CanvasProps> = {}) {
     fields: THREE_FIELDS,
     selected: null,
     scrollNonce: 0,
+    armed: null,
+    onPoint: () => {},
     ...over,
   }
   return <ExtractionCanvas {...props} />
@@ -890,17 +904,17 @@ describe('the toolbar', () => {
     expect(meta.style.letterSpacing).toBe('0.04em')
     expect(meta.style.marginTop).toBe('2px')
 
-    // 4. The READ ONLY pill.
-    const pill = screen.getByTestId('extraction-read-only')
-    expect(pill.textContent).toBe('READ ONLY')
-    expect(pill.className.split(/\s+/)).toContain('mono')
-    expect(pill.style.fontSize).toBe('9px')
-    expect(pill.style.fontWeight).toBe('700')
-    expect(pill.style.letterSpacing).toBe('0.09em')
-    expect(pill.style.color).toBe('var(--fg-3)')
-    expect(pill.style.border).toBe('1px solid var(--line-2)')
-    expect(pill.style.borderRadius).toBe('999px')
-    expect(pill.style.padding).toBe('3px 9px')
+    // 4. The READ ONLY pill is RETIRED (AC-7). The toolbar's claim is now false: every field
+    //    beside it takes an input, a chip row or an Undo. The artboard renders the badge beside
+    //    editable inputs (`:43`, `:300-340`), so retiring it is a deliberate deviation FROM the
+    //    artboard rather than a return to it, and EXTR-12-09 records it with its reason.
+    //    Converted rather than deleted: nine assertions on a badge that still renders would
+    //    stay green while it does.
+    expect(
+      screen.queryByTestId('extraction-read-only'),
+      'the document toolbar still claims the screen is read-only',
+    ).toBeNull()
+    expect(toolbar.innerHTML, 'the badge lost its testid but kept its copy').not.toContain('READ ONLY')
   })
 
   it('tints the type tile with fileTypeTone, not a fixed colour', () => {
@@ -1685,5 +1699,232 @@ describe('SourceDocumentPages.tsx', () => {
     expect(src, 'the true half of the paragraph was deleted with the false half').toContain(
       'Nothing in a browser exposes the page count',
     )
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08 — the drag surface (AC-2, AC-3). Written RED against `c994ecee`: the pane takes
+// `armed`/`onPoint` and renders nothing from either.
+// ==========================================================================================
+
+/**
+ * A TWO-AXIS rect stub, at file scope. `left` and `width` carry the translate and the scale —
+ * the two axes the transform is about — and `describe('selecting a field')`'s own `measure()`
+ * pins neither, hardcoding `left: 0, width: 0`. Dividing by that width is `Infinity`, so the
+ * shipped helper would red a correct build here rather than test it.
+ */
+function measureRect(el: HTMLElement, rect: { left: number; top: number; width: number; height: number }): void {
+  Object.defineProperty(el, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      right: rect.left + rect.width,
+      bottom: rect.top + rect.height,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => ({}),
+    }),
+  })
+}
+
+// NOT `extraction-page-surface-*`: the ground's own pad row counts
+// `[data-testid^="extraction-page-"]` and requires exactly 3.
+function surfaces(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="extraction-point-surface-"]'))
+}
+
+function surface(n: number): HTMLElement {
+  const el = screen.queryByTestId(`extraction-point-surface-${n}`)
+  expect(el, `page ${n} has no drag surface — the gesture below is vacuous`).not.toBeNull()
+  return el as HTMLElement
+}
+
+function liveBoxes(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="extraction-point-box"]'))
+}
+
+// The stub the rows below drag inside, and the box that drag describes on it.
+const SURFACE_RECT = { left: 40, top: 90, width: 600, height: 800 }
+const DRAG_FROM = { clientX: 100, clientY: 200 }
+const DRAG_TO = { clientX: 400, clientY: 500 }
+const DRAGGED: ExtractionRegion = { page: 2, x0: 0.1, y0: 0.1375, x1: 0.6, y1: 0.5125 }
+
+describe('the drag surface', () => {
+  it('renders none until a field is armed', () => {
+    // Both halves in ONE row, so neither constant passes: always-absent reds the second,
+    // always-present the first.
+    const { rerender } = render(canvas({ armed: null }))
+    expect(frames(), 'the pane rendered no frame — both counts below are vacuous').toHaveLength(3)
+    expect(surfaces(), 'the document takes a drag before any field asked for one').toHaveLength(0)
+
+    rerender(canvas({ armed: 'buyer_tin' }))
+    expect(
+      surfaces().map((el) => el.dataset.testid).sort(),
+      'an armed field must be able to point at any page',
+    ).toEqual(['extraction-point-surface-1', 'extraction-point-surface-2', 'extraction-point-surface-3'])
+  })
+
+  it("posts page 2's box in the frame's own coordinates", () => {
+    // The drag is on page 2 on purpose: a hardcoded `page: 1` reds here, and page 1 is the only
+    // page the deployed mock ever points at.
+    //
+    // What this row CANNOT catch: measuring the frame's BORDER box instead of the surface.
+    // jsdom computes no borders, so both read the same stub. Per the plan's own arithmetic
+    // ((2u − W)/(W+2), under one pixel everywhere at every zoom) that mutant is UNFALSIFIABLE
+    // through AC-2, and NO row in this story catches it. The padding-box overlay stands
+    // because it is exact and needs no border arithmetic, not because a test forces it.
+    const onPoint = vi.fn()
+    render(canvas({ armed: 'buyer_tin', onPoint }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, DRAG_TO)
+    fireEvent.mouseUp(s, DRAG_TO)
+
+    expect(onPoint.mock.calls, 'the released drag reported no box upward').toHaveLength(1)
+    expect(onPoint.mock.calls[0][0], 'the drag did not land where it was drawn').toEqual(DRAGGED)
+  })
+
+  it("discards a drag under the artboard's floor", () => {
+    // A do-nothing that never calls onPoint PASSES this row. Kept and paired with the row
+    // above, which reds it — stated rather than counted as coverage.
+    const onPoint = vi.fn()
+    render(canvas({ armed: 'buyer_tin', onPoint }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, { clientX: 110, clientY: 206 })
+    fireEvent.mouseUp(s, { clientX: 110, clientY: 206 })
+
+    expect(onPoint.mock.calls, 'a 10x6 twitch was recorded as a region').toEqual([])
+  })
+
+  it('discards a box whose drag left the frame', () => {
+    // The surface IS the frame, so leaving it is leaving the page — and there is then no
+    // clamping rule to get wrong. Same never-calls note as the row above; the live-box row
+    // below is this one's pair.
+    const onPoint = vi.fn()
+    render(canvas({ armed: 'buyer_tin', onPoint }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, DRAG_TO)
+    fireEvent.mouseLeave(s, DRAG_TO)
+    fireEvent.mouseUp(s, DRAG_TO)
+
+    expect(onPoint.mock.calls, 'a drag that left the page was recorded as a region').toEqual([])
+    expect(liveBoxes(), 'the abandoned box is still on the document').toHaveLength(0)
+  })
+
+  it('draws the live box under the cursor and clears it on release', () => {
+    // Read back through `serialized()`, so this row cannot disagree with extractionReview.ts
+    // about a literal — the literal itself is pinned in extractionReview.test.ts. What this
+    // discriminates is the REGION: a fixed box reds all four percentages.
+    render(canvas({ armed: 'buyer_tin' }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, DRAG_TO)
+
+    const drawn = liveBoxes()
+    expect(drawn, 'the drag draws nothing, so a wrong transform is invisible until Save').toHaveLength(1)
+    const keys = ['left', 'top', 'width', 'height'] as const
+    expect(pick(drawn[0].style, keys), 'the live box does not follow the cursor').toEqual(
+      serialized(pointBoxStyle(DRAGGED), keys),
+    )
+
+    fireEvent.mouseUp(s, DRAG_TO)
+    expect(liveBoxes(), 'the live box outlived the gesture that drew it').toHaveLength(0)
+  })
+
+  it('drops a drag in progress when another field arms', () => {
+    // Without the reset the release fires onPoint and the box lands on the WRONG field —
+    // a cross-field write.
+    const onPoint = vi.fn()
+    const { rerender } = render(canvas({ armed: 'buyer_tin', onPoint }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, DRAG_TO)
+    expect(liveBoxes(), 'the drag drew nothing — the drop below is vacuous').toHaveLength(1)
+
+    rerender(canvas({ armed: 'buyer_name', onPoint }))
+    fireEvent.mouseUp(surface(2), DRAG_TO)
+
+    expect(onPoint.mock.calls, "the release wrote the first field's box onto the second").toEqual([])
+    expect(liveBoxes(), 'a box drawn for another field is still on the document').toHaveLength(0)
+  })
+})
+
+// ==========================================================================================
+// EXTR-12-08, QA. Four declarations on the drag surface that nothing read: the overlay's own
+// geometry, its two affordances, and the suppression that keeps a drag from selecting text.
+// Each was found by mutating the shipped component and watching all 3639 tests pass.
+// ==========================================================================================
+
+const SURFACE_INSET = ['position', 'left', 'top', 'right', 'bottom'] as const
+
+describe('the drag surface, as declared', () => {
+  it('fills its frame edge to edge, so its own rect is the box the highlight resolves against', () => {
+    // WHAT THIS CATCHES: an overlay that is not flush with the frame. `normaliseBox` divides
+    // by whatever this element measures, so an inset of n px shifts every posted region by n
+    // at the origin and by 2n/W in scale -- a 4px inset moves a box ~4px on a 560px frame,
+    // an order of magnitude past AC-2's one-pixel claim. Measured: `inset: 4` passed the whole
+    // suite before this row existed, because every drag row stubs the rect and never reads it.
+    //
+    // WHAT THIS DOES NOT CATCH, and must not be read as catching: the BORDER-box transform --
+    // a handler dividing by the frame's rect instead of this overlay's. That mutant's error is
+    // (2u - W)/(W+2), under one pixel everywhere at every zoom and every frame size, so it
+    // satisfies AC-2 as written and NO row in this story falsifies it. The four assertions
+    // below are about this element's own box, not about which box the handler divides by.
+    render(canvas({ armed: 'buyer_tin' }))
+
+    expect(surfaces(), 'no surface rendered -- the declarations below are vacuous').toHaveLength(3)
+
+    for (const el of surfaces()) {
+      const declared = pick(el.style, SURFACE_INSET)
+      expect(declared, `${el.dataset.testid} does not fill its frame`).toEqual({
+        position: 'absolute',
+        left: '0px',
+        top: '0px',
+        right: '0px',
+        bottom: '0px',
+      })
+    }
+  })
+
+  it('says with the cursor that the document takes a drag', () => {
+    // The artboard puts an arming banner over the document pane; this build did not build it
+    // (it needs two strings the copy table does not carry), so `Stop pointing` sits in the
+    // cell and the CURSOR is the only thing on the document itself that says a drag is what
+    // is wanted. `userSelect` is the other half of the gesture: without it the drag paints a
+    // text selection across the page under the box.
+    render(canvas({ armed: 'buyer_tin' }))
+
+    const s = surface(2)
+    expect(s.style.cursor, 'the document gives no sign it takes a drag').toBe('crosshair')
+    expect(s.style.userSelect, 'a drag across the page selects the text under it').toBe('none')
+  })
+
+  it('cancels the browser default on mousedown, so no native drag starts under the cursor', () => {
+    render(canvas({ armed: 'buyer_tin' }))
+
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    const down = createEvent.mouseDown(s, DRAG_FROM)
+    fireEvent(s, down)
+
+    expect(down.defaultPrevented, 'mousedown was left to the browser, which starts its own drag').toBe(true)
+    // The floor: the handler really ran, so the flag above is this component's doing.
+    fireEvent.mouseMove(s, DRAG_TO)
+    expect(liveBoxes(), 'the gesture drew nothing -- the flag above proves nothing').toHaveLength(1)
   })
 })

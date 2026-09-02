@@ -19,7 +19,8 @@ import (
 
 // extractedField is one rank-0 extraction_field_results row: the decided reading.
 // Alternatives (candidate_rank >= 1) are never read here -- a human resolves those on the
-// review screen (EXTR-15/EXTR-16), not the writer.
+// review screen (EXTR-15/EXTR-16), not the writer. The rank-0 filter below is deliberate and
+// no longer shared: extraction.detailFieldsTx reads every rank and nests the alternatives.
 type extractedField struct {
 	Name   string
 	Value  *string // NULL for an unreadable/missing field
@@ -44,6 +45,10 @@ type SettledExtraction struct {
 // created_at (TestSettledExtraction_TiedCreatedAtResolvesStablyAcross20Calls). No import of
 // internal/extraction (TestImporterPackage_DoesNotImportExtractionPackage) -- that edge would
 // drag go-pdfium into cmd/invoice.
+//
+// Correction-blind on purpose: a human correction is written to the invoice in the same
+// transaction as the extraction_field_corrections row, so reading that table here would apply
+// the same value twice through two paths (TestSettledExtraction_IgnoresCorrectionsAndReadsRankZero).
 func (s *Store) SettledExtraction(ctx context.Context, documentID string) (SettledExtraction, error) {
 	ex := SettledExtraction{Fields: []extractedField{}}
 

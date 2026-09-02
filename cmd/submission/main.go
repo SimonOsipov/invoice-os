@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -173,6 +174,13 @@ func main() {
 	// from the detail route above, not one per page.
 	app.Mux.HandleFunc("GET /v1/extractions/{id}/pages/{n}",
 		extraction.PageImageHandler(reader.PageImageKey, newPageObjectReader(docObjects), app.Logger))
+
+	// POST /v1/extractions/{id}/fields/{name}/corrections -- one transaction that appends the
+	// correction row, writes the value onto the invoice filed from the job's document, and
+	// audits the pair (TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators).
+	app.Mux.HandleFunc("POST /v1/extractions/{id}/fields/{name}/corrections",
+		extraction.CorrectionHandler(pool, newInvoiceFieldApplier(invStore.EditBySourceDocumentTx),
+			newFieldCorrectedAuditor(), app.Logger))
 
 	// POST /v1/documents -- the upload that stores a source document and queues its
 	// extraction. Two transactions on purpose: Service.Store commits its own, the enqueue
@@ -344,6 +352,97 @@ func newDocumentReadAuditor() extraction.RecordDocumentRead {
 	return func(ctx context.Context, tx pgx.Tx, subject, documentID string) error {
 		return audit.Record(ctx, tx, subject, "document.read", map[string]any{"id": documentID})
 	}
+}
+
+// invoiceFieldEdit is (*invoice.Store).EditBySourceDocumentTx's shape, so a test can
+// substitute one -- the documentOpen idiom.
+type invoiceFieldEdit func(ctx context.Context, tx pgx.Tx, documentID string, in invoice.EditInput) (invoice.Invoice, error)
+
+// newFieldCorrectedAuditor adapts the audit module to the correction seam. The event name is
+// spelled here rather than in internal/extraction, for newDocumentReadAuditor's reason. No
+// value and no region: audit_log is append-only and the corrected value is business content
+// (TestNewFieldCorrectedAuditor_WritesTheInvoiceIdPayload).
+func newFieldCorrectedAuditor() extraction.RecordFieldCorrected {
+	return func(ctx context.Context, tx pgx.Tx, subject string, c extraction.FieldCorrection) error {
+		return audit.Record(ctx, tx, subject, "extraction.field_corrected", map[string]any{
+			"invoice_id": c.InvoiceID,
+			"field":      c.FieldName,
+			"method":     string(c.Method),
+		})
+	}
+}
+
+// newInvoiceFieldApplier adapts the invoice store to the extraction seam. Each domain outcome
+// crosses as one of the extraction sentinels so statusForErr maps it by identity; anything else
+// passes through raw and stays a 500 (TestNewInvoiceFieldApplier_MapsEachDomainError).
+func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoice {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, _ extraction.CorrectionMethod) (string, error) {
+		in, err := invoiceEditFor(field, value)
+		if err != nil {
+			return "", err
+		}
+		inv, err := edit(ctx, tx, documentID, in)
+		switch {
+		case errors.Is(err, invoice.ErrNotFound):
+			return "", extraction.ErrNoInvoiceForDocument
+		case errors.Is(err, invoice.ErrNotFixable):
+			return "", extraction.ErrInvoiceNotEditable
+		case errors.Is(err, invoice.ErrValidation):
+			return "", extraction.ErrValueRefused
+		case err != nil:
+			return "", err
+		}
+		return inv.ID, nil
+	}
+}
+
+// invoiceEditFor puts one corrected value on its own UpdateInput member. It lives here because
+// internal/extraction cannot name invoice.UpdateInput; the handler has already refused every
+// field outside this switch, and issue_date arrives normalised to ISO
+// (TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn).
+//
+// A NIL value is an undo of a field the extractor never read: the column goes back to holding
+// nothing, which is what the screen shows
+// (TestInvoiceEditFor_ANilValueClearsEveryWritableColumn).
+func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
+	var in invoice.UpdateInput
+	if field == "issue_date" {
+		switch {
+		case value == nil:
+			in.IssueDate = invoice.ClearDate
+		default:
+			at, err := time.Parse(time.DateOnly, *value)
+			if err != nil {
+				return invoice.EditInput{}, fmt.Errorf("%w: issue_date %q", extraction.ErrValueRefused, *value)
+			}
+			in.IssueDate = &at
+		}
+		return invoice.EditInput{UpdateInput: in}, nil
+	}
+
+	var column **string
+	switch field {
+	case "buyer_tin":
+		column = &in.BuyerTIN
+	case "buyer_name":
+		column = &in.BuyerName
+	case "currency":
+		column = &in.Currency
+	case "subtotal":
+		column = &in.Subtotal
+	case "vat":
+		column = &in.VAT
+	case "total":
+		column = &in.Total
+	default:
+		return invoice.EditInput{}, fmt.Errorf("%w: %q is not an invoice-writable field", extraction.ErrValueRefused, field)
+	}
+	if value == nil {
+		*column = invoice.ClearText
+	} else {
+		*column = value
+	}
+	return invoice.EditInput{UpdateInput: in}, nil
 }
 
 // selectExtractor resolves EXTRACTOR to an extraction.Extractor, the shape submission.Select

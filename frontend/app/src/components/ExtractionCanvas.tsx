@@ -3,7 +3,7 @@
 // extractionReview.ts, whose values extractionReview.test.ts pins; the toolbar, banner and
 // ground chrome below is declared here and pinned by ExtractionCanvas.test.tsx.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 
 import { gatewayBase } from '@invoice-os/api-client'
 
@@ -12,11 +12,17 @@ import {
   docMetaLine,
   fetchPageImage,
   highlightStyle,
+  isDrawnBox,
+  normaliseBox,
   pageFrameStyle,
+  pointBoxStyle,
   scrollRegionIntoView,
   type ExtractionDocument,
   type ExtractionFieldState,
   type ExtractionPage,
+  type ExtractionRegion,
+  type FrameBox,
+  type ViewportPoint,
 } from '../lib/extractionReview'
 import type { DocumentBytes } from '../lib/sourceDocument'
 import type { PlatformCtx } from '../types'
@@ -80,17 +86,6 @@ const META: CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-}
-
-const READ_ONLY: CSSProperties = {
-  flex: 'none',
-  fontSize: 9,
-  fontWeight: 700,
-  letterSpacing: '0.09em',
-  color: 'var(--fg-3)',
-  border: '1px solid var(--line-2)',
-  borderRadius: 999,
-  padding: '3px 9px',
 }
 
 const ZOOM_GROUP: CSSProperties = {
@@ -157,7 +152,33 @@ const FAILED_PANEL: CSSProperties = {
   border: '1px dashed var(--status-red-border)',
 }
 
+// Four insets, so the overlay fills the frame's PADDING box -- the box highlightStyle's
+// percentages resolve against, which is what makes the drag exact with no border arithmetic.
+// `userSelect` is the other half of the mousedown's preventDefault.
+const POINT_SURFACE: CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+  cursor: 'crosshair',
+  userSelect: 'none',
+}
+
 type PageSlot = DocumentBytes | 'error'
+
+/** One drag in progress: the page it began on, the surface it was measured against, its ends. */
+interface PointDrag {
+  page: number
+  frame: FrameBox
+  a: ViewportPoint
+  b: ViewportPoint
+}
+
+function frameBoxOf(el: HTMLElement): FrameBox {
+  const r = el.getBoundingClientRect()
+  return { left: r.left, top: r.top, width: r.width, height: r.height }
+}
 
 export function ExtractionCanvas({
   ctx,
@@ -167,6 +188,8 @@ export function ExtractionCanvas({
   fields,
   selected,
   scrollNonce,
+  armed,
+  onPoint,
 }: {
   ctx: PlatformCtx
   jobId: string
@@ -181,6 +204,10 @@ export function ExtractionCanvas({
    * so a caller that omits this silently loses the re-centre.
    */
   scrollNonce: number
+  /** The one field waiting for a box, or null. EXTR-12-08 renders the drag surface from it. */
+  armed: string | null
+  /** A completed drag, already normalised against the frame it was drawn on. */
+  onPoint: (region: ExtractionRegion) => void
 }) {
   const base = gatewayBase()
   const [zoom, setZoom] = useState(1)
@@ -278,6 +305,41 @@ export function ExtractionCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, jobId, scrollNonce])
 
+  // No ref: each handler is ON the element it measures, and re-reading per event keeps the rect
+  // right if the ground scrolls mid-drag. `e.currentTarget` is read at the TOP of each handler
+  // -- React nulls it on return, so a read inside a setState updater would be too late.
+  const [drag, setDrag] = useState<PointDrag | null>(null)
+  const live = drag === null ? null : normaliseBox(drag.frame, drag.a, drag.b, drag.page)
+
+  // Re-arming mid-drag must not strand the box on the field that is no longer waiting for it.
+  useEffect(() => {
+    setDrag(null)
+  }, [armed])
+
+  const pointDown = (page: number) => (e: MouseEvent<HTMLDivElement>) => {
+    const frame = frameBoxOf(e.currentTarget)
+    e.preventDefault()
+    const at = { x: e.clientX, y: e.clientY }
+    setDrag({ page, frame, a: at, b: at })
+  }
+
+  const pointMove = (e: MouseEvent<HTMLDivElement>) => {
+    if (drag === null) return
+    const frame = frameBoxOf(e.currentTarget)
+    setDrag({ ...drag, frame, b: { x: e.clientX, y: e.clientY } })
+  }
+
+  const pointUp = (e: MouseEvent<HTMLDivElement>) => {
+    if (drag === null) return
+    const frame = frameBoxOf(e.currentTarget)
+    const at = { x: e.clientX, y: e.clientY }
+    setDrag(null)
+    // Under the floor the gesture was a click, not a box, and the boundary would be asked to
+    // store a region nobody meant to draw.
+    if (!isDrawnBox(drag.a, at)) return
+    onPoint(normaliseBox(frame, drag.a, at, drag.page))
+  }
+
   const tone = fileTypeTone(doc.filename, doc.content_type)
   const banner = selectedField !== null && selectedField.region === null
 
@@ -305,9 +367,6 @@ export function ExtractionCanvas({
             </button>
           ))}
         </div>
-        <span data-testid="extraction-read-only" className="mono" style={READ_ONLY}>
-          READ ONLY
-        </span>
       </div>
 
       {banner ? (
@@ -338,6 +397,23 @@ export function ExtractionCanvas({
                   {selectedField && region && region.page === p.page ? (
                     <div data-testid="extraction-highlight" data-snip={selectedField.name} style={highlightStyle(region)} />
                   ) : null}
+                  {/* Last child, one per frame: the surface carries its own page, so a drag on
+                      page 2 posts page 2 with no hit test. The live box is its child, so both
+                      resolve against the same padding box. */}
+                  {armed === null ? null : (
+                    <div
+                      data-testid={`extraction-point-surface-${p.page}`}
+                      style={POINT_SURFACE}
+                      onMouseDown={pointDown(p.page)}
+                      onMouseMove={pointMove}
+                      onMouseUp={pointUp}
+                      onMouseLeave={() => setDrag(null)}
+                    >
+                      {live && live.page === p.page ? (
+                        <div data-testid="extraction-point-box" style={pointBoxStyle(live)} />
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               )
             })

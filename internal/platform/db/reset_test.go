@@ -301,6 +301,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed extraction_field_results fixture: %v", err)
 	}
 
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_field_corrections
+		     (tenant_id, extraction_job_id, field_name, value, method, actor)
+		 VALUES ($1, $2, 'total_amount', '212.50', 'typed', $3)`,
+		tenantID, extractionJobID, marker,
+	); err != nil {
+		t.Fatalf("seed extraction_field_corrections fixture: %v", err)
+	}
+
 	// The storage_key CHECK admits only this tenant's own prefix.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO extraction_page_images
@@ -524,6 +533,63 @@ func TestResetTruncatesApprovalRunLedger(t *testing.T) {
 	}
 	if got := mustCount(t, pool, `SELECT count(*) FROM approval_decisions WHERE id = $1`, decisionID); got != 0 {
 		t.Errorf("approval_decisions probe row after Reset = %d, want 0", got)
+	}
+}
+
+// TestResetTruncatesExtractionFieldCorrections: the targeted counterpart for the
+// correction record. TestResetTruncatesEveryConfiguredTable derives its
+// expectations by regex-parsing reset.go's own resetTables constant, so it is
+// blind to a table missing from that constant; this one names the table directly.
+func TestResetTruncatesExtractionFieldCorrections(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+			t.Errorf("restore curated demo state after reset test: %v", err)
+		}
+	})
+
+	marker := "reset-corrections-" + uuid.NewString()
+	var documentID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes, filename)
+		 VALUES ($1, $2, $3, 1, $4) RETURNING id`,
+		demoTenantID, "reset-fixture/"+marker,
+		strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), marker,
+	).Scan(&documentID); err != nil {
+		t.Fatalf("seed documents fixture: %v", err)
+	}
+
+	var jobID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version)
+		 VALUES ($1, $2, 'mock', 'v1') RETURNING id`,
+		demoTenantID, documentID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed extraction_jobs fixture: %v", err)
+	}
+	// Reset truncates both parents; a failure before it runs leaves them behind.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = $1`, jobID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM documents WHERE id = $1`, documentID)
+	})
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_field_corrections
+		     (tenant_id, extraction_job_id, field_name, value, method, actor)
+		 VALUES ($1, $2, 'total_amount', '212.50', 'typed', $3)`,
+		demoTenantID, jobID, marker,
+	); err != nil {
+		t.Fatalf("seed extraction_field_corrections fixture: %v", err)
+	}
+
+	if err := db.Reset(ctx, superDSN); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if got := mustCount(t, pool, `SELECT count(*) FROM extraction_field_corrections`); got != 0 {
+		t.Errorf("extraction_field_corrections holds %d row(s) after Reset, want 0 — the table is missing from reset.go's resetTables", got)
 	}
 }
 

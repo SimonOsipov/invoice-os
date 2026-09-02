@@ -57,7 +57,7 @@ ALTER TABLE extraction_field_results FORCE  ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON extraction_field_results
     USING (tenant_id = nullif(current_setting('app.current_tenant', true), '')::uuid);
 
--- Append-only by grant. Q16 makes per-field corrections a NEW row in EXTR-14's own table;
+-- Append-only by grant. A per-field correction is a NEW row in extraction_field_corrections;
 -- these rows are what a correction supersedes and must never be edited in place.
 GRANT SELECT, INSERT ON extraction_field_results TO invoice_app;
 

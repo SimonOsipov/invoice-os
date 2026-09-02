@@ -21,11 +21,17 @@ func seedDocument(t *testing.T, super *pgxpool.Pool, tenantID string) string {
 	if err := super.QueryRow(context.Background(),
 		`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes)
 		 VALUES ($1, $2, $3, $4) RETURNING id`,
-		tenantID, "t/"+tenantID+"/"+uuid.NewString(), strings.Repeat("a", 64), int64(11),
+		tenantID, "t/"+tenantID+"/"+uuid.NewString(), seedContentHash(), int64(11),
 	).Scan(&id); err != nil {
 		t.Fatalf("seed documents: %v", err)
 	}
 	return id
+}
+
+// seedContentHash is 64 hex characters, fresh per call: documents_tenant_content_hash_uq is
+// per tenant, so a fixed hash caps a tenant at one document.
+func seedContentHash() string {
+	return strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
 }
 
 // sourceDocumentOf reads the column directly: it is NOT on Invoice, by design.

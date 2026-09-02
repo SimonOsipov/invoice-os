@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,11 +196,11 @@ func TestDocumentCreateInput_SupplierFieldsNeverSetEvenWhenExtractionCarriesThem
 
 // --- MAP-04: unknown field names dropped -------------------------------------------------
 
-// TestDocumentCreateInput_UnknownFieldNamesDropped reproduces internal/extraction/mock.go:
-// 95-99's clean-invoice literal field set by hand (invoice_date/total_amount are the mock
-// extractor's real unknown names) plus two synthetic unknown names the story calls out
-// (line_items, line_items[0].line_total). internal/importer cannot import internal/extraction
-// (document_deps_test.go), so the values are copied, not referenced.
+// invoice_date/total_amount are ILLUSTRATIVE off-vocabulary names, not the mock extractor's
+// current output: EXTR-12-01 renamed its fields onto the real vocabulary (issue_date, total).
+// They stay unmapped either way, alongside two synthetic ones (line_items,
+// line_items[0].line_total). internal/importer cannot import internal/extraction
+// (document_deps_test.go), so every value here is copied, not referenced.
 func TestDocumentCreateInput_UnknownFieldNamesDropped(t *testing.T) {
 	ex := SettledExtraction{
 		Fields: []extractedField{
@@ -630,4 +631,129 @@ func mpStringSliceVar(t *testing.T, path, name string) []string {
 		}
 	}
 	return nil
+}
+
+// --- EXTR-12-01: the mock's default result, mapped ---------------------------------------
+
+// AC-6/AC-8, and CONFIRMATORY, not red-first: document_deps_test.go fences this package off from
+// internal/extraction, so the field set below is hand-copied and asserting it would pass whatever
+// the mock actually emits. The oracle for the rename is
+// internal/extraction's TestMockExtractor_DefaultResultNamesAreOnTheVocabulary; MAP-11 links
+// HeaderFields to mapperFieldNames, closing the chain to the columns asserted here.
+//
+// What this adds over MAP-01: the mock's PARTIAL field set, where three readings are flagged and
+// two carry no value at all, still maps every decided value and leaves the absent ones NULL.
+func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
+	ex := SettledExtraction{
+		JobID: "job-extr-12-01",
+		Fields: []extractedField{
+			{Name: "invoice_number", Value: mpPtr("MOCK-INV-0001")},
+			{Name: "issue_date", Value: mpPtr("2026-01-01"), Reason: mpPtr("ambiguous")},
+			{Name: "total", Value: mpPtr("1000.00"), Reason: mpPtr("inconsistent")},
+			{Name: "subtotal", Value: mpPtr("950.00"), Reason: mpPtr("inconsistent")},
+			{Name: "supplier_tin", Value: mpPtr("MOCK-TIN-SUPPLIER-ALT"), Reason: mpPtr("inconsistent")},
+			{Name: "buyer_tin", Value: nil, Reason: mpPtr("missing")},
+			{Name: "vat", Value: nil, Reason: mpPtr("unreadable")},
+		},
+	}
+
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+
+	docID := "doc-1"
+	want := invoice.CreateInput{
+		EntityID:      "entity-1",
+		InvoiceNumber: "MOCK-INV-0001",
+		IssueDate:     timePtr(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		Subtotal:      mpPtr("950.00"),
+		Total:         mpPtr("1000.00"),
+		// Q11: Store.Create overwrites the supplier from the entity, so the mapper leaves both
+		// unset however loudly the extraction carries them.
+		SourceDocumentID: &docID,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CreateInput = %+v, want %+v", got, want)
+	}
+
+	// Named again below DeepEqual: these are the two the rename repairs, and a DeepEqual failure
+	// on any other field would otherwise bury which one moved.
+	if got.IssueDate == nil {
+		t.Error("IssueDate = nil -- the mock's issue_date is on the vocabulary now and must map")
+	} else if !got.IssueDate.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("IssueDate = %v, want 2026-01-01", got.IssueDate)
+	}
+	if got.Total == nil || *got.Total != "1000.00" {
+		t.Errorf("Total = %v, want %q -- the mock's total is on the vocabulary now and must map", got.Total, "1000.00")
+	}
+	if got.Subtotal == nil || *got.Subtotal != "950.00" {
+		t.Errorf("Subtotal = %v, want %q", got.Subtotal, "950.00")
+	}
+	// An unreadable field carries no reading, so it maps to NULL rather than to an empty string.
+	if got.VAT != nil {
+		t.Errorf("VAT = %q, want nil -- the mock's vat is unreadable and carries no value", *got.VAT)
+	}
+	if got.BuyerTIN != nil {
+		t.Errorf("BuyerTIN = %q, want nil -- the mock's buyer_tin is missing", *got.BuyerTIN)
+	}
+}
+
+// AC-7's source half. The correction already reached the invoice when it was written, so a
+// correction-aware SettledExtraction would file the same value twice through two paths. The
+// method must stay correction-blind AND say why on itself, not only in a story.
+func TestSettledExtraction_SaysWhyItIsNotCorrectionAware(t *testing.T) {
+	root := sxDepsRepoRoot(t)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filepath.Join(root, "internal/importer/document.go"), nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse document.go: %v", err)
+	}
+
+	var fn *ast.FuncDecl
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if ok && fd.Recv != nil && fd.Name.Name == "SettledExtraction" {
+			fn = fd
+		}
+	}
+	if fn == nil {
+		t.Fatal("document.go declares no method SettledExtraction, so both halves below examine nothing")
+	}
+
+	var sqlLits int
+	var sawResults bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		bl, ok := n.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return true
+		}
+		unq, uerr := strconv.Unquote(bl.Value)
+		if uerr != nil || !strings.Contains(unq, "SELECT") {
+			return true
+		}
+		sqlLits++
+		if strings.Contains(unq, "extraction_field_results") {
+			sawResults = true
+		}
+		if strings.Contains(unq, "extraction_field_corrections") {
+			t.Errorf("%s: SettledExtraction reads extraction_field_corrections -- the correction was "+
+				"applied to the invoice when it was written, so reading it here files the same value twice",
+				fset.Position(bl.Pos()))
+		}
+		return true
+	})
+	// Control needle: an absence proved over a method that reads nothing proves nothing.
+	if sqlLits == 0 || !sawResults {
+		t.Fatalf("SettledExtraction holds %d SELECT literal(s) and names extraction_field_results: %v -- "+
+			"the absence above examined nothing", sqlLits, sawResults)
+	}
+
+	doc := strings.ToLower(fn.Doc.Text())
+	for _, needle := range []string{"correction", "twice"} {
+		if !strings.Contains(doc, needle) {
+			t.Errorf("SettledExtraction's doc comment does not say %q; AC-7 wants the one-write rule "+
+				"stated on the method, so the next reader does not make it correction-aware", needle)
+		}
+	}
 }

@@ -25,26 +25,120 @@
 // evidence for the substance of the story's stage-reporting criterion — it proves the
 // endpoint is reachable and correctly refuses bad input, and that is all it proves.
 //
-// NO ROW IS CREATED AND NO COUNT IS ASSERTED. Every request here is a GET; the only document
-// id and the only job id used are a per-run crypto.randomUUID() that matches nothing. That
-// makes the file trivially safe in the shared run where smoke, api and topology hit ONE
-// deployment with no reset between them (docs/e2e-convention.md:66-85). EXTR-11-09 added the
-// detail and page routes below under that same rule: Reader.Detail raises ErrNotFound from
-// detailTx BEFORE the audit recorder runs (reader.go:164-185), so even the 404 arm writes
-// nothing and its transaction rolls back.
+// NO COUNT IS ASSERTED, and every case but EXTR12-API-02 creates no row: its document id and
+// job id are a per-run crypto.randomUUID() that matches nothing. That makes those cases
+// trivially safe in the shared run where smoke, api and topology hit ONE deployment with no
+// reset between them (docs/e2e-convention.md:66-85). EXTR-11-09 added the detail and page routes
+// below under that same rule: Reader.Detail raises ErrNotFound from detailTx BEFORE the audit
+// recorder runs (reader.go:164-185), so even the 404 arm writes nothing and its transaction
+// rolls back.
+//
+// EXTR12-API-02 is the one exception and it is deliberate: a 201 from the correction POST needs
+// a real job, a real invoice and a real correction row, so it uploads its own document under its
+// own per-run entity, the contract-document-upload.spec.ts idiom. It asserts no count and
+// touches nothing another spec seeded.
 //
 // EXTR-11-09 · REFUSALS ONLY, for both new routes. A 200 from either needs a settled job, which
 // nothing in this layer can produce without breaking the paragraph above -- so the settled-body
 // assertions live in e2e/topology/import-wizard.spec.ts as EXTR11-E2E-04/04b, off the response
 // the SPA itself consumed.
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { ApiError, getExtractionDetail, getExtractions, login, rawFetch, PERSONAS } from './client'
+import {
+  ApiError,
+  apiBase,
+  createEntity,
+  getExtractionDetail,
+  getExtractions,
+  login,
+  rawFetch,
+  PERSONAS,
+  type ExtractionJob,
+} from './client'
 import { assertErrorEnvelope, assertUnauthorizedEnvelope } from './contract-helpers'
+import { freshTin } from './fixtures'
 
 const EXTRACTIONS_PATH = '/api/submission/v1/extractions'
+const UPLOAD_PATH = '/api/submission/v1/documents'
+const IMPORT_DOCUMENT_PATH = '/api/invoice/v1/imports/document'
 
 const detailPath = (id: string) => `${EXTRACTIONS_PATH}/${id}`
 const pagePath = (id: string, n: string) => `${EXTRACTIONS_PATH}/${id}/pages/${n}`
+const correctionPath = (id: string, field: string) => `${EXTRACTIONS_PATH}/${id}/fields/${field}/corrections`
+
+// e2e/ is ESM, so import.meta.url is the only cwd-independent anchor.
+const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')
+const PDF_BYTES = new Uint8Array(readFileSync(PDF_FIXTURE))
+
+// The 201 body's complete key set (CorrectionResponse), sorted. Asserted as a WHOLE: an added
+// omitempty drops a field from the wire without touching one value assertion.
+const CORRECTION_KEYS = ['created_at', 'field_name', 'id', 'invoice_id', 'method', 'region', 'value']
+
+const POLL_BUDGET_MS = 120_000
+const POLL_INTERVAL_MS = 1_000
+const TEST_TIMEOUT_MS = 180_000
+
+// A trailing PDF comment changes the content hash without moving any byte offset, so `startxref`
+// still resolves. Without a fresh hash, per-tenant dedupe reuses the old row and the permanent
+// per-document enqueue key skips the enqueue, so the poll settles on a PREVIOUS run's job.
+function uniquePdf(): Uint8Array<ArrayBuffer> {
+  const marker = new TextEncoder().encode(`%e2e-${crypto.randomUUID()}\n`)
+  const out = new Uint8Array(PDF_BYTES.length + marker.length)
+  out.set(PDF_BYTES, 0)
+  out.set(marker, PDF_BYTES.length)
+  return out
+}
+
+async function asRawResult(res: Response): Promise<{ status: number; body: unknown }> {
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// Never set Content-Type: fetch derives the multipart boundary from the FormData body, so
+// rawFetch (which forces application/json) cannot be used here.
+async function uploadPdf(token: string, label: string): Promise<string> {
+  const form = new FormData()
+  form.set('file', new Blob([uniquePdf()], { type: 'application/pdf' }), 'native_invoice.pdf')
+  const res = await asRawResult(
+    await fetch(`${apiBase()}${UPLOAD_PATH}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    }),
+  )
+  expect(res.status, `${label}: a PDF upload should return 201 (body ${JSON.stringify(res.body)})`).toBe(201)
+  return (res.body as Record<string, unknown>).document_id as string
+}
+
+// Polls to a `succeeded` job, or THROWS. Neither an empty jobs[] nor budget expiry may fall
+// through to a pass: the loop exits by throw and the function returns a JOB, not a boolean.
+async function pollUntilSucceeded(token: string, documentId: string, label: string): Promise<ExtractionJob> {
+  const deadline = Date.now() + POLL_BUDGET_MS
+  let seen = 'nothing observed'
+  for (;;) {
+    const { jobs } = await getExtractions(token, documentId)
+    if (jobs.length > 0) {
+      seen = jobs.map((j) => `${j.id}=${j.state}${j.last_error ? ` last_error=${j.last_error}` : ''}`).join(', ')
+      const dead = jobs.find((j) => j.state === 'dead_lettered')
+      if (dead) throw new Error(`${label}: extraction dead-lettered -- ${seen}`)
+      const succeeded = jobs.find((j) => j.state === 'succeeded')
+      if (succeeded) return succeeded
+    } else {
+      seen = 'jobs: [] (no extraction was ever enqueued for this document)'
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`${label}: no extraction reached "succeeded" within ${POLL_BUDGET_MS} ms -- last seen ${seen}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+  }
+}
 
 // refusalOf(): mirrors isolation.spec.ts's captureRejection — a call that RESOLVES (the wrong
 // outcome for a refusal arm) must fail loudly here, rather than pass silently before the
@@ -210,5 +304,83 @@ test.describe('extraction job reader (API E2E, over the deployed gateway)', () =
     const pageImage = await rawFetch(pagePath(unknownJobId, '1'), { headers: { Authorization: `Bearer ${token}` } })
     assertErrorEnvelope(pageImage, 404, 'unknown job, page route')
     expect(pageImage.body, 'the page route shares the detail route not-found body').toEqual({ error: 'not found' })
+  })
+
+  // --- EXTR-12-04 - the correction POST ---------------------------------------------------
+  //
+  // The registration oracle is the 400, never the 401: the gateway verifier answers 401 before
+  // the router runs, so a 401 says nothing about whether the submission mux carries this pattern
+  // under POST. Nothing in Go reads the mux pattern, so go build, go vet and the whole
+  // internal/extraction suite stay green on a misspelled path or a wrong METHOD.
+
+  test('EXTR12-API-01: the correction route exists behind the gateway', async () => {
+    const token = await login(PERSONAS.A)
+    const unknownJobId = crypto.randomUUID()
+    const authorized = { Authorization: `Bearer ${token}` }
+    const body = { value: '1500.00', method: 'typed' }
+
+    const unauthenticated = await rawFetch(correctionPath(unknownJobId, 'total'), { method: 'POST', headers: {}, body })
+    assertUnauthorizedEnvelope(unauthenticated, 'the correction route with no Authorization header')
+
+    const malformedId = await rawFetch(correctionPath('not-a-uuid', 'total'), { method: 'POST', headers: authorized, body })
+    assertErrorEnvelope(malformedId, 400, 'the correction route with a malformed job id')
+    expect(malformedId.body, 'every {id} route in this service shares one message').toEqual({
+      error: 'id must be a well-formed uuid',
+    })
+
+    // The sharpest oracle for THIS pattern: `POST /v1/extractions/{id}` is not registered at all
+    // and `GET /v1/extractions/{id}` binds a single segment, so neither can answer a
+    // four-segment subpath. A 422 naming the identity fence can only have come from this handler.
+    const locked = await rawFetch(correctionPath(unknownJobId, 'invoice_number'), {
+      method: 'POST',
+      headers: authorized,
+      body,
+    })
+    assertErrorEnvelope(locked, 422, 'a correction on invoice_number')
+    expect(locked.body, 'the locked-field refusal names the identity fence, by name').toEqual({
+      error: 'invoice_number identifies the invoice and is not corrected here',
+    })
+  })
+
+  test('EXTR12-API-02: a correction on a settled job is appended and returned', async () => {
+    test.setTimeout(TEST_TIMEOUT_MS)
+    const token = await login(PERSONAS.A)
+
+    // Its own entity, so the mock extractor's fixed MOCK-INV-0001 cannot collide with another
+    // run and quarantine instead of filing an invoice.
+    const entity = await createEntity(token, { name: `EXTR-12 corr ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadPdf(token, 'EXTR12-API-02')
+    const job = await pollUntilSucceeded(token, documentId, 'EXTR12-API-02')
+
+    const imported = await rawFetch(IMPORT_DOCUMENT_PATH, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { entity_id: entity.id, document_id: documentId },
+    })
+    expect(imported.status, 'EXTR12-API-02: the settled document should import as one batch').toBe(201)
+    expect(
+      (imported.body as Record<string, unknown>).ready_invoices,
+      'EXTR12-API-02: the import must FILE an invoice -- a quarantined row has none to correct',
+    ).toBe(1)
+
+    const res = await rawFetch(correctionPath(job.id, 'total'), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { value: '1500.00', method: 'typed' },
+    })
+
+    expect(res.status, `EXTR12-API-02: a correction should return 201 (body ${JSON.stringify(res.body)})`).toBe(201)
+    const body = res.body as Record<string, unknown>
+    expect(Object.keys(body).sort(), 'EXTR12-API-02: the 201 body is the whole CorrectionResponse').toEqual(
+      CORRECTION_KEYS,
+    )
+    expect(body.field_name, 'EXTR12-API-02: field_name echoes the path segment').toBe('total')
+    expect(body.value, 'EXTR12-API-02: value is what was sent').toBe('1500.00')
+    expect(body.method, 'EXTR12-API-02: method is what was sent').toBe('typed')
+    expect(body.region, 'EXTR12-API-02: a typed correction carries an explicit null region').toBeNull()
+    expect(
+      body.invoice_id,
+      'EXTR12-API-02: invoice_id names the invoice the correction reached, which is the claim the audit row makes',
+    ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   })
 })

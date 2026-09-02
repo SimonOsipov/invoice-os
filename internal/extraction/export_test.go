@@ -4,9 +4,24 @@
 package extraction
 
 import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
+
+// AppendCorrectionForTest and LatestCorrectionsPerFieldForTest hand the external test package
+// the tx-taking halves of the correction record. The exported wrappers they replace opened a
+// db.WithinTenantTx of their own -- the worker posture, on a request-path table -- so each
+// caller now opens its own.
+func AppendCorrectionForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string, c Correction) (Correction, error) {
+	return appendCorrectionTx(ctx, tx, tenantID, jobID, c)
+}
+
+func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, jobID string) ([]Correction, error) {
+	return latestCorrectionsPerFieldTx(ctx, tx, jobID)
+}
 
 // NewExtractArgsForTest builds the args EnqueueTx takes. The return type is river.JobArgs, so
 // the caller never writes the concrete name.

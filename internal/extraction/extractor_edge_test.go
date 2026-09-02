@@ -27,8 +27,8 @@ type outOfTreeExtractor struct{}
 func (outOfTreeExtractor) Name() string    { return "out-of-tree" }
 func (outOfTreeExtractor) Version() string { return "v0" }
 
-func (outOfTreeExtractor) Extract(context.Context, extraction.Document) ([]extraction.Field, error) {
-	return []extraction.Field{}, nil
+func (outOfTreeExtractor) Extract(context.Context, extraction.Document) ([]extraction.FieldResult, error) {
+	return []extraction.FieldResult{}, nil
 }
 
 var _ extraction.Extractor = outOfTreeExtractor{}
@@ -39,7 +39,7 @@ func TestExtractorPortHasExactlyNameVersionExtract(t *testing.T) {
 		errType    = reflect.TypeOf((*error)(nil)).Elem()
 		strType    = reflect.TypeOf("")
 		docType    = reflect.TypeOf(extraction.Document{})
-		fieldsType = reflect.TypeOf([]extraction.Field(nil))
+		fieldsType = reflect.TypeOf([]extraction.FieldResult(nil))
 	)
 
 	// FuncOf builds the exact signature; reflect drops the receiver from an interface method.
@@ -486,4 +486,114 @@ func sortedValues(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// --- EXTR-12-01: the widened seam ----------------------------------------------
+
+// edImpls is the three shipped implementations, each over a substitute reader where it needs
+// one. Named so a fourth implementation has an obvious place to join.
+func edImpls() []struct {
+	name string
+	ext  extraction.Extractor
+} {
+	return []struct {
+		name string
+		ext  extraction.Extractor
+	}{
+		{"MockExtractor", extraction.NewMockExtractor()},
+		{"PDFiumExtractor", extraction.NewPDFiumExtractorWithReaderForTest(&peCountingReader{})},
+		{"DoclingExtractor", extraction.NewDoclingExtractorWithReaderForTest(&deCountingReader{})},
+	}
+}
+
+// TestExtractor_ExtractReturnsFieldResults: AC-1. TestExtractorPortHasExactlyNameVersionExtract
+// pins the interface's own reflected signature; this pins the three implementations against it,
+// and asserts the asFieldResults lift the widening replaced is gone. Go does not flag an unused
+// function, so only a source scan catches one left behind.
+func TestExtractor_ExtractReturnsFieldResults(t *testing.T) {
+	iface := reflect.TypeOf((*extraction.Extractor)(nil)).Elem()
+	want := reflect.TypeOf([]extraction.FieldResult(nil))
+
+	impls := edImpls()
+	if len(impls) != 3 {
+		t.Fatalf("edImpls returned %d implementation(s), want 3; the clauses below would examine less than the shipped set", len(impls))
+	}
+	for _, im := range impls {
+		pt := reflect.TypeOf(im.ext)
+		if pt.Kind() != reflect.Ptr {
+			t.Errorf("%s is %s, want a pointer", im.name, pt.Kind())
+			continue
+		}
+		// Pointer-only receivers, so a copied extractor cannot silently satisfy the seam.
+		if pt.Elem().Implements(iface) {
+			t.Errorf("%s: the VALUE type %s satisfies Extractor too; every method must take a POINTER receiver", im.name, pt.Elem())
+		}
+		m, ok := pt.MethodByName("Extract")
+		if !ok {
+			t.Errorf("%s has no Extract method", im.name)
+			continue
+		}
+		if got := m.Type.Out(0); got != want {
+			t.Errorf("%s.Extract returns %s, want %s", im.name, got, want)
+		}
+	}
+
+	body, err := os.ReadFile("worker.go")
+	if err != nil {
+		t.Fatalf("read worker.go: %v", err)
+	}
+	if len(body) < 5_000 {
+		t.Fatalf("worker.go is %d byte(s), want at least 5000; the scan below would prove nothing about a read that found the wrong file", len(body))
+	}
+	if !strings.Contains(string(body), "flaggedCount(results)") {
+		t.Fatalf("worker.go does not call flaggedCount(results); this scan is no longer reading the success path, so the clause below is vacuous")
+	}
+	if strings.Contains(string(body), "asFieldResults") {
+		t.Errorf("worker.go still names asFieldResults; the widened seam returns []FieldResult, so the rank-0 lift has nothing left to do")
+	}
+}
+
+// TestExtractor_SuccessSliceIsNeverNil: AC-2. Law E04 covers the OUTER slice for each
+// implementation. Nothing covered Alternatives, which the widening added and which marshals to
+// null when nil -- FieldResult declares it without omitempty.
+func TestExtractor_SuccessSliceIsNeverNil(t *testing.T) {
+	doc := extraction.Document{Bytes: []byte("no fixture claims these bytes"), ContentType: "application/pdf"}
+
+	var examined int
+	for _, im := range edImpls() {
+		results, err := im.ext.Extract(context.Background(), doc)
+		if err != nil {
+			t.Errorf("%s: Extract returned the error %v, want a success", im.name, err)
+			continue
+		}
+		if results == nil {
+			t.Errorf("%s: Extract returned a nil []FieldResult alongside a nil error; success is an empty non-nil slice", im.name)
+			continue
+		}
+		for i, r := range results {
+			if r.Alternatives == nil {
+				t.Errorf("%s: result %d (%q) carries a nil Alternatives; a nil []T without omitempty marshals to null", im.name, i, r.Name)
+			}
+			examined++
+		}
+	}
+	// The two reader-backed extractors answer a text-bearing document with an EMPTY slice, so
+	// the Alternatives clause examines nothing for them. The mock's own result is the floor.
+	if examined < 5 {
+		t.Fatalf("the Alternatives clause examined %d result(s), want at least 5; it passed vacuously", examined)
+	}
+
+	// The error arm, same three implementations: an already-cancelled context is the one error
+	// every one of them reaches without a reader double that fails.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, im := range edImpls() {
+		results, err := im.ext.Extract(ctx, doc)
+		if err == nil {
+			t.Errorf("%s: Extract on an already-cancelled context returned no error", im.name)
+		}
+		if results != nil {
+			t.Errorf("%s: Extract returned a non-nil %d-result slice alongside an error; on error the slice is nil", im.name, len(results))
+		}
+	}
 }

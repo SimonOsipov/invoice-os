@@ -46,6 +46,13 @@ func statusForErr(err error) (status int, msg string) {
 	// still a 500 (TestStatusForErr_UnknownErrorIsStill500).
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not found"
+	// The correction route's three domain outcomes (TestStatusForErr_MapsTheThreeInvoiceSentinels).
+	case errors.Is(err, ErrNoInvoiceForDocument):
+		return http.StatusConflict, "no invoice has been filed from this document"
+	case errors.Is(err, ErrInvoiceNotEditable):
+		return http.StatusConflict, "this invoice can no longer be corrected"
+	case errors.Is(err, ErrValueRefused):
+		return http.StatusBadRequest, "the invoice refused this value"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

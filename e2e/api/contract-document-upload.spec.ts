@@ -4,8 +4,10 @@
 // fleet and cannot pass locally.
 //
 // QA disposition A-2: Core AC #9 ("documents extract in parallel") is demonstrated here ONLY as
-// collision-recovery. internal/extraction/mock.go:92-98 stamps MOCK-INV-0001 on every document,
-// so two documents against one entity must collide -- DOCUP-04 proves the loser quarantines as
+// collision-recovery. internal/extraction/mock.go stamps MOCK-INV-0001 on every document --
+// `mockDefaultResult` and the `clean-invoice` fixture alike, held there by
+// TestMockExtractor_InvoiceNumberIsUnchangedAndClean -- so two documents against one entity
+// must collide; DOCUP-04 proves the loser quarantines as
 // a domain 201, not a 500. Independent parallel success needs a non-mock extractor (EXTR-17).
 //
 // Multipart lives in this file, not client.ts: apiFetch and rawFetch both force

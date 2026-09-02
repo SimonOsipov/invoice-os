@@ -47,7 +47,7 @@ func (e *DoclingExtractor) pageReader() PageReader { return e.reader }
 //
 // PagesWithText is read in no branch: the verdict is document-level (D-9), exactly as in
 // PDFiumExtractor.
-func (e *DoclingExtractor) Extract(ctx context.Context, doc Document) ([]Field, error) {
+func (e *DoclingExtractor) Extract(ctx context.Context, doc Document) ([]FieldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (e *DoclingExtractor) Extract(ctx context.Context, doc Document) ([]Field, 
 	}
 
 	if res.TextChars == 0 {
-		return []Field{{Name: doclingTextLayerField, Reason: ReasonUnreadable}}, nil
+		return []FieldResult{{Field: Field{Name: doclingTextLayerField, Reason: ReasonUnreadable}, Alternatives: []Field{}}}, nil
 	}
-	return []Field{}, nil
+	return []FieldResult{}, nil
 }

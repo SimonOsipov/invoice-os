@@ -22,7 +22,7 @@ const peTextLayerField = "document_text_layer"
 
 // --- harness ----------------------------------------------------------------
 
-func peExtract(t *testing.T, name string) []extraction.Field {
+func peExtract(t *testing.T, name string) []extraction.FieldResult {
 	t.Helper()
 
 	fields, err := extraction.NewPDFiumExtractor().Extract(t.Context(), ptDoc(t, name))

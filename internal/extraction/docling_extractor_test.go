@@ -92,8 +92,8 @@ func TestDoclingExtractor_PassesTheContract(t *testing.T) {
 // EXTR-03-06's whole point is that DoclingExtractor passes RunExtractorContract WITHOUT
 // changing it -- a hash drift here means the suite moved, not that DoclingExtractor did.
 var deLockedContractFiles = map[string]string{
-	"contract_test.go":     "1239999a4c35172468cc53a63991b842716e38e115410b17b4ef772e5a570f16",
-	"contract_red_test.go": "6365e4ffd013cf5096cbbd5a0ae8539b63773272074e1c31d89c792307435950",
+	"contract_test.go":     "a3f65a895519acf0078506efb4b4f095c3ffee79c514c5d933a379f4d2b5daa8",
+	"contract_red_test.go": "cade0ce8c31008db557a5b93af5f6cdd371b1c865142e9facd0551d4189d2efd",
 }
 
 // deContractFileMinBytes floors a read: a typo'd path or a truncated file would otherwise

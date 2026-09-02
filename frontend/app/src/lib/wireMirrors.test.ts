@@ -76,9 +76,30 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getAuditLog(',
     floor: 10,
   },
-  // EXTR-11-04 — the review screen's five. One Go file, five distinct anchors, so a
-  // deleted struct cannot be masked by a neighbour's still-present symbol. Each anchor
-  // ends in '(' — without it a renamed getExtractionDetailX still contains the anchor.
+  // EXTR-11-04, plus EXTR-12-02's ExtractionCandidate and EXTR-12-05's ExtractionCorrected —
+  // the review screen's seven. One Go file, distinct anchors, so a deleted struct cannot be
+  // masked by a neighbour's still-present symbol. Each anchor ends in '(' — without it a renamed
+  // getExtractionDetailX still contains the anchor.
+  {
+    ts: 'ExtractionCandidate',
+    go: 'ExtractionCandidate',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func (r *Reader) PageImageKey(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function fetchPageImage(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 2,
+  },
+  {
+    ts: 'ExtractionCorrected',
+    go: 'ExtractionCorrected',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func mergeCorrections(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function highlightStyle(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 3,
+  },
   {
     ts: 'ExtractionDetail',
     go: 'ExtractionDetail',
@@ -117,7 +138,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export function scrollRegionIntoView(',
     e2eAnchor: 'export function getExtractionDetail(',
-    floor: 3,
+    floor: 6,
   },
   {
     ts: 'ExtractionRegion',
@@ -128,6 +149,26 @@ const WIRE_MIRRORS = [
     spaAnchor: 'export function highlightStyle(',
     e2eAnchor: 'export function getExtractionDetail(',
     floor: 5,
+  },
+  {
+    ts: 'CorrectionRequest',
+    go: 'CorrectionRequest',
+    goPath: 'internal/extraction/handlers_correction.go',
+    goAnchor: 'func CorrectionHandler(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postFieldCorrection(',
+    e2eAnchor: 'export function postFieldCorrection(',
+    floor: 4,
+  },
+  {
+    ts: 'CorrectionResponse',
+    go: 'CorrectionResponse',
+    goPath: 'internal/extraction/handlers_correction.go',
+    goAnchor: 'func CorrectionHandler(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postFieldCorrection(',
+    e2eAnchor: 'export function postFieldCorrection(',
+    floor: 7,
   },
 ] as const
 
@@ -235,11 +276,15 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
       'StatusChange',
       'AuditEvent',
+      'ExtractionCandidate',
+      'ExtractionCorrected',
       'ExtractionDetail',
       'ExtractionDocument',
       'ExtractionPage',
       'ExtractionFieldState',
       'ExtractionRegion',
+      'CorrectionRequest',
+      'CorrectionResponse',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -312,5 +357,57 @@ describe('wire mirror: db.NotActiveMemberMessage <-> the SPA <-> e2e/api/suspens
     expect(src, 'tenant.go stopped naming the file that pins its message').toContain(
       'frontend/app/src/lib/wireMirrors.test.ts',
     )
+  })
+})
+
+// EXTR-12-02 — the reason VOCABULARY mirror.
+//
+// WIRE_MIRRORS compares key sets, so it is blind to a type alias: both copies of
+// `ExtractionReason` could name a different five strings and every row above stays green. The
+// Go const block is the source and tracks extraction_field_results_reason_code_check, so a
+// fifth code would otherwise reach a TypeScript union that silently rejects it.
+
+const REASON_GO_PATH = 'internal/extraction/extractor.go'
+const REASON_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
+const REASON_TS_NAME = 'ExtractionReason'
+
+// Every `ReasonX Reason = "..."` in the const block, values only.
+function goReasonValues(source: string): string[] {
+  return [...source.matchAll(/\bReason[A-Za-z]*\s+Reason\s*=\s*"([^"]*)"/g)].map((m) => m[1])
+}
+
+// The single-quoted members of `export type Name = 'a' | 'b'`.
+function tsUnionMembers(source: string, name: string): string[] {
+  const body = new RegExp(`export type\\s+${name}\\s*=([^\\n]*)`).exec(source)?.[1] ?? ''
+  return [...body.matchAll(/'([^']*)'/g)].map((m) => m[1])
+}
+
+describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-12-02)', () => {
+  it('reasonMirror_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
+    // Zero hits must never read as agreement: [] equals [] on the row below.
+    expect(goReasonValues(repoFile(REASON_GO_PATH)), `no Reason const in ${REASON_GO_PATH}`).toHaveLength(5)
+    for (const path of [REASON_SPA_PATH, E2E_CLIENT]) {
+      expect(tsUnionMembers(repoFile(path), REASON_TS_NAME), `no ${REASON_TS_NAME} in ${path}`).toHaveLength(5)
+    }
+  })
+
+  it('reasonMirror_theGoConstsEqualBothTypeScriptUnions', () => {
+    const goValues = [...goReasonValues(repoFile(REASON_GO_PATH))].sort()
+    for (const path of [REASON_SPA_PATH, E2E_CLIENT]) {
+      expect([...tsUnionMembers(repoFile(path), REASON_TS_NAME)].sort(), `${path} ${REASON_TS_NAME}`).toEqual(goValues)
+    }
+    // The empty reason is what a NULL reason_code becomes, and the member a regex over quoted
+    // words drops most easily.
+    expect(goValues, "'' is what a clean field carries").toContain('')
+  })
+
+  it('reasonMirror_plantedPositiveTheExtractorsCanReportARealMismatch', () => {
+    // Synthetic, in-memory only.
+    const goFixture = 'const (\n\tReasonNone Reason = ""\n\tReasonOdd  Reason = "odd"\n)'
+    const tsFixture = "export type R = '' | 'even'\n"
+    expect(goReasonValues(goFixture)).toEqual(['', 'odd'])
+    expect(tsUnionMembers(tsFixture, 'R')).toEqual(['', 'even'])
+    expect(goReasonValues(goFixture)).not.toEqual(tsUnionMembers(tsFixture, 'R'))
+    expect(tsUnionMembers(tsFixture, 'Absent')).toEqual([])
   })
 })

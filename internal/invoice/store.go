@@ -1126,7 +1126,30 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 	const text = "%s = $%d"
 	const numeric = "%s = $%d::text::numeric"
 
-	if in.IssueDate != nil {
+	// The clear sentinels, by pointer identity: NULL through the same placeholder, so a numeric
+	// column takes NULL::text::numeric and needs no second format string. A member holding a
+	// COPY of a sentinel is a caller who dereferenced and re-took an address; it is named here
+	// and refused below rather than writing "" into a numeric column and raising 22P02.
+	var copiedSentinel string
+	put := func(col, placeholder string, p *string) {
+		switch {
+		case p == nil:
+		case p == ClearText:
+			set(col, placeholder, (*string)(nil))
+		case *p == clearText:
+			copiedSentinel = col
+		default:
+			set(col, placeholder, *p)
+		}
+	}
+
+	switch {
+	case in.IssueDate == nil:
+	case in.IssueDate == ClearDate:
+		set("issue_date", text, (*time.Time)(nil))
+	case in.IssueDate.Equal(clearDate):
+		copiedSentinel = "issue_date"
+	default:
 		set("issue_date", text, *in.IssueDate)
 	}
 
@@ -1145,23 +1168,16 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		changedFields = append(changedFields, "supplier_name")
 	}
 
-	if in.BuyerTIN != nil {
-		set("buyer_tin", text, *in.BuyerTIN)
-	}
-	if in.BuyerName != nil {
-		set("buyer_name", text, *in.BuyerName)
-	}
-	if in.Currency != nil {
-		set("currency", text, *in.Currency)
-	}
-	if in.Subtotal != nil {
-		set("subtotal", numeric, *in.Subtotal)
-	}
-	if in.VAT != nil {
-		set("vat", numeric, *in.VAT)
-	}
-	if in.Total != nil {
-		set("total", numeric, *in.Total)
+	put("buyer_tin", text, in.BuyerTIN)
+	put("buyer_name", text, in.BuyerName)
+	put("currency", text, in.Currency)
+	put("subtotal", numeric, in.Subtotal)
+	put("vat", numeric, in.VAT)
+	put("total", numeric, in.Total)
+
+	if copiedSentinel != "" {
+		return Invoice{}, nil, fmt.Errorf(
+			"%w: %s carries a copy of the clear sentinel, not the sentinel itself", ErrValidation, copiedSentinel)
 	}
 
 	args = append(args, id)
@@ -1265,156 +1281,199 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		callerID, _ := auth.IdentityFromContext(ctx)
-
-		// 2. lock+read the full row -- the fingerprint and the fixable-state
-		// guard both need it.
-		var before Invoice
-		if err := scanInvoice(tx.QueryRow(ctx,
-			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
-		), &before); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			if pgCode(err) == "22P02" {
-				return ErrValidation
-			}
-			return err
-		}
-
-		// 3. fixable-state guard -- BEFORE the content write, so it wins over
-		// a malformed numeric ([A8]).
-		if !canEdit(before.Status) {
-			return ErrNotFixable
-		}
-
-		// 4. the locked row's fingerprint, taken before the write.
-		// scanInvoice leaves LineItems nil, so the lines come from an explicit
-		// tx-scoped read ([fingerprint-explicit-lines-param]) -- the invoice
-		// row's FOR UPDATE above already serializes them.
-		beforeLines, err := hydrateLinesTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		preFP := contentFingerprint(before, beforeLines)
-
-		// 5. the header write, shared with Store.Update -- gated on hasHeader
-		// because updateContentTx assumes at least one non-nil field and would
-		// otherwise emit an empty SET clause. A lines-only edit skips it and
-		// carries `before` forward untouched.
-		var after Invoice
-		var changed []string
-		if hasHeader {
-			if after, changed, err = updateContentTx(ctx, tx, id, in.UpdateInput); err != nil {
-				return err
-			}
-		} else {
-			after = before
-		}
-
-		// 5b. the line write -- replace-all, only when an array was actually
-		// sent. afterLines are replaceLinesTx's RETURNING rows, i.e. the lines
-		// as they now stand in the DB; when nothing was written they are
-		// beforeLines, which is then post-write by definition.
-		afterLines := beforeLines
-		if in.LineItems != nil {
-			if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems); err != nil {
-				return err
-			}
-		}
-
-		// 6. DB-authoritative no-op check -- nothing to audit, demote, or
-		// record history for.
-		//
-		// Both arguments must be POST-write. Feeding beforeLines here once Edit
-		// can write lines would be a SILENT bug, not a compile error: a
-		// lines-only edit would hash both sides over the pre-edit lines, come
-		// out equal, take this no-op path, and return with no audit row, no
-		// demotion and no history -- an edit that visibly changed the invoice
-		// reported as a no-op, which is precisely the Core AC 2 compliance hole.
-		// beforeLines is legitimate on this side ONLY through the afterLines
-		// assignment above, in the branch where no line write happened at all.
-		if contentFingerprint(after, afterLines) == preFP {
-			after.LineItems = afterLines
-			inv = after
-			return nil
-		}
-
-		// 6b. [kept-marks-clear-on-edit] (INVCR-01-15, D6, AC #8): a genuine content
-		// change invalidates any recorded keep-as-is reason. Gated on `before` --
-		// the pre-edit, locked row -- actually carrying a mark: the marks can only
-		// ever be set on a draft (invoices_kept_as_is_draft_only), so this never
-		// fires for a validated/rejected `before`, and skipping it for the
-		// overwhelmingly common un-kept case avoids a pointless UPDATE on every
-		// ordinary edit. A standalone statement (not folded into updateContentTx,
-		// which Store.Update also shares and which this story does not touch) so
-		// it applies uniformly whether this edit changed header fields, lines
-		// only, or both -- a lines-only edit never runs updateContentTx at all.
-		// `after` is safe to overwrite here: step 9 re-attaches afterLines LAST
-		// regardless of what happened in between.
-		if before.KeptAsIsAt != nil {
-			if err := scanInvoice(tx.QueryRow(ctx,
-				`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
-				 WHERE id = $1 RETURNING `+invoiceColumns, id,
-			), &after); err != nil {
-				return err
-			}
-		}
-
-		// 7. the content change is real -- audit it. `fields` lists what was
-		// SUBMITTED (updateContentTx's own list), plus "line_items" whenever an
-		// array was sent ([audit-fields-includes-line-items]); a lines-only
-		// edit therefore audits fields: ["line_items"]. Built as a fresh slice
-		// rather than appended in place, so updateContentTx's returned slice is
-		// never aliased -- and so a lines-only edit's nil `changed` marshals as
-		// ["line_items"] rather than the JSON null a nil []string would give.
-		fields := changed
-		if in.LineItems != nil {
-			fields = append(append([]string{}, changed...), "line_items")
-		}
-		// invoice_number is immutable, so before and after agree.
-		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
-			"id":             id,
-			"fields":         fields,
-			"invoice_number": before.InvoiceNumber,
-		}); err != nil {
-			return err
-		}
-
-		// 8. demote whenever the state machine allows before.Status -> draft --
-		// DERIVED from legalTransitions, never a hand-maintained status literal
-		// (AC #11): a future edge that widened canEdit without symmetrically
-		// widening a literal here would let Edit commit on a non-draft invoice
-		// WITHOUT demoting it, a silent Core AC 2 violation. Deliberately not
-		// canEdit(before.Status), which also admits draft -- draft has nothing
-		// to demote from and transitionTx(draft->draft) is ErrIllegalTransition.
-		// A rejected invoice's rejection_reasons are RETAINED across the
-		// demotion (reversed by M5-09-02/task-255, [reason-lifecycle]) -- the
-		// only remaining clear lives in transitionTx, gated on
-		// target == accepted.
-		if canTransition(before.Status, StatusDraft) {
-			if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
-				return err
-			}
-			// 8b. no run outlives the promotion it belonged to (APPR-06-07, D37).
-			// Hooked BELOW step 6's no-op return, so an unchanged edit cancels
-			// nothing (TestEdit_NoOpEditCancelsNothing).
-			if _, err := approval.CancelLiveRunTx(ctx, tx, id, before.InvoiceNumber, callerID.Subject); err != nil {
-				return err
-			}
-		}
-
-		// 9. re-attach the post-write lines LAST: both updateContentTx and
-		// transitionTx return a freshly scanned Invoice and scanInvoice leaves
-		// LineItems nil, so an earlier assignment would be silently dropped.
-		after.LineItems = afterLines
-		inv = after
-		return nil
+		var err error
+		inv, err = editTx(ctx, tx, id, in)
+		return err
 	})
 	if err != nil {
 		return Invoice{}, err
 	}
 	return inv, nil
+}
+
+// editTx is Edit's steps 2-9 on a caller-supplied tx, so a caller that must
+// write something else in the same transaction reuses the fix-loop rules
+// instead of copying them.
+func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, error) {
+	// Step 1's nothing-to-do guard stays with the caller: it must answer before
+	// any tx opens.
+	hasHeader := headerFieldsPresent(in.UpdateInput)
+	callerID, _ := auth.IdentityFromContext(ctx)
+
+	// 2. lock+read the full row -- the fingerprint and the fixable-state
+	// guard both need it.
+	var before Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+	), &before); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return Invoice{}, ErrValidation
+		}
+		return Invoice{}, err
+	}
+
+	// 3. fixable-state guard -- BEFORE the content write, so it wins over
+	// a malformed numeric ([A8]).
+	if !canEdit(before.Status) {
+		return Invoice{}, ErrNotFixable
+	}
+
+	// 4. the locked row's fingerprint, taken before the write.
+	// scanInvoice leaves LineItems nil, so the lines come from an explicit
+	// tx-scoped read ([fingerprint-explicit-lines-param]) -- the invoice
+	// row's FOR UPDATE above already serializes them.
+	beforeLines, err := hydrateLinesTx(ctx, tx, id)
+	if err != nil {
+		return Invoice{}, err
+	}
+	preFP := contentFingerprint(before, beforeLines)
+
+	// 5. the header write, shared with Store.Update -- gated on hasHeader
+	// because updateContentTx assumes at least one non-nil field and would
+	// otherwise emit an empty SET clause. A lines-only edit skips it and
+	// carries `before` forward untouched.
+	var after Invoice
+	var changed []string
+	if hasHeader {
+		if after, changed, err = updateContentTx(ctx, tx, id, in.UpdateInput); err != nil {
+			return Invoice{}, err
+		}
+	} else {
+		after = before
+	}
+
+	// 5b. the line write -- replace-all, only when an array was actually
+	// sent. afterLines are replaceLinesTx's RETURNING rows, i.e. the lines
+	// as they now stand in the DB; when nothing was written they are
+	// beforeLines, which is then post-write by definition.
+	afterLines := beforeLines
+	if in.LineItems != nil {
+		if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems); err != nil {
+			return Invoice{}, err
+		}
+	}
+
+	// 6. DB-authoritative no-op check -- nothing to audit, demote, or
+	// record history for.
+	//
+	// Both arguments must be POST-write. Feeding beforeLines here once Edit
+	// can write lines would be a SILENT bug, not a compile error: a
+	// lines-only edit would hash both sides over the pre-edit lines, come
+	// out equal, take this no-op path, and return with no audit row, no
+	// demotion and no history -- an edit that visibly changed the invoice
+	// reported as a no-op, which is precisely the Core AC 2 compliance hole.
+	// beforeLines is legitimate on this side ONLY through the afterLines
+	// assignment above, in the branch where no line write happened at all.
+	if contentFingerprint(after, afterLines) == preFP {
+		after.LineItems = afterLines
+		return after, nil
+	}
+
+	// 6b. [kept-marks-clear-on-edit] (INVCR-01-15, D6, AC #8): a genuine content
+	// change invalidates any recorded keep-as-is reason. Gated on `before` --
+	// the pre-edit, locked row -- actually carrying a mark: the marks can only
+	// ever be set on a draft (invoices_kept_as_is_draft_only), so this never
+	// fires for a validated/rejected `before`, and skipping it for the
+	// overwhelmingly common un-kept case avoids a pointless UPDATE on every
+	// ordinary edit. A standalone statement (not folded into updateContentTx,
+	// which Store.Update also shares and which this story does not touch) so
+	// it applies uniformly whether this edit changed header fields, lines
+	// only, or both -- a lines-only edit never runs updateContentTx at all.
+	// `after` is safe to overwrite here: step 9 re-attaches afterLines LAST
+	// regardless of what happened in between.
+	if before.KeptAsIsAt != nil {
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+			 WHERE id = $1 RETURNING `+invoiceColumns, id,
+		), &after); err != nil {
+			return Invoice{}, err
+		}
+	}
+
+	// 7. the content change is real -- audit it. `fields` lists what was
+	// SUBMITTED (updateContentTx's own list), plus "line_items" whenever an
+	// array was sent ([audit-fields-includes-line-items]); a lines-only
+	// edit therefore audits fields: ["line_items"]. Built as a fresh slice
+	// rather than appended in place, so updateContentTx's returned slice is
+	// never aliased -- and so a lines-only edit's nil `changed` marshals as
+	// ["line_items"] rather than the JSON null a nil []string would give.
+	fields := changed
+	if in.LineItems != nil {
+		fields = append(append([]string{}, changed...), "line_items")
+	}
+	// invoice_number is immutable, so before and after agree.
+	if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
+		"id":             id,
+		"fields":         fields,
+		"invoice_number": before.InvoiceNumber,
+	}); err != nil {
+		return Invoice{}, err
+	}
+
+	// 8. demote whenever the state machine allows before.Status -> draft --
+	// DERIVED from legalTransitions, never a hand-maintained status literal
+	// (AC #11): a future edge that widened canEdit without symmetrically
+	// widening a literal here would let Edit commit on a non-draft invoice
+	// WITHOUT demoting it, a silent Core AC 2 violation. Deliberately not
+	// canEdit(before.Status), which also admits draft -- draft has nothing
+	// to demote from and transitionTx(draft->draft) is ErrIllegalTransition.
+	// A rejected invoice's rejection_reasons are RETAINED across the
+	// demotion (reversed by M5-09-02/task-255, [reason-lifecycle]) -- the
+	// only remaining clear lives in transitionTx, gated on
+	// target == accepted.
+	if canTransition(before.Status, StatusDraft) {
+		if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
+			return Invoice{}, err
+		}
+		// 8b. no run outlives the promotion it belonged to (APPR-06-07, D37).
+		// Hooked BELOW step 6's no-op return, so an unchanged edit cancels
+		// nothing (TestEdit_NoOpEditCancelsNothing).
+		if _, err := approval.CancelLiveRunTx(ctx, tx, id, before.InvoiceNumber, callerID.Subject); err != nil {
+			return Invoice{}, err
+		}
+	}
+
+	// 9. re-attach the post-write lines LAST: both updateContentTx and
+	// transitionTx return a freshly scanned Invoice and scanInvoice leaves
+	// LineItems nil, so an earlier assignment would be silently dropped.
+	after.LineItems = afterLines
+	return after, nil
+}
+
+// EditBySourceDocumentTx applies one edit to the invoice filed from documentID, on the
+// caller's transaction. Same gate, demotion and audit as Edit -- one owner, not a second
+// copy of the fix-loop rules.
+//
+// Two invoices on one document is an AMBIGUOUS target and answers ErrNotFound rather than
+// picking a row: the corrected value landing on the wrong invoice is the silent-wrong
+// outcome this entry exists to prevent.
+func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentID string, in EditInput) (Invoice, error) {
+	// editTx does not carry Edit's step-1 guard: handed an all-nil EditInput it falls
+	// through to the fingerprint check and returns `before` with no audit row and no
+	// demotion (TestRLS_EditBySourceDocumentTxRefusesAnEmptyEdit).
+	if !headerFieldsPresent(in.UpdateInput) && in.LineItems == nil {
+		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+
+	// LIMIT 2 is all the resolution needs: none, one, or more than one.
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 2`,
+		documentID)
+	if err != nil {
+		return Invoice{}, err
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return Invoice{}, err
+	}
+	if len(ids) != 1 {
+		return Invoice{}, ErrNotFound
+	}
+
+	return editTx(ctx, tx, ids[0], in)
 }
 
 // legalTransitions is the SINGLE source of truth for the invoice lifecycle

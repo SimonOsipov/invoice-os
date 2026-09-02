@@ -1070,10 +1070,26 @@ export interface ExtractionPage {
   height_px: number
 }
 
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+
+export interface ExtractionCandidate {
+  value: string | null
+  region: ExtractionRegion | null
+}
+
+export interface ExtractionCorrected {
+  method: CorrectionMethod
+  was: string | null
+  where: string | null
+}
+
 export interface ExtractionFieldState {
   name: string
   value: string | null
   region: ExtractionRegion | null
+  reason: ExtractionReason
+  alternatives: ExtractionCandidate[]
+  corrected: ExtractionCorrected | null
 }
 
 export interface ExtractionDocument {
@@ -1096,5 +1112,39 @@ export function getExtractionDetail(token: string, jobId: string): Promise<Extra
   return apiFetch<ExtractionDetail>(
     `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}`,
     { token },
+  )
+}
+
+// EXTR-12: POST /v1/extractions/{id}/fields/{name}/corrections -- one human correction.
+// Mirrored key-for-key from internal/extraction/handlers_correction.go; wireMirrors.test.ts
+// fails if this side or frontend/app/src/lib/extractionReview.ts gains or loses a key.
+export type CorrectionMethod = 'typed' | 'chosen' | 'pointed' | 'undone'
+
+export interface CorrectionResponse {
+  id: string
+  field_name: string
+  value: string
+  method: CorrectionMethod
+  region: ExtractionRegion | null
+  invoice_id: string
+  created_at: string
+}
+
+export interface CorrectionRequest {
+  value: string
+  method: CorrectionMethod
+  region?: ExtractionRegion | null
+  anchor_label?: string
+}
+
+export function postFieldCorrection(
+  token: string,
+  jobId: string,
+  field: string,
+  body: CorrectionRequest,
+): Promise<CorrectionResponse> {
+  return apiFetch<CorrectionResponse>(
+    `${apiBase()}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/fields/${encodeURIComponent(field)}/corrections`,
+    { token, method: 'POST', body },
   )
 }

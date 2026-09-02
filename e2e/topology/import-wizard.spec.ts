@@ -5518,10 +5518,11 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 //                           which strengthens its own precondition rather than changing it.
 //
 // TWO GAPS this subtask does NOT close, named so they are not mistaken for coverage:
-//   1. An extraction with NO lines (`line-item-empty`) has no deployed subject. The mock keys
-//      its fixtures by SHA-256 and `uniquePdfBytes()` mints a fresh hash per upload, so every
-//      deployed run resolves to `mockDefaultResult`, which always carries four lines. The empty
-//      state's oracle is LineItemGrid.test.tsx and it stays there.
+//   1. The EXTRACTION-FOUND-NOTHING path has no deployed subject: the mock keys its fixtures by
+//      SHA-256 and `uniquePdfBytes()` mints a fresh hash per upload, so every deployed run
+//      resolves to `mockDefaultResult`, which always carries four lines. This is a gap in how
+//      the panel is REACHED, not in the panel. The panel itself is deployed-covered by
+//      EXTR13-E2E-02 below, which removes every row to reach the same single branch.
 //   2. `extraction-write-error` still has no deployed coverage (jsdom only) -- unchanged from
 //      EXTR-12, and not this story's to close.
 
@@ -5568,6 +5569,19 @@ function wireRowState(row: WireLine): 'ok' | 'flagged' | 'unchecked' {
   const t = decimalOf(row.cells.line_total?.value)
   if (q === null || p === null || t === null) return 'unchecked'
   return Math.abs(q * p - t) > 0.01 + 1e-9 ? 'flagged' : 'ok'
+}
+
+/** Every rendered cell value, by ordinal then role, as the grid holds it right now. */
+async function gridValues(page: Page, rowCount: number): Promise<Record<LineRoleName, string>[]> {
+  const out: Record<LineRoleName, string>[] = []
+  for (let n = 1; n <= rowCount; n += 1) {
+    const row = {} as Record<LineRoleName, string>
+    for (const role of LINE_ROLE_NAMES) {
+      row[role] = await page.getByTestId(`line-item-input-${n}-${role}`).inputValue()
+    }
+    out.push(row)
+  }
+  return out
 }
 
 /** The rendered ordinals of a `line-item-*` namespace, ascending. */
@@ -5911,6 +5925,165 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
       null,
       2,
     ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR13-E2E-02 · the columns E2E-01 leaves untouched, and the empty panel -------------
+//
+// Its own upload, because E2E-01 ends on a Save and a reopen: an edit added after that point
+// could not be restored, and one added before it would move the set that Save posts. Nothing
+// here saves, so every gesture below is free to leave the draft where it lands.
+
+test('EXTR13-E2E-02 (Core AC 2, 7, 8): every column selector, both untyped columns, and the empty panel', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { lines } = await openLineGrid(page, 'EXTR-13-13 columns and empty')
+  const rowCount = lines.length
+
+  // -- 1. all four column selectors render, each reading its own column ----------------------
+  // E2E-01 drives `line-item-role-quantity` alone, so a grid that shipped one selector passes it.
+  for (const role of LINE_ROLE_NAMES) {
+    const select = page.getByTestId(`line-item-role-${role}`)
+    await expect(select, `the ${role} column carries no role selector`).toBeVisible()
+    await expect(select, `the ${role} selector does not read its own column`).toHaveValue(role)
+    await expect(select, `the ${role} selector is not operable`).toBeEnabled()
+  }
+
+  // -- 2. each of the four is individually operable, and moves only its own pair -------------
+  // Expectations are read off the grid immediately before each swap rather than off the wire,
+  // so a later pair is measured against what the earlier ones actually left on screen.
+  const pairs: [LineRoleName, LineRoleName][] = [
+    ['description', 'quantity'],
+    ['quantity', 'unit_price'],
+    ['unit_price', 'line_total'],
+    ['line_total', 'description'],
+  ]
+  for (const [driver, partner] of pairs) {
+    const before = await gridValues(page, rowCount)
+    expect(
+      before.filter((row) => row[driver] !== row[partner]).length,
+      `no row holds different values in ${driver} and ${partner} -- a swap could not be observed`,
+    ).toBeGreaterThanOrEqual(1)
+
+    await page.getByTestId(`line-item-role-${driver}`).selectOption(partner)
+    const after = await gridValues(page, rowCount)
+    for (let i = 0; i < before.length; i += 1) {
+      const n = i + 1
+      expect(after[i][driver], `row ${n}'s ${driver} column did not take the ${partner}`).toBe(before[i][partner])
+      expect(after[i][partner], `row ${n}'s ${partner} column did not take the ${driver}`).toBe(before[i][driver])
+      for (const other of LINE_ROLE_NAMES) {
+        if (other === driver || other === partner) continue
+        expect(after[i][other], `the ${driver} remap disturbed row ${n}'s ${other} column`).toBe(before[i][other])
+      }
+    }
+
+    // The selector always reads its OWN column's role, so the same choice repeats the swap.
+    await page.getByTestId(`line-item-role-${driver}`).selectOption(partner)
+    expect(await gridValues(page, rowCount), `the ${driver} remap is not its own inverse`).toEqual(before)
+  }
+
+  // -- 3. the two columns E2E-01 never types into --------------------------------------------
+  const settled = lines.map((row, i) => ({ n: i + 1, row })).filter(({ row }) => wireRowState(row) === 'ok')
+  expect(
+    settled.length,
+    'no row on this document settles, so there is no row a keystroke can be shown to break',
+  ).toBeGreaterThanOrEqual(1)
+  const { n: settledN, row: settledRow } = settled[0]
+  await expect(
+    page.getByTestId(`line-item-flag-${settledN}`),
+    `the BEFORE arm: row ${settledN} settles on the wire and must start unflagged`,
+  ).toHaveCount(0)
+
+  const typed = 'Rebar, 12mm, cut to length'
+  expect(
+    settledRow.cells.description?.value,
+    'this row already holds the description about to be typed, so the edit moves nothing',
+  ).not.toBe(typed)
+  const descriptionInput = page.getByTestId(`line-item-input-${settledN}-description`)
+  await descriptionInput.fill(typed)
+  await descriptionInput.press('Tab')
+  await expect(descriptionInput, 'the description column took no keystroke').toHaveValue(typed)
+  await expect(
+    page.getByTestId(`line-item-marker-${settledN}-description`),
+    'the typed description shows no changed marker',
+  ).toBeVisible()
+  await expect(
+    page.getByTestId(`line-item-flag-${settledN}`),
+    'a description edit moved the row arithmetic',
+  ).toHaveCount(0)
+
+  // The auto-derive arm: a grid deriving line_total from quantity x unit price would rewrite
+  // this row's total to match and never flag it.
+  const q = decimalOf(settledRow.cells.quantity?.value) as number
+  const documentTotal = settledRow.cells.line_total?.value as string
+  const brokenPrice = ((decimalOf(settledRow.cells.unit_price?.value) as number) + 1000).toFixed(2)
+  expect(
+    Math.abs(q * Number(brokenPrice) - (decimalOf(documentTotal) as number)),
+    `row ${settledN} still settles at a unit price of ${brokenPrice} -- the flag below would never appear`,
+  ).toBeGreaterThan(0.01 + 1e-9)
+
+  const priceInput = page.getByTestId(`line-item-input-${settledN}-unit_price`)
+  await priceInput.fill(brokenPrice)
+  await priceInput.press('Tab')
+  await expect(priceInput, 'the unit-price column took no keystroke').toHaveValue(brokenPrice)
+  await expect(
+    page.getByTestId(`line-item-flag-${settledN}`),
+    'the unit-price keystroke did not recompute the row flag',
+  ).toBeVisible()
+  await expect(
+    page.getByTestId(`line-item-input-${settledN}-line_total`),
+    'the grid derived the line total from quantity x unit price instead of keeping what the document read',
+  ).toHaveValue(documentTotal)
+
+  // -- 4. removing every line lands on the empty panel ----------------------------------------
+  await expect(
+    page.getByTestId('line-item-empty'),
+    'the empty panel showed while the document lines were still on screen',
+  ).toHaveCount(0)
+  for (let left = rowCount; left > 0; left -= 1) {
+    await page.getByTestId('line-item-remove-1').click()
+    await expect(
+      page.locator('[data-testid^="line-item-row-"]'),
+      `removing the first of ${left} rows left the row count where it was`,
+    ).toHaveCount(left - 1)
+  }
+
+  const empty = page.getByTestId('line-item-empty')
+  await expect(empty, 'a grid holding no row renders no panel at all').toBeVisible()
+  await expect(empty, 'the panel does not say the document carries no lines').toContainText(
+    'We found no line items on this document.',
+  )
+  await expect(empty, 'the panel does not say what an empty grid costs').toContainText(
+    'An invoice cannot be filed until it has at least one line, so add one here.',
+  )
+  await expect(
+    page.getByTestId('line-item-grid').locator('table'),
+    'an empty table survived the last removal',
+  ).toHaveCount(0)
+  await expect(page.getByTestId('line-item-sum'), 'a grid holding no line still states a sum').toHaveCount(0)
+
+  // Not a dead end: the panel's own Add is the way back to a fileable invoice.
+  await page.getByTestId('line-item-add').click()
+  await expect(
+    page.locator('[data-testid^="line-item-row-"]'),
+    'Add from the empty panel produced no row',
+  ).toHaveCount(1)
+  await expect(page.getByTestId('line-item-empty'), 'the panel outlived the row it asked for').toHaveCount(0)
+  for (const role of LINE_ROLE_NAMES) {
+    await expect(
+      page.getByTestId(`line-item-input-1-${role}`),
+      `the added row's ${role} is not a blank, editable cell`,
+    ).toHaveValue('')
+  }
+
+  await testInfo.attach('extraction-line-columns-and-empty.json', {
+    body: JSON.stringify({ rowCount, settledN, typed, brokenPrice, documentTotal }, null, 2),
     contentType: 'application/json',
   })
 

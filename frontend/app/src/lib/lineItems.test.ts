@@ -465,6 +465,23 @@ describe('lineSetChanged', () => {
   })
 })
 
+// -- the arity pin: four roles, in extraction.LineRoles' own order -------------------------
+
+describe('LINE_ROLES', () => {
+  it('holds exactly the four roles, in order', () => {
+    // Every `for (const role of LINE_ROLES)` in this file and in LineItemGrid.test.tsx is
+    // bounded by this set, so a shortened one would make them all assert less and still pass.
+    // Go pins its own side in lineitems_parse_qa_test.go.
+    expect(LINE_ROLES.length, 'a loop over LINE_ROLES asserts less than it claims to').toBe(4)
+    expect([...LINE_ROLES], "the order diverged from extraction.LineRoles").toEqual([
+      'description',
+      'quantity',
+      'unit_price',
+      'line_total',
+    ])
+  })
+})
+
 // -- the drift guard: LINE_TOLERANCE mirrors reconcile.go's own literal --------------------
 
 describe("LINE_TOLERANCE equals reconcile.go's reconcileTolerance literal", () => {

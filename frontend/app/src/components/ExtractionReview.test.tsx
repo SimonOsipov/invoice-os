@@ -2253,4 +2253,30 @@ describe('the line draft and the widened Save', () => {
     expect(scrollToSpy, 'a second click on the selected line cell did not re-centre it').toHaveBeenCalledTimes(2)
     expect(highlights(), 'the second click cleared the line cell’s highlight').toHaveLength(1)
   })
+
+  it('moves the table-level sum statement when the header subtotal is drafted', async () => {
+    // The grid takes its printed subtotal off the DRAFTED header, not the wire
+    // (ExtractionFields.tsx). Nothing read that wire, so a grid handed the wire's own subtotal
+    // passed every row above.
+    render(review({ ctx: serving(LINE_JOB).ctx }))
+    await flush()
+
+    // The floor: LINE_JOB's two lines add to 25.00 against a printed 20.00, so the statement
+    // is already on screen and the arms below are not comparing two absences.
+    const stated = (): string | null => screen.queryByTestId('line-item-sum')?.textContent ?? null
+    expect(stated(), 'the disagreeing fixture states no sum -- every arm below is vacuous').toContain('25.00')
+    expect(stated(), 'the statement does not carry the printed subtotal').toContain('20.00')
+
+    fireEvent.change(inputOf('subtotal') as HTMLInputElement, { target: { value: '30.00' } })
+    await flush()
+
+    expect(stated(), 'the drafted subtotal did not reach the statement').toContain('30.00')
+    expect(stated(), "the statement still quotes the wire's subtotal after it was typed over").not.toContain('20.00')
+    expect(stated(), 'the summed figure moved when only the printed one was drafted').toContain('25.00')
+
+    fireEvent.change(inputOf('subtotal') as HTMLInputElement, { target: { value: '25.00' } })
+    await flush()
+
+    expect(screen.queryByTestId('line-item-sum'), 'a subtotal drafted into agreement still shouts').toBeNull()
+  })
 })

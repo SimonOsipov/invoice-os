@@ -593,6 +593,112 @@ describe('QA-A5 the sum line over an added row', () => {
   })
 })
 
+describe('QA-A6 every column takes an edit, and only what depends on it moves', () => {
+  it('takes a typed description without disturbing the row it belongs to', () => {
+    const rows = [mkRow(1), mkRow(2)]
+    render(<Harness initial={rows} />)
+    expect(rowsOf().length, 'two rows must render before the sibling check means anything').toBe(2)
+    expect(flagAt(1), 'row 1 starts flagged -- the absence below would be vacuous').toBeNull()
+
+    fireEvent.change(inputAt(1, 'description'), { target: { value: 'Rebar, 12mm' } })
+
+    expect(inputAt(1, 'description').value, 'the description column took no keystroke').toBe('Rebar, 12mm')
+    expect(markerAt(1, 'description'), 'the edited description shows no changed marker').toBeTruthy()
+    expect(flagAt(1), 'a description edit moved the row arithmetic').toBeNull()
+    expect(inputAt(2, 'description').value, "the sibling row's description moved too").toBe('Widget')
+  })
+
+  it('recomputes the row flag on a unit-price keystroke, and leaves the line total as typed', () => {
+    // The auto-derive arm: a build deriving line_total from quantity x unit price rewrites
+    // 200.00 to 900.00 here and never flags the row, and nothing else told the two apart.
+    const rows = [mkRow(1)] // 2 * 100.00 = 200.00, clean
+    render(<Harness initial={rows} />)
+    expect(flagAt(1), 'the BEFORE arm: the row must start clean').toBeNull()
+
+    fireEvent.change(inputAt(1, 'unit_price'), { target: { value: '450.00' } })
+
+    expect(inputAt(1, 'unit_price').value, 'the unit-price column took no keystroke').toBe('450.00')
+    expect(flagAt(1), 'the AFTER arm: the unit-price keystroke did not recompute the flag').toBeTruthy()
+    expect(inputAt(1, 'line_total').value, 'the grid derived line_total from quantity x unit price').toBe('200.00')
+    expect(markerAt(1, 'line_total'), 'a cell nobody typed into is marked as corrected').toBeNull()
+  })
+
+  it('keeps a typed line total that disagrees with quantity x unit price, across the blur', () => {
+    // The inverse build snaps a typed total back to the derived figure, and would most
+    // plausibly do it on commit, so the blur is fired before the value is read.
+    const rows = [mkRow(1)]
+    render(<Harness initial={rows} subtotal="200.00" />)
+    expect(screen.queryByTestId('line-item-sum'), 'the floor: an agreeing sum says nothing').toBeNull()
+
+    fireEvent.change(inputAt(1, 'line_total'), { target: { value: '999.00' } })
+    fireEvent.blur(inputAt(1, 'line_total'))
+
+    expect(inputAt(1, 'line_total').value, 'the typed total snapped back to quantity x unit price').toBe('999.00')
+    expect(flagAt(1), 'the typed total disagrees with its own row and carries no flag').toBeTruthy()
+    const sum = screen.getByTestId('line-item-sum')
+    expect(sum.textContent, 'the table-level sum did not follow the typed total').toContain('999.00')
+    expect(sum.textContent, 'the printed subtotal is missing').toContain('200.00')
+  })
+})
+
+describe('QA-A7 all four column selectors', () => {
+  it('renders one per role, each holding its own role and offering all four', () => {
+    // T8 and QA-A1 drive `line-item-role-quantity` alone, so a grid that shipped a single
+    // selector passes both.
+    expect(LINE_ROLES.length, 'the sweep below is bounded by LINE_ROLES').toBe(4)
+    const rows = [mkRow(1)]
+    render(itemGrid({ rows, wireRows: rows }))
+
+    for (const role of LINE_ROLES) {
+      const select = roleSelect(role) as HTMLSelectElement
+      expect(select.tagName, `the ${role} column heading is not a selector`).toBe('SELECT')
+      expect(select.value, `the ${role} selector does not read its own column`).toBe(role)
+      expect(select.disabled, `the ${role} selector is not operable`).toBe(false)
+      expect(
+        Array.from(select.options).map((o) => o.value),
+        `the ${role} selector does not offer every role to remap to`,
+      ).toEqual([...LINE_ROLES])
+    }
+  })
+
+  it('is individually operable at each of the four, moving only its own pair', () => {
+    const row = mkRow(5, { description: 'Widget', quantity: '7', unit_price: '100.00', line_total: '700.00' })
+    render(<Harness initial={[row]} />)
+
+    const before = Object.fromEntries(LINE_ROLES.map((role) => [role, inputAt(1, role).value])) as Record<
+      LineRole,
+      string
+    >
+    expect(
+      new Set(Object.values(before)).size,
+      'the fixture ties two columns -- a tie cannot tell a swap from a no-op',
+    ).toBe(LINE_ROLES.length)
+
+    const pairs: [LineRole, LineRole][] = [
+      ['description', 'quantity'],
+      ['quantity', 'unit_price'],
+      ['unit_price', 'line_total'],
+      ['line_total', 'description'],
+    ]
+    for (const [driver, partner] of pairs) {
+      fireEvent.change(roleSelect(driver), { target: { value: partner } })
+
+      expect(inputAt(1, driver).value, `the ${driver} selector moved nothing into its own column`).toBe(before[partner])
+      expect(inputAt(1, partner).value, `the ${driver} selector left its partner column behind`).toBe(before[driver])
+      for (const other of LINE_ROLES) {
+        if (other === driver || other === partner) continue
+        expect(inputAt(1, other).value, `the ${driver} remap disturbed the ${other} column`).toBe(before[other])
+      }
+
+      // The selector always reads its OWN column's role, so the same choice repeats the swap.
+      fireEvent.change(roleSelect(driver), { target: { value: partner } })
+      for (const role of LINE_ROLES) {
+        expect(inputAt(1, role).value, `the ${driver} remap is not its own inverse at ${role}`).toBe(before[role])
+      }
+    }
+  })
+})
+
 // ==========================================================================================
 // QA-DEFECT-01 (Stage 4). RED: the changed marker compares a draft row to its POSITIONAL wire
 // counterpart, so a removal shifts every later row onto the wrong wire row. LineRow.key is

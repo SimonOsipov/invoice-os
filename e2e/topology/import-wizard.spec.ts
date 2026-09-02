@@ -5838,13 +5838,11 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
     'the total that was corrected is not in the set the server wrote',
   ).toContain(settledTotal)
 
-  // The server's own values, read back: the line set lands on the `line_items` BLOCK row as one
-  // canonical-JSON correction (handlers_lineitems.go:169-181). The per-cell
-  // `line_items[N].role` readings stay the extractor's, so this -- not the grid's cells -- is
-  // where a deployed re-read shows what was persisted. ExtractionReview.test.tsx's T10 asserts
-  // the grid lands the server's re-read line values, which in jsdom means a fixture that
-  // rewrites those per-cell fields; the deployed route does not rewrite them, so no assertion
-  // here claims the corrected cell survives the re-read.
+  // The server's own values, read back. The line set lands on the `line_items` BLOCK row as one
+  // canonical-JSON correction (handlers_lineitems.go:169-181), and the reader projects that row
+  // onto the per-cell `line_items[N].role` readings, which no correction ever names directly
+  // (expandLineCorrection, internal/extraction/reader.go). The block row is where the write's
+  // own record is checked, below; the cells it projects onto are what the reopen reads.
   const fresh = (await reread.json()) as ExtractionDetail
   const block = fresh.fields.find((f) => f.name === 'line_items')
   expect(block, 'the re-read carries no line_items block row -- the correction had nothing to land on').toBeTruthy()
@@ -5858,21 +5856,46 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
   await expect(page.getByTestId('extraction-write-error'), 'the Save reported an error').toHaveCount(0)
   await expect(save, 'a committed Save left something still to save').toBeDisabled()
 
-  // EXTR-13-10, AUTHORED BUT NOT EXECUTED as part of this RED submission (no deployed backend in
-  // this worktree). The defect this closes: a saved line correction snapped back to the
-  // extractor's own reading on every reopen, not just the Save's own re-read above. A real
-  // reload is what a reopen actually is -- the reread JSON checked above proves the write
-  // happened, never that a fresh page shows it.
-  const [reopened] = await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.request().method() === 'GET' &&
-        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
-      { timeout: 120_000 },
-    ),
-    page.reload(),
-  ])
-  expect(reopened.status(), 'the reopened review failed to re-read its detail').toBe(200)
+  // The reopen, and the defect it closes: a saved line correction snapped back to the
+  // extractor's own reading on every reopen. The re-read JSON above proves the write happened,
+  // never that a fresh mount shows it.
+  //
+  // NOT a reload. The screen has no URL of its own -- App.tsx renders it while
+  // `view === 'extraction'` off a jobId in component state, and nothing puts that jobId in the
+  // hash -- so a reload lands on the default view and re-requests no detail. Sidebar out,
+  // entry control back in, which unmounts ExtractionReview and drops the draft it held.
+  //
+  // Nav idiom: invoice-surfaces.spec.ts's goToInvoices/openInvoiceRow. The row is taken by
+  // count -- this entity was created for this run and the list is narrowed to it server-side --
+  // so a second row fails here rather than opening some other invoice.
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
+  await expect(page.getByTestId('invoices-list'), 'the sidebar nav did not land on the invoices list').toBeVisible({
+    timeout: 60_000,
+  })
+  await expect(
+    page.getByTestId('extraction-review'),
+    'the review screen is still mounted, so what follows is not a reopen',
+  ).toHaveCount(0)
+  const invoiceRows = page.getByTestId('invoice-row')
+  await expect(
+    invoiceRows,
+    'this entity was created for this run and holds exactly the one imported invoice',
+  ).toHaveCount(1)
+  await invoiceRows.click()
+  await expect(page.getByTestId('invoice-detail'), 'the row did not open the live invoice detail').toBeVisible({
+    timeout: 60_000,
+  })
+
+  // The same entry control every spec in this section opens the screen with.
+  const reopened = await openExtractionReview(page)
+  const savedCell = flaggedRow.cells.line_total as WireLineCell
+  const reopenedCell = reopened.fields.find((f) => f.name === savedCell.name)
+  expect(reopenedCell, `the reopened detail carries no ${savedCell.name} reading at all`).toBeTruthy()
+  expect(
+    reopenedCell!.value,
+    `${savedCell.name} came back from a fresh read as the extractor's own reading ` +
+      `(${savedCell.value}) instead of the saved ${settledTotal}`,
+  ).toBe(settledTotal)
   await expect(page.getByTestId('line-item-grid'), 'the reopened page rendered no line-item grid').toBeVisible({
     timeout: 30_000,
   })

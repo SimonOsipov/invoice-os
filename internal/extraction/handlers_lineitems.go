@@ -1,9 +1,5 @@
-// handlers_lineitems.go: POST /v1/extractions/{id}/line-items -- one transaction that replaces
-// the whole line set of the invoice filed from the job's document, appends a "line_items"
-// correction row, and audits the pair. Declarations only until the write lands.
-//
-// msgMalformedJobID and msgInvalidBody are handlers_correction.go's own; this route reuses them
-// rather than retyping the same sentence under a second constant.
+// handlers_lineitems.go: POST /v1/extractions/{id}/line-items -- one transaction replacing an
+// invoice's line set. Declarations only until the write lands.
 package extraction
 
 import (

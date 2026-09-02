@@ -9,7 +9,12 @@ package extraction_test
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -197,5 +202,69 @@ func TestPDFiumExtractor_OnlyThePointerSatisfiesExtractor(t *testing.T) {
 	}
 	if val := ptr.Elem(); val.Implements(iface) {
 		t.Errorf("the VALUE type %s satisfies Extractor too; every method must take a POINTER receiver, or a copied PDFiumExtractor silently satisfies the seam", val)
+	}
+}
+
+// --- EXTR-13-02 (Mode A, RED-FIRST): the boundary the mock's new line items must not cross --
+
+const pdfiumExtractorFile = "pdfium_extractor.go"
+
+// peFieldNameLiteralRE mirrors deFieldNameLiteralRE (docling_extractor_test.go): a snake_case
+// identifier shape, lowercase, digits and underscores, at least one underscore.
+var peFieldNameLiteralRE = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)+$`)
+
+// peFieldNameLiterals returns every field-name-shaped string literal in pdfium_extractor.go,
+// deduplicated. Mirrors deFieldNameLiterals.
+func peFieldNameLiterals(t *testing.T) map[string]bool {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, pdfiumExtractorFile, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", pdfiumExtractorFile, err)
+	}
+
+	found := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return true
+		}
+		if peFieldNameLiteralRE.MatchString(s) {
+			found[s] = true
+		}
+		return true
+	})
+	return found
+}
+
+// TestPDFiumExtractor_SourceNamesOnlyTheTextLayerField: the missing sibling of
+// TestDoclingExtractor_SourceNamesOnlyTheTextLayerField -- the only field-name-shaped string
+// literal in pdfium_extractor.go is "document_text_layer", and the file calls none of the
+// line-item API. EXTR-12's fork F-3 keeps both real extractors off the line-item vocabulary
+// this subtask adds to the mock.
+func TestPDFiumExtractor_SourceNamesOnlyTheTextLayerField(t *testing.T) {
+	found := peFieldNameLiterals(t)
+	if len(found) == 0 {
+		t.Fatalf("found 0 field-name-shaped string literal(s) in %s; the scan below would pass vacuously", pdfiumExtractorFile)
+	}
+	if !found[peTextLayerField] {
+		t.Errorf("%s carries no %q literal; the field-name constant itself is missing or was renamed", pdfiumExtractorFile, peTextLayerField)
+	}
+	if len(found) != 1 {
+		t.Errorf("%s carries %d field-name-shaped string literal(s) %v, want exactly 1: %q", pdfiumExtractorFile, len(found), found, peTextLayerField)
+	}
+
+	// Control first: the walker really does find an identifier this file uses (its own type).
+	control := xForbiddenIdentifiers(t, pdfiumExtractorFile, "PDFiumExtractor")
+	if !control["PDFiumExtractor"] {
+		t.Fatalf("%s never references its own PDFiumExtractor identifier; the AST walk below is broken", pdfiumExtractorFile)
+	}
+	if forbidden := xForbiddenIdentifiers(t, pdfiumExtractorFile, "LineItemResults", "LineFieldName", "LineItems", "DocLine"); len(forbidden) != 0 {
+		t.Errorf("%s references %v; EXTR-12's fork F-3 keeps this extractor off the line-item API", pdfiumExtractorFile, forbidden)
 	}
 }

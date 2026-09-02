@@ -643,6 +643,8 @@ func mpStringSliceVar(t *testing.T, path, name string) []string {
 //
 // What this adds over MAP-01: the mock's PARTIAL field set, where three readings are flagged and
 // two carry no value at all, still maps every decided value and leaves the absent ones NULL.
+// EXTR-13-02 widened the mock with 16 line-item names on top of these 7 -- the sibling test
+// below asserts those are dropped the same way; this fixture stays the 7 header fields alone.
 func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
 	ex := SettledExtraction{
 		JobID: "job-extr-12-01",
@@ -696,6 +698,62 @@ func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
 	}
 	if got.BuyerTIN != nil {
 		t.Errorf("BuyerTIN = %q, want nil -- the mock's buyer_tin is missing", *got.BuyerTIN)
+	}
+}
+
+// AC-6, and CONFIRMATORY like its sibling above: documentCreateInput's unknown-name drop is
+// unchanged by EXTR-13-02, so this passes today. What it adds is a fixture carrying the mock's
+// real 16 line-item names (not the two illustrative ones MAP-04 uses), floored non-vacuous,
+// so the LineItems-nil claim is over the actual shape mock.go now emits.
+func TestDocumentCreateInput_MockDefaultStillProducesZeroLineItems(t *testing.T) {
+	lineFields := []extractedField{
+		{Name: "line_items"},
+		{Name: "line_items[1].description", Value: mpPtr("Widget")},
+		{Name: "line_items[1].quantity", Value: mpPtr("2")},
+		{Name: "line_items[1].unit_price", Value: mpPtr("500.00")},
+		{Name: "line_items[1].line_total", Value: mpPtr("1000.00")},
+		{Name: "line_items[2].description", Value: mpPtr("Assembly, calibration and on-site commissioning of the line-item rig")},
+		{Name: "line_items[2].quantity", Value: mpPtr("3")},
+		{Name: "line_items[2].unit_price", Value: mpPtr("250.00")},
+		{Name: "line_items[2].line_total", Value: mpPtr("900.00"), Reason: mpPtr("inconsistent")},
+		{Name: "line_items[3].description", Value: mpPtr("Delivery")},
+		{Name: "line_items[3].unit_price", Value: mpPtr("120.00")},
+		{Name: "line_items[3].line_total", Value: mpPtr("120.00")},
+		{Name: "line_items[4].description", Value: mpPtr("Installation")},
+		{Name: "line_items[4].quantity", Value: mpPtr("1")},
+		{Name: "line_items[4].unit_price", Value: mpPtr("75.50")},
+		{Name: "line_items[4].line_total", Value: mpPtr("75.50")},
+	}
+	if len(lineFields) != 16 {
+		t.Fatalf("fixture carries %d line-named entr(ies), want 16 -- the check below would not exercise the mock's real shape", len(lineFields))
+	}
+
+	ex := SettledExtraction{
+		Fields: append([]extractedField{
+			{Name: "invoice_number", Value: mpPtr("MOCK-INV-0001")},
+			{Name: "subtotal", Value: mpPtr("950.00"), Reason: mpPtr("inconsistent")},
+			{Name: "total", Value: mpPtr("1000.00"), Reason: mpPtr("inconsistent")},
+		}, lineFields...),
+	}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+
+	// Positive control: the header fields still map, so the nil check below ran over a real
+	// mapping, not a stub that returns a zero-value CreateInput either way.
+	if got.InvoiceNumber != "MOCK-INV-0001" {
+		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, "MOCK-INV-0001")
+	}
+	if got.Subtotal == nil || *got.Subtotal != "950.00" {
+		t.Errorf("Subtotal = %v, want %q -- a line value must not have overwritten it", got.Subtotal, "950.00")
+	}
+	if got.Total == nil || *got.Total != "1000.00" {
+		t.Errorf("Total = %v, want %q -- a line value must not have overwritten it", got.Total, "1000.00")
+	}
+
+	if got.LineItems != nil {
+		t.Errorf("LineItems = %v, want nil -- line_items/line_items[N].<role> are not header fields; only a human pressing Save (subtask 03) writes lines", got.LineItems)
 	}
 }
 

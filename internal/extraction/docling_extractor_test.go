@@ -291,4 +291,40 @@ func TestDoclingExtractor_SourceNamesOnlyTheTextLayerField(t *testing.T) {
 	if len(found) != 1 {
 		t.Errorf("%s carries %d field-name-shaped string literal(s) %v, want exactly 1: %q", doclingExtractorFile, len(found), found, deTextLayerField)
 	}
+
+	// A literal scan cannot catch a CALL. Control first: the walker really does find an
+	// identifier this file uses (its own type), so an empty result below is not a broken walk.
+	control := xForbiddenIdentifiers(t, doclingExtractorFile, "DoclingExtractor")
+	if !control["DoclingExtractor"] {
+		t.Fatalf("%s never references its own DoclingExtractor identifier; the AST walk below is broken", doclingExtractorFile)
+	}
+	if forbidden := xForbiddenIdentifiers(t, doclingExtractorFile, "LineItemResults", "LineFieldName", "LineItems", "DocLine"); len(forbidden) != 0 {
+		t.Errorf("%s references %v; EXTR-12's fork F-3 keeps this extractor off the line-item API", doclingExtractorFile, forbidden)
+	}
+}
+
+// xForbiddenIdentifiers parses file and reports which of the given identifier names appear
+// anywhere in its AST. Shared with TestPDFiumExtractor_SourceNamesOnlyTheTextLayerField: a
+// string-literal scan alone cannot catch a call to a forbidden function.
+func xForbiddenIdentifiers(t *testing.T, file string, names ...string) map[string]bool {
+	t.Helper()
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+
+	found := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && want[id.Name] {
+			found[id.Name] = true
+		}
+		return true
+	})
+	return found
 }

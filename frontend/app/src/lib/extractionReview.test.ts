@@ -125,8 +125,24 @@ describe('highlightStyle', () => {
       { page: 1, x0: 0.62, y0: 0.8, x1: 0.9, y1: 0.85 },
       { page: 1, x0: 0.1, y0: 0.5, x1: 0.38, y1: 0.55 },
       { page: 1, x0: 0.62, y0: 0.64, x1: 0.9, y1: 0.69 },
+      // EXTR-13-02: the four-line block's 15 cells, none shared with a fixture box above.
+      { page: 1, x0: 0.1, y0: 0.3, x1: 0.44, y1: 0.34 },
+      { page: 1, x0: 0.46, y0: 0.3, x1: 0.54, y1: 0.34 },
+      { page: 1, x0: 0.56, y0: 0.3, x1: 0.72, y1: 0.34 },
+      { page: 1, x0: 0.74, y0: 0.3, x1: 0.9, y1: 0.34 },
+      { page: 1, x0: 0.1, y0: 0.35, x1: 0.44, y1: 0.39 },
+      { page: 1, x0: 0.46, y0: 0.35, x1: 0.54, y1: 0.39 },
+      { page: 1, x0: 0.56, y0: 0.35, x1: 0.72, y1: 0.39 },
+      { page: 1, x0: 0.74, y0: 0.35, x1: 0.9, y1: 0.39 },
+      { page: 1, x0: 0.1, y0: 0.4, x1: 0.44, y1: 0.44 },
+      { page: 1, x0: 0.56, y0: 0.4, x1: 0.72, y1: 0.44 },
+      { page: 1, x0: 0.74, y0: 0.4, x1: 0.9, y1: 0.44 },
+      { page: 1, x0: 0.1, y0: 0.45, x1: 0.44, y1: 0.49 },
+      { page: 1, x0: 0.46, y0: 0.45, x1: 0.54, y1: 0.49 },
+      { page: 1, x0: 0.56, y0: 0.45, x1: 0.72, y1: 0.49 },
+      { page: 1, x0: 0.74, y0: 0.45, x1: 0.9, y1: 0.49 },
     ]
-    expect(MOCK_REGIONS, 'an empty table would pass every assertion below').toHaveLength(8)
+    expect(MOCK_REGIONS, 'an empty table would pass every assertion below').toHaveLength(23)
 
     // Control: at least one axis really does carry a tail, so the property is not vacuous.
     const raw = MOCK_REGIONS.flatMap((r) => [r.x0 * 100, r.y0 * 100, (r.x1 - r.x0) * 100, (r.y1 - r.y0) * 100])

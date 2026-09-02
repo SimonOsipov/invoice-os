@@ -50,7 +50,6 @@ export interface SurfaceDef {
 export const SURFACES: readonly SurfaceDef[] = [
   { navConst: 'NAV_DASHBOARD', label: 'Overview' },
   { navConst: 'NAV_INVOICES', label: 'Invoices' },
-  { navConst: 'NAV_VALIDATION', label: 'Validation' },
   { navConst: 'NAV_WORKFLOWS', label: 'Workflows' },
   { navConst: 'NAV_RULES', label: 'Rules' },
   { navConst: 'NAV_APPROVALS', label: 'Approvals' },
@@ -116,7 +115,6 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       // invoice-surfaces.spec.ts (which does not cover it until task-532) -- the
       // same-commit rule above without a forward reference (Decision V4).
       { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
-      { navConst: 'NAV_VALIDATION', grade: 'drives', coveredBy: 'e2e/topology/validation.spec.ts' },
       { navConst: 'NAV_CLIENTS', grade: 'drives', coveredBy: 'e2e/topology/portfolio.spec.ts' },
       // PERSONA-01-04: the firm policy LIST plus the per-workspace proof (delete a policy,
       // switch client, assert the MUTATED list survived). That file never signs in as
@@ -162,7 +160,6 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     coverage: [
       { navConst: 'NAV_DASHBOARD', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_INVOICES', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
-      { navConst: 'NAV_VALIDATION', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_WORKFLOWS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_RULES', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },

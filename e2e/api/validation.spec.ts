@@ -1,39 +1,65 @@
-// M3-14-03 (Core AC 3): validation collect-all + live kill-switch, over the wire —
-// through the SAME typed seam (api/client.ts) every api/ spec shares. Re-drives
-// M3-10's collect-all engine (internal/validation) and its per-rule kill-switch
-// across gateway -> validation service -> DB, against the migration-seeded v1
-// rule set (db/seed.dev.sql).
+// The live per-rule kill-switch over the wire, through the SAME typed seam (api/client.ts)
+// every api/ spec shares: create a draft, validate it via POST /v1/invoices/{id}/validate,
+// toggle a rule, validate a second draft, restore the rule, validate a third.
 //
-// This file mutates the GLOBAL, shared `rules` table on the dev fleet (there is
-// one `rules` row per key, not per-tenant — Decision A3). Every other api/ spec
-// (and every other engineer/CI run hitting the same dev fleet) depends on the
-// seeded rules being enabled, so the D3 robustness protocol below is not
-// optional polish: a crashed run that leaves `vat-standard-rate` or
-// `currency-allowed` disabled would silently break unrelated specs until
-// someone notices and manually re-enables the rule. Hence:
-//   - beforeAll SELF-HEALS both target rules to enabled before any test runs,
-//     curing a prior crashed run's leak. Unlike the afterAll/finally restore
-//     path, the self-heal RE-THROWS on a genuinely unexpected failure (not
-//     409, not network) so a broken precondition aborts the file loudly here
-//     instead of surfacing as confusing mid-test assertion failures.
-//   - afterAll RESTORES both target rules to enabled unconditionally, and can
-//     never itself throw (a throwing cleanup would both mask the real
-//     assertion failure that triggered it AND still leave the rule disabled).
-//     Playwright still runs afterAll even when beforeAll throws, so this
-//     backstop holds regardless of which hook failed.
-//   - Both directions tolerate 409 ErrRedundantTransition (PATCH enabled:true
-//     on an already-enabled rule, or enabled:false on an already-disabled one)
-//     as success, since idempotent-looking retries are expected here.
+// This file mutates the GLOBAL, shared `rules` table on the dev fleet (there is one `rules`
+// row per key, not per-tenant -- Decision A3). Every other api/ spec (and every other
+// engineer/CI run hitting the same dev fleet) depends on the seeded rules being enabled, so
+// the D3 robustness protocol below is not optional polish: a crashed run that leaves
+// `vat-standard-rate` or `currency-allowed` disabled would silently break unrelated specs
+// until someone notices and manually re-enables the rule. Hence:
+//   - beforeAll SELF-HEALS both target rules to enabled before any test runs, curing a
+//     prior crashed run's leak. Unlike the afterAll/finally restore path, the self-heal
+//     RE-THROWS on a genuinely unexpected failure (not 409, not network) so a broken
+//     precondition aborts the file loudly here instead of surfacing as confusing mid-test
+//     assertion failures.
+//   - afterAll RESTORES both target rules to enabled unconditionally, and can never itself
+//     throw (a throwing cleanup would both mask the real assertion failure that triggered
+//     it AND still leave the rule disabled). Playwright still runs afterAll even when
+//     beforeAll throws, so this backstop holds regardless of which hook failed.
+//   - Both directions tolerate 409 ErrRedundantTransition (PATCH enabled:true on an
+//     already-enabled rule, or enabled:false on an already-disabled one) as success, since
+//     idempotent-looking retries are expected here.
 import { test, expect } from '@playwright/test'
-import { login, validate, toggleRule, PERSONAS, ApiError, type ValidateResult } from './client'
-import { validInvoice, badInvoice, manyViolations, currencyUsdInvoice, BAD_INVOICE_KEYS, MANY_VIOLATION_KEYS } from './fixtures'
-import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
+import { login, toggleRule, createEntity, createInvoice, validateInvoice, PERSONAS, ApiError, type Violation } from './client'
+import { freshTin } from './fixtures'
 
-// keysOf(): the sorted rule_key set of a ValidateResult (Engine.Evaluate sorts
-// its output — Decision N16 — but we sort again here so this assertion doesn't
-// silently depend on that ordering guarantee holding).
-function keysOf(result: ValidateResult): string[] {
-  return result.violations.map((v) => v.rule_key).sort()
+// keysOf(): the sorted rule_key set of a validate response (Engine.Evaluate sorts its
+// output -- Decision N16 -- but we sort again here so this assertion doesn't silently
+// depend on that ordering guarantee holding).
+function keysOf(violations: Violation[]): string[] {
+  return violations.map((v) => v.rule_key).sort()
+}
+
+// A draft that fires BOTH target rules at once, so disabling either leaves the other as a
+// live control: currency USD trips currency-allowed (enum {"values":["NGN"]}) and a VAT
+// that is not 7.5% of subtotal trips vat-standard-rate. supplier-tin-format is NOT usable
+// as a third rule through this path -- Store.Create re-derives supplier_tin from the
+// invoice's own entity ([supplier-from-entity]), so a malformed TIN never reaches storage.
+function killSwitchFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'USD',
+    subtotal: '1000',
+    vat: '70',
+    total: '1070',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+// A FRESH draft per validate call, for two independent 409s: the gate refuses a non-draft
+// invoice (ErrNotDraft), and invoice_number is unique per (tenant, entity) so re-using one
+// trips invoices_tenant_entity_number_uq. Each test mints its own entity, so the sequence
+// number below only has to be unique within that entity -- it cannot collide across runs.
+async function validateFreshDraft(token: string, entityId: string, seq: number): Promise<string[]> {
+  const draft = await createInvoice(token, { entity_id: entityId, ...killSwitchFields(`INV-RMV01-KS-${seq}`) })
+  const result = await validateInvoice(token, draft.id)
+  return keysOf(result.violations)
 }
 
 // toggleEnabledResilient(): the shared core of ensureEnabled/selfHeal below.
@@ -114,15 +140,13 @@ async function disableRule(token: string, key: string): Promise<void> {
   }
 }
 
-// Serial within this file: test 2 (bad invoice) and the kill-switch tests all
-// assume the seeded v1 rule set is in its baseline (all-enabled) state at
-// start, and the kill-switch tests explicitly mutate shared global state one
-// at a time. (playwright.api.config.ts already runs the whole suite with
-// workers: 1 / fullyParallel: false across files — this is belt-and-braces
-// for this file's internal ordering.)
+// Serial within this file: the kill-switch tests explicitly mutate shared global state one
+// at a time, and the closing restore check reads the state they leave behind.
+// (playwright.api.config.ts already runs the whole suite with workers: 1 /
+// fullyParallel: false across files — this is belt-and-braces for this file's ordering.)
 test.describe.configure({ mode: 'serial' })
 
-test.describe('validation collect-all + live kill-switch (API E2E, over the deployed gateway)', () => {
+test.describe('live kill-switch (API E2E, over the deployed gateway)', () => {
   let token: string
 
   test.beforeAll(async () => {
@@ -148,61 +172,60 @@ test.describe('validation collect-all + live kill-switch (API E2E, over the depl
     await ensureEnabled(token, 'currency-allowed')
   })
 
-  test('valid invoice -> zero violations, stamped with the active rule_set_version', async () => {
-    const result = await validate(token, validInvoice)
-    expect(result.rule_set_version).toBe(ACTIVE_RULE_SET_VERSION)
-    expect(result.violations).toEqual([])
-  })
+  test('kill-switch: disabling vat-standard-rate drops only it — currency-allowed (control) still fires; reversible', async () => {
+    const entity = await createEntity(token, { name: `RMV-01 kill-switch vat ${Date.now()}`, tin: freshTin() })
 
-  test('bad invoice -> exactly [supplier-tin-format, vat-standard-rate], each fully stamped', async () => {
-    const result = await validate(token, badInvoice)
-    expect(keysOf(result)).toEqual(BAD_INVOICE_KEYS)
-    expect(result.rule_set_version).toBe(ACTIVE_RULE_SET_VERSION)
-    for (const violation of result.violations) {
-      expect(violation.rule_key.length).toBeGreaterThan(0)
-      expect(violation.severity.length).toBeGreaterThan(0)
-      expect(violation.message.length).toBeGreaterThan(0)
-    }
-  })
-
-  test('manyViolations -> exactly the 8 sorted keys (collect-all breadth, not fail-fast)', async () => {
-    const result = await validate(token, manyViolations)
-    expect(keysOf(result)).toEqual(MANY_VIOLATION_KEYS)
-  })
-
-  test('kill-switch: disabling vat-standard-rate drops only it — supplier-tin-format (control) still fires; reversible', async () => {
-    const baselineKeys = keysOf(await validate(token, badInvoice))
+    const baselineKeys = await validateFreshDraft(token, entity.id, 1)
     expect(baselineKeys).toContain('vat-standard-rate')
-    expect(baselineKeys).toContain('supplier-tin-format')
+    expect(baselineKeys).toContain('currency-allowed')
 
     try {
       await disableRule(token, 'vat-standard-rate')
-      const disabled = await validate(token, badInvoice)
+      const disabled = await validateFreshDraft(token, entity.id, 2)
       // Exact set, not just "still contains the control": proves ONLY the
       // toggled key changed, not that the engine went dark or dropped extras.
-      expect(keysOf(disabled)).toEqual(baselineKeys.filter((k) => k !== 'vat-standard-rate'))
+      expect(disabled).toEqual(baselineKeys.filter((k) => k !== 'vat-standard-rate'))
     } finally {
       await ensureEnabled(token, 'vat-standard-rate')
     }
 
-    const restored = await validate(token, badInvoice)
-    expect(keysOf(restored)).toContain('vat-standard-rate')
+    const restored = await validateFreshDraft(token, entity.id, 3)
+    expect(restored).toContain('vat-standard-rate')
   })
 
-  test('kill-switch: disabling currency-allowed drops it; reversible', async () => {
-    const baselineKeys = keysOf(await validate(token, currencyUsdInvoice))
+  test('kill-switch: disabling currency-allowed drops it; vat-standard-rate (control) still fires; reversible', async () => {
+    const entity = await createEntity(token, { name: `RMV-01 kill-switch currency ${Date.now()}`, tin: freshTin() })
+
+    const baselineKeys = await validateFreshDraft(token, entity.id, 1)
     expect(baselineKeys).toContain('currency-allowed')
+    expect(baselineKeys).toContain('vat-standard-rate')
 
     try {
       await disableRule(token, 'currency-allowed')
-      const disabled = await validate(token, currencyUsdInvoice)
+      const disabled = await validateFreshDraft(token, entity.id, 2)
       // Exact set: proves ONLY the toggled key changed.
-      expect(keysOf(disabled)).toEqual(baselineKeys.filter((k) => k !== 'currency-allowed'))
+      expect(disabled).toEqual(baselineKeys.filter((k) => k !== 'currency-allowed'))
     } finally {
       await ensureEnabled(token, 'currency-allowed')
     }
 
-    const restored = await validate(token, currencyUsdInvoice)
-    expect(keysOf(restored)).toContain('currency-allowed')
+    const restored = await validateFreshDraft(token, entity.id, 3)
+    expect(restored).toContain('currency-allowed')
+  })
+
+  test('kill-switch self-heal and restore survive the rewrite', async () => {
+    // Runs last under serial mode: both rules must be enabled by now (beforeAll self-healed
+    // them, each test's finally restored them). Re-enabling an already-enabled rule is a
+    // 409 ErrRedundantTransition and performs no write, so this observes without mutating.
+    for (const key of ['vat-standard-rate', 'currency-allowed']) {
+      let status: number | null | undefined
+      try {
+        await toggleRule(token, key, true)
+      } catch (err) {
+        if (!(err instanceof ApiError)) throw err
+        status = err.status
+      }
+      expect(status, `${key} should already be enabled (409 ErrRedundantTransition)`).toBe(409)
+    }
   })
 })

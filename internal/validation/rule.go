@@ -84,8 +84,8 @@ type RuleSet struct {
 	Rules   []Rule
 }
 
-// Violation is one failed rule, in the exact JSON shape the M3-09
-// playground UI and the /v1/validate response (story API spec) expect.
+// Violation is one failed rule, in the exact JSON shape the validation
+// responses (story API spec) expect.
 //
 // Expected/Actual (D9, [expected-is-decimal-string]) carry the value this
 // rule judged against and the value it found, for evaluator types that have
@@ -101,12 +101,12 @@ type Violation struct {
 	RuleKey  string   `json:"rule_key"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
-	Path     string   `json:"path,omitempty"` // resolved target, for the M3-09 UI
+	Path     string   `json:"path,omitempty"` // resolved target
 	Expected *string  `json:"expected,omitempty"`
 	Actual   *string  `json:"actual,omitempty"`
 }
 
-// Result is the /v1/validate response body: the rule-set version actually
+// Result is the validation response body: the rule-set version actually
 // evaluated plus every collected violation (collect-ALL, never fail-fast --
 // story Core AC #2, #4). Violations is never nil -- a clean payload
 // marshals as "violations":[], not "violations":null.

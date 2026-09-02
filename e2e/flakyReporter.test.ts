@@ -69,15 +69,15 @@ describe('formatFlakySummary', () => {
   it('names the spec, its line and its attempt count', () => {
     const md = formatFlakySummary('topology', [
       {
-        file: '/repo/e2e/topology/validation.spec.ts',
+        file: '/repo/e2e/topology/invoice-surfaces.spec.ts',
         line: 35,
-        title: 'validation playground round-trips the live engine',
+        title: 'invoice detail round-trips the live engine',
         attempts: 2,
       },
     ])
     expect(md).toContain('topology: 1 flaky spec')
-    expect(md).toContain('`topology/validation.spec.ts:35`')
-    expect(md).toContain('validation playground round-trips the live engine')
+    expect(md).toContain('`topology/invoice-surfaces.spec.ts:35`')
+    expect(md).toContain('invoice detail round-trips the live engine')
     // The count must be present: "passed on retry" without it hides how bad it is.
     expect(md).toMatch(/\|\s*2\s*\|/)
   })

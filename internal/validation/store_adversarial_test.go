@@ -12,9 +12,9 @@
 // Both loaders are covered, not just the global one: [tenant-free-ruleset-load]
 // claimed "fails closed" for LoadActiveRuleSetGlobal, but store.go's actual
 // refactor routes LoadActiveRuleSet through the SAME shared
-// loadActiveRuleSetTx helper -- so the shipped, unchanged POST /v1/validate
-// path (LoadActiveRuleSet) must be guarded too, or the ORIGINAL single-invoice
-// endpoint still fails open even after this subtask ships.
+// loadActiveRuleSetTx helper -- so the tenant-scoped LoadActiveRuleSet must be
+// guarded too, or the identity-carrying loader still fails open even after this
+// subtask ships.
 //
 // Fixture: seedVersion(t, super, true) (schema_test.go) with NO seedRule
 // call -- a real, live rule_set_versions row, is_active=true, holding zero
@@ -75,11 +75,11 @@ func TestStore_LoadActiveRuleSetGlobal_ZeroRulesFailsClosed(t *testing.T) {
 
 // TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed (G3, audit item 1b): the
 // SAME zero-rules guard, but through LoadActiveRuleSet -- the tenant-wrapped
-// loader that already shipped behind POST /v1/validate before this subtask,
-// and that this subtask's refactor (loadActiveRuleSetTx) now routes through
-// the identical shared code path. If this loader were NOT guarded, the
-// original single-invoice playground endpoint would still fail open even
-// after M4-04-03 ships, despite the story's own framing of G3 as fixed.
+// tenant-scoped loader that shipped before this subtask, and that this
+// subtask's refactor (loadActiveRuleSetTx) now routes through the identical
+// shared code path. If this loader were NOT guarded, the identity-carrying
+// path would still fail open even after M4-04-03 ships, despite the story's
+// own framing of G3 as fixed.
 func TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -93,12 +93,12 @@ func TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed(t *testing.T) {
 	rs, err := store.LoadActiveRuleSet(c)
 
 	if err == nil {
-		t.Fatalf("LoadActiveRuleSet (identity-carrying, POST /v1/validate's path) against an active "+
-			"version (id=%s, version=%d) with ZERO rules returned err=nil, rs=%+v -- the single-invoice "+
-			"endpoint fails open identically to the batch path if this loader is unguarded", versionID, version, rs)
+		t.Fatalf("LoadActiveRuleSet (identity-carrying) against an active "+
+			"version (id=%s, version=%d) with ZERO rules returned err=nil, rs=%+v -- the tenant-scoped "+
+			"loader fails open identically to the batch path if this loader is unguarded", versionID, version, rs)
 	}
 	if !errors.Is(err, ErrNoActiveRuleSet) {
-		t.Errorf("errors.Is(err, ErrNoActiveRuleSet) = false (err = %v) -- ValidateHandler's statusForErr "+
+		t.Errorf("errors.Is(err, ErrNoActiveRuleSet) = false (err = %v) -- statusForErr "+
 			"keys off ErrNoActiveRuleSet to answer 503", err)
 	}
 	if !errors.Is(err, ErrEmptyRuleSet) {

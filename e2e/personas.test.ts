@@ -64,7 +64,6 @@ const EXPECTED_NAV_ONLY = new Set<string>([
 const EXPECTED_DRIVES_MIN = new Set<string>([
   'inhouse:NAV_DASHBOARD',
   'inhouse:NAV_INVOICES',
-  'inhouse:NAV_VALIDATION',
   'inhouse:NAV_WORKFLOWS', // Core AC 4
   'inhouse:NAV_RULES',
   'inhouse:NAV_APPROVALS', // Core AC 3
@@ -722,7 +721,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('row 17 (G6b) -- the named drives minimum holds', () => {
-    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(10)
+    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(9)
 
     const actualDrives = new Set<string>()
     for (const id of PERSONA_IDS) {
@@ -903,7 +902,6 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(SURFACES.map((s) => s.navConst), 'the app SPA nav catalogue is unchanged by EXTR-09').toEqual([
       'NAV_DASHBOARD',
       'NAV_INVOICES',
-      'NAV_VALIDATION',
       'NAV_WORKFLOWS',
       'NAV_RULES',
       'NAV_APPROVALS',
@@ -915,7 +913,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     ])
 
     const cells = PERSONA_IDS.flatMap((id) => PERSONAS[id].coverage ?? [])
-    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(20)
+    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(18)
 
     // The fork's own vocabulary, in either half of the map. `Import` is deliberately absent
     // from this list: the wizard has always been reached from Invoices, and no surface is
@@ -932,5 +930,111 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(forkWords.test('NAV_DOCUMENTS'), 'the scan must see a Documents surface').toBe(true)
     expect(forkWords.test('Extraction'), 'the scan must see an Extraction label').toBe(true)
     expect(forkWords.test('NAV_INVOICES'), 'and must not fire on the shipped catalogue').toBe(false)
+  })
+
+  // --- RMV-01-01 (task-816) -- the Validation nav surface is gone from the app -----------
+  //
+  // The two defences (control needle + population floor) mirror A05-8's, because an absence
+  // scan whose file walk or regex broke would otherwise report a clean zero.
+  it('rmv01_navValidationIsGoneFromTheAppSurface -- no NAV_VALIDATION token and no \'validation\' literal survives in the four app files', () => {
+    // Both scans built from the same two shapes, so a control needle exercises the exact
+    // pattern the absence assertion relies on.
+    const token = (w: string) => new RegExp(`\\b${w}\\b`)
+    const quoted = (w: string) => new RegExp(`['"]${w}['"]`)
+    const NAV_TOKEN = token('NAV_VALIDATION')
+    const VIEW_LITERAL = quoted('validation')
+
+    const files: readonly [string, string][] = [
+      ['frontend/app/src/glyphs.tsx', GLYPHS],
+      ['frontend/app/src/components/Sidebar.tsx', SIDEBAR],
+      ['frontend/app/src/types.ts', TYPES_TS],
+      ['frontend/app/src/App.tsx', APP_TSX],
+    ]
+
+    // Floor 0: a truncated file list would report a false clean, so pin its length.
+    expect(files.length, 'app files scanned (a shortened walk reports a false clean)').toBe(4)
+
+    // Floor 1: every file must actually have been read.
+    const sources = new Map<string, string>()
+    for (const [label, path] of files) {
+      const src = readFileSync(path, 'utf8')
+      expect(src.length, `${label} has no content to scan`).toBeGreaterThan(0)
+      sources.set(label, src)
+    }
+
+    // Floor 2: Sidebar.tsx still parses through G3's anchors and resolves a real roster.
+    const { firm, inhouse } = extractSidebarNavConsts(sources.get('frontend/app/src/components/Sidebar.tsx')!)
+    expect(firm.length, 'firm nav items resolved (vacuity guard)').toBeGreaterThanOrEqual(8)
+    expect(inhouse.length, 'in-house nav items resolved (vacuity guard)').toBeGreaterThanOrEqual(8)
+
+    // Control needles: both regexes must still find a LIVE neighbour, so a scanner that
+    // stopped matching fails loudly instead of reporting clean.
+    expect(
+      token('NAV_APPROVALS').test(sources.get('frontend/app/src/components/Sidebar.tsx')!),
+      'control needle: Sidebar.tsx must still carry NAV_APPROVALS -- the NAV_* scan is broken',
+    ).toBe(true)
+    expect(
+      quoted('approvals').test(sources.get('frontend/app/src/types.ts')!),
+      "control needle: types.ts must still carry the quoted 'approvals' view id -- the literal scan is broken",
+    ).toBe(true)
+
+    const hits: string[] = []
+    for (const [label] of files) {
+      const src = sources.get(label)!
+      if (NAV_TOKEN.test(src)) hits.push(`${label}: NAV_VALIDATION`)
+      if (VIEW_LITERAL.test(src)) hits.push(`${label}: 'validation'`)
+    }
+    expect(hits, `the Validation nav surface still exists: ${hits.join(', ')}`).toEqual([])
+  })
+
+  it("rmv01_navValidationScanDoesNotFalsePositive -- the scan tells NAV_VALIDATION apart from a live neighbour and from validationApi (non-vacuity control)", () => {
+    const NAV_TOKEN = new RegExp('\\bNAV_VALIDATION\\b')
+    const VIEW_LITERAL = new RegExp(`['"]validation['"]`)
+
+    // Every line here is a shape the four scanned files really carry. The quoted
+    // 'validationApi' and "validation.rule.enabled" entries are the load-bearing ones:
+    // without them a regex loosened to /['\"]validation/ still reads clean.
+    const FIXTURE = [
+      "import { NAV_APPROVALS } from './glyphs'",
+      "import { validateInvoice } from './lib/validationApi'",
+      "import { severityStyle } from './validationApi'",
+      "const MODULE = 'validationApi'",
+      "export type View = 'dashboard' | 'approvals'",
+      "{view === 'approvals' && <ApprovalsView ctx={ctx} />}",
+    ].join('\n')
+
+    expect(NAV_TOKEN.test(FIXTURE), 'must not fire on NAV_APPROVALS').toBe(false)
+    expect(VIEW_LITERAL.test(FIXTURE), "must not fire on 'approvals' or on the surviving validationApi module").toBe(false)
+
+    // Paired positive: the same two patterns DO fire on the surface being deleted, so the
+    // scan is not vacuously always-false.
+    const POSITIVE = "export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation' }"
+    expect(NAV_TOKEN.test(POSITIVE)).toBe(true)
+    expect(VIEW_LITERAL.test(POSITIVE)).toBe(true)
+  })
+
+  // The two tests above can only see the deletion going too FAR SHORT, never too far. The
+  // audit vocabulary carries its own unrelated 'validation' domain, so an over-broad sweep
+  // would silently drop live audit filters -- and the pinned scan scope would still read
+  // clean. Pin the survivors instead.
+  it('rmv01_theSweepDidNotReachTheAuditValidationDomain -- audit vocabulary keeps its own \'validation\' domain', () => {
+    const AUDIT_FILES = [
+      'frontend/app/src/lib/auditVocabulary.ts',
+      'frontend/app/src/components/AuditFilterCard.tsx',
+    ] as const
+    expect(AUDIT_FILES.length, 'audit files pinned (a shortened walk reports a false clean)').toBe(2)
+
+    for (const rel of AUDIT_FILES) {
+      const src = readFileSync(join(REPO_ROOT, rel), 'utf8')
+      expect(src.length, `${rel} has no content to scan`).toBeGreaterThan(0)
+      expect(/['"]validation['"]/.test(src), `${rel} lost its audit 'validation' domain -- the RMV-01 sweep over-reached`).toBe(true)
+    }
+
+    // The two event keys the domain exists to label. Pinned by value, because a domain
+    // string surviving while its events left would still satisfy the check above.
+    const vocab = readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/auditVocabulary.ts'), 'utf8')
+    for (const key of ['validation.rule.enabled', 'validation.rule.disabled']) {
+      expect(vocab.includes(key), `auditVocabulary.ts lost the ${key} event`).toBe(true)
+    }
   })
 })

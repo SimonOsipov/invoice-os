@@ -431,3 +431,34 @@ func TestLineItems_ABoxlessCellCarriesNoRegion(t *testing.T) {
 		t.Errorf("Region = %+v, want nil", *got[0].Region)
 	}
 }
+
+// EXTR-13-10: ParseLineFieldName is LineFieldName's inverse -- expandLineCorrection (reader.go)
+// uses it to drop every stale line-cell reading before re-emitting the corrected set. Does not
+// compile yet: the symbol does not exist until the fix adds it.
+func TestParseLineFieldName_RoundTripsWithLineFieldName(t *testing.T) {
+	for _, tc := range []struct {
+		index int
+		role  string
+	}{
+		{1, extraction.LineRoleDescription},
+		{2, extraction.LineRoleQuantity},
+		{42, extraction.LineRoleUnitPrice},
+		{1, extraction.LineRoleLineTotal},
+	} {
+		name := extraction.LineFieldName(tc.index, tc.role)
+		gotIndex, gotRole, ok := extraction.ParseLineFieldName(name)
+		if !ok {
+			t.Fatalf("ParseLineFieldName(%q) ok = false, want true", name)
+		}
+		if gotIndex != tc.index || gotRole != tc.role {
+			t.Errorf("ParseLineFieldName(%q) = (%d, %q), want (%d, %q)", name, gotIndex, gotRole, tc.index, tc.role)
+		}
+	}
+
+	// The needle above proves ok=true happens at all; these prove it is not unconditional.
+	for _, name := range []string{"total", "line_items", "line_items[abc].description", "line_items[1]", "line_items[1]."} {
+		if _, _, ok := extraction.ParseLineFieldName(name); ok {
+			t.Errorf("ParseLineFieldName(%q) ok = true, want false", name)
+		}
+	}
+}

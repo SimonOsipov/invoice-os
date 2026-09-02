@@ -5858,6 +5858,30 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
   await expect(page.getByTestId('extraction-write-error'), 'the Save reported an error').toHaveCount(0)
   await expect(save, 'a committed Save left something still to save').toBeDisabled()
 
+  // EXTR-13-10, AUTHORED BUT NOT EXECUTED as part of this RED submission (no deployed backend in
+  // this worktree). The defect this closes: a saved line correction snapped back to the
+  // extractor's own reading on every reopen, not just the Save's own re-read above. A real
+  // reload is what a reopen actually is -- the reread JSON checked above proves the write
+  // happened, never that a fresh page shows it.
+  const [reopened] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    page.reload(),
+  ])
+  expect(reopened.status(), 'the reopened review failed to re-read its detail').toBe(200)
+  await expect(page.getByTestId('line-item-grid'), 'the reopened page rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(
+    page.getByTestId(`line-item-input-${flaggedN}-line_total`),
+    `row ${flaggedN}'s line_total snapped back to the extractor's own reading ` +
+      `(${flaggedRow.cells.line_total?.value}) on reopen, instead of keeping the saved ${settledTotal}`,
+  ).toHaveValue(settledTotal)
+
   await testInfo.attach('extraction-line-grid-journey.json', {
     body: JSON.stringify(
       { lines: lines.length, flagged, settledRows, summed, printed, settledTotal, echoed },

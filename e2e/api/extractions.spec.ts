@@ -550,3 +550,55 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
     ).toBe(JSON.stringify(replaced))
   })
 })
+
+// --- EXTR-13-10 · a line correction round-trips through Detail, not just the block row --------
+//
+// AUTHORED BUT NOT EXECUTED as part of this RED submission: there is no deployed backend in
+// this worktree to run against (this suite only runs over a real gateway, per the file's own
+// header). This is the same defect TestExtractionMerge_LineCorrectionOverwritesACell and
+// TestRLS_LineItemsCorrectionRoundTripsThroughDetail (internal/extraction) prove without a
+// browser -- this row is the deployed-wire regression guard once the fix ships.
+//
+// mockDefaultLines (mock.go) is the extractor's fixed reading for every uploaded PDF: line 1 is
+// Widget / 2 / 500.00 / 1000.00. Only description is changed here, so the other three cells stay
+// a control -- if the whole row went missing rather than one cell staying stale, they would fail
+// too.
+
+test.describe('a line correction round-trips through Detail (API E2E, over the deployed gateway)', () => {
+  test('EXTR13-API-04: line_items[1].description carries the correction, not the Widget reading', async () => {
+    test.setTimeout(TEST_TIMEOUT_MS)
+    const token = await login(PERSONAS.A)
+
+    const entity = await createEntity(token, { name: `EXTR-13-10 rt ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadPdf(token, 'EXTR13-API-04')
+    const job = await pollUntilSucceeded(token, documentId, 'EXTR13-API-04')
+
+    const imported = await rawFetch(IMPORT_DOCUMENT_PATH, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { entity_id: entity.id, document_id: documentId },
+    })
+    expect(imported.status, 'EXTR13-API-04: the settled document should import as one batch').toBe(201)
+
+    const before = await getExtractionDetail(token, job.id)
+    const readingName = 'line_items[1].description'
+    const reading = before.fields.find((f) => f.name === readingName)
+    expect(reading, `EXTR13-API-04: the wire carries no ${readingName} reading -- nothing to overwrite`).toBeTruthy()
+    expect(reading!.value, 'EXTR13-API-04: line 1 is not Widget -- mockDefaultLines changed under this test').toBe(
+      'Widget',
+    )
+
+    const corrected: LineItemInput[] = [
+      { description: 'EXTR13-API-04 corrected description', quantity: '2', unit_price: '500.00', line_total: '1000.00' },
+    ]
+    await postLineItems(token, job.id, { lines: corrected })
+
+    const after = await getExtractionDetail(token, job.id)
+    const field = after.fields.find((f) => f.name === readingName)
+    expect(field, `EXTR13-API-04: ${readingName} is gone from the wire after the correction`).toBeTruthy()
+    expect(
+      field!.value,
+      `EXTR13-API-04: ${readingName} still reads "Widget" after the correction -- it snapped back to the extractor's reading`,
+    ).toBe(corrected[0].description)
+  })
+})

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"net/http"
 	"os"
 	"reflect"
 	"regexp"
@@ -1719,5 +1720,48 @@ func TestRLS_ExtractionDetailCorrectionsAreScopedByThePolicyAlone(t *testing.T) 
 
 	if _, err := r.Detail(ctxA, jobB); !errors.Is(err, extraction.ErrNotFound) {
 		t.Errorf("A reading B's job %s returned %v, want %v", jobB, err, extraction.ErrNotFound)
+	}
+}
+
+// EXTR-13-10: the real POST/GET path for TestExtractionMerge_LineCorrectionOverwritesACell's
+// pure-function proof. A real line-items write is posted through the handler (lixDBServe,
+// handlers_lineitems_db_test.go), then Detail is read on the same job. Today the per-cell
+// readings pass straight through untouched, so the field still carries the seeded reading.
+func TestRLS_LineItemsCorrectionRoundTripsThroughDetail(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR13-10-RT", "draft")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for i, seed := range []struct{ role, value string }{
+		{extraction.LineRoleDescription, "OLD-DESC"},
+		{extraction.LineRoleQuantity, "9"},
+		{extraction.LineRoleUnitPrice, "99.00"},
+		{extraction.LineRoleLineTotal, "99.00"},
+	} {
+		rvdSeedField(t, ctx, tenantID, jobID, extraction.LineFieldName(1, seed.role), rvdStr(seed.value), nil, 0, nil,
+			now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	// lixLinesBody(1) posts one line: description "line 0", quantity "1", unit_price "1.00",
+	// line_total "1.00" -- every cell differs from the OLD-* readings seeded above.
+	w := lixDBServe(t, reqCtx, jobID, lixLinesBody(1), lixApplier(lixApplyOpts{write: true}), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST line-items: %d (body=%q), want 201 -- the Detail assertions below would be vacuous", w.Code, w.Body.String())
+	}
+
+	got, err := r.Detail(reqCtx, jobID)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobID, err)
+	}
+	name := extraction.LineFieldName(1, extraction.LineRoleDescription)
+	f := rvcField(t, got, name)
+	if f.Value == nil || *f.Value != "line 0" {
+		t.Errorf("%s = %s after the POST, want \"line 0\" -- the value that was just saved, not the OLD-DESC reading",
+			name, rvcValue(f.Value))
 	}
 }

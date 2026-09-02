@@ -210,3 +210,171 @@ func mgShow(f ExtractionFieldState) string {
 	}
 	return string(b)
 }
+
+// --- EXTR-13-10: a "line_items" correction must overlay the per-cell readings ---------------
+//
+// The defect: LineFieldName(i, role) is the only name a per-cell reading ever carries, but the
+// line-items POST appends its correction under the literal name "line_items" (the block row).
+// mergeCorrections only overlays a correction whose FieldName matches a reading's Name exactly,
+// so today that row never touches line_items[N].<role> at all -- the readings pass straight
+// through untouched. The fix expands the block correction into per-cell fields before the loop
+// that already handles "total" and every other header name.
+//
+// EXTR-14's accepted residual: after a REMOVAL, rows below shift up and inherit the reading at
+// their new position -- right values, one wrong highlight. Nothing below removes a middle row,
+// only a tail row or none at all, so that residual is never exercised here.
+
+func lmgLine(index int, desc, qty, price, total string, region func(role string) *ExtractionRegion) []ExtractionFieldState {
+	roles := []struct{ role, value string }{
+		{LineRoleDescription, desc}, {LineRoleQuantity, qty}, {LineRoleUnitPrice, price}, {LineRoleLineTotal, total},
+	}
+	out := make([]ExtractionFieldState, 0, len(roles))
+	for _, r := range roles {
+		v := r.value
+		out = append(out, ExtractionFieldState{
+			Name: LineFieldName(index, r.role), Value: &v, Region: region(r.role), Alternatives: []ExtractionCandidate{},
+		})
+	}
+	return out
+}
+
+// lmgUniformRegion gives every role of one line the same box, at the given page -- distinct
+// enough to tell "the reading's own box" from "no box" without needing four different ones.
+func lmgUniformRegion(page int) func(role string) *ExtractionRegion {
+	return func(string) *ExtractionRegion {
+		return &ExtractionRegion{Page: page, X0: 0.1, Y0: 0.1, X1: 0.2, Y1: 0.2}
+	}
+}
+
+func lmgFind(fields []ExtractionFieldState, name string) (ExtractionFieldState, bool) {
+	for _, f := range fields {
+		if f.Name == name {
+			return f, true
+		}
+	}
+	return ExtractionFieldState{}, false
+}
+
+func lmgInput(desc, qty, price, total string) LineItemInput {
+	return LineItemInput{Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total}
+}
+
+// lmgCorrection is the ONE row the line-items POST ever appends: FieldName "line_items", value
+// the canonical JSON of the whole set, method typed, region nil -- handlers_lineitems.go:169-181.
+func lmgCorrection(lines []LineItemInput, superseded *string) Correction {
+	return Correction{FieldName: "line_items", Value: canonicalLineJSON(lines), Method: MethodTyped, Superseded: superseded, Actor: "operator"}
+}
+
+// 1: a cell the correction overwrites.
+func TestExtractionMerge_LineCorrectionOverwritesACell(t *testing.T) {
+	readings := lmgLine(1, "OLD-DESC", "2", "10.00", "20.00", lmgUniformRegion(1))
+	corr := lmgCorrection([]LineItemInput{lmgInput("NEW-DESC", "2", "10.00", "20.00")}, nil)
+
+	got := mergeCorrections(readings, []Correction{corr})
+
+	name := LineFieldName(1, LineRoleDescription)
+	f, ok := lmgFind(got, name)
+	if !ok {
+		t.Fatalf("the merge dropped %q entirely, want it present", name)
+	}
+	if f.Value == nil || *f.Value != "NEW-DESC" {
+		t.Errorf("%s = %s, want \"NEW-DESC\" -- the corrected value, not the OLD-DESC reading", name, mgShow(f))
+	}
+}
+
+// 2: the tail readings a shorter correction drops.
+func TestExtractionMerge_LineCorrectionDropsReadingsPastItsLength(t *testing.T) {
+	readings := append(
+		lmgLine(1, "DESC-1", "1", "1.00", "1.00", lmgUniformRegion(1)),
+		lmgLine(2, "DESC-2", "2", "2.00", "2.00", lmgUniformRegion(1))...,
+	)
+	corr := lmgCorrection([]LineItemInput{lmgInput("DESC-1", "1", "1.00", "1.00")}, nil)
+
+	got := mergeCorrections(readings, []Correction{corr})
+
+	// Control needle: line 1 must still be there, or the absence checks below prove nothing.
+	if _, ok := lmgFind(got, LineFieldName(1, LineRoleDescription)); !ok {
+		t.Fatalf("line 1 is gone entirely, want it present -- the absence checks for line 2 below would be vacuous")
+	}
+	for _, role := range LineRoles {
+		name := LineFieldName(2, role)
+		if f, ok := lmgFind(got, name); ok {
+			t.Errorf("%s came back as %s, want it dropped -- the correction only has one line", name, mgShow(f))
+		}
+	}
+}
+
+// 3: a row the correction adds beyond every reading.
+func TestExtractionMerge_LineCorrectionAddsARowWithNoRegion(t *testing.T) {
+	readings := lmgLine(1, "DESC-1", "1", "1.00", "1.00", lmgUniformRegion(1))
+	corr := lmgCorrection([]LineItemInput{
+		lmgInput("DESC-1", "1", "1.00", "1.00"),
+		lmgInput("DESC-2", "2", "2.00", "2.00"),
+	}, nil)
+
+	got := mergeCorrections(readings, []Correction{corr})
+
+	name := LineFieldName(2, LineRoleDescription)
+	f, ok := lmgFind(got, name)
+	if !ok {
+		t.Fatalf("%s is absent, want it present -- the correction added a second line the extractor never read", name)
+	}
+	if f.Value == nil || *f.Value != "DESC-2" {
+		t.Errorf("%s = %s, want \"DESC-2\"", name, mgShow(f))
+	}
+	if f.Region != nil {
+		t.Errorf("%s highlights %+v, want nil -- no reading ever sat at this name", name, *f.Region)
+	}
+}
+
+// 4: a plain edit keeps the reading's box and gains a corrected block.
+func TestExtractionMerge_LineCorrectionPreservesRegionAndGainsCorrected(t *testing.T) {
+	region := lmgUniformRegion(7)
+	readings := lmgLine(1, "OLD-DESC", "2", "10.00", "20.00", region)
+	corr := lmgCorrection([]LineItemInput{lmgInput("NEW-DESC", "2", "10.00", "20.00")}, nil)
+
+	got := mergeCorrections(readings, []Correction{corr})
+
+	name := LineFieldName(1, LineRoleDescription)
+	f, ok := lmgFind(got, name)
+	if !ok {
+		t.Fatalf("%s is absent, want it present", name)
+	}
+	want := region(LineRoleDescription)
+	if f.Region == nil || *f.Region != *want {
+		t.Errorf("%s highlights %s, want the reading's own box %+v -- a typed edit carries no box of its own", name, mgShow(f), *want)
+	}
+	if f.Corrected == nil {
+		t.Fatalf("%s carries a nil corrected block, want one -- a line edit is a correction like any other", name)
+	}
+	if f.Corrected.Method != "typed" {
+		t.Errorf("%s corrected.method = %q, want \"typed\"", name, f.Corrected.Method)
+	}
+	if f.Corrected.Was == nil || *f.Corrected.Was != "OLD-DESC" {
+		t.Errorf("%s corrected.was = %s, want \"OLD-DESC\" -- the reading, since this is the field's first correction", name, mgShow(f))
+	}
+}
+
+// 9 (green fence, must stay green across the fix): a header correction merges exactly as
+// before, alongside a line correction on the SAME call -- proving the expansion is additive to
+// the existing per-field merge, not a replacement of it.
+func TestExtractionMerge_HeaderCorrectionStillMergesAlongsideALineCorrection(t *testing.T) {
+	fields := append(mgRead(), lmgLine(1, "DESC-1", "1", "1.00", "1.00", lmgUniformRegion(1))...)
+	corrections := []Correction{
+		mgCorrection(MethodTyped, "HUMAN-TOTAL", mgStr("READ-A")),
+		lmgCorrection([]LineItemInput{lmgInput("DESC-1", "1", "1.00", "1.00")}, nil),
+	}
+
+	got := mergeCorrections(fields, corrections)
+
+	total, ok := lmgFind(got, "total")
+	if !ok {
+		t.Fatalf("total is absent from the merge, want it present")
+	}
+	if total.Value == nil || *total.Value != "HUMAN-TOTAL" {
+		t.Errorf("total = %s, want \"HUMAN-TOTAL\"", mgShow(total))
+	}
+	if total.Corrected == nil || total.Corrected.Method != "typed" {
+		t.Errorf("total's corrected block is %+v, want method typed", total.Corrected)
+	}
+}

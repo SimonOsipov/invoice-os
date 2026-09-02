@@ -170,6 +170,39 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function postFieldCorrection(',
     floor: 7,
   },
+  // EXTR-13-06 — the line-items route. LineItemInput's goPath pins internal/extraction, not
+  // internal/invoice: that package's own LineItemInput has a fifth key (LineTax) and a bare
+  // `go: 'LineItemInput'` without this path would read it and red the row (T4 below).
+  {
+    ts: 'LineItemInput',
+    go: 'LineItemInput',
+    goPath: 'internal/extraction/handlers_lineitems.go',
+    goAnchor: 'func canonicalLineJSON(',
+    spaPath: 'frontend/app/src/lib/lineItems.ts',
+    spaAnchor: 'export function linesToPost(',
+    e2eAnchor: 'export function postLineItems(',
+    floor: 4,
+  },
+  {
+    ts: 'LineItemsRequest',
+    go: 'LineItemsRequest',
+    goPath: 'internal/extraction/handlers_lineitems.go',
+    goAnchor: 'func LineItemsHandler(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postLineItems(',
+    e2eAnchor: 'export function postLineItems(',
+    floor: 1,
+  },
+  {
+    ts: 'LineItemsResponse',
+    go: 'LineItemsResponse',
+    goPath: 'internal/extraction/handlers_lineitems.go',
+    goAnchor: 'func writeLineItems(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export async function postLineItems(',
+    e2eAnchor: 'export function postLineItems(',
+    floor: 4,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -285,8 +318,58 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionRegion',
       'CorrectionRequest',
       'CorrectionResponse',
+      'LineItemInput',
+      'LineItemsRequest',
+      'LineItemsResponse',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
+  })
+
+  // T3 — closes the blind spot AC-7 names: goStructKeys and
+  // TestLineItemsWireTypes_HaveBraceFreeBodies both count `json:"…"` matches, so an exported
+  // field with NO tag is invisible to both. Reads the three new structs' own brace-free bodies
+  // and demands a tag on every remaining line.
+  it('wireMirrors_everyGoFieldInTheNewStructsCarriesAJsonTag', () => {
+    const go = repoFile('internal/extraction/handlers_lineitems.go')
+    const structs = ['LineItemInput', 'LineItemsRequest', 'LineItemsResponse']
+
+    function fieldLinesOf(structName: string): string[] {
+      const body = new RegExp(`type\\s+${structName}\\s+struct\\s*\\{([^{}]*)\\}`).exec(go)?.[1] ?? ''
+      return body
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '' && !l.startsWith('//'))
+    }
+
+    for (const s of structs) {
+      const lines = fieldLinesOf(s)
+      expect(lines.length, `${s}: found no field lines to check`).toBeGreaterThan(0)
+      for (const line of lines) {
+        expect(line, `${s}: field line has no json tag -- invisible to goStructKeys`).toMatch(/`json:"[^"]+"`/)
+      }
+    }
+
+    // Planted positive: an untagged field must fail the same predicate.
+    const untagged = 'LineTax *string'
+    expect(untagged).not.toMatch(/`json:"[^"]+"`/)
+  })
+
+  // T4 — internal/invoice.LineItemInput is a DIFFERENT, five-field type (adds LineTax) with NO
+  // json tags at all -- it is Go-to-Go (Store.Create's input), never marshaled. goStructKeys
+  // counts only `json:"…"` matches, so reading it yields 0, not 5. That is the point: a goPath
+  // typo pointing this row at invoice.go would not silently agree, it would fail the floor of 4
+  // LOUDLY (0 < 4) before the equality row ever ran.
+  it('wireMirrors_theLineItemInputRowPointsAtTheExtractionPackage', () => {
+    const row = WIRE_MIRRORS.find((m) => m.ts === 'LineItemInput')
+    expect(row, 'LineItemInput row must exist').toBeDefined()
+    expect(row?.goPath).toBe('internal/extraction/handlers_lineitems.go')
+
+    const invoiceSrc = repoFile('internal/invoice/invoice.go')
+    expect(invoiceSrc, 'internal/invoice.LineItemInput must still exist, untagged').toContain(
+      'type LineItemInput struct {\n\tDescription *string\n\tQuantity    *string\n\tUnitPrice   *string\n\tLineTotal   *string\n\tLineTax     *string\n}',
+    )
+    const invoiceKeys = goStructKeys(invoiceSrc, 'LineItemInput')
+    expect(invoiceKeys.length, 'untagged fields must not be readable as wire keys').toBe(0)
   })
 
   it('wireMirrors_theApprovalRunMirrorStillLivesInApprovalsTest', () => {
@@ -409,5 +492,69 @@ describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-
     expect(tsUnionMembers(tsFixture, 'R')).toEqual(['', 'even'])
     expect(goReasonValues(goFixture)).not.toEqual(tsUnionMembers(tsFixture, 'R'))
     expect(tsUnionMembers(tsFixture, 'Absent')).toEqual([])
+  })
+})
+
+// EXTR-13-06 — the HeaderFields vocabulary mirror. Three verbatim transcriptions of
+// internal/extraction/vocabulary.go's HeaderFields exist and none was ever compared: the
+// header/line split now depends on this order (extractionReview.ts's vocabularyRank), so a
+// silent drift here misfiles a field into the wrong section rather than merely mislabeling it.
+
+const HEADER_FIELDS_GO_PATH = 'internal/extraction/vocabulary.go'
+const HEADER_FIELDS_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
+const HEADER_FIELDS_TEST_PATH = 'frontend/app/src/components/ExtractionFields.test.tsx'
+const HEADER_FIELDS_E2E_PATH = 'e2e/topology/import-wizard.spec.ts'
+
+// var HeaderFields = []string{...}, quoted strings in declaration order.
+function goHeaderFields(source: string): string[] {
+  const body = /var\s+HeaderFields\s*=\s*\[\]string\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  return [...body.matchAll(/"([^"]*)"/g)].map((m) => m[1])
+}
+
+// Accepts both `export const NAME = [...]` (extractionReview.ts) and a bare
+// `const NAME = [...]` (the two test-file transcriptions), single-quoted members in order.
+function tsStringArrayConst(source: string, name: string): string[] {
+  const body = new RegExp(`(?:export\\s+)?const\\s+${name}\\s*(?::[^=]*)?=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? ''
+  return [...body.matchAll(/'([^']*)'/g)].map((m) => m[1])
+}
+
+const HEADER_FIELDS_TS_COPIES = [
+  { path: HEADER_FIELDS_SPA_PATH, name: 'HEADER_FIELDS' },
+  { path: HEADER_FIELDS_TEST_PATH, name: 'HEADER_FIELDS' },
+  { path: HEADER_FIELDS_E2E_PATH, name: 'VOCABULARY' },
+]
+
+describe('wire mirror: HeaderFields vocabulary <-> its three TypeScript transcriptions (EXTR-13-06)', () => {
+  it('headerFields_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
+    // A floor of ">0" is the classic escape here: if a rename made every extractor return [],
+    // an order-comparison row would still pass on [] === []. The vocabulary is a fixed 10.
+    expect(goHeaderFields(repoFile(HEADER_FIELDS_GO_PATH)), `no HeaderFields in ${HEADER_FIELDS_GO_PATH}`).toHaveLength(10)
+    for (const { path, name } of HEADER_FIELDS_TS_COPIES) {
+      expect(tsStringArrayConst(repoFile(path), name), `no ${name} in ${path}`).toHaveLength(10)
+    }
+  })
+
+  it('headerFields_theGoSliceEqualsAllThreeTranscriptions', () => {
+    // In order, not as a set: HEADER_FIELDS' contract is the order one Save writes in
+    // (extractionReview.ts's vocabularyRank), which a set comparison cannot see move.
+    const goValues = goHeaderFields(repoFile(HEADER_FIELDS_GO_PATH))
+    for (const { path, name } of HEADER_FIELDS_TS_COPIES) {
+      expect(tsStringArrayConst(repoFile(path), name), `${path} ${name} vs Go, in order`).toEqual(goValues)
+    }
+  })
+
+  it('headerFields_plantedPositiveTheExtractorsCanReportARealMismatch', () => {
+    // Synthetic, in-memory only: reordered AND one member differs ('c' vs 'd').
+    const goFixture = 'var HeaderFields = []string{\n\t"a", "b", "c",\n}'
+    const tsFixture = "const HEADER_FIELDS = [\n  'b',\n  'a',\n  'd',\n]\n"
+
+    const goValues = goHeaderFields(goFixture)
+    const tsValues = tsStringArrayConst(tsFixture, 'HEADER_FIELDS')
+    expect(goValues).toEqual(['a', 'b', 'c'])
+    expect(tsValues).toEqual(['b', 'a', 'd'])
+    expect(goValues, 'the fixtures must actually differ for this test to mean anything').not.toEqual(tsValues)
+
+    // An absent name yields [], not a thrown error and not a false [] === [] agreement.
+    expect(tsStringArrayConst(tsFixture, 'ABSENT')).toEqual([])
   })
 })

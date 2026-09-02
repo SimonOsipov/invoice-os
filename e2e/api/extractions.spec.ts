@@ -67,6 +67,7 @@ const IMPORT_DOCUMENT_PATH = '/api/invoice/v1/imports/document'
 const detailPath = (id: string) => `${EXTRACTIONS_PATH}/${id}`
 const pagePath = (id: string, n: string) => `${EXTRACTIONS_PATH}/${id}/pages/${n}`
 const correctionPath = (id: string, field: string) => `${EXTRACTIONS_PATH}/${id}/fields/${field}/corrections`
+const lineItemsPath = (id: string) => `${EXTRACTIONS_PATH}/${id}/line-items`
 
 // e2e/ is ESM, so import.meta.url is the only cwd-independent anchor.
 const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')
@@ -382,5 +383,80 @@ test.describe('extraction job reader (API E2E, over the deployed gateway)', () =
       body.invoice_id,
       'EXTR12-API-02: invoice_id names the invoice the correction reached, which is the claim the audit row makes',
     ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  })
+})
+
+// --- EXTR-13-06 · the line-items replace-all POST ---------------------------------------
+//
+// Both rows below start GREEN, not RED: cmd/submission/main.go:188 registered this route in
+// subtask 04, before this subtask ran. They are deployed-wire regression guards, not new
+// coverage of unshipped behaviour -- a first green run here is correct, not a false one.
+//
+// The registration oracle is 'lines is required', never the 401 or the shared malformed-id
+// 400: the gateway verifier answers 401 before the router runs, and 'id must be a well-formed
+// uuid' is shared by the detail, correction and line-items routes alike, so neither
+// discriminates this route from the other two 404s an unregistered path could produce.
+// 'lines is required' is a string only LineItemsHandler produces (msgNoLinesKey).
+
+test.describe('line-items replace-all POST (API E2E, over the deployed gateway)', () => {
+  test('EXTR13-API-01: the line-items route is the one that answered', async () => {
+    const token = await login(PERSONAS.A)
+    const unknownJobId = crypto.randomUUID()
+
+    const res = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: {},
+    })
+
+    assertErrorEnvelope(res, 400, 'a line-items POST with no lines key')
+    expect(res.body, "the 400 should carry LineItemsHandler's own message, by name").toEqual({
+      error: 'lines is required',
+    })
+  })
+
+  test('EXTR13-API-02: the four refusals', async () => {
+    const token = await login(PERSONAS.A)
+    const unknownJobId = crypto.randomUUID()
+    const authorized = { Authorization: `Bearer ${token}` }
+
+    const unauthenticated = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: {},
+      body: { lines: [] },
+    })
+    assertUnauthorizedEnvelope(unauthenticated, 'the line-items route with no Authorization header')
+
+    const malformedId = await rawFetch(lineItemsPath('not-a-uuid'), {
+      method: 'POST',
+      headers: authorized,
+      body: { lines: [] },
+    })
+    assertErrorEnvelope(malformedId, 400, 'the line-items route with a malformed job id')
+    expect(malformedId.body, 'every {id} route in this service shares one message').toEqual({
+      error: 'id must be a well-formed uuid',
+    })
+
+    // {lines: []} is a legitimate, non-nil empty array -- it clears msgNoLinesKey and reaches
+    // writeLineItems, which is what makes an unknown job a genuine 404 rather than a 400.
+    const unknown = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: authorized,
+      body: { lines: [] },
+    })
+    assertErrorEnvelope(unknown, 404, 'an unknown job, line-items route')
+    expect(unknown.body, 'the line-items route shares the detail route not-found body').toEqual({
+      error: 'not found',
+    })
+
+    const noLinesKey = await rawFetch(lineItemsPath(unknownJobId), {
+      method: 'POST',
+      headers: authorized,
+      body: {},
+    })
+    assertErrorEnvelope(noLinesKey, 400, 'a line-items POST with no lines key')
+    expect(noLinesKey.body, "the 400 should carry LineItemsHandler's own message, by name").toEqual({
+      error: 'lines is required',
+    })
   })
 })

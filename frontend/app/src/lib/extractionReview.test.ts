@@ -24,6 +24,7 @@ import {
   pageFrameStyle,
   pointBoxStyle,
   pointedEntry,
+  postLineItems,
   reasonPill,
   regionPhrase,
   savableCorrections,
@@ -38,8 +39,10 @@ import type {
   ExtractionPage,
   ExtractionRegion,
   FrameBox,
+  LineItemsResponse,
   ViewportPoint,
 } from './extractionReview'
+import type { LineItemInput } from './lineItems'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -591,6 +594,37 @@ describe('getExtractionDetail', () => {
     expect(authedFetch).toHaveBeenCalledTimes(1)
     expect(authedFetch.mock.calls[0][0]).toBe(`${BASE}/api/submission/v1/extractions/${JOB_ID}`)
     expect(got).toEqual(detail)
+  })
+})
+
+// -- postLineItems (EXTR-13-06) -----------------------------------------------------------
+
+describe('postLineItems', () => {
+  it('postLineItems_postsTheWrappedBodyToTheGatewayPath', async () => {
+    const lines: LineItemInput[] = [
+      { description: 'Widget', quantity: '2', unit_price: '10.00', line_total: '20.00' },
+    ]
+    const response: LineItemsResponse = { id: 'line-set-1', invoice_id: 'inv-1', lines, created_at: '2026-09-02T00:00:00Z' }
+    const authedFetch = vi.fn().mockResolvedValue(response)
+
+    const got = await postLineItems(authedFetch, BASE, JOB_ID, lines)
+
+    expect(authedFetch).toHaveBeenCalledTimes(1)
+    expect(authedFetch.mock.calls[0][0]).toBe(`${BASE}/api/submission/v1/extractions/${JOB_ID}/line-items`)
+    // The wrapper, not the bare array: LineItemsRequest is `{ lines }`.
+    expect(authedFetch.mock.calls[0][1]).toEqual({ method: 'POST', body: { lines } })
+    expect(got).toEqual(response)
+  })
+
+  it('postLineItems_encodesTheJobIdAndReturnsTheParsedResponse', async () => {
+    const lines: LineItemInput[] = []
+    const response: LineItemsResponse = { id: 'line-set-2', invoice_id: 'inv-2', lines, created_at: '2026-09-02T00:00:00Z' }
+    const authedFetch = vi.fn().mockResolvedValue(response)
+
+    const got = await postLineItems(authedFetch, BASE, 'a/b', lines)
+
+    expect(authedFetch.mock.calls[0][0]).toBe(`${BASE}/api/submission/v1/extractions/a%2Fb/line-items`)
+    expect(got, 'the resolved response must come back unchanged').toBe(response)
   })
 })
 

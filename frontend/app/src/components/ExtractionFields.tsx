@@ -461,6 +461,8 @@ export function ExtractionFields({
                 ExtractionCanvas's find-by-name over the same channel a header cell does --
                 nonce bump and all. */}
             <LineItemGrid
+              // EXTR-13-08 must make lineRows/onLine* required: today a shell that forgets to
+              // pass the draft falls back to wireLines with no-op callbacks and swallows edits.
               rows={lineRows ?? wireLines}
               wireRows={wireLines}
               subtotal={subtotal}

@@ -147,7 +147,7 @@ export function LineItemGrid({
 }: {
   /** The draft the shell holds. */
   rows: LineRow[]
-  /** The wire's own rows, positionally, so a changed cell can be marked. */
+  /** The wire's own rows, matched to a draft row by `key` so a changed cell can be marked. */
   wireRows: LineRow[]
   /** The drafted `subtotal` header value, or null. */
   subtotal: string | null
@@ -205,7 +205,7 @@ export function LineItemGrid({
               <tbody>
                 {rows.map((row, at) => {
                   const n = at + 1
-                  const wire = wireRows[at] ?? null
+                  const wire = wireRows.find((w) => w.key === row.key) ?? null
                   const flagged = rowArithmetic(row) === 'flagged'
                   return (
                     <tr key={row.key} data-testid={`line-item-row-${n}`}>

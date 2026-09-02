@@ -2115,4 +2115,142 @@ describe('the line draft and the widened Save', () => {
       'the grid did not land the server’s own re-read line value',
     ).toBe('5')
   })
+  // -- QA additions: the four mutants the Mode A set left alive ------------------------------
+
+  it('sends no line POST when the draft was typed back to the wire’s own set', async () => {
+    const w = writing(LINE_JOB, async (url, body) => {
+      if (url.includes('/line-items')) return mkLineItemsResponse((body as { lines: LineItemInput[] }).lines)
+      return mkCorrectionResponse('total', String((body as { value?: string }).value ?? ''), 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+    expect(saveButton()!.disabled, 'the line edit never armed Save -- the retype below proves nothing').toBe(false)
+
+    // Back to the wire's own value: the draft exists, and lineSetChanged is false again.
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '2' } })
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '30.00' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const sent = writes(w)
+    // The floor for the absence below: the same array holds the header write that DID happen.
+    expect(
+      sent.filter((c) => c.url.includes('/fields/')),
+      'the header edit never reached the wire -- the absence below is vacuous',
+    ).toHaveLength(1)
+    expect(
+      sent.filter((c) => c.url.includes('/line-items')),
+      'an unchanged line set was posted anyway',
+    ).toHaveLength(0)
+  })
+
+  it('skips the line POST when a header POST is refused, and still carries exactly one sentence', async () => {
+    const HEADER_REFUSAL = 'that value was refused'
+    const w = wire(async (_last, url, opts) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET') return LINE_JOB
+      if (url.includes('/line-items')) return mkLineItemsResponse([])
+      throw new ApiError('http', HEADER_REFUSAL, 400)
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '30.00' } })
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const sent = writes(w)
+    expect(
+      sent.filter((c) => c.url.includes('/fields/')),
+      'the header POST never ran -- the skip below is vacuous',
+    ).toHaveLength(1)
+    expect(
+      sent.filter((c) => c.url.includes('/line-items')),
+      'the line set was posted after a header refusal, so a second doomed write went out',
+    ).toHaveLength(0)
+    const slots = Array.from(document.querySelectorAll('[data-testid="extraction-write-error"]'))
+    expect(slots, 'the error slot holds a number of sentences other than one').toHaveLength(1)
+    expect(slots[0].textContent, 'the one slot does not carry the header refusal verbatim').toBe(HEADER_REFUSAL)
+    expect(lineInputOf(1, 'quantity')!.value, 'the never-posted line draft was discarded').toBe('5')
+  })
+
+  it('keeps a line set typed while the save was in flight, instead of clearing it on that save’s commit', async () => {
+    let release: ((v: unknown) => void) | null = null
+    const w = wire(async (_last, url, opts) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET') return LINE_JOB
+      if (url.includes('/line-items')) return new Promise((r) => (release = r))
+      return mkCorrectionResponse('x', 'x', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+    expect(release, 'the line write never started -- the mid-flight edit below is vacuous').toBeTruthy()
+
+    fireEvent.change(lineInputOf(2, 'description') as HTMLInputElement, { target: { value: 'Typed mid-flight' } })
+    await flush()
+    expect(lineInputOf(2, 'description')!.value, 'the mid-flight edit never reached the cell').toBe('Typed mid-flight')
+
+    await act(async () => {
+      ;(release as unknown as (v: unknown) => void)(mkLineItemsResponse([]))
+    })
+    await flush()
+
+    // A different array than the one that was posted, so the commit is not its judge -- the
+    // `held[name] !== entries[name]` rule at the row level.
+    expect(
+      lineInputOf(2, 'description')!.value,
+      'the commit discarded a line set typed after that save started',
+    ).toBe('Typed mid-flight')
+    expect(lineInputOf(1, 'quantity')!.value, 'the rest of the mid-flight set was dropped too').toBe('5')
+  })
+
+  it('re-centres a line cell’s region when the same cell is clicked a second time', async () => {
+    // The grid reaches ExtractionCanvas through the shell's own `onSelect` and its nonce, so
+    // this is AC-7 measured on a LINE cell -- the header row's version is at "centres again
+    // when the already-selected row is clicked a second time".
+    vi.useFakeTimers()
+    silenceObserver()
+    deferredPageFetch()
+    render(review({ ctx: serving(LINE_JOB).ctx }))
+    await flush()
+
+    fireEvent.click(lineCellOf(1, 'description') as HTMLElement)
+    await flush()
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
+    expect(
+      highlights().map((h) => h.dataset.snip),
+      'the line cell drew no highlight -- every scroll claim below is vacuous',
+    ).toEqual(['line_items[1].description'])
+    expect(scrollToSpy, 'selecting a line cell never centred its region').toHaveBeenCalledTimes(1)
+
+    fireEvent.click(lineCellOf(1, 'description') as HTMLElement)
+    await flush()
+    act(() => {
+      vi.advanceTimersByTime(20)
+    })
+
+    expect(scrollToSpy, 'a second click on the selected line cell did not re-centre it').toHaveBeenCalledTimes(2)
+    expect(highlights(), 'the second click cleared the line cell’s highlight').toHaveLength(1)
+  })
 })

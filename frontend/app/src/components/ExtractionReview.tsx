@@ -159,8 +159,9 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
 
     // Seeded LAZILY, on the first grid gesture, the way `draft` is {} until one: an eager seed
     // would flip lineSetChanged true at load on any cell linesToPost canonicalises and arm Save
-    // with nothing drafted (e2e/topology/import-wizard.spec.ts:3947 and :5065 both assert it is
-    // disabled). A useEffect seed would re-fire on every re-read; this is a render-time idiom.
+    // with nothing drafted (e2e/topology/import-wizard.spec.ts:3951 asserts it is disabled; the
+    // :5065 journey asserts Save ENABLED, so it does not guard this).
+    // A useEffect seed would re-fire on every re-read; this is a render-time idiom.
     const editLines = (next: (rows: LineRow[]) => LineRow[]) => {
       setLineDraft((d) => ({ jobId, rows: next(d && d.jobId === jobId ? d.rows : wireLines) }))
     }

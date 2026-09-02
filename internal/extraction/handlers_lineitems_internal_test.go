@@ -65,7 +65,7 @@ func TestLineItemsResponse_EmptySetIsAnArrayNotNull(t *testing.T) {
 }
 
 // wireMirrors' goStructKeys reads a struct body with type\s+NAME\s+struct\s*\{([^{}]*)\} -- not
-// brace-balanced, so one inline anonymous struct truncates the match to ” and the mirror row
+// brace-balanced, so one inline anonymous struct truncates the match to "" and the mirror row
 // passes vacuously. This applies the same regex to the source and holds each type to its key
 // count, so a nested brace or a dropped field fails here rather than silently in TypeScript.
 func TestLineItemsWireTypes_HaveBraceFreeBodies(t *testing.T) {

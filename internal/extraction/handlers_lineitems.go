@@ -27,6 +27,22 @@ type LineItemInput struct {
 	LineTotal   *string `json:"line_total"`
 }
 
+// cell returns one role's value, or nil when that cell is null. Mirrors DocLine.Cell so the
+// correction blob and the readings are read through the same role names.
+func (l LineItemInput) cell(role string) *string {
+	switch role {
+	case LineRoleDescription:
+		return l.Description
+	case LineRoleQuantity:
+		return l.Quantity
+	case LineRoleUnitPrice:
+		return l.UnitPrice
+	case LineRoleLineTotal:
+		return l.LineTotal
+	}
+	return nil
+}
+
 // LineItemsRequest is the POST body. Lines is nil when the key was absent or JSON null;
 // encoding/json leaves a present-but-empty array as a non-nil, zero-length slice, which is what
 // lets a nil Lines and an empty one mean different things to this replace-all route.
@@ -75,6 +91,17 @@ func canonicalLineJSON(lines []LineItemInput) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+// parseLineItemsJSON is canonicalLineJSON's inverse, over a stored correction value. ok is
+// false for anything that is not a JSON array of line objects; the caller then leaves the
+// readings alone rather than dropping them (expandLineCorrection, reader.go).
+func parseLineItemsJSON(value string) ([]LineItemInput, bool) {
+	var lines []LineItemInput
+	if err := json.Unmarshal([]byte(value), &lines); err != nil {
+		return nil, false
+	}
+	return lines, true
 }
 
 // LineItemsHandler returns POST /v1/extractions/{id}/line-items. Identity is checked FIRST,

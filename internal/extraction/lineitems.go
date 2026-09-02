@@ -56,10 +56,39 @@ func (l *DocLine) setRegion(role string, region *Region) {
 	l.Regions[role] = region
 }
 
+// lineFieldPrefix is the package's only spelling of the name's opening
+// (TestLineFieldName_IsThePackagesOnlyNameSource).
+const lineFieldPrefix = "line_items["
+
 // LineFieldName is the only source for the line_items[N].<role> name -- reconcileLines'
 // arithmetic flag and LineItemResults' value rows must never drift apart.
 func LineFieldName(index int, role string) string {
-	return "line_items[" + strconv.Itoa(index) + "]." + role
+	return lineFieldPrefix + strconv.Itoa(index) + "]." + role
+}
+
+// ParseLineFieldName is LineFieldName's inverse. It mirrors the SPA's own regex
+// (frontend/app/src/lib/lineItems.ts LINE_FIELD_RE): a 1-based index with no leading zero and
+// one of the four roles. The block row "line_items" is not a cell name and does not parse.
+func ParseLineFieldName(name string) (index int, role string, ok bool) {
+	rest, found := strings.CutPrefix(name, lineFieldPrefix)
+	if !found {
+		return 0, "", false
+	}
+	digits, role, found := strings.Cut(rest, "].")
+	if !found {
+		return 0, "", false
+	}
+	index, err := strconv.Atoi(digits)
+	// Itoa back: Atoi admits "+1" and "01", neither of which LineFieldName can produce.
+	if err != nil || index < 1 || strconv.Itoa(index) != digits {
+		return 0, "", false
+	}
+	for _, r := range LineRoles {
+		if r == role {
+			return index, role, true
+		}
+	}
+	return 0, "", false
 }
 
 // LineItemResults projects one FieldResult per populated cell: lines in slice order, roles in

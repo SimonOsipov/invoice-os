@@ -201,14 +201,14 @@ func TestLineItems_SortsMoreThanTwelveOutOfOrderRows(t *testing.T) {
 	}
 }
 
-// A header naming only one of the three roles still proceeds (fail-closed is zero-of-three
-// only); the two unmapped roles are nil on every row, not just the first.
+// A header naming only one of the gate's three roles still proceeds (fail-closed is
+// zero-of-three only); the two unmapped roles are nil on every row, not just the first.
 func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T) {
 	tbl := extraction.Table{
 		Rows: 3, Cols: 2,
 		Cells: []extraction.TableCell{
 			liCell(0, 0, "Description", nil),
-			liCell(0, 1, "Line Total", nil), // the only recognised role
+			liCell(0, 1, "Line Total", nil), // the only role the fail-closed gate counts
 			liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
 			liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
 		},

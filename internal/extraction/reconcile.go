@@ -5,7 +5,6 @@ package extraction
 
 import (
 	"slices"
-	"strconv"
 
 	"github.com/shopspring/decimal"
 )
@@ -139,7 +138,7 @@ func reconcileLines(lines []DocLine) (block FieldResult, lineSum decimal.Decimal
 		if exceedsTolerance(qty.Mul(price).Sub(printed).Abs()) {
 			rowFlags = append(rowFlags, FieldResult{
 				Field: Field{
-					Name:   "line_items[" + strconv.Itoa(line.Index) + "].line_total",
+					Name:   LineFieldName(line.Index, LineRoleLineTotal),
 					Value:  line.LineTotal,
 					Region: line.Region,
 					Reason: ReasonInconsistent,
@@ -157,10 +156,10 @@ func reconcileLines(lines []DocLine) (block FieldResult, lineSum decimal.Decimal
 
 // Reconcile decides which candidate to trust per field and checks the document's own
 // arithmetic. Total over HeaderFields (Core AC 1): one FieldResult per member, in HeaderFields
-// order, then the line_items block, then zero or more per-row flags. A candidate naming a field
-// outside HeaderFields is ignored.
+// order, then the line_items block, then one row per populated line-item cell. A candidate
+// naming a field outside HeaderFields is ignored.
 func Reconcile(in Input) []FieldResult {
-	out := make([]FieldResult, 0, len(HeaderFields)+1+len(in.Lines))
+	out := make([]FieldResult, 0, len(HeaderFields)+1+len(in.Lines)*len(LineRoles))
 	for _, field := range HeaderFields {
 		out = append(out, decideField(in.Candidates, field))
 	}
@@ -195,8 +194,42 @@ func Reconcile(in Input) []FieldResult {
 	}
 
 	out = append(out, lineItems)
-	out = append(out, rowFlags...)
+	out = append(out, composeLineRows(LineItemResults(in.Lines), rowFlags)...)
 	return out
+}
+
+// composeLineRows emits exactly one rank-0 row per (index, role): the value row, or the
+// arithmetic flag where reconcileLines raised one for that same name. Reading order is kept, so
+// a flagged total sits in its own line's run rather than trailing the block. Nested slice scans,
+// not a lookup map: rows per document are few and reconcile.go stays off maps.
+func composeLineRows(values, flags []FieldResult) []FieldResult {
+	out := make([]FieldResult, 0, len(values)+len(flags))
+	for _, v := range values {
+		row := v
+		for _, f := range flags {
+			if f.Name == v.Name {
+				row = f
+				break
+			}
+		}
+		out = append(out, row)
+	}
+	for _, f := range flags {
+		if !rcNamed(values, f.Name) {
+			out = append(out, f) // a flag with no value row to replace is never dropped
+		}
+	}
+	return out
+}
+
+// rcNamed reports whether rows carries one named name.
+func rcNamed(rows []FieldResult, name string) bool {
+	for _, r := range rows {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // flagIfInconsistent sets ReasonInconsistent on the named field when it is decided

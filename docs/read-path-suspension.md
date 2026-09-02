@@ -319,8 +319,9 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/extractions/{id}/pages/{n}` | submission | covered | |
 | `POST /v1/documents` | submission | covered | |
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
+| `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-62 distinct routes, 68 registrations (`GET /v1/ping` is registered once per service).
+63 distinct routes, 69 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

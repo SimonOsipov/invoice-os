@@ -333,7 +333,7 @@ describe('the pane chrome', () => {
 })
 
 // ==========================================================================================
-// One cell per wire field, in wire order (AC-2, AC-3)
+// One cell per HEADER wire field, in wire order (AC-2, AC-3)
 // ==========================================================================================
 
 describe('the field cells', () => {

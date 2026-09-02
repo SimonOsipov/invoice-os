@@ -402,7 +402,13 @@ describe('T13 the flag pill strip', () => {
     expect(pill, 'the floor: row 2 really is flagged').toBeTruthy()
     const strip = pill!.parentElement as HTMLElement
     expect(strip.style.flexWrap, "the pill's strip does not wrap").toBe('wrap')
-    expect(pill!.style.flex, 'the pill can be squeezed by its own strip').toBe('none')
+    // The three longhands, not the shorthand: jsdom expands `flex` (ExtractionFields.test.tsx
+    // :1259 reads flexBasis for the same reason), so `flex: none` reads back as `0 0 auto` and
+    // no inline value ever reads back as `none`. `flex: none` IS `0 0 auto`, so this asserts
+    // the same claim at the properties jsdom actually holds it in.
+    expect(pill!.style.flexGrow, 'the pill can be squeezed by its own strip').toBe('0')
+    expect(pill!.style.flexShrink, 'the pill can be squeezed by its own strip').toBe('0')
+    expect(pill!.style.flexBasis, 'the pill can be squeezed by its own strip').toBe('auto')
   })
 })
 

@@ -3580,8 +3580,9 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   const codes = new Set(flagged.map((f) => f.reason))
   expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the four codes`).toBe(4)
 
-  // The pill loop is a header-pane claim -- a line-item cell has no header-pane home until
-  // EXTR-13-07, so it is excluded here rather than left to fail the AC it does not test.
+  // The pill loop is a header-pane claim -- a line-item cell has no header-pane home, since
+  // EXTR-13-07 gave it LineItemGrid, so it is excluded here rather than left to fail the AC it
+  // does not test.
   const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
   expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
 
@@ -4690,10 +4691,10 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     await expect(page.locator(s.selector), `${s.element} must render before its rows are read`).toBeVisible({ timeout: 30_000 })
   }
 
-  // The bound's DEPLOYED half: no subject resolves inside a line-item cell. The pane renders
-  // every line name raw as `extraction-field-line_items...` until EXTR-13-07 filters them, so
-  // this reads the surface rather than the table above -- and it stays true, not merely
-  // vacuous, once that filter lands. What CANNOT be asserted, so it is recorded instead of
+  // The bound's DEPLOYED half: no subject resolves inside a line-item cell. EXTR-13-07's filter
+  // keeps every line name out of `extraction-field-*` and gives it to LineItemGrid, so this
+  // reads the surface rather than the table above -- and it stays true, not merely vacuous,
+  // now that the filter has landed. What CANNOT be asserted, so it is recorded instead of
   // skipped: the subject set is not derivable from the wire at all, because four subjects
   // (extraction-canvas, extraction-fields, extraction-ground, extraction-toolbar) and the page
   // frame are pane chrome that no wire field names. The bound is therefore a guard against a

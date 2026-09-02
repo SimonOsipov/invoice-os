@@ -477,6 +477,68 @@ func TestRLS_EditBySourceDocumentTxClearsAColumnToNull(t *testing.T) {
 	}
 }
 
+// --- lines-only edits (EXTR-13-04's AC-10 oracle, link 1 of 3: the demotion rule, proven
+// through EditBySourceDocumentTx itself, not through Store.Edit) -----------------------------
+
+// The line-items route posts EditInput{LineItems: &lines} with every header field nil. editTx
+// does not special-case that shape (INVED-01-04's widened guard), so a lines-only edit must
+// demote a validated invoice exactly like a header-only one does
+// (TestRLS_EditBySourceDocumentTxDemotesAValidatedInvoiceToDraft) -- but that test never posts a
+// line, so it cannot be cited as proof of THIS path.
+func TestRLS_EditBySourceDocumentTxDemotesOnALinesOnlyEdit(t *testing.T) {
+	f := ebsSeed(t, "EBS-07")
+	if _, err := f.store.Transition(f.ctx, f.invoiceID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+	// The control: the fixture really reaches validated before the edit, or the demotion
+	// asserted below proves nothing.
+	if got := f.status(t, f.invoiceID); got != StatusValidated {
+		t.Fatalf("control: invoices.status = %q after the pre-hop Transition, want %q", got, StatusValidated)
+	}
+
+	beforeHistory := mustCount(t, f.super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, f.invoiceID)
+
+	desc1, qty1, price1, total1 := "Widget", "2", "10.00", "20.00"
+	desc2, qty2, price2, total2 := "Gadget", "1", "5.00", "5.00"
+	lines := []LineItemInput{
+		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1},
+		{Description: &desc2, Quantity: &qty2, UnitPrice: &price2, LineTotal: &total2},
+	}
+
+	got, err := f.edit(t, f.documentID, EditInput{LineItems: &lines})
+	if err != nil {
+		t.Fatalf("a lines-only correction of a validated invoice: want success, got %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("the returned status = %q, want %q", got.Status, StatusDraft)
+	}
+	if stored := f.status(t, f.invoiceID); stored != StatusDraft {
+		t.Errorf("invoices.status = %q, want %q -- a lines-only correction must demote too, not only a header one", stored, StatusDraft)
+	}
+	if n := mustCount(t, f.super,
+		`SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`,
+		f.invoiceID); n != 1 {
+		t.Errorf("%d (validated,draft) history row(s), want exactly 1", n)
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, f.invoiceID); n != beforeHistory+1 {
+		t.Errorf("history rows = %d, want %d", n, beforeHistory+1)
+	}
+
+	stored := readLineItemsForTest(t, f.super, f.invoiceID)
+	if len(stored) != 2 {
+		t.Fatalf("%d line_items row(s) stored, want 2", len(stored))
+	}
+	if stored[0].LineNo != 1 || stored[1].LineNo != 2 {
+		t.Errorf("line_no sequence = [%d,%d], want [1,2]", stored[0].LineNo, stored[1].LineNo)
+	}
+	if got := stored[0].Description; got == nil || *got != desc1 {
+		t.Errorf("line 1 description = %s, want %q", ebsShow(got), desc1)
+	}
+	if got := stored[1].Description; got == nil || *got != desc2 {
+		t.Errorf("line 2 description = %s, want %q", ebsShow(got), desc2)
+	}
+}
+
 // A member holding a COPY of a sentinel is a caller who dereferenced and re-took an address.
 // Pointer identity no longer matches, so without this guard the copy is written as its own
 // CONTENTS. MEASURED with the guard removed: the two text-shaped arms raise 22021 (the NUL byte

@@ -49,7 +49,10 @@ import type {
   ExtractionFieldState,
   ExtractionPage,
   ExtractionRegion,
+  LineItemsResponse,
 } from '../lib/extractionReview'
+import { linesFromFields, linesToPost } from '../lib/lineItems'
+import type { LineItemInput, LineRole } from '../lib/lineItems'
 import type { PlatformCtx } from '../types'
 import { ExtractionReview } from './ExtractionReview'
 
@@ -1766,5 +1769,345 @@ describe('what a job change drops', () => {
     expect(fieldRows(), 'document 1 rendered no row on the way back').toHaveLength(3)
     expect(inputOf('total')?.value, 'document 1 reopened holding the value it was left with').toBe('1000.00')
     expect(saveButton()?.disabled, 'document 1 reopened able to post a draft nobody re-entered').toBe(true)
+  })
+})
+
+// ==========================================================================================
+// EXTR-13-08, Mode A. `ExtractionReview.tsx` holds no line draft and passes no lineRows /
+// onLine* props to ExtractionFields, so every row below fails on the widened behaviour it is
+// about. task-814's plan section E is the source for T1-T10.
+// ==========================================================================================
+
+/** Two header fields plus two line rows, both on page 1. */
+const LINE_JOB: ExtractionDetail = mkDetail({
+  fields: [
+    mkField({ name: 'subtotal', value: '20.00', region: mkRegion({ page: 1 }) }),
+    mkField({ name: 'total', value: '25.00', region: mkRegion({ page: 1 }) }),
+    mkField({
+      name: 'line_items[1].description',
+      value: 'Widget',
+      region: mkRegion({ page: 1, x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.24 }),
+    }),
+    mkField({
+      name: 'line_items[1].quantity',
+      value: '2',
+      region: mkRegion({ page: 1, x0: 0.32, y0: 0.2, x1: 0.4, y1: 0.24 }),
+    }),
+    mkField({
+      name: 'line_items[1].unit_price',
+      value: '10.00',
+      region: mkRegion({ page: 1, x0: 0.42, y0: 0.2, x1: 0.5, y1: 0.24 }),
+    }),
+    mkField({
+      name: 'line_items[1].line_total',
+      value: '20.00',
+      region: mkRegion({ page: 1, x0: 0.52, y0: 0.2, x1: 0.6, y1: 0.24 }),
+    }),
+    mkField({
+      name: 'line_items[2].description',
+      value: 'Gadget',
+      region: mkRegion({ page: 1, x0: 0.1, y0: 0.26, x1: 0.3, y1: 0.3 }),
+    }),
+    mkField({
+      name: 'line_items[2].quantity',
+      value: '1',
+      region: mkRegion({ page: 1, x0: 0.32, y0: 0.26, x1: 0.4, y1: 0.3 }),
+    }),
+    mkField({
+      name: 'line_items[2].unit_price',
+      value: '5.00',
+      region: mkRegion({ page: 1, x0: 0.42, y0: 0.26, x1: 0.5, y1: 0.3 }),
+    }),
+    mkField({
+      name: 'line_items[2].line_total',
+      value: '5.00',
+      region: mkRegion({ page: 1, x0: 0.52, y0: 0.26, x1: 0.6, y1: 0.3 }),
+    }),
+  ],
+})
+
+function lineInputOf(n: number, role: LineRole): HTMLInputElement | null {
+  return screen.queryByTestId(`line-item-input-${n}-${role}`) as HTMLInputElement | null
+}
+
+function lineCellOf(n: number, role: LineRole): HTMLElement | null {
+  return screen.queryByTestId(`line-item-cell-${n}-${role}`)
+}
+
+function lineAddButton(): HTMLElement | null {
+  return screen.queryByTestId('line-item-add')
+}
+
+/** The 201 body the line-items route answers. */
+function mkLineItemsResponse(lines: LineItemInput[]): LineItemsResponse {
+  return {
+    id: 'f1e2d3c4-b5a6-4f1e-8d2c-3b4a5f6e7d8c',
+    invoice_id: '5d2f7a10-6b3c-4e8d-9f01-2a3b4c5d6e7f',
+    lines,
+    created_at: '2026-09-02T09:00:00Z',
+  }
+}
+
+/** Every write's own kind, off its URL: a header field name, or 'line-items'. */
+function callKind(c: WireCall): string {
+  return c.url.includes('/line-items') ? 'line-items' : (c.url.split('/fields/')[1]?.split('/')[0] ?? '')
+}
+
+describe('the line draft and the widened Save', () => {
+  it('T1 enables Save on a line edit alone, and posts the line set as one request', async () => {
+    const w = writing(LINE_JOB, async (url, body) => {
+      if (url.includes('/line-items')) return mkLineItemsResponse((body as { lines: LineItemInput[] }).lines)
+      return mkCorrectionResponse('total', '1', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled, 'Save was armed before anything was drafted').toBe(true)
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+
+    expect(saveButton()!.disabled, 'a line-only edit did not arm Save').toBe(false)
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const linePosts = writes(w).filter((c) => c.url.includes('/line-items'))
+    expect(linePosts, 'Save sent no request to the line-items route').toHaveLength(1)
+    expect(linePosts[0].method, 'the line set was not POSTed').toBe('POST')
+  })
+
+  it('T2 keeps the line draft out of savableCorrections -- one header POST, one line POST, never a merged one', async () => {
+    const w = writing(LINE_JOB, async (url, body) => {
+      if (url.includes('/line-items')) return mkLineItemsResponse((body as { lines: LineItemInput[] }).lines)
+      return mkCorrectionResponse('total', String((body as { value?: string }).value ?? ''), 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '30.00' } })
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const sent = writes(w)
+    expect(sent.length, 'Save sent nothing -- every claim below is vacuous').toBeGreaterThan(0)
+    expect(sent.filter((c) => c.url.includes('/fields/')), 'the header edit did not reach its own route').toHaveLength(1)
+    expect(sent.filter((c) => c.url.includes('/line-items')), 'the line draft never reached its own route').toHaveLength(1)
+    expect(
+      sent.some((c) => c.url.includes('/fields/line_items')),
+      'a line cell was posted as a per-field header correction',
+    ).toBe(false)
+  })
+
+  it('T3 drops both drafts on a job change, even into a job carrying the same line rows', async () => {
+    const w = wire(async (id) => ({ ...LINE_JOB, id }))
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '999' } })
+    await flush()
+    expect(
+      lineInputOf(1, 'quantity')!.value,
+      'the typed value never reached the line cell -- every claim below is vacuous',
+    ).toBe('999')
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+
+    expect(lineInputOf(1, 'quantity')!.value, 'document 2 opened carrying document 1’s typed line value').toBe('2')
+    expect(saveButton()!.disabled, 'document 2 opened able to post document 1’s line draft').toBe(true)
+  })
+
+  it('T4 posts headers, then the line set, then re-reads once', async () => {
+    let gets = 0
+    const w = wire(async (_last, url, opts) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET') {
+        gets += 1
+        return LINE_JOB
+      }
+      if (url.includes('/line-items')) return mkLineItemsResponse((opts?.body as { lines: LineItemInput[] }).lines)
+      return mkCorrectionResponse('subtotal', String((opts?.body as { value?: string }).value ?? ''), 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+    gets = 0 // clear the mount's own read
+
+    fireEvent.change(inputOf('subtotal') as HTMLInputElement, { target: { value: '22.00' } })
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const order = writes(w).map(callKind)
+    expect(order.length, 'Save sent nothing -- every claim below is vacuous').toBeGreaterThan(0)
+    expect(order, 'the header write and the line write did not run as one ordered pair').toEqual([
+      'subtotal',
+      'line-items',
+    ])
+    expect(gets, 'the widened save did not re-read the detail exactly once').toBe(1)
+  })
+
+  it('T5 keeps the whole line draft and shows the line route’s sentence when the line POST is refused', async () => {
+    const REFUSAL = 'this invoice can no longer be corrected'
+    const w = wire(async (_last, url, opts) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET') return LINE_JOB
+      if (url.includes('/line-items')) throw new ApiError('http', REFUSAL, 409)
+      return mkCorrectionResponse('subtotal', String((opts?.body as { value?: string }).value ?? ''), 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('subtotal') as HTMLInputElement, { target: { value: '22.00' } })
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(inputOf('subtotal')!.value, 'the committed header field did not come back from the server').toBe('20.00')
+    expect(lineInputOf(1, 'quantity')!.value, 'the refused line edit lost the typing nobody accepted').toBe('5')
+    expect(
+      screen.queryByTestId('extraction-write-error')?.textContent,
+      'the line route’s own sentence was not rendered verbatim',
+    ).toBe(REFUSAL)
+  })
+
+  it('T6 the widened Save enables on a line-only change and disarms with filter:none while the line write is in flight', async () => {
+    let release: ((v: unknown) => void) | null = null
+    const w = wire(async (_last, url, opts) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET') return LINE_JOB
+      if (url.includes('/line-items')) return new Promise((r) => (release = r))
+      return mkCorrectionResponse('x', 'x', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+
+    const save = saveButton()
+    expect(save, 'the screen renders no Save button').toBeTruthy()
+    expect(save!.disabled, 'a line-only edit did not arm Save').toBe(false)
+    expect(save!.style.filter, 'the enabled Save keeps the disabled filter').toBe('')
+
+    await act(async () => {
+      fireEvent.click(save as HTMLElement)
+    })
+    await flush()
+
+    expect(release, 'the line write never started -- the in-flight claim below is vacuous').toBeTruthy()
+    expect(saveButton()!.disabled, 'Save stayed pressable while its own line write was in flight').toBe(true)
+    expect(saveButton()!.style.filter, 'Save brightened under the cursor while a write was in flight').toBe('none')
+
+    await act(async () => {
+      ;(release as unknown as (v: unknown) => void)(mkLineItemsResponse([]))
+    })
+    await flush()
+  })
+
+  // T7 ("re-centres a line cell's region on a second click") and T8 ("selects through the
+  // shipped find-by-name with no canvas change") are BOTH measured GREEN today, unchanged: a
+  // line cell's `onSelectCell` is already the shell's own generic `onSelect` (ExtractionFields.tsx
+  // :470), and ExtractionCanvas resolves `selected` against the FULL wire `fields` array — line
+  // entries included — with no gate on subtask 08's lineDraft (ExtractionCanvas.tsx:231-232,
+  // :303-306). Neither claim is this subtask's to prove RED. The one genuinely new claim in this
+  // area — that a line cell survives EDITING and stays selectable/highlightable by its own
+  // name, which only matters once `onLineEdit` spreads the whole cell rather than the bare value
+  // — is the row below.
+  it('keeps the cell’s own name selectable after a line edit, so the highlight does not drop off it', async () => {
+    render(review({ ctx: serving(LINE_JOB).ctx }))
+    await flush()
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '5' } })
+    await flush()
+    expect(
+      lineInputOf(1, 'quantity')!.value,
+      'the typed value never reached the cell -- the click below is vacuous',
+    ).toBe('5')
+
+    fireEvent.click(lineCellOf(1, 'quantity') as HTMLElement)
+    await flush()
+
+    expect(pressedRows().length, 'nothing rendered as selected after the click').toBeGreaterThan(0)
+    expect(
+      highlights().map((h) => h.dataset.snip),
+      'the edited cell no longer carries its own field name, so selecting it highlights nothing',
+    ).toEqual(['line_items[1].quantity'])
+  })
+
+  it('T9 adding a blank row arms Save, and posts the wire’s own set unchanged', async () => {
+    const w = writing(LINE_JOB, async (url, body) => {
+      if (url.includes('/line-items')) return mkLineItemsResponse((body as { lines: LineItemInput[] }).lines)
+      return mkCorrectionResponse('x', 'x', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled, 'Save was armed before anything was drafted').toBe(true)
+
+    fireEvent.click(lineAddButton() as HTMLElement)
+    await flush()
+
+    expect(saveButton()!.disabled, 'adding a blank row did not arm Save').toBe(false)
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const linePosts = writes(w).filter((c) => c.url.includes('/line-items'))
+    expect(linePosts, 'Save sent no request to the line-items route').toHaveLength(1)
+    const expected = linesToPost(linesFromFields(LINE_JOB.fields))
+    expect(
+      (linePosts[0].body as { lines: unknown }).lines,
+      'the blank row changed the set that was actually posted',
+    ).toEqual(expected)
+  })
+
+  it('T10 shows the server’s own line set after a successful save, not the draft that was typed', async () => {
+    const SETTLED: ExtractionDetail = {
+      ...LINE_JOB,
+      fields: LINE_JOB.fields.map((f) => (f.name === 'line_items[1].quantity' ? { ...f, value: '5' } : f)),
+    }
+    let posted = false
+    const w = wire(async (_last, url, opts) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET') return posted ? SETTLED : LINE_JOB
+      if (url.includes('/line-items')) {
+        posted = true
+        return mkLineItemsResponse([])
+      }
+      return mkCorrectionResponse('x', 'x', 'typed')
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(lineInputOf(1, 'quantity') as HTMLInputElement, { target: { value: '999' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(
+      lineInputOf(1, 'quantity')!.value,
+      'the grid did not land the server’s own re-read line value',
+    ).toBe('5')
   })
 })

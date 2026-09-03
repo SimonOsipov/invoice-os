@@ -262,13 +262,36 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
+		// Only a pointed correction teaches, and only where the job recorded a layout the box
+		// can anchor to. Derived before the correction row because the label is one of its
+		// columns; the rule row itself is written last, below.
+		region := regionFromWire(in.req.Region)
+		anchorLabel := strings.TrimSpace(in.req.AnchorLabel)
+		var (
+			learned     LearnedRule
+			fingerprint string
+			learnedOK   bool
+		)
+		if in.req.Method == MethodPointed && region != nil {
+			layout, ok, err := jobLayoutTx(ctx, tx, in.caller.TenantID, in.jobID)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if lr, derived := LearnRule(in.field, *region, layout.Anchors); derived {
+					learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
+					anchorLabel = strings.TrimSpace(lr.Anchor.Text)
+				}
+			}
+		}
+
 		// The tx-taking half: this route cannot afford a second transaction of its own.
 		appended, err := appendCorrectionTx(ctx, tx, in.caller.TenantID, in.jobID, Correction{
 			FieldName:   in.field,
 			Value:       in.value,
 			Method:      in.req.Method,
-			Region:      regionFromWire(in.req.Region),
-			AnchorLabel: strings.TrimSpace(in.req.AnchorLabel),
+			Region:      region,
+			AnchorLabel: anchorLabel,
 			Actor:       in.caller.Subject,
 		})
 		if err != nil {
@@ -281,6 +304,14 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			InvoiceID: invoiceID, FieldName: in.field, Method: in.req.Method,
 		}); err != nil {
 			return err
+		}
+
+		// Last of the four writes, so a failure here rolls the other three back
+		// (TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit).
+		if learnedOK {
+			if _, err := appendAnchorRuleTx(ctx, tx, in.caller.TenantID, fingerprint, learned); err != nil {
+				return err
+			}
 		}
 
 		out = CorrectionResponse{

@@ -406,6 +406,67 @@ func TestFleetGate_AllowlistEntriesStillMatchSomething(t *testing.T) {
 	}
 }
 
+// --- AC-4 ---
+
+// stepHeadRe matches a step's `- name:` line inside a job's `steps:` list.
+var stepHeadRe = regexp.MustCompile(`^\s+- name: (.*)$`)
+
+// yamlSteps splits content into (name, body) pairs, one per `- name:` step.
+func yamlSteps(content string) (names, bodies []string) {
+	lines := strings.Split(content, "\n")
+	cur := -1
+	for _, l := range lines {
+		if m := stepHeadRe.FindStringSubmatch(l); m != nil {
+			names = append(names, m[1])
+			bodies = append(bodies, "")
+			cur = len(bodies) - 1
+			continue
+		}
+		if cur >= 0 {
+			bodies[cur] += l + "\n"
+		}
+	}
+	return names, bodies
+}
+
+// TestDevEnv_DoclingBuildIsGated: docling has no public domain, so CI reaches it
+// only through the gateway's /healthz/fleet roll-up. Without a step that names
+// it, a sidecar serving the previous commit is invisible.
+func TestDevEnv_DoclingBuildIsGated(t *testing.T) {
+	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
+
+	names, bodies := yamlSteps(content)
+	if len(names) == 0 {
+		t.Fatalf("%s: parsed zero steps -- the scan reached nothing, so a missing gate is indistinguishable from a present one", devEnvRel)
+	}
+
+	idx := -1
+	for i, n := range names {
+		if strings.Contains(strings.ToLower(n), "docling") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("%s: no step names `docling` among %d steps -- nothing blocks on the sidecar's build", devEnvRel, len(names))
+	}
+	t.Logf("gate step: %q", names[idx])
+	body := bodies[idx]
+
+	for _, want := range []string{
+		"healthz/fleet",  // the only route to a service with no public domain
+		"docling",        // the roll-up entry it selects
+		".build",         // the field it compares
+		"EXPECTED_BUILD", // the commit under test
+		"github.sha",     // ...bound to the actual sha, not a literal
+		"exit 1",         // and it fails the run rather than warning
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s: the `%s` step does not mention %q -- it cannot be blocking on the sidecar's build", devEnvRel, names[idx], want)
+		}
+	}
+}
+
 // --- AC-5 ---
 
 var yamlItemRe = regexp.MustCompile(`^\s+-\s+'([^']*)'\s*$`)

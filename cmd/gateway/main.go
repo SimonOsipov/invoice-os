@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"maps"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -32,6 +34,12 @@ var routedServices = []string{
 	"tenancy", "portfolio", "invoice", "validation",
 	"submission", "dashboard", "notifications",
 }
+
+// probedServices are reached by /healthz/fleet but get NO public proxy route:
+// the sidecar has no public domain, so the roll-up is CI's only view of it, and
+// nothing outside the private network should be able to call it.
+// TestGatewayHandlersPublishNoProxyRouteForAProbedService holds that line.
+var probedServices = []string{"docling"}
 
 func main() {
 	app, err := platform.New("gateway")
@@ -119,7 +127,7 @@ func main() {
 		fatal(app.Logger, "gateway: verifier: %v", err)
 	}
 
-	upstreams, err := loadUpstreams()
+	routed, probed, err := loadUpstreams()
 	if err != nil {
 		fatal(app.Logger, "gateway: upstreams: %v", err)
 	}
@@ -130,16 +138,12 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	app.Mux.Handle(routePrefix, withCORS(gateway.Handler(gateway.Options{
-		Verifier:  verifier,
-		Upstreams: upstreams,
-		Logger:    app.Logger,
-	})))
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, app.Logger)
+	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
-	// Public fleet-health roll-up: the seven context services are private-network-only,
-	// so this is how CI (and a future status page) see their health through the one public
-	// backend surface. Outside /api/ and outside the verifier — operational, not tenant data.
-	app.Mux.HandleFunc("GET /healthz/fleet", gateway.FleetHealthHandler(upstreams, app.Logger))
+	// Public fleet-health roll-up, outside /api/ and outside the verifier —
+	// operational, not tenant data.
+	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
 	// Embed the mock issuer wherever ENVIRONMENT is not production and the flag is
 	// set — the public demo included; under Hosted posture the mint serves only
@@ -189,24 +193,59 @@ const routePrefix = "/api/"
 // healthcheck timeout with no cause attached.
 const dbConnectWait = 120 * time.Second
 
-// loadUpstreams reads each routed service's base URL from <NAME>_URL. A missing
-// or invalid URL fails startup: a gateway that cannot reach a service it fronts
-// must not come up half-wired.
-func loadUpstreams() (map[string]*url.URL, error) {
-	out := make(map[string]*url.URL, len(routedServices))
-	for _, svc := range routedServices {
-		key := strings.ToUpper(svc) + "_URL"
-		raw := os.Getenv(key)
-		if raw == "" {
-			return nil, fmt.Errorf("%s is required", key)
+// gatewayHandlers builds the two public handlers. Proxy routes come from
+// `routed` alone — that argument, not a filter, is what keeps a probed service
+// off /api/. The fleet roll-up sees both lists.
+//
+// It returns handlers rather than registering them, and leaves the CORS wrap to
+// main, so both source scans still see what they assert on:
+// TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute (the app.Mux calls) and
+// TestGatewayApiMountIsCORSWrappedAndNotMethodScoped (withCORS at the mount).
+func gatewayHandlers(
+	verifier *auth.Verifier,
+	routed, probed map[string]*url.URL,
+	log *slog.Logger,
+) (api http.Handler, fleet http.HandlerFunc) {
+	api = gateway.Handler(gateway.Options{
+		Verifier:  verifier,
+		Upstreams: routed,
+		Logger:    log,
+	})
+
+	all := make(map[string]*url.URL, len(routed)+len(probed))
+	maps.Copy(all, routed)
+	maps.Copy(all, probed)
+	return api, gateway.FleetHealthHandler(all, log)
+}
+
+// loadUpstreams reads each service's base URL from <NAME>_URL, returning the
+// routed and probed maps separately. A missing or invalid URL fails startup —
+// including a probed one: a gateway reporting a fleet it cannot see is worse
+// than one that refuses to boot.
+func loadUpstreams() (routed, probed map[string]*url.URL, err error) {
+	load := func(names []string) (map[string]*url.URL, error) {
+		out := make(map[string]*url.URL, len(names))
+		for _, svc := range names {
+			key := strings.ToUpper(svc) + "_URL"
+			raw := os.Getenv(key)
+			if raw == "" {
+				return nil, fmt.Errorf("%s is required", key)
+			}
+			u, err := url.Parse(raw)
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s=%q: %w", key, raw, err)
+			}
+			out[svc] = u
 		}
-		u, err := url.Parse(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid %s=%q: %w", key, raw, err)
-		}
-		out[svc] = u
+		return out, nil
 	}
-	return out, nil
+	if routed, err = load(routedServices); err != nil {
+		return nil, nil, err
+	}
+	if probed, err = load(probedServices); err != nil {
+		return nil, nil, err
+	}
+	return routed, probed, nil
 }
 
 func mustEnv(key string) string {

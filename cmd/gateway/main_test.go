@@ -12,12 +12,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // TestGatewayMainPrefersUnprefixedPasswordVars: Test Spec #1. Static
@@ -280,3 +285,144 @@ func TestRolePasswordResolutionPrecedence(t *testing.T) {
 		})
 	}
 }
+
+// --- EXTR-17-06: docling is probed, never routed ---
+
+// setUpstreamEnv points every routed and probed service at addr, so
+// loadUpstreams succeeds and the maps it returns can be compared.
+func setUpstreamEnv(t *testing.T, addr string) {
+	t.Helper()
+	for _, svc := range append(append([]string{}, routedServices...), probedServices...) {
+		t.Setenv(strings.ToUpper(svc)+"_URL", addr)
+	}
+}
+
+// TestLoadUpstreamsSeparatesRoutedFromProbed: routing is a capability the
+// gateway withholds by type. A probed upstream must never appear in the map
+// that becomes proxy routes.
+func TestLoadUpstreamsSeparatesRoutedFromProbed(t *testing.T) {
+	if len(routedServices) == 0 || len(probedServices) == 0 {
+		t.Fatalf("routedServices=%d probedServices=%d -- an empty list makes every assertion below vacuous", len(routedServices), len(probedServices))
+	}
+	setUpstreamEnv(t, "http://127.0.0.1:1")
+
+	routed, probed, err := loadUpstreams()
+	if err != nil {
+		t.Fatalf("loadUpstreams: %v", err)
+	}
+	if len(routed) != len(routedServices) {
+		t.Errorf("routed has %d entries, want %d", len(routed), len(routedServices))
+	}
+	if len(probed) != len(probedServices) {
+		t.Errorf("probed has %d entries, want %d", len(probed), len(probedServices))
+	}
+	for _, svc := range probedServices {
+		if _, ok := routed[svc]; ok {
+			t.Errorf("%q is in the routed map -- it would get a public /api/%s/* proxy route", svc, svc)
+		}
+		if _, ok := probed[svc]; !ok {
+			t.Errorf("%q is probed but loadUpstreams did not return it -- /healthz/fleet would never observe it", svc)
+		}
+	}
+	for _, svc := range routedServices {
+		if _, ok := routed[svc]; !ok {
+			t.Errorf("%q is routed but loadUpstreams did not return it", svc)
+		}
+	}
+	if !slices.Contains(probedServices, "docling") {
+		t.Errorf("probedServices = %v, want it to carry `docling` -- the sidecar has no public domain, so the roll-up is CI's only view of it", probedServices)
+	}
+}
+
+// TestLoadUpstreamsFailsLoudlyOnAMissingProbedURL: the accepted cost of probing
+// through the gateway is that gateway boot now depends on DOCLING_URL. It must
+// stay a named boot failure, not a silently skipped probe.
+func TestLoadUpstreamsFailsLoudlyOnAMissingProbedURL(t *testing.T) {
+	setUpstreamEnv(t, "http://127.0.0.1:1")
+	t.Setenv("DOCLING_URL", "")
+
+	_, _, err := loadUpstreams()
+	if err == nil {
+		t.Fatal("loadUpstreams succeeded with DOCLING_URL unset -- the gateway would come up reporting a fleet it cannot see")
+	}
+	if !strings.Contains(err.Error(), "DOCLING_URL") {
+		t.Errorf("error %q does not name DOCLING_URL, so the boot log would not say which variable is missing", err)
+	}
+}
+
+// TestGatewayHandlersPublishNoProxyRouteForAProbedService is the security half
+// of this change, asserted on the one function that merges the two maps: a
+// probed service is 404 under /api/, while a routed one reaches its proxy (502
+// against a dead upstream proves it routed rather than 404'd).
+func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
+	issuer, err := auth.NewMockIssuer(mountTestIssuer)
+	if err != nil {
+		t.Fatalf("mock issuer: %v", err)
+	}
+	jwks := httptest.NewServer(issuer.JWKSHandler())
+	t.Cleanup(jwks.Close)
+	verifier, err := auth.NewVerifier(auth.Config{Issuer: mountTestIssuer, JWKSURL: jwks.URL})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	tok, err := issuer.Mint(auth.MintOptions{
+		Subject:  "11111111-1111-1111-1111-111111111111",
+		Role:     "authenticated",
+		TenantID: "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	setUpstreamEnv(t, "http://127.0.0.1:1")
+	routed, probed, err := loadUpstreams()
+	if err != nil {
+		t.Fatalf("loadUpstreams: %v", err)
+	}
+
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, slog.Default())
+	mux := http.NewServeMux()
+	mux.Handle("/api/", apiHandler)
+	mux.HandleFunc("GET /healthz/fleet", fleetHandler)
+
+	get := func(path string) int {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	for _, svc := range probedServices {
+		if got := get("/api/" + svc + "/x"); got != http.StatusNotFound {
+			t.Errorf("GET /api/%s/x = %d, want 404 -- a probed sidecar is exposed as a public proxy route", svc, got)
+		}
+	}
+	// Control: without this a mux that routes NOTHING would pass the loop above.
+	if got := get("/api/" + routedServices[0] + "/x"); got != http.StatusBadGateway {
+		t.Fatalf("GET /api/%s/x = %d, want 502 (routed to a dead upstream) -- the 404s above prove nothing if no service is routed at all", routedServices[0], got)
+	}
+
+	// The roll-up sees both lists: that is why probing through the gateway works.
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
+	var fleet struct {
+		Services []struct {
+			Name string `json:"name"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &fleet); err != nil {
+		t.Fatalf("decode /healthz/fleet: %v (body %q)", err, rec.Body.String())
+	}
+	seen := map[string]bool{}
+	for _, s := range fleet.Services {
+		seen[s.Name] = true
+	}
+	for _, svc := range append(append([]string{"gateway"}, routedServices...), probedServices...) {
+		if !seen[svc] {
+			t.Errorf("/healthz/fleet omits %q -- the deploy gate cannot block on a service the roll-up never names", svc)
+		}
+	}
+}
+
+const mountTestIssuer = "https://mock.ascomply.test"

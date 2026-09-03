@@ -845,6 +845,29 @@ jobs:
           fi
           echo "All 9 backends green on $EXPECTED_BUILD."
 
+      # docling has no public domain, so the gateway's roll-up is CI's only route
+      # to it. The step above already blocks on every service's build; this one
+      # names the sidecar, so a stale sidecar reads as itself rather than as one
+      # entry in a joined list. Short poll: the wait already happened above.
+      - name: Gate on docling's build in the fleet roll-up
+        env:
+          EXPECTED_BUILD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          build=""
+          for _ in $(seq 1 5); do
+            if curl -sS --connect-timeout 5 --max-time 10 -o /tmp/docling.json "$GATEWAY_URL/healthz/fleet"; then
+              build=$(jq -r '[.services[] | select(.name == "docling") | .build // "none"][0] // "absent"' /tmp/docling.json)
+              if [ "$build" = "$EXPECTED_BUILD" ]; then break; fi
+            fi
+            sleep 5
+          done
+          if [ "$build" != "$EXPECTED_BUILD" ]; then
+            echo "::error::docling reports build='${build:-unreachable}' but the commit under test is $EXPECTED_BUILD. 'absent' means the roll-up does not name docling at all — check DOCLING_URL is set on the gateway service and that probedServices (cmd/gateway/main.go) still carries it. 'none' means the image shipped without sidecar/docling/build.txt. Any other value means the sidecar's new container never replaced the old one."
+            exit 1
+          fi
+          echo "docling is serving $EXPECTED_BUILD."
+
   # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation) via Playwright,

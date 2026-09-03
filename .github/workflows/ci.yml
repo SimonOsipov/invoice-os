@@ -164,7 +164,7 @@ jobs:
           grep -q 'tier-1 accuracy over the golden corpus' accuracy.txt
 
   # Prove the shared multi-service Dockerfile (M2-04) actually builds before it
-  # reaches Railway (M2-12). All seven services stamp the same root Dockerfile
+  # reaches Railway (M2-12). All nine Go services stamp the same root Dockerfile
   # with only the SERVICE build arg differing, so one plain service (tenancy) is
   # enough to guard "Option B": the build only sees Go source because
   # Dockerfile.dockerignore overrides the SPA-tuned root .dockerignore, so a

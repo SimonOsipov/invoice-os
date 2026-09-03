@@ -68,7 +68,7 @@ name: Dev Env (deploy full fleet + verify)
 #    or if any deployment trigger appears. See docs/deploy-model.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
-#  - Railway Watch Paths empty on all 13 non-Postgres services, or `railway up`
+#  - Railway Watch Paths empty on all 14 non-Postgres services, or `railway up`
 #    silently skips untouched services and a torn-down fleet never recovers.
 #    prepare-env asserts this at runtime. Re-clear if a service is recreated.
 #  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
@@ -356,7 +356,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
 
-      - name: Assert Watch Paths are empty on all 13 non-Postgres services (M3-16 invariant)
+      - name: Assert Watch Paths are empty on all 14 non-Postgres services (M3-16 invariant)
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
@@ -391,7 +391,7 @@ jobs:
             exit 1
           fi
 
-          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","landing","app","ops-console","support-console"]'
+          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","docling","landing","app","ops-console","support-console"]'
 
           missing=$(echo "$resp" | jq -r --argjson names "$expected_json" '
             ([.data.environment.serviceInstances.edges[]?.node.serviceName]) as $present
@@ -413,16 +413,17 @@ jobs:
             echo "$offenders"
             exit 1
           fi
-          echo "All 13 non-Postgres service instances report empty Watch Paths."
+          echo "All 14 non-Postgres service instances report empty Watch Paths."
 
       # M4-22-FU, the LOWER-VALUE half: the fork inherits development's
       # variables, which the step above the seam already checked, so this only
       # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
-      # earlier: that step queries all 13 service names and hard-fails if any is
-      # missing, which is what proves the 8 context services have materialised.
+      # earlier: that step queries all 14 service names and hard-fails if any is
+      # missing, which is what proves the 8 context services and the `docling`
+      # sidecar have materialised.
       # settle_fork is NOT a sufficient barrier — it checks only the 6 service
       # ids reconcile-fork acts on (the RAILWAY_SVC_*_ID list in
-      # require_service_ids, railway-env.sh), which excludes the 8 contexts.
+      # require_service_ids, railway-env.sh), which excludes the 8 contexts and the sidecar.
       #
       # `pull_request` only, like the seam steps and for the same reasons: it
       # checks FORK fidelity, and railway-env.sh authenticates `Authorization:
@@ -721,8 +722,8 @@ jobs:
             exit 1
           fi
 
-  # 3. Deploy the eight context services, only after the gateway is healthy.
-  #    They boot against the already-migrated schema and never run
+  # 3. Deploy the eight context services and the `docling` sidecar, only after the
+  #    gateway is healthy. They boot against the already-migrated schema and never run
   #    migrations. Skipped for draft PRs.
   deploy-context:
     name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
@@ -734,7 +735,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications, reconciliation]
+        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications, reconciliation, docling]
     steps:
       - uses: actions/checkout@v4
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
@@ -795,11 +796,11 @@ jobs:
         timeout-minutes: 15
 
   # 6. Post-deploy verification (a): the fleet /healthz gate. Poll the
-  #    gateway's fleet-health roll-up until all 8 backends are green (they may
+  #    gateway's fleet-health roll-up until all 9 backends are green (they may
   #    cold-start after `up`); fail the run naming the culprit if any stays
   #    down.
   fleet-gate:
-    name: Fleet /healthz gate (all 8 backends green)
+    name: Fleet /healthz gate (all 9 backends green)
     needs: [deploy-context, prepare-env]
     if: always() && needs.deploy-context.result == 'success'
     runs-on: ubuntu-latest
@@ -842,7 +843,7 @@ jobs:
             echo "::error::fleet is healthy but not on $EXPECTED_BUILD after 600s — still serving: $stale. A 'none' build means that service predates the /healthz build field or its stamp step did not run; any other value means its new container never replaced the old one. Running E2E here would verify the wrong commit."
             exit 1
           fi
-          echo "All 8 backends green on $EXPECTED_BUILD."
+          echo "All 9 backends green on $EXPECTED_BUILD."
 
   # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login

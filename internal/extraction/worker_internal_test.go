@@ -236,13 +236,15 @@ type rtPage struct {
 
 // rtReader is a PageReader driven entirely by the spec. It reuses ONE image buffer across every
 // page and scribbles over it after each callback returns, which is what Page.ImagePNG's
-// borrowed-not-owned contract permits (pagereader.go:70-72). No shipped reader does this today
+// borrowed-not-owned contract permits (pagereader.go:63-65). No shipped reader does this today
 // -- PDFium allocates a fresh buffer per page and Docling sets no image at all -- so the guard
 // is on the contract, which is what stops a future reader from being unsafe.
 type rtReader struct {
 	pages []rtPage
 	res   PageResult
 	err   error
+	// failAfter is the 1-based page after which Read gives up with err. Zero reads every page.
+	failAfter int
 
 	buf   []byte
 	calls int
@@ -270,6 +272,9 @@ func (r *rtReader) Read(_ context.Context, _ Document, onPage func(Page) error) 
 		// The buffer is invalid the moment the callback returns.
 		for i := range r.buf {
 			r.buf[i] = 0x00
+		}
+		if r.failAfter > 0 && r.calls == r.failAfter {
+			return PageResult{}, r.err
 		}
 	}
 	if r.err != nil {
@@ -454,5 +459,155 @@ func TestReadText_ZeroPagesIsNotAnError(t *testing.T) {
 	}
 	if res.TextChars != 0 || res.Pages != 0 {
 		t.Errorf("readText returned PageResult %+v, want the zero value the reader reported", res)
+	}
+}
+
+// --- EXTR-17-01: adversarial ------------------------------------------------------------
+
+// Two pages carrying the same number is a malformed read, not readText's to repair: a collector
+// keyed by page number, or one that deduped, silently loses a page's line items.
+func TestReadText_KeepsDuplicatePageNumbers(t *testing.T) {
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 2, tokens: []Token{rtToken("Invoice", 2)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+			{number: 5, tokens: []Token{rtToken("Page 5", 5)}},
+		},
+		res: PageResult{Pages: 3, TextChars: 21, PagesWithText: 3},
+	}
+
+	pages, tokenPages, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 3 || len(tokenPages) != 3 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 3 and 3 -- a repeated page number is not a page to drop", len(pages), len(tokenPages))
+	}
+	var got []int
+	for i := range pages {
+		if pages[i].Number != tokenPages[i].Number {
+			t.Errorf("pages[%d] is page %d but tokenPages[%d] is page %d", i, pages[i].Number, i, tokenPages[i].Number)
+		}
+		got = append(got, pages[i].Number)
+	}
+	if want := []int{2, 2, 5}; !slices.Equal(got, want) {
+		t.Errorf("readText returned pages %v, want %v", got, want)
+	}
+	// The two page 2s are distinct rows, not one merged one.
+	if a, b := len(tokenPages[0].Tokens), len(tokenPages[1].Tokens); a != 1 || b != 1 {
+		t.Errorf("the two page-2 token pages carry %d and %d token(s), want 1 and 1 -- they were merged", a, b)
+	}
+}
+
+// A scanned table: Tables set, Tokens empty. The mirror of the tokens-and-no-tables case, and
+// the one that catches a readText skipping a page it judged to hold no text.
+func TestReadText_KeepsAPageWithTablesButNoTokens(t *testing.T) {
+	tbl := []Table{{Rows: 1, Cols: 1, Cells: []TableCell{{Row: 0, Col: 0, RowSpan: 1, ColSpan: 1, Text: "Widget"}}}}
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tables: tbl},
+		},
+		res: PageResult{Pages: 2, TextChars: 7, PagesWithText: 1},
+	}
+
+	pages, tokenPages, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 2 || len(tokenPages) != 2 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 2 and 2 -- a page whose text is all table is still a page", len(pages), len(tokenPages))
+	}
+	if !reflect.DeepEqual(pages[1].Tables, tbl) {
+		t.Errorf("pages[1].Tables = %+v, want the table the reader emitted, as-is", pages[1].Tables)
+	}
+	if n := len(tokenPages[1].Tokens); n != 0 {
+		t.Errorf("tokenPages[1] carries %d token(s), want 0", n)
+	}
+	if tokenPages[1].Number != 2 {
+		t.Errorf("tokenPages[1] is page %d, want 2 -- the token page must exist even with no tokens, or every later index is off by one", tokenPages[1].Number)
+	}
+}
+
+// PageResult is the reader's self-report. Length comes from the callbacks that actually ran, so
+// a reader that miscounts cannot shorten or lengthen what the caller iterates.
+func TestReadText_LengthComesFromTheCallbacksNotThePageResult(t *testing.T) {
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+		},
+		res: PageResult{Pages: 99, TextChars: 12, PagesWithText: 99},
+	}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 2 || len(tokenPages) != 2 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 2 and 2 -- the reader's own Pages count is a self-report, never the length", len(pages), len(tokenPages))
+	}
+	// Passed through verbatim, not corrected: EXTR-17-02 classifies on what the reader said.
+	if res.Pages != 99 || res.PagesWithText != 99 {
+		t.Errorf("readText returned PageResult %+v, want the reader's own {Pages:99 PagesWithText:99} unaltered", res)
+	}
+}
+
+// ImagePNG is the one field readText clears. A rebuild that named fields one by one would drop
+// the geometry every Region scales by and nothing else here would notice.
+func TestReadText_CarriesEveryOtherPageFieldThrough(t *testing.T) {
+	r := rtOutOfOrder()
+
+	pages, _, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 3 {
+		t.Fatalf("readText returned %d page(s), want 3; the field sweep below would be vacuous", len(pages))
+	}
+	for i, p := range pages {
+		if p.WidthPt != 595 || p.HeightPt != 842 {
+			t.Errorf("pages[%d] (page %d) is %vx%v pt, want 595x842", i, p.Number, p.WidthPt, p.HeightPt)
+		}
+		if p.ImageWidth != 1240 || p.ImageHeight != 1754 {
+			t.Errorf("pages[%d] (page %d) rendered %dx%d px, want 1240x1754 -- the pixel geometry is what a canvas scales a Region by", i, p.Number, p.ImageWidth, p.ImageHeight)
+		}
+	}
+	// The tokens are the reader's own slice, not a copy: CollectTokens takes it as-is and the
+	// resolver reads both slices expecting one document.
+	if n := len(pages[2].Tokens); n != 2 {
+		t.Errorf("pages[2] (page %d) carries %d token(s), want 2", pages[2].Number, n)
+	}
+}
+
+// The error arrives with pages already collected and pages still unread -- the shape a sidecar
+// dying mid-document has. The pages that did arrive go with it.
+func TestReadText_DiscardsAPartialReadThatFailsMidStream(t *testing.T) {
+	boom := errors.New("extr-17 fake reader: sidecar died on page 2")
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+			{number: 3, tokens: []Token{rtToken("Page 3", 3)}},
+		},
+		res:       PageResult{Pages: 3, TextChars: 4242},
+		err:       boom,
+		failAfter: 1,
+	}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("readText returned error %v, want %v", err, boom)
+	}
+	// Floor: one page in, two never read. Without it this asserts over a read that collected
+	// nothing, which the zero-page spec already covers.
+	if r.calls != 1 {
+		t.Fatalf("the fake reader delivered %d page(s) before failing, want 1", r.calls)
+	}
+	if pages != nil || tokenPages != nil {
+		t.Errorf("readText returned %d page(s) and %d token page(s) alongside its error, want nil and nil -- half a document yields half the line items under a total that disagrees with them", len(pages), len(tokenPages))
+	}
+	if res != (PageResult{}) {
+		t.Errorf("readText returned PageResult %+v alongside its error, want the zero value", res)
 	}
 }

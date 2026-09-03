@@ -311,8 +311,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		return nil
 	}
 
-	// Test-local, non-nil: the reflection loop below errors on any nil collaborator, and
-	// main()'s own nil Text is pinned separately in TestSubmissionMain_WiresTheQueueSeams.
+	// Test-local, non-nil: the reflection loop below errors on any nil collaborator, and main()'s
+	// own Text is followed back to selectTextReader in TestSubmissionMain_WiresTheQueueSeams.
 	textFake := extraction.NewPDFiumReader()
 	ruled := 0
 	rules := func(context.Context, string, string) ([]extraction.AnchorRule, error) {
@@ -500,25 +500,41 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	if len(ewArgs) != 8 {
 		t.Fatalf("newExtractWorker is called with %d argument(s), want 8 (pool, extractor, opener, pages, auditor, text, rules, logger)", len(ewArgs))
 	}
+	// EXTR-17-03 AC-8: the walk covers all 8 arguments. Argument 5's exemption is gone with the
+	// literal nil it protected.
 	const ewTextArg = 5
 	for i, arg := range ewArgs {
-		// Argument 5 is exempt here and pinned positively below, not skipped: a nil Text is
-		// what selects the Extractor branch, so it is the specified value today.
-		if i == ewTextArg {
-			continue
-		}
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
 			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, the rest panic", i)
 		}
 	}
 
-	// EXTR-17-01 AC-2. The pin, not an exemption: it fails loudly the day EXTR-17-03 fills the
-	// reader in, which is when the seam's runtime behaviour actually changes.
-	if id, ok := ewArgs[ewTextArg].(*ast.Ident); !ok || id.Name != "nil" {
-		t.Errorf("newExtractWorker's text argument is %s, want the literal nil: EXTR-17-03 is the step that wires the reader, and filling it here moves Work off the Extractor branch. Update this pin in that step", wtRender(ewArgs[ewTextArg]))
+	// EXTR-17-03 AC-4/AC-7. This replaces EXTR-17-01's literal-nil pin on argument 5 and proves
+	// strictly more: both the extractor and the text reader are followed back to the selector
+	// that built them, each selector is called from main() exactly once (wtOneCall), and the
+	// two are shown to read the SAME two values. Without that last pair one selector could read
+	// EXTRACTOR and the other EXTRACTOR_TEXT while every behavioural test still passed -- which
+	// is how "one env var selects both seams" gets violated while green.
+	extName, extractorArgs := wtOneCall(t, f, "selectExtractor")
+	if id, ok := ewArgs[1].(*ast.Ident); !ok || id.Name != extName {
+		t.Errorf("newExtractWorker's extractor argument is %s, want %s -- the extractor selectExtractor built and main() already fatals on. Any other value here labels extraction_jobs.extractor with something EXTRACTOR did not select", wtRender(ewArgs[1]), extName)
+	}
+	textName, textArgs := wtOneCall(t, f, "selectTextReader")
+	if id, ok := ewArgs[ewTextArg].(*ast.Ident); !ok || id.Name != textName {
+		t.Errorf("newExtractWorker's text argument is %s, want %s -- the reader selectTextReader built and main() already fatals on. Any other value here reads text through something EXTRACTOR did not select", wtRender(ewArgs[ewTextArg]), textName)
+	}
+	if len(extractorArgs) != 2 || len(textArgs) != 2 {
+		t.Fatalf("selectExtractor is called with %d argument(s) and selectTextReader with %d, want 2 each (EXTRACTOR, DOCLING_URL)", len(extractorArgs), len(textArgs))
+	}
+	for i, label := range []string{"EXTRACTOR", "DOCLING_URL"} {
+		e, eok := extractorArgs[i].(*ast.Ident)
+		x, xok := textArgs[i].(*ast.Ident)
+		if !eok || !xok || e.Name != x.Name {
+			t.Errorf("selectExtractor's %s argument is %s and selectTextReader's is %s, want one identifier read once and handed to both -- two separate reads can drift onto different variables", label, wtRender(extractorArgs[i]), wtRender(textArgs[i]))
+		}
 	}
 
-	// The rules loader is real and non-nil, unreachable while Text is nil.
+	// The rules loader is real and non-nil at this call site whatever EXTRACTOR selects.
 	if sel, ok := ewArgs[6].(*ast.SelectorExpr); !ok || sel.Sel.Name != "AnchorRulesFor" {
 		t.Errorf("newExtractWorker's rules argument is %s, want an ...AnchorRulesFor method value: the learned-rule read is only reachable if main() builds it", wtRender(ewArgs[6]))
 	}
@@ -1162,7 +1178,200 @@ func TestSelectExtractor_UnrecognisedIsFatal(t *testing.T) {
 // T-07-7 (PageStore.Reader stays a *PDFiumReader) has no test of its own here: the assertion
 // already exists in TestSubmissionMain_WiresTheQueueSeams above, which reads the literal's
 // Reader field off the AST. A source-substring scan beside it would be a weaker duplicate --
-// it breaks on a reformat and passes on a comment quoting the string.
+// it breaks on a reformat and passes on a comment quoting the string. EXTR-17-03 AC-10 rests on
+// that same assertion: Pages stays PDFium while Text becomes Docling.
+
+// ---------------------------------------------------------------------------
+// EXTR-17-03: the text-reader selector. selectTextReader mirrors selectExtractor's switch, so
+// one EXTRACTOR value selects both seams. Locals are passed directly, the TestSelectExtractor_*
+// idiom -- the two env reads stay in main() and no test here needs t.Setenv.
+// Mode A (test-spec) RED: main.go's selectTextReader is the not-implemented stub, so each test
+// below fails on its own assertion rather than on a compile error.
+// ---------------------------------------------------------------------------
+
+// TestSelectTextReader_MockAndUnsetSelectNoReader: AC-1. EXTRACTOR unset or "mock" selects NO
+// reader, so the deployed mock path stays byte-identical to today -- a nil Text is what keeps
+// Work on the Extractor branch.
+//
+// The oracle is `got != nil` on the extraction.PageReader INTERFACE, deliberately NOT
+// reflect.ValueOf(got).IsNil(). A typed nil -- a nil *DoclingReader boxed in the interface --
+// reports IsNil() true and would pass this test, while Work's own `w.Text != nil` check reads
+// it as non-nil, takes the text branch, and panics dereferencing the nil receiver. That typed
+// nil is the precise bug this subtask owns, and only the interface comparison can see it.
+func TestSelectTextReader_MockAndUnsetSelectNoReader(t *testing.T) {
+	for _, name := range []string{"", "mock"} {
+		t.Run("EXTRACTOR="+name, func(t *testing.T) {
+			got, err := selectTextReader(name, "")
+			if err != nil {
+				t.Fatalf("selectTextReader(%q, \"\") returned error %v, want a nil reader and no error", name, err)
+			}
+			if got != nil {
+				t.Errorf("selectTextReader(%q, \"\") = %T, want an untyped nil PageReader: anything else -- including a nil *DoclingReader -- moves Work off the Extractor branch and panics on the first job", name, got)
+			}
+		})
+	}
+}
+
+// TestSelectTextReader_DoclingSelectsTheSidecarReader: AC-3. EXTRACTOR=docling with a usable
+// DOCLING_URL selects the sidecar reader itself, not the DoclingExtractor that wraps one.
+func TestSelectTextReader_DoclingSelectsTheSidecarReader(t *testing.T) {
+	const doclingURL = "http://docling.railway.internal:8080"
+	got, err := selectTextReader("docling", doclingURL)
+	if err != nil {
+		t.Fatalf("selectTextReader(\"docling\", %q) returned error %v, want a *DoclingReader and no error", doclingURL, err)
+	}
+	r, ok := got.(*extraction.DoclingReader)
+	if !ok {
+		t.Fatalf("selectTextReader(\"docling\", %q) = %T, want *extraction.DoclingReader", doclingURL, got)
+	}
+	if r.Name() != "docling" {
+		t.Errorf("Name() = %q, want %q -- the name lands in extraction_jobs.extractor", r.Name(), "docling")
+	}
+}
+
+// TestSelectTextReader_DoclingRequiresAUsableURL: AC-5. Empty and malformed are both fatal at
+// boot and both name the variable an operator must set. They must also read differently: with
+// one message, deleting the empty check still passes -- NewDoclingReader rejects "" on its own
+// and the wrapper still says DOCLING_URL, so the operator gets a URL-scheme complaint instead
+// of "you have not set this". Same clause as TestSelectExtractor_DoclingRequiresURL, asserted
+// here against selectTextReader directly: main() fatals on selectExtractor first, so this
+// selector's message can never be read off a boot log.
+func TestSelectTextReader_DoclingRequiresAUsableURL(t *testing.T) {
+	const bad = "://nope"
+	empty, emptyErr := selectTextReader("docling", "")
+	if emptyErr == nil {
+		t.Fatal("selectTextReader(\"docling\", \"\") returned a nil error, want one naming DOCLING_URL")
+	}
+	if empty != nil {
+		t.Errorf("selectTextReader(\"docling\", \"\") = %T on the error path, want nil", empty)
+	}
+	if !strings.Contains(emptyErr.Error(), "DOCLING_URL") {
+		t.Errorf("err = %q, want it to name DOCLING_URL", emptyErr.Error())
+	}
+	if !strings.Contains(emptyErr.Error(), "requires") {
+		t.Errorf("err = %q, want it to say DOCLING_URL is required rather than report a parse failure", emptyErr.Error())
+	}
+
+	malformed, badErr := selectTextReader("docling", bad)
+	if badErr == nil {
+		t.Fatalf("selectTextReader(\"docling\", %q) returned a nil error, want one rejecting the URL", bad)
+	}
+	if malformed != nil {
+		t.Errorf("selectTextReader(\"docling\", %q) = %T on the error path, want nil -- not a reader pointed at a broken address", bad, malformed)
+	}
+	if !strings.Contains(badErr.Error(), "DOCLING_URL") {
+		t.Errorf("err = %q, want it to name DOCLING_URL", badErr.Error())
+	}
+	if !strings.Contains(badErr.Error(), bad) {
+		t.Errorf("err = %q, want it to name the malformed URL %q", badErr.Error(), bad)
+	}
+	if emptyErr.Error() == badErr.Error() {
+		t.Errorf("the empty-DOCLING_URL error %q does not read differently from the malformed one", emptyErr.Error())
+	}
+}
+
+// TestSelectors_AcceptTheSameValueSet: AC-6, behavioural half. The table carries the URL
+// dimension -- without it the docling arm is never exercised at all -- plus a capitalised
+// near-miss both selectors must reject. wantErr is asserted beside the agreement check so two
+// selectors that rejected everything could not pass merely by agreeing.
+func TestSelectors_AcceptTheSameValueSet(t *testing.T) {
+	const valid = "http://docling.railway.internal:8080"
+	for _, tc := range []struct {
+		name, extractor, url string
+		wantErr              bool
+	}{
+		{"unset", "", "", false},
+		{"mock", "mock", "", false},
+		{"docling with a usable URL", "docling", valid, false},
+		{"docling with no URL", "docling", "", true},
+		{"docling with a malformed URL", "docling", "://nope", true},
+		{"unrecognised", "nonsense", "", true},
+		{"capitalised near-miss", "Docling", valid, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, extErr := selectExtractor(tc.extractor, tc.url)
+			_, textErr := selectTextReader(tc.extractor, tc.url)
+			if (extErr != nil) != tc.wantErr {
+				t.Errorf("selectExtractor(%q, %q) error = %v, want an error: %v", tc.extractor, tc.url, extErr, tc.wantErr)
+			}
+			if (textErr != nil) != tc.wantErr {
+				t.Errorf("selectTextReader(%q, %q) error = %v, want an error: %v", tc.extractor, tc.url, textErr, tc.wantErr)
+			}
+			if (extErr != nil) != (textErr != nil) {
+				t.Errorf("the selectors disagree on (%q, %q): selectExtractor err = %v, selectTextReader err = %v -- one env var must select both seams, or a fleet boots with an Extractor and no reader", tc.extractor, tc.url, extErr, textErr)
+			}
+		})
+	}
+}
+
+// TestSelectors_ShareOneCaseSet: AC-6, the half that makes "cannot disagree" true rather than
+// "do not disagree on seven rows". The table above survives a fifth arm added to one switch
+// only -- a `case "pdfium":` in selectExtractor passes it untouched. Comparing the two case
+// SETS off the AST does not.
+func TestSelectors_ShareOneCaseSet(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	sets := map[string]map[string]bool{}
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		ast.Inspect(fd, func(n ast.Node) bool {
+			sw, ok := n.(*ast.SwitchStmt)
+			if !ok {
+				return true
+			}
+			if id, ok := sw.Tag.(*ast.Ident); !ok || id.Name != "extractorName" {
+				return true
+			}
+			set := map[string]bool{}
+			for _, stmt := range sw.Body.List {
+				cc, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				if cc.List == nil {
+					set["<default>"] = true
+					continue
+				}
+				for _, e := range cc.List {
+					lit, ok := e.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						t.Errorf("%s switches on extractorName with the non-literal case %s: the set comparison below cannot see what it accepts", fd.Name.Name, wtRender(e))
+						continue
+					}
+					v, uerr := strconv.Unquote(lit.Value)
+					if uerr != nil {
+						t.Errorf("%s case %s does not unquote: %v", fd.Name.Name, lit.Value, uerr)
+						continue
+					}
+					set[v] = true
+				}
+			}
+			sets[fd.Name.Name] = set
+			return true
+		})
+	}
+
+	names := make([]string, 0, len(sets))
+	for name := range sets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	ext, text := sets["selectExtractor"], sets["selectTextReader"]
+	if len(sets) != 2 || ext == nil || text == nil {
+		t.Fatalf("cmd/submission/main.go switches on extractorName in %v, want exactly [selectExtractor selectTextReader] -- with fewer, the set comparison below is vacuous", names)
+	}
+	if len(ext) < 4 {
+		t.Fatalf("selectExtractor's case set is %v, want at least 4 entries (\"\", mock, docling, <default>) -- a set this small means the scan read almost nothing", ext)
+	}
+	if !reflect.DeepEqual(ext, text) {
+		t.Errorf("selectExtractor accepts %v and selectTextReader accepts %v: any value one accepts the other must accept, or an EXTRACTOR that builds an Extractor leaves Text unselected", ext, text)
+	}
+}
 
 func TestPageKey_MatchesTheDocumentStorageKeyPrefix(t *testing.T) {
 	const (

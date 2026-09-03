@@ -528,6 +528,13 @@ func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, er
 	}
 }
 
+// selectTextReader resolves the SAME EXTRACTOR value to ExtractWorker.Text, so one variable
+// selects both seams. Not implemented: the mirroring switch and main()'s call site are
+// EXTR-17-03's implementation step. Until then every caller gets an error.
+func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, error) {
+	return nil, errors.New("extractor: selectTextReader is not implemented")
+}
+
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails
 // only on the first job (TestNewExtractWorker_SetsEveryCollaborator).
 func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,

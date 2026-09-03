@@ -579,3 +579,138 @@ func TestLearnRule_EmptyTextIsNotACandidate(t *testing.T) {
 		t.Errorf("LearnRule(total, [blank, real]) anchor = %q, want %q", lr.Anchor.Label, "b")
 	}
 }
+
+// An interior control byte in the anchor's Text (an OCR/extraction artifact, not something
+// TrimSpace removes) survives QuoteMeta unescaped, and jsonString escapes only backslash and
+// quote -- so the derived body carries a raw control byte inside a JSON string, which
+// encoding/json refuses. LearnRule must refuse rather than persist that row: an honest
+// ok=false with a zero-value LearnedRule, not a body a later ParseRule call would choke on.
+func TestLearnRule_InteriorControlByteRefusesRatherThanEmitsAnUnparseableBody(t *testing.T) {
+	region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.30, Y1: 0.13}
+	anchor := extraction.AnchorObservation{Label: "a", Text: "TIN\n123", Page: 1, Band: 0, X0: 0.10, Y0: 0.10, X1: 0.30, Y1: 0.13}
+
+	lr, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{anchor})
+	if ok {
+		t.Fatalf("LearnRule(total, interior control byte) ok = true, want false; body = %s", lr.Body)
+	}
+	if lr.Body != nil {
+		t.Errorf("LearnRule(total, interior control byte) Body = %q, want nil (zero value)", lr.Body)
+	}
+	if lr.Field != "" {
+		t.Errorf("LearnRule(total, interior control byte) Field = %q, want \"\" (zero value)", lr.Field)
+	}
+
+	// Positive control: the same box, the control byte removed, derives normally -- the
+	// refusal above is about the control byte, not the fixture's geometry.
+	clean := extraction.AnchorObservation{Label: "a", Text: "TIN123", Page: 1, Band: 0, X0: 0.10, Y0: 0.10, X1: 0.30, Y1: 0.13}
+	if _, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{clean}); !ok {
+		t.Error("LearnRule(total, control byte removed) ok = false, want true -- the positive control")
+	}
+}
+
+// D-3's "word-bounded where the outer runes allow": a label whose entire matched text is
+// non-word bytes carries no \b on either side, and still parses and matches its own source.
+func TestLearnRule_AllNonWordLabelHasNoBoundariesEitherSide(t *testing.T) {
+	region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.20, Y1: 0.13}
+	anchor := extraction.AnchorObservation{Label: "a", Text: "#", Page: 1, Band: 0, X0: 0.10, Y0: 0.10, X1: 0.20, Y1: 0.13}
+
+	lr, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{anchor})
+	if !ok {
+		t.Fatalf("LearnRule(total, all-non-word text) ok = false, want true")
+	}
+	const wantLabel = `(?i)#`
+	if lr.Rule.Label != wantLabel {
+		t.Fatalf("LearnRule label = %q, want %q", lr.Rule.Label, wantLabel)
+	}
+	if !regexp.MustCompile(lr.Rule.Label).MatchString("Invoice # 4") {
+		t.Errorf("label %q does not match a real token carrying it, %q", lr.Rule.Label, "Invoice # 4")
+	}
+}
+
+// Anchor.Text at exactly the 128-byte cap is not truncated; one byte past it loses exactly the
+// last byte. Both are ASCII, so the byte cut and the rune cut coincide -- this isolates the
+// off-by-one at the boundary itself, distinct from L-cap-bytes' 512-byte worst case.
+func TestLearnRule_TextAtAndOverThe128ByteCap(t *testing.T) {
+	region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.90, Y1: 0.13}
+
+	atCap := extraction.AnchorObservation{Label: "a", Text: strings.Repeat("x", 128), Page: 1, Band: 0, X0: 0.10, Y0: 0.10, X1: 0.90, Y1: 0.13}
+	lr, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{atCap})
+	if !ok {
+		t.Fatalf("LearnRule(total, 128-byte text) ok = false, want true")
+	}
+	// "(?i)" (4) + `\b` (2 bytes: backslash, b) + 128 "x" + `\b` (2): "x" is a word byte, so
+	// both boundaries apply.
+	if want := 4 + 2 + 128 + 2; len(lr.Rule.Label) != want {
+		t.Errorf("len(label) = %d, want %d -- the 128-byte text must not be truncated", len(lr.Rule.Label), want)
+	}
+
+	overCap := extraction.AnchorObservation{Label: "a", Text: strings.Repeat("x", 129), Page: 1, Band: 0, X0: 0.10, Y0: 0.10, X1: 0.90, Y1: 0.13}
+	lr2, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{overCap})
+	if !ok {
+		t.Fatalf("LearnRule(total, 129-byte text) ok = false, want true")
+	}
+	if want := 4 + 2 + 128 + 2; len(lr2.Rule.Label) != want {
+		t.Errorf("len(label) = %d, want %d -- the 129th byte must be dropped, not carried through", len(lr2.Rule.Label), want)
+	}
+	if lr.Rule.Label != lr2.Rule.Label {
+		t.Errorf("128-byte and 129-byte text produced different labels (%q vs %q); truncation should make them identical", lr.Rule.Label, lr2.Rule.Label)
+	}
+}
+
+// NaN/Inf coordinates are refused before they ever reach betterAnchor: usableBox rejects a
+// non-finite region outright, and a non-finite anchor box is filtered per-candidate, leaving a
+// well-formed anchor to win instead of panicking or comparing NaN.
+func TestLearnRule_NonFiniteCoordinatesAreRefusedNotCompared(t *testing.T) {
+	t.Run("NaN region is refused", func(t *testing.T) {
+		region := extraction.Region{Page: 1, X0: math.NaN(), Y0: 0.10, X1: 0.30, Y1: 0.13}
+		anchor := rvAnchor("a", "Label", 0.10, 0.10, 0.30, 0.13)
+		if _, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{anchor}); ok {
+			t.Error("LearnRule(total, NaN region) ok = true, want false")
+		}
+	})
+
+	t.Run("+Inf region is refused", func(t *testing.T) {
+		region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: math.Inf(1), Y1: 0.13}
+		anchor := rvAnchor("a", "Label", 0.10, 0.10, 0.30, 0.13)
+		if _, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{anchor}); ok {
+			t.Error("LearnRule(total, +Inf region) ok = true, want false")
+		}
+	})
+
+	t.Run("NaN anchor is skipped, a well-formed anchor still wins", func(t *testing.T) {
+		region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.30, Y1: 0.13}
+		nanAnchor := extraction.AnchorObservation{Label: "nan", Text: "NaN", Page: 1, Band: 0, X0: math.NaN(), Y0: 0.10, X1: 0.30, Y1: 0.13}
+		goodAnchor := rvAnchor("good", "Label", 0.10, 0.10, 0.30, 0.13)
+
+		lr, ok := extraction.LearnRule("total", region, []extraction.AnchorObservation{nanAnchor, goodAnchor})
+		if !ok {
+			t.Fatalf("LearnRule(total, [NaN, good]) ok = false, want true")
+		}
+		if lr.Anchor.Label != "good" {
+			t.Errorf("LearnRule(total, [NaN, good]) anchor = %q, want %q -- the NaN anchor must be skipped, not win by comparing false", lr.Anchor.Label, "good")
+		}
+	})
+}
+
+// Two anchors at an equal gap of 0 but different relations: one overlaps the region
+// (same_token), the other only touches its right edge (right, gap 0 -- L-overlap-boundary's
+// "touching exactly" case). betterAnchor's key 2 must decide, and same_token -- the one
+// relation requiring literal box containment, not merely a nearby box -- must win.
+func TestLearnRule_EqualGapAcrossRelationsPicksSameTokenOverRight(t *testing.T) {
+	region := extraction.Region{Page: 1, X0: 0.30, Y0: 0.10, X1: 0.40, Y1: 0.13}
+	overlapping := extraction.AnchorObservation{Label: "overlap", Text: "Overlap", Page: 1, Band: 0, X0: 0.25, Y0: 0.10, X1: 0.35, Y1: 0.13}
+	touchingRight := extraction.AnchorObservation{Label: "touch", Text: "Touch", Page: 1, Band: 0, X0: 0.20, Y0: 0.10, X1: 0.30, Y1: 0.13}
+
+	for _, order := range [][]extraction.AnchorObservation{{overlapping, touchingRight}, {touchingRight, overlapping}} {
+		lr, ok := extraction.LearnRule("total", region, order)
+		if !ok {
+			t.Fatalf("LearnRule(total, order=%v) ok = false, want true", order)
+		}
+		if lr.Anchor.Label != "overlap" {
+			t.Errorf("LearnRule(total, order=%v) anchor = %q, want %q (same_token at equal gap 0)", order, lr.Anchor.Label, "overlap")
+		}
+		if lr.Rule.Relation.Kind != extraction.RelSameToken {
+			t.Errorf("LearnRule(total, order=%v) relation = %q, want %q", order, lr.Rule.Relation.Kind, extraction.RelSameToken)
+		}
+	}
+}

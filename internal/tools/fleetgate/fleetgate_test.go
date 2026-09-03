@@ -10,6 +10,8 @@ package fleetgate
 
 import (
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -553,4 +555,154 @@ func assertMember(t *testing.T, file string, items []string, at []int, want stri
 		}
 	}
 	return false
+}
+
+// --- AC-2: the allowlist is a carve-out, not a hole ---
+
+// TestFleetGate_AnAllowlistEntryExcludesExactlyOneLine: an entry matching many
+// lines silently swallows real count sites, and every other test here stays
+// green. Widening `APPR-14-03` to `service` survives the whole suite otherwise.
+func TestFleetGate_AnAllowlistEntryExcludesExactlyOneLine(t *testing.T) {
+	if len(allowlist) == 0 {
+		t.Fatal("the allowlist is empty -- nothing to bound")
+	}
+	hits := scanRepo(t)
+	if len(hits) == 0 {
+		t.Fatal("the scan found nothing, so no allowlist entry can be bounded against it")
+	}
+	for _, e := range allowlist {
+		var matched []string
+		for _, h := range hits {
+			if h.File == e.File && strings.Contains(h.Text, e.LineContains) {
+				matched = append(matched, h.File+":"+strconv.Itoa(h.Line))
+			}
+		}
+		if len(matched) != 1 {
+			t.Errorf("allowlist entry %s / %q excludes %d line(s) %v, want exactly 1 -- an entry that matches more than the one line it names carves real count sites out of the scan",
+				e.File, e.LineContains, len(matched), matched)
+		}
+	}
+	// The excluded lines must stay a small minority of the population, so a
+	// pile of narrow entries cannot hollow the scan out one line at a time.
+	excluded := 0
+	for _, h := range hits {
+		if allowed(h) {
+			excluded++
+		}
+	}
+	if excluded*2 >= len(hits) {
+		t.Errorf("%d of %d scanned line(s) are allowlisted -- the exclusions are no longer a carve-out", excluded, len(hits))
+	}
+}
+
+// --- AC-4: the gate step's own shell, run against fixture roll-ups ---
+
+var runBlockRe = regexp.MustCompile(`^(\s*)run: \|\s*$`)
+
+// runScript extracts a step's `run: |` block, dedented.
+func runScript(t *testing.T, body string) string {
+	t.Helper()
+	lines := strings.Split(body, "\n")
+	start, indent := -1, ""
+	for i, l := range lines {
+		if m := runBlockRe.FindStringSubmatch(l); m != nil {
+			start, indent = i, m[1]+"  "
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("the step has no `run: |` block, so its shell cannot be executed:\n%s", body)
+	}
+	var out []string
+	for _, l := range lines[start+1:] {
+		if strings.TrimSpace(l) == "" {
+			out = append(out, "")
+			continue
+		}
+		if !strings.HasPrefix(l, indent) {
+			break
+		}
+		out = append(out, strings.TrimPrefix(l, indent))
+	}
+	script := strings.Join(out, "\n")
+	if strings.TrimSpace(script) == "" {
+		t.Fatal("the `run: |` block dedented to nothing")
+	}
+	return script
+}
+
+// TestDevEnv_DoclingGateFailsOnAStaleOrAbsentSidecar runs the gate's real shell
+// against four roll-up payloads. TestDevEnv_DoclingBuildIsGated only asserts
+// substrings, so repointing the jq selector at `gateway` -- which greens the
+// gate on the gateway's build while the sidecar is arbitrarily stale -- and
+// treating `absent` as acceptable both survive it.
+func TestDevEnv_DoclingGateFailsOnAStaleOrAbsentSidecar(t *testing.T) {
+	for _, bin := range []string{"bash", "curl", "jq"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Fatalf("%s is not on PATH, so the gate's own shell cannot be executed here", bin)
+		}
+	}
+
+	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
+	names, bodies := yamlSteps(content)
+	idx := -1
+	for i, n := range names {
+		if strings.Contains(strings.ToLower(n), "docling") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("%s: no step names `docling` among %d steps", devEnvRel, len(names))
+	}
+	script := runScript(t, bodies[idx])
+
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const old = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	cases := []struct {
+		name    string
+		payload string
+		wantOK  bool
+		says    string
+	}{
+		{"serving the commit under test", `{"services":[{"name":"gateway","build":"` + sha + `"},{"name":"docling","build":"` + sha + `"}]}`, true, ""},
+		{"stale sidecar, fresh gateway", `{"services":[{"name":"gateway","build":"` + sha + `"},{"name":"docling","build":"` + old + `"}]}`, false, old},
+		{"sidecar reports no build", `{"services":[{"name":"gateway","build":"` + sha + `"},{"name":"docling","status":"up"}]}`, false, "none"},
+		{"roll-up never names the sidecar", `{"services":[{"name":"gateway","build":"` + sha + `"}]}`, false, "absent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/healthz/fleet" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.payload))
+			}))
+			defer srv.Close()
+
+			// Two substitutions, both for isolation only: the sleep stub keeps
+			// the failing cases off a 25s poll, and the scratch path keeps
+			// concurrent runs off one shared /tmp file.
+			isolated := strings.ReplaceAll(script, "/tmp/docling.json", filepath.Join(t.TempDir(), "fleet.json"))
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", "sleep() { :; }\n"+isolated)
+			cmd.Env = append(os.Environ(), "GATEWAY_URL="+srv.URL, "EXPECTED_BUILD="+sha)
+			out, err := cmd.CombinedOutput()
+
+			if tc.wantOK {
+				if err != nil {
+					t.Fatalf("the gate failed a sidecar already serving the commit under test: %v\n%s", err, out)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("the gate passed on %s -- a stale or missing sidecar greens the deploy\n%s", tc.name, out)
+			}
+			if !strings.Contains(string(out), tc.says) {
+				t.Errorf("the failure does not name %q, so the log does not say what the sidecar reported:\n%s", tc.says, out)
+			}
+		})
+	}
 }

@@ -11,6 +11,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -426,3 +429,81 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 }
 
 const mountTestIssuer = "https://mock.ascomply.test"
+
+// TestGatewayMainFatalsOnAnUpstreamError: loadUpstreams' loud failure is only
+// loud if main acts on it. Discarding the error boots a gateway with nil
+// upstream maps, which 404s every /api/ route instead of naming the missing
+// variable, and TestLoadUpstreamsFailsLoudlyOnAMissingProbedURL cannot see it.
+func TestGatewayMainFatalsOnAnUpstreamError(t *testing.T) {
+	const path = "main.go"
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var body *ast.BlockStmt
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+			body = fn.Body
+		}
+	}
+	if body == nil {
+		t.Fatalf("%s declares no func main -- the scan below has nothing to read", path)
+	}
+
+	at := -1
+	errName := ""
+	for i, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "loadUpstreams" {
+			continue
+		}
+		if len(as.Lhs) != 3 {
+			t.Fatalf("%s: loadUpstreams is assigned to %d name(s), want 3", path, len(as.Lhs))
+		}
+		id, ok := as.Lhs[2].(*ast.Ident)
+		if !ok || id.Name == "_" {
+			t.Fatalf("%s: main discards loadUpstreams' error -- a missing <NAME>_URL boots a gateway with no upstreams instead of a named failure", path)
+		}
+		at, errName = i, id.Name
+		break
+	}
+	if at < 0 {
+		t.Fatalf("%s: main never calls loadUpstreams -- upstreams are wired somewhere this scan cannot see", path)
+	}
+	if at+1 >= len(body.List) {
+		t.Fatalf("%s: nothing follows the loadUpstreams call, so its error is never checked", path)
+	}
+
+	guard, ok := body.List[at+1].(*ast.IfStmt)
+	if !ok {
+		t.Fatalf("%s: the statement after loadUpstreams is %T, not an `if %s != nil` guard", path, body.List[at+1], errName)
+	}
+	bin, ok := guard.Cond.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.NEQ {
+		t.Fatalf("%s: the guard after loadUpstreams tests %v, not `%s != nil`", path, guard.Cond, errName)
+	}
+	if id, ok := bin.X.(*ast.Ident); !ok || id.Name != errName {
+		t.Fatalf("%s: the guard after loadUpstreams tests something other than %s", path, errName)
+	}
+
+	fatals := 0
+	ast.Inspect(guard.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "fatal" {
+				fatals++
+			}
+		}
+		return true
+	})
+	if fatals != 1 {
+		t.Errorf("%s: the `%s != nil` guard calls fatal %d time(s), want 1 -- boot must stop, and it must stop at ERROR", path, errName, fatals)
+	}
+}

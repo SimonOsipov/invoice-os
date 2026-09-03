@@ -23,12 +23,13 @@ import (
 // it runs before Resolve, not on its path.
 var rvMapScanFiles = []string{
 	"resolve.go", "tier1.go", "vocabulary.go", "anchor.go",
-	"shapes.go", "fingerprint.go", "extractor.go", "pagereader.go",
+	"shapes.go", "fingerprint.go", "extractor.go", "pagereader.go", "learn.go",
 }
 
-// rvPureFiles are the two files Resolve's purity is asserted over. shapes.go is out: it
-// legitimately imports time for a fixed-layout time.Parse, which reads no clock.
-var rvPureFiles = []string{"resolve.go", "tier1.go"}
+// rvPureFiles are the three files Resolve's purity is asserted over. shapes.go is out: it
+// legitimately imports time for a fixed-layout time.Parse, which reads no clock. learn.go
+// (EXTR-14-04) is in: LearnRule shares resolve.go's own purity fences.
+var rvPureFiles = []string{"resolve.go", "tier1.go", "learn.go"}
 
 // rvAllowedImports excludes time, math/rand, net/*, database/sql and pgx by omission.
 var rvAllowedImports = []string{"math", "regexp", "slices", "strings", "unicode"}
@@ -88,17 +89,26 @@ func rvConcurrency(f *ast.File) []string {
 
 // V-16
 func TestResolve_TouchesNoMap(t *testing.T) {
-	decls := 0
+	// The per-file floor below must itself be discriminating: an aggregate decls==0 check
+	// (the shape this test used before EXTR-14-04) would pass over a genuinely empty file --
+	// an unimplemented learn.go, say -- as long as a SIBLING file in the set carries content.
+	if got := len(rvParse(t, "emptyDecls.go", "package p\n").Decls); got != 0 {
+		t.Fatalf("the empty-file fixture has %d declaration(s); the per-file floor below would prove nothing", got)
+	}
+	if got := len(rvParse(t, "oneDecl.go", "package p\nvar x = 1\n").Decls); got == 0 {
+		t.Fatal("the one-declaration fixture parses to zero declarations; the per-file floor below would prove nothing")
+	}
+
 	for _, name := range rvMapScanFiles {
-		// A mistyped name Fatalfs here rather than silently scanning nothing.
+		// A mistyped name, or a file that does not exist yet, Fatalfs here rather than
+		// silently scanning nothing.
 		f := rvParse(t, name, nil)
-		decls += len(f.Decls)
+		if len(f.Decls) == 0 {
+			t.Fatalf("%s parses to zero declarations; a file with nothing in it is not a clean one", name)
+		}
 		if rvHasMapType(f) {
 			t.Errorf("%s writes a map type; map iteration order is not deterministic and this file is on the resolution path", name)
 		}
-	}
-	if decls == 0 {
-		t.Fatalf("the %d scanned file(s) declare nothing; the scan above reported all-clear over an empty AST", len(rvMapScanFiles))
 	}
 
 	const needle = `package p

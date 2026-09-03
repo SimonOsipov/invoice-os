@@ -60,6 +60,9 @@ var fxCorpus = []struct {
 	{fxCorpusTwoColumn, fxBuildCorpusTwoColumn},
 	{fxCorpusAmbigDate, fxBuildCorpusAmbiguousDate},
 	{fxCorpusTotals, fxBuildCorpusTotalsBlock},
+	// Not corpus_-prefixed on purpose: EXTR-14-09's learned-rule fixture, regenerated and
+	// byte-compared like the rest but outside every corpus_ ratchet.
+	{fxLearnedTwoParty, fxBuildLearnedTwoParty},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -408,6 +411,36 @@ func fxBuildCorpusTotalsBlock() []byte {
 		fxLine{12, 380, 240, "Sub-total"}, fxLine{12, 500, 240, "5,000.00"},
 		fxLine{12, 380, 222, "VAT"}, fxLine{12, 500, 222, "375.00"},
 		fxLine{12, 380, 204, "Total"}, fxLine{12, 500, 204, "5,375.00"},
+	)
+}
+
+// --- the learned-rule fixture (NOT a corpus layout) -------------------------
+
+// fxLearnedTwoParty is deliberately named outside corpusPrefix: it is EXTR-14-09's before/after
+// document, not a seventh Tier-1 layout, so it stays out of corpusExpect, corpusLayouts,
+// corpusTokenFloor and both accuracy rates. docs/extraction-corpus.md, "## Learned rules".
+const fxLearnedTwoParty = "learned_two_party.pdf"
+
+// fxBuildLearnedTwoParty stacks both party blocks (label / name / BARE TIN) in page 1's top
+// half. That is the whole trick: t1.buyer_tin.sweep is banded BandPage1Bottom so it cannot
+// reach the buyer's TIN, and the buyer_tin lexicon needs a party word beside a TIN word, which
+// a bare number does not carry -- so Tier-1 alone returns ZERO buyer_tin candidates.
+//
+// supplier_tin therefore reads "ambiguous" here: t1.supplier_tin.sweep is top-banded and claims
+// both bare TINs. That is the cost of the arrangement, not a defect to fix -- it is invisible to
+// every accuracy number because this is not a corpus layout.
+func fxBuildLearnedTwoParty() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: INV-1007"},
+		fxLine{12, 72, 672, "Invoice Date: 2026-04-22"},
+		fxLine{12, 72, 630, "Supplier"},
+		fxLine{12, 72, 614, "Adeyemi Trading Limited"},
+		fxLine{12, 72, 598, "99999999-0701"},
+		fxLine{12, 72, 540, "Buyer"},
+		fxLine{12, 72, 524, "Honeywell Group"},
+		fxLine{12, 72, 508, "99999999-0702"},
+		fxLine{12, 72, 240, "Total: NGN 3,225.00"},
 	)
 }
 

@@ -25,12 +25,12 @@ const (
 	FailureTextNotRead         FailureKind = "text_not_read"
 )
 
-// Valid reports whether k is one of the four kinds. "" is invalid: a success carries no kind,
+// Valid reports whether k is one of the five kinds. "" is invalid: a success carries no kind,
 // and the adapter gates its failure branch on this, refusing a half-filled failure payload.
 func (k FailureKind) Valid() bool {
 	switch k {
 	case FailureDocumentUnavailable, FailurePagesNotRendered,
-		FailurePageRowsNotWritten, FailureExtractFailed:
+		FailurePageRowsNotWritten, FailureExtractFailed, FailureTextNotRead:
 		return true
 	}
 	return false

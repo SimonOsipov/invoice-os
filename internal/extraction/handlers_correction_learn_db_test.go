@@ -755,7 +755,7 @@ func clCorrectionsByMethod(t *testing.T, ctx context.Context, jobID, method stri
 	return n
 }
 
-// --- AC-6 (ordering) : the rule INSERT is the LAST of the four writes --------------------
+// --- AC-6 (ordering) : the rule INSERT follows the correction row and its audit row -------
 
 // clOrderingTrigger arms a BEFORE INSERT trigger on extraction_anchor_rules that inspects, from
 // INSIDE the same transaction, whether this job's correction row and this tenant's audit row are
@@ -810,7 +810,7 @@ func clOrderingTrigger(t *testing.T, ctx context.Context, tenantID, jobID string
 //
 // Both arms run the SAME request against the SAME fixture and must answer differently, so
 // neither status is a trigger that simply always fires.
-func TestRLS_TheAnchorRuleWriteIsTheLastOfTheFourWrites(t *testing.T) {
+func TestRLS_TheAnchorRuleWriteFollowsTheCorrectionRowAndTheCorrectionAudit(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-ORDER")
 	_, pages := clLayout(t, ctx, f.jobID)

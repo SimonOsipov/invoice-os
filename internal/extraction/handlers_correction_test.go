@@ -70,6 +70,10 @@ type corSpy struct {
 	gotSubject    string
 	gotCorrection extraction.FieldCorrection
 
+	learns     int
+	gotLearned extraction.AnchorLearned
+	learnErr   error
+
 	invoiceID string
 	applyErr  error
 	recordErr error
@@ -92,6 +96,12 @@ func (s *corSpy) record(_ context.Context, _ pgx.Tx, subject string, c extractio
 	s.records++
 	s.gotSubject, s.gotCorrection = subject, c
 	return s.recordErr
+}
+
+func (s *corSpy) recordLearned(_ context.Context, _ pgx.Tx, _ string, a extraction.AnchorLearned) error {
+	s.learns++
+	s.gotLearned = a
+	return s.learnErr
 }
 
 // corDeadPool is a lazily-configured pool at a closed port: it never connects, so the first
@@ -118,7 +128,7 @@ func corServe(t *testing.T, spy *corSpy, rawID, rawName, body string, id *auth.I
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	w := httptest.NewRecorder()
-	extraction.CorrectionHandler(corDeadPool, spy.apply, spy.record, log)(w, r)
+	extraction.CorrectionHandler(corDeadPool, spy.apply, spy.record, spy.recordLearned, log)(w, r)
 	return w
 }
 

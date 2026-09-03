@@ -180,7 +180,7 @@ func main() {
 	// audits the pair (TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators).
 	app.Mux.HandleFunc("POST /v1/extractions/{id}/fields/{name}/corrections",
 		extraction.CorrectionHandler(pool, newInvoiceFieldApplier(invStore.EditBySourceDocumentTx),
-			newFieldCorrectedAuditor(), app.Logger))
+			newFieldCorrectedAuditor(), newAnchorLearnedAuditor(), app.Logger))
 
 	// POST /v1/extractions/{id}/line-items -- the same transaction shape as the correction
 	// route, replacing the invoice's whole line set
@@ -376,6 +376,15 @@ func newFieldCorrectedAuditor() extraction.RecordFieldCorrected {
 			"field":      c.FieldName,
 			"method":     string(c.Method),
 		})
+	}
+}
+
+// newAnchorLearnedAuditor adapts the audit module to the rule-learning seam. The event name is
+// spelled here for newFieldCorrectedAuditor's reason
+// (TestNewAnchorLearnedAuditor_WritesExactlyTheSixKeys).
+func newAnchorLearnedAuditor() extraction.RecordAnchorLearned {
+	return func(context.Context, pgx.Tx, string, extraction.AnchorLearned) error {
+		return nil
 	}
 }
 

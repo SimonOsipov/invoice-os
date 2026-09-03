@@ -7,13 +7,13 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 39 identifiers this app claims to label, measured against the Go tree. Five families
+// The 40 identifiers this app claims to label, measured against the Go tree. Five families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, validation/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
 //
-// The three extraction events are the opposite case: cmd/submission/main.go spells each one
-// literally, so the source scan below can demand a label for all three.
+// The four extraction events are the opposite case: cmd/submission/main.go spells each one
+// literally, so the source scan below can demand a label for all four.
 const EXPECTED: Record<AuditDomain, string[]> = {
   invoices: [
     'invoice.created',
@@ -51,6 +51,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'extraction.succeeded',
     'extraction.failed',
     'extraction.field_corrected',
+    'extraction.anchor.learned',
   ],
   memberships: ['membership.suspended', 'membership.reactivated'],
   validation: ['validation.rule.enabled', 'validation.rule.disabled'],
@@ -61,12 +62,12 @@ const EXPECTED: Record<AuditDomain, string[]> = {
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllThirtyNineTypes', () => {
+  it('auditVocabulary_hasAllFortyTypes', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(39)
-    expect(ALL.length).toBe(39)
+    expect(shipped.length).toBe(40)
+    expect(ALL.length).toBe(40)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
@@ -124,7 +125,12 @@ describe('audit vocabulary', () => {
     // The other direction: a label with no writer is drift too. cmd/** sits outside the
     // `frontend` CI path filter, so this is the assertion that makes the Go adapter and these
     // three labels one push rather than two.
-    for (const id of ['extraction.succeeded', 'extraction.failed', 'extraction.field_corrected']) {
+    for (const id of [
+      'extraction.succeeded',
+      'extraction.failed',
+      'extraction.field_corrected',
+      'extraction.anchor.learned',
+    ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }
   })
@@ -137,6 +143,20 @@ describe('audit vocabulary', () => {
     }
     // And at least one outcome-bearing event does take a tone, so the assertion above is
     // not vacuously satisfied by a function that returns null for everything.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_anchorLearnedIsLabelledAndToneless', () => {
+    const view = auditEventView('extraction.anchor.learned')
+    // The humanise() fallback returns 'Learned' with a null domain, so the domain is what tells
+    // a labelled event from an unknown one -- the label check alone cannot.
+    expect(view.domain).toBe('documents')
+    expect(view.label).not.toBe('Learned')
+    expect(view.label).not.toBe('extraction.anchor.learned')
+    expect(view.label.length).toBeGreaterThan(0)
+    // No outcome key: a learned rule is neither good nor bad news.
+    expect(view.tone).toBeNull()
+    // Control: the same view function does return a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 

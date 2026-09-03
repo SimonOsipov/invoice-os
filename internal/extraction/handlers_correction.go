@@ -43,6 +43,23 @@ type FieldCorrection struct {
 // the correction's fate.
 type RecordFieldCorrected func(ctx context.Context, tx pgx.Tx, subject string, c FieldCorrection) error
 
+// AnchorLearned is what the rule-learning audit seam records. No corrected value, no anchor
+// text and no box: audit_log is append-only and all three are business content
+// (TestNewAnchorLearnedAuditor_WritesExactlyTheSixKeys).
+type AnchorLearned struct {
+	InvoiceID         string
+	FieldName         string
+	LayoutFingerprint string
+	RuleID            string
+	Relation          RelationKind
+	Shape             Shape
+}
+
+// RecordAnchorLearned writes one audit row on the handler's own transaction, so the row shares
+// the rule's fate. Separate from RecordFieldCorrected because cmd/submission hands that one to
+// LineItemsHandler too, and the line-items route learns nothing.
+type RecordAnchorLearned func(ctx context.Context, tx pgx.Tx, subject string, a AnchorLearned) error
+
 // CorrectionRequest is the POST body. Region is a named pointer, never an inline struct:
 // wireMirrors' goStructKeys reads a brace-free body only.
 type CorrectionRequest struct {
@@ -136,7 +153,7 @@ func validMethod(m CorrectionMethod) bool {
 // CorrectionHandler returns POST /v1/extractions/{id}/fields/{name}/corrections. Identity is
 // checked FIRST, before any path value or body is read, so an unauthenticated caller learns
 // nothing about which field names exist.
-func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, log *slog.Logger) http.HandlerFunc {
+func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, recordLearned RecordAnchorLearned, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -200,7 +217,7 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 		}
 
 		out, err := writeCorrection(r.Context(), pool, correctionWrite{
-			apply: apply, record: record, caller: caller,
+			apply: apply, record: record, recordLearned: recordLearned, caller: caller,
 			jobID: parsed.String(), field: field, value: value, req: req,
 		})
 		if err != nil {
@@ -219,13 +236,14 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 // correctionWrite is what one committed correction needs. A struct rather than nine arguments;
 // nothing outside this file builds one.
 type correctionWrite struct {
-	apply  ApplyFieldToInvoice
-	record RecordFieldCorrected
-	caller auth.Identity
-	jobID  string
-	field  string
-	value  string
-	req    CorrectionRequest
+	apply         ApplyFieldToInvoice
+	record        RecordFieldCorrected
+	recordLearned RecordAnchorLearned
+	caller        auth.Identity
+	jobID         string
+	field         string
+	value         string
+	req           CorrectionRequest
 }
 
 // writeCorrection runs the three writes on ONE transaction, so the correction row, the invoice

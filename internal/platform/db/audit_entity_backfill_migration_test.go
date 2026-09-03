@@ -896,11 +896,12 @@ func TestRLS_AuditResolverDefinerIsTheLatestMigration(t *testing.T) {
 // insert. Executed as the migrator in a rolled-back transaction.
 //
 // The target is resolved by content, so this test follows whichever migration currently
-// defines the resolver last. That is EXTR-08-06's, which adds extraction.field_corrected
-// and whose Down restores AUDIT-03's body -- where submission.failed IS attributed. So the
-// event this test watches flip is the newest one, and submission.failed and
-// submission.accepted are the two controls: they stay attributed through both bodies, and
-// a dropped or wrong-body Down cannot fake that.
+// defines the resolver last. That is Migration B, which adds extraction.anchor.learned and
+// whose Down restores the extraction body -- where extraction.field_corrected IS still
+// attributed. So the event this test watches flip is extraction.anchor.learned, and
+// extraction.field_corrected, submission.failed and submission.accepted are the three
+// controls: they stay attributed through both bodies, and a dropped or wrong-body Down
+// cannot fake that.
 func TestRLS_AuditResolverReplacementIsReversible(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -938,17 +939,19 @@ func TestRLS_AuditResolverReplacementIsReversible(t *testing.T) {
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, "Up")); err != nil {
 		t.Fatalf("Up body of %s failed: %v", definer, err)
 	}
+	wantEntity("extraction.anchor.learned", "Up")
 	wantEntity("extraction.field_corrected", "Up")
 	wantEntity("submission.failed", "Up")
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, "Down")); err != nil {
 		t.Fatalf("Down body of %s failed: %v", definer, err)
 	}
-	if got := resolve("extraction.field_corrected", "Down"); got != nil {
-		t.Errorf("after the Down body, extraction.field_corrected resolves to %s, want NULL", *got)
+	if got := resolve("extraction.anchor.learned", "Down"); got != nil {
+		t.Errorf("after the Down body, extraction.anchor.learned resolves to %s, want NULL", *got)
 	}
-	// The controls the Down cannot fake: a dropped resolver would error here, and a Down
-	// that reverted the wrong line would return NULL for these too.
+	// The controls the Down cannot fake: a dropped resolver would error here, and a Down that
+	// reverted the whole extraction arm rather than the one event would return NULL for these too.
+	wantEntity("extraction.field_corrected", "Down")
 	wantEntity("submission.failed", "Down")
 	wantEntity("submission.accepted", "Down")
 }

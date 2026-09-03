@@ -82,6 +82,14 @@ scripts/ci/docling-canary.sh golden dev --update    # `dev` = the build.txt stam
 docker rm -f docling-canary
 ```
 
+`corpus_inline_labels.docling.json` is the second golden and takes explicit paths:
+
+```sh
+scripts/ci/docling-canary.sh golden dev \
+  internal/extraction/testdata/corpus_inline_labels.pdf \
+  internal/extraction/testdata/corpus_inline_labels.docling.json --update
+```
+
 Without `--update` the same command compares and prints a diff; that is what CI runs.
 
 The `<sha>` argument is a freshness gate, not decoration: the script reads `/healthz` and

@@ -4,6 +4,7 @@ package extraction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -71,4 +72,25 @@ func anchorRulesForTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint stri
 		return []AnchorRule{}, fmt.Errorf("extraction: read anchor rules for fingerprint %s: %w", fingerprint, err)
 	}
 	return out, nil
+}
+
+// JobLayout is what a job's own read recorded: the fingerprint its learned rules are keyed to,
+// and the page-1 anchors a later correction can name. Anchors is never nil.
+type JobLayout struct {
+	Fingerprint string
+	Anchors     []AnchorObservation
+}
+
+// TODO(EXTR-14-05, Stage 2.5 RED): stub. The RED specs in anchor_store_db_test.go are what
+// this must satisfy; nothing below is the implementation.
+func appendAnchorRuleTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint string, lr LearnedRule) (string, error) {
+	_, _, _, _, _ = ctx, tx, tenantID, fingerprint, lr
+	return "", errors.New("extraction: appendAnchorRuleTx is not implemented")
+}
+
+// TODO(EXTR-14-05, Stage 2.5 RED): stub. ok=false with a nil error is the shape the specs
+// pin for an absent layout; returning it unconditionally is what they red against.
+func jobLayoutTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLayout, bool, error) {
+	_, _, _, _ = ctx, tx, tenantID, jobID
+	return JobLayout{}, false, nil
 }

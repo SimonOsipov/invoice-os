@@ -123,12 +123,12 @@ compute term again, which takes an 800-page worst case from 240 s to 328 s of th
 Nothing wires it today: `selectExtractor` returns `MockExtractor` unless `EXTRACTOR=docling`
 (`docs/docling-sidecar.md`).
 
-`ExtractWorker.Text` is a second route to the same double read, and it is the one that will fire
-first. `Work` calls `readText` through that field after `Pages.Ingest`, so a fleet that fills it
-with a *local* reader renders every document twice for the same reason. `cmd/submission/main.go`
-passes `nil` today and EXTR-17-03 is the step that fills it; the reader it names there is a
-`DoclingReader`, whose cost is an HTTP round trip to the sidecar rather than a second local
-render. Re-derive the cap before either field is wired to a local reader.
+`ExtractWorker.Text` is a second route to the same double read. `Work` calls `readText` through
+that field after `Pages.Ingest`, so a fleet that fills it with a *local* reader renders every
+document twice for the same reason. `cmd/submission/main.go` fills it from `selectTextReader`:
+`nil` under mock and unset, a `DoclingReader` under `EXTRACTOR=docling`, whose cost is an HTTP
+round trip to the sidecar rather than a second local render. Re-derive the cap before either
+field is wired to a local reader.
 
 Refusing beats truncating because a timeout is not a graceful failure. River retries three times,
 each attempt re-renders from scratch and causes a fresh `document.read` audit row, and the job

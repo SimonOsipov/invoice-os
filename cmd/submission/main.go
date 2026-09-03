@@ -129,8 +129,15 @@ func main() {
 	}
 
 	// Fatal in every environment, matching the Select call above: a fleet that names an
-	// extractor it cannot build should not boot and quietly extract nothing.
-	extractor, err := selectExtractor(os.Getenv("EXTRACTOR"), os.Getenv("DOCLING_URL"))
+	// extractor it cannot build should not boot and quietly extract nothing. One read, two
+	// seams: the same EXTRACTOR value picks the Extractor and the text reader, so the two
+	// cannot drift apart (TestSubmissionMain_WiresTheQueueSeams).
+	extractorName, doclingURL := os.Getenv("EXTRACTOR"), os.Getenv("DOCLING_URL")
+	extractor, err := selectExtractor(extractorName, doclingURL)
+	if err != nil {
+		log.Fatalf("submission: %v", err)
+	}
+	textReader, err := selectTextReader(extractorName, doclingURL)
 	if err != nil {
 		log.Fatalf("submission: %v", err)
 	}
@@ -138,13 +145,12 @@ func main() {
 	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill. PageStore.Reader
 	// stays go-pdfium whatever EXTRACTOR selects: it renders page images, not text.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
-	// Text stays nil until EXTR-17-03 wires the reader: a nil PageReader is exactly what keeps
-	// Work on the Extractor branch. Pinned as nil by TestSubmissionMain_WiresTheQueueSeams, so
-	// the day it is filled is a deliberate edit there. Rules is real and unreachable while
-	// Text is nil.
+	// Text is nil under mock and unset, which is what keeps Work on the Extractor branch; under
+	// docling it is the sidecar reader and Work reads text through it instead. Rules is real in
+	// every case and reachable only on the text branch.
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), nil, (&extraction.Store{Pool: pool}).AnchorRulesFor, app.Logger)
+		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
@@ -517,7 +523,10 @@ func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, er
 			return nil, errors.New("extractor: EXTRACTOR=docling requires DOCLING_URL")
 		}
 		// NewDoclingExtractor validates the URL, so a malformed one fails here at boot rather
-		// than on the first job with a client pointed at nothing.
+		// than on the first job with a client pointed at nothing. This arm stays a
+		// *DoclingExtractor even though Extract is unreachable once Text is wired: Name() and
+		// Version() still write extraction_jobs.extractor, and a MockExtractor here would label
+		// every docling job mock-extracted.
 		ext, err := extraction.NewDoclingExtractor(doclingURL)
 		if err != nil {
 			return nil, fmt.Errorf("extractor: DOCLING_URL %q: %w", doclingURL, err)
@@ -529,10 +538,26 @@ func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, er
 }
 
 // selectTextReader resolves the SAME EXTRACTOR value to ExtractWorker.Text, so one variable
-// selects both seams. Not implemented: the mirroring switch and main()'s call site are
-// EXTR-17-03's implementation step. Until then every caller gets an error.
+// selects both seams. mock and unset select no reader at all: a nil Text is what keeps Work on
+// the Extractor branch. The *DoclingReader is declared inside its own case and every other arm
+// returns the literal nil -- a typed nil compares non-nil as a PageReader and would panic on the
+// first job (TestSelectTextReader_MockAndUnsetSelectNoReader).
 func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, error) {
-	return nil, errors.New("extractor: selectTextReader is not implemented")
+	switch extractorName {
+	case "", "mock":
+		return nil, nil
+	case "docling":
+		if doclingURL == "" {
+			return nil, errors.New("extractor: EXTRACTOR=docling requires DOCLING_URL")
+		}
+		r, err := extraction.NewDoclingReader(doclingURL)
+		if err != nil {
+			return nil, fmt.Errorf("extractor: DOCLING_URL %q: %w", doclingURL, err)
+		}
+		return r, nil
+	default:
+		return nil, fmt.Errorf("extractor: unrecognised EXTRACTOR %q, want mock or docling", extractorName)
+	}
 }
 
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails

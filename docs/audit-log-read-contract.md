@@ -661,10 +661,11 @@ dispatch is on the event name and not the key. §3 and §5 record the same fact 
 nothing at all.
 
 **This column's set and `audit_log_entity_for`'s set are no longer the same.** EXTR-08-06 added
-a fourth resolver branch for `extraction.field_corrected`, keyed on `invoice_id`, and
-deliberately left this column's two lists alone — growing them would rewrite a `STORED` column
-across the whole table. So that event is attributed to a company through its invoice, but it
-carries no `invoice_number` obligation (§10.13) and never appears in an invoice's scoped read.
+a fourth resolver branch for `extraction.field_corrected`, keyed on `invoice_id`, and EXTR-14-07
+added `extraction.anchor.learned` to that same branch; both deliberately left this column's two
+lists alone — growing them would rewrite a `STORED` column across the whole table. So those two
+events are attributed to a company through their invoice, but they carry no `invoice_number`
+obligation (§10.13) and never appear in an invoice's scoped read.
 Read each set from its own migration.
 
 Two consequences for anyone building on this.

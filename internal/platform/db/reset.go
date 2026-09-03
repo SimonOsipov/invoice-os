@@ -226,14 +226,14 @@ func ResetEnabled(environment, flag string) bool {
 //	                          does not follow a CASCADE: omitting it makes
 //	                          TRUNCATE documents raise 0A000. Object-storage
 //	                          bytes are NOT deleted, the same as documents above.
-//	extraction_anchor_rules   per-tenant learned anchor rules (EXTR-04). Its only
-//	                          FK is to tenants, which is not truncated, so nothing
-//	                          forces it in, and invoice_app holds SELECT only
-//	                          until EXTR-14 ships the writer. Included for the
+//	extraction_anchor_rules   per-tenant learned anchor rules (EXTR-04, written by
+//	                          EXTR-14). Its only FK is to tenants, which is not
+//	                          truncated, so nothing forces it in. Included for the
 //	                          same reason as submission_rate_limits above:
 //	                          seed.dev.sql has no UPSERT, so a row written once is
 //	                          inherited by every later fork forever, and a stale
-//	                          rule steers a later extraction.
+//	                          rule steers a later extraction. Its seq bigserial is
+//	                          column-owned, so RESTART IDENTITY resets it.
 //	approval_runs,            the run-ledger tables (APPR-03). approval_runs'
 //	approval_run_steps,       (tenant_id, invoice_id) FK is ON DELETE RESTRICT
 //	approval_decisions        against invoices, so omitting it here is exactly

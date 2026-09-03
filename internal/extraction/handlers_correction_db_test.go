@@ -142,17 +142,26 @@ func cxAuditor(fail error) extraction.RecordFieldCorrected {
 	}
 }
 
-// cxServe drives the handler once over the real app pool.
+// cxServe drives the handler once over the real app pool. The variadic learning recorder
+// defaults to one that writes nothing, so only a case that names it can see an anchor.learned
+// row; laLearnedAuditor is what writes a real one.
 func cxServe(t *testing.T, ctx context.Context, jobID, field, body string,
-	apply extraction.ApplyFieldToInvoice, record extraction.RecordFieldCorrected) *httptest.ResponseRecorder {
+	apply extraction.ApplyFieldToInvoice, record extraction.RecordFieldCorrected,
+	learned ...extraction.RecordAnchorLearned) *httptest.ResponseRecorder {
 	t.Helper()
+	recordLearned := extraction.RecordAnchorLearned(func(context.Context, pgx.Tx, string, extraction.AnchorLearned) error { return nil })
+	if len(learned) == 1 {
+		recordLearned = learned[0]
+	} else if len(learned) > 1 {
+		t.Fatalf("cxServe was handed %d learning recorders, want at most 1", len(learned))
+	}
 	r := httptest.NewRequest(http.MethodPost,
 		"/v1/extractions/"+jobID+"/fields/"+field+"/corrections", strings.NewReader(body))
 	r.SetPathValue(corPathID, jobID)
 	r.SetPathValue(corPathName, field)
 	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
-	extraction.CorrectionHandler(stRequire(t).app, apply, record, nil)(w, r)
+	extraction.CorrectionHandler(stRequire(t).app, apply, record, recordLearned, nil)(w, r)
 	return w
 }
 

@@ -89,3 +89,13 @@ const (
 // MaxUploadBytesForTest exposes the request-body cap so the 413 spec asserts the production
 // constant rather than a copy of it.
 const MaxUploadBytesForTest = maxUploadBytes
+
+// AppendAnchorRuleForTest and JobLayoutForTest hand the external test package the tx-taking
+// halves of the anchor-rule writer. Each caller opens its own db.WithinTenantTx.
+func AppendAnchorRuleForTest(ctx context.Context, tx pgx.Tx, tenantID, fingerprint string, lr LearnedRule) (string, error) {
+	return appendAnchorRuleTx(ctx, tx, tenantID, fingerprint, lr)
+}
+
+func JobLayoutForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLayout, bool, error) {
+	return jobLayoutTx(ctx, tx, tenantID, jobID)
+}

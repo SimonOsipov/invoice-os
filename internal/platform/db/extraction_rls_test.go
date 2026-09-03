@@ -1,6 +1,7 @@
 // RLS, grant and constraint suites for `extraction_jobs` and `extraction_field_results`.
-// Each was written before its migration exists, so every case fails with an explicit
-// 42P01 until that migration lands.
+// failIfUndefinedExtractionJobs / failIfUndefinedFieldCorrections turn a not-yet-migrated
+// table into a self-explaining 42P01 message instead of a raw driver error — the shape every
+// case here degrades to if run against a DB missing that table's migration.
 //
 // Rows are seeded per test, never in harness.seed(): a missing table must fail only these
 // cases, not the whole package. Each rejected statement gets its own db.WithinTenantTx,
@@ -841,6 +842,156 @@ func TestRLS_ExtractionJobsGrantMatrix(t *testing.T) {
 				"SELECT, INSERT, UPDATE to invoice_app and nothing to invoice_tenant_reader",
 				c.role, c.priv, got, c.want)
 		}
+	}
+}
+
+// L-08: layout_fingerprint is nullable, but any non-NULL value must be non-empty and no
+// longer than 128 bytes.
+func TestRLS_ExtractionJobsLayoutFingerprintBounds(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "L-08/a.pdf")
+	defer cleanupDoc()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = ANY($1)`, probes)
+	}()
+
+	for _, c := range []struct {
+		what        string
+		fingerprint any // nil encodes SQL NULL
+		wantErr     bool
+	}{
+		{"an empty layout_fingerprint", "", true},
+		{"a 129-character layout_fingerprint", strings.Repeat("a", 129), true},
+		{"NULL", nil, false},
+		{"a 67-byte v1: fingerprint", "v1:" + strings.Repeat("a", 64), false},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx,
+				`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version, layout_fingerprint)
+				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				id, h.tenantA, docA, ejExtractor, ejExtractorVersion, c.fingerprint)
+			return e
+		})
+		if !c.wantErr {
+			if err != nil {
+				t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514)", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514: %v", c.what, code, err)
+			continue
+		}
+		if got := pgConstraint(err); got != "extraction_jobs_layout_fingerprint_check" {
+			t.Errorf("INSERT with %s tripped constraint %q, want extraction_jobs_layout_fingerprint_check", c.what, got)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, id); n != 0 {
+			t.Errorf("rows after the refused %s = %d, want 0", c.what, n)
+		}
+	}
+}
+
+// L-09: layout_anchors is nullable, but any non-NULL value must be a JSON array — a JSON
+// object, a JSON scalar and the JSON null literal (jsonb 'null', distinct from SQL NULL) are
+// all refused.
+func TestRLS_ExtractionJobsLayoutAnchorsMustBeAnArray(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "L-09/a.pdf")
+	defer cleanupDoc()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = ANY($1)`, probes)
+	}()
+
+	for _, c := range []struct {
+		what    string
+		anchors any // nil encodes SQL NULL; a Go string is cast ::jsonb
+		wantErr bool
+	}{
+		{"a JSON object", `{}`, true},
+		{"a JSON string scalar", `"x"`, true},
+		{"the JSON null literal", `null`, true},
+		{"NULL", nil, false},
+		{"an empty JSON array", `[]`, false},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx,
+				`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version, layout_anchors)
+				 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+				id, h.tenantA, docA, ejExtractor, ejExtractorVersion, c.anchors)
+			return e
+		})
+		if !c.wantErr {
+			if err != nil {
+				t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514)", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514: %v", c.what, code, err)
+			continue
+		}
+		if got := pgConstraint(err); got != "extraction_jobs_layout_anchors_check" {
+			t.Errorf("INSERT with %s tripped constraint %q, want extraction_jobs_layout_anchors_check", c.what, got)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, id); n != 0 {
+			t.Errorf("rows after the refused %s = %d, want 0", c.what, n)
+		}
+	}
+}
+
+// QA (Mode B): L-08 pins the 129-char rejection but never the 128-char acceptance, so a
+// migration that shrank the ceiling to, say, 64 would still pass it in full.
+func TestRLS_ExtractionJobsLayoutFingerprintAcceptsTheOneTwentyEightCeiling(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "L-08/ceiling.pdf")
+	defer cleanupDoc()
+
+	at128 := "v1:" + strings.Repeat("a", 125)
+	if len(at128) != 128 {
+		t.Fatalf("test setup: the at-ceiling fingerprint is %d chars, want 128", len(at128))
+	}
+
+	id := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = $1`, id)
+	}()
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version, layout_fingerprint)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			id, h.tenantA, docA, ejExtractor, ejExtractorVersion, at128)
+		return e
+	})
+	if failIfUndefinedExtractionJobs(t, "INSERT with a 128-char layout_fingerprint", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("INSERT with a 128-char layout_fingerprint: want success (the ceiling is inclusive), got: %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, id); n != 1 {
+		t.Errorf("rows after the 128-char layout_fingerprint = %d, want 1", n)
 	}
 }
 

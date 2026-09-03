@@ -229,6 +229,169 @@ Then regenerate as above and commit the new `.pdf` with its generator. Every val
 `TestCorpus_EveryExpectedValueAppearsInItsFixture` runs each token's word runs through the
 field's shape and fails on a row naming a value the bytes do not carry.
 
+**Not every committed fixture is a layout.** `learned_two_party.pdf` is generated and
+byte-compared exactly like the six layouts, and it is deliberately named *outside* the `corpus_`
+prefix so that none of the four edits above apply to it. Do not add a `corpusExpect` row, a
+`corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
+section below says why.
+
+## Learned rules
+
+A learned rule is one tenant's answer to "this producer puts the buyer's TIN *there*". It is
+derived from a single pointed correction, stored against the layout's fingerprint, and read back
+on every later document of that layout. It is the tenant-specific tier; Tier-1 stays generic.
+
+### How a rule is derived
+
+`LearnRule` (`internal/extraction/learn.go`) takes the corrected field, the box the reviewer
+dragged, and the anchor observations the job's own read recorded. It considers every anchor
+observation **on the corrected box's page**, keeps the ones that stand in a geometric relation to
+that box, and picks the single best one with `betterAnchor`.
+
+* **The relation** is one of `same_token`, `right` or `below`. `same_token` means the value lives
+  inside the anchor token's own text; `right` and `below` mean it sits beside or under it, with
+  at least half the shorter span overlapping on the off-axis.
+* **`max_distance`** is the measured edge gap, **rounded up** to two decimals, then capped at the
+  Tier-1 dial for that relation — `0.35` for `right`, `0.06` for `below`, `0` for `same_token`
+  (D-6). Rounding up is what absorbs the difference between the reviewer's drag box and the token
+  box; the cap is what stops one wide drag from teaching a page-wide rule.
+* **The label** is the anchor's own matched text, put through `regexp.QuoteMeta` and wrapped in
+  `(?i)` with `\b` word boundaries where the outer bytes allow one (D-3, precision over recall).
+  When a rule is derived, this label is also what lands in the correction row's `anchor_label`,
+  overwriting whatever the wire sent. When no rule is derived, the client's trimmed value stands
+  unchanged — see `TestRLS_APointedCorrectionThatAnchorsToNothingCommitsWithoutARule`.
+
+The worked example, measured off `learned_two_party.pdf`. Both party blocks are stacked
+(`label` / `name` / bare TIN) in page 1's **top** half, so `t1.buyer_tin.sweep` — which is banded
+to page 1's bottom half — cannot reach the buyer's TIN, and the `buyer_tin` lexicon needs a party
+word beside a TIN word, which a bare number does not carry. Tier-1 alone therefore returns
+**zero** `buyer_tin` candidates and decides `missing`.
+
+A reviewer points at the bare token `99999999-0702`. The nearest qualifying anchor is
+`buyer_name` / `"Buyer"`, `below` at a gap of `0.026525`; `"Supplier"` is also below, at
+`0.140267`, and is dropped for exceeding the `0.06` dial. The derived body is:
+
+```json
+{"label":"(?i)\\bBuyer\\b","relation":{"kind":"below","max_distance":0.03},"shape":"tin"}
+```
+
+On the next document of that layout the rule matches one token, `relatedTokens` reaches the two
+tokens under it, `ShapeTIN` rejects the party name, and `buyer_tin` resolves to `99999999-0702`
+as a `TierLearned` candidate with no alternatives —
+`TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN`.
+
+### Only a pointed correction produces a rule
+
+A correction carries a method. A **`typed`** correction — a reviewer retyping a value — writes
+the correction row and **zero rules**. An **`undone`** correction likewise writes **zero rules**.
+Only `pointed`, where the reviewer drew a box on the page, teaches anything, because only a box
+carries the geometry a rule is derived from.
+
+A pointed correction that **anchors to nothing** — an empty corner of the page, a box no anchor
+observation stands in a relation to, a job that recorded no layout at all — still commits the
+correction and still teaches nothing. That is an **honest refusal**, not an error: the reviewer's
+edit is recorded and applied, and the system declines to generalise from a gesture it cannot
+interpret. `LearnRule` reports `ok=false` and the request answers `201` exactly as it otherwise
+would.
+
+### Undo does not un-teach
+
+This is the sharp edge of the feature, and it is a decision (D-17), not an oversight.
+
+A rule written by a correction that was later **undone stays live**. It keeps firing on every
+later document carrying that layout fingerprint. The undo revises what one field on one document
+says; it does not withdraw the claim about *where that field lives on this layout*.
+
+The only way to displace a live rule is a **second pointed correction** on the same field,
+pointing at a distinguishing label. Displacement is by **ordering**, never by deletion: the
+`extraction_anchor_rules` table is **append-only** by grant — `invoice_app` holds `INSERT` and
+`SELECT` and no `UPDATE` or `DELETE` — so after a superseding correction **both rows remain**,
+and `AnchorRulesFor` returns them newest-first. `Resolve` lets the first rule that produces
+anything for a field claim it; an older rule is outranked, never erased.
+
+Two tests hold this:
+`TestRLS_AnUndoDoesNotUnteachAndOnlyAPointedCorrectionSupersedes` proves the undo leaves the rule
+both present and *firing*, and that a later pointed correction prepends a superseding row;
+`TestRLS_ASecondPointedCorrectionSupersedesTheFirstOnTheThirdDocument` proves that when **both**
+rules are live and resolve **different** values, the newer one decides — with the reversed
+ordering as the control.
+
+### A rule is scoped to one tenant and one layout fingerprint
+
+Both boundaries are enforced, and neither is advisory.
+
+* **Layout.** A rule is stored under the fingerprint of the layout it was learned on. A different
+  layout computes a different fingerprint, so the rule is **never even loaded** for it — the
+  read is `WHERE tenant_id = $1 AND layout_fingerprint = $2`, and a rule under another key does
+  not come back. This is the mechanism; "the rule happens to match nothing over there" is a
+  content coincidence and is not what keeps layouts apart.
+* **Tenant.** A rule belongs to the tenant whose reviewer taught it. A **different tenant**
+  handed a byte-identical document, computing an identical fingerprint, loads zero rules and
+  reads the document exactly as it did before. Row-level security on
+  `extraction_anchor_rules` is what holds it, so the isolation survives a query that forgets to
+  filter.
+
+`TestRLS_ALearnedRuleIsNeverLoadedUnderAnotherLayoutsFingerprint` and
+`TestRLS_TheLearnedRuleDoesNotLeaveItsTenant` are the oracles, each with the paired positive
+control that makes its zero mean something. Neither one can see row-level security being turned
+off, though: measured, both still pass with the policy disabled, because the store's own
+`tenant_id` predicate filters the row. The oracle for the mechanism is
+`TestRLS_ExtractionAnchorRulesCrossTenantSelectRefused`, which reds when the policy is dropped.
+
+### When a learned rule misfires
+
+**The response path is the corpus owner** — the `## Owner` section at the foot of this document.
+A learned rule is tenant data, not shipped code: it cannot be fixed by a deploy, and there is no
+admin screen that edits or retracts one. Bring the layout, the tenant and the field to the owner.
+
+The canonical misfire is `corpus_two_column.pdf`, and it is asserted rather than hidden —
+`TestRLS_TheTwoColumnLayoutGetsWorseBeforeItGetsBetter`.
+
+That layout prints the supplier and buyer blocks side by side, each ending in a token spelled
+`TIN: 99999999-04NN`. Under Tier-1 alone `buyer_tin` reads **`missing`** — one honest gap.
+A reviewer points at the buyer's own token `TIN: 99999999-0402`; the best anchor is the
+`supplier_tin` lexicon entry matching the bare word `TIN` **inside that same token**, so the
+derived rule is:
+
+```json
+{"label":"(?i)\\bTIN\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}
+```
+
+That label matches **both** party blocks. With the rule live, `buyer_tin` gets **two candidates
+from one rule**, both at distance 0, and the decision comes out `99999999-0401` — **the
+supplier's TIN** — flagged `ambiguous` with `99999999-0402` as the alternative. The layout has
+gone from one honest `missing` to a confidently decided **wrong** value.
+
+Both candidates come from the *same* rule, so newest-rule-wins cannot rescue it. The tie is
+broken in `compareRegions`: the two tokens share a baseline, so their `Y0` is bit-identical
+(`0.23407067192925346`), and `X0` decides — `0.1179 < 0.6539` hands the field to the supplier.
+
+The remedy today is a **second pointed correction** on a distinguishing label — a token whose
+text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
+so that `TIN` alone no longer anchors is **not** a remedy: the lexicon is an input to the
+fingerprint, so changing it invalidates every stored rule for every tenant and requires a
+`FingerprintVersion` bump.
+
+### learned_two_party.pdf is not a corpus layout
+
+`learned_two_party.pdf` is generated by `fxBuildLearnedTwoParty` and byte-compared by
+`TestFixtures_MatchTheirGenerator` and `TestFixtures_GeneratorIsDeterministic` like every other
+fixture. It is deliberately named **outside** the `corpus_` prefix, and therefore sits outside
+`corpusExpect`, `corpusLayouts`, `corpusTokenFloor`, the Tier-1 recall rate and the Tier-1
+decision rate.
+
+That is the point: it exists to be a layout Tier-1 **cannot** fully read, and adding it to the
+corpus would move `EXTR-04`'s accuracy ratchet — which must keep measuring the same six layouts
+it has always measured — for a fixture whose whole purpose is a gap. Its own reserved-TIN scan
+is `TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs`, because
+`TestCorpus_UsesOnlyFreeReservedTINs` quantifies over `corpusLayouts` and cannot see it.
+
+One consequence worth recording: `supplier_tin` reads `ambiguous` on this fixture, because
+`t1.supplier_tin.sweep` is banded to page 1's top half and claims **both** bare TINs. That is the
+cost of putting both party blocks in the top half, it is what makes the buyer's TIN unreachable,
+and it is invisible to every accuracy number precisely because this is not a corpus layout. Do
+not "fix" it.
+
 ## Scrubbing an anonymised real document
 
 A real invoice that failed to extract is a source of *layout information*, not of bytes. It is

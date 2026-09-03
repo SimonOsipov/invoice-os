@@ -95,8 +95,8 @@ func TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators(t *testing.T)
 			// Both adapters are unit-tested over injected seams below, so only this scan can say
 			// the handler is built over the REAL pool, store and audit module. A nil collaborator
 			// compiles and fails on the first correction.
-			if len(handlerCall.Args) != 4 {
-				t.Errorf("extraction.CorrectionHandler is called with %d argument(s), want 4 (pool, apply, record, logger)", len(handlerCall.Args))
+			if len(handlerCall.Args) != 5 {
+				t.Errorf("extraction.CorrectionHandler is called with %d argument(s), want 5 (pool, apply, record, recordLearned, logger)", len(handlerCall.Args))
 				return true
 			}
 			if c, ok := handlerCall.Args[1].(*ast.CallExpr); !ok || wtCallName(c.Fun) != fcApplierFn {
@@ -112,7 +112,13 @@ func TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators(t *testing.T)
 			if got := wtRender(handlerCall.Args[0]); got != fcPoolArg {
 				t.Errorf("CorrectionHandler's pool argument is %s, want %s -- the route must run on the service's own invoice_app pool", got, fcPoolArg)
 			}
-			if got := wtRender(handlerCall.Args[3]); got != fcLoggerArg {
+			// The learning recorder is its own adapter, not newFieldCorrectedAuditor widened:
+			// cmd/submission hands that one to LineItemsHandler too, and the line-items route
+			// learns nothing.
+			if c, ok := handlerCall.Args[3].(*ast.CallExpr); !ok || wtCallName(c.Fun) != alAdapterFn {
+				t.Errorf("CorrectionHandler's recordLearned argument is %s, want a %s(...) call", wtRender(handlerCall.Args[3]), alAdapterFn)
+			}
+			if got := wtRender(handlerCall.Args[4]); got != fcLoggerArg {
 				t.Errorf("CorrectionHandler's logger argument is %s, want %s", got, fcLoggerArg)
 			}
 		}

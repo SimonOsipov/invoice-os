@@ -394,3 +394,154 @@ func TestCorpus_HasAllSixNamedLayouts(t *testing.T) {
 		}
 	}
 }
+
+// --- EXTR-14-09: the learned-rule fixture and the doc that owns it -------------------------
+
+// E-11. C-07 quantifies over corpusLayouts, so learned_two_party.pdf sits outside its reserved-
+// TIN scan. This closes that gap for the one fixture that is deliberately not a corpus layout.
+// The >=2 floor is what stops a regex or fixture regression from reading as a clean pass.
+func TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs(t *testing.T) {
+	pages, _ := ptRead(t, fxLearnedTwoParty)
+
+	var hits []string
+	for _, tok := range ptTokens(pages) {
+		for _, hit := range corpusTIN.FindAllString(tok.Text, -1) {
+			hits = append(hits, hit)
+			if !strings.HasPrefix(hit, corpusFreeTINPrefix) {
+				t.Errorf("%s carries TIN %q, outside the reserved %s block -- it could collide with a real taxpayer", fxLearnedTwoParty, hit, corpusFreeTINPrefix)
+				continue
+			}
+			for _, scripted := range corpusScriptedTINs {
+				if strings.TrimPrefix(hit, corpusFreeTINPrefix) == scripted {
+					t.Errorf("%s carries TIN %q, one of the mock adapter's scripted or never-allocate values (internal/submission/mock_script.go:76-93)", fxLearnedTwoParty, hit)
+				}
+			}
+		}
+	}
+	if len(hits) < 2 {
+		t.Fatalf("found %d TIN-shaped token(s) in %s, want at least 2 (%v) -- a zero-hit scan asserts nothing about the block",
+			len(hits), fxLearnedTwoParty, hits)
+	}
+}
+
+// --- E-10: the learned-rules documentation ------------------------------------------------
+
+const (
+	cldSection         = "## Learned rules"
+	cldAdding          = "## Adding a layout"
+	cldMinSectionRunes = 400
+	cldMinSubRunes     = 180
+)
+
+var cldWhitespaceRun = regexp.MustCompile(`\s+`)
+
+// cldSubsections are the claims the "## Learned rules" section owes. Each needle is a phrase,
+// never a bare number: "0.06" is a substring of "0.065", and a bare-number list reports a
+// derivation present when only a summary line survived.
+var cldSubsections = []struct {
+	heading string
+	needles []string
+	why     string
+}{
+	{
+		heading: "How a rule is derived",
+		needles: []string{
+			"learnrule", "betteranchor", "same_token", "below", "rounded up",
+			"0.35", "0.06", "regexp.quotemeta", "learned_two_party.pdf", "99999999-0702",
+		},
+		why: "a derivation nobody can reproduce is a rule nobody can predict",
+	},
+	{
+		heading: "Only a pointed correction produces a rule",
+		needles: []string{"typed", "undone", "zero rules", "anchors to nothing", "honest refusal"},
+		why:     "the gesture is the whole input; a reader who thinks any correction teaches will point at the wrong thing",
+	},
+	{
+		heading: "Undo does not un-teach",
+		needles: []string{
+			"stays live", "append-only", "both rows remain", "ordering",
+			"TestRLS_AnUndoDoesNotUnteachAndOnlyAPointedCorrectionSupersedes",
+		},
+		why: "D-17 is the sharp edge of this feature, and a caveat nobody wrote down is a support call",
+	},
+	{
+		heading: "A rule is scoped to one tenant and one layout fingerprint",
+		needles: []string{"fingerprint", "never even loaded", "different tenant"},
+		why:     "the two boundaries a reader will otherwise assume are advisory",
+	},
+	{
+		heading: "When a learned rule misfires",
+		needles: []string{
+			"corpus owner", "corpus_two_column.pdf", "99999999-0401", "ambiguous",
+			"second pointed correction", "fingerprintversion",
+		},
+		why: "a response path with no name on it is a response path nobody runs, and the two-column case is the canonical misfire",
+	},
+	{
+		heading: "learned_two_party.pdf is not a corpus layout",
+		needles: []string{"corpusexpect", "corpuslayouts", "corpustokenfloor", "extr-04"},
+		why:     "the next author will otherwise add a corpusExpect row for it by reflex and drag the ratchet with it",
+	},
+}
+
+// cldSubsection returns one "### " subsection's own text inside body, whitespace collapsed. A
+// rune floor is what stops an absence check from passing over an emptied subsection.
+func cldSubsection(t *testing.T, body, heading string) string {
+	t.Helper()
+
+	lines := strings.Split(body, "\n")
+	var starts []int
+	for i, line := range lines {
+		if strings.HasPrefix(line, "### ") && strings.TrimSpace(strings.TrimPrefix(line, "### ")) == heading {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) != 1 {
+		t.Fatalf("%s holds %d subsection(s) headed %q under %s, want exactly 1 -- a renamed or duplicated heading leaves this oracle reading the wrong prose, or none",
+			acDoc, len(starts), heading, cldSection)
+	}
+
+	end := len(lines)
+	for i := starts[0] + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "### ") || strings.HasPrefix(lines[i], "## ") {
+			end = i
+			break
+		}
+	}
+	text := strings.TrimSpace(cldWhitespaceRun.ReplaceAllString(strings.Join(lines[starts[0]:end], " "), " "))
+	if n := len([]rune(text)); n < cldMinSubRunes {
+		t.Fatalf("%s subsection %q carries %d rune(s), want at least %d -- an absence check over an emptied subsection always passes",
+			acDoc, heading, n, cldMinSubRunes)
+	}
+	return text
+}
+
+// E-10. docs/extraction-corpus.md is this subtask's deliverable, so it has an oracle. The scan
+// is section-scoped: the doc names 0.06 and corpus_two_column.pdf in several places, and a
+// whole-file check would report this section clean off another section's prose.
+func TestCorpusDoc_RecordsHowALearnedRuleIsDerivedAndWhatUndoDoesNot(t *testing.T) {
+	doc := acRepoFile(t, acDoc)
+
+	body := acDocSectionText(t, doc, cldSection)
+	if n := len([]rune(body)); n < cldMinSectionRunes {
+		t.Fatalf("%s's %q section carries %d rune(s), want at least %d", acDoc, cldSection, n, cldMinSectionRunes)
+	}
+	if got := strings.Count(doc, "\n"+cldSection); got != 1 {
+		t.Fatalf("%s carries %d %q heading(s), want exactly 1", acDoc, got, cldSection)
+	}
+
+	for _, s := range cldSubsections {
+		text := strings.ToLower(cldSubsection(t, body, s.heading))
+		for _, needle := range s.needles {
+			if !strings.Contains(text, strings.ToLower(needle)) {
+				t.Errorf("%s subsection %q never says %q -- %s", acDoc, s.heading, needle, s.why)
+			}
+		}
+	}
+
+	// The reflex guard: the next author reads "## Adding a layout", not this section.
+	adding := strings.ToLower(acDocSectionText(t, doc, cldAdding))
+	if !strings.Contains(adding, fxLearnedTwoParty) {
+		t.Errorf("%s's %q section never names %s -- the next author adds a corpusExpect row for it by reflex", acDoc, cldAdding, fxLearnedTwoParty)
+	}
+}

@@ -118,8 +118,10 @@ func mustTier1Rule(key, field, label string, kind RelationKind, maxDistance stri
 	return Tier1Rule{Key: key, Field: field, Rule: rule, Band: band}
 }
 
-// jsonString quotes s as a JSON string: encoding/json is outside this file's import allowlist
-// (TestResolve_ImportsOnlyPureStdlib), and a label pattern needs no escape beyond these two.
+// jsonString quotes s as a JSON string: encoding/json is outside the import allowlist
+// (TestResolve_ImportsOnlyPureStdlib). Two escapes cover every shipped label; learn.go feeds it
+// document text, where a control byte would need more -- ParseRule refuses that body and
+// LearnRule returns ok=false rather than storing it.
 func jsonString(s string) string {
 	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
 }

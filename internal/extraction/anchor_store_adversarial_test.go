@@ -143,7 +143,8 @@ func TestAnchorRulesFor_ReturnsEveryRuleForABusyFingerprint(t *testing.T) {
 	for i := range ids {
 		ids[i] = uuid.NewString()
 	}
-	// One statement, so now() ties every row and the documented id tiebreak is the whole order.
+	// One statement, so now() ties every row and seq alone is the whole order. INSERT ...
+	// SELECT unnest(array) assigns nextval in array order, so seq DESC reads them back reversed.
 	if _, err := h.super.Exec(ctx,
 		`INSERT INTO extraction_anchor_rules (id, tenant_id, layout_fingerprint, field_name, rule, rule_schema_version)
 		 SELECT u, $2, $3, $4, $5, $6 FROM unnest($1::uuid[]) AS u`,
@@ -159,10 +160,11 @@ func TestAnchorRulesFor_ReturnsEveryRuleForABusyFingerprint(t *testing.T) {
 		t.Fatalf("AnchorRulesFor returned %d rule(s), want all %d -- a truncated read is the failure this test exists for", len(out), busy)
 	}
 
-	want := slices.Sorted(slices.Values(ids))
+	want := slices.Clone(ids)
+	slices.Reverse(want)
 	for i, w := range want {
 		if out[i].ID != w {
-			t.Fatalf("position %d is %s, want %s; %d tied rows must come back in id order", i, out[i].ID, w, busy)
+			t.Fatalf("position %d is %s, want %s; %d rows tied on created_at must come back in seq DESC order", i, out[i].ID, w, busy)
 		}
 		if out[i].Rule.Shape != extraction.ShapeInvoiceNumber {
 			t.Fatalf("position %d decoded shape %q, want %q", i, out[i].Rule.Shape, extraction.ShapeInvoiceNumber)

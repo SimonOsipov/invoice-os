@@ -260,3 +260,110 @@ func TestCollectTokens_AppendsAndNeverResetsTheDestination(t *testing.T) {
 		t.Errorf("pages[1] geometry = %vx%v, want 612x792 carried from the collected page", pages[1].WidthPt, pages[1].HeightPt)
 	}
 }
+
+// --- EXTR-14-02 -------------------------------------------------------------
+
+// O-04: a page carrying no recognised label yields an empty, non-nil AnchorObservations slice --
+// len(x)==0 is true for nil too, so the nil check is asserted on its own. A nil result would
+// defeat the layout_anchors column's array CHECK, which needs "[]", never "null".
+func TestAnchorObservations_NoMatchIsEmptyNotNil(t *testing.T) {
+	unmatched := []extraction.Token{tok("xyzzy plugh", 0.1, 0.1, 0.2, 0.12)}
+	page := []extraction.TokenPage{{Number: 1, Tokens: unmatched}}
+
+	obs := extraction.AnchorObservations(page)
+	if obs == nil {
+		t.Fatal("AnchorObservations(page with no recognised label) = nil, want a non-nil, zero-length slice")
+	}
+	if len(obs) != 0 {
+		t.Errorf("len(AnchorObservations(...)) = %d, want 0: %+v", len(obs), obs)
+	}
+
+	if got := extraction.AnchorObservations(nil); got == nil {
+		t.Error("AnchorObservations(nil) = nil, want a non-nil, zero-length slice")
+	} else if len(got) != 0 {
+		t.Errorf("len(AnchorObservations(nil)) = %d, want 0", len(got))
+	}
+
+	if fp := extraction.Fingerprint(page); fp != emptyFingerprint {
+		t.Errorf("Fingerprint(page with no recognised label) = %q, want %q -- a real v1: value, not a degenerate one", fp, emptyFingerprint)
+	}
+}
+
+// O-05: observations from page 2 are excluded even when page 2 sorts first in the slice --
+// AnchorObservations must select by Number, not by slice position. The two pages carry
+// disjoint, distinguishable label sets, so a leak is provable rather than merely possible.
+func TestAnchorObservations_ExcludesPageTwoEvenWhenFirst(t *testing.T) {
+	page1Tokens := []extraction.Token{
+		tok("Invoice No: INV-1", 0.05, 0.08, 0.35, 0.10),
+		tok("Total: 15000.00", 0.65, 0.30, 0.95, 0.32),
+	}
+	page2Tokens := []extraction.Token{
+		tok("Supplier: Acme Nigeria Ltd", 0.05, 0.50, 0.35, 0.52),
+		tok("Currency: NGN", 0.65, 0.60, 0.95, 0.62),
+	}
+	pages := []extraction.TokenPage{
+		{Number: 2, Tokens: page2Tokens},
+		{Number: 1, Tokens: page1Tokens},
+	}
+
+	obs := extraction.AnchorObservations(pages)
+	if len(obs) != 2 {
+		t.Fatalf("len(AnchorObservations) = %d, want 2 (page 1's own hits only): %+v", len(obs), obs)
+	}
+	for _, o := range obs {
+		if o.Page != 1 {
+			t.Errorf("obs %+v carries Page %d, want 1", o, o.Page)
+		}
+		if o.Label == "supplier_name" || o.Label == "currency" {
+			t.Errorf("obs %+v carries a page-2-only label; page 2 leaked in because it sorted first in the input slice", o)
+		}
+	}
+}
+
+// A document with anchors on page 2 only -- no TokenPage numbered 1 at all -- must not leak
+// them into AnchorObservations, which stays non-nil and empty, and Fingerprint must be
+// unaffected by page 2's content.
+func TestAnchorObservations_NoPageOneAtAllYieldsNonNilEmpty(t *testing.T) {
+	pages := []extraction.TokenPage{
+		{Number: 2, Tokens: []extraction.Token{tok("Total: 15000.00", 0.65, 0.30, 0.95, 0.32)}},
+	}
+
+	obs := extraction.AnchorObservations(pages)
+	if obs == nil {
+		t.Fatal("AnchorObservations(no page 1 at all) = nil, want a non-nil, zero-length slice")
+	}
+	if len(obs) != 0 {
+		t.Errorf("len(AnchorObservations(no page 1 at all)) = %d, want 0: %+v", len(obs), obs)
+	}
+	if fp := extraction.Fingerprint(pages); fp != emptyFingerprint {
+		t.Errorf("Fingerprint(no page 1 at all) = %q, want %q -- page 2's anchors must not leak in", fp, emptyFingerprint)
+	}
+}
+
+// Two distinct tokens tie on all four sort keys (Y0, X0, Label, Band): both are "Total"-family
+// matches for the "total" label at the identical box. The hash cannot see which of the two
+// comes first, but a stored observation list can, so AnchorObservations must place them in the
+// same order every time it is called, not just once.
+func TestAnchorObservations_TiedObservationsOrderDeterministically(t *testing.T) {
+	first := tok("Total", 0.10, 0.30, 0.20, 0.32)
+	second := tok("Grand Total", 0.10, 0.30, 0.20, 0.32)
+	pages := []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{first, second}}}
+
+	baseline := extraction.AnchorObservations(pages)
+	if len(baseline) != 2 {
+		t.Fatalf("fixture invalid: len(AnchorObservations) = %d, want 2 tied observations: %+v", len(baseline), baseline)
+	}
+	if baseline[0].Label != "total" || baseline[1].Label != "total" || baseline[0].Band != baseline[1].Band {
+		t.Fatalf("fixture invalid: both observations must share Label %q and Band for a genuine tie: %+v", "total", baseline)
+	}
+	if baseline[0].Text == baseline[1].Text {
+		t.Fatalf("fixture invalid: the two observations must come from distinguishable tokens, or determinism cannot be told from coincidence: %+v", baseline)
+	}
+
+	for i := 0; i < 20; i++ {
+		got := extraction.AnchorObservations(pages)
+		if len(got) != 2 || got[0].Text != baseline[0].Text || got[1].Text != baseline[1].Text {
+			t.Fatalf("run %d: AnchorObservations = %+v, want the same order as run 0 = %+v", i, got, baseline)
+		}
+	}
+}

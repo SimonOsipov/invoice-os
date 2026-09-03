@@ -127,6 +127,25 @@ func advanceJobTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, state, lastEr
 	return nil
 }
 
+// writeLayoutTx records the layout the job's own read observed. The caller computes both
+// values, the division of labour advanceJobTx already follows. Zero rows affected is an error:
+// the row is the caller's own, so a no-op means the tenant did not match. anchors is bound as a
+// string so pgx sends it to the jsonb column as raw JSON, and updated_at is the trigger's
+// (stAssertStoreNeverNamesUpdatedAt).
+func writeLayoutTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, fingerprint string, anchors []byte) error {
+	ct, err := tx.Exec(ctx,
+		`UPDATE extraction_jobs SET layout_fingerprint = $3, layout_anchors = $4
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID, fingerprint, string(anchors))
+	if err != nil {
+		return fmt.Errorf("extraction: write layout for job %s: %w", jobID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("extraction: write layout for job %s: no row affected", jobID)
+	}
+	return nil
+}
+
 // writeFieldResultsTx writes one row per decided field at candidate_rank 0, then one row per
 // alternative at ranks 1..N in slice order. It binds ReasonNone and a nil Region as SQL NULL:
 // the reason_code CHECK admits four words or NULL, and the all-NULL arm is what

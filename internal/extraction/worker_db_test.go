@@ -217,6 +217,10 @@ type wkStubReader struct {
 	// SQLSTATE 23514. The only lever in this suite that fails the page-row write and nothing
 	// upstream of it.
 	zeroWidth bool
+
+	// tokens supplies page i+1's Tokens when set (index i), mirroring psReader
+	// (pagestore_test.go). Left nil for specs that do not care, so Page.Tokens stays nil.
+	tokens [][]extraction.Token
 }
 
 func (*wkStubReader) Name() string    { return "extr-09-stub-reader" }
@@ -228,6 +232,10 @@ func (r *wkStubReader) Read(_ context.Context, _ extraction.Document, onPage fun
 		width = 0
 	}
 	for i := 1; i <= r.pages; i++ {
+		var toks []extraction.Token
+		if i-1 < len(r.tokens) {
+			toks = r.tokens[i-1]
+		}
 		if err := onPage(extraction.Page{
 			Number:      i,
 			WidthPt:     612,
@@ -235,6 +243,7 @@ func (r *wkStubReader) Read(_ context.Context, _ extraction.Document, onPage fun
 			ImageWidth:  width,
 			ImageHeight: prLetterHeightPx,
 			ImagePNG:    []byte("\x89PNG\r\n\x1a\nextr-09 stub page"),
+			Tokens:      toks,
 		}); err != nil {
 			return extraction.PageResult{}, err
 		}
@@ -1234,6 +1243,368 @@ func TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails(t *testing.T) {
 		t.Fatalf("Work on the final attempt returned %v, want the sink's error", err)
 	}
 	stAssertJobState(t, ctx, wkExtractionJobID(t, ctx, tenantID, deadRiverJobID), "dead_lettered")
+}
+
+// --- EXTR-14-03: the worker records the layout it just read ---------------------------
+
+// W-01, W-02: a succeeded job carries the v1: fingerprint and the anchor list its own page
+// read observed, computed independently here so the test is not echoing the worker's own
+// arithmetic back at itself.
+func TestRLS_ExtractWorkerRecordsLayoutOnSuccess(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxCorpusTwoColumn)
+	const riverJobID = int64(909901)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	pages := rvCorpusPages(t, fxCorpusTwoColumn)
+	wantObs := extraction.AnchorObservations(pages)
+	if len(wantObs) != 7 {
+		t.Fatalf("the independent computation over %s found %d anchor observation(s), want 7; the fixture drifted and every assertion below would compare against the wrong number", fxCorpusTwoColumn, len(wantObs))
+	}
+	wantFingerprint := extraction.Fingerprint(pages)
+	if !strings.HasPrefix(wantFingerprint, "v1:") {
+		t.Fatalf("the independent Fingerprint computation is %q, which does not start with v1:; FingerprintVersion or the fixture drifted", wantFingerprint)
+	}
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil {
+		t.Fatalf("job %s has layout_fingerprint NULL after a succeeded run over a corpus document, want %q", xid, wantFingerprint)
+	}
+	if *row.Fingerprint != wantFingerprint {
+		t.Errorf("job %s carries layout_fingerprint %q, want %q (computed independently over the same pages)", xid, *row.Fingerprint, wantFingerprint)
+	}
+	if !strings.HasPrefix(*row.Fingerprint, "v1:") {
+		t.Errorf("layout_fingerprint %q does not start with v1:", *row.Fingerprint)
+	}
+
+	if row.Anchors == nil {
+		t.Fatalf("job %s has layout_anchors NULL after a succeeded run, want a %d-element array", xid, len(wantObs))
+	}
+	gotObs, err := extraction.UnmarshalAnchorObservations([]byte(*row.Anchors))
+	if err != nil {
+		t.Fatalf("decode layout_anchors for job %s: %v", xid, err)
+	}
+	if len(gotObs) != 7 {
+		t.Fatalf("job %s stored %d anchor observation(s), want 7 -- the stored array is not merely non-empty, it is the wrong length", xid, len(gotObs))
+	}
+	if !reflect.DeepEqual(gotObs, wantObs) {
+		t.Errorf("job %s stored anchors\n  %+v\nwant (computed independently)\n  %+v", xid, gotObs, wantObs)
+	}
+}
+
+// W-03 (AC-2): the layout write sits inside the page-row transaction, upstream of Extract, so
+// a job whose extractor fails still carries both columns. Proof of ordering, not just that the
+// columns can be populated at all.
+func TestRLS_ExtractWorkerRecordsLayoutBeforeExtractFails(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxCorpusTwoColumn)
+	boom := errors.New("extr-14-03: the extractor always fails")
+	const riverJobID = int64(909902)
+	if err := wkWorkerPages(t, wkFailing(boom), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work returned %v, want the extractor's error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "failed")
+
+	pages := rvCorpusPages(t, fxCorpusTwoColumn)
+	wantFingerprint := extraction.Fingerprint(pages)
+	wantObs := extraction.AnchorObservations(pages)
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil || *row.Fingerprint != wantFingerprint {
+		t.Errorf("job %s carries layout_fingerprint %s, want %q -- the layout write must survive an Extract failure because it happens before Extract runs", xid, wkStr(row.Fingerprint), wantFingerprint)
+	}
+	if row.Anchors == nil {
+		t.Fatalf("job %s has layout_anchors NULL after Extract failed, want the %d observation(s) its own page read found", xid, len(wantObs))
+	}
+	gotObs, err := extraction.UnmarshalAnchorObservations([]byte(*row.Anchors))
+	if err != nil {
+		t.Fatalf("decode layout_anchors for job %s: %v", xid, err)
+	}
+	if !reflect.DeepEqual(gotObs, wantObs) {
+		t.Errorf("job %s stored anchors %+v after Extract failed, want %+v -- the write happens before Extract regardless of its outcome", xid, gotObs, wantObs)
+	}
+}
+
+// W-04 (AC-3): a page-ingest failure carries neither column, and still classifies as
+// pages_not_rendered. The control proves the NULL assertions are not vacuous -- the same
+// document through a working sink leaves both columns non-NULL.
+func TestRLS_ExtractWorkerLeavesLayoutNullWhenPagesFail(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxCorpusTwoColumn)
+	boom := errors.New("extr-14-03: the page sink refused the PUT")
+
+	const riverJobID = int64(909903)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{failOn: 1, err: boom}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work returned %v, want the sink's error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint != nil {
+		t.Errorf("job %s carries layout_fingerprint %s after its page ingest failed, want NULL: the transaction that would set it never committed", xid, wkStr(row.Fingerprint))
+	}
+	if row.Anchors != nil {
+		t.Errorf("job %s carries layout_anchors %s after its page ingest failed, want NULL", xid, wkStr(row.Anchors))
+	}
+
+	rows := wkAuditRowsForJob(t, ctx, tenantID, xid)
+	if len(rows) != 1 {
+		t.Fatalf("wrote %d extraction.* audit row(s), want exactly 1: %v", len(rows), rows)
+	}
+	if got, _ := rows[0].payload["failure_kind"].(string); got != string(extraction.FailurePagesNotRendered) {
+		t.Errorf("stored failure_kind = %q, want %q", got, extraction.FailurePagesNotRendered)
+	}
+
+	// Control: the same document through a working sink leaves both non-NULL. Without it the
+	// NULL assertions above would pass on a worker that never writes the layout at all.
+	const controlRiverJobID = int64(909904)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(controlRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("control Work: %v", err)
+	}
+	cid := wkExtractionJobID(t, ctx, tenantID, controlRiverJobID)
+	control := stJobLayout(t, ctx, cid)
+	if control.Fingerprint == nil || control.Anchors == nil {
+		t.Fatalf("the control job %s carries layout_fingerprint %s and layout_anchors %s; want both non-NULL, or the NULL assertions above are vacuous", cid, wkStr(control.Fingerprint), wkStr(control.Anchors))
+	}
+}
+
+// W-05 (AC-4): a River replay of a terminal job must not touch the layout columns again. The
+// oracle is extraction_jobs_set_updated_at, a BEFORE UPDATE trigger that stamps updated_at on
+// every UPDATE regardless of whether the SET values actually changed. A replay that recomputed
+// and rewrote the SAME deterministic fingerprint/anchors would pass an equality check on those
+// two columns alone -- updated_at is what a hoisted write into tx1 (upstream of the terminal
+// short-circuit at line ~96) cannot hide from. Neither
+// TestRLS_ExtractWorkerWritesOneResultSetPerJobOnReplay nor
+// TestRLS_ExtractWorkerReplayEmitsNoSecondRow reads these columns at all.
+func TestRLS_ExtractWorkerReplayWritesNoSecondLayout(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	raw := fxRead(t, fxCorpusTwoColumn)
+
+	// succeeded arm.
+	const succeededRiverJobID = int64(909905)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(succeededRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	sid := wkExtractionJobID(t, ctx, tenantID, succeededRiverJobID)
+	stAssertJobState(t, ctx, sid, "succeeded")
+
+	before := stJobLayout(t, ctx, sid)
+	if before.Fingerprint == nil {
+		t.Fatalf("job %s has layout_fingerprint NULL before the replay; an unchanged NULL would prove nothing about AC-4", sid)
+	}
+
+	if err := wkWorkerPages(t, wkOK(), wkNewOpener(), wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(succeededRiverJobID, 2, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("replayed Work: %v", err)
+	}
+	after := stJobLayout(t, ctx, sid)
+	if !reflect.DeepEqual(after.Fingerprint, before.Fingerprint) {
+		t.Errorf("replaying a succeeded job changed layout_fingerprint from %s to %s", wkStr(before.Fingerprint), wkStr(after.Fingerprint))
+	}
+	if !reflect.DeepEqual(after.Anchors, before.Anchors) {
+		t.Errorf("replaying a succeeded job changed layout_anchors from %s to %s", wkStr(before.Anchors), wkStr(after.Anchors))
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("replaying a succeeded job moved updated_at from %s to %s; extraction_jobs_set_updated_at fires on every UPDATE, so an unchanged value proves no UPDATE ran",
+			before.UpdatedAt.Format(time.RFC3339Nano), after.UpdatedAt.Format(time.RFC3339Nano))
+	}
+
+	// dead_lettered arm.
+	boom := errors.New("extr-14-03: replay dead-letter fixture")
+	const deadRiverJobID = int64(909906)
+	if err := wkWorkerPages(t, wkFailing(boom), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on the final attempt returned %v, want the extractor's error", err)
+	}
+	did := wkExtractionJobID(t, ctx, tenantID, deadRiverJobID)
+	stAssertJobState(t, ctx, did, "dead_lettered")
+
+	deadBefore := stJobLayout(t, ctx, did)
+	if deadBefore.Fingerprint == nil {
+		t.Fatalf("dead-lettered job %s has layout_fingerprint NULL before the replay; an unchanged NULL would prove nothing", did)
+	}
+
+	if err := wkWorkerPages(t, wkFailing(boom), wkNewOpener(), wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(deadRiverJobID, 4, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("replayed Work on a dead-lettered job: %v", err)
+	}
+	deadAfter := stJobLayout(t, ctx, did)
+	if !reflect.DeepEqual(deadAfter.Fingerprint, deadBefore.Fingerprint) {
+		t.Errorf("replaying a dead-lettered job changed layout_fingerprint from %s to %s", wkStr(deadBefore.Fingerprint), wkStr(deadAfter.Fingerprint))
+	}
+	if !reflect.DeepEqual(deadAfter.Anchors, deadBefore.Anchors) {
+		t.Errorf("replaying a dead-lettered job changed layout_anchors from %s to %s", wkStr(deadBefore.Anchors), wkStr(deadAfter.Anchors))
+	}
+	if !deadAfter.UpdatedAt.Equal(deadBefore.UpdatedAt) {
+		t.Errorf("replaying a dead-lettered job moved updated_at from %s to %s",
+			deadBefore.UpdatedAt.Format(time.RFC3339Nano), deadAfter.UpdatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// W-08 (AC-1's zero-page boundary): a document that yields zero pages still writes both layout
+// columns -- an empty array, never NULL, and the fingerprint over nothing.
+func TestRLS_ExtractWorkerRecordsEmptyLayoutForZeroPages(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	const riverJobID = int64(909907)
+	pages := &extraction.PageStore{Reader: &wkStubReader{pages: 0}, Sink: (&wkPageSink{}).put}
+	if err := wkWorkerPages(t, wkOK(), wkNewOpener(), pages, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	wantFingerprint := extraction.Fingerprint(nil)
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil || *row.Fingerprint != wantFingerprint {
+		t.Errorf("a zero-page job carries layout_fingerprint %s, want %q", wkStr(row.Fingerprint), wantFingerprint)
+	}
+	if row.Anchors == nil {
+		t.Fatalf("a zero-page job has layout_anchors NULL, want the empty array \"[]\"")
+	}
+	if *row.Anchors != "[]" {
+		t.Errorf("a zero-page job carries layout_anchors %s, want \"[]\"", *row.Anchors)
+	}
+}
+
+// QA (EXTR-14-03): a document that has real page-1 content that happens to match no anchor
+// label, plus later pages that would match, still writes the empty-list fingerprint and "[]" --
+// distinct from W-08 (zero pages) because CollectTokens actually gathers more than one
+// TokenPage here and AnchorObservations must exclude page 2's hits by content, not by absence
+// of pages. This is also the shape that would trip a hand-rolled json.Marshal into "null" if
+// AnchorObservations ever returned a nil slice for a non-matching page 1.
+func TestRLS_ExtractWorkerRecordsEmptyLayoutWhenPageOneMatchesNoAnchor(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	reader := &wkStubReader{pages: 2, tokens: [][]extraction.Token{
+		{{Text: "Thank you for your continued partnership this quarter."}},
+		{{Text: "Invoice No: 4471"}},
+	}}
+	const riverJobID = int64(909908)
+	pages := &extraction.PageStore{Reader: reader, Sink: (&wkPageSink{}).put}
+	if err := wkWorkerPages(t, wkOK(), wkNewOpener(), pages, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	wantFingerprint := extraction.Fingerprint(nil)
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil || *row.Fingerprint != wantFingerprint {
+		t.Errorf("a non-matching-page-1 job carries layout_fingerprint %s, want %q -- page 2's Invoice No hit must not leak in", wkStr(row.Fingerprint), wantFingerprint)
+	}
+	if row.Anchors == nil {
+		t.Fatalf("a non-matching-page-1 job has layout_anchors NULL, want the empty array \"[]\"")
+	}
+	if *row.Anchors != "[]" {
+		t.Errorf("a non-matching-page-1 job carries layout_anchors %s, want \"[]\"", *row.Anchors)
+	}
+}
+
+// QA (EXTR-14-03): AC-3, a boundary distinct from W-04. The sink fails on page 2 of 3, not page
+// 1, so Ingest has already made one successful PUT before it aborts. Both columns must still be
+// NULL and page 3 must never be attempted -- proving the abort is not merely "fails on the very
+// first page" but genuinely stops mid-read, matching docs/page-image-storage.md's "leaves orphan
+// objects and no rows at all".
+func TestRLS_ExtractWorkerLeavesLayoutNullWhenIngestFailsPartway(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, fxNative3)
+	boom := errors.New("extr-14-03: the page sink refused the PUT on page 2")
+	sink := &wkPageSink{failOn: 2, err: boom}
+
+	const riverJobID = int64(909909)
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(sink), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work returned %v, want the sink's error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+
+	if _, _, seen := sink.snapshot(); seen != 2 {
+		t.Fatalf("the sink was called %d time(s), want 2: page 3 must never be attempted once page 2 aborted the read", seen)
+	}
+	if keys, _, _ := sink.snapshot(); len(keys) != 1 {
+		t.Errorf("the sink recorded %d successful PUT(s), want 1 (page 1 only) -- page 1's object is the orphan the doc describes", len(keys))
+	}
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint != nil {
+		t.Errorf("job %s carries layout_fingerprint %s after a partway ingest failure, want NULL", xid, wkStr(row.Fingerprint))
+	}
+	if row.Anchors != nil {
+		t.Errorf("job %s carries layout_anchors %s after a partway ingest failure, want NULL", xid, wkStr(row.Anchors))
+	}
+	if n := wkPageRowIDs(t, ctx, documentID); len(n) != 0 {
+		t.Errorf("a partway ingest failure left %d page image row(s), want 0: the transaction that would write them never committed", len(n))
+	}
+}
+
+// QA (EXTR-14-03): a job in "failed" (an attempt with retries left) is NOT terminal by
+// ExtractWorker's own check (only "succeeded" and "dead_lettered" short-circuit), so a second
+// Work call over it re-runs Ingest and rewrites the layout -- unlike AC-4's guard, which applies
+// only once a job is terminal. This pins that as the real, intended behaviour: updated_at DOES
+// move, so a future change that starts short-circuiting "failed" jobs too is visible here rather
+// than only being caught by surprise elsewhere.
+func TestRLS_ExtractWorkerNonTerminalReplayRewritesLayout(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	raw := fxRead(t, fxCorpusTwoColumn)
+	boom := errors.New("extr-14-03: attempt 1 of 3 fails")
+
+	const riverJobID = int64(909910)
+	if err := wkWorkerPages(t, wkFailing(boom), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("Work on attempt 1 of 3 returned %v, want the extractor's error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "failed")
+
+	before := stJobLayout(t, ctx, xid)
+	if before.Fingerprint == nil {
+		t.Fatalf("job %s has layout_fingerprint NULL after attempt 1; an unchanged NULL would prove nothing about this test's claim", xid)
+	}
+
+	if err := wkWorkerPages(t, wkOK(), &wkOpener{body: raw}, wkPDFiumPages(&wkPageSink{}), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work on attempt 2 of 3: %v", err)
+	}
+	stAssertJobState(t, ctx, xid, "succeeded")
+	after := stJobLayout(t, ctx, xid)
+
+	if !reflect.DeepEqual(after.Fingerprint, before.Fingerprint) {
+		t.Errorf("attempt 2 recomputed layout_fingerprint as %s, want the same %s: the document did not change", wkStr(after.Fingerprint), wkStr(before.Fingerprint))
+	}
+	if !reflect.DeepEqual(after.Anchors, before.Anchors) {
+		t.Errorf("attempt 2 recomputed layout_anchors as %s, want the same %s", wkStr(after.Anchors), wkStr(before.Anchors))
+	}
+	if !after.UpdatedAt.After(before.UpdatedAt) {
+		t.Errorf("attempt 2 left updated_at at %s (was %s); a non-terminal job's second Work call must re-run the write, unlike AC-4's terminal replay guard",
+			after.UpdatedAt.Format(time.RFC3339Nano), before.UpdatedAt.Format(time.RFC3339Nano))
+	}
 }
 
 // D-20 end to end. The row ids are the oracle, not the count: the keys are content-derived and

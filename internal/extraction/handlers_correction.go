@@ -43,6 +43,23 @@ type FieldCorrection struct {
 // the correction's fate.
 type RecordFieldCorrected func(ctx context.Context, tx pgx.Tx, subject string, c FieldCorrection) error
 
+// AnchorLearned is what the rule-learning audit seam records. No corrected value, no anchor
+// text and no box: audit_log is append-only and all three are business content
+// (TestNewAnchorLearnedAuditor_WritesExactlyTheSixKeys).
+type AnchorLearned struct {
+	InvoiceID         string
+	FieldName         string
+	LayoutFingerprint string
+	RuleID            string
+	Relation          RelationKind
+	Shape             Shape
+}
+
+// RecordAnchorLearned writes one audit row on the handler's own transaction, so the row shares
+// the rule's fate. Separate from RecordFieldCorrected because cmd/submission hands that one to
+// LineItemsHandler too, and the line-items route learns nothing.
+type RecordAnchorLearned func(ctx context.Context, tx pgx.Tx, subject string, a AnchorLearned) error
+
 // CorrectionRequest is the POST body. Region is a named pointer, never an inline struct:
 // wireMirrors' goStructKeys reads a brace-free body only.
 type CorrectionRequest struct {
@@ -136,7 +153,7 @@ func validMethod(m CorrectionMethod) bool {
 // CorrectionHandler returns POST /v1/extractions/{id}/fields/{name}/corrections. Identity is
 // checked FIRST, before any path value or body is read, so an unauthenticated caller learns
 // nothing about which field names exist.
-func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, log *slog.Logger) http.HandlerFunc {
+func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, recordLearned RecordAnchorLearned, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -200,7 +217,7 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 		}
 
 		out, err := writeCorrection(r.Context(), pool, correctionWrite{
-			apply: apply, record: record, caller: caller,
+			apply: apply, record: record, recordLearned: recordLearned, caller: caller,
 			jobID: parsed.String(), field: field, value: value, req: req,
 		})
 		if err != nil {
@@ -219,13 +236,14 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 // correctionWrite is what one committed correction needs. A struct rather than nine arguments;
 // nothing outside this file builds one.
 type correctionWrite struct {
-	apply  ApplyFieldToInvoice
-	record RecordFieldCorrected
-	caller auth.Identity
-	jobID  string
-	field  string
-	value  string
-	req    CorrectionRequest
+	apply         ApplyFieldToInvoice
+	record        RecordFieldCorrected
+	recordLearned RecordAnchorLearned
+	caller        auth.Identity
+	jobID         string
+	field         string
+	value         string
+	req           CorrectionRequest
 }
 
 // writeCorrection runs the three writes on ONE transaction, so the correction row, the invoice
@@ -262,13 +280,36 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
+		// Only a pointed correction teaches, and only where the job recorded a layout the box
+		// can anchor to. Derived before the correction row because the label is one of its
+		// columns; the rule row itself is written last, below.
+		region := regionFromWire(in.req.Region)
+		anchorLabel := strings.TrimSpace(in.req.AnchorLabel)
+		var (
+			learned     LearnedRule
+			fingerprint string
+			learnedOK   bool
+		)
+		if in.req.Method == MethodPointed && region != nil {
+			layout, ok, err := jobLayoutTx(ctx, tx, in.caller.TenantID, in.jobID)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if lr, derived := LearnRule(in.field, *region, layout.Anchors); derived {
+					learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
+					anchorLabel = strings.TrimSpace(lr.Anchor.Text)
+				}
+			}
+		}
+
 		// The tx-taking half: this route cannot afford a second transaction of its own.
 		appended, err := appendCorrectionTx(ctx, tx, in.caller.TenantID, in.jobID, Correction{
 			FieldName:   in.field,
 			Value:       in.value,
 			Method:      in.req.Method,
-			Region:      regionFromWire(in.req.Region),
-			AnchorLabel: strings.TrimSpace(in.req.AnchorLabel),
+			Region:      region,
+			AnchorLabel: anchorLabel,
 			Actor:       in.caller.Subject,
 		})
 		if err != nil {
@@ -281,6 +322,26 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			InvoiceID: invoiceID, FieldName: in.field, Method: in.req.Method,
 		}); err != nil {
 			return err
+		}
+
+		// Fourth and fifth of the five writes, so a failure in either rolls the rest back
+		// (TestRLS_AFailedAnchorLearnedEmitRollsBackTheRuleTheCorrectionAndTheInvoice). The
+		// emit follows the rule write because it carries the row's id.
+		if learnedOK {
+			ruleID, err := appendAnchorRuleTx(ctx, tx, in.caller.TenantID, fingerprint, learned)
+			if err != nil {
+				return err
+			}
+			if err := in.recordLearned(ctx, tx, in.caller.Subject, AnchorLearned{
+				InvoiceID:         invoiceID,
+				FieldName:         in.field,
+				LayoutFingerprint: fingerprint,
+				RuleID:            ruleID,
+				Relation:          learned.Rule.Relation.Kind,
+				Shape:             learned.Rule.Shape,
+			}); err != nil {
+				return err
+			}
 		}
 
 		out = CorrectionResponse{

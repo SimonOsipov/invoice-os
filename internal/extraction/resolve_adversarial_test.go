@@ -509,3 +509,63 @@ func TestResolve_EmptyInputsYieldAnEmptyNonNilSlice(t *testing.T) {
 	}
 	rvControl(t, extraction.Resolve(pages, rules), "the same rule set over the mixed page")
 }
+
+// --- convergence: the two clauses, each with its own killer ------------------------------
+//
+// TestResolve_ASupersededRuleStopsFiring pins the SKIP. The two specs below pin the other half:
+// the claim is conditional on the rule having produced something, and the direction read is
+// newest-first and not merely order-dependent. Neither of these fails when the skip is deleted,
+// and the superseded-rule spec does not fail when the claim is made unconditional -- that
+// separation is the point.
+
+// V-04 / V-04b. below/"Buyer TIN" reaches tokens on this page and ShapeTIN rejects all of them,
+// so it is a real barren rule rather than one that missed its anchor.
+func TestResolve_ANewerRuleThatProducesNothingDoesNotSuppressTheOlderOne(t *testing.T) {
+	pages := rvCorpusPages(t, rvCorpusInline)
+
+	older := cvBuyerTINRule(t, "older", cvLabelSupplierTIN)
+
+	// V-04b, the control, first: it is what makes "barren" mean barren. If this page ever
+	// starts reading a value here, V-04 below stops testing anything.
+	barrenOnly := extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{cvBarrenRule(t, "barren")}})
+	if n := len(rvFor(barrenOnly, "buyer_tin")); n != 0 {
+		t.Fatalf("the barren rule alone produced %d buyer_tin candidate(s) (%v); it is no longer the zero-producing rule this spec needs",
+			n, rvValues(rvFor(barrenOnly, "buyer_tin")))
+	}
+	rvControl(t, extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{older}}),
+		"the older rule alone on the same page")
+
+	got := extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{
+		cvBarrenRule(t, "barren"),
+		older,
+	}})
+	// rvFloor is the assertion, not a guard: a newer rule that claims a field it never read
+	// leaves buyer_tin empty, and every check below would then pass over nothing.
+	buyer := rvFor(got, "buyer_tin")
+	rvFloor(t, buyer, "buyer_tin behind a newer rule that reads nothing on this page")
+	cvOnly(t, buyer, "older", cvSupplierTIN, "buyer_tin behind a barren newer rule")
+
+	if slices.Contains(cvRuleIDs(got), "barren") {
+		t.Errorf("the barren rule stamped a candidate: %+v", got)
+	}
+}
+
+// V-08. The story's form -- "reversing Learned changes the result" -- is satisfied by an
+// oldest-first loop too, because reversing that also changes the result. Both arms below name
+// the concrete winner, so only a newest-first read passes them.
+func TestResolve_RecencyDirectionIsReadNotJustOrderSensitivity(t *testing.T) {
+	pages := rvCorpusPages(t, rvCorpusInline)
+
+	newest := cvBuyerTINRule(t, "newer", cvLabelBuyerTIN)
+	oldest := cvBuyerTINRule(t, "older", cvLabelSupplierTIN)
+
+	forward := rvFor(extraction.Resolve(pages, extraction.RuleSet{
+		Learned: []extraction.AnchorRule{newest, oldest},
+	}), "buyer_tin")
+	cvOnly(t, forward, "newer", cvBuyerTIN, "buyer_tin with the Buyer TIN rule at slice position 0")
+
+	reversed := rvFor(extraction.Resolve(pages, extraction.RuleSet{
+		Learned: []extraction.AnchorRule{oldest, newest},
+	}), "buyer_tin")
+	cvOnly(t, reversed, "older", cvSupplierTIN, "buyer_tin with the Supplier TIN rule at slice position 0")
+}

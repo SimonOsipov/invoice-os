@@ -4,6 +4,7 @@ package extraction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -34,6 +35,9 @@ func (s *Store) AnchorRulesFor(ctx context.Context, tenantID, fingerprint string
 // partial one -- TestAnchorRulesFor_AParseFailureDiscardsTheRowsAlreadyRead.
 // RLS isolates, not the tenant_id predicate: measured, the predicate only folds the RLS qual to
 // a One-Time Filter; the qual reaches the same index without it.
+// The ORDER BY carries no tiebreak: a `, id` reintroduces an Incremental Sort
+// (TestAnchorRulesFor_OrdersFromTheIndexWithoutASort), and seq stays a total order because the
+// writer never names it (TestExtractionAnchorStore_TheInsertNeverNamesSeq).
 func anchorRulesForTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint string) ([]AnchorRule, error) {
 	out := []AnchorRule{}
 
@@ -41,7 +45,7 @@ func anchorRulesForTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint stri
 		`SELECT id, field_name, rule, rule_schema_version
 		   FROM extraction_anchor_rules
 		  WHERE tenant_id = $1 AND layout_fingerprint = $2
-		  ORDER BY created_at DESC, id`,
+		  ORDER BY seq DESC`,
 		tenantID, fingerprint)
 	if err != nil {
 		return out, fmt.Errorf("extraction: read anchor rules for fingerprint %s: %w", fingerprint, err)
@@ -71,4 +75,61 @@ func anchorRulesForTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint stri
 		return []AnchorRule{}, fmt.Errorf("extraction: read anchor rules for fingerprint %s: %w", fingerprint, err)
 	}
 	return out, nil
+}
+
+// JobLayout is what a job's own read recorded: the fingerprint its learned rules are keyed to,
+// and the page-1 anchors a later correction can name. Anchors is never nil.
+type JobLayout struct {
+	Fingerprint string
+	Anchors     []AnchorObservation
+}
+
+// appendAnchorRuleTx writes one learned rule and returns its id. Taking a LearnedRule makes a
+// body ParseRule would reject unrepresentable at the call site. Append-only by GRANT:
+// invoice_app holds INSERT and no UPDATE or DELETE. The column list never names seq --
+// TestExtractionAnchorStore_TheInsertNeverNamesSeq.
+func appendAnchorRuleTx(ctx context.Context, tx pgx.Tx, tenantID, fingerprint string, lr LearnedRule) (string, error) {
+	var id string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO extraction_anchor_rules
+		     (tenant_id, layout_fingerprint, field_name, rule, rule_schema_version)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id`,
+		tenantID, fingerprint, lr.Field, string(lr.Body), RuleSchemaVersion).Scan(&id); err != nil {
+		return "", fmt.Errorf("extraction: append anchor rule for field %s: %w", lr.Field, err)
+	}
+	return id, nil
+}
+
+// jobLayoutTx reads the layout one job recorded. ok is false for a job that has none, and
+// equally for another tenant's job, which RLS makes indistinguishable from absent. Only
+// pgx.ErrNoRows becomes ok=false -- a malformed jobID stays a 22P02 error
+// (TestJobLayout_AMalformedJobIdIsAnErrorNotAnAbsence).
+func jobLayoutTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLayout, bool, error) {
+	var fp *string
+	var anchors []byte
+	err := tx.QueryRow(ctx,
+		`SELECT layout_fingerprint, layout_anchors
+		   FROM extraction_jobs
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID).Scan(&fp, &anchors)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return JobLayout{}, false, nil
+	case err != nil:
+		return JobLayout{}, false, fmt.Errorf("extraction: read layout for job %s: %w", jobID, err)
+	}
+	if fp == nil {
+		return JobLayout{}, false, nil
+	}
+	// The columns are independently nullable and UnmarshalAnchorObservations refuses nil, so a
+	// fingerprint with no anchors is an empty list here, not an error.
+	if anchors == nil {
+		return JobLayout{Fingerprint: *fp, Anchors: []AnchorObservation{}}, true, nil
+	}
+	obs, err := UnmarshalAnchorObservations(anchors)
+	if err != nil {
+		return JobLayout{}, false, fmt.Errorf("extraction: read layout for job %s: %w", jobID, err)
+	}
+	return JobLayout{Fingerprint: *fp, Anchors: obs}, true, nil
 }

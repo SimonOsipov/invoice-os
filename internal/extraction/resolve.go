@@ -48,8 +48,19 @@ const maxCandidatesPerField = 8
 // permutation-invariant, and a second ordering mechanism would mask a gap in the comparator.
 func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 	var all []Candidate
+	// Learned arrives seq DESC, so the first rule that produces anything for a field is the newest
+	// one reaching this page and supersedes the rest. A rule producing nothing claims nothing --
+	// resolve_converge_test.go and TestResolve_ANewerRuleThatProducesNothingDoesNotSuppressTheOlderOne.
+	var claimed []string
 	for _, r := range rules.Learned {
+		if slices.Contains(claimed, r.Field) {
+			continue
+		}
+		before := len(all)
 		all = appendRuleCandidates(all, pages, r.Rule, BandAnywhere, r.Field, r.ID, TierLearned)
+		if len(all) > before {
+			claimed = append(claimed, r.Field)
+		}
 	}
 	for _, r := range rules.Tier1 {
 		all = appendRuleCandidates(all, pages, r.Rule, r.Band, r.Field, r.Key, TierGeneric)

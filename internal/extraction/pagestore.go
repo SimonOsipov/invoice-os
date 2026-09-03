@@ -32,17 +32,23 @@ type PageStore struct {
 }
 
 // Ingest reads the document once and PUTs every page, returning the rows the caller should
-// write. A sink failure aborts the read and returns nothing, so no caller can commit a row for
+// write together with the page text the layout fingerprint is computed from. A sink failure
+// aborts the read and returns nothing of either, so no caller can commit a row or a layout for
 // a page that was never stored (TestPageStore_ASinkFailureStopsTheIngest).
-func (s *PageStore) Ingest(ctx context.Context, tenantID string, doc Document) ([]PageImage, PageResult, error) {
+func (s *PageStore) Ingest(ctx context.Context, tenantID string, doc Document) ([]PageImage, []TokenPage, PageResult, error) {
 	sum := sha256.Sum256(doc.Bytes)
 	hash := hex.EncodeToString(sum[:])
 
 	var images []PageImage
+	var tokens []TokenPage
+	collect := CollectTokens(&tokens)
 	res, err := s.Reader.Read(ctx, doc, func(p Page) error {
 		key := PageKey(tenantID, hash, p.Number)
 		// Page.ImagePNG is borrowed for the duration of this call, which is where it is sent.
 		if err := s.Sink(ctx, key, p.ImagePNG); err != nil {
+			return err
+		}
+		if err := collect(p); err != nil {
 			return err
 		}
 		images = append(images, PageImage{
@@ -54,7 +60,7 @@ func (s *PageStore) Ingest(ctx context.Context, tenantID string, doc Document) (
 		return nil
 	})
 	if err != nil {
-		return nil, PageResult{}, err
+		return nil, nil, PageResult{}, err
 	}
-	return images, res, nil
+	return images, tokens, res, nil
 }

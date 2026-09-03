@@ -105,6 +105,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 
 	var results []FieldResult
 	var images []PageImage
+	var tokenPages []TokenPage
 	// Set by whichever stage below fails. Control flow, never a parse of last_error
 	// (TestExtractWorker_FailureKindPerStage).
 	var kind FailureKind
@@ -115,7 +116,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	if err == nil {
 		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
 		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).
-		if images, _, err = w.Pages.Ingest(ctx, args.TenantID, doc); err != nil {
+		if images, tokenPages, _, err = w.Pages.Ingest(ctx, args.TenantID, doc); err != nil {
 			kind = FailurePagesNotRendered
 		}
 	}
@@ -123,9 +124,19 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		// Objects first, rows last, so a committed row always names an object that was PUT
 		// (TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails). Outside queue.OncePerJob on
 		// purpose: these rows commit before Extract, so a document whose field extraction fails
-		// still has a page inventory.
+		// still has a page inventory and the layout it was read from
+		// (TestRLS_ExtractWorkerRecordsLayoutBeforeExtractFails).
 		if err = db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
-			return writePageImagesTx(ctx, tx, args.TenantID, args.DocumentID, images)
+			if err := writePageImagesTx(ctx, tx, args.TenantID, args.DocumentID, images); err != nil {
+				return err
+			}
+			// MarshalAnchorObservations, not json.Marshal: the column's CHECK refuses the
+			// null an empty slice would otherwise encode to.
+			anchors, err := MarshalAnchorObservations(AnchorObservations(tokenPages))
+			if err != nil {
+				return err
+			}
+			return writeLayoutTx(ctx, tx, args.TenantID, row.ID, Fingerprint(tokenPages), anchors)
 		}); err != nil {
 			kind = FailurePageRowsNotWritten
 		}

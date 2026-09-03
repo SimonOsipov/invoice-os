@@ -12,6 +12,10 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
+// LoadAnchorRules is the learned-rule read as a seam, satisfied by (*Store).AnchorRulesFor
+// with no adapter. A named func type, matching every other seam in this package.
+type LoadAnchorRules func(ctx context.Context, tenantID, fingerprint string) ([]AnchorRule, error)
+
 // AnchorRule is one stored rule: its row identity plus its decoded body.
 type AnchorRule struct {
 	ID    string

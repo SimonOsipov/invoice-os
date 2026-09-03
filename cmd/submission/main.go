@@ -138,9 +138,13 @@ func main() {
 	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill. PageStore.Reader
 	// stays go-pdfium whatever EXTRACTOR selects: it renders page images, not text.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
+	// Text stays nil until EXTR-17-03 wires the reader: a nil PageReader is exactly what keeps
+	// Work on the Extractor branch. Pinned as nil by TestSubmissionMain_WiresTheQueueSeams, so
+	// the day it is filled is a deliberate edit there. Rules is real and unreachable while
+	// Text is nil.
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), app.Logger)
+		newExtractionAuditor(), nil, (&extraction.Store{Pool: pool}).AnchorRulesFor, app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
@@ -526,8 +530,12 @@ func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, er
 
 // newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails
 // only on the first job (TestNewExtractWorker_SetsEveryCollaborator).
-func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument, pages *extraction.PageStore, auditor extraction.RecordExtractionAudit, logger *slog.Logger) *extraction.ExtractWorker {
-	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages, Audit: auditor, Logger: logger}
+func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,
+	pages *extraction.PageStore, auditor extraction.RecordExtractionAudit,
+	text extraction.PageReader, rules extraction.LoadAnchorRules,
+	logger *slog.Logger) *extraction.ExtractWorker {
+	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages,
+		Audit: auditor, Text: text, Rules: rules, Logger: logger}
 }
 
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow

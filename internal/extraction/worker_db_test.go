@@ -2399,3 +2399,54 @@ func TestRLS_ExtractWorkerWritesAlternativeRowsAtRankOneAndTwo(t *testing.T) {
 		t.Errorf("%d alternative row(s) carry a reason_code, want 0 -- only the decided reading does", reasons)
 	}
 }
+
+// EXTR-17-01 AC-10. The seam lands unwired: no call site sets Text, so Work still takes the
+// Extractor branch byte for byte. A nil PageReader is exactly what selects it, so this pins the
+// unwired path and reds the day something starts reading text without saying so.
+//
+// In this file, not worker_internal_test.go: Work's first act after the nil-Audit guard is
+// db.WithinTenantTx, so it needs a pool.
+func TestExtractWorker_NilTextKeepsTheExtractorPath(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	op := wkNewOpener()
+	ext := wkOK()
+	rec := &wkAuditRecorder{}
+	ew := wkWorkerAudit(t, ext, op, rec)
+
+	// The premise, asserted rather than assumed: a fixture that quietly set Text would make
+	// every assertion below evidence for the wrong branch.
+	if ew.Text != nil {
+		t.Fatalf("ExtractWorker.Text is %T, want nil -- this spec is about the unwired seam", ew.Text)
+	}
+
+	const riverJobID = int64(912101)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if n := ext.count(); n != 1 {
+		t.Errorf("the extractor ran %d time(s), want 1 -- a nil Text must leave the Extractor branch untouched", n)
+	}
+	if n := op.count(); n != 1 {
+		t.Errorf("OpenDocument ran %d time(s), want 1", n)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	stAssertFieldResultCount(t, ctx, xid, len(wkOneField()))
+
+	// The terminal event is the success one: a text read that ran and failed would have
+	// emitted a failure carrying a kind instead.
+	evs := rec.events()
+	if len(evs) != 1 {
+		t.Fatalf("the worker emitted %d audit event(s), want 1", len(evs))
+	}
+	if !evs[0].Succeeded {
+		t.Errorf("the worker emitted a failure carrying kind %q, want the success event", evs[0].FailureKind)
+	}
+	if evs[0].FailureKind != "" {
+		t.Errorf("the success event carries FailureKind %q, want empty", evs[0].FailureKind)
+	}
+}

@@ -311,7 +311,16 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		return nil
 	}
 
-	ew := newExtractWorker(pool, ext, open, pages, auditor, logger)
+	// Test-local, non-nil: the reflection loop below errors on any nil collaborator, and
+	// main()'s own nil Text is pinned separately in TestSubmissionMain_WiresTheQueueSeams.
+	textFake := extraction.NewPDFiumReader()
+	ruled := 0
+	rules := func(context.Context, string, string) ([]extraction.AnchorRule, error) {
+		ruled++
+		return nil, nil
+	}
+
+	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, logger)
 	if ew == nil {
 		t.Fatal("newExtractWorker returned nil")
 	}
@@ -331,8 +340,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 			}
 		}
 	}
-	if checked < 6 {
-		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 6 (Pool, Extractor, Open, Pages, Audit, Logger) -- the loop above examined almost nothing", checked)
+	if checked < 8 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 8 (Pool, Extractor, Open, Pages, Audit, Text, Rules, Logger) -- the loop above examined almost nothing", checked)
 	}
 
 	if ew.Pool != pool {
@@ -360,6 +369,16 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 	// Follows the identifier: a field set to some OTHER auditor is nil-free and reports nothing.
 	if err := ew.Audit(context.Background(), nil, extraction.ExtractionAudit{}); err != nil || audited != 1 {
 		t.Errorf("ExtractWorker.Audit ran %d time(s) and returned %v, want the recording auditor passed in to run exactly once", audited, err)
+	}
+	if ew.Text != textFake {
+		t.Error("ExtractWorker.Text is not the reader passed in")
+	}
+	if ew.Rules == nil {
+		t.Fatal("ExtractWorker.Rules is nil")
+	}
+	// Same reason as Audit above: a Rules set to some other loader is nil-free and proves nothing.
+	if _, err := ew.Rules(context.Background(), "t", "fp"); err != nil || ruled != 1 {
+		t.Errorf("ExtractWorker.Rules ran %d time(s) and returned %v, want the recording loader passed in to run exactly once", ruled, err)
 	}
 }
 
@@ -478,13 +497,30 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
 	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
 
-	if len(ewArgs) != 6 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 6 (pool, extractor, opener, pages, auditor, logger)", len(ewArgs))
+	if len(ewArgs) != 8 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 8 (pool, extractor, opener, pages, auditor, text, rules, logger)", len(ewArgs))
 	}
+	const ewTextArg = 5
 	for i, arg := range ewArgs {
+		// Argument 5 is exempt here and pinned positively below, not skipped: a nil Text is
+		// what selects the Extractor branch, so it is the specified value today.
+		if i == ewTextArg {
+			continue
+		}
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
 			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, the rest panic", i)
 		}
+	}
+
+	// EXTR-17-01 AC-2. The pin, not an exemption: it fails loudly the day EXTR-17-03 fills the
+	// reader in, which is when the seam's runtime behaviour actually changes.
+	if id, ok := ewArgs[ewTextArg].(*ast.Ident); !ok || id.Name != "nil" {
+		t.Errorf("newExtractWorker's text argument is %s, want the literal nil: EXTR-17-03 is the step that wires the reader, and filling it here moves Work off the Extractor branch. Update this pin in that step", wtRender(ewArgs[ewTextArg]))
+	}
+
+	// The rules loader is real and non-nil, unreachable while Text is nil.
+	if sel, ok := ewArgs[6].(*ast.SelectorExpr); !ok || sel.Sel.Name != "AnchorRulesFor" {
+		t.Errorf("newExtractWorker's rules argument is %s, want an ...AnchorRulesFor method value: the learned-rule read is only reachable if main() builds it", wtRender(ewArgs[6]))
 	}
 
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
@@ -558,8 +594,8 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	} else if len(call.Args) != 0 {
 		t.Errorf("newExtractionAuditor is called with %d argument(s), want 0", len(call.Args))
 	}
-	if sel, ok := ewArgs[5].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
-		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[5]))
+	if sel, ok := ewArgs[7].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[7]))
 	}
 }
 

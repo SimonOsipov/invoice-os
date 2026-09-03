@@ -13,14 +13,16 @@ import (
 // text, which the audit-payload rule forbids and the jobs table already holds.
 type FailureKind string
 
-// Four values, one per error path in Work()'s `if err == nil` chain. Rendering the pages and
+// One value per error path in Work()'s `if err == nil` chain. Rendering the pages and
 // committing the page rows are two stages that fail for different reasons and are fixed in
-// different places.
+// different places. text_not_read is the text read's path; EXTR-17-02 wires the stage that
+// sets it.
 const (
 	FailureDocumentUnavailable FailureKind = "document_unavailable"
 	FailurePagesNotRendered    FailureKind = "pages_not_rendered"
 	FailurePageRowsNotWritten  FailureKind = "page_rows_not_written"
 	FailureExtractFailed       FailureKind = "extract_failed"
+	FailureTextNotRead         FailureKind = "text_not_read"
 )
 
 // Valid reports whether k is one of the four kinds. "" is invalid: a success carries no kind,

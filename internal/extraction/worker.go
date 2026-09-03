@@ -51,7 +51,20 @@ type ExtractWorker struct {
 	Open      OpenDocument
 	Pages     *PageStore
 	Audit     RecordExtractionAudit
-	Logger    *slog.Logger
+	// Text is the second reader. nil keeps Work on the Extractor branch, byte for byte
+	// (TestExtractWorker_NilTextKeepsTheExtractorPath).
+	Text PageReader
+	// Rules loads the tenant's learned anchor rules for one layout fingerprint.
+	Rules  LoadAnchorRules
+	Logger *slog.Logger
+}
+
+// readText collects one Text.Read into the pages, the token pages and the reader's own totals.
+// PageResult is returned because the caller classifies on res.TextChars.
+//
+// EXTR-17-01 ships the seam only: the body is EXTR-17-03's.
+func readText(_ context.Context, _ PageReader, _ Document) ([]Page, []TokenPage, PageResult, error) {
+	panic("readText: not implemented")
 }
 
 // Timeout raises River's 60s client default for this kind alone: the executor resolves

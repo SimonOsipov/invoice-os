@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -26,7 +27,7 @@ import (
 // --- what the wired walk is measured against ---------------------------------------------
 
 // cwReportMarker titles the wired report. The ci.yml step greps for it and
-// TestRLS_WiredPath_TheCIStepsRunFilterNamesARealTest asserts the step carries it, so a rename
+// TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest asserts the step carries it, so a rename
 // cannot leave the workflow grepping for nothing.
 const cwReportMarker = "tier-1 decision rate through the wired worker path"
 
@@ -662,7 +663,8 @@ func TestCorpusGoldens_TheCanaryJobCoversEveryLayout(t *testing.T) {
 
 // AC-13. rls-test-gate.sh pipes `go test -json` to a file (rls-test-gate.sh:8) and rlsgate
 // deletes a passing test's buffered output (internal/tools/rlsgate/rlsgate.go:66), so the wired
-// report never reaches CI output from the gated step that runs this package (ci.yml:606).
+// report never reaches CI output from the gated step that runs this package (ci.yml:641, the
+// queue job -- the rls job runs no extraction step).
 // Mirrors TestTier1Accuracy_CIPrintsTheReport.
 func TestRLS_WiredPathCIPrintsTheReport(t *testing.T) {
 	yaml := acRepoFile(t, ".github/workflows/ci.yml")
@@ -688,8 +690,8 @@ func TestRLS_WiredPathCIPrintsTheReport(t *testing.T) {
 	}
 }
 
-// cwCIStep is the ci.yml step that prints the wired report, cut on the workflow's own step
-// indentation so the assertions above hold against ONE step rather than three unrelated ones.
+// cwCIStep is the ci.yml chunk starting at the step that prints the wired report. The chunk
+// runs past the step when it is a job's last one; cwStepBody cuts it.
 func cwCIStep(t *testing.T, yaml string) string {
 	t.Helper()
 
@@ -778,5 +780,197 @@ func TestCorpusDoc_RecordsTheWiredPathRate(t *testing.T) {
 		if !strings.Contains(section, phrase) {
 			t.Errorf("%s's %q section never mentions %q; the doc's own coverage limit is the part a reader cannot reconstruct", acDoc, cwDocSection, phrase)
 		}
+	}
+}
+
+// --- QA additions: what the sweep above found unguarded --------------------------------------
+
+// cwGeometryTol bounds the disagreement between a golden's token boxes and pdfium's reading of
+// the same PDF. Measured max over all six layouts: |dy0| 0.000576, |dy1| 0.005727,
+// |dx0| 0.003569, |dx1| 0.003863.
+const cwGeometryTol = 0.02
+
+// AC-3. TestCorpusGoldens_AreMachineGenerated proves a golden round-trips and did not come from
+// a stub image; neither notices a hand-edited coordinate. Shifting corpus_totals_block's
+// Supplier TIN token from y0 0.14 to 0.84 passed the whole suite, because every anchor that
+// reads it is same-token. A golden that no longer describes its PDF is a replay of nothing.
+func TestCorpusGoldens_DescribeTheirPDF(t *testing.T) {
+	if len(corpusLayouts) == 0 {
+		t.Fatal("corpusLayouts is empty; the loop below would assert nothing")
+	}
+	for _, layout := range corpusLayouts {
+		t.Run(layout, func(t *testing.T) {
+			_, golden, _ := dcServeGolden(t, dcReadNamedGolden(t, cwGolden(layout)))
+			pdfium := rvCorpusPages(t, layout)
+
+			if len(golden) == 0 {
+				t.Fatalf("%s replayed no page; every comparison below would hold vacuously", cwGolden(layout))
+			}
+			if len(golden) != len(pdfium) {
+				t.Fatalf("%s describes %d page(s) and %s reads %d", cwGolden(layout), len(golden), layout, len(pdfium))
+			}
+
+			compared := 0
+			for i := range golden {
+				g, p := golden[i], pdfium[i]
+				if g.WidthPt != p.WidthPt || g.HeightPt != p.HeightPt {
+					t.Errorf("page %d is %vx%v pt in the golden and %vx%v pt in the PDF", i+1, g.WidthPt, g.HeightPt, p.WidthPt, p.HeightPt)
+				}
+				if len(g.Tokens) != len(p.Tokens) {
+					t.Errorf("page %d carries %d golden token(s) and %d pdfium token(s); the golden was truncated or padded", i+1, len(g.Tokens), len(p.Tokens))
+					continue
+				}
+				for j := range g.Tokens {
+					gt, pt := g.Tokens[j], p.Tokens[j]
+					compared++
+					if strings.TrimSpace(gt.Text) != strings.TrimSpace(pt.Text) {
+						t.Errorf("page %d token %d reads %q in the golden and %q in the PDF", i+1, j, gt.Text, pt.Text)
+					}
+					for _, d := range []struct {
+						edge     string
+						got, off float64
+					}{
+						{"x0", gt.Region.X0, gt.Region.X0 - pt.Region.X0},
+						{"x1", gt.Region.X1, gt.Region.X1 - pt.Region.X1},
+						{"y0", gt.Region.Y0, gt.Region.Y0 - pt.Region.Y0},
+						{"y1", gt.Region.Y1, gt.Region.Y1 - pt.Region.Y1},
+					} {
+						if math.Abs(d.off) > cwGeometryTol {
+							t.Errorf("page %d token %d (%q) has %s %v in the golden, %v off pdfium's; the golden no longer describes this PDF",
+								i+1, j, gt.Text, d.edge, d.got, d.off)
+						}
+					}
+				}
+			}
+			if compared == 0 {
+				t.Fatalf("%s compared no token; the geometry assertions above held over nothing", cwGolden(layout))
+			}
+		})
+	}
+}
+
+// AC-11. cwScoreWired scopes its walk to HeaderFields, and the scope is equivalent to walking
+// every row name only while no non-HeaderFields row carries a value. That premise is what this
+// pins: LineItems finds nothing on any corpus layout (every golden carries `tables: []`), so the
+// block row is written missing-and-empty. A seventh layout with a table turns this red, which is
+// where the scope stops being free.
+func TestRLS_WiredPathTheBlockRowCannotEnterTheWalk(t *testing.T) {
+	ctx := t.Context()
+	corpusRequireCommitted(t)
+
+	if slices.Contains(extraction.HeaderFields, cwLineItemsRow) {
+		t.Fatalf("%s is a HeaderFields member; the walk's scope no longer excludes it", cwLineItemsRow)
+	}
+	for _, layout := range corpusLayouts {
+		pages, _, _ := dcServeGolden(t, dcReadNamedGolden(t, cwGolden(layout)))
+		if n := len(extraction.LineItems(pages)); n != 0 {
+			t.Errorf("%s yields %d line item(s); the block row can now carry a value, so scoring every row name instead of HeaderFields would inflate the decided count", layout, n)
+		}
+	}
+	// No committed golden carries a table, so the zeros above need their own positive control:
+	// without one they would also hold if LineItems always returned nothing.
+	if n := len(extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{{
+		Rows: 2, Cols: 3,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Qty", nil), liCell(0, 1, "Price", nil), liCell(0, 2, "Total", nil),
+			liCell(1, 0, "1", nil), liCell(1, 1, "5.00", nil), liCell(1, 2, "5.00", nil),
+		},
+	}}}})); n != 1 {
+		t.Fatalf("LineItems found %d line(s) on a one-row table; the zeros above hold whatever the corpus contains", n)
+	}
+
+	s := cwScoreWired(t, ctx, "the shipped Tier-1 set", 919200, cwDocling, cwRankZeroOnly, nil)
+	cwRequireWalk(t, s, "the shipped Tier-1 set")
+
+	header := map[string]bool{}
+	for _, f := range extraction.HeaderFields {
+		header[f] = true
+	}
+	valued := 0
+	for _, r := range s.runs {
+		block := false
+		for _, row := range r.rows {
+			if row.rank != 0 {
+				continue
+			}
+			if row.name == cwLineItemsRow {
+				block = true
+			}
+			if row.value == nil {
+				continue
+			}
+			valued++
+			if !header[row.name] {
+				t.Errorf("%s wrote a rank-0 %s row carrying %q; it is not a HeaderFields member, so an unscoped walk would count it decided", r.layout, row.name, *row.value)
+			}
+		}
+		if !block {
+			t.Errorf("%s wrote no rank-0 %s row; this spec is not looking at the rows Reconcile writes", r.layout, cwLineItemsRow)
+		}
+	}
+	if valued == 0 {
+		t.Fatal("no run carried a rank-0 value at all; the membership assertion above held over nothing")
+	}
+}
+
+// cwStepBody cuts a cwCIStep chunk at the end of its step. cwCIStep splits on the step marker,
+// so the LAST step of a job runs on into the next job's header and its steps -- every needle
+// asserted against the raw chunk can be satisfied by an unrelated job.
+func cwStepBody(chunk string) string {
+	lines := strings.Split(chunk, "\n")
+	for i, l := range lines[1:] {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		if len(l)-len(strings.TrimLeft(l, " ")) < 8 {
+			return strings.Join(lines[:i+1], "\n")
+		}
+	}
+	return chunk
+}
+
+// AC-13. cwCIStep finds the step by substring, so it cannot tell a step that RUNS from one that
+// is gated off, mistyped, or whose grep was neutered. Measured survivors of the shipped specs:
+// `if: false` on the step, `run:` renamed to `run2:`, and `grep ... accuracy.txt || true`. Each
+// leaves the wired number with no reader while both AC-13 specs stay green.
+func TestRLS_WiredPathTheReportStepActuallyRuns(t *testing.T) {
+	yaml := acRepoFile(t, ".github/workflows/ci.yml")
+	step := cwStepBody(cwCIStep(t, yaml))
+
+	if !regexp.MustCompile(`(?m)^\s+run: \|`).MatchString(step) {
+		t.Errorf("the wired report step has no `run: |` block; a mistyped key makes it a no-op step that still carries every string the other specs grep for")
+	}
+	if m := regexp.MustCompile(`(?m)^\s+if:.*$`).FindString(step); m != "" {
+		t.Errorf("the wired report step is conditional (%q); a step gated off never prints the report, and the substring scans cannot see the difference", strings.TrimSpace(m))
+	}
+	if strings.Contains(step, "continue-on-error") {
+		t.Errorf("the wired report step is continue-on-error; a failed grep would no longer fail the job")
+	}
+
+	// The grep must guard the report, and must read what the go test actually wrote.
+	grep := regexp.MustCompile(`grep -q '` + regexp.QuoteMeta(cwReportMarker) + `' (\S+)\s*(\S*)`).FindStringSubmatch(step)
+	if grep == nil {
+		t.Fatalf("the wired report step has no `grep -q '%s' <file>`; without it the step passes on output that says nothing", cwReportMarker)
+	}
+	if grep[2] != "" {
+		t.Errorf("the grep is followed by %q; `|| true` and friends turn the only reader-side assertion into a no-op", grep[2])
+	}
+	tee := regexp.MustCompile(`\| tee (\S+)`).FindStringSubmatch(step)
+	if tee == nil {
+		t.Fatalf("the wired report step does not tee the go test output; there is nothing for the grep to read")
+	}
+	if tee[1] != grep[1] {
+		t.Errorf("the step tees into %s and greps %s; the grep would read another job's file, or none", tee[1], grep[1])
+	}
+
+	// Same job as the gated run, so it inherits this job's DATABASE_* env. Without them every
+	// TestRLS_* self-skips, the report never renders and the grep fails for the wrong reason.
+	gated := strings.Index(yaml, "rls-test-gate.sh -count=1 ./internal/extraction/...")
+	report := strings.Index(yaml, step)
+	if gated < 0 || report < 0 {
+		t.Fatalf("could not locate both steps in ci.yml (gated %d, report %d); this scan is reading the wrong file", gated, report)
+	}
+	if between := regexp.MustCompile(`(?m)^  [A-Za-z][\w-]*:$`).FindString(yaml[gated:report]); between != "" {
+		t.Errorf("a new job (%q) starts between the gated extraction run and the report step; the report step would not inherit the DATABASE_* env and every TestRLS_* would self-skip", strings.TrimSpace(between))
 	}
 }

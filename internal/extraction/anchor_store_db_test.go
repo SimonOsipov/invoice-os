@@ -976,3 +976,86 @@ func TestJobLayout_TheTenantParameterFailsClosedInsideItsOwnSession(t *testing.T
 		t.Errorf("jobLayoutTx handed tenant A's layout to a caller that named tenant B: %+v", got)
 	}
 }
+
+// --- EXTR-14-08: convergence over the order the store actually returns -------------------
+
+// stAnchorRuleBuyerTIN / stAnchorRuleSupplierTIN read DIFFERENT tokens on corpus_inline_labels
+// -- the buyer's TIN and the supplier's. Two rules for one field whose values cannot be
+// confused, so recency is provable from the value alone.
+const (
+	stAnchorRuleBuyerTIN    = `{"label":"(?i)\\bBuyer TIN\\b","relation":{"kind":"same_token","max_distance":0},"shape":"tin"}`
+	stAnchorRuleSupplierTIN = `{"label":"(?i)\\bSupplier TIN\\b","relation":{"kind":"same_token","max_distance":0},"shape":"tin"}`
+)
+
+// V-05. The in-memory convergence specs assume Learned arrives newest-first; this one takes
+// that order from AnchorRulesFor rather than assuming it, and asserts the same field still
+// ranks learned above generic once the older rule has been suppressed.
+func TestResolve_ConvergesOnTheNewestStoredRuleAndStillOutranksGeneric(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, _ := stTenant(t, ctx)
+
+	pages := rvCorpusPages(t, stCorpusFile)
+	fingerprint := extraction.Fingerprint(pages)
+
+	// Seeded oldest first, so seq -- not insertion order into the slice -- decides.
+	olderID := stSeedAnchorRule(t, ctx, tenantID, fingerprint, "buyer_tin", stAnchorRuleSupplierTIN, extraction.RuleSchemaVersion)
+	newerID := stSeedAnchorRule(t, ctx, tenantID, fingerprint, "buyer_tin", stAnchorRuleBuyerTIN, extraction.RuleSchemaVersion)
+
+	learned, err := s.AnchorRulesFor(ctx, tenantID, fingerprint)
+	if err != nil {
+		t.Fatalf("AnchorRulesFor: %v", err)
+	}
+	if len(learned) != 2 {
+		t.Fatalf("AnchorRulesFor returned %d rule(s), want the 2 seeded for this fingerprint", len(learned))
+	}
+	if learned[0].ID != newerID {
+		t.Fatalf("AnchorRulesFor returned %s first, want the newer rule %s; convergence reads slice position 0 as the newest correction",
+			learned[0].ID, newerID)
+	}
+
+	got := rvFor(extraction.Resolve(pages, extraction.RuleSet{Learned: learned, Tier1: extraction.Tier1Rules}), "buyer_tin")
+	rvFloor(t, got, "buyer_tin with two stored rules and the shipped Tier-1 set")
+
+	var sawNewer bool
+	for _, c := range got {
+		if c.RuleID == olderID {
+			t.Errorf("the superseded rule %s still stamped buyer_tin=%q; only the newest productive rule contributes", olderID, c.Value)
+		}
+		if c.RuleID == newerID {
+			sawNewer = true
+			if c.Value != "99999999-0102" {
+				t.Errorf("the newest rule read buyer_tin=%q, want the buyer's TIN 99999999-0102", c.Value)
+			}
+		}
+	}
+	if !sawNewer {
+		t.Errorf("no buyer_tin candidate carries the newest rule %s: %+v", newerID, got)
+	}
+
+	// AC-4: convergence must not disturb the tier key. Every learned candidate still precedes
+	// every generic one within the field.
+	seenGeneric := false
+	for _, c := range got {
+		if c.Tier == extraction.TierGeneric {
+			seenGeneric = true
+			continue
+		}
+		if seenGeneric {
+			t.Errorf("learned candidate %q from %s follows a generic one: %+v", c.Value, c.RuleID, got)
+		}
+	}
+
+	// Paired control: the same page with nothing learned. Without it "every candidate is
+	// learned-then-generic" also holds over a result that is entirely generic by accident.
+	ctl := rvFor(extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}), "buyer_tin")
+	rvControl(t, ctl, "the same page with Learned nil")
+	for _, c := range ctl {
+		if c.Tier != extraction.TierGeneric {
+			t.Errorf("with Learned nil, buyer_tin candidate %q from rule %q carries %v", c.Value, c.RuleID, c.Tier)
+		}
+	}
+	if !seenGeneric {
+		t.Errorf("the two stored rules left no generic buyer_tin candidate, but the Tier-1-only control produced %d; the convergence loop must not reach the Tier-1 loop", len(ctl))
+	}
+}

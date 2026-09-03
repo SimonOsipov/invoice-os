@@ -1,0 +1,61 @@
+corpus_inline_labels.pdf	14
+	invoice_number	INV-1001	t1.invoice_number.same_token	1	0.000000	1/0.119431/0.117909/0.300137/0.129061
+	issue_date	2026-03-04	t1.issue_date.same_token	1	0.000000	1/0.119431/0.140636/0.337157/0.151788
+	supplier_tin	99999999-0101	t1.supplier_tin.same_token	1	0.000000	1/0.118608/0.163076/0.371000/0.177364
+	supplier_name	Adeyemi Trading Limited	t1.supplier_name.same_token	1	0.000000	1/0.118608/0.185803/0.416196/0.200288
+	supplier_name	Buyer TIN: 99999999-0102	t1.supplier_name.below	1	0.008530	1/0.119098/0.208818/0.353196/0.222924
+	supplier_name	Buyer: Honeywell Group	t1.supplier_name.below	1	0.030970	1/0.119098/0.231258/0.329373/0.245652
+	supplier_name	Currency: NGN	t1.supplier_name.below	1	0.053697	1/0.118510/0.253985/0.250157/0.268379
+	buyer_tin	99999999-0102	t1.buyer_tin.same_token	1	0.000000	1/0.119098/0.208818/0.353196/0.222924
+	buyer_name	Honeywell Group	t1.buyer_name.same_token	1	0.000000	1/0.119098/0.231258/0.329373/0.245652
+	buyer_name	Currency: NGN	t1.buyer_name.below	1	0.008333	1/0.118510/0.253985/0.250157/0.268379
+	currency	NGN	t1.currency.same_token	1	0.000000	1/0.118510/0.253985/0.250157/0.268379
+	subtotal	1000.00	t1.subtotal.same_token	1	0.000000	1/0.118608/0.685803/0.282588/0.699182
+	vat	75.00	t1.vat.same_token	1	0.000000	1/0.118039/0.708818/0.215000/0.719970
+	total	1075.00	t1.total.same_token	1	0.000000	1/0.117922/0.731545/0.247706/0.744636
+corpus_stacked_labels.pdf	9
+	invoice_number	INV-1003	t1.invoice_number.below	1	0.009111	1/0.119431/0.138111/0.199804/0.149263
+	issue_date	2026-04-22	t1.issue_date.below	1	0.009111	1/0.118157/0.340131/0.223725/0.354131
+	supplier_tin	99999999-0301	t1.supplier_tin.sweep	1	0.000000	1/0.118471/0.259551/0.251137/0.270475
+	supplier_name	Adeyemi Trading Limited	t1.supplier_name.below	1	0.006202	1/0.117922/0.239121/0.333373/0.253318
+	supplier_name	99999999-0301	t1.supplier_name.below	1	0.026631	1/0.118471/0.259551/0.251137/0.270475
+	buyer_tin	99999999-0302	t1.buyer_tin.sweep	1	0.000000	1/0.118471/0.575207/0.254039/0.586131
+	buyer_name	Honeywell Group	t1.buyer_name.below	1	0.005808	1/0.119157/0.554490/0.267255/0.568884
+	buyer_name	99999999-0302	t1.buyer_name.below	1	0.026525	1/0.118471/0.575207/0.254039/0.586131
+	total	3225.00	t1.total.below	1	0.008823	1/0.119137/0.706005/0.242235/0.719384
+corpus_split_labels.pdf	12
+	invoice_number	INV-1002	t1.invoice_number.right	1	0.151673	1/0.361261/0.117909/0.441340/0.129061
+	issue_date	2026-04-15	t1.issue_date.right	1	0.135614	1/0.361458/0.140348/0.456850/0.151788
+	supplier_tin	99999999-0201	t1.supplier_tin.sweep	1	0.000000	1/0.360301/0.163591/0.492967/0.174515
+	supplier_tin	99999999-0201	t1.supplier_tin.right	1	0.135183	1/0.360301/0.163591/0.492967/0.174515
+	supplier_name	Adeyemi Trading Limited	t1.supplier_name.right	1	0.170203	1/0.359752/0.186091/0.575203/0.200288
+	buyer_tin	99999999-0202	t1.buyer_tin.sweep	1	0.000000	1/0.360301/0.534803/0.495869/0.545727
+	buyer_tin	99999999-0202	t1.buyer_tin.right	1	0.155889	1/0.360301/0.534803/0.495869/0.545727
+	buyer_name	Honeywell Group	t1.buyer_name.right	1	0.192144	1/0.360987/0.557015/0.509085/0.571409
+	currency	NGN	t1.currency.right	1	0.164007	1/0.360967/0.208530/0.401556/0.219970
+	subtotal	2000.00	t1.subtotal.right	1	0.165183	1/0.359987/0.686318/0.435046/0.699182
+	vat	150.00	t1.vat.right	1	0.205948	1/0.361458/0.709045/0.418693/0.719970
+	total	2150.00	t1.total.right	1	0.200065	1/0.359987/0.731773/0.435046/0.744636
+corpus_two_column.pdf	9
+	invoice_number	INV-1004	t1.invoice_number.same_token	1	0.000000	1/0.119431/0.117909/0.303353/0.129061
+	issue_date	2026-05-06	t1.issue_date.same_token	1	0.000000	1/0.119431/0.140636/0.337059/0.151788
+	supplier_tin	99999999-0401	t1.supplier_tin.same_token	1	0.000000	1/0.117922/0.234071/0.293627/0.245222
+	supplier_tin	99999999-0402	t1.supplier_tin.same_token	1	0.000000	1/0.653869/0.234071/0.832477/0.245222
+	supplier_name	Adeyemi Trading Limited	t1.supplier_name.below	1	0.006202	1/0.117922/0.213869/0.333373/0.228066
+	supplier_name	TIN: 99999999-0401	t1.supplier_name.below	1	0.026404	1/0.117922/0.234071/0.293627/0.245222
+	buyer_name	Honeywell Group	t1.buyer_name.below	1	0.005808	1/0.655105/0.213581/0.803203/0.227975
+	buyer_name	TIN: 99999999-0402	t1.buyer_name.below	1	0.026298	1/0.653869/0.234071/0.832477/0.245222
+	total	6450.00	t1.total.same_token	1	0.000000	1/0.117922/0.685803/0.296725/0.699182
+corpus_totals_block.pdf	5
+	invoice_number	INV-1006	t1.invoice_number.same_token	1	0.000000	1/0.119431/0.117909/0.303255/0.129061
+	supplier_tin	99999999-0601	t1.supplier_tin.same_token	1	0.000000	1/0.118608/0.140348/0.371000/0.154636
+	subtotal	5000.00	t1.subtotal.right	1	0.119549	1/0.817621/0.686318/0.892562/0.699182
+	vat	375.00	t1.vat.right	1	0.158882	1/0.817660/0.709045/0.876209/0.719970
+	total	5375.00	t1.total.right	1	0.154431	1/0.817621/0.731773/0.892562/0.744636
+corpus_ambiguous_date.pdf	6
+	invoice_number	INV-1005	t1.invoice_number.same_token	1	0.000000	1/0.119431/0.117909/0.303176/0.129061
+	issue_date	2026-03-12	t1.issue_date.same_token	1	0.000000	1/0.119431/0.140348/0.334902/0.151788
+	issue_date	2026-12-03	t1.issue_date.same_token	1	0.000000	1/0.119431/0.140348/0.334902/0.151788
+	supplier_tin	99999999-0501	t1.supplier_tin.same_token	1	0.000000	1/0.118608/0.163076/0.371000/0.177364
+	supplier_name	Adeyemi Trading Limited	t1.supplier_name.same_token	1	0.000000	1/0.118608/0.185803/0.416196/0.200288
+	total	4300.00	t1.total.same_token	1	0.000000	1/0.117922/0.685803/0.296725/0.699182

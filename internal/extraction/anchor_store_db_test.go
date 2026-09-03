@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -900,5 +901,78 @@ func TestAnchorRulesFor_TheAnchorlessFingerprintIsSharedButResolvesToNothing(t *
 	}
 	if !fired {
 		t.Errorf("no total candidate carries TierLearned with rule %s: %+v", id, ctl)
+	}
+}
+
+// A-01 (QA, Mode B). S-08b reads jobLayoutTx's error through db.WithinTenantTx, which also
+// reports the COMMIT the 22P02 aborted -- so it stays green on a jobLayoutTx that maps every
+// error to ok = false. This asserts the error jobLayoutTx itself returned.
+func TestJobLayout_TheMalformedIdErrorComesFromJobLayoutNotFromTheCommit(t *testing.T) {
+	ctx := t.Context()
+	tenantID, jobID := csJob(t, ctx)
+	arSetLayout(t, ctx, jobID, "v1:ar-a01", nil)
+
+	var (
+		inner error
+		ok    bool
+	)
+	// fn returns nil either way, so only jobLayoutTx's own return reaches the assertions; the
+	// wrapper's error (a failed commit on the aborted tx) is deliberately discarded.
+	read := func(id string) {
+		t.Helper()
+		inner, ok = nil, false
+		_ = db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+			_, ok, inner = extraction.JobLayoutForTest(ctx, tx, tenantID, id)
+			return nil
+		})
+	}
+
+	read(jobID)
+	if inner != nil || !ok {
+		t.Fatalf("the control read returned ok = %v, inner error %v, want true and nil", ok, inner)
+	}
+
+	read("not-a-uuid")
+	if inner == nil {
+		t.Fatalf("jobLayoutTx itself returned no error for a malformed job id (ok = %v); the 22P02 became an absence", ok)
+	}
+	if ok {
+		t.Errorf("jobLayoutTx reported ok = true alongside its error %v", inner)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(inner, &pgErr) || pgErr.Code != "22P02" {
+		t.Errorf("jobLayoutTx returned %v, want SQLSTATE 22P02 (invalid_text_representation)", inner)
+	}
+}
+
+// A-02 (QA, Mode B). S-08's discriminator runs B's session against A's id, which RLS answers.
+// Nothing pinned the other direction: a caller that names the WRONG tenant in the parameter
+// while its session names the right one. Without this, dropping `tenant_id = $1` from the WHERE
+// survives every spec.
+func TestJobLayout_TheTenantParameterFailsClosedInsideItsOwnSession(t *testing.T) {
+	ctx := t.Context()
+	tenantA, jobA := csJob(t, ctx)
+	tenantB, _ := csJob(t, ctx)
+
+	anchors, err := extraction.MarshalAnchorObservations([]extraction.AnchorObservation{})
+	if err != nil {
+		t.Fatalf("marshal the anchors: %v", err)
+	}
+	const fp = "v1:ar-a02"
+	arSetLayout(t, ctx, jobA, fp, anchors)
+
+	got, ok, err := arLayout(t, ctx, tenantA, jobA)
+	if err != nil || !ok || got.Fingerprint != fp {
+		t.Fatalf("the control read returned ok = %v, fingerprint %q, err %v, want true and %q", ok, got.Fingerprint, err, fp)
+	}
+
+	// Tenant A's session, so RLS admits the row; tenant B in the parameter, so only the WHERE
+	// clause can remove it.
+	got, ok, err = arLayoutAs(t, ctx, tenantA, tenantB, jobA)
+	if err != nil {
+		t.Errorf("jobLayoutTx naming the wrong tenant returned error %v, want none", err)
+	}
+	if ok {
+		t.Errorf("jobLayoutTx handed tenant A's layout to a caller that named tenant B: %+v", got)
 	}
 }

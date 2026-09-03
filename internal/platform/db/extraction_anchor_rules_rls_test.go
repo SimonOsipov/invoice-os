@@ -731,6 +731,40 @@ func earMigrationStatements(t *testing.T, section string) []string {
 	return out
 }
 
+// assertEarShapeBeforeDown pins the post-Migration-A shape, the exact inverse of what the
+// L-11 assertions demand after the Down.
+func assertEarShapeBeforeDown(t *testing.T, ctx context.Context, tx pgx.Tx) {
+	t.Helper()
+
+	var insert bool
+	if err := tx.QueryRow(ctx,
+		`SELECT has_table_privilege('invoice_app', 'public.extraction_anchor_rules', 'INSERT')`,
+	).Scan(&insert); err != nil {
+		t.Fatalf("has_table_privilege before the Down: %v", err)
+	}
+	if !insert {
+		t.Fatal("invoice_app holds no INSERT before the Down — Migration A has not been applied, so this test proves nothing")
+	}
+
+	var seqCol, seqRel, newIdx int
+	if err := tx.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM information_schema.columns
+		          WHERE table_schema = 'public' AND table_name = 'extraction_anchor_rules'
+		            AND column_name = 'seq'),
+		        (SELECT count(*) FROM pg_class
+		          WHERE relkind = 'S' AND relname = 'extraction_anchor_rules_seq_seq'),
+		        (SELECT count(*) FROM pg_indexes
+		          WHERE schemaname = 'public'
+		            AND indexname = 'extraction_anchor_rules_tenant_fingerprint_seq_idx')`,
+	).Scan(&seqCol, &seqRel, &newIdx); err != nil {
+		t.Fatalf("snapshot the shape before the Down: %v", err)
+	}
+	if seqCol != 1 || seqRel != 1 || newIdx != 1 {
+		t.Fatalf("before the Down: seq column=%d, sequence=%d, seq index=%d, want 1/1/1 — "+
+			"Migration A has not been applied, so this test proves nothing", seqCol, seqRel, newIdx)
+	}
+}
+
 // L-11: the Down restores the previous shape exactly — the dropped index returns, the
 // sequence and its grant disappear, and the INSERT grant is gone. Executed for real, inside
 // one invoice_migrator transaction that is always rolled back, so it leaves nothing behind.
@@ -738,15 +772,16 @@ func TestRLS_ExtractionAnchorRulesMigrationDownRestoresTheShape(t *testing.T) {
 	ctx := context.Background()
 	tx := migratorTx(t, ctx)
 
-	up := earMigrationStatements(t, "Up")
-	if len(up) == 0 {
+	// The Up half is not replayed: the suite runs against a migrated DB, so a second
+	// ADD COLUMN raises 42701. It is still parsed, so a file that loses its Up marker fails
+	// here rather than silently testing nothing.
+	if up := earMigrationStatements(t, "Up"); len(up) == 0 {
 		t.Fatal("Up body is empty")
 	}
-	for i, s := range up {
-		if _, err := tx.Exec(ctx, s); err != nil {
-			t.Fatalf("Up statement %d failed: %v\n%s", i+1, err, s)
-		}
-	}
+
+	// Before-snapshot: without it the assertions below pass on a DB where Migration A never
+	// landed, and a Down that does nothing reads as a Down that restores the shape.
+	assertEarShapeBeforeDown(t, ctx, tx)
 
 	down := earMigrationStatements(t, "Down")
 	if len(down) == 0 {

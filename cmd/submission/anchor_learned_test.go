@@ -7,7 +7,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -155,6 +159,48 @@ func TestNewAnchorLearnedAuditor_SpellsTheEventInCmd(t *testing.T) {
 	if got := eaLiteralSites(t, root, extractionFiles, alEvent); len(got) != 0 {
 		t.Errorf("%q is spelled as a production literal under %s at %v -- a literal there drops the call site out of the repo-wide audit.Record partition",
 			alEvent, drExtractionD, got)
+	}
+}
+
+// alRecordLineRe is auditVocabulary.test.ts's matcher, verbatim: `[^)\n]*?` excludes the
+// newline, so the event name must sit on the SAME physical line as audit.Record(. A wrapped call
+// drops out of the scan silently and the frontend reports zero misses.
+var alRecordLineRe = regexp.MustCompile(`audit\.Record\([^)\n]*?"([a-z_]+(?:\.[a-z_]+)+)"`)
+
+// The frontend owns that matcher, and the Frontend CI job runs on the `frontend` path filter,
+// which lists neither cmd/** nor internal/**. A cmd-only commit that wraps the call therefore
+// ships with the scan never having run. This is the copy that runs in the Go job.
+func TestNewAnchorLearnedAuditor_EventLiteralSharesTheRecordLine(t *testing.T) {
+	root, files := eaProdFiles(t)
+
+	found := map[string]string{}
+	for _, rel := range files {
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v -- the scan cannot report on a file it cannot read", rel, err)
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			if !strings.Contains(line, "audit.Record(") {
+				continue
+			}
+			for _, m := range alRecordLineRe.FindAllStringSubmatch(line, -1) {
+				found[m[1]] = rel + ":" + strconv.Itoa(i+1)
+			}
+		}
+	}
+
+	// Population floor and a control needle: a matcher that stopped matching reports the same
+	// empty miss list as a clean tree.
+	if len(found) < 25 {
+		t.Fatalf("the line matcher read %d distinct event literal(s), want at least 25 -- the scan is broken", len(found))
+	}
+	if _, ok := found[fcEvent]; !ok {
+		t.Fatalf("control needle: the line matcher never read %q, so its verdict below is not trustworthy", fcEvent)
+	}
+
+	if _, ok := found[alEvent]; !ok {
+		t.Errorf("%q is not on the same physical line as audit.Record( -- %s reads as a non-literal "+
+			"to auditVocabulary.test.ts's scan, which then reports zero missing labels", alEvent, alAdapterFn)
 	}
 }
 

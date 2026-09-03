@@ -257,8 +257,9 @@ that box, and picks the single best one with `betterAnchor`.
   box; the cap is what stops one wide drag from teaching a page-wide rule.
 * **The label** is the anchor's own matched text, put through `regexp.QuoteMeta` and wrapped in
   `(?i)` with `\b` word boundaries where the outer bytes allow one (D-3, precision over recall).
-  It is never the client-supplied `anchor_label`: the server derives its own and overwrites what
-  the wire sent.
+  When a rule is derived, this label is also what lands in the correction row's `anchor_label`,
+  overwriting whatever the wire sent. When no rule is derived, the client's trimmed value stands
+  unchanged — see `TestRLS_APointedCorrectionThatAnchorsToNothingCommitsWithoutARule`.
 
 The worked example, measured off `learned_two_party.pdf`. Both party blocks are stacked
 (`label` / `name` / bare TIN) in page 1's **top** half, so `t1.buyer_tin.sweep` — which is banded
@@ -332,7 +333,10 @@ Both boundaries are enforced, and neither is advisory.
 
 `TestRLS_ALearnedRuleIsNeverLoadedUnderAnotherLayoutsFingerprint` and
 `TestRLS_TheLearnedRuleDoesNotLeaveItsTenant` are the oracles, each with the paired positive
-control that makes its zero mean something.
+control that makes its zero mean something. Neither one can see row-level security being turned
+off, though: measured, both still pass with the policy disabled, because the store's own
+`tenant_id` predicate filters the row. The oracle for the mechanism is
+`TestRLS_ExtractionAnchorRulesCrossTenantSelectRefused`, which reds when the policy is dropped.
 
 ### When a learned rule misfires
 

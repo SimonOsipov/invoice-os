@@ -225,3 +225,44 @@ func TestResolve_Tier1OnlyOutputIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// --- AC-2 under a mixed slice: the claim is a skip, not a stop, and not a global watermark ---
+//
+// Every convergence spec above holds Learned to two rules. Two mutations survive that shape and
+// die only on three: `continue` written as `break` (a claimed field ends the whole loop, so a
+// later field's rule never runs), and `before := len(all)` written as `before := 0` (once ANY
+// rule has produced, every later rule claims its field whether it produced or not).
+func TestResolve_ConvergenceIsPerFieldAcrossAMixedSlice(t *testing.T) {
+	pages := rvCorpusPages(t, rvCorpusInline)
+	currency := rvLearned(t, "rule-currency", "currency", cvLabelCurrency, extraction.RelSameToken, 0, extraction.ShapeCurrency)
+
+	// A superseded rule sits between the winner and another field's rule. Skipping it must not
+	// end the loop.
+	t.Run("a claimed field does not stop the rules behind it", func(t *testing.T) {
+		got := extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{
+			cvBuyerTINRule(t, "newer", cvLabelBuyerTIN),
+			cvBuyerTINRule(t, "older", cvLabelSupplierTIN),
+			currency,
+		}})
+		cvOnly(t, rvFor(got, "buyer_tin"), "newer", cvBuyerTIN, "buyer_tin ahead of a currency rule")
+		cvOnly(t, rvFor(got, "currency"), "rule-currency", cvCurrency, "currency behind a superseded buyer_tin rule")
+	})
+
+	// A barren rule that follows a productive rule for ANOTHER field must still claim nothing.
+	// Emission is counted per rule, so it is the growth of `all` across this one call that
+	// decides -- not whether `all` is non-empty by the time the rule runs.
+	t.Run("a barren rule behind another field's rule still claims nothing", func(t *testing.T) {
+		got := extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{
+			currency,
+			cvBarrenRule(t, "barren"),
+			cvBuyerTINRule(t, "older", cvLabelSupplierTIN),
+		}})
+		buyer := rvFor(got, "buyer_tin")
+		rvFloor(t, buyer, "buyer_tin behind a barren rule that follows a productive currency rule")
+		cvOnly(t, buyer, "older", cvSupplierTIN, "buyer_tin behind a barren rule that follows a productive currency rule")
+		cvOnly(t, rvFor(got, "currency"), "rule-currency", cvCurrency, "currency ahead of a barren buyer_tin rule")
+		if slices.Contains(cvRuleIDs(got), "barren") {
+			t.Errorf("the barren rule stamped a candidate: %+v", got)
+		}
+	})
+}

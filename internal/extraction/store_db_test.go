@@ -179,6 +179,25 @@ func stJobLastError(t *testing.T, ctx context.Context, jobID string) *string {
 	return got
 }
 
+// stLayoutRow is EXTR-14-03's two written columns, plus updated_at: W-05's replay oracle reads
+// all three before and after a replay to prove none of them moved.
+type stLayoutRow struct {
+	Fingerprint *string
+	Anchors     *string
+	UpdatedAt   time.Time
+}
+
+func stJobLayout(t *testing.T, ctx context.Context, jobID string) stLayoutRow {
+	t.Helper()
+	var r stLayoutRow
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT layout_fingerprint, layout_anchors::text, updated_at FROM extraction_jobs WHERE id = $1`,
+		jobID).Scan(&r.Fingerprint, &r.Anchors, &r.UpdatedAt); err != nil {
+		t.Fatalf("read layout columns for job %s: %v", jobID, err)
+	}
+	return r
+}
+
 // stAssertStoreNeverNamesUpdatedAt is the load-bearing half of
 // TestExtractionStore_AdvanceMovesStateAndUpdatedAt: the temporal assertion there cannot
 // tell the trigger firing from the writer naming the column.

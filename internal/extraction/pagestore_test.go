@@ -83,6 +83,10 @@ func (s *psSink) keys() []string {
 type psReader struct {
 	pages int
 	reads int
+
+	// tokens supplies page i+1's Tokens when set (index i). Left nil for specs that do not
+	// care about token content, so Page.Tokens stays nil as before.
+	tokens [][]extraction.Token
 }
 
 func (r *psReader) Name() string    { return "page-store-fake" }
@@ -91,6 +95,10 @@ func (r *psReader) Version() string { return "v1" }
 func (r *psReader) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
 	r.reads++
 	for i := 1; i <= r.pages; i++ {
+		var toks []extraction.Token
+		if i-1 < len(r.tokens) {
+			toks = r.tokens[i-1]
+		}
 		err := onPage(extraction.Page{
 			Number:      i,
 			WidthPt:     612,
@@ -98,6 +106,7 @@ func (r *psReader) Read(_ context.Context, _ extraction.Document, onPage func(ex
 			ImageWidth:  100 + i,
 			ImageHeight: 200 + i,
 			ImagePNG:    []byte(psPNGMagic + fmt.Sprintf("page-%d", i)),
+			Tokens:      toks,
 		})
 		if err != nil {
 			return extraction.PageResult{}, err
@@ -162,7 +171,7 @@ func TestPageStore_WritesOneObjectPerPage(t *testing.T) {
 	raw := fxRead(t, fxNative3)
 	sink := &psSink{}
 
-	images, res, err := psPDFiumStore(sink).Ingest(t.Context(), psTenant, psDoc(raw))
+	images, _, res, err := psPDFiumStore(sink).Ingest(t.Context(), psTenant, psDoc(raw))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -196,7 +205,7 @@ func TestPageStore_IngestRendersExactlyOncePerCall(t *testing.T) {
 	sink := &psSink{}
 	store := &extraction.PageStore{Reader: reader, Sink: sink.put}
 
-	if _, _, err := store.Ingest(t.Context(), psTenant, psDoc([]byte("three pages"))); err != nil {
+	if _, _, _, err := store.Ingest(t.Context(), psTenant, psDoc([]byte("three pages"))); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 	if reader.reads != 1 {
@@ -213,10 +222,10 @@ func TestPageStore_SecondIngestWritesTheSameKeysAndBodies(t *testing.T) {
 	raw := fxRead(t, fxNative3)
 
 	first, second := &psSink{}, &psSink{}
-	if _, _, err := psPDFiumStore(first).Ingest(t.Context(), psTenant, psDoc(raw)); err != nil {
+	if _, _, _, err := psPDFiumStore(first).Ingest(t.Context(), psTenant, psDoc(raw)); err != nil {
 		t.Fatalf("first Ingest: %v", err)
 	}
-	if _, _, err := psPDFiumStore(second).Ingest(t.Context(), psTenant, psDoc(raw)); err != nil {
+	if _, _, _, err := psPDFiumStore(second).Ingest(t.Context(), psTenant, psDoc(raw)); err != nil {
 		t.Fatalf("second Ingest: %v", err)
 	}
 
@@ -258,7 +267,7 @@ func TestPageStore_KeyDependsOnTheDocumentBytes(t *testing.T) {
 		sink *psSink
 	}{{raw, original}, {flipped, altered}} {
 		store := &extraction.PageStore{Reader: &psReader{pages: 3}, Sink: c.sink.put}
-		if _, _, err := store.Ingest(t.Context(), psTenant, psDoc(c.body)); err != nil {
+		if _, _, _, err := store.Ingest(t.Context(), psTenant, psDoc(c.body)); err != nil {
 			t.Fatalf("Ingest: %v", err)
 		}
 	}
@@ -286,7 +295,7 @@ func TestPageStore_ReturnsWhatItWrote(t *testing.T) {
 	raw := fxRead(t, fxNative3)
 	sink := &psSink{}
 
-	images, _, err := psPDFiumStore(sink).Ingest(t.Context(), psTenant, psDoc(raw))
+	images, _, _, err := psPDFiumStore(sink).Ingest(t.Context(), psTenant, psDoc(raw))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -323,18 +332,22 @@ func TestPageStore_ReturnsWhatItWrote(t *testing.T) {
 }
 
 // TestPageStore_ASinkFailureStopsTheIngest: a partial return is what would let a caller commit
-// a row for a page that was never PUT.
+// a row for a page that was never PUT. W-07 (EXTR-14-03) extends this to tokens: a partial
+// token list is the same defect as a partial image list.
 func TestPageStore_ASinkFailureStopsTheIngest(t *testing.T) {
 	raw := fxRead(t, fxNative3)
 	boom := errors.New("page store: the object store refused the PUT")
 	sink := &psSink{failOn: 2, err: boom}
 
-	images, res, err := psPDFiumStore(sink).Ingest(t.Context(), psTenant, psDoc(raw))
+	images, tokens, res, err := psPDFiumStore(sink).Ingest(t.Context(), psTenant, psDoc(raw))
 	if !errors.Is(err, boom) {
 		t.Fatalf("Ingest returned %v, want the sink's error", err)
 	}
 	if images != nil {
 		t.Errorf("Ingest returned %d image(s) alongside its error, want none", len(images))
+	}
+	if tokens != nil {
+		t.Errorf("Ingest returned %d token page(s) alongside its error, want none", len(tokens))
 	}
 	if res.Pages != 0 {
 		t.Errorf("Ingest returned a PageResult reporting %d page(s) alongside its error, want the zero value", res.Pages)
@@ -344,5 +357,59 @@ func TestPageStore_ASinkFailureStopsTheIngest(t *testing.T) {
 	}
 	if len(sink.puts) != 1 {
 		t.Errorf("the sink recorded %d successful PUT(s), want 1 (page 1 only)", len(sink.puts))
+	}
+}
+
+// TestPageStore_ReturnsOneTokenPagePerPage: W-06 (AC-5, EXTR-14-03). Ingest returns one
+// TokenPage per page, in page order, carrying the reader's own tokens untouched -- not a
+// re-derivation of them.
+func TestPageStore_ReturnsOneTokenPagePerPage(t *testing.T) {
+	reader := &psReader{pages: 2, tokens: [][]extraction.Token{
+		{{Text: "page-1-token"}},
+		{{Text: "page-2-token"}},
+	}}
+	sink := &psSink{}
+	store := &extraction.PageStore{Reader: reader, Sink: sink.put}
+
+	_, tokens, res, err := store.Ingest(t.Context(), psTenant, psDoc([]byte("two pages")))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Pages != 2 {
+		t.Fatalf("the reader reported %d page(s), want 2; the assertions below would read the wrong corpus", res.Pages)
+	}
+	if len(tokens) != res.Pages {
+		t.Fatalf("Ingest returned %d TokenPage(s), want %d -- one per page", len(tokens), res.Pages)
+	}
+	for i, tp := range tokens {
+		if tp.Number != i+1 {
+			t.Errorf("token page %d reports page number %d, want %d", i, tp.Number, i+1)
+		}
+		want := fmt.Sprintf("page-%d-token", i+1)
+		if len(tp.Tokens) != 1 || tp.Tokens[0].Text != want {
+			t.Errorf("token page %d carries %+v, want exactly one token with text %q", i+1, tp.Tokens, want)
+		}
+	}
+
+	// Control: the same claim over the real PDFiumReader, where the token count per page is
+	// measured (fxNative3: 3 pages, 3 tokens each) rather than dictated by a fake.
+	rawNative3 := fxRead(t, fxNative3)
+	_, nativeTokens, nativeRes, err := psPDFiumStore(&psSink{}).Ingest(t.Context(), psTenant, psDoc(rawNative3))
+	if err != nil {
+		t.Fatalf("Ingest over %s: %v", fxNative3, err)
+	}
+	if nativeRes.Pages != 3 {
+		t.Fatalf("%s reports %d page(s), want 3", fxNative3, nativeRes.Pages)
+	}
+	if len(nativeTokens) != 3 {
+		t.Fatalf("Ingest over %s returned %d TokenPage(s), want 3", fxNative3, len(nativeTokens))
+	}
+	for i, tp := range nativeTokens {
+		if tp.Number != i+1 {
+			t.Errorf("native token page %d reports page number %d, want %d", i, tp.Number, i+1)
+		}
+		if len(tp.Tokens) != 3 {
+			t.Errorf("native token page %d carries %d token(s), want 3 (measured on this fixture)", i+1, len(tp.Tokens))
+		}
 	}
 }

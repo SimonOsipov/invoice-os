@@ -120,8 +120,15 @@ and `PDFiumReader.Read` renders and PNG-encodes every page regardless of what th
 — measured: `Extract` over the three-page fixture releases three render bitmaps. So a fleet that
 wires `PDFiumExtractor` beside `PageStore` renders every document twice and pays the 110 ms
 compute term again, which takes an 800-page worst case from 240 s to 328 s of the 480 s budget.
-Nothing wires it today: `cmd/submission/main.go` builds `MockExtractor`. Re-derive the cap, or
-give the extractor a text-only read path, before that changes.
+Nothing wires it today: `selectExtractor` returns `MockExtractor` unless `EXTRACTOR=docling`
+(`docs/docling-sidecar.md`).
+
+`ExtractWorker.Text` is a second route to the same double read, and it is the one that will fire
+first. `Work` calls `readText` through that field after `Pages.Ingest`, so a fleet that fills it
+with a *local* reader renders every document twice for the same reason. `cmd/submission/main.go`
+passes `nil` today and EXTR-17-03 is the step that fills it; the reader it names there is a
+`DoclingReader`, whose cost is an HTTP round trip to the sidecar rather than a second local
+render. Re-derive the cap before either field is wired to a local reader.
 
 Refusing beats truncating because a timeout is not a graceful failure. River retries three times,
 each attempt re-renders from scratch and causes a fresh `document.read` audit row, and the job

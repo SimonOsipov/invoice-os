@@ -3,9 +3,10 @@
 // under that layout's fingerprint, and a SECOND job over the same layout resolves a field
 // Tier-1 cannot reach at all.
 //
-// What this file does NOT prove: nothing in production calls Resolve, so the chain stops one
-// rung short of a deployed document read. That rung is EXTR-17's Core AC 1. No deployed or
-// browser oracle belongs here (D-4, P-23).
+// What this file does NOT prove: Work composes Resolve only on its text branch, and
+// cmd/submission passes a nil Text (TestSubmissionMain_WiresTheQueueSeams), so the chain still
+// stops one rung short of a DEPLOYED document read. That rung is EXTR-17's Core AC 1. No
+// deployed or browser oracle belongs here (D-4, P-23).
 //
 // Shares store_db_test.go's TestMain, per-role pools and SINGLE skip site (stRequire), so it
 // adds no second skip site -- scripts/ci/rls-test-gate.sh fails the step on any skip and

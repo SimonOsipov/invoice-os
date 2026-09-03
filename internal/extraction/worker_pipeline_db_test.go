@@ -288,6 +288,9 @@ func TestRLS_ExtractWorkerWritesReconciledResults(t *testing.T) {
 	stAssertJobState(t, ctx, xid, "succeeded")
 	rows := wpResults(t, ctx, xid)
 
+	if len(wpCorpusTier1) == 0 {
+		t.Fatalf("wpCorpusTier1 is empty; the loop below would assert nothing and the set compare would hold over one name")
+	}
 	want := []string{"line_items"}
 	for _, f := range wpCorpusTier1 {
 		want = append(want, f.name)
@@ -691,4 +694,149 @@ func TestRLS_ExtractWorkerDoesNotSeeAnotherTenantsLearnedRule(t *testing.T) {
 	rows := wpResults(t, ctx, xid)
 	wpAssertRankZero(t, rows, "supplier_tin", stPtr(wpSupplierTIN), nil)
 	wpAssertRankZero(t, rows, "buyer_tin", stPtr(wpBuyerTIN), nil)
+}
+
+// --- adversarial (EXTR-17-02 Stage 4) -------------------------------------------------
+
+// Stage 1 edge case 3, characterised rather than fixed. TextChars counts TOKENS only, so a
+// document whose text landed entirely in table cells reads as unreadable and the line items the
+// reader DID find are discarded. Implausible (cells come from the same text layer) but silent,
+// and the branch order is what makes it so. Pinned here so a later change to that order is a
+// deliberate edit rather than a surprise.
+func TestRLS_ExtractWorkerDiscardsFoundLinesWhenNoTokenCarriesText(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	cell := func(row, col int, text string) extraction.TableCell {
+		return extraction.TableCell{Row: row, Col: col, RowSpan: 1, ColSpan: 1, Text: text}
+	}
+	// A real table, and not one token anywhere: the premise both assertions rest on.
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tables: []extraction.Table{{Rows: 2, Cols: 4, Cells: []extraction.TableCell{
+			cell(0, 0, "Description"), cell(0, 1, "Qty"), cell(0, 2, "Unit Price"), cell(0, 3, "Amount"),
+			cell(1, 0, "Widget A"), cell(1, 1, "2"), cell(1, 2, "100.00"), cell(1, 3, "200.00"),
+		}}},
+	}
+	if len(page.Tokens) != 0 || len(page.Tables) == 0 {
+		t.Fatalf("the fixture carries %d token(s) and %d table(s); this spec needs zero and at least one",
+			len(page.Tokens), len(page.Tables))
+	}
+	// LineItems really does find the row, so the discard below is a loss and not an empty set.
+	if lines := extraction.LineItems([]extraction.Page{page}); len(lines) == 0 {
+		t.Fatalf("LineItems found no line in the fixture; the discard this spec pins would be vacuous")
+	}
+
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+
+	const riverJobID = int64(917011)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	rows := wpResults(t, ctx, xid)
+	if len(rows) != 1 {
+		t.Fatalf("the job wrote %d row(s), want the single unreadable verdict: %v", len(rows), rows)
+	}
+	wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+}
+
+// Stage 1 edge case 4. Ambiguity reaches the DB as rank 1..N alternatives on the WIRED path
+// too, which is correct and not a defect -- it is why AC-4's "one rank-0 row per populated
+// cell" is scoped to line_items[...] names and never asserted over the whole set. Alternatives
+// carry no reason of their own; only the decided reading does.
+func TestRLS_ExtractWorkerWritesAlternativesAboveRankZeroOnTheTextPath(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	split := dcSplitWords(t, dcReadNamedGolden(t, dcCorpusGoldenName))
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), wpDoclingReader(t, split), wpStoreRules(t).load, &wkAuditRecorder{})
+
+	const riverJobID = int64(917012)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	rows := wpResults(t, ctx, xid)
+
+	// The premise: without an ambiguous field there is no alternative to find.
+	wpAssertRankZero(t, rows, "supplier_tin", stPtr(wpSupplierTIN), stPtr("ambiguous"))
+
+	alts := []wpRow{}
+	for _, r := range rows {
+		if r.name == "supplier_tin" && r.rank > 0 {
+			alts = append(alts, r)
+		}
+	}
+	if len(alts) == 0 {
+		t.Fatalf("supplier_tin reads ambiguous but stored no rank>0 row; the alternatives never reached the table: %v", rows)
+	}
+	slices.SortFunc(alts, func(a, b wpRow) int { return a.rank - b.rank })
+	for i, a := range alts {
+		if a.rank != i+1 {
+			t.Errorf("supplier_tin alternative %d carries rank %d, want %d -- writeFieldResultsTx numbers them 1..N", i, a.rank, i+1)
+		}
+		if a.reason != nil {
+			t.Errorf("alternative %v carries reason_code %s; only the decided reading does", a, wkStr(a.reason))
+		}
+		if a.value == nil {
+			t.Errorf("alternative %v carries a NULL value; an alternative with no reading is not an alternative", a)
+		}
+	}
+}
+
+// Stage 1 edge case 5. field_count and flagged_count are asserted RELATIONALLY against the rows
+// the same transaction wrote, never as literals: the wired path's magnitude moves with the
+// fixture (Reconcile emits ten header fields, a line_items block and one row per populated
+// cell), so a pinned number would drift into a false red.
+func TestRLS_ExtractWorkerAuditCountsAgreeWithTheRowsItWrote(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	rec := &wkAuditRecorder{}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t),
+		wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName)), wpStoreRules(t).load, rec)
+
+	const riverJobID = int64(917013)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	rows := wpResults(t, ctx, xid)
+
+	wantFields, wantFlagged := 0, 0
+	for _, r := range rows {
+		if r.rank != 0 {
+			continue
+		}
+		wantFields++
+		if r.reason != nil {
+			wantFlagged++
+		}
+	}
+	if wantFields == 0 {
+		t.Fatalf("no rank-0 row among %v; both comparisons below would be against zero", rows)
+	}
+
+	auditRows := wkAuditRowsForJob(t, ctx, tenantID, xid)
+	if len(auditRows) != 1 {
+		t.Fatalf("the job wrote %d extraction.* audit row(s), want exactly 1: %v", len(auditRows), auditRows)
+	}
+	got, ok := auditRows[0].payload["field_count"].(float64)
+	if !ok {
+		t.Fatalf("the stored payload carries no numeric field_count: %v", auditRows[0].payload)
+	}
+	if int(got) != wantFields {
+		t.Errorf("the audit row reports field_count %d, want the %d rank-0 row(s) the same transaction wrote", int(got), wantFields)
+	}
+	gotFlagged, ok := auditRows[0].payload["flagged_count"].(float64)
+	if !ok {
+		t.Fatalf("the stored payload carries no numeric flagged_count: %v", auditRows[0].payload)
+	}
+	if int(gotFlagged) != wantFlagged {
+		t.Errorf("the audit row reports flagged_count %d, want the %d rank-0 row(s) carrying a reason_code", int(gotFlagged), wantFlagged)
+	}
 }

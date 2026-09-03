@@ -24,11 +24,11 @@
 // unresolvable and the spreadsheet-path diff can't be observed. Verified as PR evidence instead.
 //
 // AC #6 (Core AC 8's extraction half) is NOT met by this story -- D-19
-// (.ralph/EXTR-06-finalized.md), now owned by EXTR-17 The Pipeline Runs End To End: nothing wires
-// Reconcile's output into the worker yet, and extraction_field_results carries no line-item
-// values, so no `line_items=missing` reason row is ever written. There is no oracle for that
-// absence, so asserting it would be vacuous; this comment is the story's evidence for AC #6
-// instead of a test row.
+// (.ralph/EXTR-06-finalized.md), now owned by EXTR-17 The Pipeline Runs End To End. Work does
+// compose Reconcile, but only on its text branch, and cmd/submission passes a nil Text
+// (TestSubmissionMain_WiresTheQueueSeams), so a deployed import still writes no line-item value
+// and no `line_items=missing` row. There is no oracle for that absence, so asserting it would be
+// vacuous; this comment is the story's evidence for AC #6 instead of a test row.
 package importer
 
 import (

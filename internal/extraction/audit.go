@@ -15,8 +15,8 @@ type FailureKind string
 
 // One value per error path in Work()'s `if err == nil` chain. Rendering the pages and
 // committing the page rows are two stages that fail for different reasons and are fixed in
-// different places. text_not_read is the text read's path; EXTR-17-02 wires the stage that
-// sets it.
+// different places. text_not_read is the text read's path
+// (TestExtractWorker_FailureKindPerStage drives one lever per value).
 const (
 	FailureDocumentUnavailable FailureKind = "document_unavailable"
 	FailurePagesNotRendered    FailureKind = "pages_not_rendered"

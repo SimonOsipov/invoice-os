@@ -2437,9 +2437,10 @@ func TestRLS_ExtractWorkerWritesAlternativeRowsAtRankOneAndTwo(t *testing.T) {
 	}
 }
 
-// EXTR-17-01 AC-10. The seam lands unwired: no call site sets Text, so Work still takes the
-// Extractor branch byte for byte. A nil PageReader is exactly what selects it, so this pins the
-// unwired path and reds the day something starts reading text without saying so.
+// EXTR-17-01 AC-10. The seam lands unwired: no PRODUCTION call site sets Text, so Work still
+// takes the Extractor branch byte for byte (worker_pipeline_db_test.go's specs set it, which is
+// what makes the other branch observable). A nil PageReader is exactly what selects it, so this
+// pins the unwired path and reds the day something starts reading text without saying so.
 //
 // In this file, not worker_internal_test.go: Work's first act after the nil-Audit guard is
 // db.WithinTenantTx, so it needs a pool.

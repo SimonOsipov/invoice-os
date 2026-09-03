@@ -754,3 +754,102 @@ func clCorrectionsByMethod(t *testing.T, ctx context.Context, jobID, method stri
 	}
 	return n
 }
+
+// --- AC-6 (ordering) : the rule INSERT is the LAST of the four writes --------------------
+
+// clOrderingTrigger arms a BEFORE INSERT trigger on extraction_anchor_rules that inspects, from
+// INSIDE the same transaction, whether this job's correction row and this tenant's audit row are
+// already there. whenPresent=true raises if they are; false raises if they are not. SECURITY
+// DEFINER so the probe reads past RLS rather than past the tenant GUC.
+func clOrderingTrigger(t *testing.T, ctx context.Context, tenantID, jobID string, whenPresent bool) func() {
+	t.Helper()
+	h := stRequire(t)
+	name := "cl_anchor_rule_order_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+
+	if _, err := h.super.Exec(ctx, fmt.Sprintf(
+		`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$
+		 DECLARE siblings boolean;
+		 BEGIN
+		   siblings := EXISTS (SELECT 1 FROM extraction_field_corrections
+		                        WHERE extraction_job_id = '%s'::uuid)
+		           AND EXISTS (SELECT 1 FROM audit_log
+		                        WHERE tenant_id = '%s'::uuid AND event = '%s');
+		   IF siblings = %t THEN
+		     RAISE EXCEPTION 'ordering probe: siblings=%%', siblings USING ERRCODE = 'check_violation';
+		   END IF;
+		   RETURN NEW;
+		 END; $$`, name, jobID, tenantID, cxEvent, whenPresent)); err != nil {
+		t.Fatalf("create the ordering-probe function: %v", err)
+	}
+	dropped := false
+	drop := func() {
+		if dropped {
+			return
+		}
+		dropped = true
+		if _, err := h.super.Exec(context.Background(),
+			fmt.Sprintf(`DROP FUNCTION IF EXISTS %s() CASCADE`, name)); err != nil {
+			t.Errorf("drop the ordering-probe function: %v", err)
+		}
+	}
+	t.Cleanup(drop)
+
+	if _, err := h.super.Exec(ctx, fmt.Sprintf(
+		`CREATE TRIGGER %s BEFORE INSERT ON extraction_anchor_rules FOR EACH ROW
+		 WHEN (NEW.tenant_id = '%s'::uuid) EXECUTE FUNCTION %s()`,
+		name, tenantID, name)); err != nil {
+		t.Fatalf("create the ordering-probe trigger: %v", err)
+	}
+	return drop
+}
+
+// AC-6's rollback assertions only mean "all or nothing" if the rule INSERT fires with the other
+// three writes already in the transaction. Reorder it to the front and every zero in
+// TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit still holds --
+// vacuously, because those rows were never written. This is the oracle for the order.
+//
+// Both arms run the SAME request against the SAME fixture and must answer differently, so
+// neither status is a trigger that simply always fires.
+func TestRLS_TheAnchorRuleWriteIsTheLastOfTheFourWrites(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR14-06-ORDER")
+	_, pages := clLayout(t, ctx, f.jobID)
+	region := clTokenRegion(t, pages, clTINToken)
+	body := clPointedBody(clTINValue, region, "")
+
+	// Arm 1: raise only if the correction row and the audit row are ALREADY visible.
+	var seen cxSeamCall
+	dropA := clOrderingTrigger(t, ctx, f.tenantID, f.jobID, true)
+	w := cxServe(t, f.reqCtx, f.jobID, clField, body, cxClearingApplier(&seen), cxAuditor(nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("arm 1: status = %d, want %d -- the rule INSERT did not see the correction row and the audit row, so it does not run last and AC-6's rollback zeros are vacuous (body=%q)",
+			w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if seen.calls != 1 {
+		t.Fatalf("arm 1: the invoice seam ran %d time(s), want 1", seen.calls)
+	}
+	if n := cxCorrectionRows(t, ctx, f.jobID); n != 0 {
+		t.Errorf("arm 1: %d correction row(s) survived, want 0", n)
+	}
+	dropA()
+
+	// Arm 2: the inverse condition on the same request. It must COMMIT, which is what proves
+	// arm 1's 500 came from the siblings being present rather than from any insert at all.
+	dropB := clOrderingTrigger(t, ctx, f.tenantID, f.jobID, false)
+	w2 := cxServe(t, f.reqCtx, f.jobID, clField, body, cxClearingApplier(&seen), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("arm 2: status = %d, want %d -- the inverse probe fired, so the rule INSERT ran BEFORE the correction row or the audit row (body=%q)",
+			w2.Code, http.StatusCreated, w2.Body.String())
+	}
+	dropB()
+
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("arm 2: %d anchor rule(s), want 1", n)
+	}
+	if n := cxCorrectionRows(t, ctx, f.jobID); n != 1 {
+		t.Errorf("arm 2: %d correction row(s), want 1", n)
+	}
+	if rows := cxCorrectionAudit(t, ctx, f.tenantID); len(rows) != 1 {
+		t.Errorf("arm 2: %d %s audit row(s), want 1", len(rows), cxEvent)
+	}
+}

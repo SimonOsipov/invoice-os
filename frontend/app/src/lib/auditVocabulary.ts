@@ -1,4 +1,4 @@
-// Human labels for every audit event the Go tree emits: 39 identifiers across 10 domains.
+// Human labels for every audit event the Go tree emits: 40 identifiers across 10 domains.
 // auditVocabulary.test.ts scans audit.Record( call sites, so a new writer without a label
 // here fails the suite rather than rendering a raw identifier at the user.
 //
@@ -62,6 +62,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'extraction.succeeded': { label: 'Extraction completed', domain: 'documents', outcome: 'good' },
   'extraction.failed': { label: 'Extraction failed', domain: 'documents', outcome: 'bad' },
   'extraction.field_corrected': { label: 'Field corrected', domain: 'documents' },
+  'extraction.anchor.learned': { label: 'Layout rule learned', domain: 'documents' },
 
   'membership.suspended': { label: 'Member suspended', domain: 'memberships', outcome: 'neutral' },
   'membership.reactivated': { label: 'Member reactivated', domain: 'memberships', outcome: 'neutral' },

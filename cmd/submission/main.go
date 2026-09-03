@@ -383,8 +383,15 @@ func newFieldCorrectedAuditor() extraction.RecordFieldCorrected {
 // spelled here for newFieldCorrectedAuditor's reason
 // (TestNewAnchorLearnedAuditor_WritesExactlyTheSixKeys).
 func newAnchorLearnedAuditor() extraction.RecordAnchorLearned {
-	return func(context.Context, pgx.Tx, string, extraction.AnchorLearned) error {
-		return nil
+	return func(ctx context.Context, tx pgx.Tx, subject string, a extraction.AnchorLearned) error {
+		return audit.Record(ctx, tx, subject, "extraction.anchor.learned", map[string]any{
+			"invoice_id":         a.InvoiceID,
+			"field":              a.FieldName,
+			"layout_fingerprint": a.LayoutFingerprint,
+			"anchor_rule_id":     a.RuleID,
+			"relation":           string(a.Relation),
+			"shape":              string(a.Shape),
+		})
 	}
 }
 

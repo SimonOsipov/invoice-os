@@ -324,10 +324,22 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
-		// Last of the four writes, so a failure here rolls the other three back
-		// (TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit).
+		// Fourth and fifth of the five writes, so a failure in either rolls the rest back
+		// (TestRLS_AFailedAnchorLearnedEmitRollsBackTheRuleTheCorrectionAndTheInvoice). The
+		// emit follows the rule write because it carries the row's id.
 		if learnedOK {
-			if _, err := appendAnchorRuleTx(ctx, tx, in.caller.TenantID, fingerprint, learned); err != nil {
+			ruleID, err := appendAnchorRuleTx(ctx, tx, in.caller.TenantID, fingerprint, learned)
+			if err != nil {
+				return err
+			}
+			if err := in.recordLearned(ctx, tx, in.caller.Subject, AnchorLearned{
+				InvoiceID:         invoiceID,
+				FieldName:         in.field,
+				LayoutFingerprint: fingerprint,
+				RuleID:            ruleID,
+				Relation:          learned.Rule.Relation.Kind,
+				Shape:             learned.Rule.Shape,
+			}); err != nil {
 				return err
 			}
 		}

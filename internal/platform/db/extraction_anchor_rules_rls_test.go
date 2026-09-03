@@ -1,5 +1,7 @@
-// RLS, grant and constraint suite for `extraction_anchor_rules`. Written before its migration
-// exists, so every case fails with an explicit 42P01 until that migration lands.
+// RLS, grant and constraint suite for `extraction_anchor_rules`. failIfUndefinedAnchorRules
+// turns a not-yet-migrated table into a self-explaining 42P01 message instead of a raw driver
+// error — the shape every case here degrades to if run against a DB missing this table's
+// migration, rather than a hard requirement of the current schema.
 //
 // Rows are seeded per test, never in harness.seed(): a missing table must fail only these
 // cases, not the whole package. Each rejected statement gets its own db.WithinTenantTx,
@@ -1147,5 +1149,112 @@ func TestRLS_ExtractionAnchorRulesUqCarriesACompositeForeignKey(t *testing.T) {
 		`INSERT INTO ear_fk_probe (tenant_id, anchor_rule_id) VALUES ($1, $2)`, h.tenantB, rowA)
 	if got := pgCode(err); got != "23503" {
 		t.Fatalf("a child row pairing tenant B with tenant A's rule returned SQLSTATE %q (%v), want 23503", got, err)
+	}
+}
+
+// A-09 (QA, Mode B): the table becomes INSERT-able for the first time in this subtask, so the
+// WITH CHECK half of tenant_isolation (reused from USING, per the architect's finding) is
+// exercised here for the first time too. Queried by id, never by tenant_id — a tenant_id
+// predicate would filter the row itself and pass even with the policy disabled.
+func TestRLS_ExtractionAnchorRulesCrossTenantInsertRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	crossID := uuid.NewString()
+	ownID := uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_anchor_rules WHERE id = ANY($1)`, []string{crossID, ownID})
+	}()
+
+	// Tenant B's session, a row naming tenant A: the WITH CHECK must refuse it before it lands.
+	err := db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, earInsert, crossID, h.tenantA, earFingerprint(), earField, earRuleBody, 1)
+		return e
+	})
+	if failIfUndefinedAnchorRules(t, "cross-tenant INSERT as invoice_app", err) {
+		return
+	}
+	assertRLSViolation(t, err)
+	if n := earRowCount(t, crossID); n != 0 {
+		t.Errorf("rows after the refused cross-tenant INSERT = %d, want 0", n)
+	}
+
+	// Positive half, own transaction: the identical statement shape succeeds for B's own tenant
+	// — the refusal above is the policy, not a broken statement or a missing grant.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, earInsert, ownID, h.tenantB, earFingerprint(), earField, earRuleBody, 1)
+		return e
+	}); err != nil {
+		t.Fatalf("own-tenant INSERT of the same shape: want success, got: %v", err)
+	}
+	if n := earRowCount(t, ownID); n != 1 {
+		t.Errorf("rows after tenant B's own-tenant INSERT = %d, want 1", n)
+	}
+}
+
+// A-10 (QA, Mode B): Postgres sequences are not transactional — nextval is never undone by a
+// rollback. The resolver reads "newest wins" by seq DESC, so what matters is not that seq stays
+// contiguous (it does not) but that a value consumed by a row which never lands is never handed
+// to a later row instead. Both INSERTs commit; the middle one deliberately does not.
+func TestRLS_ExtractionAnchorRulesRolledBackInsertNeverRecyclesItsSeq(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	idBefore, idAfter := uuid.NewString(), uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM extraction_anchor_rules WHERE id = ANY($1)`, []string{idBefore, idAfter})
+	}()
+
+	fingerprint := earFingerprint()
+	var seqBefore int64
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, earInsert+" RETURNING seq",
+			idBefore, h.tenantA, fingerprint, earField, earRuleBody, 1).Scan(&seqBefore)
+	}); err != nil {
+		if failIfUndefinedAnchorRules(t, "committed INSERT before the rollback", err) {
+			return
+		}
+		t.Fatalf("committed INSERT before the rollback: %v", err)
+	}
+
+	// A transaction that consumes a seq and then never commits.
+	rolledBackID := uuid.NewString()
+	var seqRolledBack int64
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the rolled-back transaction: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA); err != nil {
+		t.Fatalf("set app.current_tenant on the rolled-back transaction: %v", err)
+	}
+	if err := tx.QueryRow(ctx, earInsert+" RETURNING seq",
+		rolledBackID, h.tenantA, fingerprint, earField, earRuleBody, 1).Scan(&seqRolledBack); err != nil {
+		t.Fatalf("INSERT inside the transaction that will roll back: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("roll back: %v", err)
+	}
+	if n := earRowCount(t, rolledBackID); n != 0 {
+		t.Fatalf("rows for the rolled-back id = %d, want 0 — the row must not have landed", n)
+	}
+
+	var seqAfter int64
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, earInsert+" RETURNING seq",
+			idAfter, h.tenantA, fingerprint, earField, earRuleBody, 1).Scan(&seqAfter)
+	}); err != nil {
+		t.Fatalf("committed INSERT after the rollback: %v", err)
+	}
+
+	// Strict, not exact gaps: a concurrent test in this package can also consume a nextval.
+	if !(seqRolledBack > seqBefore) {
+		t.Fatalf("seq consumed by the rolled-back row = %d, want > %d (the committed row before it)", seqRolledBack, seqBefore)
+	}
+	if !(seqAfter > seqRolledBack) {
+		t.Fatalf("seq of the row after the rollback = %d, want > %d — a recycled seq would let a "+
+			"rolled-back insert's slot silently go to a later row, breaking the seq DESC recency read",
+			seqAfter, seqRolledBack)
 	}
 }

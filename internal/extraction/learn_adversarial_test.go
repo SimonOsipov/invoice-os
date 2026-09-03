@@ -7,6 +7,7 @@ package extraction_test
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -135,6 +136,61 @@ func TestAnchorLabelText_TruncatesOnAByteBoundary(t *testing.T) {
 			}
 			if len(got) != c.wantBytes {
 				t.Errorf("len(AnchorLabelText) = %d, want exactly %d bytes", len(got), c.wantBytes)
+			}
+		})
+	}
+}
+
+// A JSON string where the schema declares a number (page is int) must be refused, not silently
+// coerced -- encoding/json never coerces string<->number, so this also guards against a future
+// switch to a decoder that does.
+func TestAnchorObservationsCodec_RefusesATypeMismatchedField(t *testing.T) {
+	raw := []byte(`[{"label":"total","text":"Total","page":"1","band":0,"x0":0,"y0":0,"x1":0.1,"y1":0.1}]`)
+
+	got, err := extraction.UnmarshalAnchorObservations(raw)
+	if err == nil {
+		t.Fatalf("UnmarshalAnchorObservations(page as a string) = %+v, err = nil, want an error", got)
+	}
+	if !strings.Contains(err.Error(), "layout_anchors:") {
+		t.Errorf("UnmarshalAnchorObservations(page as a string) error = %q, want it to contain %q", err.Error(), "layout_anchors:")
+	}
+}
+
+// A duplicate key in one element is not a decode error -- encoding/json applies both and keeps
+// the last -- so the codec must reflect that behaviour rather than erroring or keeping the first.
+func TestAnchorObservationsCodec_DuplicateKeyKeepsTheLastValue(t *testing.T) {
+	raw := []byte(`[{"label":"total","label":"vat","text":"Total","page":1,"band":0,"x0":0,"y0":0,"x1":0.1,"y1":0.1}]`)
+
+	got, err := extraction.UnmarshalAnchorObservations(raw)
+	if err != nil {
+		t.Fatalf("UnmarshalAnchorObservations(duplicate key) error = %v, want nil", err)
+	}
+	want := []extraction.AnchorObservation{{Label: "vat", Text: "Total", Page: 1, Band: 0, X0: 0, Y0: 0, X1: 0.1, Y1: 0.1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnmarshalAnchorObservations(duplicate key) = %+v, want %+v -- the second occurrence wins", got, want)
+	}
+}
+
+// AnchorLabelText returns "" -- not a panic, not the token's full text -- when there is nothing
+// to report: an empty token, a token whose text does not match the observation's own label, and
+// a label the lexicon does not define at all.
+func TestAnchorLabelText_ReturnsEmptyWhenNothingMatches(t *testing.T) {
+	box := extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.2, Y1: 0.12}
+	knownObs := extraction.AnchorObservation{Label: "total", Page: 1, Band: 0, X0: box.X0, Y0: box.Y0, X1: box.X1, Y1: box.Y1}
+	unknownObs := extraction.AnchorObservation{Label: "not_a_real_label", Page: 1, Band: 0, X0: box.X0, Y0: box.Y0, X1: box.X1, Y1: box.Y1}
+
+	for _, c := range []struct {
+		name string
+		obs  extraction.AnchorObservation
+		tok  extraction.Token
+	}{
+		{"empty token text", knownObs, extraction.Token{Text: "", Region: box}},
+		{"known label, non-matching token", knownObs, extraction.Token{Text: "Invoice No: 5", Region: box}},
+		{"label names no lexicon entry", unknownObs, extraction.Token{Text: "Total: 5", Region: box}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := extraction.AnchorLabelText(c.obs, c.tok); got != "" {
+				t.Errorf("AnchorLabelText(%+v, %+v) = %q, want \"\"", c.obs, c.tok, got)
 			}
 		})
 	}

@@ -7,8 +7,11 @@
 package extraction_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -321,5 +324,58 @@ func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed; that invalidates every stored rule and needs a FingerprintVersion bump, and EXTR-16 does not touch the lexicon",
 				name, got, want)
 		}
+	}
+}
+
+// --- EXTR-14-02 -------------------------------------------------------------
+
+// O-02: AnchorObservations on corpus_two_column.pdf returns exactly seven observations, in the
+// exact order Fingerprint hashes them. Row 3 (buyer_name) and row 5 (supplier_tin) sit in band
+// 2 because the layout is two-column; row 5 is the buyer's own TIN, caught by supplier_tin's
+// optional party word -- the Tier-1 defect EXTR-14-09 exploits, not a bug in this ordering.
+func TestAnchorObservations_OrdersTheTwoColumnCorpusExactly(t *testing.T) {
+	obs := extraction.AnchorObservations(rvCorpusPages(t, "corpus_two_column.pdf"))
+
+	if len(obs) != 7 {
+		t.Fatalf("len(AnchorObservations(corpus_two_column.pdf)) = %d, want 7: %+v", len(obs), obs)
+	}
+
+	wantLabel := []string{"invoice_no", "issue_date", "supplier_name", "buyer_name", "supplier_tin", "supplier_tin", "total"}
+	wantBand := []int{0, 0, 0, 2, 0, 2, 0}
+	for i, o := range obs {
+		if o.Page != 1 {
+			t.Errorf("obs[%d].Page = %d, want 1", i, o.Page)
+		}
+		if o.Label != wantLabel[i] || o.Band != wantBand[i] {
+			t.Errorf("obs[%d] = {Label:%q Band:%d}, want {Label:%q Band:%d}", i, o.Label, o.Band, wantLabel[i], wantBand[i])
+		}
+	}
+}
+
+// O-03: joining label:band over AnchorObservations and hashing reproduces Fingerprint exactly,
+// for all six corpus layouts -- the hashed set and the stored observation list are the same
+// list by construction and can never drift apart.
+func TestAnchorObservations_ProjectionReproducesFingerprint(t *testing.T) {
+	sawNonEmpty := false
+	for _, name := range corpusLayouts {
+		pages := rvCorpusPages(t, name)
+		obs := extraction.AnchorObservations(pages)
+		if len(obs) > 0 {
+			sawNonEmpty = true
+		}
+
+		elems := make([]string, len(obs))
+		for i, o := range obs {
+			elems[i] = o.Label + ":" + strconv.Itoa(o.Band)
+		}
+		sum := sha256.Sum256([]byte(strings.Join(elems, "|")))
+		want := extraction.FingerprintVersion + ":" + hex.EncodeToString(sum[:])
+
+		if got := extraction.Fingerprint(pages); got != want {
+			t.Errorf("%s: Fingerprint(pages) = %q, want %q computed from AnchorObservations' own (label,band) projection", name, got, want)
+		}
+	}
+	if !sawNonEmpty {
+		t.Fatal("every layout yielded zero observations; the equality above would pass vacuously")
 	}
 }

@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
@@ -141,20 +143,98 @@ func cwGolden(layout string) string {
 // extraction_field_results against corpusExpect, scoped to HeaderFields and to mode.
 //
 // base is the first river_job_id; each layout takes the next one.
-//
-// NOT IMPLEMENTED: EXTR-17-04 Stage 2.5 authors the assertions, Stage 3 authors this walk.
-// wpDoclingReader already replays arbitrary golden bytes and wpWorker already takes any reader;
-// only wpCorpusOpener (worker_pipeline_db_test.go:122-125) is pinned to one fixture, so pass
-// &wkOpener{body: fxRead(t, layout)} rather than changing it.
 func cwScoreWired(t *testing.T, ctx context.Context, what string, base int64, reader cwReaderKind, mode cwRankMode, seed cwSeeder) cwScore {
 	t.Helper()
-	_ = ctx
-	_ = base
-	_ = reader
-	_ = seed
-	t.Fatalf("cwScoreWired is not implemented, so %q was never measured through %s: Work must run once per corpusExpect layout on its own tenant, and the rows read back from extraction_field_results scored against corpusExpect over HeaderFields at %s",
-		what, reader, mode)
-	return cwScore{}
+
+	corpusRequireCommitted(t)
+	if len(corpusExpect) == 0 {
+		t.Fatal("corpusExpect is empty; the walk below would score 0/0 and every rate assertion would read NaN")
+	}
+
+	s := cwScore{got: map[acPair]string{}}
+	for i, want := range corpusExpect {
+		tenantID, documentID := wkFixture(t, ctx)
+
+		// The seeder is keyed by fingerprint, and Work computes it over the PDFium tokens
+		// whatever the text reader is (worker.go hoists it out of Pages.Ingest).
+		fingerprint := extraction.Fingerprint(rvCorpusPages(t, want.file))
+		if seed != nil {
+			seed(t, ctx, tenantID, want.file, fingerprint)
+		}
+
+		var text extraction.PageReader = extraction.NewPDFiumReader()
+		if reader == cwDocling {
+			text = wpDoclingReader(t, dcReadNamedGolden(t, cwGolden(want.file)))
+		}
+		rules := wpStoreRules(t)
+		ew := wpWorker(t, wkOK(), &wkOpener{body: fxRead(t, want.file)}, text, rules.load, &wkAuditRecorder{})
+
+		riverJobID := base + int64(i)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("%s: Work over %s: %v", what, want.file, err)
+		}
+
+		asked, served := rules.wpOnlyCall(t)
+		run := cwRun{
+			layout:      want.file,
+			fingerprint: asked,
+			learned:     len(served),
+			rows:        wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID)),
+		}
+
+		byField := map[string][]wpRow{}
+		for _, row := range run.rows {
+			byField[row.name] = append(byField[row.name], row)
+		}
+		for _, field := range extraction.HeaderFields {
+			// decided is rank-0-and-non-NULL: a field Reconcile left undecided writes a row
+			// carrying a reason and no value, so row presence is not the same question.
+			var zero *string
+			var anyValue []string
+			for _, row := range byField[field] {
+				if row.value == nil {
+					continue
+				}
+				anyValue = append(anyValue, *row.value)
+				if row.rank == 0 {
+					zero = row.value
+				}
+			}
+			if zero != nil {
+				run.decided++
+			}
+
+			values, named := want.fields[field]
+			if !named {
+				continue
+			}
+			if len(values) == 0 {
+				t.Fatalf("%s expects %s with no value; the pair would count as a miss for the wrong reason", want.file, field)
+			}
+			pair := acPair{file: want.file, field: field}
+			s.total++
+			if zero != nil {
+				s.got[pair] = *zero
+			}
+
+			hit := zero != nil && slices.Contains(values, *zero)
+			if mode == cwAnyRank {
+				hit = false
+				for _, v := range anyValue {
+					if slices.Contains(values, v) {
+						hit = true
+					}
+				}
+			}
+			if hit {
+				s.hits++
+				continue
+			}
+			s.missed = append(s.missed, pair)
+		}
+		s.runs = append(s.runs, run)
+	}
+	return s
 }
 
 // cwRequireWalk fails when the walk did not cover the corpus. Every assertion below quantifies

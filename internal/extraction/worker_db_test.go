@@ -2437,10 +2437,11 @@ func TestRLS_ExtractWorkerWritesAlternativeRowsAtRankOneAndTwo(t *testing.T) {
 	}
 }
 
-// EXTR-17-01 AC-10. The seam lands unwired: no PRODUCTION call site sets Text, so Work still
-// takes the Extractor branch byte for byte (worker_pipeline_db_test.go's specs set it, which is
-// what makes the other branch observable). A nil PageReader is exactly what selects it, so this
-// pins the unwired path and reds the day something starts reading text without saying so.
+// EXTR-17-01 AC-10. A nil Text keeps Work on the Extractor branch byte for byte
+// (worker_pipeline_db_test.go's specs set Text, which is what makes the other branch
+// observable). EXTR-17-03 wired cmd/submission/main.go's Text from selectTextReader, so nil is
+// now the mock and unset configuration rather than the only one there is -- that is the path
+// the whole deployed fleet runs, and this pins it.
 //
 // In this file, not worker_internal_test.go: Work's first act after the nil-Audit guard is
 // db.WithinTenantTx, so it needs a pool.
@@ -2456,7 +2457,7 @@ func TestExtractWorker_NilTextKeepsTheExtractorPath(t *testing.T) {
 	// The premise, asserted rather than assumed: a fixture that quietly set Text would make
 	// every assertion below evidence for the wrong branch.
 	if ew.Text != nil {
-		t.Fatalf("ExtractWorker.Text is %T, want nil -- this spec is about the unwired seam", ew.Text)
+		t.Fatalf("ExtractWorker.Text is %T, want nil -- this spec is about the Extractor branch", ew.Text)
 	}
 
 	const riverJobID = int64(912101)

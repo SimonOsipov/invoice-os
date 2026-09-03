@@ -1001,6 +1001,34 @@ func TestSubmissionMain_FatalOnDocumentConfigError(t *testing.T) {
 	}
 }
 
+// TestSubmissionMain_FatalOnExtractorSelectionError: the boot half of AC-5.
+// TestSelectTextReader_DoclingRequiresAUsableURL proves each selector RETURNS an error; this
+// proves main() dies on it. Without it, dropping either error check ships a fleet that names
+// docling, cannot build it, and quietly runs the Extractor branch instead.
+func TestSubmissionMain_FatalOnExtractorSelectionError(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+
+	// Control: the same matcher against a known-good boot fatal in the same file, so a false
+	// below is a finding rather than a broken matcher.
+	if calls, fatal := wtFatalAfter(t, f, "submission.MockConfigFromEnv"); calls != 1 || !fatal {
+		t.Fatalf("the matcher found %d unconditional submission.MockConfigFromEnv call(s), fatal=%v, want 1 and true -- it can no longer recognise a known-good boot fatal, so the findings below mean nothing", calls, fatal)
+	}
+
+	for _, want := range []string{"selectExtractor", "selectTextReader"} {
+		calls, fatal := wtFatalAfter(t, f, want)
+		if calls != 1 {
+			t.Errorf("main() assigns from %s %d time(s) at the top level, want 1: the selection must be unconditional, not gated on whether extraction ever runs", want, calls)
+			continue
+		}
+		if !fatal {
+			t.Errorf("the statement after %s is not an error check that calls log.Fatal: an EXTRACTOR the fleet cannot build must refuse to boot rather than fall back to a seam nobody configured", want)
+		}
+	}
+}
+
 // psObjects is newPageSink's only collaborator: a fake document.ObjectStore that records the
 // one Put and, crucially, the reader's position when it arrived.
 type psObjects struct {
@@ -1212,6 +1240,33 @@ func TestSelectTextReader_MockAndUnsetSelectNoReader(t *testing.T) {
 	}
 }
 
+// TestSelectors_IgnoreDoclingURLUnderMockAndUnset: EXTRACTOR is the only selector, so a
+// DOCLING_URL set beside an unset or mock EXTRACTOR is inert in BOTH selectors -- the posture
+// cmd/gateway/main.go loadUpstreams already ships for an unrouted <NAME>_URL. Every other mock
+// and unset row in this file passes "" for the URL, so nothing else here exercises the pair.
+func TestSelectors_IgnoreDoclingURLUnderMockAndUnset(t *testing.T) {
+	const valid = "http://docling.railway.internal:8080"
+	for _, name := range []string{"", "mock"} {
+		t.Run("EXTRACTOR="+name, func(t *testing.T) {
+			got, err := selectTextReader(name, valid)
+			if err != nil {
+				t.Fatalf("selectTextReader(%q, %q) returned error %v, want a nil reader and no error", name, valid, err)
+			}
+			if got != nil {
+				t.Errorf("selectTextReader(%q, %q) = %T, want nil -- DOCLING_URL alone must not switch a mock fleet onto the sidecar", name, valid, got)
+			}
+
+			ext, err := selectExtractor(name, valid)
+			if err != nil {
+				t.Fatalf("selectExtractor(%q, %q) returned error %v, want a *MockExtractor and no error", name, valid, err)
+			}
+			if _, ok := ext.(*extraction.MockExtractor); !ok {
+				t.Errorf("selectExtractor(%q, %q) = %T, want *extraction.MockExtractor -- the URL is inert until EXTRACTOR names docling, or extraction_jobs.extractor stops matching what an operator configured", name, valid, ext)
+			}
+		})
+	}
+}
+
 // TestSelectTextReader_DoclingSelectsTheSidecarReader: AC-3. EXTRACTOR=docling with a usable
 // DOCLING_URL selects the sidecar reader itself, not the DoclingExtractor that wraps one.
 func TestSelectTextReader_DoclingSelectsTheSidecarReader(t *testing.T) {
@@ -1276,7 +1331,7 @@ func TestSelectTextReader_DoclingRequiresAUsableURL(t *testing.T) {
 // selectors that rejected everything could not pass merely by agreeing.
 func TestSelectors_AcceptTheSameValueSet(t *testing.T) {
 	const valid = "http://docling.railway.internal:8080"
-	for _, tc := range []struct {
+	cases := []struct {
 		name, extractor, url string
 		wantErr              bool
 	}{
@@ -1287,7 +1342,16 @@ func TestSelectors_AcceptTheSameValueSet(t *testing.T) {
 		{"docling with a malformed URL", "docling", "://nope", true},
 		{"unrecognised", "nonsense", "", true},
 		{"capitalised near-miss", "Docling", valid, true},
-	} {
+		// A pasted Railway value. Trimming inside both selectors leaves their case sets equal,
+		// so TestSelectors_ShareOneCaseSet stays green and only this row reds.
+		{"whitespace near-miss", " docling", valid, true},
+	}
+	// The table drives every assertion below, so an empty one is a green run that checked
+	// nothing. Both accepted spellings and both rejection modes must stay represented.
+	if len(cases) < 8 {
+		t.Fatalf("the agreement table carries %d row(s), want at least 8 -- fewer means the docling arm or a rejection mode went unexercised", len(cases))
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, extErr := selectExtractor(tc.extractor, tc.url)
 			_, textErr := selectTextReader(tc.extractor, tc.url)

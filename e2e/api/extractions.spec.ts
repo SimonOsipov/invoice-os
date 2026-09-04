@@ -14,16 +14,14 @@
 //   3. JWT -> tenant -> RLS end to end. The Go RLS tests set app.current_tenant themselves;
 //      here the tenant arrives from a real token through the real gateway.
 //
-// WHAT THIS FILE REFUSES TO ASSERT. It makes no claim about any stage, start, progress or
-// outcome of an extraction, because it cannot: nothing in this repository enqueues extraction
-// work — `extractArgs` is unexported with no caller outside internal/extraction — so no spec
-// can cause a real job to exist, and `queued` is structurally unobservable anyway (the worker
-// inserts the row and advances it to `extracting` inside ONE transaction). This file can
-// therefore only ever see {"jobs":[]}, and an empty list is evidence of a working round trip,
-// never of a job's behaviour. Every state, ordering, cap and error-surface claim lives in the
-// Go DB-backed suite (internal/extraction/reader_db_test.go). Do not cite this file as
-// evidence for the substance of the story's stage-reporting criterion — it proves the
-// endpoint is reachable and correctly refuses bad input, and that is all it proves.
+// WHAT THIS FILE REFUSES TO ASSERT. `queued` is structurally unobservable: the worker inserts
+// the row and advances it to `extracting` inside ONE transaction, so no poll can catch it.
+// Ordering, cap and error-surface claims live in the Go DB-backed suite
+// (internal/extraction/reader_db_test.go), not here.
+//
+// The readings asserted below are the MOCK extractor's. The deployed fleet runs
+// EXTRACTOR=mock, so no spec here observes the docling arm — see the EXTR-17 note in
+// contract-document-upload.spec.ts.
 //
 // NO COUNT IS ASSERTED, and every case but EXTR12-API-02 creates no row: its document id and
 // job id are a per-run crypto.randomUUID() that matches nothing. That makes those cases

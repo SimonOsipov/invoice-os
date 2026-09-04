@@ -1094,6 +1094,27 @@ func TestRLS_RichFixtureEmitsNoTextLayerVerdict(t *testing.T) {
 	}
 }
 
+// EXTR-18-05 (task-849) AC-3. Ties e2e/topology/import-wizard.spec.ts's WIRE_FIELD_SET literal
+// to the real wired-path output, so a drift between the two is caught here instead of only on
+// the deployed run. Mirrors WIRE_FIELD_SET verbatim; keep both lists in sync by hand.
+func TestRLS_RichFixtureFieldNamesMatchTheE2EWireFieldSet(t *testing.T) {
+	rows := rfRun(t)
+	got := wpRankZeroNames(rows)
+
+	want := []string{
+		"buyer_name", "buyer_tin", "currency", "invoice_number", "issue_date", "line_items",
+		"line_items[1].description", "line_items[1].line_total", "line_items[1].quantity", "line_items[1].unit_price",
+		"line_items[2].description", "line_items[2].line_total", "line_items[2].quantity", "line_items[2].unit_price",
+		"line_items[3].description", "line_items[3].line_total", "line_items[3].quantity", "line_items[3].unit_price",
+		"subtotal", "supplier_name", "supplier_tin", "total", "vat",
+	}
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("wired field-name set differs from WIRE_FIELD_SET in import-wizard.spec.ts:\n got  %v\n want %v", got, want)
+	}
+}
+
 // EXTR-18-02 adversarial coverage: the golden is genuine, and stays honest about its PDF.
 
 // TestDoclingGolden_RichInvoiceIsMachineGenerated mirrors TestCorpusGoldens_AreMachineGenerated

@@ -994,7 +994,7 @@ const rfRiverJobID = 918900
 // header row plus Widget/Gadget/Delivery in a 4-column table (fixtures_test.go).
 const (
 	rfInvoiceNumber = "ASC-2026-0918"
-	rfTableRows     = 4
+	rfTableRows     = 5
 	rfTableCols     = 4
 )
 
@@ -1106,6 +1106,8 @@ func TestRLS_RichFixtureFieldNamesMatchTheE2EWireFieldSet(t *testing.T) {
 		"line_items[1].description", "line_items[1].line_total", "line_items[1].quantity", "line_items[1].unit_price",
 		"line_items[2].description", "line_items[2].line_total", "line_items[2].quantity", "line_items[2].unit_price",
 		"line_items[3].description", "line_items[3].line_total", "line_items[3].quantity", "line_items[3].unit_price",
+		// Row 4's Qty and Unit Price are blank in the PDF, so no row is emitted for them.
+		"line_items[4].description", "line_items[4].line_total",
 		"subtotal", "supplier_name", "supplier_tin", "total", "vat",
 	}
 	slices.Sort(want)
@@ -1190,7 +1192,7 @@ func TestDoclingGolden_RichInvoiceMatchesItsPDFsPrintedNumber(t *testing.T) {
 		tables += len(p.Tables)
 		for _, tb := range p.Tables {
 			if tb.Rows != rfTableRows || tb.Cols != rfTableCols {
-				t.Errorf("%s's table is %dx%d, want %dx%d (fxBuildRichInvoice's header row plus 3 data rows)", rfGolden, tb.Rows, tb.Cols, rfTableRows, rfTableCols)
+				t.Errorf("%s's table is %dx%d, want %dx%d (fxBuildRichInvoice's header row plus 4 data rows)", rfGolden, tb.Rows, tb.Cols, rfTableRows, rfTableCols)
 			}
 		}
 	}

@@ -10,7 +10,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
-<< /Length 1371 >>
+<< /Length 1536 >>
 stream
 BT
 /F1 24 Tf
@@ -123,6 +123,26 @@ BT
 (120.00) Tj
 ET
 BT
+/F1 10 Tf
+76 482 Td
+(Handling) Tj
+ET
+BT
+/F1 10 Tf
+193 482 Td
+() Tj
+ET
+BT
+/F1 10 Tf
+310 482 Td
+() Tj
+ET
+BT
+/F1 10 Tf
+427 482 Td
+(60.00) Tj
+ET
+BT
 /F1 12 Tf
 380 440 Td
 (Sub-total) Tj
@@ -167,19 +187,22 @@ S
 72 494 m
 540 494 l
 S
-72 494 m
+72 470 m
+540 470 l
+S
+72 470 m
 72 590 l
 S
-189 494 m
+189 470 m
 189 590 l
 S
-306 494 m
+306 470 m
 306 590 l
 S
-423 494 m
+423 470 m
 423 590 l
 S
-540 494 m
+540 470 m
 540 590 l
 S
 
@@ -195,9 +218,9 @@ xref
 0000000064 00000 n 
 0000000121 00000 n 
 0000000247 00000 n 
-0000001670 00000 n 
+0000001835 00000 n 
 trailer
 << /Size 6 /Root 1 0 R >>
 startxref
-1740
+1905
 %%EOF

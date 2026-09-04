@@ -291,15 +291,16 @@ func fxBuildTable() []byte {
 }
 
 // fxRichTableRowYs are the rich fixture's own horizontal rule positions: header-top,
-// header/row1, row1/row2, row2/row3, bottom (1 header + 3 data rows = 4 bands = 5 lines).
-// A separate array from fxTableRowYs -- that one is fxBuildTable's own, and resizing it would
-// change table_invoice.pdf's committed bytes.
-var fxRichTableRowYs = [5]int{590, 566, 542, 518, 494}
+// header/row1, row1/row2, row2/row3, row3/row4, bottom (1 header + 4 data rows = 5 bands =
+// 6 lines). A separate array from fxTableRowYs -- that one is fxBuildTable's own, and
+// resizing it would change table_invoice.pdf's committed bytes.
+var fxRichTableRowYs = [6]int{590, 566, 542, 518, 494, 470}
 
-// fxBuildRichInvoice is one US-Letter page: header fields, a ruled 4-column/3-row table with a
-// deliberate line-total error (Gadget: 3 x 250.00 prints as 900.00, not 750.00), and a
-// split-label totals block whose Sub-total (1,500.00) does not match the line sum (2,020.00).
-// Both mismatches exceed reconcileTolerance, so ReasonInconsistentTotal has something to catch.
+// fxBuildRichInvoice is one US-Letter page: header fields, a ruled 4-column/4-row table with a
+// deliberate line-total error (Gadget: 3 x 250.00 prints as 900.00, not 750.00) and a row whose
+// Qty and Unit Price are blank, and a split-label totals block whose Sub-total (1,500.00) does
+// not match the line sum (2,080.00). Both mismatches exceed reconcileTolerance, so
+// ReasonInconsistentTotal has something to catch.
 func fxBuildRichInvoice() []byte {
 	lines := []fxLine{
 		{24, 72, 720, "INVOICE"},
@@ -313,6 +314,11 @@ func fxBuildRichInvoice() []byte {
 	lines = append(lines, fxTableRowText(554, []string{"Widget", "2", "500.00", "1000.00"})...)
 	lines = append(lines, fxTableRowText(530, []string{"Gadget", "3", "250.00", "900.00"})...)
 	lines = append(lines, fxTableRowText(506, []string{"Delivery", "1", "120.00", "120.00"})...)
+	// Row 4 prints a description and a line total but no Qty or Unit Price. Both blanks fail
+	// liNormalizeQuantity/liNormalizeAmount, so LineItemResults emits no row for them
+	// (lineitems.go:95) and the wire OMITS the two cells -- the only subject EXTR13-E2E-01's
+	// empty-cell arm has once the real extractor replaces the mock's hand-authored reading.
+	lines = append(lines, fxTableRowText(482, []string{"Handling", "", "", "60.00"})...)
 	// Split-label shape (label Tj, then value Tj, same baseline) -- fxBuildCorpusTotalsBlock's
 	// precedent. The inline single-Tj form would not resolve ReasonNone for Reconcile to check.
 	lines = append(lines,
@@ -1070,8 +1076,8 @@ func TestFixtures_RichInvoiceCarriesARuledTable(t *testing.T) {
 			vert++
 		}
 	}
-	if horiz != 5 {
-		t.Errorf("%s page 1 carries %d horizontal rule(s), want exactly 5", fxRich, horiz)
+	if horiz != 6 {
+		t.Errorf("%s page 1 carries %d horizontal rule(s), want exactly 6", fxRich, horiz)
 	}
 	if vert != 5 {
 		t.Errorf("%s page 1 carries %d vertical rule(s), want exactly 5", fxRich, vert)

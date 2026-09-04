@@ -47,9 +47,22 @@ describe('[extr-18-07] every EXTR18 fixture upload goes through a unique*PdfByte
     expect(bufferArgs.length, 'no buffer: argument found in the EXTR-18-07 block -- the check below covers nothing').toBeGreaterThanOrEqual(2)
   })
 
+  // `Buffer` is settleOneDocument's type annotation and `file.buffer` its forwarding
+  // parameter; neither is an upload's byte source. What this guards is a raw module-scope
+  // fixture constant (SCANNED_INVOICE_PDF) reaching setInputFiles unfreshened, which would
+  // collide on the per-document enqueue key and settle on a PREVIOUS run's job.
+  const FORWARDERS = new Set(['Buffer', 'file.buffer'])
+
   it('every buffer: arg calls a unique*PdfBytes() helper, never a raw fixture constant', () => {
-    const offenders = bufferArgs.filter((a) => !/^unique\w*PdfBytes\(\)$/.test(a))
+    const offenders = bufferArgs.filter((a) => !FORWARDERS.has(a) && !/^unique\w*PdfBytes\(\)$/.test(a))
     expect(offenders, `non-helper buffer arg(s): ${offenders.join(', ')}`).toEqual([])
+  })
+
+  // Population floor: without it the check above passes vacuously the moment every real
+  // call site is refactored behind a forwarder.
+  it('at least two buffer: args are real unique*PdfBytes() call sites', () => {
+    const calls = bufferArgs.filter((a) => /^unique\w*PdfBytes\(\)$/.test(a))
+    expect(calls.length, `only ${calls.length} helper call site(s) in the block`).toBeGreaterThanOrEqual(2)
   })
 
   it('no readFileSync call reaches extractOneDocument directly inside the block', () => {
@@ -126,7 +139,7 @@ describe('[extr-18-07] no MOCK-INV-0001 negation anywhere under e2e/', () => {
   })
 })
 
-describe('[extr-18-07] each deployed-proof spec sets test.setTimeout(300_000)', () => {
+describe('[extr-18-07] each deployed-proof spec sets test.setTimeout() >= 300_000', () => {
   const testNames = [
     "EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number",
     'EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadable, and its pages still render',
@@ -144,11 +157,19 @@ describe('[extr-18-07] each deployed-proof spec sets test.setTimeout(300_000)', 
   })
 
   for (let i = 0; i < testNames.length; i++) {
-    it(`"${testNames[i]}" sets test.setTimeout(300_000)`, () => {
+    it(`"${testNames[i]}" sets test.setTimeout() >= 300_000`, () => {
       const from = starts[i]
       const to = i + 1 < starts.length ? starts[i + 1] : block.length
       const testBody = block.slice(from, to)
-      expect(testBody.includes('test.setTimeout(300_000)'), 'no test.setTimeout(300_000) call in this test body').toBe(true)
+      // The budget, not a literal: settleOneDocument alone can wait 240s on the extraction
+      // and 120s on the landing, so -02/-03 carry 600_000. Playwright's 30s default would
+      // kill any of them, which is what this floor exists to prevent.
+      const call = /test\.setTimeout\((\d[\d_]*)\)/.exec(testBody)
+      expect(call, 'no test.setTimeout(...) call in this test body').not.toBeNull()
+      expect(
+        Number(call![1].replace(/_/g, '')),
+        `test.setTimeout(${call![1]}) is below the 300s deployed-proof floor`,
+      ).toBeGreaterThanOrEqual(300_000)
     })
   }
 })

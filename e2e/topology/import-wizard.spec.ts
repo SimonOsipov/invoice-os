@@ -67,11 +67,14 @@ import { dirname, join } from 'node:path'
 import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
 import {
   login,
+  apiBase,
   createEntity,
   listInvoices,
   approveUntilClosed,
   firmApproverTokens,
   getAuditLog,
+  getExtractions,
+  getExtractionDetail,
   postFieldCorrection,
   PERSONAS,
   type CorrectionResponse,
@@ -2969,6 +2972,10 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     'line_items[3].line_total',
     'line_items[3].quantity',
     'line_items[3].unit_price',
+    // Row 4 prints Handling and a line total but blank Qty/Unit Price, so the wire OMITS those
+    // two cells -- EXTR13-E2E-01's empty-cell arm has no subject without them.
+    'line_items[4].description',
+    'line_items[4].line_total',
     'subtotal',
     'supplier_name',
     'supplier_tin',
@@ -4440,19 +4447,23 @@ const FIDELITY: FidelityRow[] = [
   { element: 'extraction-chip-issue_date-0', property: 'text-align', artboard: 'left', source: ':315', expected: 'left', deviation: null },
   { element: 'extraction-chip-issue_date-0', property: 'border-top-width', artboard: '1px', source: ':315', expected: '1px', deviation: null },
 
-  // The reason pill, `:296`. `vat` is `unreadable` WITH a region and no correction, so the
-  // NO REGION cue does not fire, there is no chip row and no changed row: exactly one `.mono`
-  // in that cell. `letter-spacing: 0.07em` goes to the em-ratio block below, never a string.
+  // The reason pill, `:296`. Anchored on issue_date, not vat: the real extractor decides vat
+  // (reason ''), and a decided field renders no pill at all -- only issue_date (ambiguous) and
+  // subtotal (inconsistent) carry one, and subtotal's is replaced by its changed row once this
+  // journey corrects it. issue_date's chips put more `.mono` spans in the same cell, so the
+  // selector is depth-scoped to LABEL_STRIP > PILL (ExtractionFields.tsx:359-365); chip labels
+  // sit a level deeper, under a button. `letter-spacing: 0.07em` goes to the em-ratio block
+  // below, never a string.
   // A build reusing RulePills.tsx instead of the artboard's own slot reds on the two font rows.
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'font-size', artboard: '8.5px', source: ':296', expected: '8.5px', deviation: null },
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'font-weight', artboard: '700', source: ':296', expected: '700', deviation: null },
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'border-top-left-radius', artboard: '999px', source: ':296', expected: '999px', deviation: null },
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'padding-top', artboard: '2px', source: ':296', expected: '2px', deviation: null },
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'padding-left', artboard: '8px', source: ':296', expected: '8px', deviation: null },
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'border-top-width', artboard: '1px', source: ':296', expected: '1px', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'font-size', artboard: '8.5px', source: ':296', expected: '8.5px', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'font-weight', artboard: '700', source: ':296', expected: '700', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'border-top-left-radius', artboard: '999px', source: ':296', expected: '999px', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'padding-top', artboard: '2px', source: ':296', expected: '2px', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'padding-left', artboard: '8px', source: ':296', expected: '8px', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'border-top-width', artboard: '1px', source: ':296', expected: '1px', deviation: null },
   // Also what keeps the floor walk in EXTR12-E2E-07 meaningful: a pill that dropped `nowrap`
   // would wrap its own text and hide the overflow W-6 measured.
-  { element: 'extraction-pill-vat', selector: '[data-testid="extraction-field-vat"] span.mono', property: 'white-space', artboard: 'nowrap', source: ':296', expected: 'nowrap', deviation: null },
+  { element: 'extraction-pill-issue_date', selector: '[data-testid="extraction-field-issue_date"] > span > span.mono', property: 'white-space', artboard: 'nowrap', source: ':296', expected: 'nowrap', deviation: null },
 
   // The point-at-it button, `:324`, idle: `buyer_tin` stays missing here and the document has
   // one page. `border-top-left-radius: 10px` is the deployed half of the class ban -- a build
@@ -4540,13 +4551,13 @@ const FIDELITY_ROW_IDS: string[] = [
   'extraction-page-1·padding-left',
   'extraction-page-1·padding-right',
   'extraction-page-1·padding-top',
-  'extraction-pill-vat·border-top-left-radius',
-  'extraction-pill-vat·border-top-width',
-  'extraction-pill-vat·font-size',
-  'extraction-pill-vat·font-weight',
-  'extraction-pill-vat·padding-left',
-  'extraction-pill-vat·padding-top',
-  'extraction-pill-vat·white-space',
+  'extraction-pill-issue_date·border-top-left-radius',
+  'extraction-pill-issue_date·border-top-width',
+  'extraction-pill-issue_date·font-size',
+  'extraction-pill-issue_date·font-weight',
+  'extraction-pill-issue_date·padding-left',
+  'extraction-pill-issue_date·padding-top',
+  'extraction-pill-issue_date·white-space',
   'extraction-point-buyer_tin·border-top-left-radius',
   'extraction-point-buyer_tin·border-top-style',
   'extraction-point-buyer_tin·border-top-width',
@@ -4927,7 +4938,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   //    `letter-spacing: -0.015em` (app-layer.css:150), so this is also the only deployed proof
   //    that the inline value overrides the class.
   const tracking = [
-    { element: 'extraction-pill-vat', source: ':296' },
+    { element: 'extraction-pill-issue_date', source: ':296' },
     { element: 'extraction-changed-label-subtotal', source: ':335' },
   ].map(({ element, source }) => {
     const read = measured.out[element]!
@@ -6451,60 +6462,125 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
+// (internal/importer/document.go:161) -- so routeAfterRun's 'single' arm is unreachable and
+// extractOneDocument's wait for invoice-detail can never settle. Both fixtures below are that
+// case by construction: the scan has no recoverable text at all, and the dense page's label
+// OCRs as "INV0ICE NO:" (D-33). The verdict is therefore read off the deployed wire, which is
+// also exactly what EXTR-15's Core AC will consume. The review SCREEN cannot serve as the
+// oracle here: its only entry point is SourceDocumentCard's open-extraction-review, which
+// renders on the invoice detail -- building a surface for these terminal states is EXTR-15's.
+async function settleOneDocument(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer },
+): Promise<{ token: string; jobId: string; detail: ExtractionDetail }> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  // Registered before the pick, same reason as EXTR09-E2E-01's own waiter: the upload can
+  // resolve before an awaited setInputFiles returns.
+  const documentPost = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/submission/v1/documents'),
+    { timeout: 120_000 },
+  )
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  const documentId = ((await (await documentPost).json()) as { document_id?: string }).document_id
+  expect(documentId, 'the upload must mint a stored document id').toMatch(/^[0-9a-fA-F-]{36}$/)
+
+  let jobId = ''
+  await expect
+    .poll(
+      async () => {
+        const { jobs } = await getExtractions(token, documentId)
+        const job = jobs[0]
+        if (!job) return 'no job for this document yet'
+        jobId = job.id
+        return job.state
+      },
+      { message: 'the extraction never reached a terminal state', timeout: 240_000, intervals: [1_000] },
+    )
+    // succeeded, not dead_lettered: an unreadable TEXT layer is a reading, not a failure
+    // (TestRLS_ScannedFixtureSettlesTheTextLayerUnreadable asserts the same state wired).
+    .toBe('succeeded')
+
+  // The run's own landing, pinned because it is the terminal state EXTR-15 must surface: a
+  // quarantined batch still exists, so routeAfterRun returns 'review', never 'none'.
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('review-table').isVisible()) return 'review batch surface'
+        if (await page.getByText(/^BATCH /).first().isVisible()) return 'review batch surface'
+        if (await page.getByTestId('invoice-detail').isVisible()) return 'invoice detail'
+        if (await page.getByRole('button', { name: 'Extract invoices' }).isVisible()) return 'back on the picker'
+        return 'nothing yet'
+      },
+      { message: 'a quarantined single-document run must land on the review batch surface', timeout: 120_000 },
+    )
+    .toBe('review batch surface')
+
+  return { token, jobId, detail: await getExtractionDetail(token, jobId) }
+}
+
 test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadable, and its pages still render', async ({
   page,
 }) => {
-  test.setTimeout(300_000)
+  test.setTimeout(600_000)
   const errors = collectErrors(page)
 
-  await extractOneDocument(page, 'EXTR-18-07 scanned', {
+  const { token, jobId, detail } = await settleOneDocument(page, 'EXTR-18-07 scanned', {
     name: 'scanned_invoice.pdf',
     buffer: uniqueScannedPdfBytes(),
   })
-  const detail = await openExtractionReview(page)
 
   const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
   expect(textLayer, 'no document_text_layer field on the wire').toBeTruthy()
   expect(textLayer!.reason, 'a scan with no recoverable text must settle unreadable').toBe('unreadable')
+  // worker.go's zero-text branch replaces `results` WHOLESALE, so the unreadable verdict is
+  // the only row -- never one reason among ten missing fields.
+  expect(
+    detail.fields.map((f) => f.name),
+    'the zero-text branch must settle exactly one field row',
+  ).toEqual(['document_text_layer'])
 
-  // The pages must still render -- unreadable is a TEXT verdict, not a render failure. Distinct
-  // from pages_not_rendered, which this fixture must NOT trigger (EXTR18-E2E-03 is the control).
+  // unreadable is a TEXT verdict, not a render failure -- the distinction EXTR-15's T5 rests
+  // on. Positive dimensions, not a count: a row with a 0x0 page never rendered.
   expect(detail.pages.length, 'a document with no page rows cannot prove the pages render').toBeGreaterThan(0)
-  await expect(page.getByTestId('extraction-page-1'), 'page 1 frame must render').toBeVisible()
-  const img = page.getByTestId('extraction-page-image-1')
-  await expect(img, "page 1's bytes must load").toBeVisible({ timeout: 60_000 })
-  // Polled, never read once: naturalWidth is 0 until the blob decodes.
-  await expect
-    .poll(
-      async () =>
-        img.evaluate((el) => {
-          const i = el as HTMLImageElement
-          return i.complete && i.naturalWidth > 0
-        }),
-      { message: "page 1's bytes never decoded", timeout: 60_000 },
-    )
-    .toBe(true)
+  for (const p of detail.pages) {
+    expect(p.width_px, `page ${p.page} rendered no width`).toBeGreaterThan(0)
+    expect(p.height_px, `page ${p.page} rendered no height`).toBeGreaterThan(0)
+  }
 
-  const cell = page.getByTestId('extraction-field-document_text_layer')
-  await expect(cell, 'document_text_layer rendered no cell').toBeVisible()
-  await expect(cell.getByText(REASON_PILL.unreadable, { exact: true }), 'the unreadable pill did not render').toBeVisible()
+  // The stored bytes themselves, the deployed counterpart of the canvas's naturalWidth check.
+  const img = await fetch(`${apiBase()}/api/submission/v1/extractions/${jobId}/pages/1`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(img.status, "page 1's image must be served").toBe(200)
+  const bytes = Buffer.from(await img.arrayBuffer())
+  expect(bytes.length, "page 1's image is empty").toBeGreaterThan(1_000)
+  expect(bytes.subarray(0, 8).toString('hex'), 'page 1 is not a PNG').toBe('89504e470d0a1a0a')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', async ({ page }) => {
-  test.setTimeout(300_000)
+  test.setTimeout(600_000)
   const errors = collectErrors(page)
 
-  // D-23's one unmitigated residual risk: docling OCR timing on Railway hardware is unmeasured
-  // (docs/docling-sidecar.md's numbers explicitly disclaim Railway). If this reds on the
-  // invoice-detail 240s TIMEOUT rather than a value/shape mismatch, that is evidence the risk
-  // fired -- the fix is a targeted timeout bump here, done as a follow-up once observed, never
-  // guessed in advance.
-  await extractOneDocument(page, 'EXTR-18-07 dense', { name: 'dense_invoice.pdf', buffer: uniqueDensePdfBytes() })
-  const detail = await openExtractionReview(page)
+  const { detail } = await settleOneDocument(page, 'EXTR-18-07 dense', {
+    name: 'dense_invoice.pdf',
+    buffer: uniqueDensePdfBytes(),
+  })
 
-  // No document_text_layer row at all -- the OCR-succeeded half of the EXTR18-E2E-02 pair.
+  // The OCR-succeeded half of the pair: no document_text_layer row at all.
   const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
   expect(textLayer, 'an OCR-readable image page must carry no document_text_layer field').toBeUndefined()
 
@@ -6518,8 +6594,8 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
   expect(currency!.value, 'currency must carry a value').not.toBeNull()
 
   // Not asserted: invoice_number. OCR reads the label as "INV0ICE NO:" (digit zero for letter
-  // O), the Tier-1 anchor misses, and the field settles missing (D-33). No decided-field floor
-  // above 4 either -- the measured run cleared 5 at exactly 5, zero margin.
+  // O), the Tier-1 anchor misses, and the field settles missing (D-33) -- which is why this
+  // document quarantines rather than filing, and why settleOneDocument exists.
 
   const lines = wireLines(detail)
   expect(lines.length, 'the OCR read fewer than 2 line rows').toBeGreaterThanOrEqual(2)

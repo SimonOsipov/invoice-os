@@ -663,3 +663,153 @@ func TestUploadHandler_BrowserAndGoAcceptedTypeTablesAgree(t *testing.T) {
 		t.Errorf("content-type sets differ.\n  %s: %s\n  classify.go: %s", upPickerSource, got, want)
 	}
 }
+
+// --- EXTR-15-03 (task-854, Test-first): the accepted set narrows to PDF + DOCX ---------------
+
+// The sets EXTR-15-03 moves, named once. Every population floor below is DERIVED from these, so
+// a later widening moves the counts with the table rather than leaving a re-typed literal behind.
+var (
+	upNarrowedOutExts  = []string{".png", ".jpg", ".jpeg", ".webp"}
+	upNarrowedOutTypes = []string{upPNG, upJPEG, upWebP}
+
+	// What stays: extension -> the canonical content type the row must record.
+	upNarrowedInTypes = map[string]string{".pdf": upPDF, ".docx": upDOCX}
+)
+
+// PN-1 (AC-1/AC-2/AC-3): the two literals CLASSIFY-5 compares hold exactly the narrowed sets.
+// CLASSIFY-5 asserts only that the two are EQUAL, which a pair narrowed to one row each -- or to
+// none -- also satisfies. The sizes here are literals for that reason.
+func TestAcceptedTypeTables_NarrowToPDFAndDOCX(t *testing.T) {
+	raw, err := os.ReadFile(upPickerSource)
+	if err != nil {
+		t.Fatalf("read %s: %v", upPickerSource, err)
+	}
+	m := upTSTableRE.FindSubmatch(upTSCommentRE.ReplaceAll(raw, nil))
+	if m == nil {
+		t.Fatalf("no ACCEPTED_PICKED_TYPES = [ ... ] literal in %s; this spec and CLASSIFY-5 both read it as one row per entry", upPickerSource)
+	}
+	rows := upTSRowRE.FindAllSubmatch(m[1], -1)
+	if len(rows) == 0 {
+		t.Fatalf("the ACCEPTED_PICKED_TYPES literal in %s parsed to 0 rows; every assertion below would pass over nothing", upPickerSource)
+	}
+	if len(rows) != 4 {
+		t.Errorf("ACCEPTED_PICKED_TYPES holds %d row(s), want the four that stay: .csv, .xlsx, .pdf, .docx", len(rows))
+	}
+
+	tsByKind := map[string][]string{}
+	for _, r := range rows {
+		kind := string(r[2])
+		tsByKind[kind] = append(tsByKind[kind], string(r[1]))
+	}
+	for _, want := range []struct{ kind, exts string }{
+		{"spreadsheet", ".csv,.xlsx"},
+		{"document", ".docx,.pdf"},
+	} {
+		got := append([]string(nil), tsByKind[want.kind]...)
+		sort.Strings(got)
+		if strings.Join(got, ",") != want.exts {
+			t.Errorf("ACCEPTED_PICKED_TYPES' %s rows are [%s], want [%s]", want.kind, strings.Join(got, ","), want.exts)
+		}
+	}
+
+	goTable := extractionAcceptedTypes(t)
+	if len(goTable) == 0 {
+		t.Fatal("acceptedDocumentTypes parsed empty out of classify.go; the assertions below would be vacuous")
+	}
+	if len(goTable) != len(upNarrowedInTypes) {
+		t.Errorf("acceptedDocumentTypes holds %d entr(ies) %v, want the %d that stay %v", len(goTable), goTable, len(upNarrowedInTypes), upNarrowedInTypes)
+	}
+	for ext, want := range upNarrowedInTypes {
+		if goTable[ext] != want {
+			t.Errorf("acceptedDocumentTypes[%q] = %q, want %q", ext, goTable[ext], want)
+		}
+	}
+
+	// CLASSIFY-5's equality restated over the narrowed sets, so this spec is more than a pair
+	// of sizes: the picker's document half and classify.go must still be one table.
+	tsDoc := append([]string(nil), tsByKind["document"]...)
+	sort.Strings(tsDoc)
+	goExt := make([]string, 0, len(goTable))
+	for ext := range goTable {
+		goExt = append(goExt, ext)
+	}
+	sort.Strings(goExt)
+	if strings.Join(tsDoc, ",") != strings.Join(goExt, ",") {
+		t.Errorf("the picker's document extensions [%s] and classify.go's [%s] differ", strings.Join(tsDoc, ","), strings.Join(goExt, ","))
+	}
+}
+
+// PN-4/PN-5 (AC-6): POST /v1/documents refuses every narrowed-out image -- by extension AND by
+// declared content type -- with the refusal shape it already gives an unsupported type. Not a
+// 500, and not accept-then-dead-letter: neither seam may run.
+//
+// PN-5 is the accepted rows, in the SAME table. Without them this spec also passes over a
+// handler that refuses every upload it is given.
+func TestUploadHandler_RefusesTheNarrowedOutImageTypes(t *testing.T) {
+	type upNarrowCase struct {
+		name     string
+		filename string
+		partType string
+		wantCode int
+		wantType string // the canonical content type on an accepted row; "" on a refusal
+	}
+
+	var cases []upNarrowCase
+	for _, ext := range upNarrowedOutExts {
+		cases = append(cases, upNarrowCase{"refused: " + ext + " by extension", "scan" + ext, "", http.StatusBadRequest, ""})
+	}
+	for _, ct := range upNarrowedOutTypes {
+		cases = append(cases, upNarrowCase{"refused: " + ct + " by content type", "scan.bin", ct + "; charset=utf-8", http.StatusBadRequest, ""})
+	}
+	for ext, ct := range upNarrowedInTypes {
+		cases = append(cases, upNarrowCase{"accepted: " + ext + " by extension", "scan" + ext, "", http.StatusCreated, ct})
+		cases = append(cases, upNarrowCase{"accepted: " + ct + " by content type", "scan.bin", ct + "; charset=utf-8", http.StatusCreated, ct})
+	}
+
+	// Relational, never a literal: the population follows the narrowed sets above.
+	if want := len(upNarrowedOutExts) + len(upNarrowedOutTypes) + 2*len(upNarrowedInTypes); len(cases) != want {
+		t.Fatalf("the table built %d case(s), want %d; the loops did not read the narrowed sets", len(cases), want)
+	}
+	refusals, accepts := 0, 0
+	for _, c := range cases {
+		if c.wantCode == http.StatusCreated {
+			accepts++
+		} else {
+			refusals++
+		}
+	}
+	if refusals == 0 || accepts == 0 {
+		t.Fatalf("the table holds %d refusal(s) and %d accepted row(s); both halves are required or one of them asserts nothing", refusals, accepts)
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spy := newUpSpy()
+			rec, raw, decoded := upPost(t, spy, c.filename, c.partType, []byte("bytes"))
+
+			if rec.Code != c.wantCode {
+				t.Fatalf("status = %d, want %d for %s declared %q (body=%s)", rec.Code, c.wantCode, c.filename, c.partType, raw)
+			}
+
+			if c.wantCode == http.StatusCreated {
+				if got := upString(t, decoded, "content_type"); got != c.wantType {
+					t.Errorf("content_type = %q, want the canonical %q", got, c.wantType)
+				}
+				if spy.gotContentType != c.wantType {
+					t.Errorf("the store seam was handed %q, want the canonical %q", spy.gotContentType, c.wantType)
+				}
+				if spy.calls("store") != 1 {
+					t.Errorf("the store seam ran %d time(s) on an accepted upload, want 1 (order=%v)", spy.calls("store"), spy.order)
+				}
+				return
+			}
+
+			if got := upString(t, decoded, "error"); got != upMsgRefusal {
+				t.Errorf("error = %q, want the refusal string %q", got, upMsgRefusal)
+			}
+			if len(spy.order) != 0 {
+				t.Errorf("a refused %s declared %q ran %v, want neither seam -- accept-then-dead-letter is the outcome this refusal replaces", c.filename, c.partType, spy.order)
+			}
+		})
+	}
+}

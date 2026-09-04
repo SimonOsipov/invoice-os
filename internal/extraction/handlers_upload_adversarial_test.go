@@ -8,10 +8,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -394,5 +396,137 @@ func TestUploadHandler_NoIdentityNeverReadsTheBody(t *testing.T) {
 	}
 	if counted.read != 0 {
 		t.Errorf("the handler read %d byte(s) off an UNAUTHENTICATED body, want 0 -- a stranger's upload must be refused before any of it is pulled across the process boundary", counted.read)
+	}
+}
+
+// --- EXTR-15-03 (task-854, Test-first): the accepted set narrows to PDF + DOCX ----------------
+
+// PN-7: the four narrowed-out extensions and their three content types are gone from
+// acceptedDocumentTypes, and the two that stay are still there. Both halves are derived from
+// upNarrowedOutExts / upNarrowedInTypes (handlers_upload_test.go), so the population follows the
+// narrowing rather than a count typed here.
+func TestAcceptedDocumentTypes_DropsTheImageTypes(t *testing.T) {
+	got := extractionAcceptedTypes(t)
+	if len(got) == 0 {
+		t.Fatal("the accepted-type table read as empty; every assertion below would pass over nothing")
+	}
+
+	// The control runs FIRST. An absence check returns zero hits when the scan is broken, and
+	// only a hit on what must STAY separates a narrowed table from an unreadable one.
+	for ext, want := range upNarrowedInTypes {
+		if got[ext] != want {
+			t.Fatalf("acceptedDocumentTypes[%q] = %q, want %q; the absences below would pass over a table this scan misread", ext, got[ext], want)
+		}
+	}
+
+	values := map[string]bool{}
+	for _, ct := range got {
+		values[ct] = true
+	}
+	for _, ext := range upNarrowedOutExts {
+		if ct, ok := got[ext]; ok {
+			t.Errorf("acceptedDocumentTypes still maps %q to %q; EXTR-15-03 drops it from the picker and this route together", ext, ct)
+		}
+	}
+	for _, ct := range upNarrowedOutTypes {
+		if values[ct] {
+			t.Errorf("acceptedDocumentTypes still names %q; a declared image type must be refused, not classified", ct)
+		}
+	}
+	// The absence restated as an equality: this cannot pass over an emptied table.
+	if len(got) != len(upNarrowedInTypes) {
+		t.Errorf("acceptedDocumentTypes holds %d entr(ies) %v, want exactly the %d that stay %v", len(got), got, len(upNarrowedInTypes), upNarrowedInTypes)
+	}
+}
+
+var (
+	upWantExtRE   = regexp.MustCompile(`(?s)wantExtensions\s*:=\s*map\[string\]string\{(.*?)\n\t\}`)
+	upWantEntryRE = regexp.MustCompile(`"([^"]*)":\s*(\w+)`)
+)
+
+// PN-11: wantExtensions is a THIRD copy of the accepted-type table, and it is the copy
+// CLASSIFY-5's honesty rests on. Read out of this file's own source and compared to classify.go,
+// so the two cannot narrow apart.
+func TestWantExtensions_MirrorsTheAcceptedTable(t *testing.T) {
+	const self = "handlers_upload_adversarial_test.go"
+	raw, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatalf("read %s: %v", self, err)
+	}
+	m := upWantExtRE.FindSubmatch(raw)
+	if m == nil {
+		t.Fatalf("no `wantExtensions := map[string]string{...}` literal in %s; the third copy of the accepted-type table has moved and this mirror has lost its anchor", self)
+	}
+
+	// The literal names Go constants, not strings, so the identifiers are resolved here.
+	idents := map[string]string{"upPDF": upPDF, "upPNG": upPNG, "upJPEG": upJPEG, "upWebP": upWebP, "upDOCX": upDOCX, "upXLSX": upXLSX}
+	mirror := map[string]string{}
+	for _, e := range upWantEntryRE.FindAllSubmatch(m[1], -1) {
+		ext, ident := string(e[1]), string(e[2])
+		ct, ok := idents[ident]
+		if !ok {
+			t.Fatalf("wantExtensions maps %q to the identifier %s, which this spec cannot resolve; add it to idents above rather than letting the mirror read short", ext, ident)
+		}
+		mirror[ext] = ct
+	}
+	if len(mirror) == 0 {
+		t.Fatalf("wantExtensions parsed to 0 entries out of %s; the comparison below would be vacuous", self)
+	}
+
+	got := extractionAcceptedTypes(t)
+	if len(got) == 0 {
+		t.Fatal("acceptedDocumentTypes parsed empty out of classify.go; the comparison below would be vacuous")
+	}
+	if !maps.Equal(mirror, got) {
+		t.Errorf("the accepted-type table's copies differ.\n  wantExtensions (%s): %v\n  acceptedDocumentTypes (classify.go): %v", self, mirror, got)
+	}
+}
+
+// The two renames AC-8 requires. Old names are assembled from fragments on purpose: written
+// whole, this spec's own source would satisfy its own absence check forever.
+var upRenamedTests = map[string]string{
+	"TestUploadHandler_AcceptsAll" + "FiveDocumentTypes":                     "TestUploadHandler_AcceptsEveryTypeInTheAcceptedTable",
+	"TestAcceptedDocumentTypes_IsThe" + "FiveCanonicalTypesAndNoSpreadsheet": "TestAcceptedDocumentTypes_IsPDFAndDOCXAndNoSpreadsheet",
+}
+
+// PN-12: neither false test name survives, and both replacements are declared exactly once. A
+// test name that states a type count the table no longer holds is a lie a reader will believe.
+// The declaration count is the control needle: the absence half returns zero hits when the sweep
+// is broken, and only a hit on the REPLACEMENT proves it is not.
+func TestTestNames_StateNoFalseTypeCount(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob *_test.go: %v", err)
+	}
+	if len(files) < 4 {
+		t.Fatalf("the glob found %d _test.go file(s) in this package; the sweep below would read almost nothing", len(files))
+	}
+	corpus := map[string]string{}
+	decls := 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		corpus[f] = string(b)
+		decls += strings.Count(string(b), "\nfunc Test")
+	}
+	if decls < 20 {
+		t.Fatalf("the sweep found %d top-level Test function(s) across %d file(s); it did not read the package", decls, len(files))
+	}
+
+	for old, replacement := range upRenamedTests {
+		n := 0
+		for _, src := range corpus {
+			n += strings.Count(src, "func "+replacement+"(")
+		}
+		if n != 1 {
+			t.Errorf("`func %s(` is declared %d time(s) in this package, want exactly 1 -- it is the name %s must take", replacement, n, old)
+		}
+		for f, src := range corpus {
+			if strings.Contains(src, old) {
+				t.Errorf("%s still names %s; rename it to %s, never delete it", f, old, replacement)
+			}
+		}
 	}
 }

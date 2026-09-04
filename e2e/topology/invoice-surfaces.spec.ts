@@ -3546,6 +3546,16 @@ async function extr09Canvas(page: Page): Promise<string> {
   return seen
 }
 
+// PN-13 (EXTR-15-03, task-854). The legs, named once. `intercepted` is asserted against
+// SYNTHESIZED_LEGS.length rather than a typed count: swapping one literal for another leaves the
+// instrument exactly as hardcoded as it was, and that is the defect this plan has caught twice.
+//
+// EXTR-15-03 drops PNG from the accepted set, so SYNTHESIZED_LEGS loses it. The substitution
+// block below must be driven by this const too, and the PNG upload becomes a refusal assertion.
+const REAL_LEG = 'pdf'
+const SYNTHESIZED_LEGS = ['docx'] as const
+const ALL_LEGS = [REAL_LEG, ...SYNTHESIZED_LEGS] as const
+
 test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over a PNG and a DOCX on a synthesized invoice->document link', async ({
   page,
 }, testInfo) => {
@@ -3677,10 +3687,10 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       '',
       '| Leg | Upload | Extraction | `POST /v1/imports/document` | Canvas rendered | Link |',
       '|---|---|---|---|---|---|',
-      ...(['pdf', 'png', 'docx'] as const).map((leg) => {
+      ...ALL_LEGS.map((leg) => {
         const up = { pdf, png, docx }[leg]
         const job = settled[leg]
-        return `| ${leg.toUpperCase()} | \`${up.filename}\` · ${up.content_type}, ${up.size_bytes} B, reused=${up.reused}, \`${up.content_hash.slice(0, 16)}…\` | ${job ? `${job.state}${job.last_error ? ` - ${job.last_error.replace(/\|/g, '/').slice(0, 120)}` : ''}` : 'no job row'} | ${imported[leg].status} | \`${observed[leg] ?? 'not observed'}\` | ${leg === 'pdf' ? 'real - this invoice IS this document' : "SYNTHESIZED - only the meta response's `document` object was replaced; its id/filename/content-type/size/hash are the real row's, while `uploaded_at`, `uploaded_by`, `invoices_created` and `other_invoice_rows` are placeholders"} |`
+        return `| ${leg.toUpperCase()} | \`${up.filename}\` · ${up.content_type}, ${up.size_bytes} B, reused=${up.reused}, \`${up.content_hash.slice(0, 16)}…\` | ${job ? `${job.state}${job.last_error ? ` - ${job.last_error.replace(/\|/g, '/').slice(0, 120)}` : ''}` : 'no job row'} | ${imported[leg].status} | \`${observed[leg] ?? 'not observed'}\` | ${leg === REAL_LEG ? 'real - this invoice IS this document' : "SYNTHESIZED - only the meta response's `document` object was replaced; its id/filename/content-type/size/hash are the real row's, while `uploaded_at`, `uploaded_by`, `invoices_created` and `other_invoice_rows` are placeholders"} |`
       }),
       '',
       `PDF embed: \`${JSON.stringify(pdfEmbed)}\`. Meta responses substituted: ${intercepted}.`,
@@ -3704,7 +3714,10 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   // The instrument, not the product: without this a probe whose route never fired would record
   // the PDF's canvas three times and read as evidence. Every other line above is observation.
   if (invoiceNumber !== '') {
-    expect(intercepted, 'the PNG and DOCX legs must each have substituted exactly one meta response').toBe(2)
+    expect(
+      intercepted,
+      `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
+    ).toBe(SYNTHESIZED_LEGS.length)
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

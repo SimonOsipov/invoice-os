@@ -57,3 +57,26 @@ describe('BUG-09: the row blocked-reason node stays deleted', () => {
     expect(filesContaining('review-select-blocked-reason')).toEqual([])
   })
 })
+
+// The needles above only bite if a reintroduction reuses the OLD id name. An
+// `aria-describedby` re-added under any other name dangles silently: no rendered spec
+// reads that attribute off `review-select` any more, by decision (D-6, D-7).
+describe('BUG-09: the row select checkbox wires no aria-describedby', () => {
+  const reviewRowSrc = readFileSync(join(SRC, 'components', 'ReviewRow.tsx'), 'utf8')
+  const selectBlock = reviewRowSrc.match(/data-testid="review-select"[\s\S]*?\/>/)?.[0] ?? null
+
+  it('control: the scan reaches the review-select input and its attributes', () => {
+    expect(selectBlock, 'the input block no longer matches -- the absence check below is vacuous').not.toBeNull()
+    // Both edges of the attribute list, so a match that stopped early cannot read as absent.
+    expect(selectBlock, 'the match stops short of the attribute list').toContain('disabled={!isRowSelectable(r)}')
+    expect(selectBlock, 'the match ends before the last attribute').toContain('onChange={(e) => {')
+  })
+
+  it("control: the Re-validate button's own aria-describedby is still found", () => {
+    expect(reviewRowSrc).toContain('aria-describedby={view.revalidateReason != null ? REVALIDATE_REASON_ID : undefined}')
+  })
+
+  it('the select checkbox carries no aria-describedby', () => {
+    expect(selectBlock).not.toContain('aria-describedby')
+  })
+})

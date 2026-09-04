@@ -574,6 +574,35 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     expect(Array.from(rowEl.children), 'the source-file line must stay inside the invoice-number cell').not.toContain(sourceFile)
     expect(rowEl.children.length, 'two extras that both nest cannot widen the row').toBe(REVIEW_CELLS)
   })
+
+  // QA-B09-6 pins the COLLAPSED row only. ExpandedFixPanel is a sibling of the row div
+  // today, so the count is expansion-independent -- nothing pinned that, and nesting the
+  // panel inside the row would put an eighth child on a blocked row unseen.
+  it('QA-B09-9: an EXPANDED blocked row is still exactly SEVEN grid children -- the fix panel is a sibling, not a cell', async () => {
+    mockGetInvoice(detailFixture({
+      status: 'draft',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad rate' }],
+    }))
+    render(
+      <Row
+        r={listRow({ status: 'draft' })}
+        batches={[]}
+        checked={false}
+        expanded
+        onToggleExpand={() => {}}
+        onToggle={() => {}}
+        ctx={rowCtx()}
+        base="https://gw"
+        onChanged={() => {}}
+      />,
+    )
+
+    // Non-vacuity, both halves: the panel really rendered, and the row really is blocked.
+    await screen.findByTestId('review-revalidate')
+    expect((screen.getByTestId('review-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+
+    expect(screen.getByTestId('review-row').children.length, 'expanding a blocked row widened it').toBe(REVIEW_CELLS)
+  })
 })
 
 // Minimal register ctx/fetch for the ReviewRow/InvoicesList parity check (A16-2f) --

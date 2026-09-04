@@ -974,3 +974,112 @@ func TestRLS_WiredPathTheReportStepActuallyRuns(t *testing.T) {
 		t.Errorf("a new job (%q) starts between the gated extraction run and the report step; the report step would not inherit the DATABASE_* env and every TestRLS_* would self-skip", strings.TrimSpace(between))
 	}
 }
+
+// --- EXTR-18-02: the rich fixture's golden, read through the wired path -------------------
+
+// rfGolden and rfFixture are the rich invoice's committed inputs. rfGolden is untracked until
+// this subtask's executor commits it, and neither is wired into ci.yml yet -- see
+// TestGoldens_EveryCommittedGoldenHasACanaryStep.
+const (
+	rfGolden  = "rich_invoice.docling.json"
+	rfFixture = "rich_invoice.pdf"
+)
+
+// rfRiverJobID is a literal distinct from cwScoreWired's corpus-loop range (918200-918544+44).
+const rfRiverJobID = 918900
+
+// rfRun drives ExtractWorker.Work once over the rich fixture through a real DoclingReader
+// replaying rfGolden, and returns every extraction_field_results row it wrote. Each call gets
+// its own fresh tenant via wkFixture, so calling it from more than one test cannot collide on
+// rfRiverJobID.
+func rfRun(t *testing.T) []wpRow {
+	t.Helper()
+	ctx := t.Context()
+
+	tenantID, documentID := wkFixture(t, ctx)
+	text := wpDoclingReader(t, dcReadNamedGolden(t, rfGolden))
+	rules := wpStoreRules(t)
+	ew := wpWorker(t, wkOK(), &wkOpener{body: fxRead(t, rfFixture)}, text, rules.load, &wkAuditRecorder{})
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(rfRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over %s: %v", rfFixture, err)
+	}
+	return wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, rfRiverJobID))
+}
+
+// Story AC #3. Every reason the rich fixture's wired path can emit, by field name and value --
+// never by count. Measured through a real docling:canary run (task-846's Implementation Plan),
+// not predicted from the story text.
+func TestRLS_RichFixtureResolvesEveryReasonTheWiredPathCanEmit(t *testing.T) {
+	rows := rfRun(t)
+
+	wpAssertRankZero(t, rows, "issue_date", stPtr("2026-03-12"), stPtr("ambiguous"))
+	var issueDateRows int
+	for _, r := range rows {
+		if r.name == "issue_date" {
+			issueDateRows++
+		}
+	}
+	if issueDateRows < 2 {
+		t.Errorf("issue_date carries %d row(s), want at least 2 (rank 0 plus >=1 alternative) for an %q verdict", issueDateRows, "ambiguous")
+	}
+
+	wpAssertRankZero(t, rows, "subtotal", stPtr("1500.00"), stPtr("inconsistent"))
+
+	// line_items[2] is the Gadget row -- confirmed against the golden, not an off-by-one guess.
+	wpAssertRankZero(t, rows, extraction.LineFieldName(2, extraction.LineRoleLineTotal), stPtr("900.00"), stPtr("inconsistent"))
+}
+
+// Story AC #3. At least two line_items[N] rows, each carrying a named description and
+// line_total -- never a bare count.
+func TestRLS_RichFixtureCarriesAtLeastTwoLineRows(t *testing.T) {
+	rows := rfRun(t)
+
+	indices := map[int]bool{}
+	for _, r := range rows {
+		if r.rank != 0 {
+			continue
+		}
+		idx, _, ok := extraction.ParseLineFieldName(r.name)
+		if !ok {
+			continue
+		}
+		indices[idx] = true
+	}
+	if len(indices) < 2 {
+		t.Fatalf("found %d distinct line_items[N] index(es), want at least 2: %v", len(indices), indices)
+	}
+
+	for idx := range indices {
+		desc := wpRankZero(t, rows, extraction.LineFieldName(idx, extraction.LineRoleDescription))
+		if desc.value == nil || *desc.value == "" {
+			t.Errorf("line_items[%d].description carries no value", idx)
+		}
+		total := wpRankZero(t, rows, extraction.LineFieldName(idx, extraction.LineRoleLineTotal))
+		if total.value == nil || *total.value == "" {
+			t.Errorf("line_items[%d].line_total carries no value", idx)
+		}
+	}
+}
+
+// Story AC #4. The printed invoice number, decided with reason SQL NULL -- store.go:150-151
+// binds a decided field's reason_code as NULL, never "".
+func TestRLS_RichFixtureInvoiceNumberIsNotINV001(t *testing.T) {
+	rows := rfRun(t)
+
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("ASC-2026-0918"), nil)
+}
+
+// Story AC #5. No document_text_layer verdict -- the rich fixture carries a real text layer.
+// Paired with a positive control (subtotal IS present) so this cannot pass by writing zero rows.
+func TestRLS_RichFixtureEmitsNoTextLayerVerdict(t *testing.T) {
+	rows := rfRun(t)
+
+	names := wpRankZeroNames(rows)
+	if !slices.Contains(names, "subtotal") {
+		t.Fatalf("no rank-0 subtotal row among %v; the positive control failed, so the absence check below proves nothing", names)
+	}
+	if slices.Contains(names, "document_text_layer") {
+		t.Errorf("a rank-0 document_text_layer row is present among %v; the rich fixture has a text layer and should never take that branch", names)
+	}
+}

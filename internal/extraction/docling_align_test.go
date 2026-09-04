@@ -374,3 +374,69 @@ func TestDoclingReader_CorpusTokenisationMatchesItsPin(t *testing.T) {
 		t.Errorf("dcSplitWords left the whole line %q intact; the learned rule under test would still match it", "Buyer TIN: 99999999-0102")
 	}
 }
+
+// --- EXTR-18-02: every committed golden must have a canary step -------------------------
+
+// dgWiredFloor is the minimum number of *.docling.json goldens expected in testdata/. A floor,
+// not an exact count, so a broken directory read or an emptied testdata/ cannot pass by
+// finding nothing to check.
+const dgWiredFloor = 7
+
+// dgBareGoldenStep is ci.yml's one golden step that names no path args at all -- it is the
+// default docling-canary.sh compares against, i.e. dcGoldenName. A plain occurrence count over
+// that literal name would find it only once (the changes-filter entry) and misreport it as
+// unwired, so this golden gets its own check.
+const dgBareGoldenStep = `scripts/ci/docling-canary.sh golden "$GITHUB_SHA"` + "\n"
+
+// dgGoldenIsWired reports whether ci.yml's changes filter names both name's pdf and json AND a
+// docling-canary.sh golden step names the json explicitly (filter entry + step invocation is
+// 2 occurrences).
+func dgGoldenIsWired(yaml, name string) bool {
+	pdf := "internal/extraction/testdata/" + strings.TrimSuffix(name, ".docling.json") + ".pdf"
+	gold := "internal/extraction/testdata/" + name
+	return strings.Contains(yaml, pdf) && strings.Contains(yaml, gold) && strings.Count(yaml, gold) >= 2
+}
+
+// Story AC #2. TestCorpusGoldens_TheCanaryJobCoversEveryLayout (corpus_wired_db_test.go) is the
+// closest existing analog but walks corpusLayouts, a hard-coded slice rich_invoice.pdf is
+// deliberately excluded from (EXTR-18-01) -- it cannot see a missing entry for this golden.
+// This scan walks the filesystem instead, so a new golden with no CI wiring cannot go unseen.
+func TestGoldens_EveryCommittedGoldenHasACanaryStep(t *testing.T) {
+	entries, err := os.ReadDir(fxDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", fxDir, err)
+	}
+	var goldens []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".docling.json") {
+			goldens = append(goldens, e.Name())
+		}
+	}
+	if len(goldens) < dgWiredFloor {
+		t.Fatalf("found %d golden(s) in %s, want at least %d; this scan's directory read is broken or the corpus shrank", len(goldens), fxDir, dgWiredFloor)
+	}
+
+	yaml := acRepoFile(t, ".github/workflows/ci.yml")
+	if !strings.Contains(yaml, "docling-canary.sh golden") {
+		t.Fatalf("ci.yml never runs docling-canary.sh golden; this scan is reading the wrong file and every result below is a false report")
+	}
+
+	// Control needle: a golden known to be correctly wired must be found, or the scan logic
+	// itself is broken and every result below is unreliable.
+	const knownWired = "corpus_totals_block.docling.json"
+	if !dgGoldenIsWired(yaml, knownWired) {
+		t.Fatalf("%s is known-wired but this scan reports it missing; the scan logic itself is broken", knownWired)
+	}
+
+	for _, name := range goldens {
+		if name == dcGoldenName { // native_invoice.docling.json: the bare-default-args step
+			if !strings.Contains(yaml, dgBareGoldenStep) {
+				t.Errorf("%s relies on ci.yml's bare-default-args golden step, but that step is missing", name)
+			}
+			continue
+		}
+		if !dgGoldenIsWired(yaml, name) {
+			t.Errorf("%s is committed but ci.yml does not wire it: needs a changes-filter entry for both its .pdf and .docling.json AND a docling-canary.sh golden step naming the .docling.json explicitly", name)
+		}
+	}
+}

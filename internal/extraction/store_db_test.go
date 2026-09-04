@@ -1535,7 +1535,7 @@ func stFailureKindConstsFromSource(t *testing.T) []string {
 }
 
 // FK-1 (AC-1). The CHECK admits NULL and exactly the five kinds FailureKind.Valid() accepts.
-// ” is in the refused set because "" is what an empty kind must bind to SQL NULL, so a row
+// The SQL empty string is in the refused set because an empty kind must bind to NULL, so a row
 // carrying it could only come from a writer that lost that binding; payload_not_built is in it
 // because internal/submission ships a different FailureKind under the same wire key.
 func TestExtractionJobs_FailureKindCheckAdmitsTheFiveKindsAndNothingElse(t *testing.T) {
@@ -1743,7 +1743,8 @@ func TestRLS_ExtractionJobFailureKindIsNotReadableOrWritableAcrossTenants(t *tes
 }
 
 // The empty kind is refused by the CHECK and unreachable through the binding: both halves,
-// because either alone is satisfied by a writer that never emits ” for the wrong reason.
+// because either alone is satisfied by a writer that never emits the empty string for the
+// wrong reason.
 func TestExtractionJobs_FailureKindEmptyStringIsRefusedAndUnreachable(t *testing.T) {
 	ctx := t.Context()
 	stRequireFailureKind(t, ctx)

@@ -25,6 +25,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 sys.path.insert(0, str(FIXTURES))
 import build_docx
+import build_invoice_docx
 
 
 def test_native_invoice_fixture_matches_the_go_extraction_corpus():
@@ -66,4 +67,16 @@ def test_t04_18_table_invoice_docx_matches_its_generator():
     assert committed == regenerated, (
         f"{build_docx.FIXTURE} does not match its generator -- "
         "run `python tests/fixtures/build_docx.py --update`"
+    )
+
+
+def test_invoice_docx_matches_its_generator():
+    # EXTR-18-04: same idiom as above. This is the ONLY byte-fidelity guard for invoice.docx --
+    # the Go-side TestFixtures_MatchTheirGenerator counts committed .pdf files as a floor, not
+    # an equality, so a green Go run proves nothing about this DOCX's bytes.
+    committed = build_invoice_docx.FIXTURE.read_bytes()
+    regenerated = build_invoice_docx.build()
+    assert committed == regenerated, (
+        f"{build_invoice_docx.FIXTURE} does not match its generator -- "
+        "run `python tests/fixtures/build_invoice_docx.py --update`"
     )

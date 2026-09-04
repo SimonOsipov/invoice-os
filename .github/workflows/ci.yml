@@ -103,6 +103,8 @@ jobs:
               - 'internal/extraction/testdata/rich_invoice.docling.json'
               - 'internal/extraction/testdata/scanned_invoice.pdf'
               - 'internal/extraction/testdata/scanned_invoice.docling.json'
+              - 'internal/extraction/testdata/invoice.docx'
+              - 'internal/extraction/testdata/invoice.docling.json'
 
   go:
     name: Go
@@ -289,6 +291,11 @@ jobs:
           scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
             internal/extraction/testdata/scanned_invoice.pdf \
             internal/extraction/testdata/scanned_invoice.docling.json
+      - name: T-05-18 — invoice.docx golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/invoice.docx \
+            internal/extraction/testdata/invoice.docling.json
       - name: T-02-3 — the container does not run as root
         run: scripts/ci/docling-canary.sh nonroot
       - name: Record image size (informational, not a gate)

@@ -1,6 +1,6 @@
 # Add-a-Service Recipe (Railway)
 
-**Audience:** whoever stamps the next backend service (M2-12: gateway + seven context
+**Audience:** whoever stamps the next backend service (M2-12 onward: gateway + eight context
 services; M7-01: opsconsole). Follow it verbatim — every value below is either fixed by
 convention or derived mechanically from the service name. If you find yourself making a
 judgment call, the recipe is broken: fix the recipe, then the service.
@@ -9,7 +9,7 @@ judgment call, the recipe is broken: fix the recipe, then the service.
 also gets its own ephemeral environment, forked from `development` by `dev-env.yml`'s
 `prepare-env` job, but a new service is never created *in* one of those directly: it is
 created once, here, on `development`, and every subsequent PR fork inherits it. Measured
-(M4-23-04): a fork inherits all 13 service instances with `watchPatterns: []`, the service
+(M4-23-04): a fork inherits all 14 service instances with `watchPatterns: []`, the service
 domains (auto-renamed) and the Postgres TCP proxy. It does **not** inherit a Postgres
 *deployment* (started explicitly), a *volume*, or **sealed variables**.
 `$ENV` throughout this recipe always means `development`'s id below:
@@ -327,13 +327,12 @@ trigger, which had to be `deploymentTriggerDelete`d before the invariants workfl
 
 ---
 
-## Appendix: Python sidecar variant (shape only — NOT provisioned)
+## Appendix: Python sidecar variant
 
-**No `docling` service exists in the Railway fleet.** EXTR-03 built the image and the Go
-client; it did not provision anything. `sidecar/docling/railway.json` is committed and
-referenced by nothing, `EXTRACTOR` defaults to `mock`, and the fleet count is unchanged.
-This appendix records the *shape* a Python sidecar takes, so the next one has a recipe —
-it does not describe a running service.
+**The `docling` service exists in the Railway fleet** (`2fd6a6f2-8ba2-488d-a686-3a4b73f2046d`),
+is deployed by `dev-env.yml`'s `deploy-context` matrix and is named in `expected_json`. It
+is the one worked example of this variant; the table below is the shape a Python sidecar
+takes, so the next one has a recipe.
 
 | | Compute (this recipe) | Python sidecar (shape) |
 |---|---|---|
@@ -344,9 +343,33 @@ it does not describe a running service.
 | Ingress | private-networking only (gateway is the exception) | private-networking only |
 | Watch patterns | empty (§3) | empty (§3) |
 
-Provisioning `docling` would still require: creating the service, setting `DOCLING_URL` on
-whatever component calls it (today only `cmd/submission`, and only when `EXTRACTOR=docling`),
-and taking the fleet-visibility decision recorded as D-10/D-16. All three are deferred.
+All three provisioning steps are done: the service exists, `DOCLING_URL` is set on
+`cmd/submission` (its only caller, and only when `EXTRACTOR=docling`) and on `gateway`, and
+the fleet-visibility decision is taken — probed, not routed.
 
-Sizing, if it is ever provisioned: measured peak RSS is ~2.2 GiB on a one-page scan (see
-`docs/docling-sidecar.md`). Memory, not CPU, is the constraint.
+Sizing: measured peak RSS is ~2.2 GiB on a one-page scan (see `docs/docling-sidecar.md`).
+Memory, not CPU, is the constraint. Neither §5 nor §6 has a sizing knob and every service
+leaves `numReplicas`/`region` null, so this is unverified against Railway's default ceiling.
+
+### What provisioning `docling` proved about this recipe
+
+Five defects, each hit while executing §5 against a Python sidecar for the first time:
+
+1. **`railwayConfigFile` is rejected by the API.** `serviceInstanceUpdate` answers *"Config as
+   Code (railway.json / railway.toml) is deprecated. Use Infrastructure as Code
+   (.railway/railway.ts)."* The other services still carry the field because it was set before
+   the deprecation; a NEW service cannot. `docling` therefore sets `dockerfilePath`,
+   `healthcheckPath` and `restartPolicyType` directly on the service instance — the same three
+   values `sidecar/docling/railway.json` carries. Migrating the fleet to `.railway/railway.ts`
+   is the real fix and has no owner.
+2. **`serviceCreate` attaches a `main` deployment trigger.** `railway-invariants.yml` reds
+   every open PR while any trigger exists, so delete it immediately after creating a service —
+   before anything else.
+3. **§5 step 2's config path is Go-shaped** (`cmd/<svc>/railway.json`); the sidecar path is in
+   this appendix, but the runbook has no branch for it.
+4. **§5 step 4 says `SERVICE` is set "everywhere"; a Python sidecar must not set it.**
+   `sidecar/docling/Dockerfile` has no `ARG SERVICE`.
+5. **A cross-service URL needs its port as a literal.** Writing the port as
+   `${{<svc>.PORT}}` renders `http://<svc>.railway.internal:` when `PORT` is unset — a URL that
+   PARSES, boots clean, and fails every request. Set `PORT` explicitly on the service and write
+   the port literally.

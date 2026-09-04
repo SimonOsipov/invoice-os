@@ -57,7 +57,7 @@ type FleetHealth struct {
 }
 
 // FleetHealthHandler returns GET /healthz/fleet: a public, unauthenticated roll-up of
-// every backend's /healthz. The seven context services are private-network-only, so only
+// every backend's /healthz. Every upstream is private-network-only, so only
 // the gateway can reach them — this route is how CI (and a future status page) observes
 // fleet health through the one public backend surface. The gateway reports itself up (it
 // is answering this request); each upstream is probed at <base>/healthz. Overall 200 when

@@ -8,7 +8,14 @@
 // `mockDefaultResult` and the `clean-invoice` fixture alike, held there by
 // TestMockExtractor_InvoiceNumberIsUnchangedAndClean -- so two documents against one entity
 // must collide; DOCUP-04 proves the loser quarantines as
-// a domain 201, not a 500. Independent parallel success needs a non-mock extractor (EXTR-17).
+// a domain 201, not a 500. Independent parallel success needs a non-mock extractor.
+//
+// EXTR-17 did NOT close this. It wired and provisioned the docling arm but left
+// EXTRACTOR=mock deployed: flipping it reads native_invoice.pdf as 11 fields with zero line
+// items, which breaks 12 of 36 extraction specs -- 11 of them losing coverage no fixture in
+// the repo can restore (the EXTR-13 line grid, the EXTR-12 reason pills). Closing this needs
+// a rich native fixture the tier-1 rules resolve into a multi-line ambiguous result, and that
+// fixture is the real work. Until it exists the docling arm has no deployed oracle.
 //
 // Multipart lives in this file, not client.ts: apiFetch and rawFetch both force
 // Content-Type: application/json (packages/api-client/src/client.ts:47-50, client.ts:40-45), the

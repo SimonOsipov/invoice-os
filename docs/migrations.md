@@ -113,8 +113,8 @@ How the ordering works (wired at **M2-12**, when the gateway exists):
 1. On a deploy, CI deploys the **gateway first** and **health-gates** it — the gateway
    runs `goose up` (against `DATABASE_MIGRATION_URL`) as part of coming up healthy, so the
    schema is fully migrated *before* it reports healthy.
-2. Only after the gateway is healthy does CI deploy the **eight context services**. They
-   boot against an already-migrated schema and never run migrations themselves.
+2. Only after the gateway is healthy does CI deploy the **eight context services** and the
+   `docling` sidecar. They boot against an already-migrated schema and never run migrations themselves.
 
 This gives a **global ordering barrier** (schema-before-fleet) using only in-network
 connections — the gateway is the one service that already needs privileged DB reach, so
@@ -131,7 +131,7 @@ it doubles as the migrator. No context service is granted the migrator URL.
 > healthy. The CI ordering lives in `.github/workflows/dev-env.yml` (the `preview-backend.yml`
 > name above is retired — dev-env.yml superseded it at M2-14): deploy the
 > gateway → poll its public `/healthz` until 200 (the health-gate, which also surfaces a
-> failed migration) → deploy the eight context services. Because the gateway embeds the
+> failed migration) → deploy the eight context services and the `docling` sidecar. Because the gateway embeds the
 > SQL, its `cmd/gateway/railway.json` watch patterns include `migrations/**` — the one
 > service for which a migration change would rebuild the image if Railway's committed
 > `watchPatterns` field were wired to anything (it isn't — add-a-service.md §3's gotcha;

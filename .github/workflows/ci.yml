@@ -87,6 +87,18 @@ jobs:
               # skipped job as a pass.
               - 'internal/extraction/testdata/native_invoice.pdf'
               - 'internal/extraction/testdata/native_invoice.docling.json'
+              - 'internal/extraction/testdata/corpus_inline_labels.pdf'
+              - 'internal/extraction/testdata/corpus_inline_labels.docling.json'
+              - 'internal/extraction/testdata/corpus_split_labels.pdf'
+              - 'internal/extraction/testdata/corpus_split_labels.docling.json'
+              - 'internal/extraction/testdata/corpus_stacked_labels.pdf'
+              - 'internal/extraction/testdata/corpus_stacked_labels.docling.json'
+              - 'internal/extraction/testdata/corpus_two_column.pdf'
+              - 'internal/extraction/testdata/corpus_two_column.docling.json'
+              - 'internal/extraction/testdata/corpus_ambiguous_date.pdf'
+              - 'internal/extraction/testdata/corpus_ambiguous_date.docling.json'
+              - 'internal/extraction/testdata/corpus_totals_block.pdf'
+              - 'internal/extraction/testdata/corpus_totals_block.docling.json'
 
   go:
     name: Go
@@ -152,7 +164,7 @@ jobs:
           grep -q 'tier-1 accuracy over the golden corpus' accuracy.txt
 
   # Prove the shared multi-service Dockerfile (M2-04) actually builds before it
-  # reaches Railway (M2-12). All seven services stamp the same root Dockerfile
+  # reaches Railway (M2-12). All nine Go services stamp the same root Dockerfile
   # with only the SERVICE build arg differing, so one plain service (tenancy) is
   # enough to guard "Option B": the build only sees Go source because
   # Dockerfile.dockerignore overrides the SPA-tuned root .dockerignore, so a
@@ -233,6 +245,36 @@ jobs:
         run: scripts/ci/docling-canary.sh convert
       - name: T-05-18 — the committed Go golden still matches the built image
         run: scripts/ci/docling-canary.sh golden "$GITHUB_SHA"
+      - name: T-05-18 — the corpus golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/corpus_inline_labels.pdf \
+            internal/extraction/testdata/corpus_inline_labels.docling.json
+      - name: T-05-18 — corpus_split_labels golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/corpus_split_labels.pdf \
+            internal/extraction/testdata/corpus_split_labels.docling.json
+      - name: T-05-18 — corpus_stacked_labels golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/corpus_stacked_labels.pdf \
+            internal/extraction/testdata/corpus_stacked_labels.docling.json
+      - name: T-05-18 — corpus_two_column golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/corpus_two_column.pdf \
+            internal/extraction/testdata/corpus_two_column.docling.json
+      - name: T-05-18 — corpus_ambiguous_date golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/corpus_ambiguous_date.pdf \
+            internal/extraction/testdata/corpus_ambiguous_date.docling.json
+      - name: T-05-18 — corpus_totals_block golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/corpus_totals_block.pdf \
+            internal/extraction/testdata/corpus_totals_block.docling.json
       - name: T-02-3 — the container does not run as root
         run: scripts/ci/docling-canary.sh nonroot
       - name: Record image size (informational, not a gate)
@@ -597,6 +639,17 @@ jobs:
         # -run filter, so later tests are picked up with no workflow edit. Needs DATABASE_URL
         # (app) and DATABASE_SUPERUSER_URL (fixtures), both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/extraction/...
+      - name: Report the wired-path decision rate
+        run: |
+          # The gated step above drops a passing test's buffered log, so the wired report
+          # reaches CI only from here. pipefail because run: is `bash -e` and tee would
+          # otherwise mask a failed go test. TestRLS_WiredPathScoresTheCorpus renders the
+          # report; the filter is its PREFIX because
+          # TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest reads corpus_wired_db_test.go
+          # for renderers and matches itself. Keep both names in here, not in a YAML comment.
+          set -o pipefail
+          go test -count=1 -v -run 'TestRLS_WiredPath' ./internal/extraction/ | tee wired-corpus.txt
+          grep -q 'tier-1 decision rate through the wired worker path' wired-corpus.txt
 
   # M2-10 audit suite: proves audit_log rows are append-only (UPDATE/DELETE/TRUNCATE rejected
   # for the app by the missing grant and for the table owner by the append-only trigger) and

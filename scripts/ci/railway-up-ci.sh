@@ -7,7 +7,7 @@
 # page showed no incident — a sub-threshold recurrence of the resolved 2026-05-27
 # "Build Log Delivery Delays" class). `railway up --ci` returns after the BUILD, not
 # after the deployment is healthy, so the REAL health oracle is already downstream:
-# health-gate (gateway /healthz) + fleet-gate (/healthz/fleet, all 8 backends). Only
+# health-gate (gateway /healthz) + fleet-gate (/healthz/fleet, all 9 backends). Only
 # the known stream-failure exit is tolerated; any OTHER non-zero exit (auth, unknown
 # service, genuine build error) still fails the step.
 #

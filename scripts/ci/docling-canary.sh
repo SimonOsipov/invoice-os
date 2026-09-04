@@ -158,12 +158,19 @@ print(f'/v1/read converted the fixture offline: {len(tokens)} token(s)')
   ;;
 
 golden)
-  # T-05-18: internal/extraction/testdata/native_invoice.docling.json still matches what the
-  # built image returns. The sha gate is the point -- a docling:canary tag left over from an
-  # earlier subtask serves that subtask's /v1/read and produces a plausible-looking fake
-  # golden (observed: a stub image yielded docling_version "stub" and one "STUB" token).
-  want_sha="${1:?usage: docling-canary.sh golden <sha> [--update]}"
+  # T-05-18: a committed .docling.json still matches what the built image returns. The sha gate
+  # is the point -- a docling:canary tag left over from an earlier subtask serves that subtask's
+  # /v1/read and produces a plausible-looking fake golden (observed: a stub image yielded
+  # docling_version "stub" and one "STUB" token). It gates every fixture, never just the first.
+  want_sha="${1:?usage: docling-canary.sh golden <sha> [<fixture.pdf> <golden.json>] [--update]}"
   shift
+  fixture_path="internal/extraction/testdata/native_invoice.pdf"
+  golden_path="internal/extraction/testdata/native_invoice.docling.json"
+  if [ "${1:-}" != "" ] && [ "${1:-}" != "--update" ]; then
+    fixture_path="$1"
+    golden_path="${2:?usage: docling-canary.sh golden <sha> <fixture.pdf> <golden.json> [--update]}"
+    shift 2
+  fi
   update="${1:-}"
 
   got_sha="$(healthz_json | python3 -c 'import json, sys; print(json.load(sys.stdin)["build"])')"
@@ -172,8 +179,7 @@ golden)
     exit 1
   fi
 
-  golden_path="internal/extraction/testdata/native_invoice.docling.json"
-  docker cp internal/extraction/testdata/native_invoice.pdf "$CONTAINER":/tmp/native_invoice.pdf
+  docker cp "$fixture_path" "$CONTAINER":/tmp/golden_fixture.pdf
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' EXIT
   docker exec "$CONTAINER" python3 -c "
@@ -181,7 +187,7 @@ import json
 import urllib.error
 import urllib.request
 
-with open('/tmp/native_invoice.pdf', 'rb') as f:
+with open('/tmp/golden_fixture.pdf', 'rb') as f:
     body = f.read()
 req = urllib.request.Request(
     'http://localhost:${PORT}/v1/read',
@@ -207,7 +213,7 @@ print(json.dumps(payload, indent=2, sort_keys=True))
   fi
 
   if ! cmp -s "$tmp" "$golden_path"; then
-    echo "::error::$golden_path does not match the built image -- regenerate with: scripts/ci/docling-canary.sh golden <sha> --update"
+    echo "::error::$golden_path does not match the built image -- regenerate with: scripts/ci/docling-canary.sh golden <sha> $fixture_path $golden_path --update"
     diff -u "$golden_path" "$tmp" || true
     exit 1
   fi

@@ -1116,3 +1116,48 @@ func TestReconcile_AJTBEntityTINNeverProducesAFalseInconsistent(t *testing.T) {
 		t.Errorf("supplier_tin reason = %q, want ReasonInconsistent -- 99999999-0102 genuinely differs from the JTB entity, whatever its own TIN shape", got.Reason)
 	}
 }
+
+// EXTR-17-02 AC-3. The pair a document with no line-item table produces: line_items carries
+// `missing` in its own right while a single clean subtotal keeps ReasonNone, because the
+// sum check sits behind haveLineTotal and never ran (EXTR-05 D-19). Neither reads as
+// `inconsistent`, which is what a sum check running against a zero total would produce.
+func TestReconcile_MissingLinesAndCleanSubtotalAreDistinguishable(t *testing.T) {
+	out := extraction.Reconcile(extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "1000.00")},
+		Lines:      nil,
+	})
+	if len(out) == 0 {
+		t.Fatalf("Reconcile returned no result; every assertion below would hold vacuously")
+	}
+
+	lines, ok := rcFind(out, "line_items")
+	if !ok {
+		t.Fatalf("Reconcile emitted no line_items block: %v", rcNames(out))
+	}
+	if lines.Reason != extraction.ReasonMissing {
+		t.Errorf("line_items carries reason %q, want %q -- no table was found", lines.Reason, extraction.ReasonMissing)
+	}
+
+	subtotal, ok := rcFind(out, "subtotal")
+	if !ok {
+		t.Fatalf("Reconcile emitted no subtotal: %v", rcNames(out))
+	}
+	if subtotal.Reason != extraction.ReasonNone {
+		t.Errorf("subtotal carries reason %q, want %q -- the sum check never ran", subtotal.Reason, extraction.ReasonNone)
+	}
+	if subtotal.Value == nil || *subtotal.Value != "1000.00" {
+		t.Errorf("subtotal reads %v, want the single clean candidate 1000.00", subtotal.Value)
+	}
+
+	for _, r := range out {
+		if r.Reason == extraction.ReasonInconsistent {
+			t.Errorf("%s reads inconsistent; with no parseable line total nothing may be compared", r.Name)
+		}
+	}
+	if got := rcLineValues(out); len(got) != 0 {
+		t.Errorf("Reconcile emitted %d line-item cell row(s) with no lines: %v", len(got), got)
+	}
+	if got := rcLineFlags(out); len(got) != 0 {
+		t.Errorf("Reconcile emitted %d arithmetic flag(s) with no lines: %v", len(got), got)
+	}
+}

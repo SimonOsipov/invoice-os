@@ -184,6 +184,61 @@ after the label was decided as the supplier's name. It now reads `missing`. `acF
 empty and `TestCorpusDoc_RecordsTheDecisionRate` asserts this section carries no
 false-decision row, so a new fabrication is red rather than green.
 
+## Wired-path decision rate
+
+Measured 2026-09-03 on `feature/extr-17-the-pipeline-runs-end-to-end`, over the same 44 pairs the
+two rates above score. Driven through `ExtractWorker.Work` — the real document store, the real
+transaction boundaries, the fingerprint hoist, the learned-rule lookup and the rank-0 encoding —
+and scored from the rows read back out of `extraction_field_results` rather than from a
+`Reconcile` return value, the pipeline decides **43 of 44** — **0.9773**. That is the in-process
+decision rate, unmoved.
+
+`TestRLS_WiredPathRateMatchesTheInProcessDecisionRate` asserts the *equality* rather than pinning
+a second number, so a stage the in-process harness skips fails here instead of being absorbed.
+The single miss is the same `t1aGaps` pair, `corpus_two_column.pdf` / `buyer_tin`, and
+`TestRLS_WiredPathMissesExactlyTheRecordedGaps` compares the missed set to `t1aGaps` by identity
+in both directions: `43 == 43` also holds for a path that misses a *different* pair, so a count
+cannot tell one inherited gap from a new gap plus a new hit.
+
+The corpus runs through a real `DoclingReader` replaying the six committed `corpus_*.docling.json`
+goldens — the reader the deployed worker uses when `EXTRACTOR=docling` — and a second time
+through `PDFiumReader`, the reader the in-process harness reads. Both decide 43 of 44 and miss
+the same pair; `TestRLS_WiredPathReadsTheSameThroughBothReaders` compares the two missed sets by
+identity, not by rate.
+
+Two preconditions are asserted rather than assumed. The denominator is `tier1DecisionPairs`, and
+the walk is scoped to `HeaderFields`, so the `line_items` block row every layout writes is not
+counted as a field. And every layout's tenant is served **zero** learned rules on the baseline
+run, with a seeded run beside it as the positive control — a rule store that served nothing to
+anyone would satisfy the zero half alone.
+
+**The rank control.** On this corpus the rank-0 rate and the any-rank rate both read 43 of 44, so
+the shipped number alone cannot tell a decision measure from a candidate-containment one. That is
+the EXTR-16 defect, and `TestRLS_WiredPathRankingDecoyMovesTheRate` is what stops it recurring
+here: a **learned** `AnchorRule`, written through the real rule store for
+`corpus_totals_block.pdf`'s fingerprint, whose label matches both amount tokens on that layout and
+files them under `total`. `TierLearned` out-ranks `TierGeneric`, the two candidates tie at
+Distance 0, and `compareRegions` hands rank 0 to the Sub-total amount above — so the wired rate
+falls to **42 of 44** while the layout's real total, still reached, is stored one rank down.
+Scored at *any* rank the same run reads 43 of 44, and the spec asserts that difference. A
+single-amount decoy does not discriminate: `decideField` keeps an alternative only at the head's
+tier *and* distance, so a lone `TierLearned` match leaves the real total with no row at all and
+both scorers read 42.
+
+**This section has no honest oracle, and is recorded as having none.**
+`TestCorpusDoc_RecordsTheWiredPathRate` compares this prose to a Go constant, so it fails when
+someone edits the page — never when the wired measurement itself is wrong. The measurement's real
+reader is the `Report the wired-path decision rate` step in `.github/workflows/ci.yml`. This
+package's DB-backed suite runs through a gate that pipes `go test -json` into a file and discards
+a passing test's buffered log, so the report reaches CI only from a step of its own, which greps
+its own output for the marker; `TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest` keeps that
+step's `-run` filter from rotting into one that matches nothing.
+
+The remaining miss is a Tier-1 **reach** limit, not a storage or a ranking one. Closing it by
+widening the anchor lexicon needs a `FingerprintVersion` bump, because the lexicon is an input to
+the fingerprint; closing it by another route — a pointed correction on a distinguishing label —
+needs none.
+
 ## Regenerating
 
 ```

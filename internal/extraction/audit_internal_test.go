@@ -111,12 +111,34 @@ func failureKindConsts(t *testing.T) map[string]string {
 	return got
 }
 
-func TestFailureKind_VocabularyIsExactlyFour(t *testing.T) {
+// EXTR-17-01 AC-3: the text read is its own stage, so it is its own kind. Valid() is the only
+// gate on the extraction failure_kind -- the sole failure_kind CHECK in migrations is on the
+// invoices column, a different table with a disjoint vocabulary -- so a kind Valid() rejects is
+// a payload the adapter refuses to write.
+func TestFailureKind_TextNotReadIsValid(t *testing.T) {
+	if got, want := FailureTextNotRead, FailureKind("text_not_read"); got != want {
+		t.Errorf("FailureTextNotRead = %q, want %q", got, want)
+	}
+	if !FailureTextNotRead.Valid() {
+		t.Errorf("FailureKind(%q).Valid() = false, want true; the adapter gates its failure branch on Valid(), so a kind it rejects is a terminal outcome that goes unrecorded", FailureTextNotRead)
+	}
+
+	// Not vacuous: Valid() still refuses what is not a kind. Without this a Valid() that
+	// returned true for everything would pass the assertion above.
+	for _, k := range []FailureKind{"", "text_not_readable", "TEXT_NOT_READ", "quokka"} {
+		if k.Valid() {
+			t.Errorf("FailureKind(%q).Valid() = true, want false", k)
+		}
+	}
+}
+
+func TestFailureKind_VocabularyIsExactlyFive(t *testing.T) {
 	want := map[string]FailureKind{
 		"FailureDocumentUnavailable": "document_unavailable",
 		"FailurePagesNotRendered":    "pages_not_rendered",
 		"FailurePageRowsNotWritten":  "page_rows_not_written",
 		"FailureExtractFailed":       "extract_failed",
+		"FailureTextNotRead":         "text_not_read",
 	}
 
 	seen := map[FailureKind]string{}
@@ -128,12 +150,12 @@ func TestFailureKind_VocabularyIsExactlyFour(t *testing.T) {
 			t.Errorf("%s is the empty string; a blank kind is indistinguishable from an unset field", name)
 		}
 		if prior, dup := seen[k]; dup {
-			t.Errorf("%s and %s both carry %q; the four kinds must be pairwise distinct", prior, name, k)
+			t.Errorf("%s and %s both carry %q; the five kinds must be pairwise distinct", prior, name, k)
 		}
 		seen[k] = name
 	}
-	if len(seen) != 4 {
-		t.Errorf("the four names resolve to %d distinct value(s), want 4", len(seen))
+	if len(seen) != 5 {
+		t.Errorf("the five names resolve to %d distinct value(s), want 5", len(seen))
 	}
 
 	// "" is invalid too: a success carries no kind, and Valid() is what the adapter would
@@ -144,7 +166,7 @@ func TestFailureKind_VocabularyIsExactlyFour(t *testing.T) {
 		}
 	}
 
-	// Exactly four in source: reflect cannot see a const, so a fifth one added later has to
+	// Exactly five in source: reflect cannot see a const, so a sixth one added later has to
 	// be a deliberate edit here.
 	got := failureKindConsts(t)
 	if len(got) != len(want) {
@@ -166,7 +188,7 @@ func TestFailureKind_VocabularyIsExactlyFour(t *testing.T) {
 	}
 	for name := range got {
 		if _, ok := want[name]; !ok {
-			t.Errorf("const %s is a FailureKind this test does not name; a fifth kind widens the audit vocabulary and needs a label", name)
+			t.Errorf("const %s is a FailureKind this test does not name; a sixth kind widens the audit vocabulary and needs a label", name)
 		}
 	}
 }

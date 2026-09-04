@@ -251,6 +251,18 @@ func (r *wkStubReader) Read(_ context.Context, _ extraction.Document, onPage fun
 	return extraction.PageResult{Pages: r.pages}, nil
 }
 
+// wkErrReader is the only PageReader in this file whose Read fails. FailureKindPerStage's
+// text lever needs one: wkStubReader carries no error field, and the internal suite's rtReader
+// is in package extraction and invisible from out here.
+type wkErrReader struct{ err error }
+
+func (*wkErrReader) Name() string    { return "extr-17-err-reader" }
+func (*wkErrReader) Version() string { return "v1" }
+
+func (r *wkErrReader) Read(context.Context, extraction.Document, func(extraction.Page) error) (extraction.PageResult, error) {
+	return extraction.PageResult{}, r.err
+}
+
 // wkPageSink records the worker's PUTs and, per call, whether the context it arrived on
 // carried an auth identity. failOn > 0 errors on the call of that number.
 type wkPageSink struct {
@@ -463,6 +475,19 @@ func wkWorkerPages(t *testing.T, ext extraction.Extractor, op *wkOpener, pages *
 	return &extraction.ExtractWorker{
 		Pool: stRequire(t).app, Extractor: ext, Open: op.open, Pages: pages, Audit: rec.record,
 	}
+}
+
+// wkWorkerText is wkWorkerAudit with the text seam wired. Rules is set too, and must be: Work
+// calls it on the text branch, so a nil func would panic instead of failing the stage under
+// test.
+func wkWorkerText(t *testing.T, ext extraction.Extractor, op *wkOpener, text extraction.PageReader, rec *wkAuditRecorder) *extraction.ExtractWorker {
+	t.Helper()
+	ew := wkWorkerAudit(t, ext, op, rec)
+	ew.Text = text
+	ew.Rules = func(context.Context, string, string) ([]extraction.AnchorRule, error) {
+		return []extraction.AnchorRule{}, nil
+	}
+	return ew
 }
 
 // wkPDFiumPages is the page store the two corpus specs drive: the real renderer, a recording
@@ -1937,7 +1962,7 @@ func TestExtractWorker_NilAuditFailsBeforeAnyStateChange(t *testing.T) {
 	}
 }
 
-// T3-6. AC-4: the failed event names the stage that failed. Four levers, one per error path in
+// T3-6. AC-4: the failed event names the stage that failed. Five levers, one per error path in
 // Work()'s if err == nil chain, each driven at attempt 3 of 3 because the kind only reaches a
 // row on the dead_lettered branch.
 func TestExtractWorker_FailureKindPerStage(t *testing.T) {
@@ -1997,6 +2022,17 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 			},
 			want: extraction.FailureExtractFailed,
 		},
+		{
+			name:       "w.Text.Read",
+			riverJobID: 909845,
+			worker: func(rec *wkAuditRecorder) *extraction.ExtractWorker {
+				// Every upstream stage succeeds: wkOK, a fresh opener and the default page
+				// store. An earlier failure would win the short-circuit and classify some
+				// other stage.
+				return wkWorkerText(t, wkOK(), wkNewOpener(), &wkErrReader{err: boom}, rec)
+			},
+			want: extraction.FailureTextNotRead,
+		},
 	}
 
 	// Subtests, not a bare loop: one arm that cannot reach its stage must not stop the other
@@ -2035,16 +2071,17 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 		})
 	}
 
-	// Set equality against the whole vocabulary: four distinct values is satisfied by four
-	// values that are not the four FailureKind declares.
+	// Set equality against the whole vocabulary: five distinct values is satisfied by five
+	// values that are not the five FailureKind declares.
 	want := map[extraction.FailureKind]bool{
 		extraction.FailureDocumentUnavailable: true,
 		extraction.FailurePagesNotRendered:    true,
 		extraction.FailurePageRowsNotWritten:  true,
 		extraction.FailureExtractFailed:       true,
+		extraction.FailureTextNotRead:         true,
 	}
 	if len(written) != len(want) {
-		t.Fatalf("the four levers wrote %d distinct failure_kind value(s) (%v), want %d", len(written), written, len(want))
+		t.Fatalf("the levers wrote %d distinct failure_kind value(s) (%v), want %d", len(written), written, len(want))
 	}
 	for k := range want {
 		if _, ok := written[k]; !ok {
@@ -2397,5 +2434,58 @@ func TestRLS_ExtractWorkerWritesAlternativeRowsAtRankOneAndTwo(t *testing.T) {
 	}
 	if reasons != 0 {
 		t.Errorf("%d alternative row(s) carry a reason_code, want 0 -- only the decided reading does", reasons)
+	}
+}
+
+// EXTR-17-01 AC-10. A nil Text keeps Work on the Extractor branch byte for byte
+// (worker_pipeline_db_test.go's specs set Text, which is what makes the other branch
+// observable). EXTR-17-03 wired cmd/submission/main.go's Text from selectTextReader, so nil is
+// now the mock and unset configuration rather than the only one there is -- that is the path
+// the whole deployed fleet runs, and this pins it.
+//
+// In this file, not worker_internal_test.go: Work's first act after the nil-Audit guard is
+// db.WithinTenantTx, so it needs a pool.
+func TestExtractWorker_NilTextKeepsTheExtractorPath(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	op := wkNewOpener()
+	ext := wkOK()
+	rec := &wkAuditRecorder{}
+	ew := wkWorkerAudit(t, ext, op, rec)
+
+	// The premise, asserted rather than assumed: a fixture that quietly set Text would make
+	// every assertion below evidence for the wrong branch.
+	if ew.Text != nil {
+		t.Fatalf("ExtractWorker.Text is %T, want nil -- this spec is about the Extractor branch", ew.Text)
+	}
+
+	const riverJobID = int64(912101)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if n := ext.count(); n != 1 {
+		t.Errorf("the extractor ran %d time(s), want 1 -- a nil Text must leave the Extractor branch untouched", n)
+	}
+	if n := op.count(); n != 1 {
+		t.Errorf("OpenDocument ran %d time(s), want 1", n)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	stAssertFieldResultCount(t, ctx, xid, len(wkOneField()))
+
+	// The terminal event is the success one: a text read that ran and failed would have
+	// emitted a failure carrying a kind instead.
+	evs := rec.events()
+	if len(evs) != 1 {
+		t.Fatalf("the worker emitted %d audit event(s), want 1", len(evs))
+	}
+	if !evs[0].Succeeded {
+		t.Errorf("the worker emitted a failure carrying kind %q, want the success event", evs[0].FailureKind)
+	}
+	if evs[0].FailureKind != "" {
+		t.Errorf("the success event carries FailureKind %q, want empty", evs[0].FailureKind)
 	}
 }

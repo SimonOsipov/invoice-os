@@ -51,7 +51,37 @@ type ExtractWorker struct {
 	Open      OpenDocument
 	Pages     *PageStore
 	Audit     RecordExtractionAudit
-	Logger    *slog.Logger
+	// Text is the second reader. nil keeps Work on the Extractor branch, byte for byte
+	// (TestExtractWorker_NilTextKeepsTheExtractorPath).
+	Text PageReader
+	// Rules loads the tenant's learned anchor rules for one layout fingerprint.
+	Rules  LoadAnchorRules
+	Logger *slog.Logger
+}
+
+// readText collects one Text.Read into the pages, the token pages and the reader's own totals.
+// PageResult is returned because the caller classifies on res.TextChars.
+//
+// An error discards both slices: a half-read document otherwise yields half the line items with
+// totals that silently disagree with the invoice (TestReadText_DiscardsEverythingOnError). A
+// zero-page read is not an error — that is the no-text-layer classification, not a read failure.
+func readText(ctx context.Context, r PageReader, doc Document) ([]Page, []TokenPage, PageResult, error) {
+	var pages []Page
+	var tokens []TokenPage
+	collect := CollectTokens(&tokens)
+	res, err := r.Read(ctx, doc, func(p Page) error {
+		if err := collect(p); err != nil {
+			return err
+		}
+		// ImagePNG is borrowed for the length of this call; the pages outlive it.
+		p.ImagePNG = nil
+		pages = append(pages, p)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, PageResult{}, err
+	}
+	return pages, tokens, res, nil
 }
 
 // Timeout raises River's 60s client default for this kind alone: the executor resolves
@@ -105,7 +135,11 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 
 	var results []FieldResult
 	var images []PageImage
-	var tokenPages []TokenPage
+	var tokenPages []TokenPage // PDFium's, from Pages.Ingest: the fingerprint source
+	var textPages []Page       // Text's, for LineItems
+	var textTokens []TokenPage // Text's, for Resolve
+	var textRes PageResult
+	var fingerprint string
 	// Set by whichever stage below fails. Control flow, never a parse of last_error
 	// (TestExtractWorker_FailureKindPerStage).
 	var kind FailureKind
@@ -121,6 +155,9 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		}
 	}
 	if err == nil {
+		// Hoisted out of the closure below: the layout row and the rule lookup must read one
+		// Fingerprint over the same PDFium tokens.
+		fingerprint = Fingerprint(tokenPages)
 		// Objects first, rows last, so a committed row always names an object that was PUT
 		// (TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails). Outside queue.OncePerJob on
 		// purpose: these rows commit before Extract, so a document whose field extraction fails
@@ -136,16 +173,50 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			if err != nil {
 				return err
 			}
-			return writeLayoutTx(ctx, tx, args.TenantID, row.ID, Fingerprint(tokenPages), anchors)
+			return writeLayoutTx(ctx, tx, args.TenantID, row.ID, fingerprint, anchors)
 		}); err != nil {
 			kind = FailurePageRowsNotWritten
 		}
 	}
+	// After the commit above on purpose: a read failure dead-letters with the page inventory
+	// and the layout already stored (TestRLS_ExtractWorkerDeadLettersOnTextReadFailure).
+	if err == nil && w.Text != nil {
+		if textPages, textTokens, textRes, err = readText(ctx, w.Text, doc); err != nil {
+			kind = FailureTextNotRead
+		}
+	}
 	if err == nil {
-		// ctx, not octx: the extractor is fenced from the database and must not be handed a
-		// tenant identity.
-		if results, err = w.Extractor.Extract(ctx, doc); err != nil {
-			kind = FailureExtractFailed
+		switch {
+		case w.Text == nil:
+			// ctx, not octx: the extractor is fenced from the database and must not be handed
+			// a tenant identity.
+			if results, err = w.Extractor.Extract(ctx, doc); err != nil {
+				kind = FailureExtractFailed
+			}
+		case textRes.TextChars == 0:
+			// The shape both real extractors already emit, so a document with no text layer
+			// reads as one unreadable verdict rather than ten missing fields.
+			results = []FieldResult{{
+				Field:        Field{Name: doclingTextLayerField, Reason: ReasonUnreadable},
+				Alternatives: []Field{},
+			}}
+		default:
+			var learned []AnchorRule
+			// Not swallowed: a dropped rule set would read clean while the tenant's
+			// corrections were silently gone. extract_failed, because field extraction is the
+			// stage that failed and text_not_read names the read.
+			if learned, err = w.Rules(ctx, args.TenantID, fingerprint); err != nil {
+				kind = FailureExtractFailed
+			}
+			if err == nil {
+				// Entity{} skips Reconcile's advisory supplier cross-check; invoice.Store
+				// overwrites supplier_tin/supplier_name from the entity on every write anyway.
+				results = Reconcile(Input{
+					Candidates: Resolve(textTokens, RuleSet{Learned: learned, Tier1: Tier1Rules}),
+					Lines:      LineItems(textPages),
+					Entity:     Entity{},
+				})
+			}
 		}
 	}
 	if err != nil {

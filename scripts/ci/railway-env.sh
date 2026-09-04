@@ -1070,14 +1070,14 @@ cmd_select_domain() {
 
 # --- Reconcile B: settle -----------------------------------------------------
 #
-# MEASURED: all 13 service instances materialise IMMEDIATELY after
+# MEASURED: all 14 service instances materialise IMMEDIATELY after
 # environmentCreate. There is NO settle race. This poll is kept as cheap
 # insurance against read-after-write lag only, and is deliberately SHORT (60s)
 # because it is not guarding a race that was ever observed. Do not cite a race
 # as its justification.
 #
 # It checks only the 5 service ids this command goes on to act on. It is NOT a
-# second copy of the Watch-Paths assertion's 11-service list, which remains the
+# second copy of the Watch-Paths assertion's 14-service list, which remains the
 # sole authority on fleet membership.
 settle_fork() {
   local env_id="$1" try body present missing v

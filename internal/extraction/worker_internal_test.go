@@ -4,7 +4,10 @@ package extraction
 
 import (
 	"context"
+	"errors"
 	"go/ast"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -215,5 +218,396 @@ func TestMockExtractor_DefaultResultFlaggedCountIgnoresAlternatives(t *testing.T
 	if got, want := flaggedCount(results), 7; got != want {
 		t.Errorf("flaggedCount over the default result = %d, want %d -- %d decided field(s) carry a reason and %d alternative(s) must not be counted",
 			got, want, flagged, alternatives)
+	}
+}
+
+// --- EXTR-17-01: the text-read seam -----------------------------------------------------
+
+// The named seam is satisfied by (*Store).AnchorRulesFor with no adapter. A func type nothing
+// references drifts silently.
+var _ LoadAnchorRules = (&Store{}).AnchorRulesFor
+
+// rtPage is one page the fake reader hands to onPage, plus the tokens its TokenPage must carry.
+type rtPage struct {
+	number int
+	tokens []Token
+	tables []Table
+}
+
+// rtReader is a PageReader driven entirely by the spec. It reuses ONE image buffer across every
+// page and scribbles over it after each callback returns, which is what Page.ImagePNG's
+// borrowed-not-owned contract permits (pagereader.go:63-65). No shipped reader does this today
+// -- PDFium allocates a fresh buffer per page and Docling sets no image at all -- so the guard
+// is on the contract, which is what stops a future reader from being unsafe.
+type rtReader struct {
+	pages []rtPage
+	res   PageResult
+	err   error
+	// failAfter is the 1-based page after which Read gives up with err. Zero reads every page.
+	failAfter int
+
+	buf   []byte
+	calls int
+}
+
+func (*rtReader) Name() string    { return "extr-17-fake-reader" }
+func (*rtReader) Version() string { return "v1" }
+
+func (r *rtReader) Read(_ context.Context, _ Document, onPage func(Page) error) (PageResult, error) {
+	r.buf = []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	for _, p := range r.pages {
+		r.calls++
+		if err := onPage(Page{
+			Number:      p.number,
+			WidthPt:     595,
+			HeightPt:    842,
+			ImageWidth:  1240,
+			ImageHeight: 1754,
+			ImagePNG:    r.buf,
+			Tokens:      p.tokens,
+			Tables:      p.tables,
+		}); err != nil {
+			return PageResult{}, err
+		}
+		// The buffer is invalid the moment the callback returns.
+		for i := range r.buf {
+			r.buf[i] = 0x00
+		}
+		if r.failAfter > 0 && r.calls == r.failAfter {
+			return PageResult{}, r.err
+		}
+	}
+	if r.err != nil {
+		return PageResult{}, r.err
+	}
+	return r.res, nil
+}
+
+func rtToken(s string, page int) Token {
+	return Token{Text: s, Region: Region{Page: page, X0: 0.1, Y0: 0.1, X1: 0.2, Y1: 0.2}}
+}
+
+// rtOutOfOrder emits 3, 1, 2 with page 1 carrying nothing at all. Three pages in a non-ascending
+// order is the smallest fixture that can tell "kept the callback order" from "sorted"; the empty
+// page is what catches a readText that skips a page with no tokens.
+func rtOutOfOrder() *rtReader {
+	return &rtReader{
+		pages: []rtPage{
+			{number: 3, tokens: []Token{rtToken("Total", 3)}},
+			{number: 1},
+			{number: 2, tokens: []Token{rtToken("Invoice", 2), rtToken("INV-1", 2)}},
+		},
+		res: PageResult{Pages: 3, TextChars: 4242, PagesWithText: 2},
+	}
+}
+
+// EXTR-17-01 AC-7. Page.ImagePNG is borrowed for the length of the onPage call, so a readText
+// that kept the slice hands its caller bytes that belong to a later page, or to nothing.
+func TestReadText_DoesNotRetainBorrowedPageImages(t *testing.T) {
+	r := rtOutOfOrder()
+
+	pages, _, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	// Floor: an empty result satisfies the loop below without asserting anything.
+	if len(pages) != 3 {
+		t.Fatalf("readText returned %d page(s), want 3; the nil-image assertion below would be vacuous", len(pages))
+	}
+	for i, p := range pages {
+		if p.ImagePNG != nil {
+			t.Errorf("pages[%d] (page %d) carries %d image byte(s), want nil: the buffer is borrowed for the length of the onPage call and the reader has already overwritten it", i, p.Number, len(p.ImagePNG))
+		}
+	}
+}
+
+// EXTR-17-01 AC-8. The two slices are one document seen twice, so they are asserted by index
+// alignment, not by a fixture whose pages happen to arrive in order. This fails a readText that
+// sorted one slice, dropped a page, or skipped the empty one.
+func TestReadText_PagesAndTokenPagesAreIndexAligned(t *testing.T) {
+	r := rtOutOfOrder()
+
+	pages, tokenPages, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != len(tokenPages) {
+		t.Fatalf("readText returned %d page(s) and %d token page(s); the two are one document seen twice and every caller indexes them together", len(pages), len(tokenPages))
+	}
+	if len(pages) != 3 {
+		t.Fatalf("readText returned %d page(s), want 3 -- the reader emitted 3, including one with no tokens", len(pages))
+	}
+	for i := range pages {
+		if pages[i].Number != tokenPages[i].Number {
+			t.Errorf("pages[%d] is page %d but tokenPages[%d] is page %d; the two slices are out of alignment", i, pages[i].Number, i, tokenPages[i].Number)
+		}
+	}
+
+	// Callback order, not sorted: PageReader's own contract is ascending, and a second,
+	// divergent ordering policy here would disagree with CollectTokens, which never sorts.
+	var got []int
+	for _, p := range pages {
+		got = append(got, p.Number)
+	}
+	if want := []int{3, 1, 2}; !slices.Equal(got, want) {
+		t.Errorf("readText returned pages %v, want %v -- append order, never a sort", got, want)
+	}
+
+	// Not vacuous on the token side: the empty page must still carry its geometry across.
+	for i, tp := range tokenPages {
+		if tp.WidthPt != 595 || tp.HeightPt != 842 {
+			t.Errorf("tokenPages[%d] (page %d) is %vx%v pt, want 595x842", i, tp.Number, tp.WidthPt, tp.HeightPt)
+		}
+	}
+	if n := len(tokenPages[2].Tokens); n != 2 {
+		t.Errorf("tokenPages[2] (page %d) carries %d token(s), want 2", tokenPages[2].Number, n)
+	}
+	if n := len(tokenPages[1].Tokens); n != 0 {
+		t.Errorf("tokenPages[1] (page %d) carries %d token(s), want 0", tokenPages[1].Number, n)
+	}
+}
+
+// EXTR-17-01 AC-4/AC-6. Tables are copied through as-is, a page with tokens and no tables is
+// neither an error nor a skip, and PageResult is returned because the caller classifies on
+// res.TextChars.
+func TestReadText_KeepsTablesPerPage(t *testing.T) {
+	cells := []TableCell{
+		{Row: 0, Col: 0, RowSpan: 1, ColSpan: 2, Text: "Description"},
+		{Row: 1, Col: 0, RowSpan: 1, ColSpan: 1, Text: "Widget"},
+		{Row: 1, Col: 1, RowSpan: 1, ColSpan: 1, Text: "1,000.00"},
+	}
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}, tables: []Table{{Rows: 2, Cols: 2, Cells: cells}}},
+		},
+		res: PageResult{Pages: 2, TextChars: 4242, PagesWithText: 2},
+	}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 2 || len(tokenPages) != 2 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 2 and 2 -- a page carrying no table is not a page to skip", len(pages), len(tokenPages))
+	}
+	if pages[0].Tables != nil {
+		t.Errorf("pages[0] carries %d table(s), want none: nil Tables is PDFium's normal shape and must not be invented", len(pages[0].Tables))
+	}
+	if !reflect.DeepEqual(pages[1].Tables, []Table{{Rows: 2, Cols: 2, Cells: cells}}) {
+		t.Errorf("pages[1].Tables = %+v, want the 2x2 table the reader emitted, as-is", pages[1].Tables)
+	}
+
+	// The reader's own totals reach the caller: the classifier branches on res.TextChars, and
+	// a dropped PageResult sends every document down the no-text-layer path.
+	if res.TextChars != 4242 || res.Pages != 2 || res.PagesWithText != 2 {
+		t.Errorf("readText returned PageResult %+v, want the reader's own {Pages:2 TextChars:4242 PagesWithText:2}", res)
+	}
+}
+
+// EXTR-17-01 AC-9. A half-read document otherwise yields half the line items with totals that
+// silently disagree with the invoice, so the pages already collected go with the error.
+func TestReadText_DiscardsEverythingOnError(t *testing.T) {
+	boom := errors.New("extr-17 fake reader: sidecar went away")
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+		},
+		res: PageResult{Pages: 2, TextChars: 4242},
+		err: boom,
+	}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("readText returned error %v, want %v", err, boom)
+	}
+	// Floor: the reader must actually have emitted pages before failing, or "discards
+	// everything" is asserted over a read that collected nothing in the first place.
+	if r.calls != 2 {
+		t.Fatalf("the fake reader delivered %d page(s) before failing, want 2; nothing was collected, so the assertions below are vacuous", r.calls)
+	}
+	if pages != nil {
+		t.Errorf("readText returned %d page(s) alongside its error, want nil", len(pages))
+	}
+	if tokenPages != nil {
+		t.Errorf("readText returned %d token page(s) alongside its error, want nil", len(tokenPages))
+	}
+	if res != (PageResult{}) {
+		t.Errorf("readText returned PageResult %+v alongside its error, want the zero value", res)
+	}
+}
+
+// EXTR-17-01 AC-9. A zero-page read is a document with no text layer, which EXTR-17-02
+// classifies from res.TextChars. Calling it text_not_read here would label a scanned PDF an
+// infrastructure failure.
+func TestReadText_ZeroPagesIsNotAnError(t *testing.T) {
+	r := &rtReader{res: PageResult{}}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText over a zero-page read returned %v, want nil: a document with no text layer is a classification, not a read failure", err)
+	}
+	if r.calls != 0 {
+		t.Fatalf("the fake reader delivered %d page(s), want 0", r.calls)
+	}
+	if pages != nil {
+		t.Errorf("readText returned %d page(s), want nil", len(pages))
+	}
+	if tokenPages != nil {
+		t.Errorf("readText returned %d token page(s), want nil", len(tokenPages))
+	}
+	if res.TextChars != 0 || res.Pages != 0 {
+		t.Errorf("readText returned PageResult %+v, want the zero value the reader reported", res)
+	}
+}
+
+// --- EXTR-17-01: adversarial ------------------------------------------------------------
+
+// Two pages carrying the same number is a malformed read, not readText's to repair: a collector
+// keyed by page number, or one that deduped, silently loses a page's line items.
+func TestReadText_KeepsDuplicatePageNumbers(t *testing.T) {
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 2, tokens: []Token{rtToken("Invoice", 2)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+			{number: 5, tokens: []Token{rtToken("Page 5", 5)}},
+		},
+		res: PageResult{Pages: 3, TextChars: 21, PagesWithText: 3},
+	}
+
+	pages, tokenPages, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 3 || len(tokenPages) != 3 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 3 and 3 -- a repeated page number is not a page to drop", len(pages), len(tokenPages))
+	}
+	var got []int
+	for i := range pages {
+		if pages[i].Number != tokenPages[i].Number {
+			t.Errorf("pages[%d] is page %d but tokenPages[%d] is page %d", i, pages[i].Number, i, tokenPages[i].Number)
+		}
+		got = append(got, pages[i].Number)
+	}
+	if want := []int{2, 2, 5}; !slices.Equal(got, want) {
+		t.Errorf("readText returned pages %v, want %v", got, want)
+	}
+	// The two page 2s are distinct rows, not one merged one.
+	if a, b := len(tokenPages[0].Tokens), len(tokenPages[1].Tokens); a != 1 || b != 1 {
+		t.Errorf("the two page-2 token pages carry %d and %d token(s), want 1 and 1 -- they were merged", a, b)
+	}
+}
+
+// A scanned table: Tables set, Tokens empty. The mirror of the tokens-and-no-tables case, and
+// the one that catches a readText skipping a page it judged to hold no text.
+func TestReadText_KeepsAPageWithTablesButNoTokens(t *testing.T) {
+	tbl := []Table{{Rows: 1, Cols: 1, Cells: []TableCell{{Row: 0, Col: 0, RowSpan: 1, ColSpan: 1, Text: "Widget"}}}}
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tables: tbl},
+		},
+		res: PageResult{Pages: 2, TextChars: 7, PagesWithText: 1},
+	}
+
+	pages, tokenPages, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 2 || len(tokenPages) != 2 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 2 and 2 -- a page whose text is all table is still a page", len(pages), len(tokenPages))
+	}
+	if !reflect.DeepEqual(pages[1].Tables, tbl) {
+		t.Errorf("pages[1].Tables = %+v, want the table the reader emitted, as-is", pages[1].Tables)
+	}
+	if n := len(tokenPages[1].Tokens); n != 0 {
+		t.Errorf("tokenPages[1] carries %d token(s), want 0", n)
+	}
+	if tokenPages[1].Number != 2 {
+		t.Errorf("tokenPages[1] is page %d, want 2 -- the token page must exist even with no tokens, or every later index is off by one", tokenPages[1].Number)
+	}
+}
+
+// PageResult is the reader's self-report. Length comes from the callbacks that actually ran, so
+// a reader that miscounts cannot shorten or lengthen what the caller iterates.
+func TestReadText_LengthComesFromTheCallbacksNotThePageResult(t *testing.T) {
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+		},
+		res: PageResult{Pages: 99, TextChars: 12, PagesWithText: 99},
+	}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 2 || len(tokenPages) != 2 {
+		t.Fatalf("readText returned %d page(s) and %d token page(s), want 2 and 2 -- the reader's own Pages count is a self-report, never the length", len(pages), len(tokenPages))
+	}
+	// Passed through verbatim, not corrected: EXTR-17-02 classifies on what the reader said.
+	if res.Pages != 99 || res.PagesWithText != 99 {
+		t.Errorf("readText returned PageResult %+v, want the reader's own {Pages:99 PagesWithText:99} unaltered", res)
+	}
+}
+
+// ImagePNG is the one field readText clears. A rebuild that named fields one by one would drop
+// the geometry every Region scales by and nothing else here would notice.
+func TestReadText_CarriesEveryOtherPageFieldThrough(t *testing.T) {
+	r := rtOutOfOrder()
+
+	pages, _, _, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText: %v", err)
+	}
+	if len(pages) != 3 {
+		t.Fatalf("readText returned %d page(s), want 3; the field sweep below would be vacuous", len(pages))
+	}
+	for i, p := range pages {
+		if p.WidthPt != 595 || p.HeightPt != 842 {
+			t.Errorf("pages[%d] (page %d) is %vx%v pt, want 595x842", i, p.Number, p.WidthPt, p.HeightPt)
+		}
+		if p.ImageWidth != 1240 || p.ImageHeight != 1754 {
+			t.Errorf("pages[%d] (page %d) rendered %dx%d px, want 1240x1754 -- the pixel geometry is what a canvas scales a Region by", i, p.Number, p.ImageWidth, p.ImageHeight)
+		}
+	}
+	// The tokens are the reader's own slice, not a copy: CollectTokens takes it as-is and the
+	// resolver reads both slices expecting one document.
+	if n := len(pages[2].Tokens); n != 2 {
+		t.Errorf("pages[2] (page %d) carries %d token(s), want 2", pages[2].Number, n)
+	}
+}
+
+// The error arrives with pages already collected and pages still unread -- the shape a sidecar
+// dying mid-document has. The pages that did arrive go with it.
+func TestReadText_DiscardsAPartialReadThatFailsMidStream(t *testing.T) {
+	boom := errors.New("extr-17 fake reader: sidecar died on page 2")
+	r := &rtReader{
+		pages: []rtPage{
+			{number: 1, tokens: []Token{rtToken("Invoice", 1)}},
+			{number: 2, tokens: []Token{rtToken("Total", 2)}},
+			{number: 3, tokens: []Token{rtToken("Page 3", 3)}},
+		},
+		res:       PageResult{Pages: 3, TextChars: 4242},
+		err:       boom,
+		failAfter: 1,
+	}
+
+	pages, tokenPages, res, err := readText(context.Background(), r, Document{ContentType: "application/pdf"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("readText returned error %v, want %v", err, boom)
+	}
+	// Floor: one page in, two never read. Without it this asserts over a read that collected
+	// nothing, which the zero-page spec already covers.
+	if r.calls != 1 {
+		t.Fatalf("the fake reader delivered %d page(s) before failing, want 1", r.calls)
+	}
+	if pages != nil || tokenPages != nil {
+		t.Errorf("readText returned %d page(s) and %d token page(s) alongside its error, want nil and nil -- half a document yields half the line items under a total that disagrees with them", len(pages), len(tokenPages))
+	}
+	if res != (PageResult{}) {
+		t.Errorf("readText returned PageResult %+v alongside its error, want the zero value", res)
 	}
 }

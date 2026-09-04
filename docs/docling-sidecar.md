@@ -1,15 +1,14 @@
 # Docling sidecar
 
-> **This service is not deployed.** The image builds and the Go client exists, but no
-> `docling` service exists in the Railway fleet, nothing references
-> `sidecar/docling/railway.json`, and `EXTRACTOR` defaults to `mock` — so the running fleet
-> behaves exactly as it did before this service was written. Do not infer deployment from
-> the existence of a Dockerfile.
+> **This service is deployed.** Railway service `docling`
+> (`2fd6a6f2-8ba2-488d-a686-3a4b73f2046d`) exists, `dev-env.yml`'s `deploy-context` matrix
+> ships it, and `expected_json` names it — so a missing or renamed `docling` fails the
+> Watch-Paths assertion like any other service.
 >
-> Provisioning would still require: creating the Railway service; setting `DOCLING_URL` on
-> whatever component calls it (today only `cmd/submission`, and only under
-> `EXTRACTOR=docling`); and taking the fleet-visibility decision recorded as D-10/D-16.
-> All three are deferred.
+> `DOCLING_URL` is set on `submission` (the only caller, and only under
+> `EXTRACTOR=docling`) and on `gateway`, which probes it for `/healthz/fleet`. The
+> fleet-visibility decision recorded as D-10/D-16 is taken: probed, not routed — the
+> gateway publishes no `/api/docling/*` route.
 
 `sidecar/docling/` is a CPU-only FastAPI service wrapping Docling's `DocumentConverter`.
 RapidOCR (English, onnxruntime backend) handles scans; TableFormer (ACCURATE mode) handles
@@ -80,6 +79,14 @@ docker build -f sidecar/docling/Dockerfile -t docling:canary .
 docker run -d --name docling-canary --network none docling:canary
 scripts/ci/docling-canary.sh golden dev --update    # `dev` = the build.txt stamp in the image
 docker rm -f docling-canary
+```
+
+`corpus_inline_labels.docling.json` is the second golden and takes explicit paths:
+
+```sh
+scripts/ci/docling-canary.sh golden dev \
+  internal/extraction/testdata/corpus_inline_labels.pdf \
+  internal/extraction/testdata/corpus_inline_labels.docling.json --update
 ```
 
 Without `--update` the same command compares and prints a diff; that is what CI runs.

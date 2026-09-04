@@ -343,9 +343,33 @@ takes, so the next one has a recipe.
 | Ingress | private-networking only (gateway is the exception) | private-networking only |
 | Watch patterns | empty (§3) | empty (§3) |
 
-Provisioning `docling` would still require: creating the service, setting `DOCLING_URL` on
-whatever component calls it (today only `cmd/submission`, and only when `EXTRACTOR=docling`),
-and taking the fleet-visibility decision recorded as D-10/D-16. All three are deferred.
+All three provisioning steps are done: the service exists, `DOCLING_URL` is set on
+`cmd/submission` (its only caller, and only when `EXTRACTOR=docling`) and on `gateway`, and
+the fleet-visibility decision is taken — probed, not routed.
 
-Sizing, if it is ever provisioned: measured peak RSS is ~2.2 GiB on a one-page scan (see
-`docs/docling-sidecar.md`). Memory, not CPU, is the constraint.
+Sizing: measured peak RSS is ~2.2 GiB on a one-page scan (see `docs/docling-sidecar.md`).
+Memory, not CPU, is the constraint. Neither §5 nor §6 has a sizing knob and every service
+leaves `numReplicas`/`region` null, so this is unverified against Railway's default ceiling.
+
+### What provisioning `docling` proved about this recipe
+
+Five defects, each hit while executing §5 against a Python sidecar for the first time:
+
+1. **`railwayConfigFile` is rejected by the API.** `serviceInstanceUpdate` answers *"Config as
+   Code (railway.json / railway.toml) is deprecated. Use Infrastructure as Code
+   (.railway/railway.ts)."* The other services still carry the field because it was set before
+   the deprecation; a NEW service cannot. `docling` therefore sets `dockerfilePath`,
+   `healthcheckPath` and `restartPolicyType` directly on the service instance — the same three
+   values `sidecar/docling/railway.json` carries. Migrating the fleet to `.railway/railway.ts`
+   is the real fix and has no owner.
+2. **`serviceCreate` attaches a `main` deployment trigger.** `railway-invariants.yml` reds
+   every open PR while any trigger exists, so delete it immediately after creating a service —
+   before anything else.
+3. **§5 step 2's config path is Go-shaped** (`cmd/<svc>/railway.json`); the sidecar path is in
+   this appendix, but the runbook has no branch for it.
+4. **§5 step 4 says `SERVICE` is set "everywhere"; a Python sidecar must not set it.**
+   `sidecar/docling/Dockerfile` has no `ARG SERVICE`.
+5. **A cross-service URL needs its port as a literal.** Writing the port as
+   `${{<svc>.PORT}}` renders `http://<svc>.railway.internal:` when `PORT` is unset — a URL that
+   PARSES, boots clean, and fails every request. Set `PORT` explicitly on the service and write
+   the port literally.

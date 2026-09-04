@@ -29,16 +29,38 @@ export function newestJob(jobs: readonly ExtractionJob[]): ExtractionJob | null 
   return newest
 }
 
-// Sole copy owner of the budget-expiry reason, beside deadLetterRefusal — the run renders
-// what these return verbatim. Distinct texts: AC-5 wants the three failure causes
-// distinguishable.
+// Sole copy owner of the terminal wording, for BOTH surfaces: the import run's card and the
+// review screen render what these return verbatim. Every sentence names manual entry, and none
+// names a destination — View has no documents member to send anyone to (TS15-3).
 export function pollBudgetRefusal(): string {
-  return `Extraction is still running after ${Math.round(EXTRACTION_POLL_BUDGET_MS / 1000)} seconds. The document was stored and its extraction continues — open it again later.`
+  const seconds = Math.round(EXTRACTION_POLL_BUDGET_MS / 1000)
+  return `This document is still being read after ${seconds} seconds, and this run will not wait any longer. It was stored and the read continues. Enter this invoice manually to carry on.`
 }
 
-export function deadLetterRefusal(lastError: string | null): string {
+// One sentence per extraction_jobs.failure_kind, plus the unknown/absent one. Both parameters
+// are declared plain: a default would drop Function.length to 1 and red TS15-1.
+export function deadLetterRefusal(failureKind: string | null, lastError: string | null): string {
   const detail = lastError === null || lastError === '' ? 'the server gave no reason' : lastError
-  return `Extraction failed for this document — ${detail}`
+  switch (failureKind) {
+    case 'pages_not_rendered':
+      // Not a format sentence: after EXTR-15-03 only PDF and DOCX are accepted and DOCX never
+      // reaches this kind, so the file being unopenable is the only honest reading.
+      return 'This file is a PDF, and the reader could not open it — it may be damaged, or protected by a password. Enter this invoice manually to carry on.'
+    case 'text_not_read':
+      return 'The reader opened this document but could not get any text out of it. Enter this invoice manually to carry on.'
+    case 'document_unavailable':
+      return 'This file was stored, but it could not be opened again for reading. Enter this invoice manually to carry on.'
+    case 'page_rows_not_written':
+      return 'This document was read, but the result could not be stored. Enter this invoice manually to carry on.'
+    case 'extract_failed':
+      // A subordinate clause, never the sentence — TS15-4 swaps the fallback for the reason
+      // and demands the same sentence back.
+      return `The reader ran, but pulling the invoice fields out of it failed — ${detail}. Enter this invoice manually to carry on.`
+    default:
+      // The unknown kind carries the reason too: it is the only thing known here, and POLL-3
+      // (shipped, EXTR-10 AC-5) pins it verbatim on a job whose failure_kind is null.
+      return `Reading this document failed — ${detail}. Enter this invoice manually to carry on.`
+  }
 }
 
 // The reducer: the whole jobs[] array plus how long this document has been polled, in.
@@ -50,7 +72,7 @@ export function pollVerdict(jobs: readonly ExtractionJob[], elapsedMs: number): 
   const job = newestJob(jobs)
   if (job !== null && isTerminalExtractionState(job.state)) {
     if (job.state === 'succeeded') return { kind: 'succeeded', jobId: job.id }
-    return { kind: 'failed', reason: deadLetterRefusal(job.last_error) }
+    return { kind: 'failed', reason: deadLetterRefusal(job.failure_kind, job.last_error) }
   }
   if (elapsedMs > EXTRACTION_POLL_BUDGET_MS) return { kind: 'failed', reason: pollBudgetRefusal() }
   return { kind: 'waiting' }

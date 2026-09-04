@@ -1294,6 +1294,36 @@ describe('the budget refusal states its budget in seconds, derived (TS15-5, AC-5
   })
 })
 
+// TS15-5b closes a gap TS15-5 cannot: with EXTRACTION_POLL_BUDGET_MS at 120_000, a hard-coded
+// `const seconds = 120` renders the identical sentence and TS15-5 stays green. Only the source
+// says which one is written (QA mutation (d) survived the whole suite without this).
+describe('the budget seconds are derived in SOURCE, not just equal by luck (TS15-5b, AC-5)', () => {
+  it('TS15-5b: pollBudgetRefusal computes its seconds from the constant', () => {
+    const src = readRepoFile('src/lib/documentRun.ts', 'export function pollBudgetRefusal(')
+    const body = src.slice(src.indexOf('export function pollBudgetRefusal('))
+    const end = body.indexOf('\nexport function ', 1)
+    const fn = end === -1 ? body : body.slice(0, end)
+    expect(fn.length, 'the slice found no function body — the assertion below would be vacuous').toBeGreaterThan(80)
+    expect(fn, 'pollBudgetRefusal names no budget constant; its seconds are a literal').toContain(
+      'EXTRACTION_POLL_BUDGET_MS',
+    )
+  })
+})
+
+// AC-4 requires lastError VERBATIM, so the detail clause is quoted server text and cannot be
+// sanitized. TS15-3's no-destination guard therefore governs the prose this module AUTHORS,
+// which is why it only ever calls the refusals with a null reason. This pins the other half:
+// a future sanitizer that "cleaned" a slash out of the clause would break AC-4 silently.
+describe('the detail clause is quoted verbatim, slashes and all (TS15-3b, AC-4)', () => {
+  const RAW = 'docling: post /v1/read: context deadline exceeded'
+
+  it.each(['extract_failed', null])('TS15-3b: kind %s quotes the server’s reason unaltered', (kind) => {
+    const sentence = deadLetterRefusal(kind as string | null, RAW)
+    expect(sentence, 'the server’s own reason was reworded or stripped').toContain(RAW)
+    expect(sentence, 'the authored prose lost its next step').toMatch(MANUAL)
+  })
+})
+
 describe('pollVerdict passes the newest job’s failure_kind through (TS15-6, AC-6)', () => {
   it.each([...KINDS])('TS15-6: a dead_lettered job of kind %s settles with that kind’s sentence', (kind) => {
     const verdict = pollVerdict([job({ state: 'dead_lettered', failure_kind: kind, last_error: 'boom' })], 0)

@@ -2539,7 +2539,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
 // dead-letters at pages_not_rendered (worker.go). EXTR-15-04 gives that kind its own sentence,
 // so the needle must be a fragment of THAT sentence and of no other kind's --
 // documentRun.test.ts's TS15-10b is this literal's only local oracle.
-const DEAD_LETTER_NEEDLE = 'Extraction failed for this document'
+const DEAD_LETTER_NEEDLE = 'it may be damaged, or protected by a password'
 
 test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating the card', async ({ page }, testInfo) => {
   // Upload+enqueue, ~20-40s River backoff to dead-letter (attempt^4s: 1s then 16s), two

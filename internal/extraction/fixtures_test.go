@@ -30,6 +30,7 @@ const (
 	fxHybrid   = "hybrid_invoice.pdf"
 	fxTable    = "table_invoice.pdf"
 	fxDense    = "dense_invoice.pdf"
+	fxRich     = "rich_invoice.pdf"
 	fxMinBytes = 200 // floor: every fixture carries a catalog, a page tree, a page and a stream
 )
 
@@ -63,6 +64,8 @@ var fxCorpus = []struct {
 	// Not corpus_-prefixed on purpose: EXTR-14-09's learned-rule fixture, regenerated and
 	// byte-compared like the rest but outside every corpus_ ratchet.
 	{fxLearnedTwoParty, fxBuildLearnedTwoParty},
+	// Not corpus_-prefixed on purpose: EXTR-18-01's rich fixture, outside every corpus_ ratchet.
+	{fxRich, fxBuildRichInvoice},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -286,6 +289,9 @@ func fxBuildTable() []byte {
 		fxObject(fxHelvetica),
 	})
 }
+
+// fxBuildRichInvoice is a stub awaiting EXTR-18-01's implementation.
+func fxBuildRichInvoice() []byte { return nil }
 
 // --- the golden corpus ------------------------------------------------------
 
@@ -967,6 +973,69 @@ func TestFixtures_HybridHasTextOnPageOneOnly(t *testing.T) {
 	for _, op := range []string{"BT", "Tj"} {
 		if bytes.Contains(scanned, []byte(op)) {
 			t.Errorf("%s page 2 content stream carries the %s operator; page 2 has no text layer", fxHybrid, op)
+		}
+	}
+}
+
+func TestFixtures_RichInvoicePrintsItsOwnNumber(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	if !bytes.Contains(body, []byte("ASC-2026-0918")) {
+		t.Errorf("%s page 1 content stream does not carry ASC-2026-0918, its own invoice number", fxRich)
+	}
+	if bytes.Contains(body, []byte("INV-001")) {
+		t.Errorf("%s page 1 content stream carries INV-001, another fixture's number", fxRich)
+	}
+}
+
+// fxRuleOpRe matches one fxRuleH/fxRuleV emission ("%d %d m\n%d %d l\nS\n"): a horizontal
+// rule's pair share the Y operand (2nd/4th group), a vertical rule's share the X operand
+// (1st/3rd group).
+var fxRuleOpRe = regexp.MustCompile(`(\d+) (\d+) m\n(\d+) (\d+) l\nS\n`)
+
+func TestFixtures_RichInvoiceCarriesARuledTable(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	horiz, vert := 0, 0
+	for _, m := range fxRuleOpRe.FindAllSubmatch(body, -1) {
+		a, b, c, d := string(m[1]), string(m[2]), string(m[3]), string(m[4])
+		switch {
+		case b == d && a != c:
+			horiz++
+		case a == c && b != d:
+			vert++
+		}
+	}
+	if horiz < 4 {
+		t.Errorf("%s page 1 carries %d horizontal rule(s), want at least 4", fxRich, horiz)
+	}
+	if vert < 5 {
+		t.Errorf("%s page 1 carries %d vertical rule(s), want at least 5", fxRich, vert)
+	}
+
+	for _, row := range [][]string{
+		{"Widget", "2", "500.00", "1000.00"},
+		{"Gadget", "3", "250.00", "900.00"},
+		{"Delivery", "1", "120.00", "120.00"},
+	} {
+		for _, cell := range row {
+			if !bytes.Contains(body, []byte(cell)) {
+				t.Errorf("%s page 1 content stream does not carry data row cell %q", fxRich, cell)
+			}
 		}
 	}
 }

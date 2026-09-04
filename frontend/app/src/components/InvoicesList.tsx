@@ -547,9 +547,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               const st = invoiceStatusStyle(r.status)
               const errorCount = r.violations.filter((v) => v.severity === 'error').length
               const blockedReason = selectBlockedReason(r)
-              // Per-row, not a module const (ApprovalsView.tsx:361's precedent) -- every
-              // row's checkbox renders at once, and any number can be blocked.
-              const reasonId = `submit-blocked-reason-${r.id}`
               return (
                 // Click-only row (no keyboard affordance) predates this story --
                 // CodeRabbit fix cycle 2 flagged it alongside the checkbox aria-label gap,
@@ -569,7 +566,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                     checked={selected.includes(r.id)}
                     disabled={!isRowSelectable(r)}
                     title={blockedReason ?? undefined}
-                    aria-describedby={blockedReason != null ? reasonId : undefined}
                     // Disabled-only: on an enabled control this would kill the legitimate
                     // hover affordance platform.css leaves unguarded.
                     style={blockedReason == null ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
@@ -609,21 +605,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       </span>
                     )}
                   </span>
-                  {/* Layer 3 of disabled-with-reason (ApprovalsView.tsx:407-414's
-                      precedent): the visible sibling a screenshot, a keyboard user and a
-                      text assertion can all reach. An implicit second grid row, so the
-                      six cells above keep their positions. The leading `{' '}` is a
-                      SIBLING text node, not part of the reason span's own textContent --
-                      it keeps the pre-existing "N ERROR(S)" `\b`-boundary regexes intact
-                      without adding a leading space to the reason string A06-5 pins. */}
-                  {blockedReason != null && (
-                    <>
-                      {' '}
-                      <span id={reasonId} data-testid="invoice-blocked-reason" style={{ gridColumn: '2 / -1', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-                        {blockedReason}
-                      </span>
-                    </>
-                  )}
                 </div>
               )
             })}

@@ -374,14 +374,14 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
     expect(ids).not.toContain('review-row-revalidate-blocked-reason-text')
   })
 
-  it('A16-2f: parity -- ReviewRow and InvoicesList render a byte-identical string for the same row', async () => {
+  it('A16-2f: parity -- ReviewRow and InvoicesList set a byte-identical title for the same row', async () => {
     const shared = row({ id: 'inv-parity', status: 'validated', approval: openRun })
     const expected = selectBlockedReason(shared)
 
     render(
       <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
     )
-    const reviewReason = reasonNodeFor(selectBox())?.textContent ?? null
+    const reviewTitle = selectBox().getAttribute('title')
     cleanup()
 
     // InvoicesList reads its own gateway base from the env (InvoiceDetail.test.tsx's
@@ -391,10 +391,12 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
     mockRegisterFetch([shared])
     render(<InvoicesList ctx={registerCtx()} />)
     await screen.findByText(shared.invoice_number)
-    const listReason = screen.getByTestId('invoice-blocked-reason').textContent
+    const listTitle = (screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')
 
-    expect(reviewReason).toBe(expected)
-    expect(listReason).toBe(expected)
+    expect(reviewTitle).toBe(expected)
+    expect(listTitle).toBe(expected)
+    // D-8: compared directly too, so a failure names WHICH two surfaces disagree.
+    expect(reviewTitle).toBe(listTitle)
   })
 })
 

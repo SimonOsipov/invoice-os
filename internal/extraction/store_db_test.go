@@ -17,6 +17,9 @@ import (
 	"go/ast"
 	"go/token"
 	"os"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1426,4 +1429,244 @@ func TestRLS_ExtractionStoreCannotWritePageImagesAcrossTenants(t *testing.T) {
 			t.Errorf("tenant B's page %d is %+v, want the seeded %+v", seeded[i].Page, got[i], seeded[i])
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// EXTR-15-01 — extraction_jobs.failure_kind
+// ---------------------------------------------------------------------------
+
+const stFailureKindColumn = "failure_kind"
+
+// stRequireFailureKind leads every case below: a pre-migration schema fails here attributably
+// instead of on a raw 42703 out of a later statement.
+func stRequireFailureKind(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var present bool
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT count(*) = 1 FROM information_schema.columns
+		   WHERE table_schema = 'public' AND table_name = 'extraction_jobs' AND column_name = $1`,
+		stFailureKindColumn).Scan(&present); err != nil {
+		t.Fatalf("check extraction_jobs.%s presence: %v", stFailureKindColumn, err)
+	}
+	if !present {
+		t.Fatalf("extraction_jobs.%s does not exist yet", stFailureKindColumn)
+	}
+}
+
+func stJobFailureKind(t *testing.T, ctx context.Context, jobID string) *string {
+	t.Helper()
+	var got *string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT failure_kind FROM extraction_jobs WHERE id = $1`, jobID).Scan(&got); err != nil {
+		t.Fatalf("read failure_kind for job %s: %v", jobID, err)
+	}
+	return got
+}
+
+// stPlantFailureKind writes a kind straight onto the row as the superuser. Advance carries no
+// kind argument, so the clear-on-clean-advance case has no other way to arrange its
+// precondition.
+func stPlantFailureKind(t *testing.T, ctx context.Context, jobID, kind string) {
+	t.Helper()
+	ct, err := stRequire(t).super.Exec(ctx,
+		`UPDATE extraction_jobs SET failure_kind = $2 WHERE id = $1`, jobID, kind)
+	if err != nil {
+		t.Fatalf("plant failure_kind %q on job %s: %v", kind, jobID, err)
+	}
+	if ct.RowsAffected() != 1 {
+		t.Fatalf("planting failure_kind on job %s touched %d row(s), want 1", jobID, ct.RowsAffected())
+	}
+}
+
+// stFailureKindConstsFromSource re-parses audit.go. This file is package extraction_test and
+// cannot reach audit_internal_test.go's failureKindConsts; a hand-typed slice here would make
+// TestExtractionJobs_FailureKindCheckMirrorsTheConsts compare the CHECK against itself.
+func stFailureKindConstsFromSource(t *testing.T) []string {
+	t.Helper()
+
+	f, fset := mxParse(t, "audit.go")
+	var out []string
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		var carried string
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			switch {
+			case vs.Type != nil:
+				carried = ""
+				if id, ok := vs.Type.(*ast.Ident); ok {
+					carried = id.Name
+				}
+			case len(vs.Values) > 0:
+				carried = ""
+			}
+			if carried != "FailureKind" {
+				continue
+			}
+			for i := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				bl, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || bl.Kind != token.STRING {
+					t.Fatalf("%s: FailureKind const %s has no string literal value",
+						fset.Position(vs.Pos()), vs.Names[i].Name)
+				}
+				lit, err := strconv.Unquote(bl.Value)
+				if err != nil {
+					t.Fatalf("unquote %s = %s: %v", vs.Names[i].Name, bl.Value, err)
+				}
+				out = append(out, lit)
+			}
+		}
+	}
+	// The floor: a walk that read nothing would make every set comparison below vacuous.
+	if len(out) < 5 {
+		t.Fatalf("audit.go declares %d FailureKind const(s) (%v), want at least 5", len(out), out)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// FK-1 (AC-1). The CHECK admits NULL and exactly the five kinds FailureKind.Valid() accepts.
+// ” is in the refused set because "" is what an empty kind must bind to SQL NULL, so a row
+// carrying it could only come from a writer that lost that binding; payload_not_built is in it
+// because internal/submission ships a different FailureKind under the same wire key.
+func TestExtractionJobs_FailureKindCheckAdmitsTheFiveKindsAndNothingElse(t *testing.T) {
+	ctx := t.Context()
+	stRequireFailureKind(t, ctx)
+
+	h := stRequire(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	insert := func(kind any) error {
+		_, err := h.super.Exec(ctx,
+			`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version, failure_kind)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			tenantID, documentID, stExtractor, stExtractorVersion, kind)
+		return err
+	}
+
+	accepted := stFailureKindConstsFromSource(t)
+	for _, kind := range accepted {
+		if err := insert(kind); err != nil {
+			t.Errorf("the CHECK refused %q, which audit.go declares as a FailureKind: %v", kind, err)
+		}
+	}
+
+	// NULL is the shape every pre-migration row and every success carries.
+	if err := insert(nil); err != nil {
+		t.Errorf("the CHECK refused a NULL failure_kind: %v", err)
+	}
+
+	for _, kind := range []string{"", "nonsense", "Document_Unavailable", "payload_not_built"} {
+		err := insert(kind)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+			t.Errorf("inserting failure_kind %q returned %v, want SQLSTATE 23514", kind, err)
+		}
+	}
+
+	// Non-vacuity: the accepted loop proves nothing over an empty set, and a CHECK that
+	// silently dropped the value would leave fewer rows than probes.
+	if len(accepted) < 5 {
+		t.Fatalf("probed %d accepted value(s), want at least 5", len(accepted))
+	}
+	var rows int
+	if err := h.super.QueryRow(ctx,
+		`SELECT count(DISTINCT coalesce(failure_kind, '<null>')) FROM extraction_jobs WHERE tenant_id = $1`,
+		tenantID).Scan(&rows); err != nil {
+		t.Fatalf("count distinct stored kinds: %v", err)
+	}
+	if want := len(accepted) + 1; rows != want {
+		t.Errorf("the tenant's jobs hold %d distinct failure_kind value(s), want %d — one per accepted kind plus NULL", rows, want)
+	}
+}
+
+// FK-2 (AC-1, five not four). The CHECK's IN-list is set-equal to the FailureKind consts read
+// out of audit.go source, so a sixth kind added to the vocabulary reds here rather than in
+// production. reflect cannot enumerate a Go const block; source is the only oracle.
+func TestExtractionJobs_FailureKindCheckMirrorsTheConsts(t *testing.T) {
+	ctx := t.Context()
+	want := stFailureKindConstsFromSource(t)
+	stRequireFailureKind(t, ctx)
+
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT pg_get_constraintdef(c.oid)
+		   FROM pg_constraint c
+		   JOIN pg_class t ON t.oid = c.conrelid
+		   JOIN pg_namespace n ON n.oid = t.relnamespace
+		  WHERE n.nspname = 'public' AND t.relname = 'extraction_jobs'
+		    AND c.contype = 'c' AND pg_get_constraintdef(c.oid) LIKE '%failure_kind%'`)
+	if err != nil {
+		t.Fatalf("read the failure_kind CHECK on extraction_jobs: %v", err)
+	}
+	var defs []string
+	for rows.Next() {
+		var def string
+		if err := rows.Scan(&def); err != nil {
+			rows.Close()
+			t.Fatalf("scan constraint definition: %v", err)
+		}
+		defs = append(defs, def)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the failure_kind CHECK on extraction_jobs: %v", err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("extraction_jobs carries %d CHECK constraint(s) naming failure_kind (%v), want exactly 1",
+			len(defs), defs)
+	}
+
+	seen := map[string]bool{}
+	var got []string
+	for _, m := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(defs[0], -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		got = append(got, m[1])
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("the CHECK admits %v, want exactly audit.go's %v\n  %s", got, want, defs[0])
+	}
+}
+
+// FK-4 (AC-3). Every advance clears a prior kind, the discipline last_error already follows
+// (TestExtractionStore_AdvanceClearsLastErrorToNull). The write half — a failing advance
+// records its stage — is TestExtractWorker_FailureKindPerStage.
+func TestExtractionStore_AdvanceClearsFailureKindToNull(t *testing.T) {
+	ctx := t.Context()
+	stRequireFailureKind(t, ctx)
+
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 901501)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+
+	// The row must carry a kind first, or the advance below proves nothing: a column that was
+	// NULL all along reads NULL whatever Advance binds.
+	stPlantFailureKind(t, ctx, job.ID, "pages_not_rendered")
+	if got := stJobFailureKind(t, ctx, job.ID); got == nil || *got != "pages_not_rendered" {
+		t.Fatalf("after planting, failure_kind is %v, want pages_not_rendered", got)
+	}
+
+	if err := s.Advance(ctx, tenantID, job.ID, "succeeded", "", 3); err != nil {
+		t.Fatalf("Advance to succeeded: %v", err)
+	}
+	if got := stJobFailureKind(t, ctx, job.ID); got != nil {
+		t.Errorf("a clean advance to succeeded left failure_kind %q, want SQL NULL", *got)
+	}
+	stAssertJobState(t, ctx, job.ID, "succeeded")
 }

@@ -41,7 +41,9 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionCorrected", []string{"method", "was", "where"}},
 	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives", "corrected"}},
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
-	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "document", "pages", "fields"}},
+	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
+	// reader consults together — because this list compares declaration ORDER, not a set.
+	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document", "pages", "fields"}},
 	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
 }
 
@@ -1763,5 +1765,113 @@ func TestRLS_LineItemsCorrectionRoundTripsThroughDetail(t *testing.T) {
 	if f.Value == nil || *f.Value != "line 0" {
 		t.Errorf("%s = %s after the POST, want \"line 0\" -- the value that was just saved, not the OLD-DESC reading",
 			name, rvcValue(f.Value))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EXTR-15-01 — failure_kind on ExtractionDetail
+// ---------------------------------------------------------------------------
+
+// rvdJSONKey returns one top-level raw JSON value, failing attributably when the key is
+// absent. The assertions below go through the marshalled wire rather than the Go field so a
+// missing field reds on an assertion instead of on a compile error.
+func rvdJSONKey(t *testing.T, b []byte, key string) string {
+	t.Helper()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal %s: %v", b, err)
+	}
+	raw, ok := m[key]
+	if !ok {
+		t.Fatalf("the wire body carries no %q key:\n  %s", key, b)
+	}
+	return string(raw)
+}
+
+// FK-8 (AC-7). No omitempty: a job that never failed serialises an explicit null, so the
+// review screen can tell "no kind" from "key not sent".
+func TestExtractionDetail_FailureKindMarshalsAsExplicitNull(t *testing.T) {
+	b, err := json.Marshal(extraction.ExtractionDetail{})
+	if err != nil {
+		t.Fatalf("marshal a zero ExtractionDetail: %v", err)
+	}
+	if got := rvdJSONKey(t, b, "failure_kind"); got != "null" {
+		t.Errorf("a zero ExtractionDetail marshals failure_kind as %s, want null", got)
+	}
+
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal the detail: %v", err)
+	}
+	gotKeys := make([]string, 0, len(decoded))
+	for k := range decoded {
+		gotKeys = append(gotKeys, k)
+	}
+	slices.Sort(gotKeys)
+	wantKeys := []string{"document", "document_id", "failure_kind", "fields", "id", "pages", "state"}
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
+	}
+}
+
+// FK-8 (AC-7/8). The two extraction DTOs answer the same question about the same job with the
+// same value. Asserted against a literal first, then against each other: an equality alone is
+// satisfied by two DTOs that are both wrong, and by two absent keys.
+func TestExtractionDetail_FailureKindAgreesWithTheJobsList(t *testing.T) {
+	ctx := t.Context()
+	stRequireFailureKind(t, ctx)
+
+	r := rdReader(t)
+	reqCtx, tenantID, failedDoc := rdTenant(t, ctx, "active")
+	cleanDoc := rdSeedDocument(t, ctx, tenantID)
+
+	failedJob := rdSeedJob(t, ctx, tenantID, failedDoc, "dead_lettered", time.Now().UTC(), stPtr("boom"))
+	stPlantFailureKind(t, ctx, failedJob, "text_not_read")
+	cleanJob := rdSeedJob(t, ctx, tenantID, cleanDoc, "succeeded", time.Now().UTC(), nil)
+
+	for _, tc := range []struct {
+		name  string
+		jobID string
+		docID string
+		want  string
+	}{
+		{"dead-lettered", failedJob, failedDoc, `"text_not_read"`},
+		// The control: a job that settled cleanly carries null on both DTOs, so the equality
+		// below cannot pass on two keys that are simply never populated.
+		{"succeeded", cleanJob, cleanDoc, "null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail, err := r.Detail(reqCtx, tc.jobID)
+			if err != nil {
+				t.Fatalf("Detail for job %s: %v", tc.jobID, err)
+			}
+			db, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatalf("marshal the detail: %v", err)
+			}
+			detailKind := rvdJSONKey(t, db, "failure_kind")
+			if detailKind != tc.want {
+				t.Errorf("GET /v1/extractions/%s reports failure_kind %s, want %s", tc.jobID, detailKind, tc.want)
+			}
+
+			resp, err := r.JobsForDocument(reqCtx, tc.docID)
+			if err != nil {
+				t.Fatalf("JobsForDocument for %s: %v", tc.docID, err)
+			}
+			if len(resp.Jobs) != 1 {
+				t.Fatalf("the document holds %d job(s), want 1; the comparison below would pick the wrong row", len(resp.Jobs))
+			}
+			jb, err := json.Marshal(resp.Jobs[0])
+			if err != nil {
+				t.Fatalf("marshal the job state: %v", err)
+			}
+			listKind := rvdJSONKey(t, jb, "failure_kind")
+			if listKind != tc.want {
+				t.Errorf("GET /v1/extractions reports failure_kind %s for job %s, want %s", listKind, tc.jobID, tc.want)
+			}
+			if listKind != detailKind {
+				t.Errorf("the two DTOs disagree about job %s: the list says %s, the detail says %s", tc.jobID, listKind, detailKind)
+			}
+		})
 	}
 }

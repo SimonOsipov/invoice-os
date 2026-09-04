@@ -2578,7 +2578,7 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
     if (goodDocId !== null && url.searchParams.get('document_id') === goodDocId) {
       await route.fulfill({
         json: {
-          jobs: [{ id: 'e2e-hold', document_id: goodDocId, state: 'extracting', created_at: new Date().toISOString(), last_error: null }],
+          jobs: [{ id: 'e2e-hold', document_id: goodDocId, state: 'extracting', created_at: new Date().toISOString(), last_error: null, failure_kind: null }],
         },
       })
       return
@@ -2925,9 +2925,15 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   // It cannot live in e2e/api/extractions.spec.ts: that file creates no row, so it can never
   // hold a settled job (:29-32). This is the only DEPLOYED check of Go's `[]T` nil -> `null`
   // coercion, which no `omitempty`-free struct tag prevents.
+  // EXTR-15-01: failure_kind carries no omitempty, so a job that settled cleanly still sends
+  // the key with an explicit null -- the deployed proof that the tag was not written with one.
   expect(Object.keys(detail).sort(), 'the top-level key set drifted from internal/extraction/reader.go').toEqual(
-    ['document', 'document_id', 'fields', 'id', 'pages', 'state'].sort(),
+    ['document', 'document_id', 'failure_kind', 'fields', 'id', 'pages', 'state'].sort(),
   )
+  expect(
+    (detail as unknown as Record<string, unknown>).failure_kind,
+    'a succeeded job must report a null failure_kind, not a value',
+  ).toBeNull()
   expect(Array.isArray(detail.pages), 'pages arrived as null, not []').toBe(true)
   expect(Array.isArray(detail.fields), 'fields arrived as null, not []').toBe(true)
   expect(detail.document, 'document arrived as null').not.toBeNull()

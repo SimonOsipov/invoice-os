@@ -2038,6 +2038,7 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 	// Subtests, not a bare loop: one arm that cannot reach its stage must not stop the other
 	// three from proving theirs.
 	written := map[extraction.FailureKind]string{}
+	onRow := map[extraction.FailureKind]string{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &wkAuditRecorder{}
@@ -2068,6 +2069,19 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 				t.Errorf("stored failure_kind %q was already written by %s -- the four stages must be distinguishable", got, prior)
 			}
 			written[extraction.FailureKind(got)] = tc.name
+
+			// EXTR-15-01 FK-7 (AC-9): the same kind on the ROW, not only in the audit payload.
+			// Runs after the payload assertions so a pre-migration schema fails on the column
+			// rather than hiding the shipped half of this arm.
+			stRequireFailureKind(t, ctx)
+			row := stJobFailureKind(t, ctx, jobID)
+			if row == nil || *row != string(tc.want) {
+				t.Fatalf("extraction_jobs.failure_kind = %v, want %q -- the payload carries the kind, the row does not", row, tc.want)
+			}
+			if prior, dup := onRow[extraction.FailureKind(*row)]; dup {
+				t.Errorf("row failure_kind %q was already written by %s", *row, prior)
+			}
+			onRow[extraction.FailureKind(*row)] = tc.name
 		})
 	}
 
@@ -2091,6 +2105,19 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 	for k := range written {
 		if !want[k] {
 			t.Errorf("a lever wrote failure_kind %q, which FailureKind does not declare", k)
+		}
+	}
+
+	// FK-7: the same set equality over what reached the ROW. Asserted separately from the
+	// payload set so a writer that filled the payload from one source and the column from
+	// another cannot satisfy both with one value.
+	if len(onRow) != len(want) {
+		t.Fatalf("the levers wrote %d distinct extraction_jobs.failure_kind value(s) (%v), want %d",
+			len(onRow), onRow, len(want))
+	}
+	for k := range want {
+		if _, ok := onRow[k]; !ok {
+			t.Errorf("no lever wrote failure_kind %q onto the row", k)
 		}
 	}
 }

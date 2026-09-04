@@ -109,6 +109,20 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export async function getExtractionDetail(',
     e2eAnchor: 'export function getExtractionDetail(',
+    // EXTR-15-01 AC-7/8: 6 -> 7 for failure_kind. The three-way equality is set-based and
+    // therefore blind to a key added to all three legs at once; the floor is what bites.
+    floor: 7,
+  },
+  // EXTR-15-01 AC-5. The jobs list feeds documentRun.ts's newestJob/pollVerdict, so the SPA
+  // does read it -- see jobsList_theStaleNoSpaCopyExclusionIsGone.
+  {
+    ts: 'ExtractionJob',
+    go: 'JobState',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func jobsForDocumentTx(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export function getExtractions(',
+    e2eAnchor: 'export function getExtractions(',
     floor: 6,
   },
   {
@@ -313,6 +327,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionCandidate',
       'ExtractionCorrected',
       'ExtractionDetail',
+      'ExtractionJob',
       'ExtractionDocument',
       'ExtractionPage',
       'ExtractionFieldState',
@@ -768,3 +783,34 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 // A field added to all three legs at once -- goStructKeys compares SETS, so the registry is
 //   blind by construction. Go's TestLineItemsWireTypes_HaveBraceFreeBodies pins 4/1/4 exactly,
 //   which catches an addition; a same-count swap and wrong semantics stay open.
+
+// EXTR-15-01 AC-6. The exclusion list above claimed the jobs list had no SPA copy and that the
+// SPA never read it. Both are false, and a stale exclusion is worse than no exclusion: it
+// documents a gap that has already closed. Needles are assembled from fragments so this file
+// does not match its own scan.
+describe('the jobs-list exclusion (AC-5, AC-6)', () => {
+  const SELF = 'frontend/app/src/lib/wireMirrors.test.ts'
+
+  it('jobsList_theStaleNoSpaCopyExclusionIsGone', () => {
+    const self = repoFile(SELF)
+
+    // Control needle first: an absence proved over a file that was not read reads clean.
+    const banner = ['copies this file deliberately does NOT', 'guard'].join(' ')
+    expect(self.split(banner).length - 1, 'the exclusion banner itself must still be there').toBe(1)
+
+    const stale = ['no SPA copy', 'exists'].join(' ')
+    expect(
+      self.includes(stale),
+      'the exclusion list still says the jobs list has no SPA copy; importApi.ts declares ExtractionJob and documentRun.ts consumes it',
+    ).toBe(false)
+  })
+
+  it('jobsList_theSpaReallyDoesReadIt', () => {
+    // The positive half: the deletion above is only correct while these hold.
+    const importApi = repoFile('frontend/app/src/lib/importApi.ts')
+    const documentRun = repoFile('frontend/app/src/lib/documentRun.ts')
+    expect(tsInterfaceKeys(importApi, 'ExtractionJob').length).toBeGreaterThanOrEqual(6)
+    expect(documentRun).toContain('ExtractionJob')
+    expect(documentRun).toContain('newestJob')
+  })
+})

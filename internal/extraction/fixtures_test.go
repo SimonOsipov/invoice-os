@@ -1252,3 +1252,11 @@ func TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals(t *testing.T) {
 		}
 	}
 }
+
+// fxE2EExempt is a hole in the completeness scan above by design. Pinned at exactly one entry
+// so a future unguarded copy cannot be waved through by silently appending to it.
+func TestFixtures_E2EExemptionListStaysSingular(t *testing.T) {
+	if len(fxE2EExempt) != 1 {
+		t.Errorf("fxE2EExempt has %d entries, want exactly 1: %v -- each new exemption defeats the completeness scan for one more file", len(fxE2EExempt), fxE2EExempt)
+	}
+}

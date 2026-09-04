@@ -388,15 +388,34 @@ const dgWiredFloor = 7
 // unwired, so this golden gets its own check.
 const dgBareGoldenStep = `scripts/ci/docling-canary.sh golden "$GITHUB_SHA"` + "\n"
 
-// dgGoldenIsWired reports whether ci.yml's changes filter names both name's pdf and json AND a
+// dgGoldenIsWired reports whether ci.yml's changes filter names both fixture and json AND a
 // docling-canary.sh golden step names them explicitly. A wired golden's step body repeats both
 // paths, so filter entry + step invocation is 2 occurrences for EACH path -- checking only
-// Contains on the pdf path is hollow: a step that mentions the .pdf but a filter missing its
-// own entry for it still contains the string once, from the step alone.
-func dgGoldenIsWired(yaml, name string) bool {
-	pdf := "internal/extraction/testdata/" + strings.TrimSuffix(name, ".docling.json") + ".pdf"
+// Contains on the fixture path is hollow: a step that mentions it but a filter missing its own
+// entry for it still contains the string once, from the step alone.
+func dgGoldenIsWired(yaml, name, fixture string) bool {
+	src := "internal/extraction/testdata/" + fixture
 	gold := "internal/extraction/testdata/" + name
-	return strings.Count(yaml, pdf) >= 2 && strings.Count(yaml, gold) >= 2
+	return strings.Count(yaml, src) >= 2 && strings.Count(yaml, gold) >= 2
+}
+
+// dgFixtureFor finds the committed testdata/ entry sharing name's stem, whatever its extension --
+// name's own golden is never its own fixture, so a golden-only stem is a hard failure rather
+// than a silent ".pdf" guess. Fixes a bug that hardcoded ".pdf": a DOCX golden built ".pdf",
+// which ci.yml never contains, and false-failed a correctly wired fixture.
+func dgFixtureFor(t *testing.T, entries []os.DirEntry, name string) string {
+	t.Helper()
+	stem := strings.TrimSuffix(name, ".docling.json")
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), ".docling.json") {
+			continue
+		}
+		if strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())) == stem {
+			return e.Name()
+		}
+	}
+	t.Fatalf("no fixture file in %s shares the stem %q with golden %s", fxDir, stem, name)
+	return ""
 }
 
 // Story AC #2. TestCorpusGoldens_TheCanaryJobCoversEveryLayout (corpus_wired_db_test.go) is the
@@ -426,7 +445,7 @@ func TestGoldens_EveryCommittedGoldenHasACanaryStep(t *testing.T) {
 	// Control needle: a golden known to be correctly wired must be found, or the scan logic
 	// itself is broken and every result below is unreliable.
 	const knownWired = "corpus_totals_block.docling.json"
-	if !dgGoldenIsWired(yaml, knownWired) {
+	if !dgGoldenIsWired(yaml, knownWired, dgFixtureFor(t, entries, knownWired)) {
 		t.Fatalf("%s is known-wired but this scan reports it missing; the scan logic itself is broken", knownWired)
 	}
 
@@ -437,8 +456,9 @@ func TestGoldens_EveryCommittedGoldenHasACanaryStep(t *testing.T) {
 			}
 			continue
 		}
-		if !dgGoldenIsWired(yaml, name) {
-			t.Errorf("%s is committed but ci.yml does not wire it: needs a changes-filter entry for both its .pdf and .docling.json AND a docling-canary.sh golden step naming the .docling.json explicitly", name)
+		fixture := dgFixtureFor(t, entries, name)
+		if !dgGoldenIsWired(yaml, name, fixture) {
+			t.Errorf("%s is committed but ci.yml does not wire it: needs a changes-filter entry for both %s and %s AND a docling-canary.sh golden step naming the .docling.json explicitly", name, fixture, name)
 		}
 	}
 }

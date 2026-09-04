@@ -1234,3 +1234,40 @@ func TestRLS_ScannedFixturePagesStillRender(t *testing.T) {
 		t.Errorf("the page sink recorded %d call(s) for %s, want at least 1 -- an unreadable text verdict must not mean the pages never rendered", calls, fxScanned)
 	}
 }
+
+// --- EXTR-18-04: the DOCX fixture, wired through the real reader --------------------------
+
+// invoice.docx has no page image PDFium (or any renderer) can produce, so the wired run swaps
+// PageStore.Reader for a stub yielding one synthetic page and never reaches worker.go's
+// pages_not_rendered gate -- TestExtractWorker_PagesNotRenderedGateIsUntouched
+// (worker_internal_test.go) pins that this subtask leaves that gate untouched.
+const (
+	dxFixture    = "invoice.docx"
+	dxGolden     = "invoice.docling.json"
+	dxRiverJobID = 919400 // distinct from every other literal in this file
+)
+
+// Story AC #4. The DOCX fixture resolves invoice_number, issue_date and total by identity --
+// measured through a real docling:canary run (task-848's Implementation Notes), never by count.
+// reason_code is asserted nil: ReasonNone binds as SQL NULL, never "" (store.go:150-151).
+func TestRLS_DocxFixtureResolvesNamedFields(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	pages := &extraction.PageStore{Reader: &wkStubReader{pages: 1}, Sink: (&wkPageSink{}).put}
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: fxRead(t, dxFixture)}, pages, &wkAuditRecorder{})
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, dxGolden))
+	ew.Rules = wpStoreRules(t).load
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(dxRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over %s: %v", dxFixture, err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, dxRiverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("ASC-2026-0919"), nil)
+	wpAssertRankZero(t, rows, "issue_date", stPtr("2026-08-14"), nil)
+	wpAssertRankZero(t, rows, "total", stPtr("4300.00"), nil)
+}

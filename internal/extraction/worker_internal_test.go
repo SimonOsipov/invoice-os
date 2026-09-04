@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"go/ast"
+	"os"
 	"reflect"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -609,5 +612,35 @@ func TestReadText_DiscardsAPartialReadThatFailsMidStream(t *testing.T) {
 	}
 	if res != (PageResult{}) {
 		t.Errorf("readText returned PageResult %+v alongside its error, want the zero value", res)
+	}
+}
+
+// --- EXTR-18-04: scope guard -------------------------------------------------------------
+
+// TestExtractWorker_PagesNotRenderedGateIsUntouched is a ratchet, not a feature test:
+// EXTR-18-04 reaches the worker by swapping PageStore.Reader, never by touching worker.go. The
+// pages_not_rendered gate stays EXTR-15's to lift; a subtask that edits it has left this
+// story's scope.
+func TestExtractWorker_PagesNotRenderedGateIsUntouched(t *testing.T) {
+	raw, err := os.ReadFile("worker.go")
+	if err != nil {
+		t.Fatalf("read worker.go: %v", err)
+	}
+	src := string(raw)
+
+	// Control needle: prove the scan reads the right file, or a moved/renamed Work method
+	// would leave every absence below reading as a clean pass.
+	if !strings.Contains(src, "func (w *ExtractWorker) Work(") {
+		t.Fatalf("worker.go carries no Work method; this scan is reading the wrong file")
+	}
+
+	if n := strings.Count(src, "FailurePagesNotRendered"); n != 1 {
+		t.Fatalf("worker.go names FailurePagesNotRendered %d time(s), want exactly 1; the gate has moved or been duplicated", n)
+	}
+
+	guard := regexp.MustCompile(
+		`if images, tokenPages, _, err = w\.Pages\.Ingest\(ctx, args\.TenantID, doc\); err != nil \{\s*kind = FailurePagesNotRendered\s*\}`)
+	if !guard.MatchString(src) {
+		t.Errorf("worker.go no longer guards w.Pages.Ingest's error branch with `kind = FailurePagesNotRendered` exactly as before this story; worker.go must stay untouched")
 	}
 }

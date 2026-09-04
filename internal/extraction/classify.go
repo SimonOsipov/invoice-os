@@ -21,6 +21,23 @@ var acceptedDocumentTypes = map[string]string{
 	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
+// pageImageFormats says, per canonical content type, whether extraction can render page images
+// from it. Exhaustive over acceptedDocumentTypes' values on purpose, so a newly accepted format
+// cannot silently default to the no-render branch
+// (TestRendersPageImages_TableIsExhaustiveOverAcceptedTypes).
+var pageImageFormats = map[string]bool{
+	"application/pdf": true,
+	"image/png":       false,
+	"image/jpeg":      false,
+	"image/webp":      false,
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": false,
+}
+
+// RendersPageImages reports whether documents.declared_content_type names a format extraction
+// renders page images from. A strict allowlist: that column is nullable, so an unknown or absent
+// type takes the no-render branch.
+func RendersPageImages(contentType string) bool { return pageImageFormats[contentType] }
+
 // classifyDocumentType resolves the canonical content type from the filename extension
 // first, then from the declared content type with its parameters stripped, mirroring
 // detectFormat (internal/importer/handlers.go:142-162). "" means refuse.

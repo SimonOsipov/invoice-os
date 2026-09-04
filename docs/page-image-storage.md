@@ -2,8 +2,8 @@
 
 Every **PDF** that goes through extraction is rendered to one PNG per page, and those PNGs are
 what a review canvas will draw a highlighted region on. Since EXTR-09 the upload route also
-accepts PNG, JPEG, WebP and DOCX; `PageStore.Ingest` reads PDFs only, so those four render zero
-pages and their job dead-letters at `FailurePagesNotRendered` before the extractor ever runs
+accepts PNG, JPEG, WebP and DOCX; since EXTR-15 those four skip the render instead of
+dead-lettering at it, so they carry no page images and no field regions
 ([docs/document-upload.md](document-upload.md)). This page records the four things about
 them that are not obvious from the code: the render profile, the object-key scheme, where the
 800-page cap comes from, and how long the objects live.

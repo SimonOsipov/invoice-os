@@ -52,6 +52,14 @@ caller's transaction. The key is per **document**, so:
   never re-enqueued through this seam
   (`TestRLS_EnqueueExtractionRefusesEvenAfterTheJobDeadLetters`). Re-extraction is EXTR-17's.
 
-PNG, JPEG, WebP and DOCX are accepted by this route but always dead-letter today: page
-rendering (`PageStore.Ingest`) is PDFium-only and runs before the extractor. With the
-permanent key above, each of those gets exactly one attempt.
+PNG, JPEG, WebP and DOCX are accepted by this route and skip page rendering: they extract
+from the text layer alone, with no page images and no field regions. With the permanent key
+above, each of those gets exactly one attempt.
+
+Rendering is gated on `documents.declared_content_type` (`RendersPageImages`,
+`internal/extraction/classify.go`), which makes that column load-bearing. `POST
+/v1/imports/preview` stores the client's raw part header before it judges the format
+(`internal/importer/handlers.go:401`), and `Upsert` is first-writer-wins on the content hash,
+so a PDF previewed there under a non-canonical type extracts from text alone ever after. Not
+reachable from the app -- the wizard refuses a document-kind file before the preview call
+(`frontend/app/src/App.tsx:681`) -- but a direct API caller can do it to their own bytes.

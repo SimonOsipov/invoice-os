@@ -1011,6 +1011,84 @@ describe('BUG-09: a blocked register row costs no extra grid line', () => {
   })
 })
 
+// QA Mode B adversarial (task-858). B09-1/B09-2 above are both RELATIVE: they compare a
+// row against the head or against a sibling row, so an edit that moves BOTH sides keeps
+// them green, and they count row-level children only, so a reason re-added INSIDE an
+// existing cell is invisible to them. These three close both holes.
+describe('BUG-09 QA: the deleted line cannot come back through a blind spot', () => {
+  const REGISTER_CELLS = 6
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  it('QA-B09-3: the head and a blocked row each render exactly SIX grid children, pinned as a literal', async () => {
+    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head') as HTMLElement
+    expect(head).not.toBeNull()
+    // Non-vacuity: the row must really be blocked.
+    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+
+    expect(head.children.length, 'the head is the denominator B09-1 divides by').toBe(REGISTER_CELLS)
+    expect(screen.getByTestId('invoice-row').children.length, 'a blocked row is checkbox + five cells, nothing more').toBe(REGISTER_CELLS)
+  })
+
+  it('QA-B09-4: a blocked row prints its reason nowhere in its own text, at any nesting depth', async () => {
+    const notValidated = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'draft' })
+    const awaiting = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated', approval: openRun })
+    mockFetchSequence([listResponse([notValidated, awaiting], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-B')
+
+    const [aRow, bRow] = screen.getAllByTestId('invoice-row')
+    // Non-vacuity: both rows really are blocked, and each really holds its own sentence
+    // in `title` -- so the strings below exist on the page, just never as rendered text.
+    const [aBox, bBox] = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
+    expect(aBox.getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect(bBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+
+    expect(aRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(skipReasonLabel('not_validated'))
+    expect(bRow.textContent).not.toContain(skipReasonLabel('awaiting_approval'))
+  })
+
+  it('QA-B09-5: the ERROR chip and the RESOLVED marker nest inside the status cell, so the busiest row is still six wide', async () => {
+    const busiest = row({
+      id: 'inv-busy',
+      invoice_number: 'INV-BUSY',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Client accepted as-is',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([busiest], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BUSY')
+
+    const rowEl = screen.getByTestId('invoice-row')
+    const statusCell = rowEl.children[REGISTER_CELLS - 1]
+    // Non-vacuity: this row really does carry both extras. No `\b` after ERROR -- the
+    // marker abuts the chip, so the row reads "1 ERRORRESOLVED".
+    expect(rowEl.textContent, 'the fixture must really raise an ERROR chip').toContain('1 ERROR')
+    const marker = screen.getByTestId('invoice-resolved-marker')
+
+    expect(statusCell.contains(marker), 'the RESOLVED marker must stay inside the status cell, not become a row-level child').toBe(true)
+    expect(statusCell.textContent, 'the ERROR chip must stay inside the status cell').toContain('1 ERROR')
+    expect(rowEl.children.length, 'two extras that both nest cannot widen the row').toBe(REGISTER_CELLS)
+  })
+})
+
 // Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label
 // alone ("Needs attention") does not say so.
 const TOGGLE_EXPLAINER = 'Includes invoices an approver sent back.'
